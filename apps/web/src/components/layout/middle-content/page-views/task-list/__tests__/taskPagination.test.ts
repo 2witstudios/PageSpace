@@ -1,6 +1,6 @@
 import { describe, it } from 'vitest';
 import { assert } from '@/hooks/__tests__/riteway';
-import { getHasMoreTasks, isLoadingNextTaskPage, redistributeTasksAcrossPages } from '../TaskListView';
+import { getHasMoreTasks, isLoadingNextTaskPage, redistributeTasksAcrossPages, getTaskLoadMoreState } from '../TaskListView';
 import type { TaskItem } from '../task-list-types';
 
 // Minimal stand-ins — redistributeTasksAcrossPages only reads/copies `id` and `.tasks.length`.
@@ -159,6 +159,53 @@ describe('redistributeTasksAcrossPages', () => {
       should: 'return an empty array',
       actual: redistributeTasksAcrossPages([], []),
       expected: [],
+    });
+  });
+});
+
+describe('getTaskLoadMoreState', () => {
+  it('nothing requested yet', () => {
+    assert({
+      given: 'size 0',
+      should: 'return idle',
+      actual: getTaskLoadMoreState(undefined, 0, false),
+      expected: 'idle',
+    });
+  });
+
+  it('all requested pages have resolved, no error', () => {
+    assert({
+      given: 'page count matching size and no error',
+      should: 'return idle',
+      actual: getTaskLoadMoreState([{}, {}], 2, false),
+      expected: 'idle',
+    });
+  });
+
+  it('a new page was requested and is still in flight', () => {
+    assert({
+      given: 'page count behind size and no error',
+      should: 'return loading',
+      actual: getTaskLoadMoreState([{}], 2, false),
+      expected: 'loading',
+    });
+  });
+
+  it('a new page was requested and permanently failed', () => {
+    assert({
+      given: 'page count behind size and an error is present (SWR keeps stale data + error together)',
+      should: 'return failed, not loading',
+      actual: getTaskLoadMoreState([{}], 2, true),
+      expected: 'failed',
+    });
+  });
+
+  it('an error exists but every requested page already resolved', () => {
+    assert({
+      given: 'page count matching size even though an error field happens to be set',
+      should: 'return idle — nothing is behind, so there is nothing to retry',
+      actual: getTaskLoadMoreState([{}, {}], 2, true),
+      expected: 'idle',
     });
   });
 });

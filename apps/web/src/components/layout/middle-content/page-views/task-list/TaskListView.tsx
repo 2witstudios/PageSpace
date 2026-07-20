@@ -347,6 +347,21 @@ export const getHasMoreTasks = (pages: { hasMore: boolean }[] | undefined): bool
 export const isLoadingNextTaskPage = (pages: unknown[] | undefined, size: number): boolean =>
   size > 0 && (pages === undefined || pages.length < size);
 
+export type TaskLoadMoreState = 'idle' | 'loading' | 'failed';
+
+// A requested page hasn't resolved into `pages` yet — true both while it's still in
+// flight and after it's permanently failed, since SWR keeps the last-good `data` and
+// sets `error` alongside it rather than clearing it. Disambiguates those two so the
+// "Load More" control can show a spinner vs. a retry state instead of getting stuck.
+export const getTaskLoadMoreState = (
+  pages: unknown[] | undefined,
+  size: number,
+  hasError: boolean,
+): TaskLoadMoreState => {
+  if (!isLoadingNextTaskPage(pages, size)) return 'idle';
+  return hasError ? 'failed' : 'loading';
+};
+
 // Splits a reordered task list back into the same number of pages, each keeping its
 // original size (and every other field, e.g. hasMore, untouched) — used for the
 // drag-reorder optimistic update so getHasMoreTasks/isLoadingNextTaskPage stay correct
@@ -548,7 +563,9 @@ function TaskListView({ page }: TaskListViewProps) {
     };
   }, [taskPages]);
   const hasMoreTasks = data?.hasMore ?? false;
-  const isLoadingMoreTasks = isLoadingNextTaskPage(taskPages, size);
+  const loadMoreState = getTaskLoadMoreState(taskPages, size, !!error);
+  const isLoadingMoreTasks = loadMoreState === 'loading';
+  const loadMoreFailed = loadMoreState === 'failed';
   const handleLoadMoreTasks = () => setSize(size + 1);
 
   // Stable ref so the page:moved handler always sees the current task list
@@ -905,15 +922,18 @@ function TaskListView({ page }: TaskListViewProps) {
 
   // Shared between the table, kanban, and mobile card renders — the bounded GET route
   // (limit=100 default) means any of them can silently truncate without this.
-  const loadMoreControl = (hasMoreTasks || isLoadingMoreTasks) && (
-    <div className="flex justify-center py-4">
+  const loadMoreControl = (hasMoreTasks || isLoadingMoreTasks || loadMoreFailed) && (
+    <div className="flex flex-col items-center gap-2 py-4">
+      {loadMoreFailed && (
+        <p className="text-sm text-destructive">Failed to load more tasks.</p>
+      )}
       <Button
         variant="outline"
         size="sm"
-        onClick={handleLoadMoreTasks}
+        onClick={loadMoreFailed ? mutateTasks : handleLoadMoreTasks}
         disabled={isLoadingMoreTasks}
       >
-        {isLoadingMoreTasks ? 'Loading…' : 'Load more tasks'}
+        {isLoadingMoreTasks ? 'Loading…' : loadMoreFailed ? 'Retry' : 'Load more tasks'}
       </Button>
     </div>
   );
@@ -955,7 +975,10 @@ function TaskListView({ page }: TaskListViewProps) {
     );
   }
 
-  if (error) {
+  // Only a fatal error — no pages ever loaded successfully — replaces the whole view.
+  // A failed "Load More" (data already has earlier pages) surfaces via loadMoreFailed
+  // in the shared control instead, so already-loaded tasks stay visible.
+  if (error && !data) {
     return (
       <div className="flex items-center justify-center h-full text-destructive">
         Failed to load tasks
