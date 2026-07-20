@@ -42,7 +42,8 @@
         "src/lib/auth/platform-storage/web-storage.ts",
         "src/test/next-server-stub.ts",
         "src/__fixtures__/eslint-unbounded-findmany/**",
-        "src/components/ai/ui/web-preview.tsx"
+        "src/components/ai/ui/web-preview.tsx",
+        "src/lib/ai/machine-pane/machine-pane-binding-runtime.ts"
       ],
       "ignoreDependencies": [
         "eslint-config-next",
@@ -428,6 +429,7 @@
         "src/services/machines/machine-branches.ts",
         "src/services/machines/machine-list.ts",
         "src/services/machines/machine-orphan-reconcile.ts",
+        "src/services/machines/machine-pane-binding.ts",
         "src/services/machines/machine-projects-store.ts",
         "src/services/machines/machine-projects.ts",
         "src/services/machines/machine-settings.ts",

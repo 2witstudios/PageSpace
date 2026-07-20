@@ -102,4 +102,19 @@ export interface ToolExecutionContext {
   // pre-batch checkpoint's "at most once per turn" throttle
   // (`checkpoint-policy.ts`). Undefined until first stamped.
   turnId?: string;
+
+  // "PageSpace Agent" panes (Terminal epics, issue #2166): the server-derived
+  // binding that pins THIS run's default-mode code-exec tools (bash/readFile/
+  // writeFile/editFile) to the machine checkout the pane is bound to —
+  // computed once per request from `deriveMachinePaneBinding`
+  // (@pagespace/lib/services/machines/machine-pane-binding) and never
+  // mutated in place afterward (unlike `activeMachine`, a pagespace pane's
+  // binding is fixed for the conversation's lifetime, not switchable
+  // mid-turn). Undefined for every conversation that isn't a machine-bound
+  // pagespace pane.
+  machineBinding?: {
+    machineId: string;
+    cwd: string;
+    branchSandbox?: { machineBranchId: string; sandboxId: string };
+  };
 }
