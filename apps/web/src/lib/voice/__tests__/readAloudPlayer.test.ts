@@ -16,15 +16,19 @@ class FakeAudioBufferSourceNode {
   buffer: unknown = null;
   onended: (() => void) | null = null;
   connect(): void {}
-  start(): void {}
+  start = vi.fn();
   stop = vi.fn();
 }
+
+const createdSources: FakeAudioBufferSourceNode[] = [];
 
 class FakeAudioContext {
   state = 'running';
   destination = {};
   createBufferSource(): FakeAudioBufferSourceNode {
-    return new FakeAudioBufferSourceNode();
+    const node = new FakeAudioBufferSourceNode();
+    createdSources.push(node);
+    return node;
   }
   decodeAudioData(): Promise<unknown> {
     return Promise.resolve({});
@@ -36,6 +40,7 @@ class FakeAudioContext {
 
 describe('readAloudPlayer', () => {
   beforeEach(() => {
+    createdSources.length = 0;
     vi.stubGlobal('AudioContext', FakeAudioContext);
     vi.mocked(fetchWithAuth).mockResolvedValue({
       ok: true,
@@ -109,6 +114,56 @@ describe('readAloudPlayer', () => {
 
   it('stopping when nothing is playing is a no-op that does not throw', () => {
     expect(() => stopReadAloud()).not.toThrow();
+    expect(isReadAloudPlaying()).toBe(false);
+  });
+
+  it('synthesizes and starts playback of a single chunk, then finishes naturally when it ends', async () => {
+    startReadAloud(['only chunk']);
+    await vi.waitFor(() => expect(createdSources).toHaveLength(1));
+    expect(createdSources[0].start).toHaveBeenCalledTimes(1);
+    expect(isReadAloudPlaying()).toBe(true);
+
+    // Simulate the browser firing onended once the clip finishes.
+    createdSources[0].onended?.();
+    await vi.waitFor(() => expect(isReadAloudPlaying()).toBe(false));
+  });
+
+  it('plays multiple queued chunks back to back in order', async () => {
+    startReadAloud(['first', 'second']);
+    await vi.waitFor(() => expect(createdSources).toHaveLength(1));
+
+    createdSources[0].onended?.();
+    await vi.waitFor(() => expect(createdSources).toHaveLength(2));
+    expect(isReadAloudPlaying()).toBe(true);
+
+    createdSources[1].onended?.();
+    await vi.waitFor(() => expect(isReadAloudPlaying()).toBe(false));
+  });
+
+  it('skips a chunk that fails to synthesize and continues with the rest', async () => {
+    vi.mocked(fetchWithAuth)
+      .mockResolvedValueOnce({ ok: false } as Response)
+      .mockResolvedValue({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+      } as Response);
+
+    startReadAloud(['broken chunk', 'good chunk']);
+    // The first chunk's failed synthesis is skipped without ever creating a
+    // source; only the second, successful chunk should end up playing.
+    await vi.waitFor(() => expect(createdSources).toHaveLength(1));
+    expect(isReadAloudPlaying()).toBe(true);
+
+    createdSources[0].onended?.();
+    await vi.waitFor(() => expect(isReadAloudPlaying()).toBe(false));
+  });
+
+  it('discards a chunk that finishes synthesizing after stop was already called', async () => {
+    startReadAloud(['only chunk']);
+    stopReadAloud();
+    // Let the in-flight synthesis resolve; it must not resurrect playback.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(createdSources).toHaveLength(0);
     expect(isReadAloudPlaying()).toBe(false);
   });
 });
