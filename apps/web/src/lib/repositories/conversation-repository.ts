@@ -152,7 +152,7 @@ export const conversationRepository = {
    * so every caller — including pre-existing ones — gets this guarantee.
    */
 
-  async createConversation(conversationId: string, userId: string, pageId: string): Promise<void> {
+  async createConversation(conversationId: string, userId: string, pageId: string, opts?: { isShared?: boolean }): Promise<void> {
     const [existing] = await db
       .select({ id: conversations.id })
       .from(conversations)
@@ -170,7 +170,7 @@ export const conversationRepository = {
         userId,
         type: 'page',
         contextId: pageId,
-        isShared: false,
+        isShared: opts?.isShared ?? false,
         updatedAt: new Date(),
       })
       .onConflictDoNothing();
