@@ -361,8 +361,9 @@ describe('useMachinePaneChat', () => {
 
       // Never minted: no conversation row was ever created on the MACHINE page.
       const machineCreates = mockFetchWithAuth.mock.calls.filter(
-        ([url, init]: [string, RequestInit | undefined]) =>
-          url === `/api/ai/page-agents/${machineId}/conversations` && init?.method === 'POST',
+        (call) =>
+          call[0] === `/api/ai/page-agents/${machineId}/conversations` &&
+          (call[1] as RequestInit | undefined)?.method === 'POST',
       );
       expect(machineCreates).toHaveLength(0);
     });
