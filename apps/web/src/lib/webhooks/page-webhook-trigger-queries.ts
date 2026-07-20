@@ -27,6 +27,14 @@ export const MAX_PAGE_WEBHOOK_TRIGGERS = 100;
 /**
  * Every enabled trigger bound to a page webhook. Page-anchored rows skip
  * event-type matching (v1): all enabled triggers on the webhook fire.
+ *
+ * Fetches one MORE than the fan-out cap so an over-capped webhook is DETECTED,
+ * not silently truncated. Returning only the first MAX rows as if they were the
+ * complete set would drop the excess workflows on every delivery while the
+ * route still answered 2xx (the sender never learns). Overflow is surfaced as a
+ * failure instead, so the route rejects the delivery loudly (retryable 5xx)
+ * rather than dispatching a partial fan-out. Enforcing the cap at binding
+ * creation is the T6 Trigger-CRUD job; this is the fan-out-side safety net.
  */
 export async function findEnabledPageWebhookTriggers(
   pageWebhookId: string,
@@ -37,8 +45,14 @@ export async function findEnabledPageWebhookTriggers(
         eq(webhookTriggers.pageWebhookId, pageWebhookId),
         eq(webhookTriggers.isEnabled, true),
       ),
-      limit: MAX_PAGE_WEBHOOK_TRIGGERS,
+      limit: MAX_PAGE_WEBHOOK_TRIGGERS + 1,
     });
+    if (triggers.length > MAX_PAGE_WEBHOOK_TRIGGERS) {
+      return {
+        success: false,
+        error: `page webhook ${pageWebhookId} has more than ${MAX_PAGE_WEBHOOK_TRIGGERS} enabled triggers; refusing to fan out a truncated set`,
+      };
+    }
     return { success: true, data: triggers };
   } catch (e) {
     return { success: false, error: toError(e) };
