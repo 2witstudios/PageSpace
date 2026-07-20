@@ -11,9 +11,11 @@ const {
   mockBuildSpawnAgentTerminalDeps,
   mockBuildKillAgentTerminalDeps,
   mockBuildListAgentTerminalsDeps,
+  mockIsCodeExecutionEnabled,
   mockSpawnAgentTerminal,
   mockKillAgentTerminal,
   mockListAgentTerminals,
+  mockCreateConversation,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
   mockIsAuthError: vi.fn((result: unknown) => result != null && typeof result === 'object' && 'error' in result),
@@ -22,9 +24,11 @@ const {
   mockBuildSpawnAgentTerminalDeps: vi.fn(),
   mockBuildKillAgentTerminalDeps: vi.fn(),
   mockBuildListAgentTerminalsDeps: vi.fn(),
+  mockIsCodeExecutionEnabled: vi.fn(),
   mockSpawnAgentTerminal: vi.fn(),
   mockKillAgentTerminal: vi.fn(),
   mockListAgentTerminals: vi.fn(),
+  mockCreateConversation: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -38,12 +42,19 @@ vi.mock('@/lib/machines/agent-terminals-runtime', () => ({
   buildListAgentTerminalsDeps: (...args: unknown[]) => mockBuildListAgentTerminalsDeps(...args),
   canAccessMachine: (...args: unknown[]) => mockCanAccessMachine(...args),
   canViewMachine: (...args: unknown[]) => mockCanViewMachine(...args),
+  isCodeExecutionEnabled: (...args: unknown[]) => mockIsCodeExecutionEnabled(...args),
 }));
 
 vi.mock('@pagespace/lib/services/machines/agent-terminals', () => ({
   spawnAgentTerminal: (...args: unknown[]) => mockSpawnAgentTerminal(...args),
   killAgentTerminal: (...args: unknown[]) => mockKillAgentTerminal(...args),
   listAgentTerminals: (...args: unknown[]) => mockListAgentTerminals(...args),
+}));
+
+vi.mock('@/lib/repositories/conversation-repository', () => ({
+  conversationRepository: {
+    createConversation: (...args: unknown[]) => mockCreateConversation(...args),
+  },
 }));
 
 import { GET, POST, DELETE } from '../route';
@@ -58,6 +69,8 @@ beforeEach(() => {
   mockBuildSpawnAgentTerminalDeps.mockReturnValue(FAKE_DEPS);
   mockBuildKillAgentTerminalDeps.mockResolvedValue(FAKE_DEPS);
   mockBuildListAgentTerminalsDeps.mockReturnValue(FAKE_DEPS);
+  mockIsCodeExecutionEnabled.mockReturnValue(true);
+  mockCreateConversation.mockResolvedValue(undefined);
 });
 
 describe('GET /api/machines/agent-terminals', () => {
@@ -71,12 +84,13 @@ describe('GET /api/machines/agent-terminals', () => {
     mockCanViewMachine.mockResolvedValue(true);
     mockListAgentTerminals.mockResolvedValue({
       ok: true,
-      terminals: [{ name: 'cli', agentType: 'claude', createdAt: new Date('2026-07-01') }],
+      terminals: [{ id: 'agent-terminal-1', name: 'cli', agentType: 'claude', createdAt: new Date('2026-07-01') }],
     });
     const res = await GET(new Request('https://x.test/api/machines/agent-terminals?machineId=t1&projectName=repo&branchName=main'));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.agentTerminals).toHaveLength(1);
+    expect(body.agentTerminals[0].id).toBe('agent-terminal-1');
     expect(mockCanViewMachine).toHaveBeenCalledWith('user-1', 't1');
     expect(mockListAgentTerminals).toHaveBeenCalledWith(
       expect.objectContaining({ machineId: 't1', projectName: 'repo', branchName: 'main' }),
@@ -87,11 +101,16 @@ describe('GET /api/machines/agent-terminals', () => {
     mockCanViewMachine.mockResolvedValue(true);
     mockListAgentTerminals.mockResolvedValue({
       ok: true,
-      terminals: [{ name: 'legacy-cli', agentType: 'pagespace-cli', createdAt: new Date('2026-07-01') }],
+      terminals: [{ id: 'agent-terminal-legacy', name: 'legacy-cli', agentType: 'pagespace-cli', createdAt: new Date('2026-07-01') }],
     });
     const res = await GET(new Request('https://x.test/api/machines/agent-terminals?machineId=t1&projectName=repo&branchName=main'));
     const body = await res.json();
-    expect(body.agentTerminals[0]).toEqual({ name: 'legacy-cli', agentType: 'pagespace-cli', createdAt: '2026-07-01T00:00:00.000Z' });
+    expect(body.agentTerminals[0]).toEqual({
+      id: 'agent-terminal-legacy',
+      name: 'legacy-cli',
+      agentType: 'pagespace-cli',
+      createdAt: '2026-07-01T00:00:00.000Z',
+    });
   });
 
   it('given no view access, returns 403 without listing', async () => {
@@ -153,13 +172,13 @@ describe('POST /api/machines/agent-terminals', () => {
     expect(mockSpawnAgentTerminal).not.toHaveBeenCalled();
   });
 
-  it('given a fresh spawn of a claude terminal, returns 201', async () => {
+  it('given a fresh spawn of a claude terminal, returns 201 with the row id', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockSpawnAgentTerminal.mockResolvedValue({ ok: true, id: 'agent-terminal-1', agentType: 'claude', resumed: false });
     const res = await POST(req(VALID_BODY));
     expect(res.status).toBe(201);
     const body = await res.json();
-    expect(body.agentTerminal).toMatchObject({ name: 'cli', agentType: 'claude', resumed: false });
+    expect(body.agentTerminal).toMatchObject({ id: 'agent-terminal-1', name: 'cli', agentType: 'claude', resumed: false });
     expect(mockSpawnAgentTerminal).toHaveBeenCalledWith(
       expect.objectContaining({ machineId: 't1', projectName: 'repo', branchName: 'main', name: 'cli', agentType: 'claude' }),
     );
@@ -248,6 +267,66 @@ describe('POST /api/machines/agent-terminals', () => {
     expect(res.status).toBe(400);
     expect(mockSpawnAgentTerminal).not.toHaveBeenCalled();
   });
+
+  it('given a pagespace terminal with the code-execution flag off, returns 403 without spawning', async () => {
+    mockCanAccessMachine.mockResolvedValue(true);
+    mockIsCodeExecutionEnabled.mockReturnValue(false);
+    const res = await POST(req({ ...VALID_BODY, agentType: 'pagespace' }));
+    expect(res.status).toBe(403);
+    expect(mockSpawnAgentTerminal).not.toHaveBeenCalled();
+  });
+
+  it('given a pagespace terminal with the code-execution flag on, spawns normally', async () => {
+    mockCanAccessMachine.mockResolvedValue(true);
+    mockIsCodeExecutionEnabled.mockReturnValue(true);
+    mockSpawnAgentTerminal.mockResolvedValue({ ok: true, id: 'agent-terminal-5', agentType: 'pagespace', resumed: false });
+    const res = await POST(req({ ...VALID_BODY, agentType: 'pagespace' }));
+    expect(res.status).toBe(201);
+    expect(mockSpawnAgentTerminal).toHaveBeenCalled();
+  });
+
+  it('given a non-pagespace terminal, spawns regardless of the code-execution flag', async () => {
+    mockCanAccessMachine.mockResolvedValue(true);
+    mockIsCodeExecutionEnabled.mockReturnValue(false);
+    mockSpawnAgentTerminal.mockResolvedValue({ ok: true, id: 'agent-terminal-6', agentType: 'claude', resumed: false });
+    const res = await POST(req(VALID_BODY));
+    expect(res.status).toBe(201);
+    expect(mockSpawnAgentTerminal).toHaveBeenCalled();
+  });
+
+  it('given a fresh pagespace spawn, pre-creates the shared conversation keyed on the row id', async () => {
+    mockCanAccessMachine.mockResolvedValue(true);
+    mockSpawnAgentTerminal.mockResolvedValue({ ok: true, id: 'agent-terminal-7', agentType: 'pagespace', resumed: false });
+    const res = await POST(req({ ...VALID_BODY, agentType: 'pagespace' }));
+    expect(res.status).toBe(201);
+    expect(mockCreateConversation).toHaveBeenCalledWith('agent-terminal-7', 'user-1', 't1', { isShared: true });
+  });
+
+  it('given a resumed pagespace spawn, does NOT pre-create the conversation', async () => {
+    mockCanAccessMachine.mockResolvedValue(true);
+    mockSpawnAgentTerminal.mockResolvedValue({ ok: true, id: 'agent-terminal-7', agentType: 'pagespace', resumed: true });
+    const res = await POST(req({ ...VALID_BODY, agentType: 'pagespace' }));
+    expect(res.status).toBe(200);
+    expect(mockCreateConversation).not.toHaveBeenCalled();
+  });
+
+  it('given a fresh non-pagespace spawn, does NOT pre-create a conversation', async () => {
+    mockCanAccessMachine.mockResolvedValue(true);
+    mockSpawnAgentTerminal.mockResolvedValue({ ok: true, id: 'agent-terminal-8', agentType: 'claude', resumed: false });
+    const res = await POST(req(VALID_BODY));
+    expect(res.status).toBe(201);
+    expect(mockCreateConversation).not.toHaveBeenCalled();
+  });
+
+  it('given the pre-create conversation call fails, the spawn still succeeds (non-fatal)', async () => {
+    mockCanAccessMachine.mockResolvedValue(true);
+    mockSpawnAgentTerminal.mockResolvedValue({ ok: true, id: 'agent-terminal-9', agentType: 'pagespace', resumed: false });
+    mockCreateConversation.mockRejectedValue(new Error('db unavailable'));
+    const res = await POST(req({ ...VALID_BODY, agentType: 'pagespace' }));
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.agentTerminal).toMatchObject({ id: 'agent-terminal-9', resumed: false });
+  });
 });
 
 describe('DELETE /api/machines/agent-terminals', () => {
@@ -300,5 +379,12 @@ describe('DELETE /api/machines/agent-terminals', () => {
     mockKillAgentTerminal.mockResolvedValue({ ok: false, reason: 'invalid_target' });
     const res = await DELETE(url('machineId=t1&branchName=main&name=cli'));
     expect(res.status).toBe(400);
+  });
+
+  it('given a chat-surface (not_a_pty_agent) row, returns a pinned status', async () => {
+    mockCanAccessMachine.mockResolvedValue(true);
+    mockKillAgentTerminal.mockResolvedValue({ ok: false, reason: 'not_a_pty_agent' });
+    const res = await DELETE(url('machineId=t1&projectName=repo&branchName=main&name=cli'));
+    expect(res.status).toBe(409);
   });
 });
