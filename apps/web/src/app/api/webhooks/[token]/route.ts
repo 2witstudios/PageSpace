@@ -56,9 +56,10 @@ export async function POST(request: Request, context: { params: Promise<{ token:
     }
 
     // Resolve the enabled workflow triggers bound to this webhook once. The
-    // count both suppresses the dispatcher's 'no action configured' write (a
-    // page with triggers isn't a no-op) and decides the no-action vs triggers
-    // 202. This is the single trigger lookup for the delivery.
+    // count tells the dispatcher a page with triggers isn't a no-op (it records
+    // the delivery as fired instead of 'no action configured') and decides the
+    // route's no-action vs triggers 202. This is the single trigger lookup for
+    // the delivery.
     const triggerLookup = await findEnabledPageWebhookTriggers(webhook.id);
     if (!triggerLookup.success) {
       loggers.api.warn('Page webhook: trigger lookup failed', {
