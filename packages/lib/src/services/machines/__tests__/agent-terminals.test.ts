@@ -467,6 +467,70 @@ describe('spawnAgentTerminal — machine scope', () => {
   });
 });
 
+describe('spawnAgentTerminal — pagespace (chat-surface) has NO spawn-side type restriction', () => {
+  it('given a fresh pagespace spawn at branch scope, should reserve it exactly like a pty type', async () => {
+    const { store, rows } = makeStore();
+    const deps = makeDeps({ store });
+    const result = await spawnAgentTerminal({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      branchName: BRANCH_NAME,
+      name: 'agent',
+      agentType: 'pagespace',
+      actor,
+      deps,
+    });
+    expect(result).toMatchObject({ ok: true, agentType: 'pagespace', resumed: false });
+    expect([...rows.values()][0]).toMatchObject({ scope: 'branch', machineBranchId: BRANCH_ID, agentType: 'pagespace' });
+  });
+
+  it('given a fresh pagespace spawn at project scope, should reserve it exactly like a pty type', async () => {
+    const { store, rows } = makeStore();
+    const deps = makeDeps({ store });
+    const result = await spawnAgentTerminal({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      name: 'agent',
+      agentType: 'pagespace',
+      actor,
+      deps,
+    });
+    expect(result).toMatchObject({ ok: true, agentType: 'pagespace', resumed: false });
+    expect([...rows.values()][0]).toMatchObject({ scope: 'project', projectName: PROJECT_NAME, machineBranchId: null, agentType: 'pagespace' });
+  });
+
+  it('given a fresh pagespace spawn at machine scope, should reserve it exactly like a pty type', async () => {
+    const { store, rows } = makeStore();
+    const deps = makeDeps({ store, projectStore: makeProjectLookup() });
+    const result = await spawnAgentTerminal({
+      machineId: TERMINAL_ID,
+      name: 'agent',
+      agentType: 'pagespace',
+      actor,
+      deps,
+    });
+    expect(result).toMatchObject({ ok: true, agentType: 'pagespace', resumed: false });
+    expect([...rows.values()][0]).toMatchObject({ scope: 'machine', projectName: null, machineBranchId: null, agentType: 'pagespace' });
+  });
+
+  it('given a repeat pagespace spawn of the same name, should resume idempotently rather than duplicate', async () => {
+    const { store } = makeStore();
+    const deps = makeDeps({ store, projectStore: makeProjectLookup() });
+    const first = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'agent', agentType: 'pagespace', actor, deps });
+    const second = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'agent', agentType: 'pagespace', actor, deps });
+    expect(first.ok && second.ok && first.id === second.id).toBe(true);
+    expect(second).toMatchObject({ resumed: true });
+  });
+
+  it('given the same name reused under a DIFFERENT agent type (claude then pagespace), should reject as name_in_use', async () => {
+    const { store } = makeStore();
+    const deps = makeDeps({ store, projectStore: makeProjectLookup() });
+    await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'agent', agentType: 'claude', actor, deps });
+    const conflicting = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'agent', agentType: 'pagespace', actor, deps });
+    expect(conflicting).toEqual({ ok: false, reason: 'name_in_use' });
+  });
+});
+
 describe('resolveAgentTerminalRow', () => {
   // The whole point of this resolver: it answers "does this target still exist?"
   // with DB reads alone. Passing `machineSandbox: undefined` throughout is the
@@ -534,6 +598,16 @@ describe('resolveAgentTerminalRow', () => {
     const result = await resolveAgentTerminalRow({ machineId: TERMINAL_ID, branchName: BRANCH_NAME, name: 'cli', deps });
 
     expect(result).toEqual({ ok: false, reason: 'invalid_target' });
+  });
+
+  it('given a pagespace (chat-surface) row, should deny not_a_pty_agent WITHOUT any machineSandbox', async () => {
+    const { store } = makeStore();
+    const deps = makeDeps({ store, projectStore: makeProjectLookup(), machineSandbox: undefined });
+    await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'agent', agentType: 'pagespace', actor, deps });
+
+    const result = await resolveAgentTerminalRow({ machineId: TERMINAL_ID, name: 'agent', deps });
+
+    expect(result).toEqual({ ok: false, reason: 'not_a_pty_agent' });
   });
 });
 
@@ -681,6 +755,51 @@ describe('resolveAgentTerminal', () => {
 
     expect(result).toEqual({ ok: false, reason: 'machine_unavailable' });
   });
+
+  it('given a pagespace (chat-surface) row at machine scope, should deny not_a_pty_agent WITHOUT acquiring the machine Sprite', async () => {
+    const { store } = makeStore();
+    const acquireCalls: string[] = [];
+    const deps = makeDeps({
+      store,
+      projectStore: makeProjectLookup(),
+      machineSandbox: makeMachineSandbox({
+        acquire: async (machineId) => {
+          acquireCalls.push(machineId);
+          return { ok: true, sandboxId: MACHINE_SANDBOX_ID };
+        },
+      }),
+    });
+    await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'agent', agentType: 'pagespace', actor, deps });
+
+    const result = await resolveAgentTerminal({ machineId: TERMINAL_ID, name: 'agent', deps });
+
+    expect(result).toEqual({ ok: false, reason: 'not_a_pty_agent' });
+    expect(acquireCalls).toEqual([]);
+  });
+
+  it('given a pagespace (chat-surface) row at branch scope, should deny not_a_pty_agent', async () => {
+    const { store } = makeStore();
+    const deps = makeDeps({ store });
+    await spawnAgentTerminal({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      branchName: BRANCH_NAME,
+      name: 'agent',
+      agentType: 'pagespace',
+      actor,
+      deps,
+    });
+
+    const result = await resolveAgentTerminal({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      branchName: BRANCH_NAME,
+      name: 'agent',
+      deps,
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'not_a_pty_agent' });
+  });
 });
 
 describe('resolveAgentTerminalById — level-agnostic (PurePoint Attach{agent_id} parity)', () => {
@@ -775,6 +894,27 @@ describe('resolveAgentTerminalById — level-agnostic (PurePoint Attach{agent_id
 
     expect(result).toEqual({ ok: false, reason: 'branch_not_found' });
   });
+
+  it('given a pagespace (chat-surface) row id, should deny not_a_pty_agent WITHOUT acquiring the machine Sprite', async () => {
+    const { store } = makeStore();
+    const acquireCalls: string[] = [];
+    const deps = makeDeps({
+      store,
+      projectStore: makeProjectLookup(),
+      machineSandbox: makeMachineSandbox({
+        acquire: async (machineId) => {
+          acquireCalls.push(machineId);
+          return { ok: true, sandboxId: MACHINE_SANDBOX_ID };
+        },
+      }),
+    });
+    const spawned = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'agent', agentType: 'pagespace', actor, deps });
+
+    const result = await resolveAgentTerminalById({ agentTerminalId: spawned.ok ? spawned.id : '', deps });
+
+    expect(result).toEqual({ ok: false, reason: 'not_a_pty_agent' });
+    expect(acquireCalls).toEqual([]);
+  });
 });
 
 describe('listAgentTerminals', () => {
@@ -839,6 +979,74 @@ describe('killAgentTerminal', () => {
     const result = await killAgentTerminal({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: BRANCH_NAME, name: 'cli', deps });
 
     expect(result).toEqual({ ok: true });
+    expect(attachCalls).toEqual([]);
+    expect(rows.size).toBe(0);
+  });
+
+  it('given a PROJECT-scoped agent terminal whose PTY was never opened (no streamSessionId), should drop the row WITHOUT acquiring the machine Sprite', async () => {
+    const { store, rows } = makeStore();
+    const acquireCalls: string[] = [];
+    const deps = makeDeps({
+      store,
+      machineSandbox: makeMachineSandbox({
+        acquire: async (machineId) => {
+          acquireCalls.push(machineId);
+          return { ok: true, sandboxId: MACHINE_SANDBOX_ID };
+        },
+      }),
+    });
+    await spawnAgentTerminal({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, name: 'cli', agentType: 'claude', actor, deps });
+
+    const result = await killAgentTerminal({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, name: 'cli', deps });
+
+    expect(result).toEqual({ ok: true });
+    expect(acquireCalls).toEqual([]);
+    expect(rows.size).toBe(0);
+  });
+
+  it('given a MACHINE-scoped agent terminal whose PTY was never opened (no streamSessionId), should drop the row WITHOUT acquiring the machine Sprite', async () => {
+    const { store, rows } = makeStore();
+    const acquireCalls: string[] = [];
+    const deps = makeDeps({
+      store,
+      projectStore: makeProjectLookup(),
+      machineSandbox: makeMachineSandbox({
+        acquire: async (machineId) => {
+          acquireCalls.push(machineId);
+          return { ok: true, sandboxId: MACHINE_SANDBOX_ID };
+        },
+      }),
+    });
+    await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'claude', actor, deps });
+
+    const result = await killAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', deps });
+
+    expect(result).toEqual({ ok: true });
+    expect(acquireCalls).toEqual([]);
+    expect(rows.size).toBe(0);
+  });
+
+  it('given a pagespace (chat-surface) agent terminal (never has a streamSessionId), should drop the row WITHOUT touching the Sprite at all', async () => {
+    const { store, rows } = makeStore();
+    const acquireCalls: string[] = [];
+    const attachCalls: string[] = [];
+    const deps = makeDeps({
+      store,
+      projectStore: makeProjectLookup(),
+      machineSandbox: makeMachineSandbox({
+        acquire: async (machineId) => {
+          acquireCalls.push(machineId);
+          return { ok: true, sandboxId: MACHINE_SANDBOX_ID };
+        },
+      }),
+      host: makeHost({ attach: async ({ machineId }) => { attachCalls.push(machineId); return makeHandle(); } }),
+    });
+    await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'agent', agentType: 'pagespace', actor, deps });
+
+    const result = await killAgentTerminal({ machineId: TERMINAL_ID, name: 'agent', deps });
+
+    expect(result).toEqual({ ok: true });
+    expect(acquireCalls).toEqual([]);
     expect(attachCalls).toEqual([]);
     expect(rows.size).toBe(0);
   });
@@ -1119,14 +1327,50 @@ describe('killAgentTerminalById — level-agnostic (PurePoint Attach{agent_id} p
     expect(rows.size).toBe(0);
   });
 
-  it('given a machine-scoped row id, should acquire the machine Sprite and drop the row', async () => {
+  it('given a machine-scoped row id whose PTY was never opened (no streamSessionId), should drop the row WITHOUT acquiring the machine Sprite', async () => {
     const { store, rows } = makeStore();
-    const deps = makeDeps({ store, projectStore: makeProjectLookup() });
+    const acquireCalls: string[] = [];
+    const deps = makeDeps({
+      store,
+      projectStore: makeProjectLookup(),
+      machineSandbox: makeMachineSandbox({
+        acquire: async (machineId) => {
+          acquireCalls.push(machineId);
+          return { ok: true, sandboxId: MACHINE_SANDBOX_ID };
+        },
+      }),
+    });
     const spawned = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'claude', actor, deps });
 
     const result = await killAgentTerminalById({ agentTerminalId: spawned.ok ? spawned.id : '', deps });
 
     expect(result).toEqual({ ok: true });
+    expect(acquireCalls).toEqual([]);
+    expect(rows.size).toBe(0);
+  });
+
+  it('given a pagespace (chat-surface) row id (never has a streamSessionId), should drop the row WITHOUT touching the Sprite at all', async () => {
+    const { store, rows } = makeStore();
+    const acquireCalls: string[] = [];
+    const attachCalls: string[] = [];
+    const deps = makeDeps({
+      store,
+      projectStore: makeProjectLookup(),
+      machineSandbox: makeMachineSandbox({
+        acquire: async (machineId) => {
+          acquireCalls.push(machineId);
+          return { ok: true, sandboxId: MACHINE_SANDBOX_ID };
+        },
+      }),
+      host: makeHost({ attach: async ({ machineId }) => { attachCalls.push(machineId); return makeHandle(); } }),
+    });
+    const spawned = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'agent', agentType: 'pagespace', actor, deps });
+
+    const result = await killAgentTerminalById({ agentTerminalId: spawned.ok ? spawned.id : '', deps });
+
+    expect(result).toEqual({ ok: true });
+    expect(acquireCalls).toEqual([]);
+    expect(attachCalls).toEqual([]);
     expect(rows.size).toBe(0);
   });
 });
