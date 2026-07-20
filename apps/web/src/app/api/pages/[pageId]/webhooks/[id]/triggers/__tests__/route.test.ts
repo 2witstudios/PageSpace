@@ -15,6 +15,7 @@ const mockWorkflowFindFirst = vi.fn();
 const mockTriggerFindFirst = vi.fn();
 const mockTriggerFindMany = vi.fn();
 const mockInsertReturning = vi.fn();
+const mockCountResult = vi.fn();
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
@@ -26,6 +27,11 @@ vi.mock('@pagespace/db/db', () => ({
         findMany: (...args: unknown[]) => mockTriggerFindMany(...args),
       },
     },
+    select: () => ({
+      from: () => ({
+        where: () => mockCountResult(),
+      }),
+    }),
     insert: () => ({
       values: () => ({
         onConflictDoNothing: () => ({
@@ -38,6 +44,8 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: (a: unknown, b: unknown) => ({ eq: [a, b] }),
   and: (...args: unknown[]) => ({ and: args }),
+  asc: (col: unknown) => ({ asc: col }),
+  count: () => ({ count: true }),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id' },
@@ -46,7 +54,12 @@ vi.mock('@pagespace/db/schema/page-webhooks', () => ({
   pageWebhooks: { id: 'pageWebhooks.id', pageId: 'pageWebhooks.pageId' },
 }));
 vi.mock('@pagespace/db/schema/webhook-triggers', () => ({
-  webhookTriggers: { id: 'webhookTriggers.id', pageWebhookId: 'webhookTriggers.pageWebhookId', workflowId: 'webhookTriggers.workflowId' },
+  webhookTriggers: {
+    id: 'webhookTriggers.id',
+    pageWebhookId: 'webhookTriggers.pageWebhookId',
+    workflowId: 'webhookTriggers.workflowId',
+    createdAt: 'webhookTriggers.createdAt',
+  },
   PAGE_WEBHOOK_EVENT_TYPE: '*',
 }));
 vi.mock('@pagespace/db/schema/workflows', () => ({
@@ -81,16 +94,20 @@ beforeEach(() => {
   mockWebhookFindFirst.mockResolvedValue({ id: 'wh-1' });
   mockPageFindFirst.mockResolvedValue({ driveId: 'drive-1' });
   mockWorkflowFindFirst.mockResolvedValue({ id: 'wf-1', driveId: 'drive-1' });
+  mockTriggerFindFirst.mockResolvedValue(null); // no existing binding by default
+  mockCountResult.mockResolvedValue([{ value: 0 }]);
 });
 
 describe('GET /api/pages/[pageId]/webhooks/[id]/triggers', () => {
-  it('lists the webhook triggers with a bounded query', async () => {
+  it('lists the webhook triggers with a bounded, deterministically-ordered query', async () => {
     mockTriggerFindMany.mockResolvedValue([{ id: 't-1', pageWebhookId: 'wh-1', workflowId: 'wf-1' }]);
     const response = await GET(makeRequest('GET'), PARAMS);
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.triggers).toHaveLength(1);
-    expect(mockTriggerFindMany).toHaveBeenCalledWith(expect.objectContaining({ limit: 200 }));
+    expect(mockTriggerFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 100, orderBy: expect.any(Array) }),
+    );
   });
 
   it('rejects a non-owner/admin with 403', async () => {
@@ -129,13 +146,21 @@ describe('POST /api/pages/[pageId]/webhooks/[id]/triggers', () => {
     expect(mockAuditRequest).not.toHaveBeenCalled();
   });
 
-  it('returns 200 (idempotent) when the binding already exists', async () => {
-    mockInsertReturning.mockResolvedValue([]);
+  it('returns 200 (idempotent) when the binding already exists, without re-inserting or counting', async () => {
     mockTriggerFindFirst.mockResolvedValue({ id: 't-existing', pageWebhookId: 'wh-1', workflowId: 'wf-1' });
     const response = await POST(makeRequest('POST', { workflowId: 'wf-1' }), PARAMS);
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.trigger.id).toBe('t-existing');
+    expect(mockCountResult).not.toHaveBeenCalled();
+    expect(mockInsertReturning).not.toHaveBeenCalled();
+  });
+
+  it('rejects a genuinely-new binding beyond the per-webhook cap with 409', async () => {
+    mockCountResult.mockResolvedValue([{ value: 100 }]);
+    const response = await POST(makeRequest('POST', { workflowId: 'wf-new' }), PARAMS);
+    expect(response.status).toBe(409);
+    expect(mockInsertReturning).not.toHaveBeenCalled();
   });
 
   it('returns 404 when the workflow does not exist', async () => {

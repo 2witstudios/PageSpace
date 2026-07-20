@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { db } from '@pagespace/db/db';
-import { and, eq } from '@pagespace/db/operators';
+import { and, eq, asc, count } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { pageWebhooks } from '@pagespace/db/schema/page-webhooks';
 import { webhookTriggers, PAGE_WEBHOOK_EVENT_TYPE } from '@pagespace/db/schema/webhook-triggers';
@@ -22,6 +22,12 @@ const createSchema = z.object({
 // A page webhook is not an OAuth connection, so a trigger anchored to one is
 // tagged with this provider constant (mirrors 'zoom' on connection-anchored rows).
 const PAGE_WEBHOOK_PROVIDER = 'page-webhook';
+
+// A page webhook fans out to at most this many workflow bindings. The list
+// endpoint returns the full set in one bounded query, so the create path caps
+// at the same number — this keeps GET from ever silently truncating (no cursor
+// needed) while staying far above any realistic wiring depth.
+const MAX_TRIGGERS_PER_WEBHOOK = 100;
 
 // Returns the webhook only if it belongs to this page — scopes every trigger op
 // to a webhook the caller's page owns, and yields the page's driveId for the
@@ -56,9 +62,12 @@ export async function GET(request: Request, context: { params: Promise<{ pageId:
     const scope = await findWebhookWithDrive(pageId, id);
     if (!scope) return NextResponse.json({ error: 'Webhook not found' }, { status: 404 });
 
+    // Stable ordering so repeated reads return the same sequence, and the whole
+    // set fits in one page (creation is capped at MAX_TRIGGERS_PER_WEBHOOK).
     const triggers = await db.query.webhookTriggers.findMany({
       where: eq(webhookTriggers.pageWebhookId, id),
-      limit: 200,
+      orderBy: [asc(webhookTriggers.createdAt), asc(webhookTriggers.id)],
+      limit: MAX_TRIGGERS_PER_WEBHOOK,
     });
 
     return NextResponse.json({ triggers });
@@ -111,9 +120,31 @@ export async function POST(request: Request, context: { params: Promise<{ pageId
       );
     }
 
-    // Idempotent create: the partial unique on (pageWebhookId, workflowId) makes
-    // repeated POSTs no-ops rather than duplicate fan-out. connectionId is left
-    // NULL to satisfy the anchor XOR check.
+    // Idempotent create: re-binding an already-wired workflow is a no-op (and
+    // never counts against the cap below). The partial unique on
+    // (pageWebhookId, workflowId) still guards the concurrent-insert race.
+    const alreadyBound = await db.query.webhookTriggers.findFirst({
+      where: and(
+        eq(webhookTriggers.pageWebhookId, id),
+        eq(webhookTriggers.workflowId, workflowId),
+      ),
+    });
+    if (alreadyBound) return NextResponse.json({ trigger: alreadyBound }, { status: 200 });
+
+    // Cap genuinely-new bindings so the list endpoint's single bounded page can
+    // always return the complete set.
+    const [{ value: existingCount }] = await db
+      .select({ value: count() })
+      .from(webhookTriggers)
+      .where(eq(webhookTriggers.pageWebhookId, id));
+    if (existingCount >= MAX_TRIGGERS_PER_WEBHOOK) {
+      return NextResponse.json(
+        { error: `A webhook can have at most ${MAX_TRIGGERS_PER_WEBHOOK} workflow bindings` },
+        { status: 409 },
+      );
+    }
+
+    // connectionId is left NULL to satisfy the anchor XOR check.
     const [inserted] = await db
       .insert(webhookTriggers)
       .values({
@@ -126,13 +157,14 @@ export async function POST(request: Request, context: { params: Promise<{ pageId
       .returning();
 
     if (!inserted) {
-      const existing = await db.query.webhookTriggers.findFirst({
+      // Lost the insert race to a concurrent identical bind — return the winner.
+      const raced = await db.query.webhookTriggers.findFirst({
         where: and(
           eq(webhookTriggers.pageWebhookId, id),
           eq(webhookTriggers.workflowId, workflowId),
         ),
       });
-      return NextResponse.json({ trigger: existing }, { status: 200 });
+      return NextResponse.json({ trigger: raced }, { status: 200 });
     }
 
     auditRequest(request, {
