@@ -55,6 +55,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
     },
   },
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+  logPerformance: vi.fn(),
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
@@ -89,12 +90,17 @@ vi.mock('@pagespace/db/db', () => {
         })),
       })),
     },
+    // Accessed by start-generation-exclusive's advisory lock (real, unmocked
+    // implementation) — its own error handling degrades to running unlocked
+    // when the pool/lock query fails, which a bare object triggers harmlessly.
+    getAdvisoryLockPool: vi.fn(() => ({})),
   };
 });
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   ne: vi.fn(),
+  desc: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id' },
@@ -182,8 +188,17 @@ vi.mock('ai', () => ({
   stepCountIs: vi.fn(),
   hasToolCall: vi.fn(() => () => false),
   tool: vi.fn((config) => config),
-  createUIMessageStream: vi.fn(),
-  createUIMessageStreamResponse: vi.fn(),
+  // Real createUIMessageStream runs `execute` as a detached producer (the
+  // route never awaits it — the returned stream is consumed by piping into
+  // the HTTP response). Mirror that: fire it without awaiting, so the route
+  // under test returns the same way it does in production, and this file's
+  // tests poll (vi.waitFor) for streamText to have been invoked once its
+  // microtasks settle.
+  createUIMessageStream: vi.fn((opts: { execute?: (args: { writer: { write: () => void } }) => Promise<void> }) => {
+    void opts.execute?.({ writer: { write: vi.fn() } })?.catch(() => {});
+    return {};
+  }),
+  createUIMessageStreamResponse: vi.fn(() => new Response(null, { status: 200 })),
 }));
 
 vi.mock('@paralleldrive/cuid2', () => ({
@@ -243,6 +258,7 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: {
     getConversation: vi.fn().mockResolvedValue(null),
     hasConflictingMessageOwner: vi.fn().mockResolvedValue(false),
+    createConversation: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -315,7 +331,7 @@ describe('POST /api/ai/chat - machine-pane binding', () => {
     expect(filtered).not.toHaveProperty('list_machines');
     expect(filtered).toHaveProperty('read_page');
 
-    expect(streamTextMock).toHaveBeenCalled();
+    await vi.waitFor(() => expect(streamTextMock).toHaveBeenCalled());
     const streamTextArgs = streamTextMock.mock.calls[0]?.[0] as { experimental_context?: Record<string, unknown> };
     expect(streamTextArgs.experimental_context?.machineBinding).toEqual({
       machineId: chatId,
@@ -350,7 +366,7 @@ describe('POST /api/ai/chat - machine-pane binding', () => {
     expect(filtered).toHaveProperty('switch_machine');
     expect(filtered).toHaveProperty('list_machines');
 
-    expect(streamTextMock).toHaveBeenCalled();
+    await vi.waitFor(() => expect(streamTextMock).toHaveBeenCalled());
     const streamTextArgs = streamTextMock.mock.calls[0]?.[0] as { experimental_context?: Record<string, unknown> };
     expect(streamTextArgs.experimental_context?.machineBinding).toBeUndefined();
     expect(streamTextArgs.experimental_context?.activeMachine).toBeUndefined();

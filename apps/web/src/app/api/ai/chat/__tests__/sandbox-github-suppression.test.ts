@@ -167,6 +167,16 @@ vi.mock('@/lib/ai/core/mcp-tool-converter', () => ({
 vi.mock('@/lib/ai/core/personalization-utils', () => ({
   getUserPersonalization: vi.fn().mockResolvedValue(null),
 }));
+// Phase 6 (#2166): the route now derives a Machine Pane binding for every
+// request. None of these requests carry a machine-bound conversationId, so
+// this resolves to null (not a machine-bound pane) — the real DB-backed
+// deps builder is stubbed out since the pure core itself is fully mocked.
+vi.mock('@pagespace/lib/services/machines/machine-pane-binding', () => ({
+  deriveMachinePaneBinding: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@/lib/ai/machine-pane/machine-pane-binding-runtime', () => ({
+  buildMachinePaneBindingDeps: vi.fn(() => ({})),
+}));
 
 vi.mock('ai', () => ({
   streamText: vi.fn(),
