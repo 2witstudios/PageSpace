@@ -57,21 +57,16 @@ import { useSyncedWorkspaceActions } from '@/hooks/useMachineWorkspaceSync';
 import { ConnectIntegrationDialog } from '@/components/integrations/ConnectIntegrationDialog';
 import { normalizeProjectName } from '@pagespace/lib/services/machines/project-name';
 import { normalizeBranchName } from '@pagespace/lib/services/machines/branch-name';
-import type { AgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
+import {
+  PICKABLE_AGENT_TYPES,
+  agentSurfaceOf,
+  type AgentRuntimeType,
+} from '@pagespace/lib/services/machines/agent-terminal-types';
 import { useMachineWorkspaceStore, autoSessionName } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 import { AddButton } from './RemoveButton';
 import { nodeScopeOf } from './WorkspaceLeaves';
+import { agentTypeLabelOf } from './pane-surface';
 import type { MachineTreeNode } from './MachineTree';
-
-/**
- * The "New terminal" agent choices — a fixed, local list rather than
- * `Object.keys(AGENT_LAUNCH_SPECS)`, for two reasons: `pagespace-cli` is
- * being removed as an agent type by a sibling change, and `shell` must be
- * offered and listed FIRST (a plain shell is a first-class choice here,
- * arguably the default — not an afterthought). Defined locally so this
- * palette can't silently inherit some other list that (buggily) excludes it.
- */
-const PICKABLE_AGENT_TYPES: AgentRuntimeType[] = ['shell', 'claude', 'codex'];
 
 /** Short project name from a GitHub `full_name` (e.g. "org/my-repo" -> "my-repo"), and the ready-to-clone URL. */
 export function deriveProjectFieldsFromRepo(repo: { full_name: string; clone_url: string }): { name: string; repoUrl: string } {
@@ -283,7 +278,15 @@ function TerminalSpawnForm({
         ? bindPaneTerminal(
             workspaceId,
             workspace.activePaneId,
-            { projectName: scope.projectName, branchName: scope.branchName, name: created.name },
+            {
+              projectName: scope.projectName,
+              branchName: scope.branchName,
+              name: created.name,
+              // Same rule as TerminalPanes' spawnIntoPane: record the surface
+              // at bind time; only `chat` is written, since an omitted kind
+              // already means `terminal` (see OpenTerminalScope).
+              ...(agentSurfaceOf(agentType) === 'chat' ? { kind: 'chat' as const } : {}),
+            },
             created.resumed ? undefined : prompt.trim() || undefined,
           )
         : false;
@@ -324,7 +327,7 @@ function TerminalSpawnForm({
           <SelectContent>
             {PICKABLE_AGENT_TYPES.map((type) => (
               <SelectItem key={type} value={type}>
-                {type}
+                {agentTypeLabelOf(type)}
               </SelectItem>
             ))}
           </SelectContent>

@@ -122,7 +122,7 @@ describe('resolvePaneSurface', () => {
       actual: resolvePaneSurface({
         scope: { ...NODE, name: 'old-cli' },
         workspaceScope: NODE,
-        agentTerminals: [{ id: 'row-old', name: 'old-cli', agentType: 'pagespace-cli', createdAt: '' }],
+        agentTerminals: [{ id: 'row-old', name: 'old-cli', agentType: 'pagespace-cli' }],
         isLoading: false,
       }),
       expected: { surface: 'terminal' },
