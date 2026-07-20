@@ -32,10 +32,10 @@ interface PageWebhooksDialogProps {
   pageId: string;
 }
 
-const webhooksFetcher = async (url: string): Promise<{ webhooks: WebhookRow[] } | { error: string }> => {
+const webhooksFetcher = async (url: string): Promise<{ webhooks: WebhookRow[] } | { error: string; status: number }> => {
   const res = await fetchWithAuth(url);
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) return { error: body.error ?? 'Failed to load webhooks' };
+  if (!res.ok) return { error: body.error ?? 'Failed to load webhooks', status: res.status };
   return body;
 };
 
@@ -55,7 +55,8 @@ export function PageWebhooksDialog({ open, onOpenChange, pageId }: PageWebhooksD
     }
   }, [open]);
 
-  const forbidden = data && 'error' in data;
+  const forbidden = data && 'error' in data && data.status === 403;
+  const loadFailed = data && 'error' in data && data.status !== 403;
   const webhooks = data && 'webhooks' in data ? data.webhooks : [];
 
   const createWebhook = async () => {
@@ -131,6 +132,13 @@ export function PageWebhooksDialog({ open, onOpenChange, pageId }: PageWebhooksD
           <p className="text-sm text-muted-foreground py-4">
             Only this drive&apos;s owner or an admin can manage webhooks.
           </p>
+        ) : loadFailed ? (
+          <div className="flex items-center justify-between gap-2 py-4">
+            <p className="text-sm text-muted-foreground">Failed to load webhooks.</p>
+            <Button type="button" variant="outline" size="sm" onClick={() => refetch()}>
+              Retry
+            </Button>
+          </div>
         ) : revealed ? (
           <div className="space-y-3 py-2">
             <p className="text-sm">

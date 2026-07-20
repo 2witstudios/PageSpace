@@ -88,6 +88,26 @@ describe('PageWebhooksDialog', () => {
     });
   });
 
+  test('distinguishes a server failure from missing permission', async () => {
+    vi.mocked(fetchWithAuth).mockResolvedValue(
+      listResponse(500, { error: 'Failed to list webhooks' }),
+    );
+
+    renderDialog();
+    await waitFor(() => screen.getByText('Failed to load webhooks.'));
+
+    assert({
+      given: 'the webhook list request fails with a non-403 error',
+      should: 'show a retryable failure message, NOT the owner/admin explanation',
+      actual: {
+        failure: screen.getByText('Failed to load webhooks.') !== null,
+        retry: screen.getByRole('button', { name: /Retry/ }) !== null,
+        permissionCopy: screen.queryByText(/Only this drive's owner or an admin/),
+      },
+      expected: { failure: true, retry: true, permissionCopy: null },
+    });
+  });
+
   test('reveals the secret exactly once, dismissed only by explicit confirmation', async () => {
     vi.mocked(fetchWithAuth).mockResolvedValue(listResponse(200, { webhooks: [] }));
     vi.mocked(post).mockResolvedValue({
