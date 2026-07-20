@@ -20,10 +20,6 @@ export const useDictationActivityStore = create<DictationActivityState>(() => ({
   activeCount: 0,
 }));
 
-export function isDictationActive(): boolean {
-  return useDictationActivityStore.getState().activeCount > 0;
-}
-
 export interface UseSpeechRecognitionOptions {
   /** Callback when speech is transcribed */
   onTranscript: (text: string) => void;
