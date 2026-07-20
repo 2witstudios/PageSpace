@@ -49,7 +49,8 @@ export const webhookTriggers = pgTable('webhook_triggers', {
       table.eventType,
     ),
     // Page-anchored rows skip event matching (all enabled triggers fire), so the
-    // idempotency key is just (pageWebhookId, workflowId). Partial: NULLs stay out.
+    // idempotency key is just (pageWebhookId, workflowId). The WHERE keeps
+    // connection-anchored rows (pageWebhookId NULL) out of the index entirely.
     pageWebhookWorkflowUnique: uniqueIndex('webhook_triggers_page_webhook_workflow_unique')
       .on(table.pageWebhookId, table.workflowId)
       .where(sql`${table.pageWebhookId} IS NOT NULL`),
