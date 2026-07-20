@@ -35,10 +35,10 @@ const listResponse = (status: number, body: unknown) =>
     headers: { 'Content-Type': 'application/json' },
   });
 
-const renderDialog = () =>
+const renderDialog = (pageType = 'AI_CHAT') =>
   render(
     <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
-      <PageWebhooksDialog open onOpenChange={() => {}} pageId={PAGE_ID} />
+      <PageWebhooksDialog open onOpenChange={() => {}} pageId={PAGE_ID} pageType={pageType} />
     </SWRConfig>,
   );
 
@@ -85,6 +85,29 @@ describe('PageWebhooksDialog', () => {
         createForm: screen.queryByPlaceholderText(/Webhook name/),
       },
       expected: { explanation: true, createForm: null },
+    });
+  });
+
+  test('description copy states the channel default action only on channels', async () => {
+    vi.mocked(fetchWithAuth).mockResolvedValue(listResponse(200, { webhooks: [] }));
+
+    const channelRender = renderDialog('CHANNEL');
+    await waitFor(() => screen.getByText(/post messages into this channel/));
+    const channelCopyShown = screen.getByText(/post messages into this channel/) !== null;
+    channelRender.unmount();
+
+    renderDialog('AI_CHAT');
+    await waitFor(() => screen.getByText(/push events to this page/));
+
+    assert({
+      given: 'the dialog mounted on a CHANNEL page and then on an AI_CHAT page',
+      should: 'describe the post-as-messages default only for the channel, neutral copy elsewhere',
+      actual: {
+        channelCopyShown,
+        aiPageNeutralCopy: screen.getByText(/push events to this page/) !== null,
+        aiPageChannelCopy: screen.queryByText(/post messages into this channel/),
+      },
+      expected: { channelCopyShown: true, aiPageNeutralCopy: true, aiPageChannelCopy: null },
     });
   });
 

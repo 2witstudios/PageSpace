@@ -656,6 +656,7 @@ function ChannelView({ page }: ChannelViewProps) {
             open={webhooksOpen}
             onOpenChange={setWebhooksOpen}
             pageId={page.id}
+            pageType="CHANNEL"
           />
           <Conversation className="h-full">
             <ConversationContent className="max-w-4xl mx-auto p-4">

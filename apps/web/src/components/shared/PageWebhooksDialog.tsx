@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { Check, Copy, Webhook } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR from 'swr';
@@ -30,6 +30,7 @@ interface PageWebhooksDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   pageId: string;
+  pageType: string;
 }
 
 const webhooksFetcher = async (url: string): Promise<{ webhooks: WebhookRow[] } | { error: string; status: number }> => {
@@ -39,7 +40,7 @@ const webhooksFetcher = async (url: string): Promise<{ webhooks: WebhookRow[] } 
   return body;
 };
 
-export function PageWebhooksDialog({ open, onOpenChange, pageId }: PageWebhooksDialogProps) {
+function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWebhooksDialogProps) {
   const key = open ? `/api/pages/${pageId}/webhooks` : null;
   const { data, isLoading, mutate: refetch } = useSWR(key, webhooksFetcher, { revalidateOnFocus: false });
 
@@ -55,8 +56,9 @@ export function PageWebhooksDialog({ open, onOpenChange, pageId }: PageWebhooksD
     }
   }, [open]);
 
-  const forbidden = data && 'error' in data && data.status === 403;
-  const loadFailed = data && 'error' in data && data.status !== 403;
+  const errorStatus = data && 'error' in data ? data.status : null;
+  const forbidden = errorStatus === 403;
+  const loadFailed = errorStatus !== null && errorStatus !== 403;
   const webhooks = data && 'webhooks' in data ? data.webhooks : [];
 
   const createWebhook = async () => {
@@ -120,9 +122,11 @@ export function PageWebhooksDialog({ open, onOpenChange, pageId }: PageWebhooksD
             Incoming Webhooks
           </DialogTitle>
           <DialogDescription>
-            External systems can push events to this page by sending signed requests to a webhook
-            URL. On channels, deliveries post as messages; other page types act on deliveries as
-            their integrations are wired up.
+            {/* CHANNEL is the one type with a default delivery action today — the same
+                special case the intake route carries until the dispatch map lands. */}
+            {pageType === 'CHANNEL'
+              ? 'External systems can post messages into this channel by sending signed requests to a webhook URL.'
+              : 'External systems can push events to this page by sending signed requests to a webhook URL.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -228,3 +232,7 @@ export function PageWebhooksDialog({ open, onOpenChange, pageId }: PageWebhooksD
     </Dialog>
   );
 }
+
+// Memoized: AiChatView re-renders per streaming token, and every prop here is
+// stable/primitive — memo skips the closed dialog's subtree on all of them.
+export const PageWebhooksDialog = memo(PageWebhooksDialogImpl);

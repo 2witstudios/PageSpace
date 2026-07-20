@@ -1584,6 +1584,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         open={webhooksOpen}
         onOpenChange={setWebhooksOpen}
         pageId={page.id}
+        pageType={page.type}
       />
     </div>
     </AskUserAnswerProvider>
