@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSocket } from '@/hooks/useSocket';
 import { useAuth } from '@/hooks/useAuth';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -64,6 +64,11 @@ export function useMessageRendererState({
   const [tasks, setTasks] = useState<RendererTask[]>([]);
   const [taskList, setTaskList] = useState<RendererTaskList | null>(null);
   const [isLoadingTasks, setIsLoadingTasks] = useState(false);
+  // Read inside the socket effect below without making taskList a dependency —
+  // a fresh taskList reference on every reload would otherwise tear down and
+  // re-register both listeners on every real-time task-list update.
+  const taskListRef = useRef(taskList);
+  taskListRef.current = taskList;
 
   // Socket connection (singleton pattern) - only used for todo_list messages
   const socket = useSocket();
@@ -113,7 +118,8 @@ export function useMessageRendererState({
     };
 
     const handleTaskListUpdate = (payload: { taskListId: string }) => {
-      if (taskList && payload.taskListId === taskList.id) {
+      const currentTaskList = taskListRef.current;
+      if (currentTaskList && payload.taskListId === currentTaskList.id) {
         loadTasksForMessage(message.id);
       }
     };
@@ -125,7 +131,7 @@ export function useMessageRendererState({
       socket.off('task:task_updated', handleTaskUpdate);
       socket.off('task:task_list_created', handleTaskListUpdate);
     };
-  }, [socket, message.messageType, message.id, taskList]);
+  }, [socket, message.messageType, message.id]);
 
   const handleTaskStatusUpdate = async (taskId: string, newStatus: TaskStatus) => {
     try {
