@@ -12,6 +12,7 @@ import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { isImageGenerationAllowed } from '@/lib/ai/core/image-gen-access';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
+import { stopReadAloud } from '@/lib/voice/readAloudPlayer';
 import type { ImageAttachment } from '@/lib/ai/shared/hooks/useImageAttachments';
 
 export interface ChatInputProps {
@@ -183,6 +184,15 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       },
     });
 
+    // Starting mic dictation stops Read Aloud first — otherwise the mic can
+    // transcribe the TTS audio it hears right back into the draft.
+    const handleMicClick = useCallback(() => {
+      if (!isListening) {
+        stopReadAloud();
+      }
+      toggleListening();
+    }, [isListening, toggleListening]);
+
     // Mobile keyboard management
     const keyboard = useMobileKeyboard();
     const prevStreamingRef = useRef(isStreaming);
@@ -307,7 +317,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
           isMcpServerEnabled={isMcpServerEnabled}
           onMcpServerToggle={onMcpServerToggle}
           showMcp={showMcp}
-          onMicClick={toggleListening}
+          onMicClick={handleMicClick}
           isListening={isListening}
           isMicSupported={isSupported}
           micError={speechError}

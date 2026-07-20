@@ -181,7 +181,7 @@ export function InputFooter({
               variant="ghost"
               size="sm"
               onClick={onReadAloudClick}
-              disabled={!isReadingAloud && (disabled || isVoiceProGated || !canReadAloud)}
+              disabled={!isReadingAloud && (disabled || isVoiceProGated || !canReadAloud || isListening)}
               className={cn(
                 'h-8 w-8 p-0 transition-all duration-200 hover:bg-transparent dark:hover:bg-transparent',
                 isReadingAloud
@@ -195,7 +195,9 @@ export function InputFooter({
                   ? 'Read aloud requires Pro'
                   : isReadingAloud
                     ? 'Stop reading aloud'
-                    : 'Read aloud'}
+                    : isListening
+                      ? 'Read aloud unavailable while dictating'
+                      : 'Read aloud'}
               </span>
             </Button>
           </TooltipTrigger>
@@ -204,7 +206,9 @@ export function InputFooter({
               ? 'Read aloud requires a Pro plan'
               : isReadingAloud
                 ? 'Stop reading aloud'
-                : 'Read aloud'}
+                : isListening
+                  ? 'Read aloud unavailable while dictating'
+                  : 'Read aloud'}
           </TooltipContent>
         </Tooltip>
 
