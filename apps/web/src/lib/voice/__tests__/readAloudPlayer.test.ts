@@ -5,11 +5,12 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
 }));
 
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
 import {
   startReadAloud,
   stopReadAloud,
   isReadAloudPlaying,
-  subscribeReadAloud,
+  useReadAloudPlayerStore,
 } from '../readAloudPlayer';
 
 class FakeAudioBufferSourceNode {
@@ -50,6 +51,7 @@ describe('readAloudPlayer', () => {
 
   afterEach(() => {
     stopReadAloud();
+    useVoiceModeStore.getState().disable();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -79,8 +81,8 @@ describe('readAloudPlayer', () => {
     // main content) both observing the one shared player.
     const surfaceA = vi.fn();
     const surfaceB = vi.fn();
-    const unsubscribeA = subscribeReadAloud(surfaceA);
-    const unsubscribeB = subscribeReadAloud(surfaceB);
+    const unsubscribeA = useReadAloudPlayerStore.subscribe(surfaceA);
+    const unsubscribeB = useReadAloudPlayerStore.subscribe(surfaceB);
 
     startReadAloud(['hello there']);
     expect(surfaceA).toHaveBeenCalledTimes(1);
@@ -99,7 +101,7 @@ describe('readAloudPlayer', () => {
 
   it('unsubscribing stops further notifications', () => {
     const listener = vi.fn();
-    const unsubscribe = subscribeReadAloud(listener);
+    const unsubscribe = useReadAloudPlayerStore.subscribe(listener);
     unsubscribe();
 
     startReadAloud(['hello there']);
@@ -203,5 +205,18 @@ describe('readAloudPlayer', () => {
     resolveSecond?.();
     await vi.waitFor(() => expect(createdSources).toHaveLength(1));
     expect(isReadAloudPlaying()).toBe(true);
+  });
+
+  it('stops playback the moment Voice Mode is enabled, regardless of how it was enabled', () => {
+    // Enforced at the module level (subscribed to useVoiceModeStore) rather
+    // than by any specific UI call site — so calling the store's enable()
+    // action directly, bypassing every view's own handleVoiceModeToggle,
+    // must still stop read-aloud.
+    startReadAloud(['hello there']);
+    expect(isReadAloudPlaying()).toBe(true);
+
+    useVoiceModeStore.getState().enable('ai-page');
+
+    expect(isReadAloudPlaying()).toBe(false);
   });
 });

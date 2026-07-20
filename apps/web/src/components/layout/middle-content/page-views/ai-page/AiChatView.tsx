@@ -48,9 +48,7 @@ import { shouldRefreshAfterUndo } from '@/lib/ai/streams/shouldRefreshAfterUndo'
 import { shouldPrependConversation } from '@/lib/ai/streams/shouldPrependConversation';
 import { shouldReloadOnComountComplete } from '@/lib/ai/streams/shouldReloadOnComountComplete';
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
-import { getTextSinceLastUserTurn } from '@/lib/ai/streams/getTextSinceLastUserTurn';
 import { useReadAloud } from '@/hooks/useReadAloud';
-import { stopReadAloud } from '@/lib/voice/readAloudPlayer';
 
 // Shared hooks and components
 import {
@@ -586,13 +584,11 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
   // Read Aloud: on-demand TTS for everything the assistant said since the
   // user's last turn, via a shared playback singleton (see readAloudPlayer).
-  // Disabled whenever Voice Mode is enabled on ANY surface (not just this
-  // one) since a live call elsewhere plays through its own separate
-  // AudioContext and would overlap with this audio.
-  const { isReadingAloud, toggleReadAloud } = useReadAloud();
-  const canReadAloud = useMemo(
-    () => !isVoiceModeEnabled && getTextSinceLastUserTurn(plainMessages).trim().length > 0,
-    [plainMessages, isVoiceModeEnabled]
+  const { isReadingAloud, toggleReadAloud, canReadAloud: canReadAloudFor } = useReadAloud();
+  const canReadAloud = canReadAloudFor(plainMessages);
+  const handleReadAloudClick = useCallback(
+    () => toggleReadAloud(plainMessages),
+    [toggleReadAloud, plainMessages]
   );
 
   // "Load older" (epic leaf 6.6, scroll-to-top): AiChatView's route IS the agent-conversation
@@ -1252,14 +1248,13 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     prepareSend,
   ]);
 
-  // Voice mode toggle handler
+  // Voice mode toggle handler. Enabling Voice Mode also stops any
+  // in-progress read-aloud playback — enforced inside readAloudPlayer itself
+  // (subscribed to the voice-mode store), not here.
   const handleVoiceModeToggle = useCallback(() => {
     if (isVoiceModeActive) {
       disableVoiceMode();
     } else {
-      // Voice Mode's mic capture would otherwise pick up read-aloud audio
-      // still playing through the shared singleton.
-      stopReadAloud();
       enableVoiceMode(VOICE_OWNER);
     }
   }, [isVoiceModeActive, enableVoiceMode, disableVoiceMode]);
@@ -1535,7 +1530,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                   }}
                   onVoiceModeClick={handleVoiceModeToggle}
                   isVoiceModeActive={isVoiceModeActive}
-                  onReadAloudClick={() => toggleReadAloud(plainMessages)}
+                  onReadAloudClick={handleReadAloudClick}
                   isReadingAloud={isReadingAloud}
                   canReadAloud={canReadAloud}
                   attachments={attachments}

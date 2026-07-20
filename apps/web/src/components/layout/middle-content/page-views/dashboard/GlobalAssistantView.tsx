@@ -108,9 +108,7 @@ import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimi
 import { selectVoiceStreamText } from '@/lib/ai/streams/selectVoiceStreamText';
 import { selectVoiceActivationBaseline } from '@/lib/ai/streams/selectVoiceActivationBaseline';
 import { selectPostBaselineAssistantMessage } from '@/lib/ai/streams/selectPostBaselineAssistantMessage';
-import { getTextSinceLastUserTurn } from '@/lib/ai/streams/getTextSinceLastUserTurn';
 import { useReadAloud } from '@/hooks/useReadAloud';
-import { stopReadAloud } from '@/lib/voice/readAloudPlayer';
 import { createId } from '@paralleldrive/cuid2';
 
 const VOICE_OWNER: VoiceModeOwner = 'global-assistant';
@@ -442,13 +440,11 @@ const GlobalAssistantView: React.FC = () => {
 
   // Read Aloud: on-demand TTS for everything the assistant said since the
   // user's last turn, via a shared playback singleton (see readAloudPlayer).
-  // Disabled whenever Voice Mode is enabled on ANY surface (not just this
-  // one) since a live call elsewhere plays through its own separate
-  // AudioContext and would overlap with this audio.
-  const { isReadingAloud, toggleReadAloud } = useReadAloud();
-  const canReadAloud = useMemo(
-    () => !isVoiceModeEnabled && getTextSinceLastUserTurn(plainMessages).trim().length > 0,
-    [plainMessages, isVoiceModeEnabled]
+  const { isReadingAloud, toggleReadAloud, canReadAloud: canReadAloudFor } = useReadAloud();
+  const canReadAloud = canReadAloudFor(plainMessages);
+  const handleReadAloudClick = useCallback(
+    () => toggleReadAloud(plainMessages),
+    [toggleReadAloud, plainMessages]
   );
   // Loading/error UI reads the cache entry's state (replaces the context's
   // isMessagesLoading and the dashboard store's isConversationMessagesLoading).
@@ -913,14 +909,13 @@ const GlobalAssistantView: React.FC = () => {
     setLastAIResponse((current) => (current?.id === next.id ? current : next));
   }, [renderedMessages, isVoiceModeActive]);
 
-  // Voice mode toggle handler
+  // Voice mode toggle handler. Enabling Voice Mode also stops any
+  // in-progress read-aloud playback — enforced inside readAloudPlayer itself
+  // (subscribed to the voice-mode store), not here.
   const handleVoiceModeToggle = useCallback(() => {
     if (isVoiceModeActive) {
       disableVoiceMode();
     } else {
-      // Voice Mode's mic capture would otherwise pick up read-aloud audio
-      // still playing through the shared singleton.
-      stopReadAloud();
       enableVoiceMode(VOICE_OWNER);
     }
   }, [isVoiceModeActive, enableVoiceMode, disableVoiceMode]);
@@ -1112,7 +1107,7 @@ const GlobalAssistantView: React.FC = () => {
               popupPlacement={props.inputPosition === 'centered' ? 'bottom' : 'top'}
               onVoiceModeClick={handleVoiceModeToggle}
               isVoiceModeActive={isVoiceModeActive}
-              onReadAloudClick={() => toggleReadAloud(plainMessages)}
+              onReadAloudClick={handleReadAloudClick}
               isReadingAloud={isReadingAloud}
               canReadAloud={canReadAloud}
               attachments={attachments}

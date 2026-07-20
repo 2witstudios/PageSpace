@@ -1,5 +1,6 @@
 'use client';
 
+import { create } from 'zustand';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
 
@@ -17,28 +18,40 @@ import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
  * an unmounting instance never resets that shared state either. Keeping the
  * one real audio source at module scope means there is only ever one thing
  * to stop, reachable from anywhere `useReadAloud()` is called.
+ *
+ * Only the boolean "is something playing" needs to be observable by React,
+ * so that alone lives in a tiny zustand store (this codebase's established
+ * pattern for shared, cross-component state — see the sibling
+ * `useVoiceModeStore`). The actual audio machinery (AudioContext, the
+ * current source, the chunk queue, the race-guard generation counter) stays
+ * in plain module variables outside React entirely.
  */
 
-type Listener = () => void;
+interface ReadAloudPlayerState {
+  isPlaying: boolean;
+}
+
+export const useReadAloudPlayerStore = create<ReadAloudPlayerState>(() => ({
+  isPlaying: false,
+}));
+
+function setPlaying(isPlaying: boolean): void {
+  useReadAloudPlayerStore.setState({ isPlaying });
+}
 
 let audioContext: AudioContext | null = null;
 let audioSource: AudioBufferSourceNode | null = null;
 let queue: string[] = [];
-let playing = false;
-const listeners = new Set<Listener>();
 
 // Bumped by every stopReadAloud() call (including the implicit one at the
 // start of startReadAloud()). A `playNext`/`synthesize` chain captures the
 // generation it was started under and re-checks it after every await:
-// `playing` alone can't tell "this run was stopped" apart from "this run was
-// stopped AND THEN a newer run began" — in the latter case `playing` is true
-// again by the time the stale chain resumes, so it would otherwise create a
-// second AudioBufferSourceNode that plays concurrently with the new run's.
+// `isPlaying` alone can't tell "this run was stopped" apart from "this run
+// was stopped AND THEN a newer run began" — in the latter case `isPlaying`
+// is true again by the time the stale chain resumes, so it would otherwise
+// create a second AudioBufferSourceNode that plays concurrently with the
+// new run's.
 let generation = 0;
-
-function notify(): void {
-  listeners.forEach((listener) => { listener(); });
-}
 
 function getAudioContext(): AudioContext {
   if (!audioContext) {
@@ -73,8 +86,7 @@ async function playNext(runId: number): Promise<void> {
   if (runId !== generation) return;
   const text = queue.shift();
   if (text === undefined) {
-    playing = false;
-    notify();
+    setPlaying(false);
     return;
   }
 
@@ -95,10 +107,12 @@ async function playNext(runId: number): Promise<void> {
   audioSource = source;
   source.onended = () => {
     if (runId !== generation) return;
-    if (audioSource === source) {
-      audioSource = null;
-      void playNext(runId);
-    }
+    // Within one generation only one source is ever live at a time — a new
+    // one is only created after the previous one's onended fired (or after a
+    // stop, which bumps generation and is already excluded above) — so
+    // audioSource is guaranteed to still be this source here.
+    audioSource = null;
+    void playNext(runId);
   };
   source.start();
 }
@@ -107,14 +121,12 @@ export function startReadAloud(chunks: string[]): void {
   stopReadAloud();
   if (chunks.length === 0) return;
   queue = [...chunks];
-  playing = true;
-  notify();
+  setPlaying(true);
   void playNext(generation);
 }
 
 export function stopReadAloud(): void {
   generation++;
-  const wasPlaying = playing;
   if (audioSource) {
     try {
       audioSource.stop();
@@ -124,15 +136,25 @@ export function stopReadAloud(): void {
     audioSource = null;
   }
   queue = [];
-  playing = false;
-  if (wasPlaying) notify();
+  // Guard against a redundant store update (and subscriber notification):
+  // startReadAloud() always calls this first to reset any prior run, even
+  // when nothing was playing.
+  if (useReadAloudPlayerStore.getState().isPlaying) {
+    setPlaying(false);
+  }
 }
 
 export function isReadAloudPlaying(): boolean {
-  return playing;
+  return useReadAloudPlayerStore.getState().isPlaying;
 }
 
-export function subscribeReadAloud(listener: Listener): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
+// Enforced here (not per call-site) so the invariant holds no matter which
+// UI entry point enables Voice Mode, present or future: a mic-capturing live
+// call must never run concurrently with this module's own TTS audio, since
+// each has its own separate AudioContext and would otherwise be picked up by
+// Voice Mode's microphone as if it were user speech.
+useVoiceModeStore.subscribe((state, prevState) => {
+  if (state.isEnabled && !prevState.isEnabled) {
+    stopReadAloud();
+  }
+});

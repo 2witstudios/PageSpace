@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { UIMessage } from 'ai';
-import { getTextSinceLastUserTurn } from '../getTextSinceLastUserTurn';
+import { getTextSinceLastUserTurn, hasTextSinceLastUserTurn } from '../getTextSinceLastUserTurn';
 
 const msg = (id: string, role: UIMessage['role'], parts: UIMessage['parts']): UIMessage => ({
   id,
@@ -59,5 +59,36 @@ describe('getTextSinceLastUserTurn', () => {
 
   it('given an empty array, returns empty string', () => {
     expect(getTextSinceLastUserTurn([])).toBe('');
+  });
+});
+
+describe('hasTextSinceLastUserTurn', () => {
+  it('given no user message at all, returns false', () => {
+    expect(hasTextSinceLastUserTurn([msg('a1', 'assistant', [text('hello')])])).toBe(false);
+  });
+
+  it('given a single assistant reply with text, returns true', () => {
+    const messages = [msg('u1', 'user', [text('hi')]), msg('a1', 'assistant', [text('hello there')])];
+    expect(hasTextSinceLastUserTurn(messages)).toBe(true);
+  });
+
+  it('given only tool-call parts and no text, returns false', () => {
+    const messages = [
+      msg('u1', 'user', [text('run it')]),
+      msg('a1', 'assistant', [
+        { type: 'tool-run', toolCallId: 't1', state: 'output-available' } as unknown as UIMessage['parts'][number],
+      ]),
+    ];
+    expect(hasTextSinceLastUserTurn(messages)).toBe(false);
+  });
+
+  it('given a text part that is only whitespace, returns false', () => {
+    const messages = [msg('u1', 'user', [text('hi')]), msg('a1', 'assistant', [text('   ')])];
+    expect(hasTextSinceLastUserTurn(messages)).toBe(false);
+  });
+
+  it('given the last user message has no reply yet, returns false', () => {
+    const messages = [msg('a1', 'assistant', [text('old reply')]), msg('u1', 'user', [text('new question')])];
+    expect(hasTextSinceLastUserTurn(messages)).toBe(false);
   });
 });

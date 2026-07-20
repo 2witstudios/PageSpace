@@ -20,3 +20,16 @@ export function getTextSinceLastUserTurn(messages: readonly UIMessage[]): string
     .filter(Boolean)
     .join('\n\n');
 }
+
+/**
+ * Cheap yes/no check for "is there anything to read aloud" — short-circuits
+ * on the first non-empty text part instead of joining the full reply text.
+ * Callers that only need a boolean (e.g. to enable/disable a button on every
+ * render, including every token of a live stream) should use this instead of
+ * checking `getTextSinceLastUserTurn(...).trim().length > 0`.
+ */
+export function hasTextSinceLastUserTurn(messages: readonly UIMessage[]): boolean {
+  return getAssistantMessagesAfterLastUser(messages).some((message) =>
+    (message.parts ?? []).some((p) => p.type === 'text' && p.text.trim().length > 0)
+  );
+}
