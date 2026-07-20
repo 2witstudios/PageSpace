@@ -203,6 +203,24 @@ describe('resolveMachineSandbox', () => {
     });
   });
 
+  it('refuses a pagespace (chat-surface) target WITHOUT reading the Sprite', async () => {
+    const getSprite = spyGetSprite();
+    const result = await resolveMachineSandbox(
+      { machineId: 'm-1', name: 'assistant' },
+      {
+        resolveAgentTerminal: async () => ({ ...resolvedOk, agentType: 'pagespace' }),
+        getSprite: getSprite.fn,
+      },
+    );
+
+    assert({
+      given: 'a resolved agent terminal whose agentType is pagespace (chat surface, not pty)',
+      should: 'deny with not_a_pty_agent without touching the Sprite',
+      actual: { result, spriteCalls: getSprite.calls.length },
+      expected: { result: { ok: false, reason: 'not_a_pty_agent' }, spriteCalls: 0 },
+    });
+  });
+
   it('denies with provision_failed (and the sandboxId) when the Sprite lookup throws', async () => {
     const result = await resolveMachineSandbox(
       { machineId: 'm-1', name: 'shell' },
