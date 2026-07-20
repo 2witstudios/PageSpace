@@ -25,17 +25,28 @@
  * `pickable` gates the empty-pane "spawn an agent" picker (`TerminalPanes.tsx`
  * — see `PICKABLE_AGENT_TYPES` below). `shell` is PRIMARY here — a plain
  * interactive shell is the default, first-class way to work on a Machine —
- * with `claude`/`codex` as secondary, opt-in AI agents. Only the retired
- * `pagespace-cli` is excluded. Keeping the marker on the registry entry
- * itself (rather than a hardcoded list living in the UI file) is what keeps
- * the picker in sync when a new entry is added here: forgetting to set
+ * with `claude`/`codex`/`pagespace` as secondary, opt-in AI agents. Only the
+ * retired `pagespace-cli` is excluded. Keeping the marker on the registry
+ * entry itself (rather than a hardcoded list living in the UI file) is what
+ * keeps the picker in sync when a new entry is added here: forgetting to set
  * `pickable: true` fails safe (excluded, not silently spawnable).
+ *
+ * `surface` is the rendering discriminator every pane-hosting layer branches
+ * on: `'pty'` types spawn a real PTY process (`command`/`args` are launched
+ * for real); `'chat'` types render the PageSpace AI chat UI in the pane
+ * instead — `pagespace`'s `command` is a dead sentinel, never launched. See
+ * `agentSurfaceOf`/`isPtyAgentType` below for the pure accessors callers
+ * should use rather than reading `.surface` off the registry directly.
  */
 export const AGENT_LAUNCH_SPECS = {
-  shell: { command: 'shell', args: [], pickable: true },
-  claude: { command: 'claude', args: [], pickable: true },
-  codex: { command: 'codex', args: [], pickable: true },
-} as const satisfies Record<string, { command: string; args: readonly string[]; pickable: boolean }>;
+  shell: { command: 'shell', args: [], pickable: true, surface: 'pty' },
+  claude: { command: 'claude', args: [], pickable: true, surface: 'pty' },
+  codex: { command: 'codex', args: [], pickable: true, surface: 'pty' },
+  pagespace: { command: 'pagespace', args: [], pickable: true, surface: 'chat' },
+} as const satisfies Record<
+  string,
+  { command: string; args: readonly string[]; pickable: boolean; surface: 'pty' | 'chat' }
+>;
 
 export type AgentRuntimeType = keyof typeof AGENT_LAUNCH_SPECS;
 
@@ -57,6 +68,18 @@ export function isAgentRuntimeType(value: string): value is AgentRuntimeType {
 export function resolveAgentLaunchSpec(type: AgentRuntimeType): AgentLaunchSpec {
   const spec = AGENT_LAUNCH_SPECS[type];
   return { command: spec.command, args: [...spec.args] };
+}
+
+export type AgentSurface = 'pty' | 'chat';
+
+/** The pane surface a given agent type renders: a real PTY process, or the PageSpace AI chat UI. */
+export function agentSurfaceOf(type: AgentRuntimeType): AgentSurface {
+  return AGENT_LAUNCH_SPECS[type].surface;
+}
+
+/** Whether an agent type spawns a real PTY process (as opposed to a `'chat'`-surface type like `pagespace`). */
+export function isPtyAgentType(type: AgentRuntimeType): boolean {
+  return agentSurfaceOf(type) === 'pty';
 }
 
 const MAX_AGENT_TERMINAL_NAME_LENGTH = 100;
