@@ -81,19 +81,19 @@ await fetch(url, {
 });
 \`\`\`
 
-A \`200\` means the default action ran (a Channel post, for example). A \`202 { accepted: true, action: "none" | "triggers" }\` means the delivery was accepted but had no channel action, bound workflows, or both — \`action\` tells you which. Any \`4xx\`/\`5xx\` means nothing ran; a well-behaved sender should retry those.
+A \`200\` means the default action ran (a Channel post, for example). A \`202 { accepted: true, action: "none" | "triggers" }\` means the delivery was accepted but had no channel action, bound workflows, or both — \`action\` tells you which. Only retry a \`429\` (rate limited) or a \`5xx\`/\`503\` (transient) — those are the sole retryable outcomes. \`400\` (malformed payload), \`403\` (bad/missing signature), \`404\` (unknown or disabled token), and \`413\` (body too large) are permanent failures: fix the request before sending it again, since an unmodified retry can only fail the same way, and retrying it in a loop risks a retry storm against your own integration.
 
 ## Composability: one delivery, two actions
 
 A single signed delivery can do **both** things at once — post the default action for the page type **and** fire every enabled workflow bound to that webhook. They're not alternatives; binding a workflow doesn't turn off the channel post, and the channel post doesn't block the workflow from also running.
 
-Bindings are managed through the API (there's no dedicated UI for this yet):
+Bindings are managed through the API (there's no dedicated UI for this yet). Managing webhooks (minting, and binding triggers) is deliberately a human console action — a *drive-scoped* \`mcp_...\` token is rejected outright, on purpose. Script it with an **all-drives** token instead: \`pagespace keys create --all-drives --name ci-webhooks --show-token --yes\` (see [MCP](/docs/integrations/mcp)), or mint one from **Settings > MCP**. That token carries your own owner/admin authority and authenticates as a \`Bearer\` token, which also sidesteps this write endpoint's CSRF check (CSRF only applies to cookie-based session auth):
 
 \`\`\`bash
 # Bind a workflow to a webhook — owner/admin only, workflow must be in the same drive as the page
 curl -X POST "https://your-pagespace-host/api/pages/<pageId>/webhooks/<webhookId>/triggers" \\
   -H "Content-Type: application/json" \\
-  -H "Cookie: <your session cookie>" \\
+  -H "Authorization: Bearer mcp_your_token_here" \\
   -d '{"workflowId":"<workflowId>"}'
 \`\`\`
 
