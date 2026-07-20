@@ -49,7 +49,7 @@ import type {
 } from '@pagespace/lib/services/machines/agent-terminals';
 import { canAccessMachine, canViewMachine, getMachineHostForBranches } from './machine-branches-runtime';
 
-export { canAccessMachine, canViewMachine };
+export { canAccessMachine, canViewMachine, isCodeExecutionEnabled };
 
 // The Fly Sprites driver is loaded via a DYNAMIC import, never a static one —
 // @fly/sprites is ESM-only and @pagespace/lib compiles to CJS. Mirrors the
