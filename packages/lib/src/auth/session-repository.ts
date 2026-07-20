@@ -73,6 +73,34 @@ export const sessionRepository = {
       .catch((err) => { console.error('[auth] Failed to update session lastUsedAt', err); });
   },
 
+  // Read the expiry of a single active (non-revoked, unexpired) session by hash.
+  // Used by the grace-expiry op to clamp — returns undefined when there is no
+  // such session (already revoked/expired/absent), so the caller no-ops.
+  getActiveSessionExpiry: async (tokenHash: string): Promise<Date | undefined> => {
+    const row = await db.query.sessions.findFirst({
+      where: and(
+        eq(sessions.tokenHash, tokenHash),
+        isNull(sessions.revokedAt),
+        gt(sessions.expiresAt, new Date()),
+      ),
+      columns: { expiresAt: true },
+    });
+    return row?.expiresAt;
+  },
+
+  // Bring a session's expiry forward (grace-expiry). The `gt` guard makes this
+  // update physically unable to EXTEND a session even under a stale-read race —
+  // it only ever writes an earlier expiry.
+  setExpiresAtByHash: async (tokenHash: string, expiresAt: Date): Promise<void> => {
+    await db.update(sessions)
+      .set({ expiresAt })
+      .where(and(
+        eq(sessions.tokenHash, tokenHash),
+        isNull(sessions.revokedAt),
+        gt(sessions.expiresAt, expiresAt),
+      ));
+  },
+
   revokeByHash: async (tokenHash: string, reason: string): Promise<void> => {
     await db.update(sessions)
       .set({ revokedAt: new Date(), revokedReason: reason })

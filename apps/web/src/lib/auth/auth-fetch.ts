@@ -512,6 +512,22 @@ class AuthFetch {
     }
   }
 
+  /**
+   * Extract the machine-readable `reason` the device-refresh route attaches to a
+   * 401 body (e.g. `invalid_device_token`, `device_id_mismatch`, `rotation_failed`).
+   * Returns undefined if the body is missing/not JSON/has no string reason, so the
+   * caller can fall back to a generic label. Uses `clone()` so the caller can still
+   * read the body if needed.
+   */
+  private async readServerLogoutReason(response: Response): Promise<string | undefined> {
+    try {
+      const body = await response.clone().json();
+      return typeof body?.reason === 'string' ? body.reason : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   private async doRefresh(): Promise<SessionRefreshResult> {
     const storage = this.getStorage();
 
@@ -604,7 +620,9 @@ class AuthFetch {
         : null;
 
       if (!deviceToken) {
-        this.logger.warn('Web: No device token - session expired, must re-authenticate');
+        this.logger.warn('Web: No device token - session expired, must re-authenticate', {
+          logoutReason: 'no_device_token',
+        });
         return { success: false, shouldLogout: true };
       }
 
@@ -654,7 +672,10 @@ class AuthFetch {
       }
 
       if (response.status === 401) {
-        this.logger.warn('Web: Device token invalid - logging out');
+        const logoutReason = await this.readServerLogoutReason(response);
+        this.logger.warn('Web: Device token invalid - logging out', {
+          logoutReason: logoutReason ?? 'device_refresh_401',
+        });
         return { success: false, shouldLogout: true };
       }
 
@@ -685,85 +706,31 @@ class AuthFetch {
     }
 
     try {
-      const session = await window.electron.auth.getSession();
-      const deviceInfo = await window.electron.auth.getDeviceInfo();
-
-      const deviceToken = session?.deviceToken;
-
-      // Desktop REQUIRES a device token for long-lived sessions
-      // If no device token exists, user needs to re-authenticate
-      if (!deviceToken) {
-        this.logger.warn('Desktop: No device token found - user must re-authenticate');
-        return { success: false, shouldLogout: true };
+      const first = await this.attemptDesktopDeviceRefresh();
+      if (first.kind !== 'unauthorized') {
+        return first.result;
       }
 
-      let response: Response;
-
-      // Device token refresh (90-day validity)
-      // This is the PRIMARY auth mechanism for desktop - designed for long-lived sessions
-      try {
-        response = await fetch('/api/auth/device/refresh', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            deviceToken,
-            deviceId: deviceInfo.deviceId,
-            userAgent: deviceInfo.userAgent,
-            appVersion: deviceInfo.appVersion,
-          }),
-        });
-
-        if (response.ok) {
-          this.logger.debug('Desktop: Device token refresh succeeded');
-        }
-      } catch (networkError) {
-        // Network error - don't logout, let retry logic handle it
-        this.logger.warn('Desktop: Device token refresh network error', {
-          error: networkError instanceof Error ? networkError.message : String(networkError),
-        });
-        return { success: false, shouldLogout: false };
-      }
-
-      if (response.status === 401) {
-        // 401 = device token is genuinely invalid (expired or revoked)
-        // User must re-authenticate
-        this.logger.warn('Desktop: Device token rejected - user must re-authenticate');
-        return { success: false, shouldLogout: true };
-      }
-
-      if (response.status === 429) {
-        // Rate limited - don't logout, let retry logic handle it
-        this.logger.warn('Desktop: Token refresh rate limited');
-        return { success: false, shouldLogout: false };
-      }
-
-      if (response.status >= 500) {
-        // Server error - don't logout, let retry logic handle it
-        this.logger.warn('Desktop: Token refresh server error', { status: response.status });
-        return { success: false, shouldLogout: false };
-      }
-
-      if (!response.ok) {
-        this.logger.error('Desktop: Token refresh failed with unexpected status', {
-          status: response.status,
-        });
-        return { success: false, shouldLogout: false };
-      }
-
-      const data = await response.json();
-
-      await window.electron.auth.storeSession({
-        sessionToken: data.sessionToken,
-        csrfToken: data.csrfToken,
-        deviceToken: data.deviceToken,
+      // A single 401 is not proof the session is dead: a concurrent refresh may
+      // have just rotated the device token, leaving this attempt with a
+      // momentarily-stale token. Retry EXACTLY ONCE with a freshly-read token
+      // before logging out. This runs inside the single-flight refreshPromise
+      // (:refreshToken/:refreshAuthSession) and the 5s post-success cooldown, so
+      // it is one extra attempt — it cannot loop.
+      this.logger.warn('Desktop: device refresh returned 401 - retrying once with a fresh token before logout', {
+        reason: first.reason,
       });
-
       this.clearSessionCache();
-      this.logger.info('Desktop: Session refreshed successfully via secure storage');
-      if (typeof window !== 'undefined' && window.dispatchEvent) {
-        window.dispatchEvent(new CustomEvent('auth:refreshed'));
+
+      const second = await this.attemptDesktopDeviceRefresh();
+      if (second.kind === 'unauthorized') {
+        // Second consecutive 401 - the device token is genuinely invalid.
+        this.logger.warn('Desktop: Device token rejected on retry - user must re-authenticate', {
+          logoutReason: second.reason ?? 'device_refresh_401',
+        });
+        return { success: false, shouldLogout: true };
       }
-      return { success: true, shouldLogout: false };
+      return second.result;
     } catch (error) {
       this.logger.error('Desktop: Token refresh request threw an error', {
         error: error instanceof Error ? error : String(error),
@@ -771,6 +738,106 @@ class AuthFetch {
       // Don't logout on unexpected errors - let retry logic handle it
       return { success: false, shouldLogout: false };
     }
+  }
+
+  /**
+   * One desktop device-refresh attempt. Returns `unauthorized` (with the server
+   * reason) on a 401 so the caller can decide whether to retry; every other
+   * outcome (success, no-token logout, network/429/5xx/unexpected) is terminal
+   * and returned as a `result`.
+   */
+  private async attemptDesktopDeviceRefresh(): Promise<
+    { kind: 'result'; result: SessionRefreshResult } | { kind: 'unauthorized'; reason?: string }
+  > {
+    const electron = window.electron;
+    if (!electron) {
+      return { kind: 'result', result: { success: false, shouldLogout: false } };
+    }
+
+    // Freshly read the session each attempt so a retry picks up a token a
+    // concurrent refresh may have just stored.
+    const session = await electron.auth.getSession();
+    const deviceInfo = await electron.auth.getDeviceInfo();
+
+    const deviceToken = session?.deviceToken;
+
+    // Desktop REQUIRES a device token for long-lived sessions
+    // If no device token exists, user needs to re-authenticate
+    if (!deviceToken) {
+      this.logger.warn('Desktop: No device token found - user must re-authenticate', {
+        logoutReason: 'no_device_token',
+      });
+      return { kind: 'result', result: { success: false, shouldLogout: true } };
+    }
+
+    let response: Response;
+
+    // Device token refresh (90-day validity)
+    // This is the PRIMARY auth mechanism for desktop - designed for long-lived sessions
+    try {
+      response = await fetch('/api/auth/device/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          deviceToken,
+          deviceId: deviceInfo.deviceId,
+          userAgent: deviceInfo.userAgent,
+          appVersion: deviceInfo.appVersion,
+        }),
+      });
+
+      if (response.ok) {
+        this.logger.debug('Desktop: Device token refresh succeeded');
+      }
+    } catch (networkError) {
+      // Network error - don't logout, let retry logic handle it
+      this.logger.warn('Desktop: Device token refresh network error', {
+        error: networkError instanceof Error ? networkError.message : String(networkError),
+      });
+      return { kind: 'result', result: { success: false, shouldLogout: false } };
+    }
+
+    if (response.status === 401) {
+      const reason = await this.readServerLogoutReason(response);
+      return { kind: 'unauthorized', reason };
+    }
+
+    if (response.status === 429) {
+      // Rate limited - don't logout, let retry logic handle it
+      this.logger.warn('Desktop: Token refresh rate limited');
+      return { kind: 'result', result: { success: false, shouldLogout: false } };
+    }
+
+    if (response.status >= 500) {
+      // Server error - don't logout, let retry logic handle it
+      this.logger.warn('Desktop: Token refresh server error', { status: response.status });
+      return { kind: 'result', result: { success: false, shouldLogout: false } };
+    }
+
+    if (!response.ok) {
+      this.logger.error('Desktop: Token refresh failed with unexpected status', {
+        status: response.status,
+      });
+      return { kind: 'result', result: { success: false, shouldLogout: false } };
+    }
+
+    const data = await response.json();
+
+    await electron.auth.storeSession({
+      sessionToken: data.sessionToken,
+      csrfToken: data.csrfToken,
+      // Grace-clobber guard: a rotation-race loser refresh returns NO
+      // deviceToken. Persisting `undefined` would wipe the good token and
+      // guarantee a 401 → logout on the next cycle. Keep the existing token.
+      deviceToken: data.deviceToken ?? deviceToken,
+    });
+
+    this.clearSessionCache();
+    this.logger.info('Desktop: Session refreshed successfully via secure storage');
+    if (typeof window !== 'undefined' && window.dispatchEvent) {
+      window.dispatchEvent(new CustomEvent('auth:refreshed'));
+    }
+    return { kind: 'result', result: { success: true, shouldLogout: false } };
   }
 
   async refreshAuthSession(): Promise<SessionRefreshResult> {
