@@ -1,16 +1,27 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq, and, inArray } from '@pagespace/db/operators'
+import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
-import { taskItems, taskLists } from '@pagespace/db/schema/tasks';
+import { taskLists } from '@pagespace/db/schema/tasks';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canPrincipalEditPage } from '@/lib/auth'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent } from '@/lib/websocket';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { computeReorderPlan, lockedBatchReorder } from '@pagespace/lib/services/reorder';
+import { computeReorderPlan } from '@pagespace/lib/services/reorder';
+import { reorderTaskListChildren } from './reorder-task-list';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+
+/**
+ * lockedBatchReorder's batched `UPDATE ... FROM (VALUES ...)` binds 2
+ * parameters per row plus 1 scope parameter, so an unbounded tasks array
+ * can cross PostgreSQL's 65,535-parameter-per-statement ceiling and 500
+ * instead of failing cleanly. Task lists are never legitimately this large —
+ * reject oversized requests up front. Mirrors the bound on
+ * apps/web/src/app/api/user/favorites/reorder/route.ts (#2164).
+ */
+const MAX_REORDER_BATCH = 5000;
 
 /**
  * PATCH /api/pages/[pageId]/tasks/reorder
@@ -56,6 +67,10 @@ export async function PATCH(
     return NextResponse.json({ error: 'tasks must be an array' }, { status: 400 });
   }
 
+  if (tasks.length > MAX_REORDER_BATCH) {
+    return NextResponse.json({ error: `tasks must not exceed ${MAX_REORDER_BATCH} entries` }, { status: 400 });
+  }
+
   // Validate format: [{ id: string, position: number }]
   for (const task of tasks) {
     if (!task.id || typeof task.position !== 'number') {
@@ -71,30 +86,9 @@ export async function PATCH(
   // that deadlocked production Postgres on 2026-07-18.
   const plan = computeReorderPlan(tasks);
   if (plan.orderedIds.length > 0) {
-    // task_items has no direct FK to its task list — membership is derived
-    // the same way GET does, via pages that are direct TASK_LIST children of
-    // this list's page. Scoping the write to that set closes a gap the old
-    // per-row loop never checked (it trusted every submitted id blindly).
-    const childPages = await db
-      .select({ id: pages.id })
-      .from(pages)
-      .where(and(
-        eq(pages.parentId, pageId),
-        eq(pages.type, 'TASK_LIST'),
-        eq(pages.isTrashed, false),
-      ));
-    const childPageIds = childPages.map(p => p.id);
-
     try {
       await db.transaction(async (tx) => {
-        const lockedIds = await lockedBatchReorder(tx, {
-          table: taskItems,
-          idColumn: taskItems.id,
-          positionColumn: taskItems.position,
-          scopeWhere: inArray(taskItems.pageId, childPageIds),
-          plan,
-          touchColumns: [taskItems.updatedAt],
-        });
+        const lockedIds = await reorderTaskListChildren(tx, pageId, plan);
 
         if (lockedIds.length !== plan.orderedIds.length) {
           throw new Error('Invalid task IDs');
