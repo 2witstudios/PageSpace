@@ -87,7 +87,7 @@ describe('acquireBranchSandbox', () => {
         },
       }),
     });
-    expect(result).toEqual({ ok: true, sandboxId: BRANCH_SANDBOX_ID, pageId: MACHINE_ID });
+    expect(result).toEqual({ ok: true, sandboxId: BRANCH_SANDBOX_ID });
     // Keyed by the MACHINE page id, not the branch id — mirrors acquireMachineSandbox.
     expect(seenGuardrail).toEqual([{ machineKey: MACHINE_ID, now: NOW.getTime() }]);
     expect(seenRecord).toEqual([{ machineKey: MACHINE_ID, now: NOW.getTime() }]);

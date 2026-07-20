@@ -48,7 +48,23 @@ export interface AcquireBranchSandboxInput {
 }
 
 export type AcquireBranchSandboxResult =
-  | { ok: true; sandboxId: string; pageId: string }
+  | {
+      ok: true;
+      sandboxId: string;
+      /**
+       * Deliberately omitted (always undefined), NOT the branch's owning
+       * `machineId`: `openSession` (tool-runners.ts) threads this straight
+       * into the opportunistic storage-measurement seam and the Terminal
+       * activity-feed notifier, both of which key off a MACHINE's own
+       * `machine_sessions` row. The awake sandbox here is the branch's OWN,
+       * separate Sprite — attributing its measured bytes (or activity) to
+       * the machine's row would silently corrupt that machine's storage
+       * billing. A dedicated branch-scoped seam for either is future work;
+       * until then, omitting `pageId` cleanly opts branch runs out of both
+       * (`openSession`'s `if (acquired.pageId && ...)` guards).
+       */
+      pageId?: undefined;
+    }
   | { ok: false; reason: CodeExecutionDenialReason | MachineRuntimeGuardrailReason | 'branch_not_found' };
 
 export async function acquireBranchSandbox(
@@ -67,5 +83,5 @@ export async function acquireBranchSandbox(
   if (!branch || branch.spriteTornDownAt !== null) return { ok: false, reason: 'branch_not_found' };
 
   deps.recordMachineActivity({ machineKey: machineId, now: nowMs });
-  return { ok: true, sandboxId: branch.sandboxId, pageId: machineId };
+  return { ok: true, sandboxId: branch.sandboxId };
 }
