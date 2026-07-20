@@ -27,6 +27,7 @@ import {
   Github,
   Package,
   Terminal,
+  Webhook,
 } from "lucide-react";
 
 export interface NavItem {
@@ -92,6 +93,7 @@ export const docsNav: NavSection[] = [
       { title: "GitHub", href: "/docs/integrations/github", icon: Github },
       { title: "MCP", href: "/docs/integrations/mcp", icon: Server },
       { title: "Desktop MCP", href: "/docs/integrations/mcp/desktop", icon: Monitor },
+      { title: "Incoming Webhooks", href: "/docs/integrations/incoming-webhooks", icon: Webhook },
     ],
   },
   {
