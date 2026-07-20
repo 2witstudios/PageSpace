@@ -11,7 +11,6 @@
  * match the write side regardless of process TZ.
  */
 
-// @ts-expect-error -- pg has no bundled types; runtime cast below handles type safety
 import pg from 'pg';
 
 const pgTypes = (

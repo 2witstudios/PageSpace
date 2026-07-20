@@ -2419,7 +2419,6 @@
     "marked": "^17.0.1",
     "pako": "^2.1.0",
     "react": "^19.1.2",
-    "react-dom": "^19.1.2",
     "react-email": "^5.1.1",
     "resend": "^6.1.2",
     "sanitize-html": "^2.17.6",
