@@ -4,6 +4,11 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: vi.fn(),
 }));
 
+const { toastErrorMock } = vi.hoisted(() => ({ toastErrorMock: vi.fn() }));
+vi.mock('sonner', () => ({
+  toast: { error: toastErrorMock, success: vi.fn() },
+}));
+
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
 import { useDictationActivityStore } from '@/hooks/useSpeechRecognition';
@@ -43,6 +48,7 @@ class FakeAudioContext {
 describe('readAloudPlayer', () => {
   beforeEach(() => {
     createdSources.length = 0;
+    toastErrorMock.mockClear();
     vi.stubGlobal('AudioContext', FakeAudioContext);
     vi.mocked(fetchWithAuth).mockResolvedValue({
       ok: true,
@@ -257,5 +263,41 @@ describe('readAloudPlayer', () => {
     startReadAloud(['second']);
 
     expect(loadSettingsSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses to start when Voice Mode is already enabled at call time, even with no prior transition to observe', () => {
+    // Not a "stop while playing" case — Voice Mode was ALREADY on before
+    // startReadAloud() ever ran, so the subscription (which only fires on a
+    // future inactive-to-active transition) never gets a chance to fire.
+    useVoiceModeStore.getState().enable('ai-page');
+
+    startReadAloud(['hello there']);
+
+    expect(isReadAloudPlaying()).toBe(false);
+    expect(createdSources).toHaveLength(0);
+  });
+
+  it('refuses to start when dictation is already active at call time, even with no prior transition to observe', () => {
+    useDictationActivityStore.setState({ activeCount: 1 });
+
+    startReadAloud(['hello there']);
+
+    expect(isReadAloudPlaying()).toBe(false);
+    expect(createdSources).toHaveLength(0);
+  });
+
+  it('surfaces a systemic synthesis failure and stops the run instead of retry-skipping every remaining chunk', async () => {
+    vi.mocked(fetchWithAuth).mockResolvedValue({
+      ok: false,
+      json: () => Promise.resolve({ message: 'Voice synthesis is not configured on this deployment.' }),
+    } as Response);
+
+    startReadAloud(['first chunk', 'second chunk']);
+
+    await vi.waitFor(() => expect(isReadAloudPlaying()).toBe(false));
+    expect(createdSources).toHaveLength(0);
+    expect(toastErrorMock).toHaveBeenCalledWith('Voice synthesis is not configured on this deployment.');
+    // Stopped after the first failure — never even attempted the second chunk.
+    expect(fetchWithAuth).toHaveBeenCalledTimes(1);
   });
 });

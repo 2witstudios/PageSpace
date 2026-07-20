@@ -1,6 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
+import { toast } from 'sonner';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
 import { useDictationActivityStore } from '@/hooks/useSpeechRecognition';
@@ -85,7 +86,21 @@ async function synthesize(text: string): Promise<AudioBuffer | null> {
       body: JSON.stringify({ text, voice: ttsVoice, speed: ttsSpeed }),
       signal: controller.signal,
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      // A systemic failure (out of credits, rate-limited, misconfigured) —
+      // every remaining chunk would fail identically, so surface it and stop
+      // the whole run instead of silently skip-retrying it chunk by chunk.
+      // playNext()'s generation check (bumped by the stopReadAloud() call
+      // below) is what actually prevents the skip-retry, not this branch.
+      const errorData = await response.json().catch(() => ({}) as Record<string, unknown>);
+      const message =
+        (typeof errorData.message === 'string' && errorData.message) ||
+        (typeof errorData.error === 'string' && errorData.error) ||
+        'Could not read this reply aloud.';
+      toast.error(message);
+      stopReadAloud();
+      return null;
+    }
     const audioData = await response.arrayBuffer();
     if (ctx.state === 'suspended') {
       await ctx.resume();
@@ -150,6 +165,14 @@ export function startReadAloud(chunks: string[]): void {
   useVoiceModeStore.getState().loadSettings();
   stopReadAloud();
   if (chunks.length === 0) return;
+  // Re-validate live state here, not just via the subscriptions above: a
+  // caller's "may I start?" check (useReadAloud's `blocked`) can be a stale
+  // React closure, and the subscriptions only fire on a FUTURE
+  // inactive-to-active transition — neither catches "already active by the
+  // time this specific call runs" (e.g. rapid clicks across two surfaces).
+  if (useVoiceModeStore.getState().isEnabled || useDictationActivityStore.getState().activeCount > 0) {
+    return;
+  }
   queue = [...chunks];
   setPlaying(true);
   void playNext(generation);
