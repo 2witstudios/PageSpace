@@ -12,17 +12,19 @@ vi.mock('@/lib/auth', () => ({
 
 const mockFindFirst = vi.fn();
 const mockUpdateSet = vi.fn();
+const mockUpdateWhere = vi.fn();
 const mockUpdateReturning = vi.fn();
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: { pageWebhooks: { findFirst: (...args: unknown[]) => mockFindFirst(...args) } },
     update: () => ({
-      set: (...args: unknown[]) => {
-        mockUpdateSet(...args);
+      set: (...setArgs: unknown[]) => {
+        mockUpdateSet(...setArgs);
         return {
-          where: () => ({
-            returning: () => mockUpdateReturning(...args),
-          }),
+          where: (...whereArgs: unknown[]) => {
+            mockUpdateWhere(...whereArgs);
+            return { returning: () => mockUpdateReturning(...setArgs) };
+          },
         };
       },
     }),
@@ -33,7 +35,11 @@ vi.mock('@pagespace/db/operators', () => ({
   and: (...args: unknown[]) => ({ and: args }),
 }));
 vi.mock('@pagespace/db/schema/page-webhooks', () => ({
-  pageWebhooks: { id: 'pageWebhooks.id', pageId: 'pageWebhooks.pageId' },
+  pageWebhooks: {
+    id: 'pageWebhooks.id',
+    pageId: 'pageWebhooks.pageId',
+    webhookSecretEncrypted: 'pageWebhooks.webhookSecretEncrypted',
+  },
 }));
 
 const mockEncryptField = vi.fn(async (v: string) => `encrypted(${v})`);
@@ -141,6 +147,26 @@ describe('POST /api/pages/[pageId]/webhooks/[id]/rotate', () => {
     const signedWithNew = v0Scheme.sign(newSecret, timestampSeconds, rawBody);
     expect(verifyAgainstStored(signedWithOld)).toBe(false);
     expect(verifyAgainstStored(signedWithNew)).toBe(true);
+  });
+
+  it('guards the update on the previously stored ciphertext (optimistic concurrency)', async () => {
+    await POST(makeRequest(), PARAMS);
+    expect(mockUpdateWhere).toHaveBeenCalledWith({
+      and: [
+        { a: 'pageWebhooks.id', b: 'wh-1' },
+        { a: 'pageWebhooks.webhookSecretEncrypted', b: 'encrypted(old-secret)' },
+      ],
+    });
+  });
+
+  it('returns 409 without auditing or leaking a secret when a concurrent rotation wins', async () => {
+    mockUpdateReturning.mockReturnValue([]);
+    const response = await POST(makeRequest(), PARAMS);
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    expect(body.webhookSecret).toBeUndefined();
+    expect(body.webhook).toBeUndefined();
+    expect(mockAuditRequest).not.toHaveBeenCalled();
   });
 
   it('audits the rotation as a data.write with operation rotate', async () => {

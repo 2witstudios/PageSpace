@@ -40,11 +40,25 @@ export async function POST(request: Request, context: { params: Promise<{ pageId
     const webhookSecretPlaintext = randomBytes(32).toString('base64url');
     const webhookSecretEncrypted = await encryptField(webhookSecretPlaintext);
 
+    // Optimistic-concurrency guard: encryption is randomized, so the stored
+    // ciphertext is unique per write — conditioning on the value we just read
+    // means a concurrent rotation makes this update match zero rows instead of
+    // silently overwriting (which would 200 both callers but leave one holding
+    // a plaintext secret that never verifies).
     const [row] = await db
       .update(pageWebhooks)
       .set({ webhookSecretEncrypted })
-      .where(eq(pageWebhooks.id, id))
+      .where(and(
+        eq(pageWebhooks.id, id),
+        eq(pageWebhooks.webhookSecretEncrypted, existing.webhookSecretEncrypted),
+      ))
       .returning();
+    if (!row) {
+      return NextResponse.json(
+        { error: 'The secret was rotated by a concurrent request — use that rotation\'s secret or rotate again' },
+        { status: 409 },
+      );
+    }
 
     auditRequest(request, {
       eventType: 'data.write',
