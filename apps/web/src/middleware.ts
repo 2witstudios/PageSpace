@@ -350,7 +350,6 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       // session, drowning out real unauthorized events.
       if (!isAPIRoute && isElectronShell(req.headers.get('user-agent'))) {
         const { response } = createSecureResponse(isProduction, req, {
-          isAPIRoute,
           disableCOEP: shouldDisableCOEP(pathname),
         });
         return response;
