@@ -2,9 +2,9 @@ name: Test Suite
 
 on:
   push:
-    branches: [main, master, develop, pu/flash-sandbox]
+    branches: [main, master, develop, pu/flash-sandbox, pu/panes-agent]
   pull_request:
-    branches: [main, master, develop, pu/flash-sandbox]
+    branches: [main, master, develop, pu/flash-sandbox, pu/panes-agent]
   workflow_dispatch:
 
 jobs:

@@ -38,6 +38,7 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ kind: 'eq', field, value })),
   and: vi.fn((...conds) => ({ kind: 'and', conds })),
+  inArray: vi.fn((field, values) => ({ kind: 'inArray', field, values })),
   sql: Object.assign(
     vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
       kind: 'sql',
@@ -113,6 +114,42 @@ describe('conversationRepository.getConversation', () => {
     const result = await conversationRepository.getConversation('conv_missing');
 
     expect(result).toBeNull();
+  });
+});
+
+describe('conversationRepository.getAiAgent', () => {
+  // vi.mocked(db) does not see through Drizzle's query-builder generics.
+  const findFirstMock = () =>
+    mockDb.query.pages.findFirst as unknown as ReturnType<typeof vi.fn>;
+
+  // #2166 Phase 11: MACHINE pages host machine-pane conversations (Phase 4
+  // pre-creates them), so the conversation routes' host-page lookup must
+  // accept both types. Agent-only routes do their own AI_CHAT checks.
+  it('queries for conversation-hosting page types: AI_CHAT and MACHINE', async () => {
+    findFirstMock().mockResolvedValue({
+      id: 'machine_1',
+      title: 'Build box',
+      type: 'MACHINE',
+      driveId: 'drive_1',
+    });
+
+    const result = await conversationRepository.getAiAgent('machine_1');
+
+    expect(result).toEqual(
+      expect.objectContaining({ id: 'machine_1', type: 'MACHINE' }),
+    );
+    const call = findFirstMock().mock.calls[0][0] as { where: { conds: unknown[] } };
+    expect(call.where.conds).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'inArray', values: ['AI_CHAT', 'MACHINE'] }),
+      ]),
+    );
+  });
+
+  it('returns null when the page does not exist', async () => {
+    findFirstMock().mockResolvedValue(undefined);
+
+    expect(await conversationRepository.getAiAgent('missing')).toBeNull();
   });
 });
 
@@ -220,6 +257,47 @@ describe('conversationRepository.createConversation', () => {
     expect(valuesMock).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'conv-mine', userId: 'user-1' })
     );
+  });
+
+  it('given { isShared: true }, persists a shared row, keeping the squat-guard + onConflictDoNothing', async () => {
+    mockSelectChain.from
+      .mockImplementationOnce(() => mockConversationsLookup([]))
+      .mockImplementationOnce(() => mockChatMessagesLookup([]));
+    const onConflictDoNothing = vi.fn().mockResolvedValue(undefined);
+    const valuesMock = vi.fn().mockReturnValue({ onConflictDoNothing });
+    mockDb.insert = vi.fn().mockReturnValue({ values: valuesMock });
+
+    await conversationRepository.createConversation('conv-shared', 'user-1', 'machine-1', { isShared: true });
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'conv-shared', userId: 'user-1', contextId: 'machine-1', isShared: true })
+    );
+    expect(onConflictDoNothing).toHaveBeenCalled();
+  });
+
+  it('given no opts (or isShared omitted), still defaults to isShared: false', async () => {
+    mockSelectChain.from
+      .mockImplementationOnce(() => mockConversationsLookup([]))
+      .mockImplementationOnce(() => mockChatMessagesLookup([]));
+    const onConflictDoNothing = vi.fn().mockResolvedValue(undefined);
+    const valuesMock = vi.fn().mockReturnValue({ onConflictDoNothing });
+    mockDb.insert = vi.fn().mockReturnValue({ values: valuesMock });
+
+    await conversationRepository.createConversation('conv-default', 'user-1', 'agent-1', {});
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'conv-default', isShared: false })
+    );
+  });
+
+  it('given { isShared: true }, still refuses a conversationId owned by a different user (squat-guard applies regardless of isShared)', async () => {
+    mockSelectChain.from
+      .mockImplementationOnce(() => mockConversationsLookup([]))
+      .mockImplementationOnce(() => mockChatMessagesLookup([{ userId: 'victim-user' }]));
+
+    await conversationRepository.createConversation('conv-legacy', 'attacker-user', 'machine-1', { isShared: true });
+
+    expect(mockDb.insert).not.toHaveBeenCalled();
   });
 });
 

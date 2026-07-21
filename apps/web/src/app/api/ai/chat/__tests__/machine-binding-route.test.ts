@@ -3,20 +3,21 @@ import { POST } from '../route';
 import type { SessionAuthResult } from '@/lib/auth';
 
 // ============================================================================
-// Route-level regression test for GitHub-integration/sandbox-tool suppression
-// in 'search' tool-exposure mode.
+// Machine Pane binding tests for POST /api/ai/chat (Phase 6, issue #2166)
 //
-// The bug this guards against: `resolvePageAgentIntegrationTools` needs the
-// PRE-exposure tool set to detect whether the sandbox git/gh CLI toolkit is
-// active (search mode moves non-core tools, including all sandbox tools,
-// behind execute_tool — hiding their names from a top-level key scan). A
-// prior implementation captured the tool set AFTER `applyToolExposureMode`
-// ran, so suppression silently never fired in search mode. `resolveThe
-// PageAgentIntegrationTools` is mocked here (its own suppression logic is
-// covered by integration-tool-resolver.test.ts) — this test only asserts on
-// what the ROUTE passes as `currentTools`, which is the part a resolver-level
-// unit test cannot observe.
+// Verifies the route's wiring of deriveMachinePaneBinding (Phase 5 pure core):
+//  - bound conversation -> machineBinding + activeMachine seeded into
+//    experimental_context, switch_machine/list_machines dropped from tools
+//  - row.machineId !== chatId -> 400 before streaming
+//  - non-bound conversation -> derivation null, passthrough unchanged
+//
+// Mirrors mcp-scope-tool-filtering.test.ts's idiom: mocks every module the
+// route imports, calls the real POST with a real Request, and spies on the
+// REAL filterToolsForMachineBinding (via importOriginal) to assert on its
+// actual isBound argument and return value.
 // ============================================================================
+
+const deriveMachinePaneBindingMock = vi.fn();
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
@@ -54,6 +55,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
     },
   },
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+  logPerformance: vi.fn(),
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
@@ -65,7 +67,6 @@ vi.mock('@pagespace/db/db', () => {
     title: 'Test Page',
     systemPrompt: null,
     enabledTools: null,
-    toolExposureMode: 'search',
     aiProvider: 'openai',
     aiModel: 'openai/gpt-5.3-chat',
     driveId: 'drive_A',
@@ -73,6 +74,7 @@ vi.mock('@pagespace/db/db', () => {
     includePageTree: false,
     pageTreeScope: null,
     revision: 0,
+    type: 'AI_CHAT',
   };
   return {
     db: {
@@ -88,17 +90,23 @@ vi.mock('@pagespace/db/db', () => {
         })),
       })),
     },
+    // Accessed by start-generation-exclusive's advisory lock (real, unmocked
+    // implementation) — its own error handling degrades to running unlocked
+    // when the pool/lock query fails, which a bare object triggers harmlessly.
+    getAdvisoryLockPool: vi.fn(() => ({})),
   };
 });
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
+  ne: vi.fn(),
+  desc: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id' },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  chatMessages: { pageId: 'pageId', conversationId: 'conversationId', isActive: 'isActive', createdAt: 'createdAt' },
+  chatMessages: { pageId: 'pageId', conversationId: 'conversationId', isActive: 'isActive', createdAt: 'createdAt', status: 'status' },
   pages: { id: 'id' },
   drives: { id: 'id', drivePrompt: 'drivePrompt' },
 }));
@@ -126,14 +134,12 @@ vi.mock('@/lib/ai/core/provider-factory', () => ({
   createProviderErrorResponse: vi.fn(),
   isProviderError: vi.fn().mockReturnValue(false),
 }));
-// git_clone stands in for the sandbox git/gh CLI toolkit — a real sandbox
-// toolkit registers ~56 tool names, but only one is needed to prove
-// suppression sees it. list_pages is a non-sandbox, non-core tool so it gets
-// deferred behind execute_tool in search mode alongside git_clone.
+// pageSpaceTools includes switch_machine/list_machines so filtering behavior is observable.
 vi.mock('@/lib/ai/core/ai-tools', () => ({
   pageSpaceTools: {
-    git_clone: { description: 'git_clone' },
-    list_pages: { description: 'list_pages' },
+    switch_machine: { description: 'switch_machine' },
+    list_machines: { description: 'list_machines' },
+    read_page: { description: 'read_page' },
   },
 }));
 vi.mock('@/lib/ai/core/message-utils', () => ({
@@ -153,9 +159,16 @@ vi.mock('@/lib/ai/core/timestamp-utils', () => ({
 vi.mock('@/lib/ai/core/system-prompt', () => ({
   buildSystemPrompt: vi.fn().mockReturnValue(''),
   buildPersonalizationPrompt: vi.fn().mockReturnValue(''),
-  TOOL_DISCOVERY_PROMPT: 'discover tools',
-  buildNonCoreToolNamesPrompt: vi.fn().mockReturnValue(''),
 }));
+// Spy on the REAL implementation so we can assert on its actual behavior
+// (isBound argument + filtered return value), instead of stubbing it away.
+vi.mock('@/lib/ai/core/tool-filtering', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../../lib/ai/core/tool-filtering')>();
+  return {
+    ...actual,
+    filterToolsForMachineBinding: vi.fn(actual.filterToolsForMachineBinding),
+  };
+});
 vi.mock('@/lib/ai/core/page-tree-context', () => ({
   getPageTreeContext: vi.fn(),
 }));
@@ -167,30 +180,31 @@ vi.mock('@/lib/ai/core/mcp-tool-converter', () => ({
 vi.mock('@/lib/ai/core/personalization-utils', () => ({
   getUserPersonalization: vi.fn().mockResolvedValue(null),
 }));
-// Phase 6 (#2166): the route now derives a Machine Pane binding for every
-// request. None of these requests carry a machine-bound conversationId, so
-// this resolves to null (not a machine-bound pane) — the real DB-backed
-// deps builder is stubbed out since the pure core itself is fully mocked.
-vi.mock('@pagespace/lib/services/machines/machine-pane-binding', () => ({
-  deriveMachinePaneBinding: vi.fn().mockResolvedValue(null),
-}));
-vi.mock('@/lib/ai/machine-pane/machine-pane-binding-runtime', () => ({
-  buildMachinePaneBindingDeps: vi.fn(() => ({})),
-}));
 
+const streamTextMock = vi.fn();
 vi.mock('ai', () => ({
-  streamText: vi.fn(),
+  streamText: (...args: unknown[]) => streamTextMock(...args),
   convertToModelMessages: vi.fn().mockReturnValue([]),
   stepCountIs: vi.fn(),
   hasToolCall: vi.fn(() => () => false),
   tool: vi.fn((config) => config),
-  createUIMessageStream: vi.fn(),
-  createUIMessageStreamResponse: vi.fn(),
+  // Real createUIMessageStream runs `execute` as a detached producer (the
+  // route never awaits it — the returned stream is consumed by piping into
+  // the HTTP response). Mirror that: fire it without awaiting, so the route
+  // under test returns the same way it does in production, and this file's
+  // tests poll (vi.waitFor) for streamText to have been invoked once its
+  // microtasks settle.
+  createUIMessageStream: vi.fn((opts: { execute?: (args: { writer: { write: () => void } }) => Promise<void> }) => {
+    void opts.execute?.({ writer: { write: vi.fn() } })?.catch(() => {});
+    return {};
+  }),
+  createUIMessageStreamResponse: vi.fn(() => new Response(null, { status: 200 })),
 }));
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('generated_id'),
   init: vi.fn(() => vi.fn(() => 'test-cuid')),
+  isCuid: vi.fn(() => true),
 }));
 
 vi.mock('@/lib/logging/mask', () => ({
@@ -222,6 +236,7 @@ vi.mock('@/services/api/page-mutation-service', () => ({
 vi.mock('@/lib/ai/core/stream-abort-registry', () => ({
   createStreamAbortController: vi.fn().mockReturnValue({ streamId: 'stream_123', signal: new AbortController().signal }),
   removeStream: vi.fn(),
+  attachStreamFinisher: vi.fn(),
   STREAM_ID_HEADER: 'x-stream-id',
 }));
 
@@ -233,20 +248,37 @@ vi.mock('@/lib/ai/core/validate-image-parts', () => ({
 vi.mock('@/lib/ai/core/model-capabilities', () => ({
   getModelCapabilities: vi.fn(),
   hasVisionCapability: vi.fn().mockReturnValue(true),
+  DEFAULT_IMAGE_MODEL: 'default-image-model',
 }));
-
-// The resolver itself (and its suppression logic) is unit-tested in
-// integration-tool-resolver.test.ts. This test only needs to observe what
-// the route passes as `currentTools`.
 vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
   resolvePageAgentIntegrationTools: vi.fn().mockResolvedValue({}),
 }));
 
+vi.mock('@/lib/repositories/conversation-repository', () => ({
+  conversationRepository: {
+    getConversation: vi.fn().mockResolvedValue(null),
+    hasConflictingMessageOwner: vi.fn().mockResolvedValue(false),
+    createConversation: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+// The module under test in this file: deriveMachinePaneBinding is the Phase 5
+// pure core the route must call. buildMachinePaneBindingDeps is its DB-backed
+// wiring (Phase 5 runtime shell) — stubbed to a no-op object since the pure
+// core itself is fully mocked below.
+vi.mock('@pagespace/lib/services/machines/machine-pane-binding', () => ({
+  deriveMachinePaneBinding: (...args: unknown[]) => deriveMachinePaneBindingMock(...args),
+}));
+vi.mock('@/lib/ai/machine-pane/machine-pane-binding-runtime', () => ({
+  buildMachinePaneBindingDeps: vi.fn(() => ({})),
+}));
+
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { resolvePageAgentIntegrationTools } from '@/lib/ai/core/integration-tool-resolver';
+import { filterToolsForMachineBinding } from '@/lib/ai/core/tool-filtering';
 
 const mockUserId = 'user_123';
 const chatId = 'page_123'; // in drive_A per db mock above
+const conversationId = 'conversation_abc';
 
 const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,
@@ -266,29 +298,77 @@ const createChatRequest = () => {
         { id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] },
       ],
       chatId,
+      conversationId,
       selectedProvider: 'openai',
       selectedModel: 'openai/gpt-5.3-chat',
     }),
   });
 };
 
-describe('POST /api/ai/chat - GitHub suppression sees sandbox tools in search mode', () => {
+describe('POST /api/ai/chat - machine-pane binding', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    streamTextMock.mockReturnValue({});
   });
 
-  it('passes the pre-exposure tool set (including sandbox tools) to resolvePageAgentIntegrationTools even in search mode', async () => {
-    const auth = mockWebAuth(mockUserId);
-    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(auth);
+  it('injects machineBinding + seeds activeMachine, and drops switch_machine/list_machines when bound', async () => {
+    deriveMachinePaneBindingMock.mockResolvedValue({
+      ok: true,
+      binding: { cwd: '/workspace' },
+    });
 
     await POST(createChatRequest());
 
-    expect(resolvePageAgentIntegrationTools).toHaveBeenCalledTimes(1);
-    const call = vi.mocked(resolvePageAgentIntegrationTools).mock.calls[0]![0];
-    // In search mode, git_clone/list_pages are moved behind execute_tool and
-    // vanish as top-level keys — this assertion only passes if the route
-    // captured currentTools BEFORE applyToolExposureMode ran.
-    expect(call.currentTools).toHaveProperty('git_clone');
-    expect(call.currentTools).toHaveProperty('list_pages');
+    expect(deriveMachinePaneBindingMock).toHaveBeenCalledWith(
+      { chatId, conversationId },
+      expect.anything(),
+    );
+
+    expect(filterToolsForMachineBinding).toHaveBeenCalledWith(expect.anything(), true);
+    const filtered = vi.mocked(filterToolsForMachineBinding).mock.results[0]?.value as Record<string, unknown>;
+    expect(filtered).not.toHaveProperty('switch_machine');
+    expect(filtered).not.toHaveProperty('list_machines');
+    expect(filtered).toHaveProperty('read_page');
+
+    await vi.waitFor(() => expect(streamTextMock).toHaveBeenCalled());
+    const streamTextArgs = streamTextMock.mock.calls[0]?.[0] as { experimental_context?: Record<string, unknown> };
+    expect(streamTextArgs.experimental_context?.machineBinding).toEqual({
+      machineId: chatId,
+      cwd: '/workspace',
+      branchSandbox: undefined,
+    });
+    expect(streamTextArgs.experimental_context?.activeMachine).toEqual({
+      kind: 'existing',
+      machineId: chatId,
+    });
+  });
+
+  it('returns 400 before streaming when row.machineId !== chatId', async () => {
+    deriveMachinePaneBindingMock.mockResolvedValue({
+      ok: false,
+      reason: 'binding_page_mismatch',
+    });
+
+    const response = await POST(createChatRequest());
+
+    expect(response.status).toBe(400);
+    expect(streamTextMock).not.toHaveBeenCalled();
+  });
+
+  it('leaves behavior unchanged for a non-bound conversation (derivation null)', async () => {
+    deriveMachinePaneBindingMock.mockResolvedValue(null);
+
+    await POST(createChatRequest());
+
+    expect(filterToolsForMachineBinding).toHaveBeenCalledWith(expect.anything(), false);
+    const filtered = vi.mocked(filterToolsForMachineBinding).mock.results[0]?.value as Record<string, unknown>;
+    expect(filtered).toHaveProperty('switch_machine');
+    expect(filtered).toHaveProperty('list_machines');
+
+    await vi.waitFor(() => expect(streamTextMock).toHaveBeenCalled());
+    const streamTextArgs = streamTextMock.mock.calls[0]?.[0] as { experimental_context?: Record<string, unknown> };
+    expect(streamTextArgs.experimental_context?.machineBinding).toBeUndefined();
+    expect(streamTextArgs.experimental_context?.activeMachine).toBeUndefined();
   });
 });

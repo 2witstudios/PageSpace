@@ -32,6 +32,8 @@ import {
   createDbMachineSessionStore,
 } from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { acquireMachineSandbox } from '@pagespace/lib/services/sandbox/machine-session';
+import { acquireBranchSandbox } from '@pagespace/lib/services/sandbox/branch-session';
+import { createDbMachineBranchStore } from '@pagespace/lib/services/machines/machine-branches-store';
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/machine-billing';
 import { measureMachineStorageOpportunistically } from '@pagespace/lib/services/sandbox/machine-storage-billing';
 import { lookupPageOwnerId } from '@pagespace/lib/billing/machine-payer';
@@ -72,6 +74,13 @@ let sandboxClientPromise: Promise<ExecSandboxClient> | null = null;
 function getStore() {
   storePromise ??= createDbMachineSessionStore();
   return storePromise;
+}
+
+let branchStorePromise: ReturnType<typeof createDbMachineBranchStore> | null = null;
+
+function getBranchStore() {
+  branchStorePromise ??= createDbMachineBranchStore();
+  return branchStorePromise;
 }
 
 // The Fly Sprites driver is loaded via a DYNAMIC import, never a static one.
@@ -120,28 +129,48 @@ function getSandboxClient(): Promise<ExecSandboxClient> {
 export function buildRealSandboxRunDeps(): SandboxRunDeps {
   return {
     isEnabled: isCodeExecutionEnabled,
-    acquireSandbox: async (input) =>
-      acquireMachineSandbox({
-        ...input,
-        deps: {
-          store: await getStore(),
-          client: await getSandboxClient(),
-          authorize: canRunCode,
-          now: () => new Date(),
-          secret: getSandboxSessionSecret(),
-          // Full-egress G-gate: the agent sandbox runs OPEN egress, so refuse to
-          // provision unless containment is verified for the live topology
-          // (SANDBOX_CONTAINMENT_VERIFIED=true after the G1 probes pass). Admin
-          // gate has precedence. Fail-closed when unset.
-          checkFullEgressEnablement: async () =>
-            decideFullEgressEnablement({
-              adminGateEnabled: isCodeExecutionEnabled(),
-              containment: isContainmentVerified() ? { contained: true } : null,
-            }),
-          checkMachineRuntimeGuardrail,
-          recordMachineActivity,
-        },
-      }),
+    // Branch-scoped "PageSpace Agent" panes (issue #2166 phase 8) route to the
+    // attach-only branch seam instead of the machine's own persistent
+    // session — a branch's Sprite is provisioned exclusively by the
+    // branch-spawn path, never lazily here.
+    acquireSandbox: async ({ branchSandbox, ...input }) =>
+      branchSandbox
+        ? acquireBranchSandbox({
+            driveId: input.driveId,
+            userId: input.userId,
+            requestOrigin: input.requestOrigin,
+            agentPageId: input.agentPageId,
+            machineId: branchSandbox.machineId,
+            machineBranchId: branchSandbox.machineBranchId,
+            deps: {
+              authorize: canRunCode,
+              now: () => new Date(),
+              checkMachineRuntimeGuardrail,
+              recordMachineActivity,
+              findBranch: async (machineBranchId) => (await getBranchStore()).findById(machineBranchId),
+            },
+          })
+        : acquireMachineSandbox({
+            ...input,
+            deps: {
+              store: await getStore(),
+              client: await getSandboxClient(),
+              authorize: canRunCode,
+              now: () => new Date(),
+              secret: getSandboxSessionSecret(),
+              // Full-egress G-gate: the agent sandbox runs OPEN egress, so refuse to
+              // provision unless containment is verified for the live topology
+              // (SANDBOX_CONTAINMENT_VERIFIED=true after the G1 probes pass). Admin
+              // gate has precedence. Fail-closed when unset.
+              checkFullEgressEnablement: async () =>
+                decideFullEgressEnablement({
+                  adminGateEnabled: isCodeExecutionEnabled(),
+                  containment: isContainmentVerified() ? { contained: true } : null,
+                }),
+              checkMachineRuntimeGuardrail,
+              recordMachineActivity,
+            },
+          }),
     reconnect: async (sandboxId) => (await getSandboxClient()).get({ sandboxId }),
     quota: {
       acquireSlot: acquireCodeExecutionSlot,
@@ -468,8 +497,17 @@ export function createMachineDirectory(
   deps: MachineDirectoryRuntimeDeps = defaultMachineDirectoryDeps,
 ): MachineDirectoryDeps {
   return {
-    listMachines: (rawContext) =>
-      resolveConfiguredMachines(activeMachineAgentPageId(rawContext), rawContext?.userId, deps),
+    listMachines: (rawContext) => {
+      // A machine-bound "PageSpace Agent" pane (issue #2166 phase 7): the
+      // binding IS the entitlement (established by the route's page-edit
+      // check before deriveMachinePaneBinding ran), so the agent's/global
+      // assistant's own configured machine list is never consulted — the
+      // bound machine is the ONLY machine this run may ever see or switch to.
+      if (rawContext?.machineBinding) {
+        return Promise.resolve([{ kind: 'existing' as const, machineId: rawContext.machineBinding.machineId }]);
+      }
+      return resolveConfiguredMachines(activeMachineAgentPageId(rawContext), rawContext?.userId, deps);
+    },
     describeMachine: async (_rawContext, machine) => {
       if (machine.kind === 'own') return { name: 'My Machine' };
       const page = await deps.findPage(machine.machineId);
@@ -487,6 +525,15 @@ export function createMachineDirectory(
       if (!page || page.isTrashed || !isMachinePage(page.type as PageType)) return { allowed: false };
       const canView = await deps.canViewPage(rawContext, machine.machineId);
       if (!canView) return { allowed: false };
+      // A machine-bound "PageSpace Agent" pane (issue #2166 phase 7): the
+      // pane's OWN bound machine is exempt from the Settings-toggle decision
+      // below — same rationale as the user-scoped-agent exemption just below
+      // (the binding IS the entitlement, established by the route's
+      // page-edit check before deriveMachinePaneBinding ran) — but existence/
+      // trash/type/canActorViewPage above are NEVER bypassed. A DIFFERENT
+      // machine (e.g. an attempted switch_machine away from the bound
+      // checkout) still gets the full toggle check below.
+      if (rawContext.machineBinding?.machineId === machine.machineId) return { allowed: true };
       // Machine access toggles (Settings tab): pure policy in @pagespace/lib
       // machines/machine-access.ts. An agentPageId — the agent's own page or
       // the parent's for a sub-agent — marks the actor page-scoped; without

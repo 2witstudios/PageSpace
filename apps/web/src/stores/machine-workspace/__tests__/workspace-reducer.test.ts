@@ -206,6 +206,19 @@ describe('sessionWorkspaceId', () => {
     });
   });
 
+  it('given scopes that differ only by content kind, should resolve to the same workspace id', () => {
+    assert({
+      given: 'the same session scope tagged "chat", "terminal", and untagged',
+      should: 'produce the identical workspace id — the content kind is not part of session identity',
+      actual: new Set([
+        sessionWorkspaceId({ projectName: 'app', branchName: 'main', name: 'claude-a1b2c3', kind: 'chat' }),
+        sessionWorkspaceId({ projectName: 'app', branchName: 'main', name: 'claude-a1b2c3', kind: 'terminal' }),
+        sessionWorkspaceId({ projectName: 'app', branchName: 'main', name: 'claude-a1b2c3' }),
+      ]).size,
+      expected: 1,
+    });
+  });
+
   it('given any scope, should never contain a NUL byte', () => {
     const id = sessionWorkspaceId({ projectName: 'app', branchName: 'main', name: 'claude-a1b2c3' });
 
@@ -337,6 +350,28 @@ describe('assignPane (split-and-pick landing)', () => {
       should:
         'return the state untouched — the store reads that identity to know the session it just created is orphaned, and removes it',
       actual: assignPane(state, 'closed-pane', { name: 'claude-a1b2c3' }),
+      expected: state,
+    });
+  });
+});
+
+describe('assignPane — content kind round-trips on the bound scope (#2166 phase 9)', () => {
+  it('given a scope carrying the content kind, should round-trip it onto the pane', () => {
+    assert({
+      given: 'assignPane with a scope tagged kind: "chat"',
+      should: "round-trip the kind onto the pane's scope, unchanged",
+      actual: panesOf(assignPane(aWorkspace(), 'pane-1', { name: 'claude-a1b2c3', kind: 'chat' }))[0].scope,
+      expected: { name: 'claude-a1b2c3', kind: 'chat' },
+    });
+  });
+
+  it('given an unknown pane id, should be a no-op even when the scope carries a content kind', () => {
+    const state = aWorkspace();
+
+    assert({
+      given: 'a pane id that does not resolve, with a scope carrying a content kind',
+      should: 'be a no-op, same as any other assignPane call',
+      actual: assignPane(state, 'gone', { name: 'claude-a1b2c3', kind: 'chat' }),
       expected: state,
     });
   });
@@ -806,6 +841,48 @@ describe('mergeServerWorkspaces — reconciling the server\'s workspace list', (
   });
 });
 
+describe('mergeServerWorkspaces — round-trips the content kind (#2166 phase 9)', () => {
+  it('given a server workspace whose pane scope carries the content kind, should round-trip it', () => {
+    const merged = mergeServerWorkspaces(undefined, [
+      {
+        id: 'ws-1',
+        name: 'Workspace 1',
+        scope: {},
+        columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: { name: 'claude-a1', kind: 'chat' } }] }],
+      },
+    ]);
+
+    assert({
+      given: 'a server payload whose pane scope is tagged kind: "chat"',
+      should: 'round-trip the tag into local state — server isValidLayout is lenient, so this is not stripped in transit',
+      actual: panesOf(merged.workspaces['ws-1'])[0].scope,
+      expected: { name: 'claude-a1', kind: 'chat' },
+    });
+  });
+
+  it("given a surviving pane with a local pendingPrompt, should preserve both the prompt and the server's content kind", () => {
+    const local = initialMachineWorkspaces(
+      assignPane(aWorkspace('ws-1', 'pane-1'), 'pane-1', { name: 'claude-a1' }, 'fix the build')
+    );
+
+    const merged = mergeServerWorkspaces(local, [
+      {
+        id: 'ws-1',
+        name: 'ws-1',
+        scope: BRANCH_SCOPE,
+        columns: [{ id: 'pane-1', panes: [{ id: 'pane-1', scope: { name: 'claude-a1', kind: 'chat' } }] }],
+      },
+    ]);
+
+    assert({
+      given: 'an incoming layout for a pane that survives locally with an undelivered prompt, whose server scope now carries a content kind',
+      should: 'keep the local pendingPrompt AND adopt the server content kind together — same merge, two fields',
+      actual: panesOf(merged.workspaces['ws-1'])[0],
+      expected: { id: 'pane-1', scope: { name: 'claude-a1', kind: 'chat' }, pendingPrompt: 'fix the build' },
+    });
+  });
+});
+
 describe('applyServerWorkspaceUpsert', () => {
   it('given a brand-new workspace id, should add it to the end of order', () => {
     const machine = initialMachineWorkspaces(aWorkspace('ws-a', 'a1'));
@@ -990,6 +1067,61 @@ describe('sanitizeMachines — what comes back from storage is untrusted', () =>
         'point active at a real pane — every grid transition no-ops on a pane it cannot resolve, so a split anchored on a phantom would silently do nothing',
       actual: sanitizeMachines(persisted).m1.workspaces['ws-1'].activePaneId,
       expected: 'pane-1',
+    });
+  });
+
+  it('given a persisted pane scope carrying the content kind, should preserve it (#2166 phase 9)', () => {
+    const persisted = {
+      m1: {
+        workspaces: {
+          'ws-1': {
+            id: 'ws-1',
+            name: 'ws-1',
+            scope: {},
+            columns: [{ id: 'pane-1', panes: [{ id: 'pane-1', scope: { name: 'claude-a1', kind: 'chat' } }] }],
+            activePaneId: 'pane-1',
+          },
+        },
+        order: ['ws-1'],
+        activeWorkspaceId: 'ws-1',
+      },
+    };
+
+    const actual = sanitizeMachines(persisted).m1.workspaces['ws-1'];
+
+    assert({
+      given: 'a rehydrated pane whose scope carries kind: "chat"',
+      should: 'preserve the content kind on the way through, not strip it as an unrecognized field',
+      actual: panesOf(actual)[0].scope,
+      expected: { name: 'claude-a1', kind: 'chat' },
+    });
+  });
+
+  it('given a persisted activePaneId that does not resolve, should still repoint it while preserving the content kind on surviving panes', () => {
+    const persisted = {
+      m1: {
+        workspaces: {
+          'ws-1': {
+            id: 'ws-1',
+            name: 'ws-1',
+            scope: {},
+            columns: [{ id: 'pane-1', panes: [{ id: 'pane-1', scope: { name: 'claude-a1', kind: 'chat' } }] }],
+            activePaneId: 'pane-that-was-closed',
+          },
+        },
+        order: ['ws-1'],
+        activeWorkspaceId: 'ws-1',
+      },
+    };
+
+    const actual = sanitizeMachines(persisted).m1.workspaces['ws-1'];
+
+    assert({
+      given: 'an activePaneId that no longer resolves, on a workspace whose surviving pane carries a content kind',
+      should:
+        'repoint active at the real pane and keep the content kind intact — same no-op-on-unknown-id contract as every other transition here',
+      actual: { activePaneId: actual.activePaneId, scope: panesOf(actual)[0].scope },
+      expected: { activePaneId: 'pane-1', scope: { name: 'claude-a1', kind: 'chat' } },
     });
   });
 });

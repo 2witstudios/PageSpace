@@ -4,6 +4,7 @@ import {
   filterToolsForReadOnly,
   filterToolsForWebSearch,
   filterToolsForMcpScope,
+  filterToolsForMachineBinding,
   isWebSearchTool,
   isImageGenTool,
   filterToolsForImageGen,
@@ -125,6 +126,28 @@ describe('filterToolsForMcpScope', () => {
     const result = filterToolsForMcpScope(withDrive, true);
     expect(result.create_drive).toBeUndefined();
     expect(result.list_pages).toBe('list_pages');
+    expect(result.read_page).toBe('read_page');
+  });
+});
+
+describe('filterToolsForMachineBinding', () => {
+  const withMachineTools = {
+    switch_machine: 'switch_machine',
+    list_machines: 'list_machines',
+    read_page: 'read_page',
+  };
+
+  it('returns input unchanged when not bound', () => {
+    const result = filterToolsForMachineBinding(withMachineTools, false);
+    expect(result).toEqual(withMachineTools);
+    expect(result.switch_machine).toBe('switch_machine');
+    expect(result.list_machines).toBe('list_machines');
+  });
+
+  it('removes switch_machine and list_machines when bound to a machine pane', () => {
+    const result = filterToolsForMachineBinding(withMachineTools, true);
+    expect(result.switch_machine).toBeUndefined();
+    expect(result.list_machines).toBeUndefined();
     expect(result.read_page).toBe('read_page');
   });
 });

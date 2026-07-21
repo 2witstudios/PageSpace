@@ -26,7 +26,9 @@ import {
   buildListAgentTerminalsDeps,
   canAccessMachine,
   canViewMachine,
+  isCodeExecutionEnabled,
 } from '@/lib/machines/agent-terminals-runtime';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -67,6 +69,7 @@ const SPAWN_DENIAL_STATUS: Record<string, number> = {
 const KILL_DENIAL_STATUS: Record<string, number> = {
   ...SCOPE_DENIAL_STATUS,
   not_found: 404,
+  not_a_pty_agent: 409,
   error: 500,
 };
 
@@ -96,7 +99,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: result.reason }, { status: SCOPE_DENIAL_STATUS[result.reason] ?? 500 });
   }
   return NextResponse.json({
-    agentTerminals: result.terminals.map((t) => ({ name: t.name, agentType: t.agentType, createdAt: t.createdAt })),
+    agentTerminals: result.terminals.map((t) => ({ id: t.id, name: t.name, agentType: t.agentType, createdAt: t.createdAt })),
   });
 }
 
@@ -124,6 +127,12 @@ export async function POST(request: Request) {
   const command = optionalString(body.command, 'command');
   if (!command.ok) return command.error;
 
+  // `pagespace` renders the PageSpace AI chat UI rather than a real PTY — refuse it
+  // up front, before any DB access check, when the code-execution kill switch is off.
+  if (agentType.value === 'pagespace' && !isCodeExecutionEnabled()) {
+    return NextResponse.json({ error: 'code_execution_disabled', reason: 'code_execution_disabled' }, { status: 403 });
+  }
+
   if (!(await canAccessMachine(auth.userId, machineId.value))) {
     return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
   }
@@ -141,8 +150,21 @@ export async function POST(request: Request) {
   if (!result.ok) {
     return NextResponse.json({ error: result.reason, reason: result.reason }, { status: SPAWN_DENIAL_STATUS[result.reason] ?? 500 });
   }
+
+  // A fresh `pagespace` row needs its shared conversation to exist before the client's
+  // first message so co-editors get multi-viewer parity from the start. A resumed
+  // spawn reattaches to whatever the original fresh spawn already created. Non-fatal:
+  // a failed pre-create just means the row gets created lazily on first message instead.
+  if (agentType.value === 'pagespace' && !result.resumed) {
+    try {
+      await conversationRepository.createConversation(result.id, auth.userId, machineId.value, { isShared: true });
+    } catch {
+      // Non-fatal — see comment above.
+    }
+  }
+
   return NextResponse.json(
-    { agentTerminal: { name: name.value, agentType: result.agentType, resumed: result.resumed } },
+    { agentTerminal: { id: result.id, name: name.value, agentType: result.agentType, resumed: result.resumed } },
     { status: result.resumed ? 200 : 201 },
   );
 }

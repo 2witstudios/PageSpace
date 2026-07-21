@@ -507,6 +507,11 @@
       "import": "./dist/services/sandbox/machine-session.js",
       "require": "./dist/services/sandbox/machine-session.js"
     },
+    "./services/sandbox/branch-session": {
+      "types": "./dist/services/sandbox/branch-session.d.ts",
+      "import": "./dist/services/sandbox/branch-session.js",
+      "require": "./dist/services/sandbox/branch-session.js"
+    },
     "./services/sandbox/machine-billing": {
       "types": "./dist/services/sandbox/machine-billing.d.ts",
       "import": "./dist/services/sandbox/machine-billing.js",
@@ -686,6 +691,11 @@
       "types": "./dist/services/machines/agent-terminals.d.ts",
       "import": "./dist/services/machines/agent-terminals.js",
       "require": "./dist/services/machines/agent-terminals.js"
+    },
+    "./services/machines/machine-pane-binding": {
+      "types": "./dist/services/machines/machine-pane-binding.d.ts",
+      "import": "./dist/services/machines/machine-pane-binding.js",
+      "require": "./dist/services/machines/machine-pane-binding.js"
     },
     "./services/machines/machine-access": {
       "types": "./dist/services/machines/machine-access.d.ts",
@@ -1846,6 +1856,9 @@
       ],
       "services/sandbox/machine-session": [
         "./dist/services/sandbox/machine-session.d.ts"
+      ],
+      "services/sandbox/branch-session": [
+        "./dist/services/sandbox/branch-session.d.ts"
       ],
       "services/sandbox/machine-billing": [
         "./dist/services/sandbox/machine-billing.d.ts"

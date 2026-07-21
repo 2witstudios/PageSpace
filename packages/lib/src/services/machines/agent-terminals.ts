@@ -47,7 +47,13 @@ import {
   type AgentTerminalScope,
   deriveAgentTerminalScope,
 } from './agent-terminals-store';
-import { isValidAgentTerminalName, isValidAgentTerminalCommand, isAgentRuntimeType, type AgentRuntimeType } from './agent-terminal-types';
+import {
+  isValidAgentTerminalName,
+  isValidAgentTerminalCommand,
+  isAgentRuntimeType,
+  isPtyAgentType,
+  type AgentRuntimeType,
+} from './agent-terminal-types';
 
 export type { AgentTerminalScopeKey, AgentTerminalScope };
 export { deriveAgentTerminalScope };
@@ -176,45 +182,6 @@ async function resolveProjectOrMachineLocation({
   return { ok: true, sandboxId: acquired.sandboxId, cwd };
 }
 
-type ScopeLocationResolution =
-  | { ok: true; scopeKey: AgentTerminalScopeKey; sandboxId: string; cwd: string }
-  | { ok: false; reason: AgentTerminalScopeDenialReason };
-
-/** Resolve WHERE a scope target's Sprite + working directory live, by (project, branch) NAME — used by the by-name resolve/kill path. */
-async function resolveScopeLocation({
-  machineId,
-  projectName,
-  branchName,
-  deps,
-}: {
-  machineId: string;
-  projectName?: string;
-  branchName?: string;
-  deps: Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'machineSandbox'>;
-}): Promise<ScopeLocationResolution> {
-  if (branchName !== undefined) {
-    if (!projectName) return { ok: false, reason: 'invalid_target' };
-    const branch = await deps.branchStore.findByName(machineId, projectName, branchName);
-    if (!branch) return { ok: false, reason: 'branch_not_found' };
-    return {
-      ok: true,
-      scopeKey: { machineId, projectName, machineBranchId: branch.id },
-      sandboxId: branch.sandboxId,
-      cwd: BRANCH_REPO_PATH,
-    };
-  }
-
-  const resolvedProjectName = projectName ?? null;
-  const located = await resolveProjectOrMachineLocation({ machineId, projectName: resolvedProjectName, deps });
-  if (!located.ok) return located;
-  return {
-    ok: true,
-    scopeKey: { machineId, projectName: resolvedProjectName, machineBranchId: null },
-    sandboxId: located.sandboxId,
-    cwd: located.cwd,
-  };
-}
-
 /** Resolve WHERE an already-known ROW's Sprite + working directory live, by its OWN scope columns — the level-agnostic path (no name lookup at all). */
 async function resolveLocationForRow(
   row: Pick<MachineAgentTerminalRecord, 'machineId' | 'projectName' | 'machineBranchId'>,
@@ -321,16 +288,33 @@ export type ResolveAgentTerminalResult =
       command: string | null;
       streamSessionId: string | null;
     }
-  | { ok: false; reason: AgentTerminalScopeDenialReason | 'not_found' };
+  | { ok: false; reason: AgentTerminalScopeDenialReason | 'not_found' | 'not_a_pty_agent' };
 
-function toResolveResult(row: MachineAgentTerminalRecord, location: { sandboxId: string; cwd: string }): ResolveAgentTerminalResult {
+/**
+ * Is this row's agentType valid AND does it actually spawn a PTY (as opposed
+ * to a `'chat'`-surface type like `pagespace`)? Every resolve/kill path that
+ * would otherwise wake or attach a Sprite must run this check FIRST — a row
+ * nothing can ever launch a PTY on has no business touching a Sprite at all.
+ */
+function checkPtyAgentRow(
+  row: Pick<MachineAgentTerminalRecord, 'agentType'>,
+): { ok: true; agentType: AgentRuntimeType } | { ok: false; reason: 'not_found' | 'not_a_pty_agent' } {
   if (!isAgentRuntimeType(row.agentType)) return { ok: false, reason: 'not_found' };
+  if (!isPtyAgentType(row.agentType)) return { ok: false, reason: 'not_a_pty_agent' };
+  return { ok: true, agentType: row.agentType };
+}
+
+function toResolveResult(
+  row: MachineAgentTerminalRecord,
+  agentType: AgentRuntimeType,
+  location: { sandboxId: string; cwd: string },
+): ResolveAgentTerminalResult {
   return {
     ok: true,
     agentTerminalId: row.id,
     sandboxId: location.sandboxId,
     cwd: location.cwd,
-    agentType: row.agentType,
+    agentType,
     command: row.command,
     streamSessionId: row.streamSessionId,
   };
@@ -338,7 +322,7 @@ function toResolveResult(row: MachineAgentTerminalRecord, location: { sandboxId:
 
 export type ResolveAgentTerminalRowResult =
   | { ok: true; agentTerminalId: string; agentType: AgentRuntimeType }
-  | { ok: false; reason: AgentTerminalScopeDenialReason | 'not_found' };
+  | { ok: false; reason: AgentTerminalScopeDenialReason | 'not_found' | 'not_a_pty_agent' };
 
 export type ResolveAgentTerminalRowDeps = Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'store'>;
 
@@ -372,8 +356,9 @@ export async function resolveAgentTerminalRow({
 
   const row = await deps.store.findByName(scope.scopeKey, name);
   if (!row) return { ok: false, reason: 'not_found' };
-  if (!isAgentRuntimeType(row.agentType)) return { ok: false, reason: 'not_found' };
-  return { ok: true, agentTerminalId: row.id, agentType: row.agentType };
+  const check = checkPtyAgentRow(row);
+  if (!check.ok) return check;
+  return { ok: true, agentTerminalId: row.id, agentType: check.agentType };
 }
 
 /**
@@ -392,12 +377,17 @@ export async function resolveAgentTerminal({
   name,
   deps,
 }: AgentTerminalTarget & { deps: ResolveAgentTerminalDeps }): Promise<ResolveAgentTerminalResult> {
-  const location = await resolveScopeLocation({ machineId, projectName, branchName, deps });
-  if (!location.ok) return location;
+  const scope = await resolveScopeKey({ machineId, projectName, branchName, deps });
+  if (!scope.ok) return scope;
 
-  const row = await deps.store.findByName(location.scopeKey, name);
+  const row = await deps.store.findByName(scope.scopeKey, name);
   if (!row) return { ok: false, reason: 'not_found' };
-  return toResolveResult(row, location);
+  const check = checkPtyAgentRow(row);
+  if (!check.ok) return check;
+
+  const location = await resolveLocationForRow(row, deps);
+  if (!location.ok) return location;
+  return toResolveResult(row, check.agentType, location);
 }
 
 /**
@@ -422,10 +412,12 @@ export async function resolveAgentTerminalById({
 }): Promise<ResolveAgentTerminalResult> {
   const row = await deps.store.findById(agentTerminalId);
   if (!row) return { ok: false, reason: 'not_found' };
+  const check = checkPtyAgentRow(row);
+  if (!check.ok) return check;
 
   const location = await resolveLocationForRow(row, deps);
   if (!location.ok) return location;
-  return toResolveResult(row, location);
+  return toResolveResult(row, check.agentType, location);
 }
 
 export async function listAgentTerminals({
@@ -501,6 +493,25 @@ async function killAtLocation(
 }
 
 /**
+ * A row with `streamSessionId === null` (a chat-surface row, which never has
+ * one, or a PTY row whose stream was never opened) has nothing running to
+ * kill — drop it with a DB-only write, no Sprite touch at all. Only a row
+ * whose PTY IS running needs its scope's Sprite resolved (which, for
+ * machine/project scope, may acquire/reconnect it) before `killAtLocation`
+ * can reach in and kill that specific session.
+ */
+async function killRow(row: MachineAgentTerminalRecord, deps: KillAgentTerminalDeps): Promise<KillAgentTerminalResult> {
+  if (row.streamSessionId === null) {
+    await deps.store.remove({ machineId: row.machineId, projectName: row.projectName, machineBranchId: row.machineBranchId }, row.name);
+    return { ok: true };
+  }
+
+  const location = await resolveLocationForRow(row, deps);
+  if (!location.ok) return location;
+  return killAtLocation(row, location, deps);
+}
+
+/**
  * Tear down a named agent terminal: if its process was ever actually
  * launched (`streamSessionId` set), attach the scope's Sprite through the
  * `MachineHost` seam and kill that specific PTY session, then drop the
@@ -515,13 +526,13 @@ export async function killAgentTerminal({
   name,
   deps,
 }: AgentTerminalTarget & { deps: KillAgentTerminalDeps }): Promise<KillAgentTerminalResult> {
-  const location = await resolveScopeLocation({ machineId, projectName, branchName, deps });
-  if (!location.ok) return location;
+  const scope = await resolveScopeKey({ machineId, projectName, branchName, deps });
+  if (!scope.ok) return scope;
 
-  const row = await deps.store.findByName(location.scopeKey, name);
+  const row = await deps.store.findByName(scope.scopeKey, name);
   if (!row) return { ok: false, reason: 'not_found' };
 
-  return killAtLocation(row, location, deps);
+  return killRow(row, deps);
 }
 
 /**
@@ -543,8 +554,5 @@ export async function killAgentTerminalById({
   const row = await deps.store.findById(agentTerminalId);
   if (!row) return { ok: false, reason: 'not_found' };
 
-  const location = await resolveLocationForRow(row, deps);
-  if (!location.ok) return location;
-
-  return killAtLocation(row, location, deps);
+  return killRow(row, deps);
 }

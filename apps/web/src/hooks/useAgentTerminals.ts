@@ -6,6 +6,9 @@ import { fetchWithAuth, post, del } from '@/lib/auth/auth-fetch';
 import type { AgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
 
 export interface AgentTerminal {
+  // The row's own id — used client-side as the conversation id for
+  // chat-surface (`pagespace`) terminals.
+  id: string;
   name: string;
   // A raw DB value, not narrowed to AgentRuntimeType — a row can carry an
   // agentType from a since-retired AGENT_LAUNCH_SPECS entry (e.g. the removed
@@ -95,7 +98,7 @@ export function useAgentTerminals(machineId: string | null, projectName?: string
   const addAgentTerminal = useCallback(
     async (name: string, agentType: AgentRuntimeType) => {
       if (!machineId) throw new Error('No active machine');
-      const result = await post<{ agentTerminal: { name: string; agentType: AgentRuntimeType; resumed: boolean } }>(
+      const result = await post<{ agentTerminal: { id: string; name: string; agentType: AgentRuntimeType; resumed: boolean } }>(
         '/api/machines/agent-terminals',
         { machineId, projectName: projectName ?? undefined, branchName: branchName ?? undefined, name, agentType },
       );
