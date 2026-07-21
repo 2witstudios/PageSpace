@@ -192,6 +192,91 @@ describe('PageWebhooksDialog', () => {
     });
   });
 
+  test('reveals the rotated secret even when the list refresh fails', async () => {
+    vi.mocked(fetchWithAuth)
+      .mockResolvedValueOnce(listResponse(200, { webhooks: [remoteWebhook()] }))
+      .mockRejectedValue(new Error('network down'));
+    vi.mocked(post).mockResolvedValue({
+      webhook: remoteWebhook(),
+      webhookSecret: 'whsec_survives_refetch',
+    });
+
+    renderDialog();
+    await waitFor(() => screen.getByText('Deploys'));
+
+    await userEvent.click(screen.getByRole('button', { name: /Rotate secret/ }));
+    await waitFor(() => screen.getByText('whsec_survives_refetch'));
+
+    assert({
+      given: 'a successful rotation whose follow-up list revalidation rejects',
+      should: 'still reveal the one-time secret (the old one is already dead) with no error toast',
+      actual: {
+        secret: screen.getByText('whsec_survives_refetch') !== null,
+        errorToasts: vi.mocked(toast.error).mock.calls.length,
+      },
+      expected: { secret: true, errorToasts: 0 },
+    });
+  });
+
+  test('reveals the created secret even when the list refresh fails', async () => {
+    vi.mocked(fetchWithAuth)
+      .mockResolvedValueOnce(listResponse(200, { webhooks: [] }))
+      .mockRejectedValue(new Error('network down'));
+    vi.mocked(post).mockResolvedValue({
+      webhook: remoteWebhook(),
+      webhookSecret: 'whsec_created_survives',
+    });
+
+    renderDialog();
+    await waitFor(() => screen.getByPlaceholderText(/Webhook name/));
+
+    await userEvent.type(screen.getByPlaceholderText(/Webhook name/), 'Deploys');
+    await userEvent.click(screen.getByRole('button', { name: /Create webhook/ }));
+    await waitFor(() => screen.getByText('whsec_created_survives'));
+
+    assert({
+      given: 'a successful creation whose follow-up list revalidation rejects',
+      should: 'still reveal the one-time secret with no error toast',
+      actual: {
+        secret: screen.getByText('whsec_created_survives') !== null,
+        errorToasts: vi.mocked(toast.error).mock.calls.length,
+      },
+      expected: { secret: true, errorToasts: 0 },
+    });
+  });
+
+  test('a pending rotation disables every other secret-producing action', async () => {
+    const second = { ...remoteWebhook(), id: 'wh-2', name: 'Alerts', webhookToken: 'tok_second_999999' };
+    vi.mocked(fetchWithAuth).mockResolvedValue(
+      listResponse(200, { webhooks: [remoteWebhook(), second] }),
+    );
+    let resolvePost: (value: unknown) => void = () => {};
+    vi.mocked(post).mockImplementation(
+      () => new Promise<never>((resolve) => { resolvePost = resolve as (value: unknown) => void; }),
+    );
+
+    renderDialog();
+    await waitFor(() => screen.getByText('Alerts'));
+
+    const rotateButtons = screen.getAllByRole('button', { name: /Rotate secret/ });
+    await userEvent.click(rotateButtons[0]);
+    await waitFor(() => {
+      if (!(rotateButtons[1] as HTMLButtonElement).disabled) throw new Error('not yet disabled');
+    });
+
+    assert({
+      given: 'a rotation in flight on one webhook of several',
+      should: 'disable the other rotate and create actions so a second one-time secret cannot overwrite the first reveal',
+      actual: {
+        otherRotateDisabled: (rotateButtons[1] as HTMLButtonElement).disabled,
+        createDisabled: (screen.getByRole('button', { name: /Create webhook/ }) as HTMLButtonElement).disabled,
+      },
+      expected: { otherRotateDisabled: true, createDisabled: true },
+    });
+
+    resolvePost({ webhook: remoteWebhook(), webhookSecret: 'whsec_settled' });
+  });
+
   test('reveals the secret exactly once, dismissed only by explicit confirmation', async () => {
     vi.mocked(fetchWithAuth).mockResolvedValue(listResponse(200, { webhooks: [] }));
     vi.mocked(post).mockResolvedValue({

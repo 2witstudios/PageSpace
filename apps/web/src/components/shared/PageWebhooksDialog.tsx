@@ -70,12 +70,14 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
         `/api/pages/${pageId}/webhooks`,
         { name },
       );
-      await refetch();
       setNewName('');
+      // Reveal before refreshing the list: the secret exists only in this
+      // response, so a failed (cosmetic) revalidation must never discard it.
       setRevealed({
         webhookUrl: `${window.location.origin}/api/webhooks/${res.webhook.webhookToken}`,
         secret: res.webhookSecret,
       });
+      await refetch().catch(() => {});
     } catch {
       toast.error('Failed to create webhook');
     } finally {
@@ -101,11 +103,14 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
       const res = await post<{ webhook: WebhookRow; webhookSecret: string }>(
         `/api/pages/${pageId}/webhooks/${id}/rotate`,
       );
-      await refetch();
+      // Reveal before refreshing the list: the old secret is already dead and
+      // this response holds the only copy of the new one — a failed (cosmetic)
+      // revalidation must never discard it.
       setRevealed({
         webhookUrl: `${window.location.origin}/api/webhooks/${res.webhook.webhookToken}`,
         secret: res.webhookSecret,
       });
+      await refetch().catch(() => {});
     } catch (error) {
       // The rotate route's error bodies are user-actionable (e.g. "rotated by a
       // concurrent request") — surface them instead of a generic failure.
@@ -197,7 +202,11 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
                 placeholder="Webhook name (e.g. Deploys)"
                 maxLength={80}
               />
-              <Button type="submit" size="sm" disabled={creating || newName.trim().length === 0}>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={creating || busyId !== null || newName.trim().length === 0}
+              >
                 {creating ? 'Creating…' : 'Create webhook'}
               </Button>
             </form>
@@ -226,11 +235,14 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
                         disabled={busyId === webhook.id}
                         onCheckedChange={(checked) => toggleWebhook(webhook.id, checked)}
                       />
+                      {/* Any-busy, not row-busy: two in-flight rotations would race
+                          for the single reveal slot and one one-time secret would be
+                          lost — no new secret may start while one is being minted. */}
                       <Button
                         type="button"
                         variant="ghost"
                         size="sm"
-                        disabled={busyId === webhook.id}
+                        disabled={busyId !== null || creating}
                         onClick={() => rotateWebhook(webhook.id)}
                       >
                         Rotate secret
