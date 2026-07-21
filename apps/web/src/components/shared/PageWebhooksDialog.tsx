@@ -95,6 +95,26 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
     }
   };
 
+  const rotateWebhook = async (id: string) => {
+    setBusyId(id);
+    try {
+      const res = await post<{ webhook: WebhookRow; webhookSecret: string }>(
+        `/api/pages/${pageId}/webhooks/${id}/rotate`,
+      );
+      await refetch();
+      setRevealed({
+        webhookUrl: `${window.location.origin}/api/webhooks/${res.webhook.webhookToken}`,
+        secret: res.webhookSecret,
+      });
+    } catch (error) {
+      // The rotate route's error bodies are user-actionable (e.g. "rotated by a
+      // concurrent request") — surface them instead of a generic failure.
+      toast.error(error instanceof Error && error.message ? error.message : 'Failed to rotate secret');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const removeWebhook = async (id: string) => {
     setBusyId(id);
     try {
@@ -206,6 +226,15 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
                         disabled={busyId === webhook.id}
                         onCheckedChange={(checked) => toggleWebhook(webhook.id, checked)}
                       />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={busyId === webhook.id}
+                        onClick={() => rotateWebhook(webhook.id)}
+                      >
+                        Rotate secret
+                      </Button>
                       <Button
                         type="button"
                         variant="ghost"

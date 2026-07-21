@@ -15,6 +15,7 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   del: vi.fn(),
 }));
 
+import { toast } from 'sonner';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import { PageWebhooksDialog } from '../PageWebhooksDialog';
 
@@ -128,6 +129,66 @@ describe('PageWebhooksDialog', () => {
         permissionCopy: screen.queryByText(/Only this drive's owner or an admin/),
       },
       expected: { failure: true, retry: true, permissionCopy: null },
+    });
+  });
+
+  test('rotates a webhook secret in place and reveals the new secret exactly once', async () => {
+    vi.mocked(fetchWithAuth).mockResolvedValue(
+      listResponse(200, { webhooks: [remoteWebhook()] }),
+    );
+    vi.mocked(post).mockResolvedValue({
+      webhook: remoteWebhook(),
+      webhookSecret: 'whsec_rotated_once',
+    });
+
+    renderDialog();
+    await waitFor(() => screen.getByText('Deploys'));
+
+    await userEvent.click(screen.getByRole('button', { name: /Rotate secret/ }));
+    await waitFor(() => screen.getByText('whsec_rotated_once'));
+
+    assert({
+      given: 'the user rotated an existing webhook secret',
+      should: 'POST to the rotate endpoint and show the new secret once, same URL',
+      actual: {
+        endpoint: vi.mocked(post).mock.calls[0]?.[0],
+        secret: screen.getByText('whsec_rotated_once') !== null,
+        sameUrl: screen.getByText(new RegExp('/api/webhooks/tok_abcdef12345678')) !== null,
+        dismiss: screen.getByRole('button', { name: /Done, I've saved it/ }) !== null,
+      },
+      expected: {
+        endpoint: `/api/pages/${PAGE_ID}/webhooks/wh-1/rotate`,
+        secret: true,
+        sameUrl: true,
+        dismiss: true,
+      },
+    });
+  });
+
+  test('surfaces the server explanation when rotation fails (e.g. concurrent rotation)', async () => {
+    vi.mocked(fetchWithAuth).mockResolvedValue(
+      listResponse(200, { webhooks: [remoteWebhook()] }),
+    );
+    const conflict =
+      'The secret was rotated by a concurrent request — use that rotation’s secret or rotate again';
+    vi.mocked(post).mockRejectedValue(new Error(conflict));
+
+    renderDialog();
+    await waitFor(() => screen.getByText('Deploys'));
+
+    await userEvent.click(screen.getByRole('button', { name: /Rotate secret/ }));
+    await waitFor(() => {
+      if (vi.mocked(toast.error).mock.calls.length === 0) throw new Error('no toast yet');
+    });
+
+    assert({
+      given: 'the rotate request failed with a server-provided reason',
+      should: 'surface that reason in the error toast and never show a secret panel',
+      actual: {
+        toastMessage: vi.mocked(toast.error).mock.calls[0]?.[0],
+        revealPanel: screen.queryByText(/Save this secret now/),
+      },
+      expected: { toastMessage: conflict, revealPanel: null },
     });
   });
 
