@@ -5,6 +5,16 @@ import { Check, Copy, Webhook } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR from 'swr';
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -43,6 +53,12 @@ type RevealedSecret = { pageId: string; webhookUrl: string; secret: string };
 // consumed the next time that page's dialog opens.
 const orphanedReveals = new Map<string, RevealedSecret>();
 
+// Latest rotation issued per webhook id. A response from a superseded rotation
+// (an older request resolving after a newer one already succeeded) is
+// discarded outright — its secret is already dead server-side, so revealing or
+// parking it would hand the user a credential that can never verify.
+const rotationGenerations = new Map<string, number>();
+
 const webhooksFetcher = async (url: string): Promise<{ webhooks: WebhookRow[] } | { error: string; status: number }> => {
   const res = await fetchWithAuth(url);
   const body = await res.json().catch(() => ({}));
@@ -57,6 +73,7 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
   const [newName, setNewName] = useState('');
   const [creating, setCreating] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [confirmRotateId, setConfirmRotateId] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<RevealedSecret | null>(null);
 
   const mountedRef = useRef(true);
@@ -151,16 +168,24 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
 
   const rotateWebhook = async (id: string) => {
     setBusyId(id);
+    const generation = (rotationGenerations.get(id) ?? 0) + 1;
+    rotationGenerations.set(id, generation);
     try {
       const res = await post<{ webhook: WebhookRow; webhookSecret: string }>(
         `/api/pages/${pageId}/webhooks/${id}/rotate`,
       );
+      // Superseded while in flight (a newer rotation of this webhook already
+      // succeeded): this secret can never verify — drop it.
+      if (rotationGenerations.get(id) !== generation) return;
       // Reveal before refreshing the list: the old secret is already dead and
       // this response holds the only copy of the new one — a failed (cosmetic)
       // revalidation must never discard it.
       reveal(res.webhook, res.webhookSecret);
       await refetch().catch(() => {});
     } catch (error) {
+      // A failed rotation didn't mint anything — restore the previous
+      // generation so an older still-pending response may deliver its secret.
+      if (rotationGenerations.get(id) === generation) rotationGenerations.set(id, generation - 1);
       // The rotate route's error bodies are user-actionable (e.g. "rotated by a
       // concurrent request") — surface them instead of a generic failure.
       toast.error(error instanceof Error && error.message ? error.message : 'Failed to rotate secret');
@@ -292,7 +317,7 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
                         variant="ghost"
                         size="sm"
                         disabled={busyId !== null || creating}
-                        onClick={() => rotateWebhook(webhook.id)}
+                        onClick={() => setConfirmRotateId(webhook.id)}
                       >
                         Rotate secret
                       </Button>
@@ -318,6 +343,31 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
             Done
           </Button>
         </DialogFooter>
+
+        <AlertDialog open={confirmRotateId !== null} onOpenChange={(o) => { if (!o) setConfirmRotateId(null); }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Rotate this webhook&apos;s secret?</AlertDialogTitle>
+              <AlertDialogDescription>
+                The current secret stops working immediately — deliveries signed with it are rejected
+                until your external sender is updated with the new secret. The webhook URL stays the
+                same, and the new secret is shown exactly once.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  const id = confirmRotateId;
+                  setConfirmRotateId(null);
+                  if (id) void rotateWebhook(id);
+                }}
+              >
+                Rotate
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </DialogContent>
     </Dialog>
   );

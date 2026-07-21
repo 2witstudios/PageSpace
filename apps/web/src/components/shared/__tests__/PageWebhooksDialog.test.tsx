@@ -36,6 +36,15 @@ const listResponse = (status: number, body: unknown) =>
     headers: { 'Content-Type': 'application/json' },
   });
 
+/** Click a row's "Rotate secret", then confirm in the alert dialog. */
+const confirmRotation = async () => {
+  await userEvent.click(await screen.findByRole('button', { name: /^Rotate$/ }));
+};
+const startRotation = async () => {
+  await userEvent.click(screen.getByRole('button', { name: /Rotate secret/ }));
+  await confirmRotation();
+};
+
 const renderDialog = (pageType = 'AI_CHAT') =>
   render(
     <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
@@ -132,6 +141,74 @@ describe('PageWebhooksDialog', () => {
     });
   });
 
+  test('rotation is gated behind an explicit confirmation that names the consequence', async () => {
+    vi.mocked(fetchWithAuth).mockResolvedValue(
+      listResponse(200, { webhooks: [remoteWebhook()] }),
+    );
+    vi.mocked(post).mockResolvedValue({
+      webhook: remoteWebhook(),
+      webhookSecret: 'whsec_confirmed',
+    });
+
+    renderDialog();
+    await waitFor(() => screen.getByText('Deploys'));
+    await userEvent.click(screen.getByRole('button', { name: /Rotate secret/ }));
+
+    const postedBeforeConfirm = vi.mocked(post).mock.calls.length;
+    const warning = await screen.findByText(/current secret stops working immediately/i);
+
+    await confirmRotation();
+    await waitFor(() => screen.getByText('whsec_confirmed'));
+
+    assert({
+      given: 'a click on Rotate secret',
+      should: 'not call the API until the destructive consequence is confirmed',
+      actual: {
+        postedBeforeConfirm,
+        warningShown: warning !== null,
+        postedAfterConfirm: vi.mocked(post).mock.calls.length,
+      },
+      expected: { postedBeforeConfirm: 0, warningShown: true, postedAfterConfirm: 1 },
+    });
+  });
+
+  test('a superseded rotation response is discarded, not parked for a later reveal', async () => {
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
+      listResponse(200, { webhooks: [remoteWebhook()] }),
+    );
+    const resolvers: Array<(value: unknown) => void> = [];
+    vi.mocked(post).mockImplementation(
+      () => new Promise<never>((resolve) => { resolvers.push(resolve as (value: unknown) => void); }),
+    );
+
+    const first = renderDialog();
+    await waitFor(() => screen.getByText('Deploys'));
+    await startRotation();
+    first.unmount();
+
+    const second = renderDialog();
+    await waitFor(() => screen.getByText('Deploys'));
+    await startRotation();
+    resolvers[1]({ webhook: remoteWebhook(), webhookSecret: 'whsec_newer' });
+    await waitFor(() => screen.getByText('whsec_newer'));
+    await userEvent.click(screen.getByRole('button', { name: /Done, I've saved it/ }));
+    second.unmount();
+    await new Promise((r) => { setTimeout(r, 0); });
+
+    resolvers[0]({ webhook: remoteWebhook(), webhookSecret: 'whsec_older_stale' });
+    await new Promise((r) => { setTimeout(r, 0); });
+
+    renderDialog();
+    await waitFor(() => screen.getByText('Deploys'));
+
+    assert({
+      given: 'an older rotation response arriving after a newer rotation was revealed and saved',
+      should: 'discard the stale secret (already dead server-side) instead of parking it for the next open',
+      actual: screen.queryByText('whsec_older_stale'),
+      expected: null,
+    });
+  });
+
   test('rotates a webhook secret in place and reveals the new secret exactly once', async () => {
     vi.mocked(fetchWithAuth).mockResolvedValue(
       listResponse(200, { webhooks: [remoteWebhook()] }),
@@ -144,7 +221,7 @@ describe('PageWebhooksDialog', () => {
     renderDialog();
     await waitFor(() => screen.getByText('Deploys'));
 
-    await userEvent.click(screen.getByRole('button', { name: /Rotate secret/ }));
+    await startRotation();
     await waitFor(() => screen.getByText('whsec_rotated_once'));
 
     assert({
@@ -176,7 +253,7 @@ describe('PageWebhooksDialog', () => {
     renderDialog();
     await waitFor(() => screen.getByText('Deploys'));
 
-    await userEvent.click(screen.getByRole('button', { name: /Rotate secret/ }));
+    await startRotation();
     await waitFor(() => {
       if (vi.mocked(toast.error).mock.calls.length === 0) throw new Error('no toast yet');
     });
@@ -204,7 +281,7 @@ describe('PageWebhooksDialog', () => {
     renderDialog();
     await waitFor(() => screen.getByText('Deploys'));
 
-    await userEvent.click(screen.getByRole('button', { name: /Rotate secret/ }));
+    await startRotation();
     await waitFor(() => screen.getByText('whsec_survives_refetch'));
 
     assert({
@@ -260,6 +337,7 @@ describe('PageWebhooksDialog', () => {
 
     const rotateButtons = screen.getAllByRole('button', { name: /Rotate secret/ });
     await userEvent.click(rotateButtons[0]);
+    await confirmRotation();
     await waitFor(() => {
       if (!(rotateButtons[1] as HTMLButtonElement).disabled) throw new Error('not yet disabled');
     });
@@ -293,7 +371,7 @@ describe('PageWebhooksDialog', () => {
     );
     const view = render(dialogAt(true));
     await waitFor(() => screen.getByText('Deploys'));
-    await userEvent.click(screen.getByRole('button', { name: /Rotate secret/ }));
+    await startRotation();
 
     view.rerender(dialogAt(false));
     resolvePost({ webhook: remoteWebhook(), webhookSecret: 'whsec_late_arrival' });
@@ -319,7 +397,7 @@ describe('PageWebhooksDialog', () => {
 
     const first = renderDialog();
     await waitFor(() => screen.getByText('Deploys'));
-    await userEvent.click(screen.getByRole('button', { name: /Rotate secret/ }));
+    await startRotation();
     first.unmount();
 
     resolvePost({ webhook: remoteWebhook(), webhookSecret: 'whsec_after_unmount' });
@@ -352,7 +430,7 @@ describe('PageWebhooksDialog', () => {
     );
     const view = render(dialogFor(PAGE_ID));
     await waitFor(() => screen.getByText('Deploys'));
-    await userEvent.click(screen.getByRole('button', { name: /Rotate secret/ }));
+    await startRotation();
 
     // Same component instance survives navigation (CenterPanel reuses the
     // view across channel ids) — only the pageId prop changes.
