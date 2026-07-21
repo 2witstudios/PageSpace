@@ -445,7 +445,7 @@ describe('MachineTree', () => {
     });
   });
 
-  test('the project node\'s palette does not offer "New terminal" when the tree is BARE (no onWorkspaceCreated)', async () => {
+  test('the project node\'s palette offers no spawn options when the tree is BARE (no onWorkspaceCreated)', async () => {
     const user = userEvent.setup();
     renderTree();
 
@@ -454,12 +454,13 @@ describe('MachineTree', () => {
 
     assert({
       given: 'a bare tree (Diff/Files-tab shape: no onWorkspaceCreated passed) with a project node\'s palette opened',
-      should: 'offer "Add branch" but not "New terminal" — no workspace concept to spawn into',
+      should: 'offer "Add branch" but neither Agent nor Shell — no workspace concept to spawn into',
       actual: {
         addBranch: screen.queryByRole('option', { name: 'Add branch' }) !== null,
-        newTerminal: screen.queryByRole('option', { name: 'New terminal' }) !== null,
+        agent: screen.queryByRole('option', { name: 'Agent' }) !== null,
+        shell: screen.queryByRole('option', { name: 'Shell' }) !== null,
       },
-      expected: { addBranch: true, newTerminal: false },
+      expected: { addBranch: true, agent: false, shell: false },
     });
   });
 
@@ -477,13 +478,14 @@ describe('MachineTree', () => {
 
     assert({
       given: 'a branch row with onWorkspaceCreated wired in',
-      should: 'offer "New terminal" only — a branch has no structural add-child action',
+      should: 'offer the Agent + Shell spawns only — a branch has no structural add-child action',
       actual: {
-        newTerminal: screen.queryByRole('option', { name: 'New terminal' }) !== null,
+        agent: screen.queryByRole('option', { name: 'Agent' }) !== null,
+        shell: screen.queryByRole('option', { name: 'Shell' }) !== null,
         addProject: screen.queryByRole('option', { name: 'Add project' }) !== null,
         addBranch: screen.queryByRole('option', { name: 'Add branch' }) !== null,
       },
-      expected: { newTerminal: true, addProject: false, addBranch: false },
+      expected: { agent: true, shell: true, addProject: false, addBranch: false },
     });
   });
 });

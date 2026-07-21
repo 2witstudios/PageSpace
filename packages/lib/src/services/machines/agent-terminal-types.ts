@@ -22,14 +22,18 @@
  * `process.env.SHELL`) that belongs to whichever layer actually spawns the
  * PTY (the realtime bridge), not this pure module.
  *
- * `pickable` gates the empty-pane "spawn an agent" picker (`TerminalPanes.tsx`
- * — see `PICKABLE_AGENT_TYPES` below). `shell` is PRIMARY here — a plain
- * interactive shell is the default, first-class way to work on a Machine —
- * with `claude`/`codex`/`pagespace` as secondary, opt-in AI agents. Only the
- * retired `pagespace-cli` is excluded. Keeping the marker on the registry
- * entry itself (rather than a hardcoded list living in the UI file) is what
- * keeps the picker in sync when a new entry is added here: forgetting to set
- * `pickable: true` fails safe (excluded, not silently spawnable).
+ * `pickable` gates the spawn pickers (`TerminalPanes.tsx`'s empty-pane picker
+ * and `NodeActionPalette`'s "+" palette — see `PICKABLE_AGENT_TYPES` below).
+ * `pagespace` (the Agent) is PRIMARY — listed first, the default way to work
+ * on a Machine — with `shell` as the plain-PTY secondary. `claude`/`codex`
+ * are RETIRED alongside `pagespace-cli`: their existing DB rows degrade to
+ * unlaunchable, remove-only sidebar listings (the list endpoint is
+ * deliberately unfiltered — see `listAgentTerminals`), and new spawns of a
+ * retired type are rejected as `invalid_agent_type`. Keeping the marker on
+ * the registry entry itself (rather than a hardcoded list living in the UI
+ * file) is what keeps the pickers in sync when a new entry is added here:
+ * forgetting to set `pickable: true` fails safe (excluded, not silently
+ * spawnable), and the object's key ORDER is the pickers' display order.
  *
  * `surface` is the rendering discriminator every pane-hosting layer branches
  * on: `'pty'` types spawn a real PTY process (`command`/`args` are launched
@@ -39,10 +43,8 @@
  * should use rather than reading `.surface` off the registry directly.
  */
 export const AGENT_LAUNCH_SPECS = {
-  shell: { command: 'shell', args: [], pickable: true, surface: 'pty' },
-  claude: { command: 'claude', args: [], pickable: true, surface: 'pty' },
-  codex: { command: 'codex', args: [], pickable: true, surface: 'pty' },
   pagespace: { command: 'pagespace', args: [], pickable: true, surface: 'chat' },
+  shell: { command: 'shell', args: [], pickable: true, surface: 'pty' },
 } as const satisfies Record<
   string,
   { command: string; args: readonly string[]; pickable: boolean; surface: 'pty' | 'chat' }

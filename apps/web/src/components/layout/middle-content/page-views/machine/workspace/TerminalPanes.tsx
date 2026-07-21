@@ -4,18 +4,11 @@ import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { toast } from 'sonner';
 import type { Socket } from 'socket.io-client';
-import { SquareSplitHorizontal, SquareSplitVertical, X } from 'lucide-react';
+import { Bot, TerminalSquare } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import { Textarea } from '@/components/ui/textarea';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
+import PaneBar, { PaneSplitCloseActions, PaneSessionIdentity, type PaneControlProps } from './PaneBar';
 import { useMobile } from '@/hooks/useMobile';
 import { useAgentTerminals, killAgentTerminal, type AgentTerminal } from '@/hooks/useAgentTerminals';
 import { useSyncedWorkspaceActions } from '@/hooks/useMachineWorkspaceSync';
@@ -111,7 +104,7 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
    * resolves, so the agent belongs to a pane from the first frame it exists.
    */
   const spawnIntoPane = useCallback(
-    async (paneId: string, agentType: AgentRuntimeType, prompt?: string) => {
+    async (paneId: string, agentType: AgentRuntimeType) => {
       const created = await addAgentTerminal(autoSessionName(agentType, freshNameSuffix()), agentType);
       const bound = bindPaneTerminal(
         workspaceId,
@@ -133,12 +126,9 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
             ? { kind: 'chat' as const }
             : {}),
         },
-        // `spawnAgentTerminal` is an upsert: `resumed` means it handed back a session
-        // that ALREADY EXISTED rather than creating one. An agent that was already
-        // running must never be typed at, and the API says so right here — relying on
-        // the auto-name's entropy to make this unreachable would leave the invariant
-        // resting on luck instead of on the answer we were given.
-        created.resumed ? undefined : prompt,
+        // No starting prompt — instant spawn means the prompt is typed in the
+        // pane itself, so there is nothing to auto-send.
+        undefined,
       );
       if (!bound && !created.resumed) {
         // The pane went away while the Sprite booted (closed, or the page
@@ -207,10 +197,18 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
 
       closePane(workspaceId, paneId);
       if (closing !== null && !boundElsewhere) {
+        // `killAgentTerminal` drops the session from the SWR cache
+        // synchronously (optimistic mutation) — the same tick as `closePane`
+        // above — so the sidebar never flashes the closing session as an
+        // unclaimed row. On a genuine kill failure the mutation ROLLS the row
+        // BACK as the unclaimed fallback (still reachable, still removable,
+        // with its own remove button) — but the pane is already gone, so the
+        // user must be TOLD the agent is still running (and billing) rather
+        // than left to notice the sidebar row: toast instead of throwing into
+        // the click handler.
+        const closingName = closing.name;
         void killAgentTerminal(machineId, closing).catch(() => {
-          // The pane is already gone locally; a failed kill leaves the session
-          // discoverable as an unclaimed row (which now carries its own remove
-          // button), so this must not throw into the click handler.
+          toast.error(`Failed to stop ${closingName} — it is still running, listed in the sidebar`);
         });
       }
     },
@@ -274,7 +272,7 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
     onSplitRight: () => splitRight(workspaceId, pane.id),
     onSplitDown: () => splitDown(workspaceId, pane.id),
     onClose: () => closePaneAndKill(pane.id),
-    onSpawn: (agentType: AgentRuntimeType, prompt?: string) => spawnIntoPane(pane.id, agentType, prompt),
+    onSpawn: (agentType: AgentRuntimeType) => spawnIntoPane(pane.id, agentType),
     onPickerFocused: () => dismissPicker(machineId, workspaceId, pane.id),
     onPromptSent: () => clearPanePrompt(machineId, workspaceId, pane.id),
   });
@@ -393,12 +391,15 @@ function PaneStrip({
 }
 
 /**
- * Chrome-free by design (no per-pane header, ever, verified against
- * PurePoint's real chrome-free pane design) — a top accent bar shows focus
- * and hover-revealed controls handle splitting/closing without permanent
- * chrome. Known tradeoff: with 2+ panes open the Machine tree sidebar does not
- * yet indicate which open terminal is showing in which pane — that's tree
- * sidebar work, out of scope for this theming-foundation round.
+ * Every pane wears a {@link PaneBar}: identity left (session name + checkout),
+ * split/close right, bar tint as the focus state. This retired the chrome-free
+ * design's floating control chip and 2px accent line — the chip physically
+ * covered the chat surface's own header, hover-reveal needed a coarse-pointer
+ * escape hatch, and anonymous panes left "which terminal is showing where"
+ * unanswerable. A CHAT pane's bar is rendered by {@link MachinePaneChat}
+ * instead (its agent picker and tabs merge into the same bar — one bar per
+ * pane, never two), so this component only draws the bar for the surfaces
+ * that have no header of their own: PTY, picker, loading, and notice panes.
  */
 function TerminalPane({
   socket,
@@ -439,7 +440,7 @@ function TerminalPane({
   onSplitRight(): void;
   onSplitDown(): void;
   onClose(): void;
-  onSpawn(agentType: AgentRuntimeType, prompt?: string): Promise<void>;
+  onSpawn(agentType: AgentRuntimeType): Promise<void>;
   onPickerFocused(): void;
   onPromptSent(): void;
 }) {
@@ -450,63 +451,34 @@ function TerminalPane({
   const resolved = pane.scope
     ? resolvePaneSurface({ scope: pane.scope, workspaceScope, agentTerminals, isLoading: agentTerminalsLoading })
     : null;
-  // With neither a split nor a close to offer (a lone pane on a phone), the
-  // control chip has nothing in it — and since it is opacity-100 on touch, an
-  // empty bordered box would just sit in the corner forever.
   const hasControls = canSplit || canClose;
+  const paneControls: PaneControlProps | undefined = hasControls
+    ? { canSplit, canClose, onSplitRight, onSplitDown, onClose }
+    : undefined;
+  // MachinePaneChat draws the pane's ONE bar itself (agent picker + tabs +
+  // these same controls, merged) — every other surface gets the bar here.
+  const chatMounted = pane.scope !== null && resolved?.surface === 'chat' && resolved.terminalId !== null;
 
   return (
     <div className="group/pane relative flex h-full flex-col" onClick={onSelect}>
-      <div className={`absolute inset-x-0 top-0 z-10 h-0.5 ${isActive ? 'bg-primary' : 'bg-transparent'}`} />
-      {/* Hover-revealed from `md:` up. On a coarse pointer there is nothing to
-          hover with, so the global `[data-pointer='coarse']` rule in globals.css
-          keeps this exact opacity-0/group-hover shape visible — the controls must
-          not be unreachable on a device that cannot hover. */}
-      {hasControls && (
-      <div className="absolute right-1.5 top-1.5 z-10 flex items-center gap-0.5 rounded-md border border-border bg-card/90 p-0.5 opacity-100 shadow-sm backdrop-blur-sm transition-opacity focus-within:opacity-100 md:opacity-0 md:group-hover/pane:opacity-100">
-        {canSplit && (
-          <>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={(e) => {
-                e.stopPropagation();
-                onSplitRight();
-              }}
-              className="size-6 text-muted-foreground hover:text-foreground"
-              title="Split right"
-            >
-              <SquareSplitHorizontal className="size-3.5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={(e) => {
-                e.stopPropagation();
-                onSplitDown();
-              }}
-              className="size-6 text-muted-foreground hover:text-foreground"
-              title="Split down"
-            >
-              <SquareSplitVertical className="size-3.5" />
-            </Button>
-          </>
-        )}
-        {canClose && (
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={(e) => {
-              e.stopPropagation();
-              onClose();
-            }}
-            className="size-6 text-muted-foreground hover:text-destructive"
-            title="Close pane"
-          >
-            <X className="size-3.5" />
-          </Button>
-        )}
-      </div>
+      {!chatMounted && (
+        <PaneBar
+          isActive={isActive}
+          identity={
+            pane.scope ? (
+              <PaneSessionIdentity
+                name={pane.scope.name}
+                // The PANE's own checkout, not the workspace's — a restored
+                // server layout can hold panes bound at other checkouts, and
+                // the chip exists to make exactly that visible.
+                scopeLabel={scopeLabelOf({ projectName: pane.scope.projectName, branchName: pane.scope.branchName })}
+              />
+            ) : (
+              <span className="truncate">New pane</span>
+            )
+          }
+          actions={paneControls && <PaneSplitCloseActions {...paneControls} />}
+        />
       )}
       <div className="relative min-h-0 flex-1">
         {!pane.scope || !sessionId || !resolved ? (
@@ -521,7 +493,7 @@ function TerminalPane({
           // hold while it's still loading (the one thing a chat-bound pane
           // must never do is mount an Xterm), but a LOADED list without the
           // row means the session was killed — say so rather than spin
-          // forever; the close control above stays reachable either way.
+          // forever; the close control in the bar stays reachable either way.
           resolved.terminalId === null ? (
             agentTerminalsLoading ? (
               <PaneLoading message="Loading session…" />
@@ -541,6 +513,8 @@ function TerminalPane({
               terminalId={resolved.terminalId}
               pendingPrompt={pane.pendingPrompt}
               onPromptSent={onPromptSent}
+              isActive={isActive}
+              paneControls={paneControls}
             />
           )
         ) : resolved.surface === 'loading' ? (
@@ -562,14 +536,12 @@ function TerminalPane({
 }
 
 /**
- * An empty pane's inline agent picker — the whole spawn flow, in the pane the
- * agent will run in. Pick a type, optionally say what it should start on, and
- * the agent is created AND placed here in one action: no modal, no name step,
- * no separate "now assign it to a pane" click.
- *
- * The starting prompt is optional on purpose — Enter on the type is the fast
- * path (the agent boots to its own prompt), and the textarea is there for when
- * the user already knows the first thing to say.
+ * An empty pane's inline agent picker — two instant-spawn buttons, in the pane
+ * the agent will run in. Click Agent or Shell and the agent is created AND
+ * placed here in one action: no modal, no name step, no type dropdown, no
+ * prompt form — the prompt is typed in the pane once it opens (same instant
+ * grammar as NodeActionPalette's spawn options). The buttons come from
+ * `PICKABLE_AGENT_TYPES`, so this stays registry-driven.
  */
 function PaneAgentPicker({
   focused,
@@ -579,29 +551,28 @@ function PaneAgentPicker({
 }: {
   focused: boolean;
   scopeLabel: string;
-  onSpawn(agentType: AgentRuntimeType, prompt?: string): Promise<void>;
+  onSpawn(agentType: AgentRuntimeType): Promise<void>;
   onFocused(): void;
 }) {
-  const [agentType, setAgentType] = useState<AgentRuntimeType>(AGENT_TYPES[0]);
-  const [prompt, setPrompt] = useState('');
   const [spawning, setSpawning] = useState(false);
-  const promptRef = useRef<HTMLTextAreaElement>(null);
+  const firstChoiceRef = useRef<HTMLButtonElement>(null);
 
   // Consume the focus intent once. Clearing it in the store (onFocused) is what
-  // stops a later unrelated re-render from yanking the caret back here while
-  // the user is typing in a sibling pane.
+  // stops a later unrelated re-render from yanking the focus back here while
+  // the user is typing in a sibling pane. Focus lands on the FIRST choice
+  // (Agent) — the split asked for a new agent, so Enter spawns the default.
   useEffect(() => {
     if (!focused) return;
-    promptRef.current?.focus();
+    firstChoiceRef.current?.focus();
     onFocused();
   }, [focused, onFocused]);
 
-  const submit = async () => {
+  const spawn = async (agentType: AgentRuntimeType) => {
     setSpawning(true);
     try {
       // A spawned pane re-renders with a terminal in it, unmounting this picker
       // — so `spawning` is only ever cleared on the failure path.
-      await onSpawn(agentType, prompt.trim() || undefined);
+      await onSpawn(agentType);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to spawn agent');
       setSpawning(false);
@@ -614,40 +585,21 @@ function PaneAgentPicker({
         <p className="text-sm font-medium">Spawn an agent</p>
         <p className="text-xs text-muted-foreground">Runs in {scopeLabel}.</p>
       </div>
-      <div className="flex w-full max-w-xs flex-col gap-2">
-        <Select value={agentType} onValueChange={(value) => setAgentType(value as AgentRuntimeType)}>
-          <SelectTrigger aria-label="Agent type" className="h-8">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {AGENT_TYPES.map((type) => (
-              <SelectItem key={type} value={type}>
-                {agentTypeLabelOf(type)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Textarea
-          ref={promptRef}
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          placeholder="Starting prompt (optional)"
-          aria-label="Starting prompt"
-          rows={2}
-          className="resize-none text-sm"
-          // Enter submits; Shift+Enter is a newline — the prompt is usually one
-          // line, and reaching for the button to spawn would put the click back
-          // into a flow whose whole point is not having one.
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              if (!spawning) void submit();
-            }
-          }}
-        />
-        <Button size="sm" disabled={spawning} onClick={() => void submit()}>
-          {spawning ? 'Spawning…' : 'Spawn agent'}
-        </Button>
+      <div className="flex gap-2">
+        {AGENT_TYPES.map((type, index) => (
+          <Button
+            key={type}
+            ref={index === 0 ? firstChoiceRef : undefined}
+            size="sm"
+            variant="outline"
+            disabled={spawning}
+            onClick={() => void spawn(type)}
+            className="gap-2"
+          >
+            {agentSurfaceOf(type) === 'chat' ? <Bot className="size-3.5" /> : <TerminalSquare className="size-3.5" />}
+            {agentTypeLabelOf(type)}
+          </Button>
+        ))}
       </div>
     </div>
   );

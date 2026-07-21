@@ -27,7 +27,7 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
 }));
 
 import { toast } from 'sonner';
-import { del, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 // `pushWorkspaceUpdate` (useMachineWorkspaceSync) PATCHes via `fetchWithAuth`
 // directly rather than the `patch()` helper, to read the real HTTP status
@@ -38,10 +38,11 @@ const patchCallsTo = (url: string) =>
     ([calledUrl, options]) => calledUrl === url && (options as RequestInit | undefined)?.method === 'PATCH',
   );
 
-// `killAgentTerminal` DELETEs via `fetchWithAuth` directly (not the `del()`
-// helper) so it can read the real HTTP status — a 404 is its success state.
-// Workspace-removal kills therefore show up here; unclaimed-row removal still
-// goes through the hook's `removeAgentTerminal`, i.e. the `del` mock.
+// Every session removal — `killAgentTerminal` AND the hook's
+// `removeAgentTerminal` — DELETEs via `fetchWithAuth` directly so it can read
+// the real HTTP status (a 404 is the success state), wrapped in an optimistic
+// SWR mutation that drops the row synchronously and rolls it back on genuine
+// failure. All removal calls therefore show up here, not on the `del` mock.
 const killCalls = () =>
   vi.mocked(fetchWithAuth).mock.calls.filter(
     ([, options]) => (options as RequestInit | undefined)?.method === 'DELETE',
@@ -174,7 +175,7 @@ describe('WorkspaceLeaves', () => {
     store().splitRight('m1', workspace.id, workspace.activePaneId);
     const withPane = selectMachine('m1')(store())!.workspaces[workspace.id];
     const newPaneId = withPane.columns[1].panes[0].id;
-    store().bindPaneTerminal('m1', workspace.id, newPaneId, { name: 'claude-a1b2c3' });
+    store().bindPaneTerminal('m1', workspace.id, newPaneId, { name: 'shell-a1b2c3' });
 
     renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
 
@@ -184,7 +185,7 @@ describe('WorkspaceLeaves', () => {
       should: 'render only the owning workspace as a row — the child pane is not a separate row',
       actual: {
         rows: screen.getAllByRole('button', { name: /^Workspace \d+$/ }).length,
-        childRowRendered: screen.queryByText('claude-a1b2c3') !== null,
+        childRowRendered: screen.queryByText('shell-a1b2c3') !== null,
       },
       expected: { rows: 1, childRowRendered: false },
     });
@@ -234,7 +235,7 @@ describe('WorkspaceLeaves', () => {
   test('removing a workspace WITH a running pane stops that agent server-side before dropping the workspace', async () => {
     seedMachine('m1');
     const workspace = selectMachine('m1')(store())!.workspaces[selectMachine('m1')(store())!.activeWorkspaceId];
-    store().bindPaneTerminal('m1', workspace.id, workspace.activePaneId, { name: 'claude-a1b2c3' });
+    store().bindPaneTerminal('m1', workspace.id, workspace.activePaneId, { name: 'shell-a1b2c3' });
     // A SECOND (empty) workspace, so removing the first one actually exercises
     // the removeWorkspace path — not the "last workspace" no-op path, which
     // has its own dedicated test below.
@@ -253,7 +254,7 @@ describe('WorkspaceLeaves', () => {
         given: 'a workspace holding one running pane, with a sibling workspace also present, remove confirmed',
         should: 'DELETE that agent_terminal server-side, then drop the local workspace entirely (its sibling survives)',
         actual: {
-          deletedRunningAgent: killCalls().some(([url]) => String(url).includes('name=claude-a1b2c3')),
+          deletedRunningAgent: killCalls().some(([url]) => String(url).includes('name=shell-a1b2c3')),
           remainingWorkspaces: Object.keys(selectMachine('m1')(store())!.workspaces).length,
         },
         expected: { deletedRunningAgent: true, remainingWorkspaces: rows.length - 1 },
@@ -269,7 +270,7 @@ describe('WorkspaceLeaves', () => {
     seedMachine('m1');
     const workspaceId = selectMachine('m1')(store())!.activeWorkspaceId;
     const workspace = selectMachine('m1')(store())!.workspaces[workspaceId];
-    store().bindPaneTerminal('m1', workspaceId, workspace.activePaneId, { name: 'claude-solo' });
+    store().bindPaneTerminal('m1', workspaceId, workspace.activePaneId, { name: 'shell-solo' });
 
     renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
 
@@ -284,7 +285,7 @@ describe('WorkspaceLeaves', () => {
         should:
           'stop the agent server-side and drop the workspace — this used to EMPTY it in place instead, which left an un-removable row that New terminal then duplicated',
         actual: {
-          deletedRunningAgent: killCalls().some(([url]) => String(url).includes('name=claude-solo')),
+          deletedRunningAgent: killCalls().some(([url]) => String(url).includes('name=shell-solo')),
           workspaceCount: Object.keys(machine.workspaces).length,
           active: machine.activeWorkspaceId,
         },
@@ -423,7 +424,7 @@ describe('WorkspaceLeaves', () => {
   test('a server-backed session with no local workspace is reachable — clicking adopts it into a real workspace', async () => {
     vi.mocked(fetchWithAuth).mockImplementation(async () =>
       new Response(
-        JSON.stringify({ agentTerminals: [{ name: 'orphan-1', agentType: 'claude', createdAt: '2026-01-01' }] }),
+        JSON.stringify({ agentTerminals: [{ name: 'orphan-1', agentType: 'shell', createdAt: '2026-01-01' }] }),
         { status: 200 },
       ),
     );
@@ -590,7 +591,7 @@ describe('WorkspaceLeaves', () => {
     });
   });
 
-  // The OTHER un-removable listing: a `shell`/`claude`/`codex` orphan rendered
+  // The OTHER un-removable listing: a supported-type orphan rendered
   // its remove button only when `!launchable`, so a supported unclaimed session
   // had no remove affordance at all. The only stop path was "remove the
   // workspace holding it" — which is precisely what an unclaimed session lacks.
@@ -598,19 +599,19 @@ describe('WorkspaceLeaves', () => {
     vi.mocked(fetchWithAuth).mockImplementation(async () =>
       new Response(
         JSON.stringify({
-          agentTerminals: [{ name: 'claude-orphan', agentType: 'claude', createdAt: '2026-01-01' }],
+          agentTerminals: [{ name: 'shell-runner', agentType: 'shell', createdAt: '2026-01-01' }],
         }),
         { status: 200 },
       ),
     );
     renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
 
-    const row = (await screen.findByText('claude-orphan')).closest('.group') as HTMLElement;
+    const row = (await screen.findByText('shell-runner')).closest('.group') as HTMLElement;
 
     assert({
       given: 'an unclaimed session whose agent type IS supported',
       should: 'still offer a remove button — it has no workspace to remove instead',
-      actual: within(row).queryByRole('button', { name: /Remove session claude-orphan/ }) !== null,
+      actual: within(row).queryByRole('button', { name: /Remove session shell-runner/ }) !== null,
       expected: true,
     });
   });
@@ -633,9 +634,56 @@ describe('WorkspaceLeaves', () => {
       assert({
         given: 'the remove button on an unlaunchable session',
         should: 'DELETE it by name server-side, exactly like a normal running agent',
-        actual: vi.mocked(del).mock.calls.some(([url]) => String(url).includes('name=legacy-cli')),
+        actual: killCalls().some(([url]) => String(url).includes('name=legacy-cli')),
         expected: true,
       });
+    });
+  });
+
+  // The pane-close orphan fix's DOM-level contract: the row leaves the list in
+  // the same render as the removal click — not after a DELETE round-trip whose
+  // revalidation might silently fail and strand the row.
+  test('removing an unclaimed session drops the row BEFORE the DELETE resolves', async () => {
+    let resolveDelete!: (response: Response) => void;
+    let deleted = false;
+    vi.mocked(fetchWithAuth).mockImplementation((url, init) => {
+      if ((init as RequestInit | undefined)?.method === 'DELETE') {
+        deleted = true;
+        return new Promise<Response>((resolve) => {
+          resolveDelete = resolve;
+        });
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            agentTerminals: deleted
+              ? []
+              : [{ name: 'shell-orphan', agentType: 'shell', createdAt: '2026-01-01' }],
+          }),
+          { status: 200 },
+        ),
+      );
+    });
+    renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
+
+    const row = (await screen.findByText('shell-orphan')).closest('.group') as HTMLElement;
+    await userEvent.click(within(row).getByRole('button', { name: /Remove session shell-orphan/ }));
+
+    assert({
+      given: 'a removal whose DELETE is still in flight',
+      should: 'have already dropped the row from the DOM (optimistic, same render)',
+      actual: screen.queryByText('shell-orphan'),
+      expected: null,
+    });
+
+    await act(async () => {
+      resolveDelete(new Response(null, { status: 204 }));
+    });
+    assert({
+      given: 'the DELETE then succeeding',
+      should: 'keep the row gone',
+      actual: screen.queryByText('shell-orphan'),
+      expected: null,
     });
   });
 
@@ -643,16 +691,17 @@ describe('WorkspaceLeaves', () => {
   // through ConfirmRemoveDialog, which reports a thrown error via toast), a
   // fire-and-forget remove call with nothing observing the rejection would
   // silently no-op on failure — the row stays, but the user gets no signal why.
-  test('a failed removal of an unlaunchable session is reported via toast, not swallowed silently', async () => {
-    vi.mocked(fetchWithAuth).mockImplementation(async () =>
-      new Response(
-        JSON.stringify({
-          agentTerminals: [{ name: 'legacy-cli', agentType: 'pagespace-cli', createdAt: '2026-01-01' }],
-        }),
-        { status: 200 },
-      ),
+  test('a failed removal is reported via toast AND the row rolls back into the list', async () => {
+    vi.mocked(fetchWithAuth).mockImplementation(async (url, init) =>
+      (init as RequestInit | undefined)?.method === 'DELETE'
+        ? new Response(JSON.stringify({ error: 'Failed to remove' }), { status: 500 })
+        : new Response(
+            JSON.stringify({
+              agentTerminals: [{ name: 'legacy-cli', agentType: 'pagespace-cli', createdAt: '2026-01-01' }],
+            }),
+            { status: 200 },
+          ),
     );
-    vi.mocked(del).mockRejectedValueOnce(new Error('Failed to remove'));
     renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
 
     const row = (await screen.findByText('legacy-cli')).closest('.group') as HTMLElement;
@@ -660,10 +709,20 @@ describe('WorkspaceLeaves', () => {
 
     await waitFor(() => {
       assert({
-        given: 'a DELETE that rejects for an unlaunchable session\'s remove button',
+        given: 'a DELETE that fails 5xx for an unclaimed session\'s remove button',
         should: 'surface the failure via toast.error rather than swallowing it',
         actual: vi.mocked(toast.error).mock.calls.length,
         expected: 1,
+      });
+    });
+    // Rollback: the agent may genuinely still be running (and billing) — the
+    // row is the only way left to reach it, so it must come back.
+    await waitFor(() => {
+      assert({
+        given: 'the failed removal',
+        should: 'restore the row to the list — still reachable, still removable',
+        actual: screen.queryByText('legacy-cli') !== null,
+        expected: true,
       });
     });
   });
@@ -690,7 +749,7 @@ describe('WorkspaceNodeExtras', () => {
   test('shows a running-count badge scoped to the node', () => {
     seedMachine('m1');
     const workspace = selectMachine('m1')(store())!.workspaces[selectMachine('m1')(store())!.activeWorkspaceId];
-    store().bindPaneTerminal('m1', workspace.id, workspace.activePaneId, { name: 'claude-a1b2c3' });
+    store().bindPaneTerminal('m1', workspace.id, workspace.activePaneId, { name: 'shell-a1b2c3' });
 
     renderLeaves(<WorkspaceNodeExtras machineId="m1" node={MACHINE_NODE} />);
 

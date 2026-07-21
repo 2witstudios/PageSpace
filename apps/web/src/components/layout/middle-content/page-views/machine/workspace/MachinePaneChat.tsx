@@ -16,8 +16,24 @@
  * and the messages area contains its own layout.
  */
 import React, { useCallback, useState } from 'react';
-import { MessageSquare, History, Settings, Plus, Loader2 } from 'lucide-react';
+import {
+  MessageSquare,
+  History,
+  Settings,
+  Plus,
+  Loader2,
+  MoreHorizontal,
+  SquareSplitHorizontal,
+  SquareSplitVertical,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
 import { ChatInput } from '@/components/ai/chat/input';
@@ -33,6 +49,7 @@ import PageAgentHistoryTab from '@/components/ai/page-agents/PageAgentHistoryTab
 import { SidebarMessagesContent } from '@/components/layout/right-sidebar/ai-assistant/SidebarChatTab';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
+import PaneBar, { PaneSplitCloseActions, type PaneControlProps } from './PaneBar';
 import { useMachinePaneChat } from './useMachinePaneChat';
 
 export interface MachinePaneChatProps {
@@ -44,6 +61,12 @@ export interface MachinePaneChatProps {
   pendingPrompt?: string;
   /** Consumed-notification for pendingPrompt. */
   onPromptSent?: () => void;
+  /** Drives the pane bar's focus tint — same grammar as every PTY pane. */
+  isActive?: boolean;
+  /** The pane-level split/close controls, merged into THIS component's bar —
+   * a chat pane renders exactly one bar, so TerminalPane hands its controls
+   * down instead of drawing a second bar (or floating chrome) above this one. */
+  paneControls?: PaneControlProps;
 }
 
 type PaneTab = 'chat' | 'history' | 'settings';
@@ -53,6 +76,8 @@ export default function MachinePaneChat({
   terminalId,
   pendingPrompt,
   onPromptSent,
+  isActive = false,
+  paneControls,
 }: MachinePaneChatProps) {
   const [activeTab, setActiveTab] = useState<PaneTab>('chat');
   const [input, setInput] = useState('');
@@ -67,7 +92,7 @@ export default function MachinePaneChat({
     historyEnabled: activeTab === 'history' || activeTab === 'chat',
   });
 
-  const assistantName = pane.selectedAgent ? pane.selectedAgent.title : 'PageSpace Agent';
+  const assistantName = pane.selectedAgent ? pane.selectedAgent.title : 'Agent';
 
   const handleSendClick = useCallback(async () => {
     const text = input;
@@ -109,41 +134,113 @@ export default function MachinePaneChat({
     : null;
 
   return (
-    <div data-testid="machine-pane-chat" className="flex h-full min-w-0 flex-col bg-background">
+    // `@container` sizes the bar's fold to the PANE, not the viewport — a
+    // 3-way split on a wide screen is exactly where the chat bar overflows.
+    <div data-testid="machine-pane-chat" className="@container flex h-full min-w-0 flex-col bg-background">
       <Tabs
         value={activeTab}
         onValueChange={(value) => setActiveTab(value as PaneTab)}
         className="flex h-full min-h-0 flex-col"
       >
-        {/* Header: picker + tabs + new conversation — one compact row. */}
-        <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1">
-          <AISelector
-            selectedAgent={pane.selectedAgent}
-            onSelectAgent={pane.selectAgent}
-            disabled={pane.displayIsStreaming}
-            className="min-w-0 flex-1 text-xs font-medium"
-          />
-          <TabsList className="h-7 shrink-0 p-0.5">
-            <TabsTrigger value="chat" aria-label="Chat" className="h-6 px-1.5">
-              <MessageSquare className="size-3.5" />
-            </TabsTrigger>
-            <TabsTrigger value="history" aria-label="History" className="h-6 px-1.5">
-              <History className="size-3.5" />
-            </TabsTrigger>
-            <TabsTrigger value="settings" aria-label="Settings" className="h-6 px-1.5">
-              <Settings className="size-3.5" />
-            </TabsTrigger>
-          </TabsList>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={handleCreateConversation}
-            title="New conversation"
-            className="size-7 shrink-0 text-muted-foreground hover:text-foreground"
-          >
-            <Plus className="size-3.5" />
-          </Button>
-        </div>
+        {/* The pane's ONE bar (pane-chrome redesign): agent picker as
+            identity; tabs + new-conversation + the pane-level split/close
+            controls merged as actions. Nothing floats over this header
+            anymore — the old chip sat exactly on top of these tabs. */}
+        <PaneBar
+          isActive={isActive}
+          identity={
+            <AISelector
+              selectedAgent={pane.selectedAgent}
+              onSelectAgent={pane.selectAgent}
+              disabled={pane.displayIsStreaming}
+              className="min-w-0 flex-1 text-xs font-medium"
+            />
+          }
+          actions={
+            <>
+              {/* Full-width run of controls — folds away under the container
+                  threshold, replaced by the ⋯ menu below. Close never folds:
+                  a control that destroys the pane must never be two clicks
+                  deep or hidden behind a layout state. */}
+              <span className="flex items-center gap-0.5 @max-[360px]:hidden">
+                <TabsList className="h-6 shrink-0 p-0.5">
+                  <TabsTrigger value="chat" aria-label="Chat" className="h-5 px-1.5">
+                    <MessageSquare className="size-3.5" />
+                  </TabsTrigger>
+                  <TabsTrigger value="history" aria-label="History" className="h-5 px-1.5">
+                    <History className="size-3.5" />
+                  </TabsTrigger>
+                  <TabsTrigger value="settings" aria-label="Settings" className="h-5 px-1.5">
+                    <Settings className="size-3.5" />
+                  </TabsTrigger>
+                </TabsList>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleCreateConversation}
+                  title="New conversation"
+                  className="size-6 shrink-0 text-muted-foreground hover:text-foreground"
+                >
+                  <Plus className="size-3.5" />
+                </Button>
+                {paneControls?.canSplit && (
+                  <>
+                    <div aria-hidden className="mx-0.5 h-3.5 w-px shrink-0 bg-border" />
+                    <PaneSplitCloseActions {...paneControls} canClose={false} />
+                  </>
+                )}
+              </span>
+              <span className="hidden @max-[360px]:flex">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title="More"
+                      className="size-6 shrink-0 text-muted-foreground hover:text-foreground"
+                    >
+                      <MoreHorizontal className="size-3.5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  {/* Menu clicks bubble through the Radix portal back into
+                      TerminalPane's onClick={onSelect} — for a split action
+                      that would immediately re-select the SOURCE pane,
+                      undoing the new pane's activation. Same guard as
+                      PaneSplitCloseActions' buttons. */}
+                  <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                    <DropdownMenuItem onSelect={() => setActiveTab('chat')}>
+                      <MessageSquare className="size-3.5" /> Chat
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => setActiveTab('history')}>
+                      <History className="size-3.5" /> History
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => setActiveTab('settings')}>
+                      <Settings className="size-3.5" /> Settings
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onSelect={() => handleCreateConversation()}>
+                      <Plus className="size-3.5" /> New conversation
+                    </DropdownMenuItem>
+                    {paneControls?.canSplit && (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem onSelect={() => paneControls.onSplitRight()}>
+                          <SquareSplitHorizontal className="size-3.5" /> Split right
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => paneControls.onSplitDown()}>
+                          <SquareSplitVertical className="size-3.5" /> Split down
+                        </DropdownMenuItem>
+                      </>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </span>
+              {paneControls?.canClose && (
+                <PaneSplitCloseActions {...paneControls} canSplit={false} />
+              )}
+            </>
+          }
+        />
 
         <TabsContent value="chat" className="mt-0 flex min-h-0 flex-1 flex-col overflow-hidden">
           {pane.hasLoadError && (

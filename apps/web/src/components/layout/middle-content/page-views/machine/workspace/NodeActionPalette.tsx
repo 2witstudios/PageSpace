@@ -2,44 +2,37 @@
 
 /**
  * The single "+" per Machine/Project/Branch row (Terminal UX redesign,
- * add-palette consolidation). Before this, a row could carry up to TWO plus
- * icons that did different things — the structural "Add project"/"Add branch"
- * dialog trigger (this file's predecessor lived in MachineTree.tsx) and the
- * separate "New workspace" trigger injected via `renderNodeExtra`
- * (WorkspaceLeaves.tsx's `WorkspaceNodeExtras`). One `+` per row, one
- * Raycast-style palette, actions scoped to what that node can actually do:
+ * add-palette consolidation). One `+` per row, one Raycast-style palette,
+ * actions scoped to what that node can actually do:
  *
- * - Machine node: New terminal + Add project.
- * - Project node: New terminal + Add branch.
- * - Branch node: New terminal only.
+ * - Machine node: Agent + Shell + Add project.
+ * - Project node: Agent + Shell + Add branch.
+ * - Branch node: Agent + Shell only.
  *
- * "New terminal" only appears when `onWorkspaceCreated` is passed — the
+ * The spawn options are INSTANT: picking Agent or Shell closes the palette on
+ * the spot and spawns that agent type into a fresh workspace at the node's
+ * scope — no "New terminal" phase, no agent-type dropdown, no prompt form
+ * (the prompt is typed in the pane the agent opens in). The options come from
+ * `PICKABLE_AGENT_TYPES`, so the palette is registry-driven: a hardcoded list
+ * here is what silently dropped `pagespace` from a picker once. Only the
+ * structural actions (Add project/Add branch) keep a second form phase,
+ * mirroring {@link QuickCreatePalette}'s CommandDialog/back-button shape.
+ *
+ * The spawn options only appear when `onWorkspaceCreated` is passed — the
  * Diff/Files tabs render the shared {@link MachineTree} BARE, with no
- * workspace concept at all, and must not pay for one. Its spawn step
- * (`TerminalSpawnForm`) is its own component, mounted only once the user
- * actually opens that phase, so `useAgentTerminals`/the workspace store are
- * never subscribed to for a row that only ever shows Add project/Add branch.
- *
- * Two-phase flow mirrors {@link QuickCreatePalette}: pick the action, then
- * fill in its details. Follows that file's CommandDialog/back-button/phase
- * shape closely rather than inventing a new palette pattern.
+ * workspace concept at all, and must not pay for one. Their hooks live in
+ * {@link InstantSpawnGroup}, mounted only inside the OPEN dialog (Radix
+ * unmounts closed dialog content), so `useAgentTerminals`/the workspace store
+ * are never subscribed to for a row whose palette isn't showing.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { toast } from 'sonner';
-import { ArrowLeft, ChevronDown, FolderGit2, Github, GitBranch, Plus, TerminalSquare } from 'lucide-react';
+import { ArrowLeft, Bot, ChevronDown, FolderGit2, Github, GitBranch, Plus, TerminalSquare } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   Command,
@@ -80,18 +73,17 @@ function freshNameSuffix(): string {
   return crypto.randomUUID().replace(/-/g, '');
 }
 
-type PaletteAction = 'new-terminal' | 'add-project' | 'add-branch';
-type Phase = 'select' | PaletteAction;
+/** The actions that still need a form phase — spawns are instant, not phases. */
+type StructuralAction = 'add-project' | 'add-branch';
+type Phase = 'select' | StructuralAction;
 
-const ACTION_LABEL: Record<PaletteAction, string> = {
-  'new-terminal': 'New terminal',
+const ACTION_LABEL: Record<StructuralAction, string> = {
   'add-project': 'Add project',
   'add-branch': 'Add branch',
 };
 
-function actionsFor(node: MachineTreeNode, hasTerminalSupport: boolean): PaletteAction[] {
-  const actions: PaletteAction[] = [];
-  if (hasTerminalSupport) actions.push('new-terminal');
+function structuralActionsFor(node: MachineTreeNode): StructuralAction[] {
+  const actions: StructuralAction[] = [];
   if (node.level === 'machine') actions.push('add-project');
   if (node.level === 'project') actions.push('add-branch');
   return actions;
@@ -146,8 +138,8 @@ export default function NodeActionPalette({ machineId, node, onAddProject, onAdd
   const [open, setOpen] = useState(false);
   const [phase, setPhase] = useState<Phase>('select');
 
-  const actions = actionsFor(node, onWorkspaceCreated !== undefined);
-  if (actions.length === 0) return null;
+  const structuralActions = structuralActionsFor(node);
+  if (structuralActions.length === 0 && onWorkspaceCreated === undefined) return null;
 
   const reset = () => setPhase('select');
   // Also resets the phase: this is called on SUCCESS (a spawn/add completing),
@@ -172,31 +164,26 @@ export default function NodeActionPalette({ machineId, node, onAddProject, onAdd
           <CommandInput placeholder="Search actions…" autoFocus />
           <CommandList>
             <CommandEmpty>No matching actions.</CommandEmpty>
-            <CommandGroup>
-              {actions.map((action) => (
-                <CommandItem key={action} value={ACTION_LABEL[action]} onSelect={() => setPhase(action)}>
-                  {action === 'new-terminal' && <TerminalSquare className="size-3.5 shrink-0 text-muted-foreground" />}
-                  {action === 'add-project' && <FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" />}
-                  {action === 'add-branch' && <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />}
-                  {ACTION_LABEL[action]}
-                </CommandItem>
-              ))}
-            </CommandGroup>
+            {onWorkspaceCreated !== undefined && (
+              <InstantSpawnGroup
+                machineId={machineId}
+                node={node}
+                onClose={close}
+                onSpawned={onWorkspaceCreated}
+              />
+            )}
+            {structuralActions.length > 0 && (
+              <CommandGroup>
+                {structuralActions.map((action) => (
+                  <CommandItem key={action} value={ACTION_LABEL[action]} onSelect={() => setPhase(action)}>
+                    {action === 'add-project' && <FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" />}
+                    {action === 'add-branch' && <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />}
+                    {ACTION_LABEL[action]}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            )}
           </CommandList>
-        </CommandDialog>
-      )}
-
-      {phase === 'new-terminal' && onWorkspaceCreated && (
-        <CommandDialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) reset(); }} title="New terminal" description="Spawn an agent" showCloseButton={false} className="max-w-[380px]">
-          <TerminalSpawnForm
-            machineId={machineId}
-            node={node}
-            onBack={reset}
-            onSpawned={(workspaceId) => {
-              close();
-              onWorkspaceCreated(workspaceId);
-            }}
-          />
         </CommandDialog>
       )}
 
@@ -216,24 +203,36 @@ export default function NodeActionPalette({ machineId, node, onAddProject, onAdd
 }
 
 /**
- * Split-and-pick, retargeted at a fresh workspace instead of an existing
- * empty pane: create the session AND place it, in one act. Mirrors
- * TerminalPanes' `spawnIntoPane` closely — same upsert/`resumed` handling,
- * same "only clean up what we created" guard — but binds into the new
- * workspace's first pane rather than a pane the user picked by clicking into
- * it, since there is no pane yet: the palette action IS the "give me an
- * agent" click.
+ * The palette's instant-spawn options — split-and-pick retargeted at a fresh
+ * workspace, with the pick collapsed into the palette itself: clicking Agent
+ * or Shell closes the palette on the spot and spawns that type into a new
+ * workspace at the node's scope. Mirrors TerminalPanes' `spawnIntoPane`
+ * closely — same upsert/`resumed` handling, same "only clean up what we
+ * created" guard — but binds into the new workspace's first pane, since
+ * there is no pane yet: the palette click IS the "give me an agent" click.
+ *
+ * This component (not the palette) owns the SWR/workspace hooks so the bare
+ * Diff/Files trees never subscribe: it renders only when `onWorkspaceCreated`
+ * exists, inside dialog content Radix unmounts while closed.
+ *
+ * The palette closes BEFORE the network resolves — the click is the
+ * commitment, and the pane the caller navigates to on `onSpawned` is where
+ * the result lands. The async continuation is unmount-safe: everything it
+ * touches is closure-captured (store writes go through `getState`, the SWR
+ * mutations are cache-addressed, `onSpawned` closes over the caller's stable
+ * store actions). There is no cancel affordance mid-flight anymore, so the
+ * old `cancelledRef` back-out went with the form it guarded.
  */
-function TerminalSpawnForm({
+function InstantSpawnGroup({
   machineId,
   node,
+  onClose,
   onSpawned,
-  onBack,
 }: {
   machineId: string;
   node: MachineTreeNode;
+  onClose(): void;
   onSpawned(workspaceId: string): void;
-  onBack(): void;
 }) {
   const scope = nodeScopeOf(node);
   const { addAgentTerminal, removeAgentTerminal } = useAgentTerminals(machineId, scope.projectName ?? null, scope.branchName ?? null);
@@ -241,37 +240,14 @@ function TerminalSpawnForm({
   // server like every other create/bind path, not just materialize locally.
   const { createWorkspace, bindPaneTerminal } = useSyncedWorkspaceActions(machineId);
 
-  const [agentType, setAgentType] = useState<AgentRuntimeType>(PICKABLE_AGENT_TYPES[0]);
-  const [prompt, setPrompt] = useState('');
-  const [spawning, setSpawning] = useState(false);
-  const promptRef = useRef<HTMLTextAreaElement>(null);
-  // Backs out of an in-flight spawn cleanly: the palette can close (Escape,
-  // backdrop click) while `submit` is still awaiting the network. Without
-  // this, a spawn that resolves after the user backed out would still call
-  // `onSpawned` — reporting success to a caller that isn't listening for it
-  // anymore (e.g. DevelopmentSidebar would still navigate to the Terminal tab
-  // for a spawn the user explicitly cancelled).
-  const cancelledRef = useRef(false);
-  useEffect(() => () => { cancelledRef.current = true; }, []);
-
-  useEffect(() => {
-    const timer = setTimeout(() => promptRef.current?.focus(), 50);
-    return () => clearTimeout(timer);
-  }, []);
-
-  const submit = async () => {
-    setSpawning(true);
+  const spawn = async (agentType: AgentRuntimeType) => {
+    onClose();
     // May end up set even on a path that throws before assignment finishes —
     // tracked outside the try so the catch below knows whether there's a
     // session to clean up, regardless of which step failed.
     let created: Awaited<ReturnType<typeof addAgentTerminal>> | undefined;
     try {
       created = await addAgentTerminal(autoSessionName(agentType, freshNameSuffix()), agentType);
-
-      if (cancelledRef.current) {
-        if (!created.resumed) await removeAgentTerminal(created.name).catch(() => {});
-        return;
-      }
 
       const workspaceId = createWorkspace(scope);
       const workspace = useMachineWorkspaceStore.getState().machines[machineId]?.workspaces[workspaceId];
@@ -292,7 +268,9 @@ function TerminalSpawnForm({
                 ? { kind: 'chat' as const }
                 : {}),
             },
-            created.resumed ? undefined : prompt.trim() || undefined,
+            // No starting prompt — instant spawn means the prompt is typed in
+            // the pane itself, so there is nothing to auto-send.
+            undefined,
           )
         : false;
 
@@ -302,7 +280,6 @@ function TerminalSpawnForm({
         // open in someone else's pane — and report failure, not success.
         if (!created.resumed) await removeAgentTerminal(created.name).catch(() => {});
         toast.error('Failed to spawn agent');
-        setSpawning(false);
         return;
       }
 
@@ -314,51 +291,23 @@ function TerminalSpawnForm({
       if (created && !created.resumed) {
         await removeAgentTerminal(created.name).catch(() => {});
       }
-      if (!cancelledRef.current) {
-        toast.error(err instanceof Error ? err.message : 'Failed to spawn agent');
-        setSpawning(false);
-      }
+      toast.error(err instanceof Error ? err.message : 'Failed to spawn agent');
     }
   };
 
   return (
-    <>
-      <PhaseHeader title="New terminal" onBack={onBack} />
-      <div className="flex flex-col gap-3 px-4 py-4">
-        <Select value={agentType} onValueChange={(value) => setAgentType(value as AgentRuntimeType)}>
-          <SelectTrigger aria-label="Agent type" className="h-9">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {PICKABLE_AGENT_TYPES.map((type) => (
-              <SelectItem key={type} value={type}>
-                {agentTypeLabelOf(type)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Textarea
-          ref={promptRef}
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          placeholder="Starting prompt (optional)"
-          aria-label="Starting prompt"
-          rows={2}
-          className="resize-none text-sm"
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              if (!spawning) void submit();
-            }
-          }}
-        />
-        <div className="flex justify-end">
-          <Button size="sm" disabled={spawning} onClick={() => void submit()} className="h-7 px-3 text-xs">
-            {spawning ? 'Spawning…' : 'Spawn agent'}
-          </Button>
-        </div>
-      </div>
-    </>
+    <CommandGroup>
+      {PICKABLE_AGENT_TYPES.map((type) => (
+        <CommandItem key={type} value={agentTypeLabelOf(type)} onSelect={() => void spawn(type)}>
+          {agentSurfaceOf(type) === 'chat' ? (
+            <Bot className="size-3.5 shrink-0 text-muted-foreground" />
+          ) : (
+            <TerminalSquare className="size-3.5 shrink-0 text-muted-foreground" />
+          )}
+          {agentTypeLabelOf(type)}
+        </CommandItem>
+      ))}
+    </CommandGroup>
   );
 }
 

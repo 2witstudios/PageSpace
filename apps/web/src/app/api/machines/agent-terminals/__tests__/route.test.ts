@@ -84,7 +84,7 @@ describe('GET /api/machines/agent-terminals', () => {
     mockCanViewMachine.mockResolvedValue(true);
     mockListAgentTerminals.mockResolvedValue({
       ok: true,
-      terminals: [{ id: 'agent-terminal-1', name: 'cli', agentType: 'claude', createdAt: new Date('2026-07-01') }],
+      terminals: [{ id: 'agent-terminal-1', name: 'cli', agentType: 'shell', createdAt: new Date('2026-07-01') }],
     });
     const res = await GET(new Request('https://x.test/api/machines/agent-terminals?machineId=t1&projectName=repo&branchName=main'));
     expect(res.status).toBe(200);
@@ -163,7 +163,7 @@ describe('POST /api/machines/agent-terminals', () => {
       headers: { 'content-type': 'application/json' },
     });
   }
-  const VALID_BODY = { machineId: 't1', projectName: 'repo', branchName: 'main', name: 'cli', agentType: 'claude' };
+  const VALID_BODY = { machineId: 't1', projectName: 'repo', branchName: 'main', name: 'cli', agentType: 'shell' };
 
   it('given no edit access, returns 403 without spawning', async () => {
     mockCanAccessMachine.mockResolvedValue(false);
@@ -172,30 +172,30 @@ describe('POST /api/machines/agent-terminals', () => {
     expect(mockSpawnAgentTerminal).not.toHaveBeenCalled();
   });
 
-  it('given a fresh spawn of a claude terminal, returns 201 with the row id', async () => {
+  it('given a fresh spawn of a shell terminal, returns 201 with the row id', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
-    mockSpawnAgentTerminal.mockResolvedValue({ ok: true, id: 'agent-terminal-1', agentType: 'claude', resumed: false });
+    mockSpawnAgentTerminal.mockResolvedValue({ ok: true, id: 'agent-terminal-1', agentType: 'shell', resumed: false });
     const res = await POST(req(VALID_BODY));
     expect(res.status).toBe(201);
     const body = await res.json();
-    expect(body.agentTerminal).toMatchObject({ id: 'agent-terminal-1', name: 'cli', agentType: 'claude', resumed: false });
+    expect(body.agentTerminal).toMatchObject({ id: 'agent-terminal-1', name: 'cli', agentType: 'shell', resumed: false });
     expect(mockSpawnAgentTerminal).toHaveBeenCalledWith(
-      expect.objectContaining({ machineId: 't1', projectName: 'repo', branchName: 'main', name: 'cli', agentType: 'claude' }),
+      expect.objectContaining({ machineId: 't1', projectName: 'repo', branchName: 'main', name: 'cli', agentType: 'shell' }),
     );
   });
 
-  it('given a fresh spawn of a codex terminal, returns 201', async () => {
+  it('given a fresh spawn of a pagespace terminal, returns 201', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
-    mockSpawnAgentTerminal.mockResolvedValue({ ok: true, id: 'agent-terminal-2', agentType: 'codex', resumed: false });
-    const res = await POST(req({ ...VALID_BODY, name: 'reviewer', agentType: 'codex' }));
+    mockSpawnAgentTerminal.mockResolvedValue({ ok: true, id: 'agent-terminal-2', agentType: 'pagespace', resumed: false });
+    const res = await POST(req({ ...VALID_BODY, name: 'reviewer', agentType: 'pagespace' }));
     expect(res.status).toBe(201);
     const body = await res.json();
-    expect(body.agentTerminal).toMatchObject({ name: 'reviewer', agentType: 'codex', resumed: false });
+    expect(body.agentTerminal).toMatchObject({ name: 'reviewer', agentType: 'pagespace', resumed: false });
   });
 
   it('given a resumed spawn, returns 200', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
-    mockSpawnAgentTerminal.mockResolvedValue({ ok: true, id: 'agent-terminal-1', agentType: 'claude', resumed: true });
+    mockSpawnAgentTerminal.mockResolvedValue({ ok: true, id: 'agent-terminal-1', agentType: 'shell', resumed: true });
     const res = await POST(req(VALID_BODY));
     expect(res.status).toBe(200);
   });
@@ -288,7 +288,7 @@ describe('POST /api/machines/agent-terminals', () => {
   it('given a non-pagespace terminal, spawns regardless of the code-execution flag', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockIsCodeExecutionEnabled.mockReturnValue(false);
-    mockSpawnAgentTerminal.mockResolvedValue({ ok: true, id: 'agent-terminal-6', agentType: 'claude', resumed: false });
+    mockSpawnAgentTerminal.mockResolvedValue({ ok: true, id: 'agent-terminal-6', agentType: 'shell', resumed: false });
     const res = await POST(req(VALID_BODY));
     expect(res.status).toBe(201);
     expect(mockSpawnAgentTerminal).toHaveBeenCalled();
@@ -312,7 +312,7 @@ describe('POST /api/machines/agent-terminals', () => {
 
   it('given a fresh non-pagespace spawn, does NOT pre-create a conversation', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
-    mockSpawnAgentTerminal.mockResolvedValue({ ok: true, id: 'agent-terminal-8', agentType: 'claude', resumed: false });
+    mockSpawnAgentTerminal.mockResolvedValue({ ok: true, id: 'agent-terminal-8', agentType: 'shell', resumed: false });
     const res = await POST(req(VALID_BODY));
     expect(res.status).toBe(201);
     expect(mockCreateConversation).not.toHaveBeenCalled();

@@ -105,7 +105,7 @@ function fakeSocket() {
   };
 }
 
-const CONNECT = { machineId: 'm1', name: 'claude-a1b2c3' };
+const CONNECT = { machineId: 'm1', name: 'shell-a1b2c3' };
 
 const inputs = (emitted: Array<{ event: string; payload: Record<string, unknown> }>) =>
   emitted.filter((entry) => entry.event === 'agent-terminal:input').map((entry) => entry.payload.data);
@@ -141,7 +141,7 @@ describe('XtermTerminal — starting-prompt delivery', () => {
     const beforeOutput = inputs(fake.emitted);
 
     // The agent prints its banner: it is alive and reading.
-    fake.server('agent-terminal:output', { data: 'claude> ', connectionId });
+    fake.server('agent-terminal:output', { data: 'shell> ', connectionId });
 
     assert({
       given: 'a cold agent that has just been exec’d, then starts drawing',
@@ -221,7 +221,7 @@ describe('XtermTerminal — starting-prompt delivery', () => {
     // so treating every reattach as unsafe would mean the prompt never worked
     // while developing the feature.
     fake.server('agent-terminal:ready', { scrollback: '', resumed: false, connectionId });
-    fake.server('agent-terminal:output', { data: 'claude> ', connectionId });
+    fake.server('agent-terminal:output', { data: 'shell> ', connectionId });
 
     assert({
       given: 'a re-mount that reattaches to an agent which has printed nothing yet',
@@ -309,7 +309,7 @@ describe('XtermTerminal — starting-prompt delivery', () => {
     await waitFor(() => expect(fake.hasHandlers()).toBe(true));
 
     fake.server('agent-terminal:ready', { connectionId: fake.connectionId() });
-    fake.server('agent-terminal:output', { data: 'claude> ', connectionId: fake.connectionId() });
+    fake.server('agent-terminal:output', { data: 'shell> ', connectionId: fake.connectionId() });
     await vi.advanceTimersByTimeAsync(5000);
 
     assert({
@@ -381,7 +381,7 @@ describe('XtermTerminal — starting-prompt delivery', () => {
     await waitFor(() => expect(fake.hasHandlers()).toBe(true));
     const connectionId = fake.connectionId();
 
-    fake.server('agent-terminal:output', { data: 'claude> ', connectionId });
+    fake.server('agent-terminal:output', { data: 'shell> ', connectionId });
     fake.server('agent-terminal:ready', { resumed: false, connectionId });
 
     assert({
@@ -400,18 +400,18 @@ describe('XtermTerminal — starting-prompt delivery', () => {
     const paneA = render(
       <XtermTerminal socket={fake.socket} sessionId="a" connectPayload={CONNECT} initialInput="fix the build" />
     );
-    render(<XtermTerminal socket={fake.socket} sessionId="b" connectPayload={{ ...CONNECT, name: 'codex-b2' }} />);
+    render(<XtermTerminal socket={fake.socket} sessionId="b" connectPayload={{ ...CONNECT, name: 'other-b2' }} />);
     await waitFor(() => expect(fake.connectionIds().length).toBe(2));
     const [idA, idB] = fake.connectionIds();
 
     // B boots and draws. A must not read that as its own agent waking up.
     fake.server('agent-terminal:ready', { connectionId: idB });
-    fake.server('agent-terminal:output', { data: 'codex> ', connectionId: idB });
+    fake.server('agent-terminal:output', { data: 'other> ', connectionId: idB });
     const afterBOnly = inputs(fake.emitted);
 
     // Now A's own agent comes up.
     fake.server('agent-terminal:ready', { connectionId: idA });
-    fake.server('agent-terminal:output', { data: 'claude> ', connectionId: idA });
+    fake.server('agent-terminal:output', { data: 'shell> ', connectionId: idA });
 
     paneA.unmount();
     const listenersAfterAClosed = fake.listenerCount('agent-terminal:output');
@@ -479,7 +479,7 @@ describe('XtermTerminal — starting-prompt delivery', () => {
     await waitFor(() => expect(fake.hasHandlers()).toBe(true));
 
     fake.server('agent-terminal:ready', { connectionId: fake.connectionId() });
-    fake.server('agent-terminal:output', { data: 'claude> ', connectionId: fake.connectionId() });
+    fake.server('agent-terminal:output', { data: 'shell> ', connectionId: fake.connectionId() });
     await vi.advanceTimersByTimeAsync(5000);
 
     assert({

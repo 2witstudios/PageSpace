@@ -61,7 +61,7 @@ describe('deriveMachinePaneBinding', () => {
   });
 
   it('given a non-pagespace (pty-surface) row, should return null', async () => {
-    const row = makeRow({ agentType: 'claude' });
+    const row = makeRow({ agentType: 'shell' });
     const deps = makeDeps({ terminalStore: makeTerminalStore(row) });
     const result = await deriveMachinePaneBinding({ chatId: MACHINE_ID, conversationId: CONVERSATION_ID }, deps);
     expect(result).toBeNull();

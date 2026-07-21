@@ -26,7 +26,7 @@ vi.mock('@/hooks/useGithubRepos', () => ({
 vi.mock('@/hooks/useIntegrations', () => ({ useProviders: () => ({ providers: [] }) }));
 vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: vi.fn(async () => new Response(JSON.stringify({ agentTerminals: [] }), { status: 200 })),
-  post: vi.fn(async () => ({ agentTerminal: { name: 'claude-a1b2c3', agentType: 'claude', resumed: false } })),
+  post: vi.fn(async () => ({ agentTerminal: { name: 'shell-a1b2c3', agentType: 'shell', resumed: false } })),
   del: vi.fn(async () => new Response(null, { status: 204 })),
 }));
 
@@ -87,8 +87,7 @@ describe('TerminalTab', () => {
 
     await screen.findByText('Machine');
     await userEvent.click(screen.getByTitle('Add…'));
-    await userEvent.click(await screen.findByRole('option', { name: 'New terminal' }));
-    await userEvent.click(await screen.findByRole('button', { name: 'Spawn agent' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Shell' }));
 
     await waitFor(() => {
       const machine = selectMachine('machine-1')(store())!;

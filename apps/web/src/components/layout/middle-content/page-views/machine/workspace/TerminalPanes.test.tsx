@@ -1,5 +1,5 @@
 import { describe, test, beforeEach, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { assert } from '@/stores/__tests__/riteway';
 import type { Socket } from 'socket.io-client';
@@ -8,6 +8,8 @@ import type { OpenTerminalScope, WorkspaceState } from '@/stores/machine-workspa
 
 const mockUseMobile = vi.fn<() => boolean>();
 vi.mock('@/hooks/useMobile', () => ({ useMobile: () => mockUseMobile() }));
+
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 // `useSyncedWorkspaceActions` (#2048) pushes layout changes to the server via
 // these — fire-and-forget from the component's point of view, but each must
@@ -38,23 +40,37 @@ vi.mock('../XtermTerminal', () => ({
 
 // The chat pane is a whole AI-chat subtree (Phase 11) — stubbed for the same
 // reason as XtermTerminal: under test is WHICH surface the pane renders and
-// what it is handed, not the chat UI inside it.
+// what it is handed, not the chat UI inside it. The stub renders a close
+// control from the threaded paneControls because that IS the contract under
+// test: a chat pane's split/close live in ITS bar (one bar per pane), so
+// TerminalPane must hand them down rather than draw its own.
 vi.mock('./MachinePaneChat', () => ({
   default: ({
     machineId,
     terminalId,
     pendingPrompt,
+    isActive,
+    paneControls,
   }: {
     machineId: string;
     terminalId: string;
     pendingPrompt?: string;
+    isActive?: boolean;
+    paneControls?: { canSplit: boolean; canClose: boolean; onSplitRight(): void; onSplitDown(): void; onClose(): void };
   }) => (
     <div
       data-testid="machine-pane-chat"
       data-machine-id={machineId}
       data-terminal-id={terminalId}
       data-initial-input={pendingPrompt}
-    />
+      data-pane-active={isActive ? 'true' : undefined}
+    >
+      {paneControls?.canClose && (
+        <button type="button" title="Close pane" onClick={() => paneControls.onClose()}>
+          Close pane
+        </button>
+      )}
+    </div>
   ),
 }));
 
@@ -306,6 +322,28 @@ describe('TerminalPanes (close means close)', () => {
     });
   });
 
+  test('a failed close-kill TELLS the user the agent is still running — the pane is already gone', async () => {
+    // The pane closes optimistically, so a failed kill has no surface left to
+    // report through except a toast: the agent is still running (and billing),
+    // reachable only via the rolled-back sidebar row the user must go find.
+    workspace = SOLO_WORKSPACE;
+    killAgentTerminal.mockRejectedValueOnce(new Error('sprite unreachable'));
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+    await screen.findByTestId('xterm');
+
+    await userEvent.click(screen.getByTitle('Close pane'));
+
+    const { toast } = await import('sonner');
+    await waitFor(() => {
+      assert({
+        given: 'a close whose kill request failed after the pane was already removed',
+        should: 'toast that the named agent is still running rather than fail silently',
+        actual: vi.mocked(toast.error).mock.calls[0]?.[0],
+        expected: 'Failed to stop solo — it is still running, listed in the sidebar',
+      });
+    });
+  });
+
   test('closing a pane whose session another pane still shows does NOT kill it', async () => {
     workspace = SHARED_SESSION_WORKSPACE;
     render(<TerminalPanes machineId="m1" socket={socket} />);
@@ -328,8 +366,8 @@ describe('TerminalPanes (close means close)', () => {
     // branch is a DIFFERENT terminal and must not be mistaken for this one.
     workspace = aWorkspace({
       columns: [
-        { id: 'col-1', panes: [{ id: 'pane-1', scope: { ...WORKSPACE_SCOPE, name: 'claude-x' } }] },
-        { id: 'col-2', panes: [{ id: 'pane-2', scope: { projectName: 'app', branchName: 'other', name: 'claude-x' } }] },
+        { id: 'col-1', panes: [{ id: 'pane-1', scope: { ...WORKSPACE_SCOPE, name: 'shell-x' } }] },
+        { id: 'col-2', panes: [{ id: 'pane-2', scope: { projectName: 'app', branchName: 'other', name: 'shell-x' } }] },
       ],
       activePaneId: 'pane-1',
       pendingPickerPaneId: null,
@@ -343,7 +381,7 @@ describe('TerminalPanes (close means close)', () => {
       given: 'two panes whose sessions share a name but sit in different branches',
       should: 'still kill the closed one, at ITS checkout — comparing on name alone would silently skip it',
       actual: killAgentTerminal.mock.calls,
-      expected: [['m1', { ...WORKSPACE_SCOPE, name: 'claude-x' }]],
+      expected: [['m1', { ...WORKSPACE_SCOPE, name: 'shell-x' }]],
     });
   });
 
@@ -548,17 +586,16 @@ describe('TerminalPanes (split-and-pick spawn)', () => {
     workspace = EMPTY_WORKSPACE;
   });
 
-  test('an empty pane picks an agent and gets it running — ONE action, no modal, no name step', async () => {
+  test('an empty pane picks an agent and gets it running — ONE action, no modal, no name step, no prompt form', async () => {
     render(<TerminalPanes machineId="m1" socket={socket} />);
 
-    await userEvent.type(screen.getByLabelText('Starting prompt'), 'fix the build');
-    await userEvent.click(screen.getByRole('button', { name: 'Spawn agent' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Shell' }));
 
     const [spawnedName, spawnedType] = addAgentTerminal.mock.calls[0] ?? [];
     assert({
-      given: 'an empty pane, an agent type (the default) and an optional starting prompt',
+      given: 'an empty pane and one click on Shell',
       should:
-        'spawn the session — auto-named, never prompted for — at the ACTIVE NODE\'s scope and bind it to that pane, in one action',
+        'spawn the session — auto-named, never prompted for — at the ACTIVE NODE\'s scope and bind it to that pane with NO starting prompt (the prompt is typed in the pane), in one action',
       actual: {
         spawns: addAgentTerminal.mock.calls.length,
         agentType: spawnedType,
@@ -574,52 +611,39 @@ describe('TerminalPanes (split-and-pick spawn)', () => {
           WORKSPACE_ID,
           'pane-1',
           { projectName: 'app', branchName: 'main', name: spawnedName },
-          'fix the build',
+          undefined,
         ],
       },
     });
   });
 
-  test('the agent picker offers shell (primary), claude, codex, and the PageSpace Agent — no retired pagespace-cli', async () => {
+  test('the agent picker offers Agent then Shell — registry-driven, no retired types', async () => {
     render(<TerminalPanes machineId="m1" socket={socket} />);
-
-    await userEvent.click(screen.getByLabelText('Agent type'));
-    const options = screen.getAllByRole('option').map((el) => el.textContent);
 
     assert({
       given: 'the empty pane\'s agent picker',
-      should: 'list every user-spawnable agent type — shell as the default primary option, claude, codex, and the chat agent labeled "PageSpace Agent" (agents and chats are one thing, so it presents as an agent, never as "chat") — excluding only the retired pagespace-cli',
-      actual: options,
-      expected: ['shell', 'claude', 'codex', 'PageSpace Agent'],
-    });
-  });
-
-  test('the starting prompt is optional — picking an agent alone is enough', async () => {
-    render(<TerminalPanes machineId="m1" socket={socket} />);
-
-    await userEvent.click(screen.getByRole('button', { name: 'Spawn agent' }));
-
-    assert({
-      given: 'a pick with no starting prompt typed',
-      should: 'still spawn and bind, carrying no prompt — the agent just boots to its own',
+      should:
+        'render one instant-spawn button per PICKABLE_AGENT_TYPES entry, in registry order — Agent (pagespace) first, then Shell; claude/codex/pagespace-cli are retired and must not resurface here',
       actual: {
-        spawns: addAgentTerminal.mock.calls.length,
-        prompt: bindPaneTerminal.mock.calls[0]?.[4],
+        agent: screen.queryByRole('button', { name: 'Agent' }) !== null,
+        shell: screen.queryByRole('button', { name: 'Shell' }) !== null,
+        claude: screen.queryByRole('button', { name: 'claude' }),
+        codex: screen.queryByRole('button', { name: 'codex' }),
       },
-      expected: { spawns: 1, prompt: undefined },
+      expected: { agent: true, shell: true, claude: null, codex: null },
     });
   });
 
-  test('a pane made by a split opens its picker FOCUSED', async () => {
+  test('a pane made by a split opens its picker FOCUSED on the Agent button', async () => {
     workspace = JUST_SPLIT_WORKSPACE;
 
     render(<TerminalPanes machineId="m1" socket={socket} />);
 
     assert({
       given: 'the empty pane a split just created',
-      should: 'focus its picker (and consume the pending-picker flag) rather than leave the user facing a blank pane',
+      should: 'focus its first spawn choice (and consume the pending-picker flag) rather than leave the user facing a blank pane',
       actual: {
-        focused: document.activeElement === screen.getByLabelText('Starting prompt'),
+        focused: document.activeElement === screen.getByRole('button', { name: 'Agent' }),
         consumed: dismissPicker.mock.calls[0],
       },
       expected: { focused: true, consumed: ['m1', WORKSPACE_ID, 'pane-1'] },
@@ -632,7 +656,7 @@ describe('TerminalPanes (split-and-pick spawn)', () => {
     assert({
       given: 'an empty pane the user did not just create (a restored grid, say)',
       should: 'leave focus alone — auto-focus is the split\'s intent, not every empty pane\'s',
-      actual: document.activeElement === screen.getByLabelText('Starting prompt'),
+      actual: document.activeElement === screen.getByRole('button', { name: 'Agent' }),
       expected: false,
     });
   });
@@ -641,14 +665,14 @@ describe('TerminalPanes (split-and-pick spawn)', () => {
     addAgentTerminal.mockRejectedValueOnce(new Error('name_in_use'));
     render(<TerminalPanes machineId="m1" socket={socket} />);
 
-    await userEvent.click(screen.getByRole('button', { name: 'Spawn agent' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Shell' }));
 
     assert({
       given: 'a spawn the API rejected',
       should: 'bind nothing and re-offer the picker — a pane bound to a session that does not exist would connect to nothing',
       actual: {
         bound: bindPaneTerminal.mock.calls.length,
-        canRetry: screen.queryByRole('button', { name: 'Spawn agent' }) !== null,
+        canRetry: !screen.getByRole('button', { name: 'Shell' }).hasAttribute('disabled'),
       },
       expected: { bound: 0, canRetry: true },
     });
@@ -657,7 +681,7 @@ describe('TerminalPanes (split-and-pick spawn)', () => {
   test('the spawn is scoped to the WORKSPACE\'s checkout, not the machine root', async () => {
     render(<TerminalPanes machineId="m1" socket={socket} />);
 
-    await userEvent.click(screen.getByRole('button', { name: 'Spawn agent' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Shell' }));
 
     assert({
       given: 'a workspace whose scope is the branch app/main',
@@ -681,7 +705,7 @@ describe('TerminalPanes (split-and-pick spawn)', () => {
     bindPaneTerminal.mockReturnValueOnce(false);
     render(<TerminalPanes machineId="m1" socket={socket} />);
 
-    await userEvent.click(screen.getByRole('button', { name: 'Spawn agent' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Shell' }));
 
     assert({
       given: 'a spawn whose pane is gone by the time it resolves',
@@ -696,7 +720,7 @@ describe('TerminalPanes (split-and-pick spawn)', () => {
     // The pane the picker just spawned into: bound, with its prompt not yet typed.
     workspace = aWorkspace({
       columns: [
-        { id: 'col-1', panes: [{ id: 'pane-1', scope: { name: 'claude-a1' }, pendingPrompt: 'fix the build' }] },
+        { id: 'col-1', panes: [{ id: 'pane-1', scope: { name: 'shell-a1' }, pendingPrompt: 'fix the build' }] },
       ],
       activePaneId: 'pane-1',
       pendingPickerPaneId: null,
@@ -714,20 +738,19 @@ describe('TerminalPanes (split-and-pick spawn)', () => {
     });
   });
 
-  test('a session the API says ALREADY EXISTED is never handed a starting prompt', async () => {
+  test('a session the API says ALREADY EXISTED still binds with no prompt', async () => {
     // `spawnAgentTerminal` is an upsert: `resumed` means it gave back a session that
     // was already there (and whose agent may have been running for hours), rather
-    // than creating one. Typing a prompt into that is the hazard the whole flow
-    // guards against — and the API tells us right here.
-    addAgentTerminal.mockResolvedValueOnce({ name: 'claude-a1', agentType: 'claude', resumed: true });
+    // than creating one. Instant spawn never carries a prompt anyway, but this
+    // pins that a resumed bind stays promptless even if a prompt source returns.
+    addAgentTerminal.mockResolvedValueOnce({ name: 'shell-a1', agentType: 'shell', resumed: true });
 
     render(<TerminalPanes machineId="m1" socket={socket} />);
-    await userEvent.type(screen.getByLabelText('Starting prompt'), 'fix the build');
-    await userEvent.click(screen.getByRole('button', { name: 'Spawn agent' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Shell' }));
 
     assert({
       given: 'a spawn the API served by handing back an EXISTING session',
-      should: 'bind it to the pane but carry NO prompt — the invariant must not rest on the auto-name never colliding',
+      should: 'bind it to the pane but carry NO prompt — an already-running agent must never be typed at',
       actual: { bound: bindPaneTerminal.mock.calls.length, prompt: bindPaneTerminal.mock.calls[0]?.[4] },
       expected: { bound: 1, prompt: undefined },
     });
@@ -739,11 +762,11 @@ describe('TerminalPanes (split-and-pick spawn)', () => {
     // terminal — so cleaning up here destroys an agent that may be mid-task in
     // someone else's pane. Only a session this spawn actually brought into the world
     // is ours to take back out.
-    addAgentTerminal.mockResolvedValueOnce({ name: 'claude-a1', agentType: 'claude', resumed: true });
+    addAgentTerminal.mockResolvedValueOnce({ name: 'shell-a1', agentType: 'shell', resumed: true });
     bindPaneTerminal.mockReturnValueOnce(false);
 
     render(<TerminalPanes machineId="m1" socket={socket} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Spawn agent' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Shell' }));
 
     assert({
       given: 'an unbindable spawn the API served from an EXISTING session',
@@ -775,16 +798,14 @@ describe('TerminalPanes (PageSpace Agent panes)', () => {
     workspace = EMPTY_WORKSPACE;
   });
 
-  test('picking the PageSpace Agent spawns a pagespace session bound with a chat-kind scope', async () => {
+  test('picking Agent spawns a pagespace session bound with a chat-kind scope', async () => {
     render(<TerminalPanes machineId="m1" socket={socket} />);
 
-    await userEvent.click(screen.getByLabelText('Agent type'));
-    await userEvent.click(screen.getByRole('option', { name: 'PageSpace Agent' }));
-    await userEvent.click(screen.getByRole('button', { name: 'Spawn agent' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Agent' }));
 
     const [spawnedName, spawnedType] = addAgentTerminal.mock.calls[0] ?? [];
     assert({
-      given: 'the picker\'s "PageSpace Agent" choice, spawned',
+      given: 'the picker\'s "Agent" choice, spawned',
       should:
         'create a pagespace session and bind it with kind "chat" on the scope — without the kind, the pane would have to guess its surface from the SWR list on every future mount',
       actual: {
@@ -803,15 +824,13 @@ describe('TerminalPanes (PageSpace Agent panes)', () => {
     // pagespace-shaped name but is actually a PTY agent. Labeling it chat
     // from the PICKED type would mislabel it forever — an explicit kind
     // beats the SWR fallback on every future mount.
-    addAgentTerminal.mockResolvedValueOnce({ name: 'pagespace-x', agentType: 'claude', resumed: true });
+    addAgentTerminal.mockResolvedValueOnce({ name: 'pagespace-x', agentType: 'shell', resumed: true });
     render(<TerminalPanes machineId="m1" socket={socket} />);
 
-    await userEvent.click(screen.getByLabelText('Agent type'));
-    await userEvent.click(screen.getByRole('option', { name: 'PageSpace Agent' }));
-    await userEvent.click(screen.getByRole('button', { name: 'Spawn agent' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Agent' }));
 
     assert({
-      given: 'a pagespace pick the API served by resuming an existing claude session',
+      given: 'an Agent pick the API served by resuming an existing shell session',
       should:
         'bind WITHOUT a chat kind — the surface is judged by the API\'s answer, the same standard the resumed-prompt guard applies',
       actual: bindPaneTerminal.mock.calls[0]?.[3],
@@ -884,13 +903,13 @@ describe('TerminalPanes (PageSpace Agent panes)', () => {
     });
   });
 
-  test('no kind hint + SWR resolving the name to claude renders xterm', async () => {
-    workspace = soloPane({ scope: { ...WORKSPACE_SCOPE, name: 'claude-b2' } });
-    agentTerminalRows = [{ id: 'row-c1', name: 'claude-b2', agentType: 'claude', createdAt: '' }];
+  test('no kind hint + SWR resolving the name to shell renders xterm', async () => {
+    workspace = soloPane({ scope: { ...WORKSPACE_SCOPE, name: 'shell-b2' } });
+    agentTerminalRows = [{ id: 'row-c1', name: 'shell-b2', agentType: 'shell', createdAt: '' }];
     render(<TerminalPanes machineId="m1" socket={socket} />);
 
     assert({
-      given: 'a kind-less pane whose name the loaded list maps to agentType "claude"',
+      given: 'a kind-less pane whose name the loaded list maps to agentType "shell"',
       should: 'resolve to the PTY surface',
       actual: {
         xterm: screen.queryByTestId('xterm') !== null,
@@ -923,7 +942,7 @@ describe('TerminalPanes (PageSpace Agent panes)', () => {
     workspace = aWorkspace({
       columns: [
         { id: 'col-1', panes: [{ id: 'pane-1', scope: CHAT_SCOPE }] },
-        { id: 'col-2', panes: [{ id: 'pane-2', scope: { ...WORKSPACE_SCOPE, name: 'claude-b2', kind: 'terminal' } }] },
+        { id: 'col-2', panes: [{ id: 'pane-2', scope: { ...WORKSPACE_SCOPE, name: 'shell-b2', kind: 'terminal' } }] },
       ],
       activePaneId: 'pane-2',
       pendingPickerPaneId: null,
