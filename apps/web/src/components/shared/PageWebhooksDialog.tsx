@@ -26,6 +26,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { fetchWithAuth, post, patch, del } from '@/lib/auth/auth-fetch';
+import { useAuthStore } from '@/stores/useAuthStore';
 
 interface WebhookRow {
   id: string;
@@ -43,8 +44,14 @@ interface PageWebhooksDialogProps {
   pageType: string;
 }
 
-/** pageId is the ORIGINATING page — the reveal panel only renders when it matches the dialog's current page. */
-type RevealedSecret = { pageId: string; webhookUrl: string; secret: string };
+/**
+ * ownerId/pageId are the ORIGINATING user and page — the reveal panel only
+ * renders when both match the dialog's current identity, so neither another
+ * page's dialog nor another signed-in account can ever be shown this secret.
+ */
+type RevealedSecret = { ownerId: string; pageId: string; webhookUrl: string; secret: string };
+
+const penKey = (ownerId: string, pageId: string) => `${ownerId}:${pageId}`;
 
 // Holding pen for one-time secrets whose create/rotate response landed after
 // this page's dialog unmounted (CenterPanel remounts views by page id on
@@ -64,12 +71,13 @@ const subscribeOrphans = (listener: () => void) => {
 const getOrphanVersion = () => orphanVersion;
 
 const parkOrphan = (value: RevealedSecret) => {
-  const queue = orphanedReveals.get(value.pageId) ?? [];
+  const key = penKey(value.ownerId, value.pageId);
+  const queue = orphanedReveals.get(key) ?? [];
   // Idempotent per secret (43-char random, unique per mint) — effects may
   // double-fire under StrictMode and must not queue duplicates.
   if (queue.some((parked) => parked.secret === value.secret)) return;
   queue.push(value);
-  orphanedReveals.set(value.pageId, queue);
+  orphanedReveals.set(key, queue);
   orphanVersion += 1;
   orphanListeners.forEach((listener) => listener());
 };
@@ -89,6 +97,9 @@ const webhooksFetcher = async (url: string): Promise<{ webhooks: WebhookRow[] } 
 };
 
 function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWebhooksDialogProps) {
+  // Identity only — deliberately the store selector, not useAuth() (which
+  // wires refresh timers and routing this dialog must not own).
+  const userId = useAuthStore((state) => state.user?.id) ?? '';
   const key = open ? `/api/pages/${pageId}/webhooks` : null;
   const { data, isLoading, mutate: refetch } = useSWR(key, webhooksFetcher, { revalidateOnFocus: false });
 
@@ -123,6 +134,7 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
   // page ids), which the render gate below handles.
   const reveal = (webhook: WebhookRow, secret: string) => {
     const value: RevealedSecret = {
+      ownerId: userId,
       pageId,
       webhookUrl: `${window.location.origin}/api/webhooks/${webhook.webhookToken}`,
       secret,
@@ -137,15 +149,17 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
     setRevealed(value);
   };
 
-  // Never show a secret in another page's dialog: only a reveal minted for the
-  // current page renders; one that belongs elsewhere is parked for that page.
-  const activeReveal = revealed && revealed.pageId === pageId ? revealed : null;
+  // Never show a secret in another page's dialog or to another signed-in
+  // user: only a reveal minted for the current page AND account renders; one
+  // that belongs elsewhere is parked under its owner+page for later.
+  const activeReveal =
+    revealed && revealed.pageId === pageId && revealed.ownerId === userId ? revealed : null;
   useEffect(() => {
-    if (revealed && revealed.pageId !== pageId) {
+    if (revealed && (revealed.pageId !== pageId || revealed.ownerId !== userId)) {
       parkOrphan(revealed);
       setRevealed(null);
     }
-  }, [revealed, pageId]);
+  }, [revealed, pageId, userId]);
 
   useEffect(() => {
     if (!open) {
@@ -159,15 +173,16 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
       setNewName('');
       return;
     }
-    // Open with no reveal showing: deliver the next parked secret, if any.
-    // Re-runs when a reveal is dismissed or a new orphan is parked
-    // (orphanSignal), so queued secrets surface one at a time.
+    // Open with no reveal showing: deliver the next parked secret for THIS
+    // user on THIS page, if any. Re-runs when a reveal is dismissed or a new
+    // orphan is parked (orphanSignal), so queued secrets surface one at a time.
     if (revealed) return;
-    const queue = orphanedReveals.get(pageId);
+    const pen = penKey(userId, pageId);
+    const queue = orphanedReveals.get(pen);
     const next = queue?.shift();
-    if (queue && queue.length === 0) orphanedReveals.delete(pageId);
+    if (queue && queue.length === 0) orphanedReveals.delete(pen);
     if (next) setRevealed(next);
-  }, [open, pageId, revealed, orphanSignal]);
+  }, [open, pageId, userId, revealed, orphanSignal]);
 
   const errorStatus = data && 'error' in data ? data.status : null;
   const forbidden = errorStatus === 403;
@@ -268,20 +283,10 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
           </DialogDescription>
         </DialogHeader>
 
-        {isLoading ? (
-          <div className="py-8 text-center text-sm text-muted-foreground">Loading…</div>
-        ) : forbidden ? (
-          <p className="text-sm text-muted-foreground py-4">
-            Only this drive&apos;s owner or an admin can manage webhooks.
-          </p>
-        ) : loadFailed ? (
-          <div className="flex items-center justify-between gap-2 py-4">
-            <p className="text-sm text-muted-foreground">Failed to load webhooks.</p>
-            <Button type="button" variant="outline" size="sm" onClick={() => refetch()}>
-              Retry
-            </Button>
-          </div>
-        ) : activeReveal ? (
+        {/* The reveal panel outranks every list state: it holds the only copy
+            of a one-time secret, and a transient list failure (which resolves
+            to an error value, not a rejection) must never replace it. */}
+        {activeReveal ? (
           <div className="space-y-3 py-2">
             <p className="text-sm">
               Save this secret now — it won&apos;t be shown again. Configure your system to POST to the URL below,
@@ -299,6 +304,19 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
                 <Check className="h-3.5 w-3.5 mr-1" /> Done, I&apos;ve saved it
               </Button>
             </div>
+          </div>
+        ) : isLoading ? (
+          <div className="py-8 text-center text-sm text-muted-foreground">Loading…</div>
+        ) : forbidden ? (
+          <p className="text-sm text-muted-foreground py-4">
+            Only this drive&apos;s owner or an admin can manage webhooks.
+          </p>
+        ) : loadFailed ? (
+          <div className="flex items-center justify-between gap-2 py-4">
+            <p className="text-sm text-muted-foreground">Failed to load webhooks.</p>
+            <Button type="button" variant="outline" size="sm" onClick={() => refetch()}>
+              Retry
+            </Button>
           </div>
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto space-y-4 pr-1">

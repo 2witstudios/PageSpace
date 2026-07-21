@@ -17,6 +17,7 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
 
 import { toast } from 'sonner';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
+import { useAuthStore } from '@/stores/useAuthStore';
 import { PageWebhooksDialog } from '../PageWebhooksDialog';
 
 const PAGE_ID = 'page-1';
@@ -55,6 +56,7 @@ const renderDialog = (pageType = 'AI_CHAT') =>
 describe('PageWebhooksDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useAuthStore.setState({ user: { id: 'user-a' } as never });
   });
 
   test('lists webhooks under the Incoming Webhooks title', async () => {
@@ -575,6 +577,71 @@ describe('PageWebhooksDialog', () => {
         goneAfterAck: screen.queryByText('whsec_unacknowledged'),
       },
       expected: { survivedClose: true, goneAfterAck: null },
+    });
+  });
+
+  test('the reveal panel outranks a failed list refresh', async () => {
+    vi.mocked(fetchWithAuth)
+      .mockResolvedValueOnce(listResponse(200, { webhooks: [remoteWebhook()] }))
+      .mockImplementation(async () => listResponse(500, { error: 'transient list failure' }));
+    vi.mocked(post).mockResolvedValue({
+      webhook: remoteWebhook(),
+      webhookSecret: 'whsec_outranks_errors',
+    });
+
+    renderDialog();
+    await waitFor(() => screen.getByText('Deploys'));
+    await startRotation();
+    await waitFor(() => screen.getByText('whsec_outranks_errors'));
+
+    assert({
+      given: 'a successful rotation whose follow-up list refresh resolves to a non-2xx error state',
+      should: 'render the one-time secret panel, never the list error screen, over the only copy',
+      actual: {
+        secret: screen.getByText('whsec_outranks_errors') !== null,
+        errorScreen: screen.queryByText('Failed to load webhooks.'),
+      },
+      expected: { secret: true, errorScreen: null },
+    });
+  });
+
+  test('a parked secret is never delivered to a different authenticated user', async () => {
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
+      listResponse(200, { webhooks: [remoteWebhook()] }),
+    );
+    let resolvePost: (value: unknown) => void = () => {};
+    vi.mocked(post).mockImplementation(
+      () => new Promise<never>((resolve) => { resolvePost = resolve as (value: unknown) => void; }),
+    );
+
+    const first = renderDialog();
+    await waitFor(() => screen.getByText('Deploys'));
+    await startRotation();
+    first.unmount();
+
+    resolvePost({ webhook: remoteWebhook(), webhookSecret: 'whsec_user_scoped' });
+    await new Promise((r) => { setTimeout(r, 0); });
+
+    // A different account on the same shared browser opens the same page's dialog.
+    useAuthStore.setState({ user: { id: 'user-b' } as never });
+    const second = renderDialog();
+    await waitFor(() => screen.getByText('Deploys'));
+    const leakedToOtherUser = screen.queryByText('whsec_user_scoped');
+    second.unmount();
+
+    // The owner comes back — their secret is still deliverable.
+    useAuthStore.setState({ user: { id: 'user-a' } as never });
+    renderDialog();
+    const deliveredToOwner = await screen.findByText('whsec_user_scoped');
+
+    assert({
+      given: 'a parked one-time secret and a subsequent sign-in by a different user',
+      should: 'never deliver the parked secret to another account, but keep it for its owner',
+      actual: {
+        leakedToOtherUser,
+        deliveredToOwner: deliveredToOwner !== null,
+      },
+      expected: { leakedToOtherUser: null, deliveredToOwner: true },
     });
   });
 
