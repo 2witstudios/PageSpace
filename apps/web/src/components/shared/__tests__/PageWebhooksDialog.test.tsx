@@ -728,6 +728,56 @@ describe('PageWebhooksDialog', () => {
     });
   });
 
+  test('a parked secret is not released from a stale cached 200 before fresh authorization', async () => {
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
+      listResponse(200, { webhooks: [remoteWebhook()] }),
+    );
+    let resolvePost: (value: unknown) => void = () => {};
+    vi.mocked(post).mockImplementation(
+      () => new Promise<never>((resolve) => { resolvePost = resolve as (value: unknown) => void; }),
+    );
+
+    // One shared SWR cache across mounts — like the app's global cache, the
+    // reopened dialog sees the previous session's 200 before revalidation.
+    const cache = new Map();
+    const withCache = () =>
+      render(
+        <SWRConfig value={{ provider: () => cache, dedupingInterval: 0 }}>
+          <PageWebhooksDialog open onOpenChange={() => {}} pageId={PAGE_ID} pageType="AI_CHAT" />
+        </SWRConfig>,
+      );
+
+    const first = withCache();
+    await waitFor(() => screen.getByText('Deploys'));
+    await startRotation();
+    first.unmount();
+    resolvePost({ webhook: remoteWebhook(), webhookSecret: 'whsec_stale_gate' });
+    await new Promise((r) => { setTimeout(r, 0); });
+
+    // Role revoked — but the fresh 403 is slow, so the cached 200 arrives first.
+    let resolveList: (response: Response) => void = () => {};
+    vi.mocked(fetchWithAuth).mockImplementation(
+      () => new Promise<Response>((resolve) => { resolveList = resolve; }),
+    );
+
+    withCache();
+    await new Promise((r) => { setTimeout(r, 0); });
+    const leakedFromCache = screen.queryByText('whsec_stale_gate');
+
+    resolveList(listResponse(403, { error: 'Forbidden' }));
+    await waitFor(() => screen.getByText(/Only this drive's owner or an admin/));
+
+    assert({
+      given: 'a reopened dialog holding a stale cached 200 while the fresh list request will 403',
+      should: 'withhold the parked secret until fresh authorization, then discard it on the 403',
+      actual: {
+        leakedFromCache,
+        shownAfterFresh403: screen.queryByText('whsec_stale_gate'),
+      },
+      expected: { leakedFromCache: null, shownAfterFresh403: null },
+    });
+  });
+
   test('reveals the secret exactly once, dismissed only by explicit confirmation', async () => {
     vi.mocked(fetchWithAuth).mockImplementation(async () => listResponse(200, { webhooks: [] }));
     vi.mocked(post).mockResolvedValue({
