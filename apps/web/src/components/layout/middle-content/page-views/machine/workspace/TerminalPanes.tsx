@@ -207,11 +207,14 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
 
       closePane(workspaceId, paneId);
       if (closing !== null && !boundElsewhere) {
-        void killAgentTerminal(machineId, closing).catch(() => {
-          // The pane is already gone locally; a failed kill leaves the session
-          // discoverable as an unclaimed row (which now carries its own remove
-          // button), so this must not throw into the click handler.
-        });
+        // `killAgentTerminal` drops the session from the SWR cache
+        // synchronously (optimistic mutation) — the same tick as `closePane`
+        // above — so the sidebar never flashes the closing session as an
+        // unclaimed row. On a genuine kill failure the mutation ROLLS the row
+        // BACK as the unclaimed fallback (still reachable, still removable,
+        // with its own remove button), so this must not throw into the click
+        // handler.
+        void killAgentTerminal(machineId, closing).catch(() => {});
       }
     },
     [machineId, workspaceId, closePane],

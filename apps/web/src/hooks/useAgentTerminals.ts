@@ -2,7 +2,7 @@
 
 import { useCallback } from 'react';
 import useSWR, { mutate } from 'swr';
-import { fetchWithAuth, post, del } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import type { AgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
 
 export interface AgentTerminal {
@@ -34,19 +34,11 @@ function buildQuery(machineId: string, projectName?: string | null, branchName?:
   return params.toString();
 }
 
+/** The hook's SWR cache value — `undefined` until the first GET lands. */
+type TerminalList = { agentTerminals: AgentTerminal[] } | undefined;
+
 /**
- * Kills a session addressed by its OWN (project, branch, name) scope — the
- * session's real identity (`machine_agent_terminals`' unique index).
- *
- * The hook's `removeAgentTerminal` below DELETEs under whatever scope the hook
- * instance was mounted with — right for undoing a spawn that same instance
- * just made, wrong for killing an arbitrary pane's session: a pane's scope can
- * differ from its workspace's (a restored server layout can hold panes bound
- * at other checkouts), and DELETEing that pane's `name` under the WORKSPACE's
- * scope would kill a different terminal that happens to share the name — or
- * nothing — while the intended one lives on as an unclaimed session.
- *
- * A 404 is SUCCESS here, not a failure: it means the session — or the
+ * The shared DELETE, with 404-as-success: a 404 means the session — or the
  * project/branch checkout that held it — is already gone server-side, which is
  * this call's goal state. Treating it as an error made a workspace holding a
  * stale pane permanently unremovable: the kill rejected, the confirm dialog
@@ -57,11 +49,8 @@ function buildQuery(machineId: string, projectName?: string | null, branchName?:
  * status needs `fetchWithAuth` directly — the `del()` helper throws a plain
  * `Error` with no status attached (see `pushWorkspaceUpdate`'s doc in
  * useMachineWorkspaceSync for the same choice).
- *
- * Revalidates the killed scope's list afterwards so any mounted hook on that
- * scope (e.g. the sidebar's session rows) drops the dead row.
  */
-export async function killAgentTerminal(
+async function deleteAgentTerminalRequest(
   machineId: string,
   scope: { projectName?: string | null; branchName?: string | null; name: string },
 ): Promise<void> {
@@ -74,11 +63,65 @@ export async function killAgentTerminal(
     const body: { error?: unknown } | null = await response.json().catch(() => null);
     throw new Error(typeof body?.error === 'string' ? body.error : 'Failed to remove terminal');
   }
-  // Fire-and-forget: the kill has already succeeded by this point, and a
-  // transient failure of the list REFETCH must not turn a completed teardown
-  // into a rejection — that would keep the remove-workspace dialog open (and
-  // fail closePaneAndKill's catch path) over a session that is already dead.
-  void mutate(`/api/machines/agent-terminals?${query}`).catch(() => {});
+}
+
+/** Pure: the cached list minus the named row; `undefined` cache passes through. */
+export const withoutSession =
+  (name: string) =>
+  (list: TerminalList): TerminalList =>
+    list ? { agentTerminals: list.agentTerminals.filter((terminal) => terminal.name !== name) } : list;
+
+/**
+ * The optimistic-mutation contract every session removal runs under. The
+ * sidebar's "unclaimed session" rows are a set-difference between this cache
+ * and the workspace store's panes — a pane close mutates the store
+ * synchronously, so the row must leave this cache in the SAME tick, or the
+ * session resurfaces as an orphan row for at least a frame (and forever if
+ * the round-trip fails silently). Mutate applies `optimisticData`
+ * synchronously within the call, which is what makes close-and-kill one
+ * batched render.
+ *
+ * - `optimisticData` filters the DISPLAYED data, not the committed snapshot:
+ *   with two concurrent kills on one key (a workspace removal killing several
+ *   same-scope sessions), the second kill's committed snapshot still holds
+ *   the first kill's row — filtering displayed data keeps it hidden.
+ * - `populateCache` commits the filtered committed snapshot on success.
+ * - `rollbackOnError` restores the row when the DELETE genuinely fails — the
+ *   unclaimed fallback row IS the recovery path (still reachable, still
+ *   removable), and the error still throws to the caller.
+ * - `revalidate` reconciles with server truth after settling; it is detached
+ *   in SWR 2.x, so a transient refetch failure can never turn a completed
+ *   teardown into a rejection.
+ */
+export const killMutateOptions = (name: string) => ({
+  optimisticData: (_committed: TerminalList, displayed: TerminalList) => withoutSession(name)(displayed),
+  populateCache: (_result: void, committed: TerminalList) => withoutSession(name)(committed),
+  rollbackOnError: true,
+  revalidate: true,
+});
+
+/**
+ * Kills a session addressed by its OWN (project, branch, name) scope — the
+ * session's real identity (`machine_agent_terminals`' unique index).
+ *
+ * The hook's `removeAgentTerminal` below DELETEs under whatever scope the hook
+ * instance was mounted with — right for undoing a spawn that same instance
+ * just made, wrong for killing an arbitrary pane's session: a pane's scope can
+ * differ from its workspace's (a restored server layout can hold panes bound
+ * at other checkouts), and DELETEing that pane's `name` under the WORKSPACE's
+ * scope would kill a different terminal that happens to share the name — or
+ * nothing — while the intended one lives on as an unclaimed session.
+ *
+ * The DELETE runs inside an optimistic mutation (see {@link killMutateOptions})
+ * so the row leaves the killed scope's list synchronously — the same tick as
+ * the caller's `closePane` — and rolls back only on genuine failure.
+ */
+export async function killAgentTerminal(
+  machineId: string,
+  scope: { projectName?: string | null; branchName?: string | null; name: string },
+): Promise<void> {
+  const key = `/api/machines/agent-terminals?${buildQuery(machineId, scope.projectName, scope.branchName)}`;
+  await mutate(key, deleteAgentTerminalRequest(machineId, scope), killMutateOptions(scope.name));
 }
 
 /**
@@ -108,11 +151,17 @@ export function useAgentTerminals(machineId: string | null, projectName?: string
     [machineId, projectName, branchName, mutate],
   );
 
+  // The hook's BOUND mutate (not the global one): it targets this instance's
+  // cache through whatever SWR provider is active, and shares the exact
+  // optimistic/rollback/404-as-success contract as `killAgentTerminal` —
+  // a row already dead server-side must still be removable.
   const removeAgentTerminal = useCallback(
     async (name: string) => {
       if (!machineId) throw new Error('No active machine');
-      await del(`/api/machines/agent-terminals?${buildQuery(machineId, projectName, branchName)}&name=${encodeURIComponent(name)}`);
-      await mutate();
+      await mutate(
+        deleteAgentTerminalRequest(machineId, { projectName, branchName, name }),
+        killMutateOptions(name),
+      );
     },
     [machineId, projectName, branchName, mutate],
   );
