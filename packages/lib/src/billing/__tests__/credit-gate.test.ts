@@ -38,6 +38,9 @@ vi.mock('@pagespace/db/operators', () => ({
   sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ sql: true, strings, values })),
 }));
 vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled }));
+vi.mock('@pagespace/db/schema/monitoring', () => ({
+  aiUsageLogs: { userId: 'aul.userId', cost: 'aul.cost', timestamp: 'aul.timestamp' },
+}));
 const mockEmitCreditsUpdated = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../credit-emit', () => ({ emitCreditsUpdated: mockEmitCreditsUpdated }));
 
@@ -870,5 +873,53 @@ describe('canConsumeAI — per-user/day exposure cap', () => {
 
     expect(r.allowed).toBe(true);
     expect(sink.insertCalled).toBe(true);
+  });
+});
+
+describe('canConsumeAI — dailyCapCeilingCents with billing disabled (tenant/onprem)', () => {
+  // Aggregate select over aiUsageLogs: `.from().where()` resolves directly (no
+  // `.limit()` — it's a SUM, not a row fetch).
+  function selectAggReturning(rows: unknown[]) {
+    return { from: () => ({ where: () => Promise.resolve(rows) }) };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsBillingEnabled.mockReturnValue(false);
+  });
+
+  it('stays a pure fast path (no queries) when no ceiling is passed', async () => {
+    const r = await canConsumeAI('u1', 'pro');
+
+    expect(r).toEqual({ allowed: true, reason: 'unlimited' });
+    expect(mockDb.select).not.toHaveBeenCalled();
+    expect(mockDb.transaction).not.toHaveBeenCalled();
+  });
+
+  it('denies when the day metered cost (aiUsageLogs) has reached the ceiling', async () => {
+    // $6 metered today ≥ the $5 ceiling → deny even though billing is off.
+    mockDb.select.mockReturnValueOnce(selectAggReturning([{ costUsd: 6.0 }]));
+
+    const r = await canConsumeAI('u1', 'pro', { dailyCapCeilingCents: 500 });
+
+    expect(r).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
+  });
+
+  it('allows (unlimited, no hold machinery) when the metered day cost is under the ceiling', async () => {
+    mockDb.select.mockReturnValueOnce(selectAggReturning([{ costUsd: 1.2 }]));
+
+    const r = await canConsumeAI('u1', 'pro', { dailyCapCeilingCents: 500 });
+
+    expect(r).toEqual({ allowed: true, reason: 'unlimited' });
+    expect(mockDb.insert).not.toHaveBeenCalled();
+    expect(mockDb.transaction).not.toHaveBeenCalled();
+  });
+
+  it('treats missing/null metered cost as zero spend (local models log no cost)', async () => {
+    mockDb.select.mockReturnValueOnce(selectAggReturning([{ costUsd: 0 }]));
+
+    const r = await canConsumeAI('u1', 'pro', { dailyCapCeilingCents: 500 });
+
+    expect(r).toEqual({ allowed: true, reason: 'unlimited' });
   });
 });

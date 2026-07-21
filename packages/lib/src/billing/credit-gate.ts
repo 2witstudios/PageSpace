@@ -16,6 +16,7 @@
 
 import { db } from '@pagespace/db/db';
 import { creditBalances, creditHolds, creditLedger } from '@pagespace/db/schema/credits';
+import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { and, eq, gt, gte, inArray, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
@@ -136,13 +137,22 @@ export interface GateOptions {
    * Per-user/day charged-spend ceiling (whole cents) applied IN ADDITION to the tier
    * cap — the effective cap is the smaller of the two — and, unlike the tier cap,
    * it binds even on deployments where DAILY_USER_EXPOSURE_CAP_CENTS is unset
-   * (0 = disabled). Passed by callers whose runs are forced by a bearer credential
-   * (the page-webhook trigger path), so an unconfigured deployment still bounds what
-   * a leaked secret can spend per day. Zero/negative values are ignored. Independent
-   * of skipDailyCap: an explicit ceiling is the caller's own opt-in bound, not the
-   * interactive runaway backstop that skipDailyCap exists to bypass.
+   * (0 = disabled) AND on billing-disabled deployments (tenant/onprem), where the
+   * day's spend is metered from aiUsageLogs instead of the credit ledger. Passed by
+   * callers whose runs are forced by a bearer credential (the page-webhook trigger
+   * path), so an unconfigured deployment still bounds what a leaked secret can spend
+   * per day. Zero/negative values are ignored. Independent of skipDailyCap: an
+   * explicit ceiling is the caller's own opt-in bound, not the interactive runaway
+   * backstop that skipDailyCap exists to bypass.
    */
   dailyCapCeilingCents?: number;
+}
+
+/** Normalize the caller-supplied daily ceiling: zero/negative/absent → null (off). */
+function callerCeilingCents(opts: GateOptions): number | null {
+  return opts.dailyCapCeilingCents !== undefined && opts.dailyCapCeilingCents > 0
+    ? opts.dailyCapCeilingCents
+    : null;
 }
 
 export async function canConsumeAI(
@@ -150,7 +160,26 @@ export async function canConsumeAI(
   tier: SubscriptionTier = 'free',
   opts: GateOptions = {},
 ): Promise<GateResult> {
-  if (!isBillingEnabled()) return { allowed: true, reason: 'unlimited' };
+  if (!isBillingEnabled()) {
+    // Billing-off deployments (tenant/onprem) have no credit ledger, but a
+    // caller-supplied daily ceiling must still bind: a metered provider (e.g.
+    // Azure OpenAI on-prem) spends real money, and the ceiling exists precisely
+    // for runs forced by a bearer credential. aiUsageLogs is written in EVERY
+    // deployment mode, so meter the day's cost from it. The run that crosses
+    // the ceiling is allowed (its cost is only known after it finishes); the
+    // next is denied — the same one-run-overshoot semantics as the ledger-backed
+    // cap below. Without a ceiling this stays the query-free unlimited fast path.
+    const ceiling = callerCeilingCents(opts);
+    if (ceiling === null) return { allowed: true, reason: 'unlimited' };
+    const dayStart = startOfUtcDay(new Date());
+    const agg = await db
+      .select({ costUsd: sql<number>`coalesce(sum(${aiUsageLogs.cost}), 0)` })
+      .from(aiUsageLogs)
+      .where(and(eq(aiUsageLogs.userId, userId), gte(aiUsageLogs.timestamp, dayStart)));
+    const spentCents = Math.floor(Number(agg[0]?.costUsd ?? 0) * 100);
+    if (spentCents >= ceiling) return { allowed: false, reason: 'daily_cap_exceeded' };
+    return { allowed: true, reason: 'unlimited' };
+  }
 
   const now = new Date();
 
@@ -341,10 +370,7 @@ export async function canConsumeAI(
   // ceiling tightens (never loosens) the tier cap and applies even when the tier cap
   // is disabled or skipped — see GateOptions.dailyCapCeilingCents.
   const tierDailyCap = opts.skipDailyCap ? null : dailyExposureCapForTier(tier);
-  const callerCeiling =
-    opts.dailyCapCeilingCents !== undefined && opts.dailyCapCeilingCents > 0
-      ? opts.dailyCapCeilingCents
-      : null;
+  const callerCeiling = callerCeilingCents(opts);
   const dailyCap =
     tierDailyCap !== null && callerCeiling !== null
       ? Math.min(tierDailyCap, callerCeiling)
