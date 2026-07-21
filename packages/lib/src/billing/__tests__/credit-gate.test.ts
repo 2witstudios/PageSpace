@@ -877,10 +877,43 @@ describe('canConsumeAI — per-user/day exposure cap', () => {
 });
 
 describe('canConsumeAI — dailyCapCeilingCents with billing disabled (tenant/onprem)', () => {
-  // Aggregate select over aiUsageLogs: `.from().where()` resolves directly (no
-  // `.limit()` — it's a SUM, not a row fetch).
-  function selectAggReturning(rows: unknown[]) {
-    return { from: () => ({ where: () => Promise.resolve(rows) }) };
+  // The billing-off ceiling decision runs in a transaction: advisory-lock
+  // serialize per user, sum unexpired holds (in-flight runs), sum the day's
+  // aiUsageLogs cost, then reserve a hold on allow. Selects resolve in that
+  // order: [holds agg], [usage agg].
+  function mockBillingOffTransaction(
+    reserved: number,
+    costUsd: number,
+    sink: { insertCalled?: boolean; executeSql?: string } = {},
+  ) {
+    mockDb.transaction.mockImplementationOnce(async (cb: (tx: unknown) => Promise<unknown>) => {
+      let selectCount = 0;
+      const tx = {
+        execute: vi.fn((q: { strings?: readonly string[] }) => {
+          sink.executeSql = q?.strings?.join('');
+          return Promise.resolve(undefined);
+        }),
+        select: vi.fn(() => {
+          selectCount++;
+          const n = selectCount;
+          return {
+            from: () => ({
+              where: () =>
+                Promise.resolve(
+                  n === 1 ? [{ reserved, inFlight: 0 }] : [{ costUsd }],
+                ),
+            }),
+          };
+        }),
+        insert: vi.fn(() => ({
+          values: () => {
+            sink.insertCalled = true;
+            return { returning: () => Promise.resolve([{ id: 'hold-x' }]) };
+          },
+        })),
+      };
+      return cb(tx);
+    });
   }
 
   beforeEach(() => {
@@ -896,30 +929,47 @@ describe('canConsumeAI — dailyCapCeilingCents with billing disabled (tenant/on
     expect(mockDb.transaction).not.toHaveBeenCalled();
   });
 
-  it('denies when the day metered cost (aiUsageLogs) has reached the ceiling', async () => {
+  it('denies when the day metered cost (aiUsageLogs) has reached the ceiling, without reserving a hold', async () => {
     // $6 metered today ≥ the $5 ceiling → deny even though billing is off.
-    mockDb.select.mockReturnValueOnce(selectAggReturning([{ costUsd: 6.0 }]));
+    const sink: { insertCalled?: boolean } = {};
+    mockBillingOffTransaction(0, 6.0, sink);
 
     const r = await canConsumeAI('u1', 'pro', { dailyCapCeilingCents: 500 });
 
     expect(r).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
+    expect(sink.insertCalled).toBeFalsy();
   });
 
-  it('allows (unlimited, no hold machinery) when the metered day cost is under the ceiling', async () => {
-    mockDb.select.mockReturnValueOnce(selectAggReturning([{ costUsd: 1.2 }]));
+  it('counts in-flight hold reservations toward the ceiling (concurrent fan-out cannot blow past it)', async () => {
+    // Settled usage is only $0.50, but 480¢ of concurrent runs hold reservations:
+    // 50 + 480 + EST(25) = 555 > 500 → deny. Without in-flight accounting every
+    // run of a Promise.allSettled fan-out would see the same below-cap total.
+    const sink: { insertCalled?: boolean } = {};
+    mockBillingOffTransaction(480, 0.5, sink);
 
     const r = await canConsumeAI('u1', 'pro', { dailyCapCeilingCents: 500 });
 
-    expect(r).toEqual({ allowed: true, reason: 'unlimited' });
-    expect(mockDb.insert).not.toHaveBeenCalled();
-    expect(mockDb.transaction).not.toHaveBeenCalled();
+    expect(r).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
+    expect(sink.insertCalled).toBeFalsy();
+  });
+
+  it('allows under the ceiling, reserves a hold, and serializes via a per-user advisory lock', async () => {
+    const sink: { insertCalled?: boolean; executeSql?: string } = {};
+    mockBillingOffTransaction(0, 1.2, sink); // 120 + 25 < 500
+
+    const r = await canConsumeAI('u1', 'pro', { dailyCapCeilingCents: 500 });
+
+    expect(r.allowed).toBe(true);
+    expect(r.holdId).toBe('hold-x');
+    expect(sink.insertCalled).toBe(true);
+    expect(sink.executeSql).toContain('pg_advisory_xact_lock');
   });
 
   it('treats missing/null metered cost as zero spend (local models log no cost)', async () => {
-    mockDb.select.mockReturnValueOnce(selectAggReturning([{ costUsd: 0 }]));
+    mockBillingOffTransaction(0, 0);
 
     const r = await canConsumeAI('u1', 'pro', { dailyCapCeilingCents: 500 });
 
-    expect(r).toEqual({ allowed: true, reason: 'unlimited' });
+    expect(r.allowed).toBe(true);
   });
 });

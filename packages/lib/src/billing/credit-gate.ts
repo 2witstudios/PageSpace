@@ -165,20 +165,47 @@ export async function canConsumeAI(
     // caller-supplied daily ceiling must still bind: a metered provider (e.g.
     // Azure OpenAI on-prem) spends real money, and the ceiling exists precisely
     // for runs forced by a bearer credential. aiUsageLogs is written in EVERY
-    // deployment mode, so meter the day's cost from it. The run that crosses
-    // the ceiling is allowed (its cost is only known after it finishes); the
-    // next is denied — the same one-run-overshoot semantics as the ledger-backed
-    // cap below. Without a ceiling this stays the query-free unlimited fast path.
+    // deployment mode, so meter the day's cost from it; concurrent in-flight
+    // runs are accounted via creditHolds reservations (a webhook fan-out starts
+    // runs concurrently — settled usage alone would let every run of a burst
+    // observe the same below-cap total). The per-user advisory lock serializes
+    // concurrent decisions the way the billed path's balance row lock does
+    // (there is no balance row to lock in this mode). The caller releases the
+    // hold after the run (releaseHold deletes in every mode); an abandoned hold
+    // expires via its TTL. Without a ceiling this stays the query-free
+    // unlimited fast path.
     const ceiling = callerCeilingCents(opts);
     if (ceiling === null) return { allowed: true, reason: 'unlimited' };
-    const dayStart = startOfUtcDay(new Date());
-    const agg = await db
-      .select({ costUsd: sql<number>`coalesce(sum(${aiUsageLogs.cost}), 0)` })
-      .from(aiUsageLogs)
-      .where(and(eq(aiUsageLogs.userId, userId), gte(aiUsageLogs.timestamp, dayStart)));
-    const spentCents = Math.floor(Number(agg[0]?.costUsd ?? 0) * 100);
-    if (spentCents >= ceiling) return { allowed: false, reason: 'daily_cap_exceeded' };
-    return { allowed: true, reason: 'unlimited' };
+    const now = new Date();
+    const dayStart = startOfUtcDay(now);
+    const estCost = reservationCents(opts.estCostCents ?? CREDIT_HOLD_ESTIMATE_CENTS);
+    const expiresAt = new Date(holdExpiresAt(now.getTime(), CREDIT_HOLD_TTL_SECONDS * 1000));
+    return await db.transaction(async (tx): Promise<GateResult> => {
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtext(${'billing-off-daily-ceiling:' + userId}))`,
+      );
+      const holdAgg = await tx
+        .select({ reserved: sql<number>`coalesce(sum(${creditHolds.estCents}), 0)` })
+        .from(creditHolds)
+        .where(and(eq(creditHolds.userId, userId), gt(creditHolds.expiresAt, now)));
+      const reserved = Number(holdAgg[0]?.reserved ?? 0);
+      const agg = await tx
+        .select({ costUsd: sql<number>`coalesce(sum(${aiUsageLogs.cost}), 0)` })
+        .from(aiUsageLogs)
+        .where(and(eq(aiUsageLogs.userId, userId), gte(aiUsageLogs.timestamp, dayStart)));
+      const spentCents = Math.floor(Number(agg[0]?.costUsd ?? 0) * 100);
+      const cap = evaluateDailyCap({
+        dailyChargedCents: spentCents + reserved,
+        estCostCents: estCost,
+        capCents: ceiling,
+      });
+      if (!cap.allowed) return { allowed: false, reason: cap.reason };
+      const inserted = await tx
+        .insert(creditHolds)
+        .values({ userId, estCents: estCost, expiresAt })
+        .returning({ id: creditHolds.id });
+      return { allowed: true, reason: 'unlimited', holdId: inserted[0]?.id };
+    });
   }
 
   const now = new Date();
