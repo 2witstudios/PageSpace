@@ -478,6 +478,28 @@ describe('POST /api/webhooks/[token]', () => {
       expect(mockDispatch).toHaveBeenCalledTimes(1);
     });
 
+    it('does NOT un-commit a completed delivery when a failure happens AFTER acceptance — the retry is acknowledged as duplicate, never double-delivered', async () => {
+      // A throw after completion (here: scheduling the trigger fan-out) maps
+      // to a 500, but the channel post already happened. The claim must stay
+      // completed so the sender's retry gets {duplicate:true} instead of
+      // re-posting.
+      const triggers = [{ id: 't1', workflowId: 'wf1', pageWebhookId: 'wh-1' }];
+      mockFindTriggers.mockResolvedValue({ success: true, data: triggers });
+      mockFireTriggers.mockImplementationOnce(() => {
+        throw new Error('fan-out scheduling blew up');
+      });
+      const headers = identicalSignedHeaders(VALID_PAYLOAD);
+
+      const failedAfterCommit = await POST(makeRequest(VALID_PAYLOAD, headers), params());
+      expect(failedAfterCommit.status).toBe(500);
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+
+      const retry = await POST(makeRequest(VALID_PAYLOAD, headers), params());
+      expect(retry.status).toBe(200);
+      expect(await retry.json()).toEqual({ ok: true, duplicate: true });
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+    });
+
     it('does NOT touch the claim store for a request that fails signature verification — an attacker cannot claim anything without the secret', async () => {
       const timestamp = String(Math.floor(Date.now() / 1000));
       const forged = await POST(

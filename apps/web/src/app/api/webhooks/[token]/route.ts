@@ -133,11 +133,17 @@ export async function POST(request: Request, context: { params: Promise<{ token:
     if (deliveryAccepted) {
       // Flip the claim to completed so identical requests from now on read
       // 'duplicate' (no-op success) instead of 'pending' (retryable 409).
+      // Clearing `claimed` makes the claim un-releasable: if anything throws
+      // past this point the work is already committed, so the catch below
+      // must answer 500 WITHOUT releasing — the sender's retry then gets the
+      // duplicate acknowledgment instead of double-delivering.
       await completeWebhookDelivery(webhook.id, deliveryId);
+      claimed = null;
     } else {
       // Every 'failed' outcome maps to a non-2xx the sender is expected to
       // retry — release the claim so that retry isn't swallowed as a duplicate.
       await releaseWebhookDelivery(webhook.id, deliveryId);
+      claimed = null;
     }
     if (deliveryAccepted && enabledTriggers.length > 0) {
       after(() => firePageWebhookTriggers(enabledTriggers, body));
