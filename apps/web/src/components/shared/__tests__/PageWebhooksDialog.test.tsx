@@ -336,6 +336,46 @@ describe('PageWebhooksDialog', () => {
     });
   });
 
+  test('a rotation from one page never reveals in another page’s dialog', async () => {
+    vi.mocked(fetchWithAuth).mockResolvedValue(
+      listResponse(200, { webhooks: [remoteWebhook()] }),
+    );
+    let resolvePost: (value: unknown) => void = () => {};
+    vi.mocked(post).mockImplementation(
+      () => new Promise<never>((resolve) => { resolvePost = resolve as (value: unknown) => void; }),
+    );
+
+    const dialogFor = (pid: string) => (
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+        <PageWebhooksDialog open onOpenChange={() => {}} pageId={pid} pageType="CHANNEL" />
+      </SWRConfig>
+    );
+    const view = render(dialogFor(PAGE_ID));
+    await waitFor(() => screen.getByText('Deploys'));
+    await userEvent.click(screen.getByRole('button', { name: /Rotate secret/ }));
+
+    // Same component instance survives navigation (CenterPanel reuses the
+    // view across channel ids) — only the pageId prop changes.
+    view.rerender(dialogFor('page-2'));
+    resolvePost({ webhook: remoteWebhook(), webhookSecret: 'whsec_page_scoped' });
+    await new Promise((r) => { setTimeout(r, 0); });
+
+    const leakedIntoOtherPage = screen.queryByText('whsec_page_scoped');
+
+    view.rerender(dialogFor(PAGE_ID));
+    await waitFor(() => screen.getByText('whsec_page_scoped'));
+
+    assert({
+      given: 'a rotation started on page A whose response landed while the same dialog instance showed page B',
+      should: 'never reveal A’s secret in B’s dialog, but deliver it when A’s dialog is shown again',
+      actual: {
+        leakedIntoOtherPage,
+        revealedOnOwnPage: screen.getByText('whsec_page_scoped') !== null,
+      },
+      expected: { leakedIntoOtherPage: null, revealedOnOwnPage: true },
+    });
+  });
+
   test('reveals the secret exactly once, dismissed only by explicit confirmation', async () => {
     vi.mocked(fetchWithAuth).mockResolvedValue(listResponse(200, { webhooks: [] }));
     vi.mocked(post).mockResolvedValue({

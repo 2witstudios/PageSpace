@@ -33,7 +33,8 @@ interface PageWebhooksDialogProps {
   pageType: string;
 }
 
-type RevealedSecret = { webhookUrl: string; secret: string };
+/** pageId is the ORIGINATING page — the reveal panel only renders when it matches the dialog's current page. */
+type RevealedSecret = { pageId: string; webhookUrl: string; secret: string };
 
 // Holding pen for a one-time secret whose create/rotate response landed after
 // this page's dialog unmounted (CenterPanel remounts views by page id on
@@ -65,9 +66,13 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
   }, []);
 
   // Routes a fresh one-time secret to the live dialog, or parks it in the
-  // orphan pen when the response outlived this component instance.
+  // orphan pen when the response outlived this component instance. `pageId` in
+  // the closure is the page the request was started on — the same instance may
+  // meanwhile be showing a different page (CenterPanel reuses views across
+  // page ids), which the render gate below handles.
   const reveal = (webhook: WebhookRow, secret: string) => {
     const value: RevealedSecret = {
+      pageId,
       webhookUrl: `${window.location.origin}/api/webhooks/${webhook.webhookToken}`,
       secret,
     };
@@ -77,6 +82,16 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
     }
     setRevealed(value);
   };
+
+  // Never show a secret in another page's dialog: only a reveal minted for the
+  // current page renders; one that belongs elsewhere is parked for that page.
+  const activeReveal = revealed && revealed.pageId === pageId ? revealed : null;
+  useEffect(() => {
+    if (revealed && revealed.pageId !== pageId) {
+      orphanedReveals.set(revealed.pageId, revealed);
+      setRevealed(null);
+    }
+  }, [revealed, pageId]);
 
   useEffect(() => {
     if (open) {
@@ -167,8 +182,8 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
   };
 
   const copyRevealed = async () => {
-    if (!revealed) return;
-    await navigator.clipboard.writeText(`${revealed.webhookUrl}\n${revealed.secret}`);
+    if (!activeReveal) return;
+    await navigator.clipboard.writeText(`${activeReveal.webhookUrl}\n${activeReveal.secret}`);
     toast.success('Copied to clipboard');
   };
 
@@ -202,15 +217,15 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
               Retry
             </Button>
           </div>
-        ) : revealed ? (
+        ) : activeReveal ? (
           <div className="space-y-3 py-2">
             <p className="text-sm">
               Save this secret now — it won&apos;t be shown again. Configure your system to POST to the URL below,
               signed with the secret (see docs for the signature scheme).
             </p>
             <div className="rounded-md border bg-muted p-3 space-y-1 text-xs font-mono break-all">
-              <div>{revealed.webhookUrl}</div>
-              <div>{revealed.secret}</div>
+              <div>{activeReveal.webhookUrl}</div>
+              <div>{activeReveal.secret}</div>
             </div>
             <div className="flex items-center justify-end gap-2">
               <Button type="button" variant="outline" size="sm" onClick={copyRevealed}>
