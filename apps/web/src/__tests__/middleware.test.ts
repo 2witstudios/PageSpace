@@ -420,6 +420,33 @@ describe('middleware — Electron shell page navigations are never bounced to si
     expect(response.headers.get('x-middleware-rewrite')).toBeNull();
   });
 
+  it('does NOT log a security "unauthorized" event for an accepted Electron shell page navigation', async () => {
+    // The navigation is deliberately accepted — logging it as unauthorized
+    // would flood the security drain on every client-side route change of a
+    // cookie-less desktop session and obscure real failures.
+    await middleware(buildRequest('/dashboard/drv_abc', { 'user-agent': ELECTRON_UA }));
+
+    expect(mockLogSecurityEvent).not.toHaveBeenCalled();
+  });
+
+  it('still logs the unauthorized event for an Electron API request with no credentials', async () => {
+    await middleware(buildRequest('/api/ai/chat/active-streams', { 'user-agent': ELECTRON_UA }));
+
+    expect(mockLogSecurityEvent).toHaveBeenCalledWith(
+      'unauthorized',
+      expect.objectContaining({ reason: 'No session token' }),
+    );
+  });
+
+  it('still logs the unauthorized event for a browser page navigation with no session cookie', async () => {
+    await middleware(buildRequest('/activate', { 'user-agent': BROWSER_UA }));
+
+    expect(mockLogSecurityEvent).toHaveBeenCalledWith(
+      'unauthorized',
+      expect.objectContaining({ reason: 'No session token' }),
+    );
+  });
+
   it('changes nothing for the Electron shell when a session cookie IS present (pass-through, as for everyone)', async () => {
     mockGetSessionFromCookies.mockReturnValue('ps_sess_valid');
 

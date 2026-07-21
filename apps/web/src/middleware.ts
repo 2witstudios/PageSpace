@@ -334,16 +334,6 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
     const sessionToken = getSessionFromCookies(cookieHeader);
 
     if (!sessionToken) {
-      logSecurityEvent('unauthorized', {
-        pathname,
-        reason: 'No session token',
-        ip,
-      });
-
-      if (isAPIRoute) {
-        return createSecureErrorResponse('Authentication required', 401, isProduction, isSecureRequest(req));
-      }
-
       // Electron desktop shell: its page navigations carry COOKIES while the
       // real credential (the Bearer token) lives in the Electron main process
       // and is attached per API call — so a missing/stale session cookie says
@@ -352,15 +342,28 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       // page load and let the shell recover client-side via its Bearer. This
       // relaxes only the navigation UX gate, never an auth boundary: the page
       // shell is public and all data still comes from Bearer-validated API
-      // routes (the isAPIRoute 401 above is untouched). The iOS/Capacitor
+      // routes (the isAPIRoute 401 below is untouched). The iOS/Capacitor
       // /dashboard rewrite below is a different shell (no Electron/ UA token)
-      // and keeps its own handling.
-      if (isElectronShell(req.headers.get('user-agent'))) {
+      // and keeps its own handling. Sits above the 'unauthorized' security
+      // event: this navigation is deliberately accepted, and logging it would
+      // fire on every client-side route change of a cookie-less desktop
+      // session, drowning out real unauthorized events.
+      if (!isAPIRoute && isElectronShell(req.headers.get('user-agent'))) {
         const { response } = createSecureResponse(isProduction, req, {
           isAPIRoute,
           disableCOEP: shouldDisableCOEP(pathname),
         });
         return response;
+      }
+
+      logSecurityEvent('unauthorized', {
+        pathname,
+        reason: 'No session token',
+        ip,
+      });
+
+      if (isAPIRoute) {
+        return createSecureErrorResponse('Authentication required', 401, isProduction, isSecureRequest(req));
       }
 
       if (isShellEntryPath(pathname)) {
