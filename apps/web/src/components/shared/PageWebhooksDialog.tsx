@@ -106,6 +106,11 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
     return () => { mountedRef.current = false; };
   }, []);
 
+  // Handlers resolve long after the render that created them — they must see
+  // the dialog's CURRENT visibility, not the closure's stale `open`.
+  const openRef = useRef(open);
+  useEffect(() => { openRef.current = open; }, [open]);
+
   const orphanSignal = useSyncExternalStore(subscribeOrphans, getOrphanVersion, getOrphanVersion);
 
   // Routes a fresh one-time secret to the live dialog, or parks it in the
@@ -119,7 +124,10 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
       webhookUrl: `${window.location.origin}/api/webhooks/${webhook.webhookToken}`,
       secret,
     };
-    if (!mountedRef.current) {
+    // Park unless the dialog is mounted AND currently open — writing into a
+    // closed dialog's state would be wiped by the close-reset effect, losing
+    // the only plaintext copy. The pen delivers it at the next open instead.
+    if (!mountedRef.current || !openRef.current) {
       parkOrphan(value);
       return;
     }
@@ -138,11 +146,10 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
 
   useEffect(() => {
     if (!open) {
-      // Clears the secret from state on close — but deliberately does NOT
-      // cancel an in-flight create/rotate: its response holds the only copy of
-      // a one-time secret (rotate has already invalidated the old one), so a
-      // late resolution repopulates `revealed` and the reopened dialog shows
-      // the secret once instead of silently losing it.
+      // Clears an on-screen secret when the user closes the dialog — an
+      // in-flight create/rotate is NOT cancelled: its late response goes to
+      // the orphan pen (reveal() parks while closed) and is delivered at the
+      // next open instead of being lost.
       setRevealed(null);
       setNewName('');
       return;

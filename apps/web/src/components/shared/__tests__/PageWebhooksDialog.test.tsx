@@ -452,6 +452,9 @@ describe('PageWebhooksDialog', () => {
 
     view.rerender(dialogAt(false));
     resolvePost({ webhook: remoteWebhook(), webhookSecret: 'whsec_late_arrival' });
+    // The response must be fully processed while the dialog is still closed —
+    // reopening first would mask a wipe of the closed-dialog reveal.
+    await new Promise((r) => { setTimeout(r, 0); });
     view.rerender(dialogAt(true));
     await waitFor(() => screen.getByText('whsec_late_arrival'));
 
