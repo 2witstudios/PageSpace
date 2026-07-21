@@ -54,6 +54,12 @@ export async function POST(request: Request, context: { params: Promise<{ pageId
       ))
       .returning();
     if (!row) {
+      // Zero rows can also mean a concurrent DELETE won, not a rotation —
+      // re-check so the caller gets a truthful 404 instead of "rotate again".
+      const stillExists = await db.query.pageWebhooks.findFirst({
+        where: and(eq(pageWebhooks.id, id), eq(pageWebhooks.pageId, pageId)),
+      });
+      if (!stillExists) return NextResponse.json({ error: 'Webhook not found' }, { status: 404 });
       return NextResponse.json(
         { error: 'The secret was rotated by a concurrent request — use that rotation\'s secret or rotate again' },
         { status: 409 },

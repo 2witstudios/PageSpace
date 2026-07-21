@@ -169,6 +169,34 @@ describe('POST /api/pages/[pageId]/webhooks/[id]/rotate', () => {
     expect(mockAuditRequest).not.toHaveBeenCalled();
   });
 
+  it('returns 404 when the webhook was deleted concurrently (zero-row update, row gone)', async () => {
+    mockFindFirst.mockResolvedValueOnce(WEBHOOK_ROW).mockResolvedValueOnce(null);
+    mockUpdateReturning.mockReturnValue([]);
+    const response = await POST(makeRequest(), PARAMS);
+    expect(response.status).toBe(404);
+    const body = await response.json();
+    expect(body.webhookSecret).toBeUndefined();
+    expect(mockAuditRequest).not.toHaveBeenCalled();
+  });
+
+  it('requires CSRF on the auth gate', async () => {
+    await POST(makeRequest(), PARAMS);
+    expect(mockAuthenticateRequestWithOptions).toHaveBeenCalledWith(
+      expect.any(Request),
+      expect.objectContaining({ requireCSRF: true }),
+    );
+  });
+
+  it('returns a generic 500 with no secret material when encryption fails', async () => {
+    mockEncryptField.mockRejectedValueOnce(new Error('kms unavailable'));
+    const response = await POST(makeRequest(), PARAMS);
+    expect(response.status).toBe(500);
+    const body = await response.json();
+    expect(body).toEqual({ error: 'Failed to rotate webhook secret' });
+    expect(mockUpdateSet).not.toHaveBeenCalled();
+    expect(mockAuditRequest).not.toHaveBeenCalled();
+  });
+
   it('audits the rotation as a data.write with operation rotate', async () => {
     await POST(makeRequest(), PARAMS);
     expect(mockAuditRequest).toHaveBeenCalledWith(expect.any(Request), {
