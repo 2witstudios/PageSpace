@@ -39,7 +39,11 @@ const mockClaim = vi.fn(async (webhookId: string, deliveryId: string) => {
   return 'claimed' as const;
 });
 const mockComplete = vi.fn(async (webhookId: string, deliveryId: string) => {
-  seenStore.set(`${webhookId}:${deliveryId}`, 'completed');
+  // Like the real module's UPDATE, completing a key that holds no pending
+  // claim is a no-op — it must never conjure a completed marker from nothing.
+  if (seenStore.get(`${webhookId}:${deliveryId}`) === 'pending') {
+    seenStore.set(`${webhookId}:${deliveryId}`, 'completed');
+  }
 });
 const mockRelease = vi.fn(async (webhookId: string, deliveryId: string) => {
   seenStore.delete(`${webhookId}:${deliveryId}`);
@@ -439,6 +443,7 @@ describe('POST /api/webhooks/[token]', () => {
       // here could lose the delivery if the first attempt later fails.
       const concurrent = await POST(makeRequest(VALID_PAYLOAD, headers), params());
       expect(concurrent.status).toBe(409);
+      expect(concurrent.headers.get('Retry-After')).toBe('5');
       expect(mockDispatch).toHaveBeenCalledTimes(1);
 
       // First attempt completes; from now on identical requests are duplicates.
@@ -479,10 +484,13 @@ describe('POST /api/webhooks/[token]', () => {
     });
 
     it('does NOT un-commit a completed delivery when a failure happens AFTER acceptance — the retry is acknowledged as duplicate, never double-delivered', async () => {
-      // A throw after completion (here: scheduling the trigger fan-out) maps
-      // to a 500, but the channel post already happened. The claim must stay
-      // completed so the sender's retry gets {duplicate:true} instead of
-      // re-posting.
+      // Defensive invariant: nothing in the CURRENT route throws between
+      // completion and the response in production (the real after() defers
+      // its callback past the response; only this file's inline after() mock
+      // lets the fan-out throw reach the catch). The test pins the catch-all
+      // contract for any future code on that path: once the work committed,
+      // a late failure answers 500 WITHOUT releasing, so the retry gets
+      // {duplicate:true} instead of re-posting.
       const triggers = [{ id: 't1', workflowId: 'wf1', pageWebhookId: 'wh-1' }];
       mockFindTriggers.mockResolvedValue({ success: true, data: triggers });
       mockFireTriggers.mockImplementationOnce(() => {
@@ -498,6 +506,22 @@ describe('POST /api/webhooks/[token]', () => {
       expect(retry.status).toBe(200);
       expect(await retry.json()).toEqual({ ok: true, duplicate: true });
       expect(mockDispatch).toHaveBeenCalledTimes(1);
+    });
+
+    it('proceeds normally when the claim store fails OPEN (verdict "claimed" on both of two identical requests) — a store outage must never swallow deliveries', async () => {
+      // The real module answers 'claimed' when the store is unreachable; at
+      // the route level that must mean both requests deliver (the composed
+      // system still bounds them: dispatch shares the same DB and its rate
+      // limit fails closed in production).
+      mockClaim.mockResolvedValueOnce('claimed').mockResolvedValueOnce('claimed');
+      const headers = identicalSignedHeaders(VALID_PAYLOAD);
+
+      const first = await POST(makeRequest(VALID_PAYLOAD, headers), params());
+      const second = await POST(makeRequest(VALID_PAYLOAD, headers), params());
+
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      expect(mockDispatch).toHaveBeenCalledTimes(2);
     });
 
     it('does NOT touch the claim store for a request that fails signature verification — an attacker cannot claim anything without the secret', async () => {

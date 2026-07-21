@@ -77,7 +77,13 @@ export async function POST(request: Request, context: { params: Promise<{ token:
       return NextResponse.json({ ok: true, duplicate: true });
     }
     if (claim === 'pending') {
-      return NextResponse.json({ error: 'Delivery already in progress' }, { status: 409 });
+      // In-flight deliveries are sub-second-to-seconds; by the retry the
+      // sender sees either the duplicate ack (work committed) or a fresh
+      // claim (the attempt failed and released, or its lease lapsed).
+      return NextResponse.json(
+        { error: 'Delivery already in progress' },
+        { status: 409, headers: { 'Retry-After': '5' } },
+      );
     }
     claimed = { webhookId: webhook.id, deliveryId };
 
