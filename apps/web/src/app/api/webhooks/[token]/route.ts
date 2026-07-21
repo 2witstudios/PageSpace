@@ -5,9 +5,9 @@ import { pageWebhooks } from '@pagespace/db/schema/page-webhooks';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { v0Scheme, DEFAULT_REPLAY_WINDOW_MS } from '@pagespace/lib/security/webhook-signature';
 import {
-  WEBHOOK_DELIVERY_ID_HEADER,
   deriveWebhookDeliveryId,
   claimWebhookDelivery,
+  completeWebhookDelivery,
   releaseWebhookDelivery,
 } from '@pagespace/lib/security/webhook-delivery-idempotency';
 import { dispatchWebhookDelivery } from '@pagespace/lib/services/page-webhook-dispatch';
@@ -63,18 +63,21 @@ export async function POST(request: Request, context: { params: Promise<{ token:
 
     // Replay idempotency (F4): the signature's ±5-min window alone lets a
     // captured request replay unlimited times in-window. Claim this delivery's
-    // id (sender-supplied header, or a signature-derived fallback) AFTER
-    // verification and BEFORE any dispatch or trigger fan-out; a duplicate is
-    // a no-op success — the work already happened. Claims are released on
-    // every non-accepted outcome so sender retries (the design's at-least-once
+    // id — derived from the SIGNED material only, never a client header the
+    // HMAC doesn't cover — AFTER verification and BEFORE any dispatch or
+    // trigger fan-out. A COMPLETED duplicate is a no-op success (the work
+    // already happened); an identical delivery still IN FLIGHT answers a
+    // retryable 409, because acknowledging it now could lose the delivery if
+    // the in-flight attempt fails and releases. Claims are released on every
+    // non-accepted outcome so sender retries (the design's at-least-once
     // mechanism) still deliver.
-    const deliveryId = deriveWebhookDeliveryId({
-      headerValue: request.headers.get(WEBHOOK_DELIVERY_ID_HEADER),
-      signature,
-      timestamp,
-    });
-    if ((await claimWebhookDelivery(webhook.id, deliveryId)) === 'duplicate') {
+    const deliveryId = deriveWebhookDeliveryId({ signature, timestamp });
+    const claim = await claimWebhookDelivery(webhook.id, deliveryId);
+    if (claim === 'duplicate') {
       return NextResponse.json({ ok: true, duplicate: true });
+    }
+    if (claim === 'pending') {
+      return NextResponse.json({ error: 'Delivery already in progress' }, { status: 409 });
     }
     claimed = { webhookId: webhook.id, deliveryId };
 
@@ -127,7 +130,11 @@ export async function POST(request: Request, context: { params: Promise<{ token:
     // it posts (handled → 200) AND fires; an arbitrary-JSON delivery to a
     // no-handler page fires via no_action → 202.
     const deliveryAccepted = result.kind === 'handled' || result.kind === 'no_action';
-    if (!deliveryAccepted) {
+    if (deliveryAccepted) {
+      // Flip the claim to completed so identical requests from now on read
+      // 'duplicate' (no-op success) instead of 'pending' (retryable 409).
+      await completeWebhookDelivery(webhook.id, deliveryId);
+    } else {
       // Every 'failed' outcome maps to a non-2xx the sender is expected to
       // retry — release the claim so that retry isn't swallowed as a duplicate.
       await releaseWebhookDelivery(webhook.id, deliveryId);

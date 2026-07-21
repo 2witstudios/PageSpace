@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { insertMock, deleteMock, warnMock } = vi.hoisted(() => ({
+const { insertMock, updateMock, deleteMock, warnMock } = vi.hoisted(() => ({
   insertMock: vi.fn(),
+  updateMock: vi.fn(),
   deleteMock: vi.fn(),
   warnMock: vi.fn(),
 }));
@@ -9,6 +10,7 @@ const { insertMock, deleteMock, warnMock } = vi.hoisted(() => ({
 vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: insertMock,
+    update: updateMock,
     delete: deleteMock,
   },
 }));
@@ -29,9 +31,15 @@ vi.mock('../../logging/logger-config', () => ({
 import {
   deriveWebhookDeliveryId,
   claimWebhookDelivery,
+  completeWebhookDelivery,
   releaseWebhookDelivery,
 } from '../webhook-delivery-idempotency';
 import { DEFAULT_REPLAY_WINDOW_MS } from '../webhook-signature';
+
+// The count value completeWebhookDelivery writes; claims above it read as
+// 'duplicate', claims at or below it as 'pending'. Kept in lockstep with
+// COMPLETED_SENTINEL_COUNT in the module under test.
+const COMPLETED_SENTINEL_COUNT = 1_000_000;
 
 // Build a chainable mock for db.insert(...).values(...).onConflictDoUpdate(...).returning()
 // that captures the inserted row and returns the given post-upsert count.
@@ -57,39 +65,17 @@ beforeEach(() => {
 describe('deriveWebhookDeliveryId', () => {
   const base = { signature: 'v0=abc', timestamp: '1700000000' };
 
-  it('is a constant-size hex digest regardless of input shape', () => {
-    const fromHeader = deriveWebhookDeliveryId({ ...base, headerValue: 'delivery-1' });
-    const fromFallback = deriveWebhookDeliveryId({ ...base, headerValue: null });
-    expect(fromHeader).toMatch(/^[0-9a-f]{64}$/);
-    expect(fromFallback).toMatch(/^[0-9a-f]{64}$/);
+  it('is a constant-size hex digest of the signed material', () => {
+    expect(deriveWebhookDeliveryId(base)).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('identifies by the client header when present: the same id maps to the same delivery across RE-SIGNED retries', () => {
-    const first = deriveWebhookDeliveryId({ signature: 'v0=aaa', timestamp: '1700000000', headerValue: 'delivery-1' });
-    const resigned = deriveWebhookDeliveryId({ signature: 'v0=bbb', timestamp: '1700000030', headerValue: 'delivery-1' });
-    expect(resigned).toBe(first);
+  it('is stable for identical signed bytes — a byte-identical replay maps to the same delivery', () => {
+    expect(deriveWebhookDeliveryId({ ...base })).toBe(deriveWebhookDeliveryId({ ...base }));
   });
 
-  it('treats distinct header ids as distinct deliveries even for identical signed bytes', () => {
-    const a = deriveWebhookDeliveryId({ ...base, headerValue: 'delivery-1' });
-    const b = deriveWebhookDeliveryId({ ...base, headerValue: 'delivery-2' });
-    expect(a).not.toBe(b);
-  });
-
-  it('falls back to the signature+timestamp pair when the header is absent or blank: identical bytes dedup, a re-signed retry does not', () => {
-    const identical = deriveWebhookDeliveryId({ ...base, headerValue: null });
-    const blankHeader = deriveWebhookDeliveryId({ ...base, headerValue: '   ' });
-    const resigned = deriveWebhookDeliveryId({ signature: 'v0=other', timestamp: '1700000030', headerValue: null });
-    expect(blankHeader).toBe(identical);
-    expect(resigned).not.toBe(identical);
-  });
-
-  it('never collides a header-derived id with a fallback-derived one (domain-separated hashing)', () => {
-    // A malicious header carrying the fallback's preimage must not claim the
-    // same id the fallback would derive.
-    const fallback = deriveWebhookDeliveryId({ ...base, headerValue: null });
-    const mimic = deriveWebhookDeliveryId({ ...base, headerValue: `signature:${base.timestamp}:${base.signature}` });
-    expect(mimic).not.toBe(fallback);
+  it('differs for a re-signed retry (fresh timestamp/signature) — at-least-once semantics preserved', () => {
+    const resigned = deriveWebhookDeliveryId({ signature: 'v0=other', timestamp: '1700000030' });
+    expect(resigned).not.toBe(deriveWebhookDeliveryId(base));
   });
 });
 
@@ -106,8 +92,13 @@ describe('claimWebhookDelivery', () => {
     expect(expiresAt - before).toBeGreaterThanOrEqual(DEFAULT_REPLAY_WINDOW_MS);
   });
 
-  it('reports duplicate for an already-seen id (upsert count > 1)', async () => {
+  it('reports pending for an id whose first attempt has not completed (small count) — callers must answer retryable, never success', async () => {
     mockClaimReturning(2);
+    await expect(claimWebhookDelivery('wh-1', 'id-1')).resolves.toBe('pending');
+  });
+
+  it('reports duplicate only for a COMPLETED delivery (count above the sentinel)', async () => {
+    mockClaimReturning(COMPLETED_SENTINEL_COUNT + 1);
     await expect(claimWebhookDelivery('wh-1', 'id-1')).resolves.toBe('duplicate');
   });
 
@@ -116,6 +107,31 @@ describe('claimWebhookDelivery', () => {
       throw new Error('db down');
     });
     await expect(claimWebhookDelivery('wh-1', 'id-1')).resolves.toBe('claimed');
+    expect(warnMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('completeWebhookDelivery', () => {
+  it('flips the claim row to the completed sentinel so later identical requests read duplicate instead of pending', async () => {
+    const whereMock = vi.fn().mockResolvedValue(undefined);
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    updateMock.mockReturnValue({ set: setMock });
+
+    await completeWebhookDelivery('wh-1', 'id-1');
+
+    expect(setMock).toHaveBeenCalledWith({ count: COMPLETED_SENTINEL_COUNT });
+    expect(whereMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        and: expect.arrayContaining([expect.objectContaining({ b: 'webhook-seen:wh-1:id-1' })]),
+      })
+    );
+  });
+
+  it('never throws when the store is unreachable — the claim stays pending (replays answer retryable, never double-deliver)', async () => {
+    updateMock.mockImplementation(() => {
+      throw new Error('db down');
+    });
+    await expect(completeWebhookDelivery('wh-1', 'id-1')).resolves.toBeUndefined();
     expect(warnMock).toHaveBeenCalledTimes(1);
   });
 });
