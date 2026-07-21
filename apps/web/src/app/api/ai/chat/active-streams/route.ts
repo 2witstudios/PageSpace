@@ -21,7 +21,7 @@ export async function GET(request: Request) {
         eventType: 'authz.access.denied',
         resourceType: 'ai_chat_stream',
         resourceId: 'active-streams',
-        details: { reason: 'auth_failed', method: 'GET' },
+        details: { reason: 'auth_failed', method: 'GET', authFailureReason: auth.authFailureReason },
         riskScore: 0.5,
       });
       return auth.error;

@@ -37,7 +37,7 @@ export async function GET(
       eventType: 'authz.access.denied',
       resourceType: 'ai_stream',
       resourceId: 'stream-join',
-      details: { reason: 'auth_failed', method: 'GET' },
+      details: { reason: 'auth_failed', method: 'GET', authFailureReason: authResult.authFailureReason },
       riskScore: 0.4,
     });
     return authResult.error;

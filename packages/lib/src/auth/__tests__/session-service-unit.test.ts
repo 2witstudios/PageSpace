@@ -4,6 +4,9 @@ vi.mock('../session-repository', () => ({
   sessionRepository: {
     findUserById: vi.fn(),
     findActiveSession: vi.fn(),
+    // D5: the failure path now does a secondary any-state lookup to classify the reason.
+    // Defaults to undefined ⇒ 'not_found' ⇒ validateSession still returns null (parity).
+    findSessionByHashAnyState: vi.fn(),
     insertSession: vi.fn(),
     touchSession: vi.fn(),
     revokeByHash: vi.fn(),

@@ -22,7 +22,7 @@ export async function PATCH(request: Request) {
         eventType: 'authz.access.denied',
         resourceType: 'ai_settings',
         resourceId: 'image_model',
-        details: { reason: 'auth_failed', method: 'PATCH' },
+        details: { reason: 'auth_failed', method: 'PATCH', authFailureReason: auth.authFailureReason },
         riskScore: 0.5,
       });
       return auth.error;

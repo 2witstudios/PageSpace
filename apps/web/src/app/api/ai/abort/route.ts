@@ -25,7 +25,7 @@ export async function POST(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) {
-      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'ai_chat_stream', resourceId: 'abort', details: { reason: 'auth_failed', method: 'POST' }, riskScore: 0.5 });
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'ai_chat_stream', resourceId: 'abort', details: { reason: 'auth_failed', method: 'POST', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
       return auth.error;
     }
     const userId = auth.userId;

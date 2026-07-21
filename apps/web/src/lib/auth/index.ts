@@ -4,7 +4,7 @@ import { eq, and, isNull } from '@pagespace/db/operators'
 import { mcpTokens } from '@pagespace/db/schema/auth';
 import { oauthAccessTokens } from '@pagespace/db/schema/oauth';
 import { hashToken } from '@pagespace/lib/auth/token-utils';
-import { sessionService, type SessionClaims } from '@pagespace/lib/auth/session-service';
+import { sessionService, type SessionClaims, type SessionFailureReason } from '@pagespace/lib/auth/session-service';
 import { findOAuthAccessTokenByValue } from '@pagespace/lib/auth/token-lookup';
 import { parseScopeList, scopeSetToDriveScopes, type ScopeSet, type DriveScopeRow } from '@pagespace/lib/auth/oauth/scopes';
 import { EnforcedAuthContext } from '@pagespace/lib/permissions/enforced-context';
@@ -66,6 +66,13 @@ export type AuthResult = MCPAuthResult | SessionAuthResult | OAuthAuthResult;
 
 export interface AuthError {
   error: NextResponse;
+  /**
+   * When the failure was a session-token validation failure, the machine-readable reason
+   * (D5): expired vs revoked vs not_found vs ... Additive — undefined for non-session failures
+   * (missing token, MCP/OAuth failures). Callers spread it into their `auth_failed` audit
+   * details so an incident is provable.
+   */
+  authFailureReason?: SessionFailureReason;
 }
 
 export type AuthenticationResult = AuthResult | AuthError;
@@ -290,6 +297,27 @@ export async function validateSessionToken(token: string): Promise<SessionClaims
   }
 }
 
+/**
+ * Session-token validation that also surfaces WHY it failed (D5), for the audit trail.
+ * Mirrors `validateSessionToken`'s error-swallowing contract: on success returns the claims;
+ * on any failure returns `{ failureReason }` and never throws (an unexpected error maps to
+ * `not_found`, preserving the historical 401 outcome).
+ */
+async function validateSessionTokenWithReason(
+  token: string,
+): Promise<{ claims: SessionClaims } | { claims?: undefined; failureReason: SessionFailureReason }> {
+  try {
+    if (!token) {
+      return { failureReason: 'bad_format' };
+    }
+    const result = await sessionService.validateSessionWithReason(token, { expectedType: 'user' });
+    return result.claims ? { claims: result.claims } : { failureReason: result.failureReason };
+  } catch (error) {
+    console.error('validateSessionTokenWithReason error', error);
+    return { failureReason: 'not_found' };
+  }
+}
+
 export async function authenticateMCPRequest(request: Request): Promise<AuthenticationResult> {
   const token = getBearerToken(request);
 
@@ -348,18 +376,18 @@ export async function authenticateSessionRequest(request: Request): Promise<Auth
 
     // Session token sent as Bearer (mobile/desktop)
     if (bearerToken.startsWith(SESSION_TOKEN_PREFIX)) {
-      const sessionResult = await validateSessionToken(bearerToken);
-      if (sessionResult) {
+      const sessionResult = await validateSessionTokenWithReason(bearerToken);
+      if (sessionResult.claims) {
         return {
-          userId: sessionResult.userId,
-          role: sessionResult.userRole,
-          tokenVersion: sessionResult.tokenVersion,
-          adminRoleVersion: sessionResult.adminRoleVersion,
-          sessionId: sessionResult.sessionId,
+          userId: sessionResult.claims.userId,
+          role: sessionResult.claims.userRole,
+          tokenVersion: sessionResult.claims.tokenVersion,
+          adminRoleVersion: sessionResult.claims.adminRoleVersion,
+          sessionId: sessionResult.claims.sessionId,
           tokenType: 'session',
         } satisfies SessionAuthResult;
       }
-      return { error: unauthorized('Invalid or expired session') };
+      return { error: unauthorized('Invalid or expired session'), authFailureReason: sessionResult.failureReason };
     }
 
     // Unknown Bearer token format
@@ -376,19 +404,20 @@ export async function authenticateSessionRequest(request: Request): Promise<Auth
     };
   }
 
-  const sessionClaims = await validateSessionToken(sessionToken);
-  if (!sessionClaims) {
+  const sessionResult = await validateSessionTokenWithReason(sessionToken);
+  if (!sessionResult.claims) {
     return {
       error: unauthorized('Invalid or expired session'),
+      authFailureReason: sessionResult.failureReason,
     };
   }
 
   return {
-    userId: sessionClaims.userId,
-    role: sessionClaims.userRole,
-    tokenVersion: sessionClaims.tokenVersion,
-    adminRoleVersion: sessionClaims.adminRoleVersion,
-    sessionId: sessionClaims.sessionId,
+    userId: sessionResult.claims.userId,
+    role: sessionResult.claims.userRole,
+    tokenVersion: sessionResult.claims.tokenVersion,
+    adminRoleVersion: sessionResult.claims.adminRoleVersion,
+    sessionId: sessionResult.claims.sessionId,
     tokenType: 'session',
   } satisfies SessionAuthResult;
 }
