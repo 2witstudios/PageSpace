@@ -534,6 +534,50 @@ describe('PageWebhooksDialog', () => {
     });
   });
 
+  test('closing without acknowledging parks the on-screen secret; acknowledging discards it', async () => {
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
+      listResponse(200, { webhooks: [remoteWebhook()] }),
+    );
+    vi.mocked(post).mockResolvedValue({
+      webhook: remoteWebhook(),
+      webhookSecret: 'whsec_unacknowledged',
+    });
+
+    const dialogAt = (open: boolean) => (
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+        <PageWebhooksDialog open={open} onOpenChange={() => {}} pageId={PAGE_ID} pageType="AI_CHAT" />
+      </SWRConfig>
+    );
+    const view = render(dialogAt(true));
+    await waitFor(() => screen.getByText('Deploys'));
+    await startRotation();
+    await waitFor(() => screen.getByText('whsec_unacknowledged'));
+
+    // Accidental close (X / Escape / outside click / generic Done) — the
+    // unacknowledged secret must come back on reopen.
+    view.rerender(dialogAt(false));
+    await new Promise((r) => { setTimeout(r, 0); });
+    view.rerender(dialogAt(true));
+    const survivedClose = await screen.findByText('whsec_unacknowledged');
+
+    // Explicit acknowledgement is the one true discard.
+    await userEvent.click(screen.getByRole('button', { name: /Done, I've saved it/ }));
+    view.rerender(dialogAt(false));
+    await new Promise((r) => { setTimeout(r, 0); });
+    view.rerender(dialogAt(true));
+    await waitFor(() => screen.getByText('Deploys'));
+
+    assert({
+      given: 'a revealed secret across an unacknowledged close and then an acknowledged one',
+      should: 'redeliver after the accidental close and stay gone after "Done, I\'ve saved it"',
+      actual: {
+        survivedClose: survivedClose !== null,
+        goneAfterAck: screen.queryByText('whsec_unacknowledged'),
+      },
+      expected: { survivedClose: true, goneAfterAck: null },
+    });
+  });
+
   test('reveals the secret exactly once, dismissed only by explicit confirmation', async () => {
     vi.mocked(fetchWithAuth).mockResolvedValue(listResponse(200, { webhooks: [] }));
     vi.mocked(post).mockResolvedValue({

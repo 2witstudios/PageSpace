@@ -65,6 +65,9 @@ const getOrphanVersion = () => orphanVersion;
 
 const parkOrphan = (value: RevealedSecret) => {
   const queue = orphanedReveals.get(value.pageId) ?? [];
+  // Idempotent per secret (43-char random, unique per mint) — effects may
+  // double-fire under StrictMode and must not queue duplicates.
+  if (queue.some((parked) => parked.secret === value.secret)) return;
   queue.push(value);
   orphanedReveals.set(value.pageId, queue);
   orphanVersion += 1;
@@ -146,10 +149,12 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
 
   useEffect(() => {
     if (!open) {
-      // Clears an on-screen secret when the user closes the dialog — an
-      // in-flight create/rotate is NOT cancelled: its late response goes to
-      // the orphan pen (reveal() parks while closed) and is delivered at the
-      // next open instead of being lost.
+      // Closing does not discard: an UNACKNOWLEDGED on-screen secret is parked
+      // and redelivered at the next open (an accidental X/Escape/outside-click
+      // must not orphan the integration), and an in-flight create/rotate's
+      // late response also parks (reveal() checks openRef). The one true
+      // discard is the explicit "Done, I've saved it" acknowledgement.
+      if (revealed) parkOrphan(revealed);
       setRevealed(null);
       setNewName('');
       return;
