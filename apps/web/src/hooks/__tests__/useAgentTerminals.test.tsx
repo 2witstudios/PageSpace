@@ -108,7 +108,7 @@ describe('killMutateOptions (pure)', () => {
     assert({
       given: 'a concurrent kill already hid another row from displayed data',
       should: 'filter the displayed data, not resurrect the committed snapshot',
-      actual: killMutateOptions('shell-a').optimisticData(committed, displayed),
+      actual: killMutateOptions('key-pure', 'shell-a').optimisticData(committed, displayed),
       expected: { agentTerminals: [] },
     });
   });
@@ -119,13 +119,13 @@ describe('killMutateOptions (pure)', () => {
     assert({
       given: 'a settled DELETE and the committed snapshot',
       should: 'commit the snapshot minus the killed row',
-      actual: killMutateOptions('shell-a').populateCache(undefined, committed),
+      actual: killMutateOptions('key-pure', 'shell-a').populateCache(undefined, committed),
       expected: { agentTerminals: [row('shell-b')] },
     });
   });
 
   it('rolls back on error and reconciles via detached revalidation', () => {
-    const options = killMutateOptions('shell-a');
+    const options = killMutateOptions('key-pure', 'shell-a');
 
     assert({
       given: 'a kill mutation',
@@ -297,6 +297,57 @@ describe('removeAgentTerminal', () => {
 });
 
 describe('concurrent kills on one key', () => {
+  it('never resurrects an already-killed sibling row when settles arrive out of order and revalidation is delayed', async () => {
+    // The Codex-flagged race: SWR hands each settle the ORIGINAL committed
+    // snapshot (`_c`, captured before any optimistic update), so the
+    // latest-started kill's populateCache would write the FIRST kill's row
+    // back into the cache. With revalidation delayed (here: hung), that
+    // resurrected row is not a flash — it's an orphan listing again.
+    const machineId = 'm-kill-out-of-order';
+    const first = deferredDelete();
+    const second = deferredDelete();
+    const deletes = [first, second];
+    let loaded = false;
+    mockFetchWithAuth.mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method === 'DELETE') return deletes.shift()!.promise as Promise<never>;
+      if (!loaded) {
+        loaded = true;
+        return Promise.resolve(jsonResponse({ agentTerminals: [row('shell-a'), row('shell-b')] }));
+      }
+      // Every revalidation after the initial load HANGS — the cache's own
+      // committed state must be correct without the detached repair.
+      return new Promise(() => {});
+    });
+
+    const { result } = renderHook(() => useAgentTerminals(machineId, 'proj', 'main'));
+    await waitFor(() => expect(result.current.agentTerminals).toHaveLength(2));
+
+    let killA!: Promise<void>;
+    let killB!: Promise<void>;
+    act(() => {
+      killA = killAgentTerminal(machineId, { projectName: 'proj', branchName: 'main', name: 'shell-a' });
+      killB = killAgentTerminal(machineId, { projectName: 'proj', branchName: 'main', name: 'shell-b' });
+    });
+
+    // B (the latest-started mutation, the one whose populateCache SWR will
+    // honor) settles FIRST; A settles after.
+    await act(async () => {
+      second.resolve(jsonResponse(null));
+      await killB;
+    });
+    await act(async () => {
+      first.resolve(jsonResponse(null));
+      await killA;
+    });
+
+    assert({
+      given: 'two concurrent kills whose DELETEs settle out of order, with revalidation hung',
+      should: 'commit a cache containing NEITHER row — no settle may resurrect the other kill from its stale committed snapshot',
+      actual: result.current.agentTerminals,
+      expected: [],
+    });
+  });
+
   it('hides both rows in flight and keeps both gone after settling', async () => {
     const machineId = 'm-kill-concurrent';
     const first = deferredDelete();

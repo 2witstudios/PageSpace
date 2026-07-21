@@ -241,7 +241,7 @@ describe('MachinePaneChat (pane bar)', () => {
     expect(screen.queryByTitle('Split right')).not.toBeInTheDocument();
   });
 
-  it('the overflow menu lists the folded actions and drives them', async () => {
+  it('the overflow menu lists the folded actions — INCLUDING Chat — and drives them', async () => {
     const paneControls = controls();
     render(
       <MachinePaneChat machineId="machine-1" terminalId="terminal-1" isActive paneControls={paneControls} />,
@@ -249,8 +249,12 @@ describe('MachinePaneChat (pane bar)', () => {
 
     await userEvent.click(screen.getByTitle('More'));
 
-    // Everything foldable is here; close is NOT — it never leaves the bar.
-    expect(await screen.findByRole('menuitem', { name: /New conversation/ })).toBeInTheDocument();
+    // Everything foldable is here. Chat matters most: below the fold width the
+    // TabsList is hidden, so this menu is the ONLY way back to the
+    // conversation after opening History or Settings. Close is NOT here — it
+    // never leaves the bar.
+    expect(await screen.findByRole('menuitem', { name: /Chat/ })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /New conversation/ })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: /History/ })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: /Settings/ })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: /Split down/ })).toBeInTheDocument();
@@ -258,6 +262,40 @@ describe('MachinePaneChat (pane bar)', () => {
 
     await userEvent.click(screen.getByRole('menuitem', { name: /Split right/ }));
     expect(paneControls.onSplitRight).toHaveBeenCalledTimes(1);
+  });
+
+  it('overflow-menu Chat returns to the conversation from another tab', async () => {
+    render(<MachinePaneChat machineId="machine-1" terminalId="terminal-1" paneControls={controls()} />);
+
+    // Leave the chat tab first (Settings), then come back via the menu alone —
+    // the narrow-pane path where the TabsList is unavailable.
+    await userEvent.click(screen.getByRole('tab', { name: 'Settings' }));
+    expect(screen.getByTestId('machine-pane-assistant-settings')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTitle('More'));
+    await userEvent.click(await screen.findByRole('menuitem', { name: /Chat/ }));
+
+    expect(await screen.findByTestId('messages-content')).toBeInTheDocument();
+  });
+
+  it('overflow-menu clicks do not bubble into the pane\'s own click handler', async () => {
+    // The menu is portaled, but React portals bubble through the REACT tree —
+    // straight into TerminalPane's onClick={onSelect}. A split action that
+    // re-selects the SOURCE pane undoes the new pane's activation.
+    const onPaneClick = vi.fn();
+    const paneControls = controls();
+    render(
+      <div onClick={onPaneClick}>
+        <MachinePaneChat machineId="machine-1" terminalId="terminal-1" paneControls={paneControls} />
+      </div>,
+    );
+
+    await userEvent.click(screen.getByTitle('More'));
+    onPaneClick.mockClear(); // opening the menu may bubble; only the ACTION must not
+    await userEvent.click(await screen.findByRole('menuitem', { name: /Split right/ }));
+
+    expect(paneControls.onSplitRight).toHaveBeenCalledTimes(1);
+    expect(onPaneClick).not.toHaveBeenCalled();
   });
 
   it('selecting History from the overflow menu switches to the history tab', async () => {

@@ -202,15 +202,24 @@ export default function MachinePaneChat({
                       <MoreHorizontal className="size-3.5" />
                     </Button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onSelect={() => handleCreateConversation()}>
-                      <Plus className="size-3.5" /> New conversation
+                  {/* Menu clicks bubble through the Radix portal back into
+                      TerminalPane's onClick={onSelect} — for a split action
+                      that would immediately re-select the SOURCE pane,
+                      undoing the new pane's activation. Same guard as
+                      PaneSplitCloseActions' buttons. */}
+                  <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                    <DropdownMenuItem onSelect={() => setActiveTab('chat')}>
+                      <MessageSquare className="size-3.5" /> Chat
                     </DropdownMenuItem>
                     <DropdownMenuItem onSelect={() => setActiveTab('history')}>
                       <History className="size-3.5" /> History
                     </DropdownMenuItem>
                     <DropdownMenuItem onSelect={() => setActiveTab('settings')}>
                       <Settings className="size-3.5" /> Settings
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onSelect={() => handleCreateConversation()}>
+                      <Plus className="size-3.5" /> New conversation
                     </DropdownMenuItem>
                     {paneControls?.canSplit && (
                       <>
