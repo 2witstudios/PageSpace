@@ -146,7 +146,17 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
       parkOrphan(value);
       return;
     }
-    setRevealed(value);
+    // Never clobber a secret already on screen (another mint may have resolved
+    // first): queue behind it and the pickup effect delivers after dismissal.
+    // parkOrphan is idempotent per secret, so the functional updater is safe
+    // under StrictMode double-invocation.
+    setRevealed((current) => {
+      if (current) {
+        parkOrphan(value);
+        return current;
+      }
+      return value;
+    });
   };
 
   // Never show a secret in another page's dialog or to another signed-in

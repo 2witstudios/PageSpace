@@ -645,6 +645,46 @@ describe('PageWebhooksDialog', () => {
     });
   });
 
+  test('a second resolving mint queues behind an on-screen secret instead of overwriting it', async () => {
+    const hookB = { ...remoteWebhook(), id: 'wh-2', name: 'Alerts', webhookToken: 'tok_second_999999' };
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
+      listResponse(200, { webhooks: [remoteWebhook(), hookB] }),
+    );
+    const resolvers: Array<(value: unknown) => void> = [];
+    vi.mocked(post).mockImplementation(
+      () => new Promise<never>((resolve) => { resolvers.push(resolve as (value: unknown) => void); }),
+    );
+
+    const first = renderDialog();
+    await waitFor(() => screen.getByText('Alerts'));
+    await userEvent.click(screen.getAllByRole('button', { name: /Rotate secret/ })[0]);
+    await confirmRotation();
+    first.unmount();
+
+    // Fresh instance after navigation: its mint gate is clear, so rotating B
+    // is allowed while A is still in flight from the previous mount.
+    renderDialog();
+    await waitFor(() => screen.getByText('Alerts'));
+    await userEvent.click(screen.getAllByRole('button', { name: /Rotate secret/ })[1]);
+    await confirmRotation();
+
+    resolvers[0]({ webhook: remoteWebhook(), webhookSecret: 'whsec_A_shown_first' });
+    await waitFor(() => screen.getByText('whsec_A_shown_first'));
+    resolvers[1]({ webhook: hookB, webhookSecret: 'whsec_B_queued' });
+    await new Promise((r) => { setTimeout(r, 0); });
+
+    const aStillShown = screen.queryByText('whsec_A_shown_first');
+    await userEvent.click(screen.getByRole('button', { name: /Done, I've saved it/ }));
+    const bShownNext = await screen.findByText('whsec_B_queued');
+
+    assert({
+      given: 'a second mint resolving while another one-time secret is on screen',
+      should: 'keep the on-screen secret and queue the new one for the next reveal slot',
+      actual: { aStillShown: aStillShown !== null, bShownNext: bShownNext !== null },
+      expected: { aStillShown: true, bShownNext: true },
+    });
+  });
+
   test('reveals the secret exactly once, dismissed only by explicit confirmation', async () => {
     vi.mocked(fetchWithAuth).mockResolvedValue(listResponse(200, { webhooks: [] }));
     vi.mocked(post).mockResolvedValue({
