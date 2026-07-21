@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Check, Copy, Webhook } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR from 'swr';
@@ -46,18 +46,37 @@ interface PageWebhooksDialogProps {
 /** pageId is the ORIGINATING page — the reveal panel only renders when it matches the dialog's current page. */
 type RevealedSecret = { pageId: string; webhookUrl: string; secret: string };
 
-// Holding pen for a one-time secret whose create/rotate response landed after
+// Holding pen for one-time secrets whose create/rotate response landed after
 // this page's dialog unmounted (CenterPanel remounts views by page id on
 // navigation). Rotate has already invalidated the predecessor server-side, so
-// the response is the only plaintext copy — parked here, keyed by page, and
-// consumed the next time that page's dialog opens.
-const orphanedReveals = new Map<string, RevealedSecret>();
+// each response is the only plaintext copy — parked here in arrival order,
+// keyed by page, and consumed one at a time by that page's dialog.
+const orphanedReveals = new Map<string, RevealedSecret[]>();
 
-// Latest rotation issued per webhook id. A response from a superseded rotation
-// (an older request resolving after a newer one already succeeded) is
-// discarded outright — its secret is already dead server-side, so revealing or
-// parking it would hand the user a credential that can never verify.
-const rotationGenerations = new Map<string, number>();
+// The pen is module state, so parking must notify any mounted dialog — a
+// version counter via useSyncExternalStore re-runs the pickup effect.
+let orphanVersion = 0;
+const orphanListeners = new Set<() => void>();
+const subscribeOrphans = (listener: () => void) => {
+  orphanListeners.add(listener);
+  return () => { orphanListeners.delete(listener); };
+};
+const getOrphanVersion = () => orphanVersion;
+
+const parkOrphan = (value: RevealedSecret) => {
+  const queue = orphanedReveals.get(value.pageId) ?? [];
+  queue.push(value);
+  orphanedReveals.set(value.pageId, queue);
+  orphanVersion += 1;
+  orphanListeners.forEach((listener) => listener());
+};
+
+// Webhook ids with a rotation in flight, across component instances. Client
+// issuance order cannot establish DB commit order, so a second concurrent
+// rotation of the same webhook would make it unknowable which response's
+// secret is live — a new rotation is refused until the pending one settles.
+// (Other browsers/admins are covered by the server's 409 optimistic guard.)
+const rotatingWebhooks = new Set<string>();
 
 const webhooksFetcher = async (url: string): Promise<{ webhooks: WebhookRow[] } | { error: string; status: number }> => {
   const res = await fetchWithAuth(url);
@@ -72,7 +91,12 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
 
   const [newName, setNewName] = useState('');
   const [creating, setCreating] = useState(false);
+  // Two independent locks: busyId covers row edits (toggle/delete); mintingId
+  // covers the secret-producing rotation. They must not share state — a
+  // toggle/delete settling mid-rotation would otherwise clear the shared lock
+  // and let a second one-time secret race for the single reveal slot.
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [mintingId, setMintingId] = useState<string | null>(null);
   const [confirmRotateId, setConfirmRotateId] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<RevealedSecret | null>(null);
 
@@ -81,6 +105,8 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
   }, []);
+
+  const orphanSignal = useSyncExternalStore(subscribeOrphans, getOrphanVersion, getOrphanVersion);
 
   // Routes a fresh one-time secret to the live dialog, or parks it in the
   // orphan pen when the response outlived this component instance. `pageId` in
@@ -94,7 +120,7 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
       secret,
     };
     if (!mountedRef.current) {
-      orphanedReveals.set(pageId, value);
+      parkOrphan(value);
       return;
     }
     setRevealed(value);
@@ -105,19 +131,13 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
   const activeReveal = revealed && revealed.pageId === pageId ? revealed : null;
   useEffect(() => {
     if (revealed && revealed.pageId !== pageId) {
-      orphanedReveals.set(revealed.pageId, revealed);
+      parkOrphan(revealed);
       setRevealed(null);
     }
   }, [revealed, pageId]);
 
   useEffect(() => {
-    if (open) {
-      const orphan = orphanedReveals.get(pageId);
-      if (orphan) {
-        orphanedReveals.delete(pageId);
-        setRevealed(orphan);
-      }
-    } else {
+    if (!open) {
       // Clears the secret from state on close — but deliberately does NOT
       // cancel an in-flight create/rotate: its response holds the only copy of
       // a one-time secret (rotate has already invalidated the old one), so a
@@ -125,8 +145,17 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
       // the secret once instead of silently losing it.
       setRevealed(null);
       setNewName('');
+      return;
     }
-  }, [open, pageId]);
+    // Open with no reveal showing: deliver the next parked secret, if any.
+    // Re-runs when a reveal is dismissed or a new orphan is parked
+    // (orphanSignal), so queued secrets surface one at a time.
+    if (revealed) return;
+    const queue = orphanedReveals.get(pageId);
+    const next = queue?.shift();
+    if (queue && queue.length === 0) orphanedReveals.delete(pageId);
+    if (next) setRevealed(next);
+  }, [open, pageId, revealed, orphanSignal]);
 
   const errorStatus = data && 'error' in data ? data.status : null;
   const forbidden = errorStatus === 403;
@@ -167,30 +196,28 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
   };
 
   const rotateWebhook = async (id: string) => {
-    setBusyId(id);
-    const generation = (rotationGenerations.get(id) ?? 0) + 1;
-    rotationGenerations.set(id, generation);
+    if (rotatingWebhooks.has(id)) {
+      toast.error('A rotation of this webhook is still in progress — wait for its secret before starting another');
+      return;
+    }
+    rotatingWebhooks.add(id);
+    setMintingId(id);
     try {
       const res = await post<{ webhook: WebhookRow; webhookSecret: string }>(
         `/api/pages/${pageId}/webhooks/${id}/rotate`,
       );
-      // Superseded while in flight (a newer rotation of this webhook already
-      // succeeded): this secret can never verify — drop it.
-      if (rotationGenerations.get(id) !== generation) return;
       // Reveal before refreshing the list: the old secret is already dead and
       // this response holds the only copy of the new one — a failed (cosmetic)
       // revalidation must never discard it.
       reveal(res.webhook, res.webhookSecret);
       await refetch().catch(() => {});
     } catch (error) {
-      // A failed rotation didn't mint anything — restore the previous
-      // generation so an older still-pending response may deliver its secret.
-      if (rotationGenerations.get(id) === generation) rotationGenerations.set(id, generation - 1);
       // The rotate route's error bodies are user-actionable (e.g. "rotated by a
       // concurrent request") — surface them instead of a generic failure.
       toast.error(error instanceof Error && error.message ? error.message : 'Failed to rotate secret');
     } finally {
-      setBusyId(null);
+      rotatingWebhooks.delete(id);
+      setMintingId(null);
     }
   };
 
@@ -279,7 +306,7 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
               <Button
                 type="submit"
                 size="sm"
-                disabled={creating || busyId !== null || newName.trim().length === 0}
+                disabled={creating || mintingId !== null || newName.trim().length === 0}
               >
                 {creating ? 'Creating…' : 'Create webhook'}
               </Button>
@@ -306,17 +333,18 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
                     <div className="flex items-center gap-2 shrink-0">
                       <Switch
                         checked={webhook.isEnabled}
-                        disabled={busyId === webhook.id}
+                        disabled={busyId === webhook.id || mintingId === webhook.id}
                         onCheckedChange={(checked) => toggleWebhook(webhook.id, checked)}
                       />
-                      {/* Any-busy, not row-busy: two in-flight rotations would race
-                          for the single reveal slot and one one-time secret would be
-                          lost — no new secret may start while one is being minted. */}
+                      {/* Any-minting, not row-busy: two in-flight secret mints would
+                          race for the single reveal slot and one one-time secret
+                          would be lost — no new secret may start while one is being
+                          minted anywhere in this dialog. */}
                       <Button
                         type="button"
                         variant="ghost"
                         size="sm"
-                        disabled={busyId !== null || creating}
+                        disabled={mintingId !== null || creating}
                         onClick={() => setConfirmRotateId(webhook.id)}
                       >
                         Rotate secret
@@ -325,7 +353,7 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
                         type="button"
                         variant="ghost"
                         size="sm"
-                        disabled={busyId === webhook.id}
+                        disabled={busyId === webhook.id || mintingId === webhook.id}
                         onClick={() => removeWebhook(webhook.id)}
                       >
                         Delete

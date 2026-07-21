@@ -172,7 +172,7 @@ describe('PageWebhooksDialog', () => {
     });
   });
 
-  test('a superseded rotation response is discarded, not parked for a later reveal', async () => {
+  test('a second rotation of the same webhook is refused while one is in flight across remounts', async () => {
     vi.mocked(fetchWithAuth).mockImplementation(async () =>
       listResponse(200, { webhooks: [remoteWebhook()] }),
     );
@@ -189,23 +189,100 @@ describe('PageWebhooksDialog', () => {
     const second = renderDialog();
     await waitFor(() => screen.getByText('Deploys'));
     await startRotation();
-    resolvers[1]({ webhook: remoteWebhook(), webhookSecret: 'whsec_newer' });
-    await waitFor(() => screen.getByText('whsec_newer'));
-    await userEvent.click(screen.getByRole('button', { name: /Done, I've saved it/ }));
+
+    const postsAfterRefusal = vi.mocked(post).mock.calls.length;
+    const refusalToast = vi.mocked(toast.error).mock.calls[0]?.[0];
+
+    resolvers[0]({ webhook: remoteWebhook(), webhookSecret: 'whsec_serialized' });
+    await waitFor(() => screen.getByText('whsec_serialized'));
     second.unmount();
+
+    assert({
+      given: 'a rotation still in flight from a previous mount of this dialog',
+      should: 'refuse a second rotation of the same webhook (commit order is unknowable) and deliver the in-flight secret',
+      actual: {
+        postsAfterRefusal,
+        refusalMentionsProgress: typeof refusalToast === 'string' && /in progress/i.test(refusalToast),
+        inFlightSecretDelivered: true,
+      },
+      expected: { postsAfterRefusal: 1, refusalMentionsProgress: true, inFlightSecretDelivered: true },
+    });
+  });
+
+  test('toggling or deleting another row does not unlock secret-producing actions mid-rotation', async () => {
+    const second = { ...remoteWebhook(), id: 'wh-2', name: 'Alerts', webhookToken: 'tok_second_999999' };
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
+      listResponse(200, { webhooks: [remoteWebhook(), second] }),
+    );
+    let resolveRotation: (value: unknown) => void = () => {};
+    vi.mocked(post).mockImplementation(
+      () => new Promise<never>((resolve) => { resolveRotation = resolve as (value: unknown) => void; }),
+    );
+    const { del } = await import('@/lib/auth/auth-fetch');
+    vi.mocked(del).mockResolvedValue(undefined);
+
+    renderDialog();
+    await waitFor(() => screen.getByText('Alerts'));
+
+    const rotateButtons = screen.getAllByRole('button', { name: /Rotate secret/ });
+    await userEvent.click(rotateButtons[0]);
+    await confirmRotation();
+
+    // Delete the OTHER row while the rotation is still pending — its finally
+    // must not unlock the mint gate.
+    await userEvent.click(screen.getAllByRole('button', { name: /^Delete$/ })[1]);
     await new Promise((r) => { setTimeout(r, 0); });
 
-    resolvers[0]({ webhook: remoteWebhook(), webhookSecret: 'whsec_older_stale' });
+    assert({
+      given: 'a delete on another row settling while a rotation is still in flight',
+      should: 'keep every secret-producing action locked until the rotation settles',
+      actual: {
+        otherRotateDisabled: (screen.getAllByRole('button', { name: /Rotate secret/ })[1] as HTMLButtonElement).disabled,
+        createDisabled: (screen.getByRole('button', { name: /Create webhook/ }) as HTMLButtonElement).disabled,
+      },
+      expected: { otherRotateDisabled: true, createDisabled: true },
+    });
+
+    resolveRotation({ webhook: remoteWebhook(), webhookSecret: 'whsec_settled_late' });
+  });
+
+  test('two secrets parked while unmounted are both delivered, one reveal at a time', async () => {
+    const secondHook = { ...remoteWebhook(), id: 'wh-2', name: 'Alerts', webhookToken: 'tok_second_999999' };
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
+      listResponse(200, { webhooks: [remoteWebhook(), secondHook] }),
+    );
+    const resolvers: Array<(value: unknown) => void> = [];
+    vi.mocked(post).mockImplementation(
+      () => new Promise<never>((resolve) => { resolvers.push(resolve as (value: unknown) => void); }),
+    );
+
+    const first = renderDialog();
+    await waitFor(() => screen.getByText('Alerts'));
+    const rotateButtons = screen.getAllByRole('button', { name: /Rotate secret/ });
+    await userEvent.click(rotateButtons[0]);
+    await confirmRotation();
+    first.unmount();
+
+    const second = renderDialog();
+    await waitFor(() => screen.getByText('Alerts'));
+    await userEvent.click(screen.getAllByRole('button', { name: /Rotate secret/ })[1]);
+    await confirmRotation();
+    second.unmount();
+
+    resolvers[0]({ webhook: remoteWebhook(), webhookSecret: 'whsec_first_parked' });
+    resolvers[1]({ webhook: secondHook, webhookSecret: 'whsec_second_parked' });
     await new Promise((r) => { setTimeout(r, 0); });
 
     renderDialog();
-    await waitFor(() => screen.getByText('Deploys'));
+    const firstShown = await screen.findByText('whsec_first_parked');
+    await userEvent.click(screen.getByRole('button', { name: /Done, I've saved it/ }));
+    const secondShown = await screen.findByText('whsec_second_parked');
 
     assert({
-      given: 'an older rotation response arriving after a newer rotation was revealed and saved',
-      should: 'discard the stale secret (already dead server-side) instead of parking it for the next open',
-      actual: screen.queryByText('whsec_older_stale'),
-      expected: null,
+      given: 'two rotations of different webhooks whose responses both landed while unmounted',
+      should: 'deliver both parked one-time secrets in order, one reveal at a time',
+      actual: { firstShown: firstShown !== null, secondShown: secondShown !== null },
+      expected: { firstShown: true, secondShown: true },
     });
   });
 
