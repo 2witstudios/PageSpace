@@ -202,9 +202,14 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
         // above — so the sidebar never flashes the closing session as an
         // unclaimed row. On a genuine kill failure the mutation ROLLS the row
         // BACK as the unclaimed fallback (still reachable, still removable,
-        // with its own remove button), so this must not throw into the click
-        // handler.
-        void killAgentTerminal(machineId, closing).catch(() => {});
+        // with its own remove button) — but the pane is already gone, so the
+        // user must be TOLD the agent is still running (and billing) rather
+        // than left to notice the sidebar row: toast instead of throwing into
+        // the click handler.
+        const closingName = closing.name;
+        void killAgentTerminal(machineId, closing).catch(() => {
+          toast.error(`Failed to stop ${closingName} — it is still running, listed in the sidebar`);
+        });
       }
     },
     [machineId, workspaceId, closePane],

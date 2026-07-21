@@ -1,5 +1,5 @@
 import { describe, test, beforeEach, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { assert } from '@/stores/__tests__/riteway';
 import type { Socket } from 'socket.io-client';
@@ -8,6 +8,8 @@ import type { OpenTerminalScope, WorkspaceState } from '@/stores/machine-workspa
 
 const mockUseMobile = vi.fn<() => boolean>();
 vi.mock('@/hooks/useMobile', () => ({ useMobile: () => mockUseMobile() }));
+
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 // `useSyncedWorkspaceActions` (#2048) pushes layout changes to the server via
 // these — fire-and-forget from the component's point of view, but each must
@@ -317,6 +319,28 @@ describe('TerminalPanes (close means close)', () => {
         kills: [['m1', { name: 'solo' }]],
         viaWorkspaceHook: 0,
       },
+    });
+  });
+
+  test('a failed close-kill TELLS the user the agent is still running — the pane is already gone', async () => {
+    // The pane closes optimistically, so a failed kill has no surface left to
+    // report through except a toast: the agent is still running (and billing),
+    // reachable only via the rolled-back sidebar row the user must go find.
+    workspace = SOLO_WORKSPACE;
+    killAgentTerminal.mockRejectedValueOnce(new Error('sprite unreachable'));
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+    await screen.findByTestId('xterm');
+
+    await userEvent.click(screen.getByTitle('Close pane'));
+
+    const { toast } = await import('sonner');
+    await waitFor(() => {
+      assert({
+        given: 'a close whose kill request failed after the pane was already removed',
+        should: 'toast that the named agent is still running rather than fail silently',
+        actual: vi.mocked(toast.error).mock.calls[0]?.[0],
+        expected: 'Failed to stop solo — it is still running, listed in the sidebar',
+      });
     });
   });
 

@@ -84,31 +84,71 @@ export const withoutSession = (name: string) => withoutSessions(new Set([name]))
  * the committed snapshot through this registry keeps every sibling kill's row
  * out of whatever any settle commits.
  *
- * Lifecycle: a name is registered before its mutation starts, dropped on
- * FAILURE (rollback means that row is supposed to come back), kept on success,
- * and the whole entry is cleared once the key has zero kills in flight —
- * successful names must outlive their own settle because a sibling that
- * started earlier settles later with a snapshot that still contains them.
+ * Bookkeeping details, each covering a verified failure mode:
+ *
+ * - `perName` holds COUNTS, not a set: two concurrent kills of one name (a
+ *   pane close racing the sidebar's remove of the same session) register
+ *   twice, and the first duplicate failing must not deregister the name while
+ *   the second is still in flight — its later success would commit a snapshot
+ *   WITH the row.
+ * - `succeeded` names outlive their own settle: a sibling that started
+ *   earlier settles later with a snapshot that still contains them.
+ * - A FAILED kill deregisters its name (rollback means that row is supposed
+ *   to come back) — but SWR's own repair is not enough: `rollbackOnError`
+ *   writes the pre-kill snapshot back WITHOUT consulting `populateCache`
+ *   (resurrecting succeeded siblings), and a non-latest mutation's rollback
+ *   and revalidation are BOTH skipped by SWR's timestamp guard (leaving a
+ *   genuinely-failed kill's row invisible while its agent runs and bills).
+ *   So the failed release hands the caller a compensating filter set — see
+ *   {@link withKillRegistered} — to re-drop succeeded siblings and force one
+ *   reconciling revalidation.
+ * - The entry is cleared once the key has zero kills in flight; the detached
+ *   revalidation reconciles any longer-term drift with server truth.
  */
-const killsInFlight = new Map<string, { inflight: number; names: Set<string> }>();
+const killsInFlight = new Map<string, { inflight: number; perName: Map<string, number>; succeeded: Set<string> }>();
 
-function registerKill(key: string, name: string): (failed: boolean) => void {
+/** Every name any settle's commit must keep filtering: still-in-flight kills plus already-succeeded ones. */
+function activeKillNames(key: string): ReadonlySet<string> | null {
+  const entry = killsInFlight.get(key);
+  if (!entry) return null;
+  return new Set([...entry.perName.keys(), ...entry.succeeded]);
+}
+
+function registerKill(key: string, name: string): (failed: boolean) => ReadonlySet<string> {
   let entry = killsInFlight.get(key);
   if (!entry) {
-    entry = { inflight: 0, names: new Set() };
+    entry = { inflight: 0, perName: new Map(), succeeded: new Set() };
     killsInFlight.set(key, entry);
   }
   entry.inflight += 1;
-  entry.names.add(name);
+  entry.perName.set(name, (entry.perName.get(name) ?? 0) + 1);
   return (failed: boolean) => {
     entry.inflight -= 1;
-    if (failed) entry.names.delete(name);
+    const remaining = (entry.perName.get(name) ?? 1) - 1;
+    if (remaining <= 0) entry.perName.delete(name);
+    else entry.perName.set(name, remaining);
+    if (!failed) entry.succeeded.add(name);
+    const filterNames = new Set([...entry.perName.keys(), ...entry.succeeded]);
     if (entry.inflight === 0) killsInFlight.delete(key);
+    return filterNames;
   };
 }
 
-/** Runs `mutation` with its kill registered for the key's populateCache filter. */
-async function withKillRegistered(key: string, name: string, mutation: () => Promise<unknown>): Promise<void> {
+/**
+ * Runs `mutation` with its kill registered for the key's populateCache
+ * filter. On FAILURE, calls `compensate` with the post-release filter set —
+ * the caller issues a cache write that re-drops every still-relevant kill's
+ * row (undoing SWR's snapshot rollback resurrecting succeeded siblings)
+ * while leaving the failed row alone, and forces a reconciling revalidation
+ * (covering the non-latest-mutation case where SWR skips both its rollback
+ * and its revalidation).
+ */
+async function withKillRegistered(
+  key: string,
+  name: string,
+  mutation: () => Promise<unknown>,
+  compensate: (filterNames: ReadonlySet<string>) => void,
+): Promise<void> {
   const release = registerKill(key, name);
   let failed = false;
   try {
@@ -117,7 +157,8 @@ async function withKillRegistered(key: string, name: string, mutation: () => Pro
     failed = true;
     throw error;
   } finally {
-    release(failed);
+    const filterNames = release(failed);
+    if (failed) compensate(filterNames);
   }
 }
 
@@ -159,7 +200,7 @@ export const killMutateOptions = (key: string, name: string) => ({
   // from the promise) and a hook's bound one (no per-call generic in SWR
   // 2.4's KeyedMutator) — must accept this options object as-is.
   populateCache: (_result: unknown, committed: TerminalList) =>
-    withoutSessions(killsInFlight.get(key)?.names ?? new Set([name]))(committed) ?? { agentTerminals: [] },
+    withoutSessions(activeKillNames(key) ?? new Set([name]))(committed) ?? { agentTerminals: [] },
   rollbackOnError: true,
   revalidate: true,
 });
@@ -185,8 +226,16 @@ export async function killAgentTerminal(
   scope: { projectName?: string | null; branchName?: string | null; name: string },
 ): Promise<void> {
   const key = `/api/machines/agent-terminals?${buildQuery(machineId, scope.projectName, scope.branchName)}`;
-  await withKillRegistered(key, scope.name, () =>
-    mutate(key, deleteAgentTerminalRequest(machineId, scope), killMutateOptions(key, scope.name)),
+  await withKillRegistered(
+    key,
+    scope.name,
+    () => mutate(key, deleteAgentTerminalRequest(machineId, scope), killMutateOptions(key, scope.name)),
+    (filterNames) =>
+      void mutate(
+        key,
+        (current: TerminalList) => withoutSessions(filterNames)(current) ?? { agentTerminals: [] },
+        { revalidate: true },
+      ).catch(() => {}),
   );
 }
 
@@ -227,11 +276,19 @@ export function useAgentTerminals(machineId: string | null, projectName?: string
       // `.then(() => undefined)` shapes the DELETE into the Promise<Data |
       // undefined> the bound mutate accepts; `populateCache` supplies the real
       // next cache value, so the undefined result is never written as data.
-      await withKillRegistered(key, name, () =>
-        mutate(
-          deleteAgentTerminalRequest(machineId, { projectName, branchName, name }).then(() => undefined),
-          killMutateOptions(key, name),
-        ),
+      await withKillRegistered(
+        key,
+        name,
+        () =>
+          mutate(
+            deleteAgentTerminalRequest(machineId, { projectName, branchName, name }).then(() => undefined),
+            killMutateOptions(key, name),
+          ),
+        (filterNames) =>
+          void mutate(
+            (current) => withoutSessions(filterNames)(current) ?? { agentTerminals: [] },
+            { revalidate: true },
+          ).catch(() => {}),
       );
     },
     [machineId, key, projectName, branchName, mutate],

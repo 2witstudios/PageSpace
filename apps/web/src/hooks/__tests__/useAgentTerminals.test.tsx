@@ -297,6 +297,148 @@ describe('removeAgentTerminal', () => {
 });
 
 describe('concurrent kills on one key', () => {
+  it('a LATER kill failing does not resurrect an already-killed sibling (rollback bypasses populateCache)', async () => {
+    // SWR's rollbackOnError writes the ORIGINAL committed snapshot back
+    // without consulting populateCache — so kill B failing would restore
+    // kill A's already-deleted row. The failed release must issue a
+    // compensating write that re-drops succeeded siblings.
+    const machineId = 'm-kill-late-fail';
+    const first = deferredDelete();
+    const second = deferredDelete();
+    const deletes = [first, second];
+    let loaded = false;
+    mockFetchWithAuth.mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method === 'DELETE') return deletes.shift()!.promise as Promise<never>;
+      if (!loaded) {
+        loaded = true;
+        return Promise.resolve(jsonResponse({ agentTerminals: [row('shell-a'), row('shell-b')] }));
+      }
+      return new Promise(() => {}); // revalidation hung — cache must be right on its own
+    });
+
+    const { result } = renderHook(() => useAgentTerminals(machineId, 'proj', 'main'));
+    await waitFor(() => expect(result.current.agentTerminals).toHaveLength(2));
+
+    let killA!: Promise<void>;
+    let killB!: Promise<void>;
+    act(() => {
+      killA = killAgentTerminal(machineId, { projectName: 'proj', branchName: 'main', name: 'shell-a' });
+      killB = killAgentTerminal(machineId, { projectName: 'proj', branchName: 'main', name: 'shell-b' });
+    });
+
+    await act(async () => {
+      first.resolve(jsonResponse(null)); // A dies for real
+      await killA;
+    });
+    await act(async () => {
+      second.resolve(jsonResponse({ error: 'sprite unreachable' }, 500)); // B's kill fails
+      await killB.catch(() => {});
+    });
+
+    assert({
+      given: 'kill A succeeded, then the later-started kill B failed (rollback restored the pre-kill snapshot)',
+      should: 'show only B — the failed kill rolls ITS row back, never the sibling the server already deleted',
+      actual: result.current.agentTerminals.map((t) => t.name),
+      expected: ['shell-b'],
+    });
+  });
+
+  it('an EARLIER kill failing after a sibling settled still restores its row (SWR skips its rollback)', async () => {
+    // SWR's timestamp guard makes a non-latest mutation skip BOTH rollback
+    // and revalidation — a genuinely failed kill (agent still running and
+    // billing) would stay invisible everywhere. The failed release's
+    // compensating write forces a reconciling revalidation.
+    const machineId = 'm-kill-early-fail';
+    const first = deferredDelete();
+    const second = deferredDelete();
+    const deletes = [first, second];
+    let deletesStarted = 0;
+    mockFetchWithAuth.mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method === 'DELETE') {
+        deletesStarted += 1;
+        return deletes.shift()!.promise as Promise<never>;
+      }
+      // Server truth after the dust settles: A survived (its kill failed), B died.
+      return Promise.resolve(
+        jsonResponse({ agentTerminals: deletesStarted === 0 ? [row('shell-a'), row('shell-b')] : [row('shell-a')] }),
+      );
+    });
+
+    const { result } = renderHook(() => useAgentTerminals(machineId, 'proj', 'main'));
+    await waitFor(() => expect(result.current.agentTerminals).toHaveLength(2));
+
+    let killA!: Promise<void>;
+    let killB!: Promise<void>;
+    act(() => {
+      killA = killAgentTerminal(machineId, { projectName: 'proj', branchName: 'main', name: 'shell-a' });
+      killB = killAgentTerminal(machineId, { projectName: 'proj', branchName: 'main', name: 'shell-b' });
+    });
+
+    await act(async () => {
+      second.resolve(jsonResponse(null)); // B (latest) settles first, commits
+      await killB;
+    });
+    await act(async () => {
+      first.resolve(jsonResponse({ error: 'sprite unreachable' }, 500)); // A then fails
+      await killA.catch(() => {});
+    });
+
+    await waitFor(() => {
+      assert({
+        given: 'the earlier-started kill failing after its sibling already settled',
+        should:
+          'surface A again — its agent is still running (and billing), and a row SWR forgot to roll back must come back via the forced reconciliation',
+        actual: result.current.agentTerminals.map((t) => t.name),
+        expected: ['shell-a'],
+      });
+    });
+  });
+
+  it('two concurrent kills of the SAME name settle to the row being gone when either succeeds', async () => {
+    // names-as-a-Set undercounts duplicates: the first duplicate failing must
+    // not deregister the name while the second duplicate is still in flight —
+    // its later success would commit the snapshot WITH the row.
+    const machineId = 'm-kill-same-name';
+    const first = deferredDelete();
+    const second = deferredDelete();
+    const deletes = [first, second];
+    let loaded = false;
+    mockFetchWithAuth.mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method === 'DELETE') return deletes.shift()!.promise as Promise<never>;
+      if (!loaded) {
+        loaded = true;
+        return Promise.resolve(jsonResponse({ agentTerminals: [row('shell-a'), row('shell-x')] }));
+      }
+      return new Promise(() => {}); // revalidation hung
+    });
+
+    const { result } = renderHook(() => useAgentTerminals(machineId, 'proj', 'main'));
+    await waitFor(() => expect(result.current.agentTerminals).toHaveLength(2));
+
+    let kill1!: Promise<void>;
+    let kill2!: Promise<void>;
+    act(() => {
+      kill1 = killAgentTerminal(machineId, { projectName: 'proj', branchName: 'main', name: 'shell-a' });
+      kill2 = killAgentTerminal(machineId, { projectName: 'proj', branchName: 'main', name: 'shell-a' });
+    });
+
+    await act(async () => {
+      first.resolve(jsonResponse({ error: 'sprite unreachable' }, 500)); // duplicate 1 fails
+      await kill1.catch(() => {});
+    });
+    await act(async () => {
+      second.resolve(jsonResponse(null)); // duplicate 2 succeeds — the session IS dead
+      await kill2;
+    });
+
+    assert({
+      given: 'two concurrent kills of one name, the first failing and the second succeeding',
+      should: 'keep the row gone (the session is dead server-side) and the unrelated row intact',
+      actual: result.current.agentTerminals.map((t) => t.name),
+      expected: ['shell-x'],
+    });
+  });
+
   it('never resurrects an already-killed sibling row when settles arrive out of order and revalidation is delayed', async () => {
     // The Codex-flagged race: SWR hands each settle the ORIGINAL committed
     // snapshot (`_c`, captured before any optimistic update), so the
