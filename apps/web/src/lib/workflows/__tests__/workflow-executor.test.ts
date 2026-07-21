@@ -249,23 +249,35 @@ describe('executeWorkflow', () => {
     // (and the billing settle it drives) is durable before the caller returns.
     // A fire-and-forget call here would let a hold be released (and, in the
     // billing-off ceiling path, a next run be admitted) before the cost lands.
+    // Barrier-style proof: hold the tracking promise open, assert the workflow
+    // CANNOT complete while it is pending, then release and assert completion —
+    // a zero-delay timer could race and pass even against fire-and-forget.
     setupSelectChain([mockAgent], [mockDrive]);
-    let usagePersisted = false;
+    let resolveTracking!: () => void;
+    let trackingCalled = false;
     const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
-    vi.mocked(AIMonitoring.trackUsage).mockImplementation(
-      () =>
-        new Promise((res) =>
-          setTimeout(() => {
-            usagePersisted = true;
-            res(undefined as never);
-          }, 0),
-        ),
-    );
+    vi.mocked(AIMonitoring.trackUsage).mockImplementation(() => {
+      trackingCalled = true;
+      return new Promise<void>((res) => {
+        resolveTracking = res;
+      }) as never;
+    });
 
-    const result = await executeWorkflow(createInputFixture());
+    const pending = executeWorkflow(createInputFixture());
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
 
+    await vi.waitFor(() => expect(trackingCalled).toBe(true));
+    // Flush several macrotask turns: with a fire-and-forget call the workflow
+    // would complete here despite tracking still being pending.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(settled).toBe(false);
+
+    resolveTracking();
+    const result = await pending;
     expect(result.success).toBe(true);
-    expect(usagePersisted).toBe(true);
   });
 
   test('successful execution with tools', async () => {
