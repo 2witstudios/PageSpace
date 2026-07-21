@@ -286,10 +286,11 @@ export async function consumeCredits(input: ConsumeCreditsInput): Promise<void> 
  * but produced no billable usage — e.g. a pre-generation failure (0 tokens) that
  * never reaches consumeCredits — so the reservation isn't left to linger against
  * the user's spendable / in-flight cap until the reconcile cron expires it.
+ * Deletes in EVERY deployment mode: billing-off deployments reserve holds too
+ * (the daily-ceiling path in canConsumeAI), and those must not linger either.
  * Idempotent and never throws: a missing/expired hold deletes zero rows.
  */
 export async function releaseHold(holdId: string): Promise<void> {
-  if (!isBillingEnabled()) return;
   try {
     // Return the hold's owner so we can push their freed balance. A missing/expired
     // hold deletes zero rows and yields no userId — then there's nothing to emit.
@@ -298,7 +299,8 @@ export async function releaseHold(holdId: string): Promise<void> {
       .where(eq(creditHolds.id, holdId))
       .returning({ userId: creditHolds.userId });
     const userId = deleted[0]?.userId;
-    if (userId) void emitCreditsUpdated(userId);
+    // The credits push is a billing-UI concern — skip it when billing is off.
+    if (userId && isBillingEnabled()) void emitCreditsUpdated(userId);
   } catch (error) {
     loggers.ai.debug('credit hold release failed', { error: (error as Error).message, holdId });
   }
