@@ -696,6 +696,19 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 60 * 1000,
     progressiveDelay: false,
   },
+  // Per-WEBHOOK budget on AI runs (key: `page-webhook-ai-budget:{webhookId}`),
+  // consumed once per attempted trigger run. The per-trigger bucket above
+  // cannot bound aggregate spend: one webhook can bind up to 100 triggers,
+  // each with its own 5/min bucket (500 runs/min). The webhook secret is a
+  // bearer credential handed to external systems, so a leak must stay a
+  // capped incident — this ceiling bounds ALL runs a leaked secret can force
+  // through one webhook, regardless of how many triggers it fans out to.
+  PAGE_WEBHOOK_AI_BUDGET: {
+    maxAttempts: 60,
+    windowMs: 60 * 60 * 1000,
+    blockDurationMs: 60 * 60 * 1000,
+    progressiveDelay: false,
+  },
 } as const;
 
 // =============================================================================

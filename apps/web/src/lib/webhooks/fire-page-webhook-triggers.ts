@@ -32,6 +32,28 @@ export async function firePageWebhookTriggers(
   await Promise.allSettled(
     triggers.map(async (trigger) => {
       try {
+        // Per-WEBHOOK AI budget, drawn once per attempted run BEFORE the
+        // per-trigger bucket. The per-trigger limit alone does not bound
+        // aggregate spend — one webhook can bind up to 100 triggers, each with
+        // its own 5/min bucket — so every run attempt (allowed or not further
+        // down) consumes from the shared budget keyed by the webhook id. A
+        // leaked webhook secret is thereby a bounded incident: at most the
+        // budget's ceiling of runs per window across ALL bound triggers.
+        if (trigger.pageWebhookId) {
+          const budget = await checkDistributedRateLimit(
+            `page-webhook-ai-budget:${trigger.pageWebhookId}`,
+            DISTRIBUTED_RATE_LIMITS.PAGE_WEBHOOK_AI_BUDGET,
+          );
+          if (!budget.allowed) {
+            logger.warn('Page webhook trigger: webhook AI budget exhausted', {
+              triggerId: trigger.id,
+              pageWebhookId: trigger.pageWebhookId,
+            });
+            await setTriggerError(trigger.id, 'rate_limited');
+            return;
+          }
+        }
+
         // Per-trigger rate limit, TIGHTER than the channel-post path (an AI run
         // costs ~1000x a message insert). On top of executeWorkflow's
         // single-running claim, this bounds the run RATE for a runaway sender.

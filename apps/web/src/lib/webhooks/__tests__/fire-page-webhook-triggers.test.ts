@@ -12,7 +12,10 @@ vi.mock('../page-webhook-trigger-executor', () => ({
 
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn(),
-  DISTRIBUTED_RATE_LIMITS: { PAGE_WEBHOOK_TRIGGER: { maxAttempts: 5 } },
+  DISTRIBUTED_RATE_LIMITS: {
+    PAGE_WEBHOOK_TRIGGER: { maxAttempts: 5 },
+    PAGE_WEBHOOK_AI_BUDGET: { maxAttempts: 60 },
+  },
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -78,7 +81,9 @@ describe('firePageWebhookTriggers', () => {
   });
 
   it('skips a trigger that is rate limited and records rate_limited without executing', async () => {
-    mockRateLimit.mockResolvedValue({ allowed: false });
+    mockRateLimit.mockImplementation((key: string) =>
+      Promise.resolve({ allowed: !key.startsWith('page-webhook-trigger:') }),
+    );
 
     await firePageWebhookTriggers([aTrigger('t1')], envelope);
 
@@ -89,9 +94,9 @@ describe('firePageWebhookTriggers', () => {
   });
 
   it('isolates a rate-limited trigger from a healthy one in the same delivery', async () => {
-    mockRateLimit
-      .mockResolvedValueOnce({ allowed: false })
-      .mockResolvedValueOnce({ allowed: true });
+    mockRateLimit.mockImplementation((key: string) =>
+      Promise.resolve({ allowed: key !== 'page-webhook-trigger:t1' }),
+    );
     mockExecute.mockResolvedValue({ success: true, durationMs: 1 });
 
     await firePageWebhookTriggers([aTrigger('t1'), aTrigger('t2')], envelope);
@@ -99,6 +104,48 @@ describe('firePageWebhookTriggers', () => {
     expect(mockSetError).toHaveBeenCalledWith('t1', 'rate_limited');
     expect(mockExecute).toHaveBeenCalledTimes(1);
     expect(mockClaim).toHaveBeenCalledWith('t2');
+  });
+
+  it('consumes the per-WEBHOOK AI budget (keyed by pageWebhookId) BEFORE the per-trigger bucket on every attempted run', async () => {
+    mockExecute.mockResolvedValue({ success: true, durationMs: 1 });
+
+    await firePageWebhookTriggers([aTrigger('t1')], envelope);
+
+    expect(mockRateLimit).toHaveBeenCalledWith(
+      'page-webhook-ai-budget:wh_1',
+      expect.objectContaining({ maxAttempts: 60 }),
+    );
+    // Budget first: every attempted run draws the shared webhook budget, so
+    // the aggregate bound holds even when per-trigger buckets are fresh.
+    expect(mockRateLimit.mock.calls[0][0]).toBe('page-webhook-ai-budget:wh_1');
+    expect(mockRateLimit.mock.calls[1][0]).toBe('page-webhook-trigger:t1');
+    expect(mockClaim).toHaveBeenCalledWith('t1');
+  });
+
+  it('bounds AGGREGATE runs: an exhausted webhook AI budget rate-limits every trigger even when each per-trigger bucket is fresh', async () => {
+    mockRateLimit.mockImplementation((key: string) =>
+      Promise.resolve({ allowed: !key.startsWith('page-webhook-ai-budget:') }),
+    );
+
+    await firePageWebhookTriggers([aTrigger('t1'), aTrigger('t2')], envelope);
+
+    expect(mockExecute).not.toHaveBeenCalled();
+    expect(mockSetError).toHaveBeenCalledWith('t1', 'rate_limited');
+    expect(mockSetError).toHaveBeenCalledWith('t2', 'rate_limited');
+    expect(mockClaim).not.toHaveBeenCalled();
+  });
+
+  it('still executes (and lets the executor reject) a trigger without a pageWebhookId instead of crashing the budget check', async () => {
+    mockExecute.mockResolvedValue({ success: false, durationMs: 1, error: 'Trigger is not anchored to a page webhook' });
+    const orphan = { id: 't9', workflowId: 'wf_t9', pageWebhookId: null } as never;
+
+    await firePageWebhookTriggers([orphan], envelope);
+
+    const budgetCalls = mockRateLimit.mock.calls.filter(([key]) =>
+      String(key).startsWith('page-webhook-ai-budget:'),
+    );
+    expect(budgetCalls).toHaveLength(0);
+    expect(mockSetError).toHaveBeenCalledWith('t9', 'Trigger is not anchored to a page webhook');
   });
 
   it('never throws even if the whole fan-out misbehaves', async () => {

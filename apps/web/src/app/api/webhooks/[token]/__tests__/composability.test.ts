@@ -108,7 +108,7 @@ vi.mock('@pagespace/lib/services/page-webhook-dispatch', () => ({
 const mockCheckDistributedRateLimit = vi.fn();
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: (...args: unknown[]) => mockCheckDistributedRateLimit(...args),
-  DISTRIBUTED_RATE_LIMITS: { PAGE_WEBHOOK: {}, PAGE_WEBHOOK_TRIGGER: {} },
+  DISTRIBUTED_RATE_LIMITS: { PAGE_WEBHOOK: {}, PAGE_WEBHOOK_TRIGGER: {}, PAGE_WEBHOOK_AI_BUDGET: {} },
 }));
 
 // Replay idempotency (F4) is mocked as always-first-delivery: this file proves
