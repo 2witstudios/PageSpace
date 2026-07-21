@@ -38,23 +38,37 @@ vi.mock('../XtermTerminal', () => ({
 
 // The chat pane is a whole AI-chat subtree (Phase 11) — stubbed for the same
 // reason as XtermTerminal: under test is WHICH surface the pane renders and
-// what it is handed, not the chat UI inside it.
+// what it is handed, not the chat UI inside it. The stub renders a close
+// control from the threaded paneControls because that IS the contract under
+// test: a chat pane's split/close live in ITS bar (one bar per pane), so
+// TerminalPane must hand them down rather than draw its own.
 vi.mock('./MachinePaneChat', () => ({
   default: ({
     machineId,
     terminalId,
     pendingPrompt,
+    isActive,
+    paneControls,
   }: {
     machineId: string;
     terminalId: string;
     pendingPrompt?: string;
+    isActive?: boolean;
+    paneControls?: { canSplit: boolean; canClose: boolean; onSplitRight(): void; onSplitDown(): void; onClose(): void };
   }) => (
     <div
       data-testid="machine-pane-chat"
       data-machine-id={machineId}
       data-terminal-id={terminalId}
       data-initial-input={pendingPrompt}
-    />
+      data-pane-active={isActive ? 'true' : undefined}
+    >
+      {paneControls?.canClose && (
+        <button type="button" title="Close pane" onClick={() => paneControls.onClose()}>
+          Close pane
+        </button>
+      )}
+    </div>
   ),
 }));
 

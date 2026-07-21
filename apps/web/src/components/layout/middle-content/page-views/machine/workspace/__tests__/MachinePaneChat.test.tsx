@@ -59,6 +59,14 @@ vi.mock('@/components/ai/shared/chat', () => ({
   UndoAiChangesDialog: () => null,
 }));
 
+// jsdom lacks the pointer-capture APIs and scrollIntoView Radix's DropdownMenu
+// uses when opening — without these stubs, clicking the overflow trigger
+// throws instead of rendering its items (same stubs as TerminalPanes.test).
+Element.prototype.hasPointerCapture ??= () => false;
+Element.prototype.setPointerCapture ??= () => {};
+Element.prototype.releasePointerCapture ??= () => {};
+Element.prototype.scrollIntoView ??= () => {};
+
 import MachinePaneChat from '../MachinePaneChat';
 
 function conversationRow(id: string, title: string) {
@@ -192,5 +200,77 @@ describe('MachinePaneChat', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(paneState.current.reloadConversation).toHaveBeenCalled();
+  });
+});
+
+describe('MachinePaneChat (pane bar)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    paneState.current = basePaneState();
+  });
+
+  const controls = () => ({
+    canSplit: true,
+    canClose: true,
+    onSplitRight: vi.fn(),
+    onSplitDown: vi.fn(),
+    onClose: vi.fn(),
+  });
+
+  it('renders the pane controls in its ONE bar, tinted when the pane is active', async () => {
+    const paneControls = controls();
+    render(
+      <MachinePaneChat machineId="machine-1" terminalId="terminal-1" isActive paneControls={paneControls} />,
+    );
+
+    const bar = screen.getByTestId('pane-bar');
+    expect(bar.getAttribute('data-active')).toBe('true');
+    // The controls live IN the bar — nothing floats over the tabs anymore.
+    expect(screen.getByTitle('Split right')).toBeInTheDocument();
+    expect(screen.getByTitle('Close pane')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTitle('Close pane'));
+    expect(paneControls.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('without paneControls (or focus), the bar is plain and control-free', () => {
+    render(<MachinePaneChat machineId="machine-1" terminalId="terminal-1" />);
+
+    expect(screen.getByTestId('pane-bar').getAttribute('data-active')).toBeNull();
+    expect(screen.queryByTitle('Close pane')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Split right')).not.toBeInTheDocument();
+  });
+
+  it('the overflow menu lists the folded actions and drives them', async () => {
+    const paneControls = controls();
+    render(
+      <MachinePaneChat machineId="machine-1" terminalId="terminal-1" isActive paneControls={paneControls} />,
+    );
+
+    await userEvent.click(screen.getByTitle('More'));
+
+    // Everything foldable is here; close is NOT — it never leaves the bar.
+    expect(await screen.findByRole('menuitem', { name: /New conversation/ })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /History/ })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /Settings/ })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /Split down/ })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /Close/ })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('menuitem', { name: /Split right/ }));
+    expect(paneControls.onSplitRight).toHaveBeenCalledTimes(1);
+  });
+
+  it('selecting History from the overflow menu switches to the history tab', async () => {
+    paneState.current = basePaneState({
+      conversations: [conversationRow('conv-1', 'Machine chat')],
+    });
+    render(
+      <MachinePaneChat machineId="machine-1" terminalId="terminal-1" paneControls={controls()} />,
+    );
+
+    await userEvent.click(screen.getByTitle('More'));
+    await userEvent.click(await screen.findByRole('menuitem', { name: /History/ }));
+
+    expect(await screen.findByTestId('history-conversation-item')).toHaveTextContent('Machine chat');
   });
 });

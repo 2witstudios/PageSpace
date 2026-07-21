@@ -99,7 +99,11 @@ export const killMutateOptions = (name: string) => ({
   // and the detached revalidation reconciles it with server truth.
   optimisticData: (_committed: TerminalList, displayed: TerminalList) =>
     withoutSession(name)(displayed) ?? { agentTerminals: [] },
-  populateCache: (_result: void, committed: TerminalList) =>
+  // `_result` is `unknown` (not `void`): the DELETE resolves to nothing, but
+  // both mutate flavors this feeds — the global one (MutationData inferred
+  // from the promise) and a hook's bound one (no per-call generic in SWR
+  // 2.4's KeyedMutator) — must accept this options object as-is.
+  populateCache: (_result: unknown, committed: TerminalList) =>
     withoutSession(name)(committed) ?? { agentTerminals: [] },
   rollbackOnError: true,
   revalidate: true,
@@ -163,8 +167,11 @@ export function useAgentTerminals(machineId: string | null, projectName?: string
   const removeAgentTerminal = useCallback(
     async (name: string) => {
       if (!machineId) throw new Error('No active machine');
+      // `.then(() => undefined)` shapes the DELETE into the Promise<Data |
+      // undefined> the bound mutate accepts; `populateCache` supplies the real
+      // next cache value, so the undefined result is never written as data.
       await mutate(
-        deleteAgentTerminalRequest(machineId, { projectName, branchName, name }),
+        deleteAgentTerminalRequest(machineId, { projectName, branchName, name }).then(() => undefined),
         killMutateOptions(name),
       );
     },
