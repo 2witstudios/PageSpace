@@ -84,6 +84,7 @@ vi.mock('@/lib/ai/core/materialize-interrupted-stream', () => ({
 import { GET } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const mockUserId = 'user-test-1';
 const mockChannelId = 'page-test-1';
@@ -97,8 +98,9 @@ const mockSessionAuth = (userId = mockUserId): SessionAuthResult => ({
   adminRoleVersion: 0,
 });
 
-const mockAuthFailure = (status = 401): AuthError => ({
+const mockAuthFailure = (status = 401, authFailureReason?: AuthError['authFailureReason']): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
+  authFailureReason,
 });
 
 const makeRequest = (channelId = mockChannelId) =>
@@ -389,6 +391,22 @@ describe('GET /api/ai/chat/active-streams', () => {
     const response = await GET(makeRequest());
 
     expect(response.status).toBe(401);
+  });
+
+  // D5: the auth_failed audit must carry the machine-readable reason so an incident is provable
+  // (expired vs revoked vs ...) rather than a bare auth_failed.
+  it('given auth fails with a known reason, should populate details.authFailureReason in the audit', async () => {
+    vi.mocked(isAuthError).mockReturnValue(true);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthFailure(401, 'expired'));
+
+    await GET(makeRequest());
+
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        details: expect.objectContaining({ reason: 'auth_failed', authFailureReason: 'expired' }),
+      }),
+    );
   });
 
   it('given the user cannot view the page, should return 403 without querying streams', async () => {

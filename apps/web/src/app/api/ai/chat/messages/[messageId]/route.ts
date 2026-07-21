@@ -49,7 +49,7 @@ export async function PATCH(
     // Authenticate
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) {
-      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'message', resourceId: 'edit', details: { reason: 'auth_failed', method: 'PATCH' }, riskScore: 0.5 });
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'message', resourceId: 'edit', details: { reason: 'auth_failed', method: 'PATCH', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
       return auth.error;
     }
     const userId = auth.userId;
@@ -205,7 +205,7 @@ export async function DELETE(
     // Authenticate
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) {
-      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'message', resourceId: 'delete', details: { reason: 'auth_failed', method: 'DELETE' }, riskScore: 0.5 });
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'message', resourceId: 'delete', details: { reason: 'auth_failed', method: 'DELETE', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
       return auth.error;
     }
     const userId = auth.userId;

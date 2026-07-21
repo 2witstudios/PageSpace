@@ -16,7 +16,7 @@ const AUTH_OPTIONS = { allow: ['mcp'] as const, requireCSRF: false };
 export async function GET(request: Request): Promise<Response> {
   const authResult = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
   if (isAuthError(authResult)) {
-    auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'openai_models', resourceId: 'list', details: { reason: 'auth_failed', method: 'GET' }, riskScore: 0.5 });
+    auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'openai_models', resourceId: 'list', details: { reason: 'auth_failed', method: 'GET', authFailureReason: authResult.authFailureReason }, riskScore: 0.5 });
     return authResult.error;
   }
 

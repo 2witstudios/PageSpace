@@ -30,6 +30,11 @@ vi.mock('../constants', () => ({
   IDLE_TIMEOUT_MS: 0,
 }));
 
+const { infoSpy } = vi.hoisted(() => ({ infoSpy: vi.fn() }));
+vi.mock('../../logging/logger-config', () => ({
+  loggers: { auth: { info: infoSpy, warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },
+}));
+
 import { SessionService, clampExpiry } from '../session-service';
 import { sessionRepository } from '../session-repository';
 
@@ -75,6 +80,13 @@ describe('SessionService.expireSessionByHashSoon', () => {
     // Clamped to ~now+grace, never the original 1h expiry.
     expect(clamped.getTime()).toBeGreaterThanOrEqual(now + 60_000 - 1000);
     expect(clamped.getTime()).toBeLessThanOrEqual(now + 60_000 + 1000);
+    // D5: the clamp is logged so grace-expiries are visible in prod (and traceable to the
+    // later `expired` failure reason).
+    expect(infoSpy).toHaveBeenCalledTimes(1);
+    expect(infoSpy).toHaveBeenCalledWith('Session grace-expiry clamped', expect.objectContaining({
+      sessionRef: 'hash-1',
+      graceMs: 60_000,
+    }));
   });
 
   it('never extends a session already expiring sooner than now+grace', async () => {
@@ -86,6 +98,8 @@ describe('SessionService.expireSessionByHashSoon', () => {
     await service.expireSessionByHashSoon('hash-1', 60_000);
 
     expect(sessionRepository.setExpiresAtByHash).not.toHaveBeenCalled();
+    // No clamp ⇒ no log.
+    expect(infoSpy).not.toHaveBeenCalled();
   });
 
   it('is a no-op when there is no active session for the hash', async () => {
@@ -94,5 +108,6 @@ describe('SessionService.expireSessionByHashSoon', () => {
     await expect(service.expireSessionByHashSoon('hash-missing', 60_000)).resolves.toBeUndefined();
 
     expect(sessionRepository.setExpiresAtByHash).not.toHaveBeenCalled();
+    expect(infoSpy).not.toHaveBeenCalled();
   });
 });

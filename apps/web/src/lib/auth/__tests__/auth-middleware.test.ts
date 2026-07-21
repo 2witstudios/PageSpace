@@ -17,11 +17,21 @@ import {
 vi.mock('@pagespace/lib/auth/token-utils', () => ({
   hashToken: vi.fn().mockReturnValue('mocked-hash'),
 }));
-vi.mock('@pagespace/lib/auth/session-service', () => ({
-  sessionService: {
-    validateSession: vi.fn(),
-  },
-}));
+vi.mock('@pagespace/lib/auth/session-service', () => {
+  const validateSession = vi.fn();
+  return {
+    sessionService: {
+      validateSession,
+      // D5: authenticateSessionRequest now goes through validateSessionWithReason. Delegate to
+      // the same validateSession mock so every existing per-test setup drives both paths: claims
+      // -> { claims }, null -> { failureReason }.
+      validateSessionWithReason: vi.fn(async (token: string, opts?: unknown) => {
+        const claims = await validateSession(token, opts);
+        return claims ? { claims } : { failureReason: 'not_found' };
+      }),
+    },
+  };
+});
 vi.mock('@pagespace/lib/auth/token-lookup', () => ({
   findOAuthAccessTokenByValue: vi.fn(),
 }));

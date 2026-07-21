@@ -60,7 +60,7 @@ export async function POST(request: Request): Promise<Response> {
   // 1. Authenticate — MCP tokens only; no session, no CSRF, no browser session ID
   const authResult = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
   if (isAuthError(authResult)) {
-    auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'openai_inference', resourceId: 'post', details: { reason: 'auth_failed', method: 'POST' }, riskScore: 0.5 });
+    auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'openai_inference', resourceId: 'post', details: { reason: 'auth_failed', method: 'POST', authFailureReason: authResult.authFailureReason }, riskScore: 0.5 });
     return authResult.error;
   }
 

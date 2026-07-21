@@ -39,6 +39,19 @@ export interface SessionRecord {
   } | null;
 }
 
+/**
+ * A session row read WITHOUT the active-only filter (any revoked/expired state), for
+ * explaining WHY there is no active session (D5). Deliberately minimal: just the columns the
+ * failure-reason classifier needs, no user join.
+ */
+export interface SessionAnyStateRecord {
+  id: string;
+  type: 'user' | 'service' | 'mcp' | 'device' | 'socket';
+  revokedAt: Date | null;
+  revokedReason: string | null;
+  expiresAt: Date;
+}
+
 export const sessionRepository = {
   findUserById: async (userId: string): Promise<SessionUserRecord | undefined> => {
     return db.query.users.findFirst({
@@ -60,6 +73,16 @@ export const sessionRepository = {
         },
       },
     }) as Promise<SessionRecord | undefined>;
+  },
+
+  // Look up a session by hash in ANY state (revoked, expired, or active). Used by the
+  // failure-reason classifier when findActiveSession finds nothing, to split "revoked" vs
+  // "grace-expired" vs "genuinely never existed". No revoked/expiry predicate, no user join.
+  findSessionByHashAnyState: async (tokenHash: string): Promise<SessionAnyStateRecord | undefined> => {
+    return db.query.sessions.findFirst({
+      where: eq(sessions.tokenHash, tokenHash),
+      columns: { id: true, type: true, revokedAt: true, revokedReason: true, expiresAt: true },
+    }) as Promise<SessionAnyStateRecord | undefined>;
   },
 
   insertSession: async (values: typeof sessions.$inferInsert): Promise<void> => {

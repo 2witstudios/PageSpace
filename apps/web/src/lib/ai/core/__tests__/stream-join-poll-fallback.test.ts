@@ -6,11 +6,46 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: mockFetchWithAuth,
 }));
 
-import { startStreamJoinPollFallback, STREAM_JOIN_POLL_INTERVAL_MS } from '../stream-join-poll-fallback';
+import {
+  startStreamJoinPollFallback,
+  decidePollTickOutcome,
+  STREAM_JOIN_POLL_INTERVAL_MS,
+} from '../stream-join-poll-fallback';
 
 const okResponse = (streams: unknown[]) => ({
   ok: true,
   json: async () => ({ streams }),
+});
+
+const notOkResponse = (status: number) => ({ ok: false, status, json: async () => ({}) });
+
+// The pure decision core for what a failed tick means: an auth failure (401/403) is a signal
+// to STOP the 1s interval (the storm) until a refresh lands; anything else is a transient miss
+// the interval should ride out and retry on its next tick.
+describe('decidePollTickOutcome (pure)', () => {
+  it('given a 401, should suspend (an auth failure would otherwise storm the refresh endpoint)', () => {
+    expect(decidePollTickOutcome(401)).toBe('suspend');
+  });
+
+  it('given a 403, should suspend (same auth-failure class as 401)', () => {
+    expect(decidePollTickOutcome(403)).toBe('suspend');
+  });
+
+  it('given a 500, should continue (server error — retry on the next tick)', () => {
+    expect(decidePollTickOutcome(500)).toBe('continue');
+  });
+
+  it('given a 429, should continue (rate limited — retry on the next tick)', () => {
+    expect(decidePollTickOutcome(429)).toBe('continue');
+  });
+
+  it('given a 400, should continue (not an auth failure)', () => {
+    expect(decidePollTickOutcome(400)).toBe('continue');
+  });
+
+  it('given a 404, should continue (not an auth failure)', () => {
+    expect(decidePollTickOutcome(404)).toBe('continue');
+  });
 });
 
 describe('startStreamJoinPollFallback', () => {
@@ -346,5 +381,231 @@ describe('startStreamJoinPollFallback', () => {
       `/api/ai/chat/active-streams?channelId=${encodeURIComponent('page/weird id')}`,
       expect.any(Object),
     );
+  });
+
+  // The storm (D2): before this, a 401 was swallowed like any other non-ok response and the 1s
+  // interval kept firing forever — hammering device-refresh ~1/sec until the rate limit locked
+  // the user out. Now a 401/403 SUSPENDS the interval until an `auth:refreshed` event says the
+  // session is healed.
+  describe('auth-failure suspend/resume (the D2 storm fix)', () => {
+    // A suspended poll registers a window `auth:refreshed` listener that only clears on abort or
+    // on the event firing. Tests that intentionally leave a poll suspended must abort at the end
+    // or their listener leaks onto the shared window and fires during a LATER test's dispatch.
+    // Track every controller and abort it in cleanup so each test is isolated.
+    const controllers: AbortController[] = [];
+    const newController = (): AbortController => {
+      const c = new AbortController();
+      controllers.push(c);
+      return c;
+    };
+    afterEach(() => {
+      controllers.forEach((c) => c.abort());
+      controllers.length = 0;
+    });
+
+    it('given a 401 tick, should stop the 1s interval — the storm cannot happen', async () => {
+      mockFetchWithAuth.mockResolvedValue(notOkResponse(401));
+      const controller = newController();
+
+      startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, vi.fn(), vi.fn());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+
+      mockFetchWithAuth.mockClear();
+      await vi.advanceTimersByTimeAsync(STREAM_JOIN_POLL_INTERVAL_MS * 10);
+      expect(mockFetchWithAuth).not.toHaveBeenCalled();
+    });
+
+    it('given a 403 tick, should also stop the interval (same auth-failure class)', async () => {
+      mockFetchWithAuth.mockResolvedValue(notOkResponse(403));
+      const controller = newController();
+
+      startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, vi.fn(), vi.fn());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+
+      mockFetchWithAuth.mockClear();
+      await vi.advanceTimersByTimeAsync(STREAM_JOIN_POLL_INTERVAL_MS * 10);
+      expect(mockFetchWithAuth).not.toHaveBeenCalled();
+    });
+
+    it('given an auth:refreshed event after a suspend, should resume with an immediate tick and restart the interval', async () => {
+      mockFetchWithAuth
+        .mockResolvedValueOnce(notOkResponse(401)) // first tick suspends
+        .mockResolvedValue(okResponse([{ messageId: 'msg-1', parts: [{ type: 'text', text: 'healed' }] }]));
+      const controller = newController();
+      const onSnapshot = vi.fn();
+
+      startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, onSnapshot, vi.fn());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+
+      // Refresh landed — the session is healed. Resuming fires an IMMEDIATE tick (not a full
+      // interval's wait).
+      window.dispatchEvent(new Event('auth:refreshed'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockFetchWithAuth).toHaveBeenCalledTimes(2);
+      expect(onSnapshot).toHaveBeenCalledWith([{ type: 'text', text: 'healed' }]);
+
+      // ...and the interval is running again.
+      await vi.advanceTimersByTimeAsync(STREAM_JOIN_POLL_INTERVAL_MS);
+      expect(mockFetchWithAuth).toHaveBeenCalledTimes(3);
+    });
+
+    it('given the signal aborts while suspended, should remove the auth:refreshed listener (no leak, no resume)', async () => {
+      mockFetchWithAuth.mockResolvedValue(notOkResponse(401));
+      const controller = newController();
+
+      startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, vi.fn(), vi.fn());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+
+      controller.abort();
+      mockFetchWithAuth.mockClear();
+
+      // The listener must be gone — a stray auth:refreshed cannot resurrect a dead poll.
+      window.dispatchEvent(new Event('auth:refreshed'));
+      await vi.advanceTimersByTimeAsync(STREAM_JOIN_POLL_INTERVAL_MS * 5);
+      expect(mockFetchWithAuth).not.toHaveBeenCalled();
+    });
+
+    it('given auth:refreshed fires but the signal aborted first, should not resume', async () => {
+      // Belt-and-suspenders: even if the listener somehow survived the abort cleanup, the resume
+      // handler itself must no-op on an aborted signal.
+      mockFetchWithAuth.mockResolvedValue(notOkResponse(401));
+      const controller = newController();
+
+      startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, vi.fn(), vi.fn());
+      await vi.advanceTimersByTimeAsync(0);
+
+      controller.abort();
+      mockFetchWithAuth.mockClear();
+      window.dispatchEvent(new Event('auth:refreshed'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockFetchWithAuth).not.toHaveBeenCalled();
+    });
+
+    // Regression (Codex P2 / CodeRabbit Major): setInterval does not wait for a slow tick, so two
+    // ticks can be in flight at once. If BOTH see a 401, each suspends — and a naive
+    // implementation would leave two `auth:refreshed` listeners registered, so one resume would
+    // spin up two intervals and orphan one past abort. Exactly one listener must survive, so a
+    // single resume yields a single interval, and abort stops everything.
+    it('given two overlapping in-flight ticks that both 401, should keep only ONE resume listener (no orphaned interval)', async () => {
+      // Both in-flight ticks resolve 401 (the slow-fetch race), then everything else is healthy.
+      mockFetchWithAuth
+        .mockResolvedValueOnce(notOkResponse(401)) // tick A (interval-driven)
+        .mockResolvedValueOnce(notOkResponse(401)) // tick B (overlapping, manually driven)
+        .mockResolvedValue(okResponse([{ messageId: 'msg-1', parts: [] }]));
+      const controller = newController();
+
+      startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, vi.fn(), vi.fn());
+      // First tick (A) resolves 401 → suspend #1.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+
+      // Simulate a second, overlapping tick (B) that also 401s → suspend #2 overwrites the
+      // listener. Trigger it by dispatching a resume (which fires tick B) — tick B's 401 suspends
+      // again. If the first listener leaked, TWO would now be registered.
+      window.dispatchEvent(new Event('auth:refreshed'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockFetchWithAuth).toHaveBeenCalledTimes(2); // tick B ran and re-suspended
+
+      // A single resume must now produce a SINGLE immediate tick (one listener), not two.
+      mockFetchWithAuth.mockClear();
+      window.dispatchEvent(new Event('auth:refreshed'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+
+      // ...and a SINGLE interval, not two orphaned ones (would be 2 fetches per interval if leaked).
+      mockFetchWithAuth.mockClear();
+      await vi.advanceTimersByTimeAsync(STREAM_JOIN_POLL_INTERVAL_MS);
+      expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+
+      // Abort must silence everything — proof no orphaned interval survives.
+      controller.abort();
+      mockFetchWithAuth.mockClear();
+      await vi.advanceTimersByTimeAsync(STREAM_JOIN_POLL_INTERVAL_MS * 5);
+      expect(mockFetchWithAuth).not.toHaveBeenCalled();
+    });
+
+    // Regression (adversarial review): the terminal not-found path must not leave a resume
+    // listener behind. If a 401 armed one and a subsequently-resumed tick finds the row gone, the
+    // poll is terminally done — a later stray `auth:refreshed` must NOT resurrect polling.
+    it('given a resumed tick that finds the row gone, should clear the listener so a later auth:refreshed cannot resurrect polling', async () => {
+      mockFetchWithAuth
+        .mockResolvedValueOnce(notOkResponse(401)) // tick 1 → suspend, arms listener
+        .mockResolvedValueOnce(okResponse([])); // resumed tick → row gone → terminal
+      const controller = newController();
+      const onNotFound = vi.fn();
+
+      startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, vi.fn(), onNotFound);
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Resume → the resumed tick sees the row gone → onNotFound + terminal teardown.
+      window.dispatchEvent(new Event('auth:refreshed'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onNotFound).toHaveBeenCalledTimes(1);
+
+      // A stray auth:refreshed after the terminal state must do nothing (listener was cleared).
+      mockFetchWithAuth.mockClear();
+      window.dispatchEvent(new Event('auth:refreshed'));
+      await vi.advanceTimersByTimeAsync(STREAM_JOIN_POLL_INTERVAL_MS * 3);
+      expect(mockFetchWithAuth).not.toHaveBeenCalled();
+      expect(onNotFound).toHaveBeenCalledTimes(1); // never fired again
+    });
+
+    it('given a terminal not-found while an overlapping tick is still in flight, that tick 401ing must NOT arm a resume listener', async () => {
+      // Simulate two overlapping in-flight ticks: tick A (first, slow) will 401; tick B (interval)
+      // resolves row-gone FIRST → terminal. When tick A finally resolves 401, the `terminated`
+      // guard must stop it from arming a resume listener that auth:refreshed could resurrect.
+      let resolveA: (v: unknown) => void = () => {};
+      const aPending = new Promise((r) => { resolveA = r; });
+      mockFetchWithAuth
+        .mockReturnValueOnce(aPending) // tick A — stays pending past the interval
+        .mockResolvedValueOnce(okResponse([])); // tick B — row gone → terminal
+      const controller = newController();
+      const onNotFound = vi.fn();
+
+      startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, vi.fn(), onNotFound);
+      await vi.advanceTimersByTimeAsync(0); // tick A fired, awaiting
+      // Interval fires tick B, which resolves row-gone → terminal.
+      await vi.advanceTimersByTimeAsync(STREAM_JOIN_POLL_INTERVAL_MS);
+      expect(onNotFound).toHaveBeenCalledTimes(1);
+
+      // Now tick A resolves 401 — post-terminal. It must not arm a listener.
+      resolveA(notOkResponse(401));
+      await vi.advanceTimersByTimeAsync(0);
+
+      mockFetchWithAuth.mockClear();
+      window.dispatchEvent(new Event('auth:refreshed'));
+      await vi.advanceTimersByTimeAsync(STREAM_JOIN_POLL_INTERVAL_MS * 3);
+      expect(mockFetchWithAuth).not.toHaveBeenCalled(); // no resurrection
+      expect(onNotFound).toHaveBeenCalledTimes(1);
+    });
+
+    it('given a second 401 after a resume, should suspend again (survives repeated auth failures)', async () => {
+      mockFetchWithAuth
+        .mockResolvedValueOnce(notOkResponse(401)) // tick 1 → suspend
+        .mockResolvedValueOnce(notOkResponse(401)); // resumed tick → suspend again
+      const controller = newController();
+
+      startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, vi.fn(), vi.fn());
+      await vi.advanceTimersByTimeAsync(0);
+
+      window.dispatchEvent(new Event('auth:refreshed'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockFetchWithAuth).toHaveBeenCalledTimes(2);
+
+      // Suspended again — interval is stopped, no storm.
+      mockFetchWithAuth.mockClear();
+      await vi.advanceTimersByTimeAsync(STREAM_JOIN_POLL_INTERVAL_MS * 5);
+      expect(mockFetchWithAuth).not.toHaveBeenCalled();
+
+      // A fresh auth:refreshed still resumes it.
+      mockFetchWithAuth.mockResolvedValue(okResponse([{ messageId: 'msg-1', parts: [] }]));
+      window.dispatchEvent(new Event('auth:refreshed'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+    });
   });
 });
