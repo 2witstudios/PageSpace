@@ -205,7 +205,35 @@ describe('NodeActionPalette', () => {
     });
   });
 
-  test('"New terminal" offers shell, claude, and codex — not pagespace-cli — with shell first/default', async () => {
+  test('a "PageSpace Agent" palette spawn binds a chat-kind scope', async () => {
+    vi.mocked(post).mockResolvedValueOnce({
+      agentTerminal: { name: 'pagespace-mocked', agentType: 'pagespace', resumed: false },
+    });
+    const onWorkspaceCreated = vi.fn();
+    renderPalette(<NodeActionPalette machineId="m1" node={BRANCH_NODE} onWorkspaceCreated={onWorkspaceCreated} />);
+
+    const user = await openPalette();
+    await user.click(await screen.findByRole('option', { name: 'New terminal' }));
+    await user.click(await screen.findByLabelText('Agent type'));
+    await user.click(await screen.findByRole('option', { name: 'PageSpace Agent' }));
+    await user.click(screen.getByRole('button', { name: 'Spawn agent' }));
+
+    await waitFor(() => {
+      const workspaceId = onWorkspaceCreated.mock.calls[0]?.[0];
+      const machine = selectMachine('m1')(store());
+      const workspace = workspaceId ? machine?.workspaces[workspaceId] : undefined;
+      const pane = workspace?.columns[0]?.panes[0];
+      assert({
+        given: 'the palette\'s "PageSpace Agent" choice, spawned on a branch node',
+        should:
+          'record kind "chat" on the bound pane scope — the pane grid renders MachinePaneChat from this tag, so a palette spawn that omitted it would open as a PTY',
+        actual: { name: pane?.scope?.name, kind: pane?.scope?.kind },
+        expected: { name: 'pagespace-mocked', kind: 'chat' },
+      });
+    });
+  });
+
+  test('"New terminal" offers shell, claude, codex, and the PageSpace Agent — not pagespace-cli — with shell first/default', async () => {
     renderPalette(<NodeActionPalette machineId="m1" node={MACHINE_NODE} onWorkspaceCreated={vi.fn()} />);
 
     const user = await openPalette();
@@ -218,9 +246,10 @@ describe('NodeActionPalette', () => {
 
     assert({
       given: 'the "New terminal" agent-type picker, opened',
-      should: 'offer exactly shell, claude, and codex (never pagespace-cli), defaulting to shell',
+      should:
+        'offer the shared PICKABLE_AGENT_TYPES — shell first/default, then claude, codex, and the chat agent labeled "PageSpace Agent" (never pagespace-cli); a palette-local hardcoded list is exactly what silently dropped pagespace from this surface',
       actual: { optionTexts, defaultSelected },
-      expected: { optionTexts: ['shell', 'claude', 'codex'], defaultSelected: 'shell' },
+      expected: { optionTexts: ['shell', 'claude', 'codex', 'PageSpace Agent'], defaultSelected: 'shell' },
     });
   });
 

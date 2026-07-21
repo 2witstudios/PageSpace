@@ -36,6 +36,28 @@ vi.mock('../XtermTerminal', () => ({
   ),
 }));
 
+// The chat pane is a whole AI-chat subtree (Phase 11) — stubbed for the same
+// reason as XtermTerminal: under test is WHICH surface the pane renders and
+// what it is handed, not the chat UI inside it.
+vi.mock('./MachinePaneChat', () => ({
+  default: ({
+    machineId,
+    terminalId,
+    pendingPrompt,
+  }: {
+    machineId: string;
+    terminalId: string;
+    pendingPrompt?: string;
+  }) => (
+    <div
+      data-testid="machine-pane-chat"
+      data-machine-id={machineId}
+      data-terminal-id={terminalId}
+      data-initial-input={pendingPrompt}
+    />
+  ),
+}));
+
 const selectPane = vi.fn();
 const splitRight = vi.fn();
 const splitDown = vi.fn();
@@ -57,14 +79,18 @@ const killAgentTerminal = vi.fn<
 >(async () => {});
 /** Records the scope the hook was asked for, so a spawn at the wrong checkout can't pass. */
 const useAgentTerminalsArgs = vi.fn<(machineId: string, projectName: string | null, branchName: string | null) => void>();
+/** The workspace-scoped SWR session list — what a kind-less pane's surface is
+ * resolved against, and where a chat pane finds its conversation row id. */
+let agentTerminalRows: { id: string; name: string; agentType: string; createdAt: string }[] = [];
+let agentTerminalsLoading = false;
 vi.mock('@/hooks/useAgentTerminals', () => ({
   killAgentTerminal: (machineId: string, scope: { projectName?: string; branchName?: string; name: string }) =>
     killAgentTerminal(machineId, scope),
   useAgentTerminals: (machineId: string, projectName: string | null, branchName: string | null) => {
     useAgentTerminalsArgs(machineId, projectName, branchName);
     return {
-      agentTerminals: [],
-      isLoading: false,
+      agentTerminals: agentTerminalRows,
+      isLoading: agentTerminalsLoading,
       error: undefined,
       mutate: vi.fn(),
       addAgentTerminal,
@@ -136,6 +162,8 @@ let machineEnsured = true;
 let extraWorkspaces: WorkspaceState[] = [];
 beforeEach(() => {
   extraWorkspaces = [];
+  agentTerminalRows = [];
+  agentTerminalsLoading = false;
 });
 
 // Only the store HOOK is faked; selectActiveWorkspace / panesOf / autoSessionName
@@ -552,7 +580,7 @@ describe('TerminalPanes (split-and-pick spawn)', () => {
     });
   });
 
-  test('the agent picker offers shell (primary), claude, codex, and pagespace — no retired pagespace-cli', async () => {
+  test('the agent picker offers shell (primary), claude, codex, and the PageSpace Agent — no retired pagespace-cli', async () => {
     render(<TerminalPanes machineId="m1" socket={socket} />);
 
     await userEvent.click(screen.getByLabelText('Agent type'));
@@ -560,9 +588,9 @@ describe('TerminalPanes (split-and-pick spawn)', () => {
 
     assert({
       given: 'the empty pane\'s agent picker',
-      should: 'list every user-spawnable agent type — shell as the default primary option, claude, codex, and pagespace as secondary agents — excluding only the retired pagespace-cli',
+      should: 'list every user-spawnable agent type — shell as the default primary option, claude, codex, and the chat agent labeled "PageSpace Agent" (agents and chats are one thing, so it presents as an agent, never as "chat") — excluding only the retired pagespace-cli',
       actual: options,
-      expected: ['shell', 'claude', 'codex', 'pagespace'],
+      expected: ['shell', 'claude', 'codex', 'PageSpace Agent'],
     });
   });
 
@@ -722,6 +750,219 @@ describe('TerminalPanes (split-and-pick spawn)', () => {
       should: 'leave that session alone — the cleanup path kills terminals, and this spawn did not create this one',
       actual: removeAgentTerminal.mock.calls.length,
       expected: 0,
+    });
+  });
+});
+
+describe('TerminalPanes (PageSpace Agent panes)', () => {
+  /** A pane bound to the chat agent — kind on the SCOPE (Phase 9), so the
+   * surface decision survives every place a scope flows opaquely. */
+  const CHAT_SCOPE = { ...WORKSPACE_SCOPE, name: 'pagespace-a1', kind: 'chat' as const };
+  /** The chat session's own row — its id IS the conversation id (Phase 4). */
+  const CHAT_ROW = { id: 'row-ps1', name: 'pagespace-a1', agentType: 'pagespace', createdAt: '' };
+
+  const soloPane = (pane: { scope: OpenTerminalScope | null; pendingPrompt?: string }) =>
+    aWorkspace({
+      columns: [{ id: 'col-1', panes: [{ id: 'pane-1', ...pane }] }],
+      activePaneId: 'pane-1',
+      pendingPickerPaneId: null,
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    onDesktop();
+    machineEnsured = true;
+    workspace = EMPTY_WORKSPACE;
+  });
+
+  test('picking the PageSpace Agent spawns a pagespace session bound with a chat-kind scope', async () => {
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+
+    await userEvent.click(screen.getByLabelText('Agent type'));
+    await userEvent.click(screen.getByRole('option', { name: 'PageSpace Agent' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Spawn agent' }));
+
+    const [spawnedName, spawnedType] = addAgentTerminal.mock.calls[0] ?? [];
+    assert({
+      given: 'the picker\'s "PageSpace Agent" choice, spawned',
+      should:
+        'create a pagespace session and bind it with kind "chat" on the scope — without the kind, the pane would have to guess its surface from the SWR list on every future mount',
+      actual: {
+        agentType: spawnedType,
+        boundScope: bindPaneTerminal.mock.calls[0]?.[3],
+      },
+      expected: {
+        agentType: 'pagespace',
+        boundScope: { projectName: 'app', branchName: 'main', name: spawnedName, kind: 'chat' },
+      },
+    });
+  });
+
+  test('a RESUMED spawn takes its kind from the API\'s agentType, not the picked one', async () => {
+    // The upsert handed back an EXISTING session that happens to wear a
+    // pagespace-shaped name but is actually a PTY agent. Labeling it chat
+    // from the PICKED type would mislabel it forever — an explicit kind
+    // beats the SWR fallback on every future mount.
+    addAgentTerminal.mockResolvedValueOnce({ name: 'pagespace-x', agentType: 'claude', resumed: true });
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+
+    await userEvent.click(screen.getByLabelText('Agent type'));
+    await userEvent.click(screen.getByRole('option', { name: 'PageSpace Agent' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Spawn agent' }));
+
+    assert({
+      given: 'a pagespace pick the API served by resuming an existing claude session',
+      should:
+        'bind WITHOUT a chat kind — the surface is judged by the API\'s answer, the same standard the resumed-prompt guard applies',
+      actual: bindPaneTerminal.mock.calls[0]?.[3],
+      expected: { projectName: 'app', branchName: 'main', name: 'pagespace-x' },
+    });
+  });
+
+  test('a chat pane whose row is GONE from the loaded list says so — not an eternal spinner', async () => {
+    workspace = soloPane({ scope: CHAT_SCOPE });
+    // The list has answered and the session isn't in it: killed elsewhere.
+    agentTerminalRows = [];
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+
+    assert({
+      given: 'a chat-kind pane whose session the loaded list no longer contains',
+      should:
+        'render a notice with close still reachable — an indefinite "Loading session…" over a dead session would read as a hang',
+      actual: {
+        notice: screen.queryByText('This session no longer exists') !== null,
+        loading: screen.queryByText('Loading session…') !== null,
+        chat: screen.queryByTestId('machine-pane-chat') !== null,
+        xterm: screen.queryByTestId('xterm') !== null,
+        canClose: screen.queryByTitle('Close pane') !== null,
+      },
+      expected: { notice: true, loading: false, chat: false, xterm: false, canClose: true },
+    });
+  });
+
+  test('a chat-kind pane renders MachinePaneChat — addressed by row id, with the picker prompt — not xterm', async () => {
+    workspace = soloPane({ scope: CHAT_SCOPE, pendingPrompt: 'audit the docs' });
+    agentTerminalRows = [CHAT_ROW];
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+
+    const chat = await screen.findByTestId('machine-pane-chat');
+
+    assert({
+      given: 'a pane whose scope carries kind "chat", its session row in the list',
+      should:
+        'render the chat surface addressed by the ROW id (the machine-anchored conversation) carrying the starting prompt — and never mount an xterm for it',
+      actual: {
+        terminalId: chat.getAttribute('data-terminal-id'),
+        machineId: chat.getAttribute('data-machine-id'),
+        pendingPrompt: chat.getAttribute('data-initial-input'),
+        xterm: screen.queryByTestId('xterm') !== null,
+      },
+      expected: {
+        terminalId: 'row-ps1',
+        machineId: 'm1',
+        pendingPrompt: 'audit the docs',
+        xterm: false,
+      },
+    });
+  });
+
+  test('no kind hint + SWR resolving the name to pagespace renders chat', async () => {
+    // A kind-less binding: made before the kind tag existed, or by a path that
+    // didn't set it. The session list is the only witness to what it is.
+    workspace = soloPane({ scope: { ...WORKSPACE_SCOPE, name: 'pagespace-a1' } });
+    agentTerminalRows = [CHAT_ROW];
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+
+    assert({
+      given: 'a kind-less pane whose name the loaded list maps to agentType "pagespace"',
+      should: 'resolve to the chat surface',
+      actual: {
+        chat: screen.queryByTestId('machine-pane-chat') !== null,
+        xterm: screen.queryByTestId('xterm') !== null,
+      },
+      expected: { chat: true, xterm: false },
+    });
+  });
+
+  test('no kind hint + SWR resolving the name to claude renders xterm', async () => {
+    workspace = soloPane({ scope: { ...WORKSPACE_SCOPE, name: 'claude-b2' } });
+    agentTerminalRows = [{ id: 'row-c1', name: 'claude-b2', agentType: 'claude', createdAt: '' }];
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+
+    assert({
+      given: 'a kind-less pane whose name the loaded list maps to agentType "claude"',
+      should: 'resolve to the PTY surface',
+      actual: {
+        xterm: screen.queryByTestId('xterm') !== null,
+        chat: screen.queryByTestId('machine-pane-chat') !== null,
+      },
+      expected: { xterm: true, chat: false },
+    });
+  });
+
+  test('no kind hint while the list is loading renders PaneLoading — NEVER xterm for a maybe-chat session', async () => {
+    workspace = soloPane({ scope: { ...WORKSPACE_SCOPE, name: 'pagespace-a1' } });
+    agentTerminalsLoading = true;
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+
+    assert({
+      given: 'a kind-less pane before the session list has answered',
+      should:
+        'hold at a loading state — mounting Xterm now would cold-start a PTY (and register a viewer) for a session that may turn out to be a chat',
+      actual: {
+        loading: screen.queryByText('Loading session…') !== null,
+        xterm: screen.queryByTestId('xterm') !== null,
+        chat: screen.queryByTestId('machine-pane-chat') !== null,
+      },
+      expected: { loading: true, xterm: false, chat: false },
+    });
+  });
+
+  test('on mobile, a hidden chat pane stays MOUNTED — invisible, never unmounted', async () => {
+    onMobile();
+    workspace = aWorkspace({
+      columns: [
+        { id: 'col-1', panes: [{ id: 'pane-1', scope: CHAT_SCOPE }] },
+        { id: 'col-2', panes: [{ id: 'pane-2', scope: { ...WORKSPACE_SCOPE, name: 'claude-b2', kind: 'terminal' } }] },
+      ],
+      activePaneId: 'pane-2',
+      pendingPickerPaneId: null,
+    });
+    agentTerminalRows = [CHAT_ROW];
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+
+    const chat = await screen.findByTestId('machine-pane-chat');
+    const wrapper = screen
+      .getAllByTestId('mobile-pane')
+      .find((pane) => pane.contains(chat));
+
+    assert({
+      given: 'a chat pane hidden by the narrow-viewport collapse',
+      should:
+        'keep it mounted but invisible, exactly like a hidden PTY pane — unmounting would drop the chat\'s in-flight state, and its streaming reply with it',
+      actual: {
+        mounted: chat !== null,
+        hidden: wrapper?.dataset.hidden,
+        invisible: wrapper?.classList.contains('invisible'),
+      },
+      expected: { mounted: true, hidden: 'true', invisible: true },
+    });
+  });
+
+  test('closing a chat pane kills its session row, exactly as a PTY close does', async () => {
+    workspace = soloPane({ scope: CHAT_SCOPE });
+    agentTerminalRows = [CHAT_ROW];
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+    await screen.findByTestId('machine-pane-chat');
+
+    await userEvent.click(screen.getByTitle('Close pane'));
+
+    assert({
+      given: 'the close control on a pane rendering the chat surface',
+      should:
+        'kill the session at the pane\'s own scope, same as any terminal — the row delete is cheap (Phase 2) and the conversation survives it',
+      actual: killAgentTerminal.mock.calls,
+      expected: [['m1', CHAT_SCOPE]],
     });
   });
 });

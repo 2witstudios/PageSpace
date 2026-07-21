@@ -17,9 +17,14 @@ import {
 } from '@/components/ui/select';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { useMobile } from '@/hooks/useMobile';
-import { useAgentTerminals, killAgentTerminal } from '@/hooks/useAgentTerminals';
+import { useAgentTerminals, killAgentTerminal, type AgentTerminal } from '@/hooks/useAgentTerminals';
 import { useSyncedWorkspaceActions } from '@/hooks/useMachineWorkspaceSync';
-import { PICKABLE_AGENT_TYPES, type AgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
+import {
+  PICKABLE_AGENT_TYPES,
+  agentSurfaceOf,
+  isAgentRuntimeType,
+  type AgentRuntimeType,
+} from '@pagespace/lib/services/machines/agent-terminal-types';
 import {
   useMachineWorkspaceStore,
   selectActiveWorkspace,
@@ -34,8 +39,13 @@ import {
   type TerminalPaneState,
 } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 import { PaneLoading, PaneNotice } from '../tabs/tab-states';
+import { resolvePaneSurface, agentTypeLabelOf } from './pane-surface';
 
 const XtermTerminal = dynamic(() => import('../XtermTerminal'), { ssr: false });
+// Split out like XtermTerminal and for the same reason in reverse: the chat
+// pane is a whole AI-chat subtree, and a workspace holding only PTY panes
+// should not pay to load it.
+const MachinePaneChat = dynamic(() => import('./MachinePaneChat'), { ssr: false });
 
 const AGENT_TYPES = PICKABLE_AGENT_TYPES;
 
@@ -85,7 +95,10 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
   // Every agent spawned here runs in the workspace's node scope — a branch
   // workspace's panes all share that branch's checkout.
   const scope = workspace?.scope ?? MACHINE_NODE_SCOPE;
-  const { addAgentTerminal, removeAgentTerminal } = useAgentTerminals(
+  // `agentTerminals`/`isLoading` feed the per-pane surface decision
+  // (`resolvePaneSurface`): a kind-less pane's surface is resolved from this
+  // list, and a chat pane finds its conversation ROW id in it.
+  const { agentTerminals, isLoading: agentTerminalsLoading, addAgentTerminal, removeAgentTerminal } = useAgentTerminals(
     machineId,
     scope.projectName ?? null,
     scope.branchName ?? null,
@@ -103,7 +116,23 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
       const bound = bindPaneTerminal(
         workspaceId,
         paneId,
-        { projectName: scope.projectName, branchName: scope.branchName, name: created.name },
+        {
+          projectName: scope.projectName,
+          branchName: scope.branchName,
+          name: created.name,
+          // The surface decision, recorded at the one moment it is KNOWN
+          // rather than re-derived from the SWR list on every future mount.
+          // Only `chat` is written — an omitted kind already means `terminal`
+          // (see OpenTerminalScope), so PTY bindings stay byte-identical to
+          // every binding that predates the tag. Judged by the API's OWN
+          // answer, not the picked type: a `resumed` upsert hands back an
+          // existing session whose agentType can differ (same reasoning as
+          // the resumed-prompt guard below), and a retired type the registry
+          // no longer knows falls through to the terminal default.
+          ...(isAgentRuntimeType(created.agentType) && agentSurfaceOf(created.agentType) === 'chat'
+            ? { kind: 'chat' as const }
+            : {}),
+        },
         // `spawnAgentTerminal` is an upsert: `resumed` means it handed back a session
         // that ALREADY EXISTED rather than creating one. An agent that was already
         // running must never be typed at, and the API says so right here — relying on
@@ -222,6 +251,11 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
     socket,
     machineId,
     pane,
+    // What the pane's surface decision resolves against — the workspace's own
+    // session list (see resolvePaneSurface's doc for the foreign-scope rule).
+    workspaceScope: scope,
+    agentTerminals,
+    agentTerminalsLoading,
     isActive: pane.id === activeId,
     // Every pane closes, always. The old rule (`panes.length > 1 || scope !==
     // null`) existed to stop a lone empty pane being closed, because the
@@ -370,6 +404,9 @@ function TerminalPane({
   socket,
   machineId,
   pane,
+  workspaceScope,
+  agentTerminals,
+  agentTerminalsLoading,
   isActive,
   canClose,
   canSplit,
@@ -386,6 +423,10 @@ function TerminalPane({
   socket: Socket | null | undefined;
   machineId: string;
   pane: TerminalPaneState;
+  /** The checkout `agentTerminals` was fetched at — the workspace's scope. */
+  workspaceScope: MachineNodeScope;
+  agentTerminals: AgentTerminal[];
+  agentTerminalsLoading: boolean;
   isActive: boolean;
   canClose: boolean;
   /** False on narrow viewports, where a split would produce two unusable slivers. */
@@ -403,6 +444,12 @@ function TerminalPane({
   onPromptSent(): void;
 }) {
   const sessionId = pane.scope ? paneSessionId(machineId, pane.scope) : null;
+  // Which surface this pane renders — decided by the pure helper, never by
+  // defaulting: an Xterm mounted for what turns out to be a chat session
+  // would open (and register a viewer on) a PTY stream that shouldn't exist.
+  const resolved = pane.scope
+    ? resolvePaneSurface({ scope: pane.scope, workspaceScope, agentTerminals, isLoading: agentTerminalsLoading })
+    : null;
   // With neither a split nor a close to offer (a lone pane on a phone), the
   // control chip has nothing in it — and since it is opacity-100 on touch, an
   // empty bordered box would just sit in the corner forever.
@@ -462,13 +509,42 @@ function TerminalPane({
       </div>
       )}
       <div className="relative min-h-0 flex-1">
-        {!pane.scope || !sessionId ? (
+        {!pane.scope || !sessionId || !resolved ? (
           <PaneAgentPicker
             focused={pickerFocused}
             scopeLabel={scopeLabel}
             onSpawn={onSpawn}
             onFocused={onPickerFocused}
           />
+        ) : resolved.surface === 'chat' ? (
+          // `terminalId` still null means the list hasn't turned the row up:
+          // hold while it's still loading (the one thing a chat-bound pane
+          // must never do is mount an Xterm), but a LOADED list without the
+          // row means the session was killed — say so rather than spin
+          // forever; the close control above stays reachable either way.
+          resolved.terminalId === null ? (
+            agentTerminalsLoading ? (
+              <PaneLoading message="Loading session…" />
+            ) : (
+              <PaneNotice
+                title="This session no longer exists"
+                description="It may have been closed elsewhere. Close the pane to remove it."
+              />
+            )
+          ) : (
+            <MachinePaneChat
+              // Re-keyed per conversation row, same reason TerminalPaneStream
+              // keys by sessionId: switching sessions is a remount, not a
+              // state handoff.
+              key={resolved.terminalId}
+              machineId={machineId}
+              terminalId={resolved.terminalId}
+              pendingPrompt={pane.pendingPrompt}
+              onPromptSent={onPromptSent}
+            />
+          )
+        ) : resolved.surface === 'loading' ? (
+          <PaneLoading message="Loading session…" />
         ) : (
           <TerminalPaneStream
             key={sessionId}
@@ -546,7 +622,7 @@ function PaneAgentPicker({
           <SelectContent>
             {AGENT_TYPES.map((type) => (
               <SelectItem key={type} value={type}>
-                {type}
+                {agentTypeLabelOf(type)}
               </SelectItem>
             ))}
           </SelectContent>
