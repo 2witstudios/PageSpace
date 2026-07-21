@@ -2,12 +2,31 @@ import type { WebhookTrigger } from '@pagespace/db/schema/webhook-triggers';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
+  type RateLimitConfig,
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { claimTriggerFired, setTriggerError } from './page-webhook-trigger-queries';
 import { executePageWebhookTrigger } from './page-webhook-trigger-executor';
 
 const logger = loggers.api.child({ module: 'fire-page-webhook-triggers' });
+
+/**
+ * Check one rate-limit bucket for a trigger fire; on denial, log + record
+ * `rate_limited` on the trigger and report `true` so the caller can bail.
+ */
+async function denyIfRateLimited(
+  key: string,
+  config: RateLimitConfig,
+  triggerId: string,
+  logMessage: string,
+  extraLogFields?: Record<string, unknown>,
+): Promise<boolean> {
+  const result = await checkDistributedRateLimit(key, config);
+  if (result.allowed) return false;
+  logger.warn(logMessage, { triggerId, ...extraLogFields });
+  await setTriggerError(triggerId, 'rate_limited');
+  return true;
+}
 
 /**
  * Fan out a verified page-webhook delivery to every enabled workflow trigger
@@ -40,32 +59,26 @@ export async function firePageWebhookTriggers(
         // leaked webhook secret is thereby a bounded incident: at most the
         // budget's ceiling of runs per window across ALL bound triggers.
         if (trigger.pageWebhookId) {
-          const budget = await checkDistributedRateLimit(
+          const blocked = await denyIfRateLimited(
             `page-webhook-ai-budget:${trigger.pageWebhookId}`,
             DISTRIBUTED_RATE_LIMITS.PAGE_WEBHOOK_AI_BUDGET,
+            trigger.id,
+            'Page webhook trigger: webhook AI budget exhausted',
+            { pageWebhookId: trigger.pageWebhookId },
           );
-          if (!budget.allowed) {
-            logger.warn('Page webhook trigger: webhook AI budget exhausted', {
-              triggerId: trigger.id,
-              pageWebhookId: trigger.pageWebhookId,
-            });
-            await setTriggerError(trigger.id, 'rate_limited');
-            return;
-          }
+          if (blocked) return;
         }
 
         // Per-trigger rate limit, TIGHTER than the channel-post path (an AI run
         // costs ~1000x a message insert). On top of executeWorkflow's
         // single-running claim, this bounds the run RATE for a runaway sender.
-        const rl = await checkDistributedRateLimit(
+        const rateLimited = await denyIfRateLimited(
           `page-webhook-trigger:${trigger.id}`,
           DISTRIBUTED_RATE_LIMITS.PAGE_WEBHOOK_TRIGGER,
+          trigger.id,
+          'Page webhook trigger: rate limited',
         );
-        if (!rl.allowed) {
-          logger.warn('Page webhook trigger: rate limited', { triggerId: trigger.id });
-          await setTriggerError(trigger.id, 'rate_limited');
-          return;
-        }
+        if (rateLimited) return;
 
         const result = await executePageWebhookTrigger(trigger, envelope);
         if (result.success) {

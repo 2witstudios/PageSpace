@@ -132,6 +132,17 @@ export interface GateOptions {
    * ceiling meant for interactive runaway protection. User-driven routes omit it.
    */
   skipDailyCap?: boolean;
+  /**
+   * Per-user/day charged-spend ceiling (whole cents) applied IN ADDITION to the tier
+   * cap — the effective cap is the smaller of the two — and, unlike the tier cap,
+   * it binds even on deployments where DAILY_USER_EXPOSURE_CAP_CENTS is unset
+   * (0 = disabled). Passed by callers whose runs are forced by a bearer credential
+   * (the page-webhook trigger path), so an unconfigured deployment still bounds what
+   * a leaked secret can spend per day. Zero/negative values are ignored. Independent
+   * of skipDailyCap: an explicit ceiling is the caller's own opt-in bound, not the
+   * interactive runaway backstop that skipDailyCap exists to bypass.
+   */
+  dailyCapCeilingCents?: number;
 }
 
 export async function canConsumeAI(
@@ -326,8 +337,18 @@ export async function canConsumeAI(
   const expiresAt = new Date(holdExpiresAt(now.getTime(), CREDIT_HOLD_TTL_SECONDS * 1000));
 
   // Per-user/day exposure cap (null = disabled, the default). Resolved here; the day's
-  // charged total is summed inside the transaction below on the allow path.
-  const dailyCap = opts.skipDailyCap ? null : dailyExposureCapForTier(tier);
+  // charged total is summed inside the transaction below on the allow path. A caller
+  // ceiling tightens (never loosens) the tier cap and applies even when the tier cap
+  // is disabled or skipped — see GateOptions.dailyCapCeilingCents.
+  const tierDailyCap = opts.skipDailyCap ? null : dailyExposureCapForTier(tier);
+  const callerCeiling =
+    opts.dailyCapCeilingCents !== undefined && opts.dailyCapCeilingCents > 0
+      ? opts.dailyCapCeilingCents
+      : null;
+  const dailyCap =
+    tierDailyCap !== null && callerCeiling !== null
+      ? Math.min(tierDailyCap, callerCeiling)
+      : (tierDailyCap ?? callerCeiling);
   const dayStart = startOfUtcDay(now);
 
   // Authoritative decision + reservation, atomic under a balance row lock. The lock

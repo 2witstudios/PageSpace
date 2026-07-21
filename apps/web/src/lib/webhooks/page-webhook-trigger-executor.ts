@@ -13,6 +13,7 @@ import {
 } from '@/lib/workflows/workflow-executor';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { WEBHOOK_DAILY_EXPOSURE_CAP_CENTS } from '@pagespace/lib/billing/credit-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -146,8 +147,10 @@ export async function executePageWebhookTrigger(
     //    the model is invoked. Unlike the Zoom path (whose trigger source is
     //    an authenticated OAuth account), this run is forced by whoever holds
     //    the webhook secret — a bearer credential handed to external systems.
-    //    The daily exposure cap therefore MUST apply: it is the hard bound on
-    //    what a leaked secret can spend from the owner's wallet in a day.
+    //    The daily exposure cap therefore MUST apply, and because the env tier
+    //    caps default to DISABLED, the webhook-specific ceiling (default-on)
+    //    is what guarantees a hard per-day monetary bound on a leaked secret
+    //    even on unconfigured deployments.
     const [owner] = await db
       .select({ subscriptionTier: users.subscriptionTier })
       .from(users)
@@ -155,6 +158,7 @@ export async function executePageWebhookTrigger(
     const gate = await canConsumeAI(
       workflow.createdBy,
       (owner?.subscriptionTier ?? 'free') as SubscriptionTier,
+      { dailyCapCeilingCents: WEBHOOK_DAILY_EXPOSURE_CAP_CENTS },
     );
     if (!gate.allowed) {
       logger.info('Page webhook trigger: skipped (credit gate denied)', {

@@ -36,6 +36,10 @@ vi.mock('@pagespace/lib/billing/credit-gate', () => ({
   canConsumeAI: (...args: unknown[]) => mockCanConsume(...args),
 }));
 
+vi.mock('@pagespace/lib/billing/credit-pricing', () => ({
+  WEBHOOK_DAILY_EXPOSURE_CAP_CENTS: 500,
+}));
+
 const mockReleaseHold = vi.fn();
 vi.mock('@pagespace/lib/billing/credit-consume', () => ({
   releaseHold: (...args: unknown[]) => mockReleaseHold(...args),
@@ -104,14 +108,19 @@ describe('executePageWebhookTrigger', () => {
 
   it('bills the credit gate to workflow.createdBy and releases the hold', async () => {
     await executePageWebhookTrigger(TRIGGER, ENVELOPE);
-    expect(mockCanConsume).toHaveBeenCalledWith('user-1', 'pro');
+    expect(mockCanConsume).toHaveBeenCalledWith('user-1', 'pro', { dailyCapCeilingCents: 500 });
     expect(mockReleaseHold).toHaveBeenCalledWith('hold-1');
   });
 
   it('does NOT bypass the per-user daily exposure cap (no skipDailyCap) — the trigger source is a bearer secret, not an authenticated account', async () => {
     await executePageWebhookTrigger(TRIGGER, ENVELOPE);
-    const opts = mockCanConsume.mock.calls[0][2] as { skipDailyCap?: boolean } | undefined;
+    const opts = mockCanConsume.mock.calls[0][2] as
+      | { skipDailyCap?: boolean; dailyCapCeilingCents?: number }
+      | undefined;
     expect(opts?.skipDailyCap).not.toBe(true);
+    // The env tier caps default to disabled, so the executor must pass an
+    // explicit monetary ceiling that binds on unconfigured deployments too.
+    expect(opts?.dailyCapCeilingCents).toBe(500);
   });
 
   it('releases the credit hold even when executeWorkflow throws', async () => {
