@@ -277,6 +277,37 @@ describe('PageWebhooksDialog', () => {
     resolvePost({ webhook: remoteWebhook(), webhookSecret: 'whsec_settled' });
   });
 
+  test('a rotation resolving after the dialog closes still reveals its secret on reopen', async () => {
+    vi.mocked(fetchWithAuth).mockResolvedValue(
+      listResponse(200, { webhooks: [remoteWebhook()] }),
+    );
+    let resolvePost: (value: unknown) => void = () => {};
+    vi.mocked(post).mockImplementation(
+      () => new Promise<never>((resolve) => { resolvePost = resolve as (value: unknown) => void; }),
+    );
+
+    const dialogAt = (open: boolean) => (
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+        <PageWebhooksDialog open={open} onOpenChange={() => {}} pageId={PAGE_ID} pageType="AI_CHAT" />
+      </SWRConfig>
+    );
+    const view = render(dialogAt(true));
+    await waitFor(() => screen.getByText('Deploys'));
+    await userEvent.click(screen.getByRole('button', { name: /Rotate secret/ }));
+
+    view.rerender(dialogAt(false));
+    resolvePost({ webhook: remoteWebhook(), webhookSecret: 'whsec_late_arrival' });
+    view.rerender(dialogAt(true));
+    await waitFor(() => screen.getByText('whsec_late_arrival'));
+
+    assert({
+      given: 'a rotation whose response arrived only after the dialog was closed',
+      should: 'reveal the one-time secret on reopen — the old secret is already dead and this is the only copy',
+      actual: screen.getByText('whsec_late_arrival') !== null,
+      expected: true,
+    });
+  });
+
   test('reveals the secret exactly once, dismissed only by explicit confirmation', async () => {
     vi.mocked(fetchWithAuth).mockResolvedValue(listResponse(200, { webhooks: [] }));
     vi.mocked(post).mockResolvedValue({

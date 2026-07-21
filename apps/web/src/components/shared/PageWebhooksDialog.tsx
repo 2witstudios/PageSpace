@@ -51,6 +51,11 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
 
   useEffect(() => {
     if (!open) {
+      // Clears the secret from state on close — but deliberately does NOT
+      // cancel an in-flight create/rotate: its response holds the only copy of
+      // a one-time secret (rotate has already invalidated the old one), so a
+      // late resolution repopulates `revealed` and the reopened dialog shows
+      // the secret once instead of silently losing it.
       setRevealed(null);
       setNewName('');
     }
