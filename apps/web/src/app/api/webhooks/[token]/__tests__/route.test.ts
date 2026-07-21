@@ -20,6 +20,33 @@ vi.mock('@pagespace/db/db', () => ({
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({ eq: (a: unknown, b: unknown) => ({ a, b }) }));
+
+// The seen-id store, mocked at the lib-module boundary like every other
+// db-touching lib module here (the lib dist requires @pagespace/db natively,
+// outside vitest's mock interception). The Map faithfully emulates the store's
+// contract — atomic claim-once per (webhookId, deliveryId), release deletes —
+// while `deriveWebhookDeliveryId` stays REAL, so the header-vs-fallback
+// identity rules the replay tests pin are the production ones. The SQL-level
+// claim/release logic has its own unit coverage in
+// packages/lib/src/security/__tests__/webhook-delivery-idempotency.test.ts.
+const seenStore = new Map<string, number>();
+vi.mock('@pagespace/lib/security/webhook-delivery-idempotency', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@pagespace/lib/security/webhook-delivery-idempotency')>();
+  return {
+    WEBHOOK_DELIVERY_ID_HEADER: actual.WEBHOOK_DELIVERY_ID_HEADER,
+    deriveWebhookDeliveryId: actual.deriveWebhookDeliveryId,
+    claimWebhookDelivery: async (webhookId: string, deliveryId: string) => {
+      const key = `${webhookId}:${deliveryId}`;
+      const count = (seenStore.get(key) ?? 0) + 1;
+      seenStore.set(key, count);
+      return count > 1 ? 'duplicate' : 'claimed';
+    },
+    releaseWebhookDelivery: async (webhookId: string, deliveryId: string) => {
+      seenStore.delete(`${webhookId}:${deliveryId}`);
+    },
+  };
+});
 vi.mock('@pagespace/db/schema/page-webhooks', () => ({
   pageWebhooks: { id: 'pageWebhooks.id', webhookToken: 'pageWebhooks.webhookToken' },
 }));
@@ -82,6 +109,7 @@ const VALID_PAYLOAD = JSON.stringify({ content: 'deploy finished' });
 
 beforeEach(() => {
   vi.clearAllMocks();
+  seenStore.clear();
   mockFindFirst.mockResolvedValue(WEBHOOK);
   mockDispatch.mockResolvedValue({ kind: 'handled' });
   // Default: no workflow triggers bound. Composability tests override this.
@@ -293,6 +321,142 @@ describe('POST /api/webhooks/[token]', () => {
 
     expect(response.status).toBe(400);
     expect(mockFireTriggers).not.toHaveBeenCalled();
+  });
+
+  // ── Replay idempotency (F4) ─────────────────────────────────────────────
+  //
+  // The signature scheme's ±5-minute window alone lets a captured, correctly
+  // signed request replay unlimited times in-window — each replay re-posting
+  // the channel message AND re-firing every bound workflow. These tests pin
+  // the seen-id defense: one signed delivery is processed exactly once; a
+  // replay short-circuits as a no-op success AFTER signature verification and
+  // BEFORE any dispatch or trigger fan-out.
+
+  describe('replay idempotency', () => {
+    const params = () => ({ params: Promise.resolve({ token: 'tok-abc' }) });
+
+    function identicalSignedHeaders(body: string, extra: Record<string, string> = {}) {
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      return { 'x-pagespace-signature': sign(body, timestamp), 'x-pagespace-timestamp': timestamp, ...extra };
+    }
+
+    it('delivers the exact same signed request only ONCE — the replay is a duplicate no-op (no second channel post, no second workflow fire)', async () => {
+      const triggers = [{ id: 't1', workflowId: 'wf1', pageWebhookId: 'wh-1' }];
+      mockFindTriggers.mockResolvedValue({ success: true, data: triggers });
+      const headers = identicalSignedHeaders(VALID_PAYLOAD);
+
+      const first = await POST(makeRequest(VALID_PAYLOAD, headers), params());
+      expect(first.status).toBe(200);
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+      expect(mockFireTriggers).toHaveBeenCalledTimes(1);
+
+      const replay = await POST(makeRequest(VALID_PAYLOAD, headers), params());
+      expect(replay.status).toBe(200);
+      expect(await replay.json()).toEqual({ ok: true, duplicate: true });
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+      expect(mockFireTriggers).toHaveBeenCalledTimes(1);
+    });
+
+    it('still delivers distinct requests with NO delivery-id header (back-compat: plain senders keep working)', async () => {
+      const bodyA = JSON.stringify({ content: 'deploy one' });
+      const bodyB = JSON.stringify({ content: 'deploy two' });
+
+      const first = await POST(makeRequest(bodyA, identicalSignedHeaders(bodyA)), params());
+      const second = await POST(makeRequest(bodyB, identicalSignedHeaders(bodyB)), params());
+
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      expect(await second.json()).toEqual({ ok: true });
+      expect(mockDispatch).toHaveBeenCalledTimes(2);
+    });
+
+    it('dedupes on the client x-pagespace-delivery-id across RE-SIGNED retries (same id, different signature)', async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const tsA = String(now - 30);
+      const tsB = String(now);
+      const first = await POST(
+        makeRequest(VALID_PAYLOAD, {
+          'x-pagespace-signature': sign(VALID_PAYLOAD, tsA),
+          'x-pagespace-timestamp': tsA,
+          'x-pagespace-delivery-id': 'delivery-42',
+        }),
+        params(),
+      );
+      const retry = await POST(
+        makeRequest(VALID_PAYLOAD, {
+          'x-pagespace-signature': sign(VALID_PAYLOAD, tsB),
+          'x-pagespace-timestamp': tsB,
+          'x-pagespace-delivery-id': 'delivery-42',
+        }),
+        params(),
+      );
+
+      expect(first.status).toBe(200);
+      expect(retry.status).toBe(200);
+      expect(await retry.json()).toEqual({ ok: true, duplicate: true });
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+    });
+
+    it('treats DISTINCT client delivery ids as distinct deliveries even for identical signed bytes (header takes precedence over the signature fallback)', async () => {
+      const headers = identicalSignedHeaders(VALID_PAYLOAD);
+
+      const first = await POST(makeRequest(VALID_PAYLOAD, { ...headers, 'x-pagespace-delivery-id': 'd-1' }), params());
+      const second = await POST(makeRequest(VALID_PAYLOAD, { ...headers, 'x-pagespace-delivery-id': 'd-2' }), params());
+
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      expect(mockDispatch).toHaveBeenCalledTimes(2);
+    });
+
+    it('releases the claim when the delivery FAILS, so a sender retry still delivers (at-least-once preserved)', async () => {
+      const headers = identicalSignedHeaders(VALID_PAYLOAD);
+      mockDispatch.mockResolvedValueOnce({ kind: 'failed', error: 'rate_limited' });
+
+      const failed = await POST(makeRequest(VALID_PAYLOAD, headers), params());
+      expect(failed.status).toBe(429);
+
+      const retry = await POST(makeRequest(VALID_PAYLOAD, headers), params());
+      expect(retry.status).toBe(200);
+      expect(await retry.json()).toEqual({ ok: true });
+      expect(mockDispatch).toHaveBeenCalledTimes(2);
+    });
+
+    it('releases the claim on a trigger-lookup 503 so the retry delivers both actions', async () => {
+      const headers = identicalSignedHeaders(VALID_PAYLOAD);
+      mockFindTriggers.mockResolvedValueOnce({ success: false, error: 'db down' });
+
+      const failed = await POST(makeRequest(VALID_PAYLOAD, headers), params());
+      expect(failed.status).toBe(503);
+      expect(mockDispatch).not.toHaveBeenCalled();
+
+      const retry = await POST(makeRequest(VALID_PAYLOAD, headers), params());
+      expect(retry.status).toBe(200);
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT record a claim for a request that fails signature verification — an attacker cannot pre-poison a delivery id', async () => {
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const forged = await POST(
+        makeRequest(VALID_PAYLOAD, {
+          'x-pagespace-signature': sign(VALID_PAYLOAD, timestamp, 'wrong-secret'),
+          'x-pagespace-timestamp': timestamp,
+          'x-pagespace-delivery-id': 'delivery-99',
+        }),
+        params(),
+      );
+      expect(forged.status).toBe(403);
+
+      const genuine = await POST(
+        makeRequest(VALID_PAYLOAD, {
+          'x-pagespace-signature': sign(VALID_PAYLOAD, timestamp),
+          'x-pagespace-timestamp': timestamp,
+          'x-pagespace-delivery-id': 'delivery-99',
+        }),
+        params(),
+      );
+      expect(genuine.status).toBe(200);
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('returns a retryable 503 (no dispatch, no fan-out) when the trigger lookup fails — never silently drops bound workflows', async () => {

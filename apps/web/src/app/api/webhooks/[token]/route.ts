@@ -4,6 +4,12 @@ import { eq } from '@pagespace/db/operators';
 import { pageWebhooks } from '@pagespace/db/schema/page-webhooks';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { v0Scheme, DEFAULT_REPLAY_WINDOW_MS } from '@pagespace/lib/security/webhook-signature';
+import {
+  WEBHOOK_DELIVERY_ID_HEADER,
+  deriveWebhookDeliveryId,
+  claimWebhookDelivery,
+  releaseWebhookDelivery,
+} from '@pagespace/lib/security/webhook-delivery-idempotency';
 import { dispatchWebhookDelivery } from '@pagespace/lib/services/page-webhook-dispatch';
 import { findEnabledPageWebhookTriggers } from '@/lib/webhooks/page-webhook-trigger-queries';
 import { firePageWebhookTriggers } from '@/lib/webhooks/fire-page-webhook-triggers';
@@ -17,6 +23,9 @@ const NOT_FOUND = () => NextResponse.json({ error: 'Not found' }, { status: 404 
 
 // POST /api/webhooks/[token] — signed intake for a page incoming webhook.
 export async function POST(request: Request, context: { params: Promise<{ token: string }> }) {
+  // Set once a delivery id has been claimed, so the catch-all 500 below can
+  // release it — an unexpected throw is a retryable outcome like any other.
+  let claimed: { webhookId: string; deliveryId: string } | null = null;
   try {
     const { token } = await context.params;
     const rawBody = await request.text();
@@ -36,17 +45,38 @@ export async function POST(request: Request, context: { params: Promise<{ token:
     }
 
     const secret = await decryptField(webhook.webhookSecretEncrypted);
+    const signature = request.headers.get('x-pagespace-signature');
+    const timestamp = request.headers.get('x-pagespace-timestamp');
     const verified = v0Scheme.verify({
       secret,
-      signature: request.headers.get('x-pagespace-signature'),
-      timestamp: request.headers.get('x-pagespace-timestamp'),
+      signature,
+      timestamp,
       rawBody,
       nowMs: Date.now(),
       replayWindowMs: DEFAULT_REPLAY_WINDOW_MS,
     });
-    if (!verified) {
+    // verify() already fails on absent headers; re-checking them narrows the
+    // types for the id derivation below.
+    if (!verified || !signature || !timestamp) {
       return NextResponse.json({ error: 'Invalid signature' }, { status: 403 });
     }
+
+    // Replay idempotency (F4): the signature's ±5-min window alone lets a
+    // captured request replay unlimited times in-window. Claim this delivery's
+    // id (sender-supplied header, or a signature-derived fallback) AFTER
+    // verification and BEFORE any dispatch or trigger fan-out; a duplicate is
+    // a no-op success — the work already happened. Claims are released on
+    // every non-accepted outcome so sender retries (the design's at-least-once
+    // mechanism) still deliver.
+    const deliveryId = deriveWebhookDeliveryId({
+      headerValue: request.headers.get(WEBHOOK_DELIVERY_ID_HEADER),
+      signature,
+      timestamp,
+    });
+    if ((await claimWebhookDelivery(webhook.id, deliveryId)) === 'duplicate') {
+      return NextResponse.json({ ok: true, duplicate: true });
+    }
+    claimed = { webhookId: webhook.id, deliveryId };
 
     let body: unknown;
     try {
@@ -73,6 +103,7 @@ export async function POST(request: Request, context: { params: Promise<{ token:
         webhookId: webhook.id,
         error: triggerLookup.error,
       });
+      await releaseWebhookDelivery(webhook.id, deliveryId);
       return NextResponse.json({ error: 'Service unavailable' }, { status: 503 });
     }
     const enabledTriggers = triggerLookup.data;
@@ -96,6 +127,11 @@ export async function POST(request: Request, context: { params: Promise<{ token:
     // it posts (handled → 200) AND fires; an arbitrary-JSON delivery to a
     // no-handler page fires via no_action → 202.
     const deliveryAccepted = result.kind === 'handled' || result.kind === 'no_action';
+    if (!deliveryAccepted) {
+      // Every 'failed' outcome maps to a non-2xx the sender is expected to
+      // retry — release the claim so that retry isn't swallowed as a duplicate.
+      await releaseWebhookDelivery(webhook.id, deliveryId);
+    }
     if (deliveryAccepted && enabledTriggers.length > 0) {
       after(() => firePageWebhookTriggers(enabledTriggers, body));
     }
@@ -126,6 +162,10 @@ export async function POST(request: Request, context: { params: Promise<{ token:
     }
   } catch (error) {
     loggers.api.error('Error handling inbound page webhook', error as Error);
+    if (claimed) {
+      // releaseWebhookDelivery never throws (best-effort by contract).
+      await releaseWebhookDelivery(claimed.webhookId, claimed.deliveryId);
+    }
     return NextResponse.json({ error: 'Internal error' }, { status: 500 });
   }
 }
