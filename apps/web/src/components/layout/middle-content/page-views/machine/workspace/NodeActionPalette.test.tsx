@@ -28,6 +28,7 @@ vi.mock('@/hooks/useIntegrations', () => ({
   useProviders: () => ({ providers: [] }),
 }));
 
+import { toast } from 'sonner';
 import { post } from '@/lib/auth/auth-fetch';
 
 const MACHINE_NODE: MachineTreeNode = { level: 'machine' };
@@ -71,51 +72,54 @@ describe('NodeActionPalette', () => {
     });
   });
 
-  test('the machine node offers New terminal + Add project, not Add branch', async () => {
+  test('the machine node offers Agent + Shell + Add project, not Add branch', async () => {
     renderPalette(<NodeActionPalette machineId="m1" node={MACHINE_NODE} onAddProject={vi.fn()} onWorkspaceCreated={vi.fn()} />);
     await openPalette();
 
     assert({
       given: 'a machine node\'s palette, with onWorkspaceCreated wired in',
-      should: 'offer New terminal and Add project, but not Add branch',
+      should: 'offer the instant spawns plus Add project, but not Add branch',
       actual: {
-        newTerminal: screen.queryByRole('option', { name: 'New terminal' }) !== null,
+        agent: screen.queryByRole('option', { name: 'Agent' }) !== null,
+        shell: screen.queryByRole('option', { name: 'Shell' }) !== null,
         addProject: screen.queryByRole('option', { name: 'Add project' }) !== null,
         addBranch: screen.queryByRole('option', { name: 'Add branch' }) !== null,
       },
-      expected: { newTerminal: true, addProject: true, addBranch: false },
+      expected: { agent: true, shell: true, addProject: true, addBranch: false },
     });
   });
 
-  test('the project node offers New terminal + Add branch, not Add project', async () => {
+  test('the project node offers Agent + Shell + Add branch, not Add project', async () => {
     renderPalette(<NodeActionPalette machineId="m1" node={PROJECT_NODE} onAddBranch={vi.fn()} onWorkspaceCreated={vi.fn()} />);
     await openPalette();
 
     assert({
       given: 'a project node\'s palette, with onWorkspaceCreated wired in',
-      should: 'offer New terminal and Add branch, but not Add project',
+      should: 'offer the instant spawns plus Add branch, but not Add project',
       actual: {
-        newTerminal: screen.queryByRole('option', { name: 'New terminal' }) !== null,
+        agent: screen.queryByRole('option', { name: 'Agent' }) !== null,
+        shell: screen.queryByRole('option', { name: 'Shell' }) !== null,
         addBranch: screen.queryByRole('option', { name: 'Add branch' }) !== null,
         addProject: screen.queryByRole('option', { name: 'Add project' }) !== null,
       },
-      expected: { newTerminal: true, addBranch: true, addProject: false },
+      expected: { agent: true, shell: true, addBranch: true, addProject: false },
     });
   });
 
-  test('the branch node offers New terminal only', async () => {
+  test('the branch node offers Agent + Shell only', async () => {
     renderPalette(<NodeActionPalette machineId="m1" node={BRANCH_NODE} onWorkspaceCreated={vi.fn()} />);
     await openPalette();
 
     assert({
       given: 'a branch node\'s palette, with onWorkspaceCreated wired in',
-      should: 'offer New terminal only — a branch has no structural add-child action',
+      should: 'offer the instant spawns only — a branch has no structural add-child action',
       actual: {
-        newTerminal: screen.queryByRole('option', { name: 'New terminal' }) !== null,
+        agent: screen.queryByRole('option', { name: 'Agent' }) !== null,
+        shell: screen.queryByRole('option', { name: 'Shell' }) !== null,
         addProject: screen.queryByRole('option', { name: 'Add project' }) !== null,
         addBranch: screen.queryByRole('option', { name: 'Add branch' }) !== null,
       },
-      expected: { newTerminal: true, addProject: false, addBranch: false },
+      expected: { agent: true, shell: true, addProject: false, addBranch: false },
     });
   });
 
@@ -130,17 +134,40 @@ describe('NodeActionPalette', () => {
     });
   });
 
-  test('"New terminal" creates a workspace at the node\'s scope, spawns the picked agent into it with the typed prompt, and reports the new workspace id', async () => {
+  test('the spawn options derive from the registry: exactly Agent then Shell', async () => {
+    renderPalette(<NodeActionPalette machineId="m1" node={BRANCH_NODE} onWorkspaceCreated={vi.fn()} />);
+    await openPalette();
+
+    const optionTexts = (await screen.findAllByRole('option')).map((o) => o.textContent);
+    assert({
+      given: 'the palette\'s spawn group, on a node with no structural actions',
+      should:
+        'list exactly the PICKABLE_AGENT_TYPES in registry order — Agent (pagespace) first, then Shell; a palette-local hardcoded list is exactly what silently dropped pagespace from this surface once',
+      actual: optionTexts,
+      expected: ['Agent', 'Shell'],
+    });
+  });
+
+  test('clicking Shell closes the palette immediately and spawns into a fresh workspace at the node\'s scope', async () => {
     vi.mocked(post).mockResolvedValueOnce({
-      agentTerminal: { name: 'claude-mocked', agentType: 'pagespace-cli', resumed: false },
+      agentTerminal: { name: 'shell-mocked', agentType: 'shell', resumed: false },
     });
     const onWorkspaceCreated = vi.fn();
     renderPalette(<NodeActionPalette machineId="m1" node={PROJECT_NODE} onAddBranch={vi.fn()} onWorkspaceCreated={onWorkspaceCreated} />);
 
     const user = await openPalette();
-    await user.click(await screen.findByRole('option', { name: 'New terminal' }));
-    await user.type(await screen.findByLabelText('Starting prompt'), 'hello agent');
-    await user.click(screen.getByRole('button', { name: 'Spawn agent' }));
+    await user.click(await screen.findByRole('option', { name: 'Shell' }));
+
+    // The click is the commitment: no second phase, no form — the palette is
+    // gone before the network resolves.
+    await waitFor(() => {
+      assert({
+        given: 'Shell clicked in the palette',
+        should: 'close the palette immediately (instant spawn, no form phase)',
+        actual: screen.queryByRole('dialog'),
+        expected: null,
+      });
+    });
 
     await waitFor(() => {
       const workspaceId = onWorkspaceCreated.mock.calls[0]?.[0];
@@ -148,64 +175,28 @@ describe('NodeActionPalette', () => {
       const workspace = workspaceId ? machine?.workspaces[workspaceId] : undefined;
       const pane = workspace?.columns[0]?.panes[0];
       assert({
-        given: '"New terminal" submitted with a starting prompt, on a project node',
-        should: 'create a workspace scoped to that project, bind the spawned agent into its first pane with the prompt pending, and report the workspace id',
+        given: 'the spawn resolving, on a project node',
+        should:
+          'create a workspace scoped to that project, bind the spawned shell into its first pane with NO pending prompt (the prompt is typed in the pane), and report the workspace id',
         actual: {
           reported: workspaceId !== undefined,
           scope: workspace?.scope,
           paneAgentName: pane?.scope?.name,
+          kind: pane?.scope?.kind,
           pendingPrompt: pane?.pendingPrompt,
         },
         expected: {
           reported: true,
           scope: { projectName: 'app' },
-          paneAgentName: 'claude-mocked',
-          pendingPrompt: 'hello agent',
+          paneAgentName: 'shell-mocked',
+          kind: undefined,
+          pendingPrompt: undefined,
         },
       });
     });
   });
 
-  // Regression: submit() used to call onSpawned(workspaceId) unconditionally,
-  // even if the user backed out (Escape/backdrop) while the addAgentTerminal
-  // network call was still in flight. A late-resolving spawn would then still
-  // report "success" to a caller no longer listening — in DevelopmentSidebar
-  // that meant navigating the user to a workspace they explicitly cancelled.
-  test('cancelling "New terminal" (Escape) while the spawn is in flight never reports success once it resolves', async () => {
-    let resolveSpawn: (value: unknown) => void = () => {};
-    vi.mocked(post).mockImplementationOnce(() => new Promise((resolve) => { resolveSpawn = resolve; }));
-    const onWorkspaceCreated = vi.fn();
-    renderPalette(<NodeActionPalette machineId="m1" node={MACHINE_NODE} onWorkspaceCreated={onWorkspaceCreated} />);
-
-    const user = await openPalette();
-    await user.click(await screen.findByRole('option', { name: 'New terminal' }));
-    await user.click(screen.getByRole('button', { name: 'Spawn agent' }));
-
-    // Still awaiting the network — back out before it resolves.
-    await user.keyboard('{Escape}');
-    await waitFor(() => {
-      assert({
-        given: 'Escape pressed while a "New terminal" spawn is awaiting the network',
-        should: 'close the palette immediately rather than wait for the in-flight spawn',
-        actual: screen.queryByRole('dialog'),
-        expected: null,
-      });
-    });
-
-    resolveSpawn({ agentTerminal: { name: 'claude-late', agentType: 'claude', resumed: false } });
-    // Let the now-resolved promise chain (addAgentTerminal -> cancelledRef
-    // check -> removeAgentTerminal cleanup) finish draining.
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    assert({
-      given: 'the spawn resolving AFTER the user cancelled it',
-      should: 'never call onWorkspaceCreated for a spawn the user backed out of',
-      actual: onWorkspaceCreated.mock.calls.length,
-      expected: 0,
-    });
-  });
-
-  test('a "PageSpace Agent" palette spawn binds a chat-kind scope', async () => {
+  test('clicking Agent binds a chat-kind scope', async () => {
     vi.mocked(post).mockResolvedValueOnce({
       agentTerminal: { name: 'pagespace-mocked', agentType: 'pagespace', resumed: false },
     });
@@ -213,10 +204,7 @@ describe('NodeActionPalette', () => {
     renderPalette(<NodeActionPalette machineId="m1" node={BRANCH_NODE} onWorkspaceCreated={onWorkspaceCreated} />);
 
     const user = await openPalette();
-    await user.click(await screen.findByRole('option', { name: 'New terminal' }));
-    await user.click(await screen.findByLabelText('Agent type'));
-    await user.click(await screen.findByRole('option', { name: 'PageSpace Agent' }));
-    await user.click(screen.getByRole('button', { name: 'Spawn agent' }));
+    await user.click(await screen.findByRole('option', { name: 'Agent' }));
 
     await waitFor(() => {
       const workspaceId = onWorkspaceCreated.mock.calls[0]?.[0];
@@ -224,7 +212,7 @@ describe('NodeActionPalette', () => {
       const workspace = workspaceId ? machine?.workspaces[workspaceId] : undefined;
       const pane = workspace?.columns[0]?.panes[0];
       assert({
-        given: 'the palette\'s "PageSpace Agent" choice, spawned on a branch node',
+        given: 'the palette\'s Agent choice, spawned on a branch node',
         should:
           'record kind "chat" on the bound pane scope — the pane grid renders MachinePaneChat from this tag, so a palette spawn that omitted it would open as a PTY',
         actual: { name: pane?.scope?.name, kind: pane?.scope?.kind },
@@ -233,23 +221,36 @@ describe('NodeActionPalette', () => {
     });
   });
 
-  test('"New terminal" offers shell, claude, codex, and the PageSpace Agent — not pagespace-cli — with shell first/default', async () => {
-    renderPalette(<NodeActionPalette machineId="m1" node={MACHINE_NODE} onWorkspaceCreated={vi.fn()} />);
+  test('a spawn that fails after the palette closed toasts the error and never navigates', async () => {
+    let rejectSpawn: (reason: Error) => void = () => {};
+    vi.mocked(post).mockImplementationOnce(() => new Promise((resolve, reject) => { rejectSpawn = reject; }));
+    const onWorkspaceCreated = vi.fn();
+    renderPalette(<NodeActionPalette machineId="m1" node={MACHINE_NODE} onWorkspaceCreated={onWorkspaceCreated} />);
 
     const user = await openPalette();
-    await user.click(await screen.findByRole('option', { name: 'New terminal' }));
-    const agentTypeTrigger = await screen.findByLabelText('Agent type');
-    const defaultSelected = agentTypeTrigger.textContent;
+    await user.click(await screen.findByRole('option', { name: 'Agent' }));
 
-    await user.click(agentTypeTrigger);
-    const optionTexts = (await screen.findAllByRole('option')).map((o) => o.textContent);
+    // Palette already closed, spawn still in flight.
+    await waitFor(() => {
+      assert({
+        given: 'Agent clicked, spawn in flight',
+        should: 'have closed the palette already',
+        actual: screen.queryByRole('dialog'),
+        expected: null,
+      });
+    });
 
-    assert({
-      given: 'the "New terminal" agent-type picker, opened',
-      should:
-        'offer the shared PICKABLE_AGENT_TYPES — shell first/default, then claude, codex, and the chat agent labeled "PageSpace Agent" (never pagespace-cli); a palette-local hardcoded list is exactly what silently dropped pagespace from this surface',
-      actual: { optionTexts, defaultSelected },
-      expected: { optionTexts: ['shell', 'claude', 'codex', 'PageSpace Agent'], defaultSelected: 'shell' },
+    rejectSpawn(new Error('code_execution_disabled'));
+    await waitFor(() => {
+      assert({
+        given: 'the spawn rejecting after the palette closed',
+        should: 'surface the error via toast and never call onWorkspaceCreated',
+        actual: {
+          toasts: vi.mocked(toast.error).mock.calls.length,
+          navigations: onWorkspaceCreated.mock.calls.length,
+        },
+        expected: { toasts: 1, navigations: 0 },
+      });
     });
   });
 
@@ -322,7 +323,7 @@ describe('NodeActionPalette', () => {
 
     assert({
       given: 'the palette reopened right after a successful "Add branch" submit',
-      should: 'show the action list (New terminal / Add branch), not the branch-name form left over from last time',
+      should: 'show the action list (Agent / Shell / Add branch), not the branch-name form left over from last time',
       actual: {
         actionList: screen.queryByRole('option', { name: 'Add branch' }) !== null,
         staleForm: screen.queryByPlaceholderText('Branch name') !== null,

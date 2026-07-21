@@ -175,7 +175,7 @@ describe('WorkspaceLeaves', () => {
     store().splitRight('m1', workspace.id, workspace.activePaneId);
     const withPane = selectMachine('m1')(store())!.workspaces[workspace.id];
     const newPaneId = withPane.columns[1].panes[0].id;
-    store().bindPaneTerminal('m1', workspace.id, newPaneId, { name: 'claude-a1b2c3' });
+    store().bindPaneTerminal('m1', workspace.id, newPaneId, { name: 'shell-a1b2c3' });
 
     renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
 
@@ -185,7 +185,7 @@ describe('WorkspaceLeaves', () => {
       should: 'render only the owning workspace as a row — the child pane is not a separate row',
       actual: {
         rows: screen.getAllByRole('button', { name: /^Workspace \d+$/ }).length,
-        childRowRendered: screen.queryByText('claude-a1b2c3') !== null,
+        childRowRendered: screen.queryByText('shell-a1b2c3') !== null,
       },
       expected: { rows: 1, childRowRendered: false },
     });
@@ -235,7 +235,7 @@ describe('WorkspaceLeaves', () => {
   test('removing a workspace WITH a running pane stops that agent server-side before dropping the workspace', async () => {
     seedMachine('m1');
     const workspace = selectMachine('m1')(store())!.workspaces[selectMachine('m1')(store())!.activeWorkspaceId];
-    store().bindPaneTerminal('m1', workspace.id, workspace.activePaneId, { name: 'claude-a1b2c3' });
+    store().bindPaneTerminal('m1', workspace.id, workspace.activePaneId, { name: 'shell-a1b2c3' });
     // A SECOND (empty) workspace, so removing the first one actually exercises
     // the removeWorkspace path — not the "last workspace" no-op path, which
     // has its own dedicated test below.
@@ -254,7 +254,7 @@ describe('WorkspaceLeaves', () => {
         given: 'a workspace holding one running pane, with a sibling workspace also present, remove confirmed',
         should: 'DELETE that agent_terminal server-side, then drop the local workspace entirely (its sibling survives)',
         actual: {
-          deletedRunningAgent: killCalls().some(([url]) => String(url).includes('name=claude-a1b2c3')),
+          deletedRunningAgent: killCalls().some(([url]) => String(url).includes('name=shell-a1b2c3')),
           remainingWorkspaces: Object.keys(selectMachine('m1')(store())!.workspaces).length,
         },
         expected: { deletedRunningAgent: true, remainingWorkspaces: rows.length - 1 },
@@ -270,7 +270,7 @@ describe('WorkspaceLeaves', () => {
     seedMachine('m1');
     const workspaceId = selectMachine('m1')(store())!.activeWorkspaceId;
     const workspace = selectMachine('m1')(store())!.workspaces[workspaceId];
-    store().bindPaneTerminal('m1', workspaceId, workspace.activePaneId, { name: 'claude-solo' });
+    store().bindPaneTerminal('m1', workspaceId, workspace.activePaneId, { name: 'shell-solo' });
 
     renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
 
@@ -285,7 +285,7 @@ describe('WorkspaceLeaves', () => {
         should:
           'stop the agent server-side and drop the workspace — this used to EMPTY it in place instead, which left an un-removable row that New terminal then duplicated',
         actual: {
-          deletedRunningAgent: killCalls().some(([url]) => String(url).includes('name=claude-solo')),
+          deletedRunningAgent: killCalls().some(([url]) => String(url).includes('name=shell-solo')),
           workspaceCount: Object.keys(machine.workspaces).length,
           active: machine.activeWorkspaceId,
         },
@@ -424,7 +424,7 @@ describe('WorkspaceLeaves', () => {
   test('a server-backed session with no local workspace is reachable — clicking adopts it into a real workspace', async () => {
     vi.mocked(fetchWithAuth).mockImplementation(async () =>
       new Response(
-        JSON.stringify({ agentTerminals: [{ name: 'orphan-1', agentType: 'claude', createdAt: '2026-01-01' }] }),
+        JSON.stringify({ agentTerminals: [{ name: 'orphan-1', agentType: 'shell', createdAt: '2026-01-01' }] }),
         { status: 200 },
       ),
     );
@@ -591,7 +591,7 @@ describe('WorkspaceLeaves', () => {
     });
   });
 
-  // The OTHER un-removable listing: a `shell`/`claude`/`codex` orphan rendered
+  // The OTHER un-removable listing: a supported-type orphan rendered
   // its remove button only when `!launchable`, so a supported unclaimed session
   // had no remove affordance at all. The only stop path was "remove the
   // workspace holding it" — which is precisely what an unclaimed session lacks.
@@ -599,19 +599,19 @@ describe('WorkspaceLeaves', () => {
     vi.mocked(fetchWithAuth).mockImplementation(async () =>
       new Response(
         JSON.stringify({
-          agentTerminals: [{ name: 'claude-orphan', agentType: 'claude', createdAt: '2026-01-01' }],
+          agentTerminals: [{ name: 'shell-runner', agentType: 'shell', createdAt: '2026-01-01' }],
         }),
         { status: 200 },
       ),
     );
     renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
 
-    const row = (await screen.findByText('claude-orphan')).closest('.group') as HTMLElement;
+    const row = (await screen.findByText('shell-runner')).closest('.group') as HTMLElement;
 
     assert({
       given: 'an unclaimed session whose agent type IS supported',
       should: 'still offer a remove button — it has no workspace to remove instead',
-      actual: within(row).queryByRole('button', { name: /Remove session claude-orphan/ }) !== null,
+      actual: within(row).queryByRole('button', { name: /Remove session shell-runner/ }) !== null,
       expected: true,
     });
   });
@@ -749,7 +749,7 @@ describe('WorkspaceNodeExtras', () => {
   test('shows a running-count badge scoped to the node', () => {
     seedMachine('m1');
     const workspace = selectMachine('m1')(store())!.workspaces[selectMachine('m1')(store())!.activeWorkspaceId];
-    store().bindPaneTerminal('m1', workspace.id, workspace.activePaneId, { name: 'claude-a1b2c3' });
+    store().bindPaneTerminal('m1', workspace.id, workspace.activePaneId, { name: 'shell-a1b2c3' });
 
     renderLeaves(<WorkspaceNodeExtras machineId="m1" node={MACHINE_NODE} />);
 

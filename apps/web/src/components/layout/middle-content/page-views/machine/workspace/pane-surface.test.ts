@@ -13,7 +13,7 @@ import { resolvePaneSurface, agentTypeLabelOf } from './pane-surface';
 const NODE = { projectName: 'app', branchName: 'main' };
 
 const chatRow = { id: 'row-chat', name: 'pagespace-a1', agentType: 'pagespace', createdAt: '' };
-const ptyRow = { id: 'row-pty', name: 'claude-b2', agentType: 'claude', createdAt: '' };
+const ptyRow = { id: 'row-pty', name: 'shell-b2', agentType: 'shell', createdAt: '' };
 
 describe('resolvePaneSurface', () => {
   test('an explicit chat kind renders chat, carrying the row id the list resolved', () => {
@@ -49,7 +49,7 @@ describe('resolvePaneSurface', () => {
       given: 'kind "terminal" while the list is still loading',
       should: 'be a terminal immediately — an explicit binding never waits on the list',
       actual: resolvePaneSurface({
-        scope: { ...NODE, name: 'claude-b2', kind: 'terminal' },
+        scope: { ...NODE, name: 'shell-b2', kind: 'terminal' },
         workspaceScope: NODE,
         agentTerminals: [],
         isLoading: true,
@@ -74,10 +74,10 @@ describe('resolvePaneSurface', () => {
 
   test('no kind hint + the list resolving the name to a PTY agent type renders a terminal', () => {
     assert({
-      given: 'a kind-less scope whose name the loaded list maps to agentType "claude"',
+      given: 'a kind-less scope whose name the loaded list maps to agentType "shell"',
       should: 'resolve to a terminal',
       actual: resolvePaneSurface({
-        scope: { ...NODE, name: 'claude-b2' },
+        scope: { ...NODE, name: 'shell-b2' },
         workspaceScope: NODE,
         agentTerminals: [ptyRow],
         isLoading: false,
@@ -146,21 +146,17 @@ describe('resolvePaneSurface', () => {
 });
 
 describe('agentTypeLabelOf', () => {
-  test('the chat agent presents as "PageSpace Agent", PTY types as themselves', () => {
+  test('the chat agent presents as "Agent", the PTY type as "Shell"', () => {
     assert({
       given: 'every pickable agent type',
-      should: 'label pagespace "PageSpace Agent" — agents and chats are one thing, so it presents as an agent, never as "chat" — and leave PTY binaries under their real names',
+      should: 'label pagespace "Agent" — agents and chats are one thing, and PageSpace is the assumed context — and shell "Shell"',
       actual: {
         pagespace: agentTypeLabelOf('pagespace'),
         shell: agentTypeLabelOf('shell'),
-        claude: agentTypeLabelOf('claude'),
-        codex: agentTypeLabelOf('codex'),
       },
       expected: {
-        pagespace: 'PageSpace Agent',
-        shell: 'shell',
-        claude: 'claude',
-        codex: 'codex',
+        pagespace: 'Agent',
+        shell: 'Shell',
       },
     });
   });

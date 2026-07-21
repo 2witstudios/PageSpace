@@ -216,7 +216,7 @@ describe('killAgentTerminal', () => {
     assert({
       given: 'a DELETE failing 5xx',
       should: 'rethrow the server error (agent may still be running and billing)',
-      actual: error?.message,
+      actual: (error as Error | null)?.message,
       expected: 'sprite unreachable',
     });
     await waitFor(() => {
@@ -282,7 +282,7 @@ describe('removeAgentTerminal', () => {
     assert({
       given: 'a DELETE failing 5xx',
       should: 'rethrow so the caller can toast',
-      actual: error?.message,
+      actual: (error as Error | null)?.message,
       expected: 'kill failed',
     });
     await waitFor(() => {

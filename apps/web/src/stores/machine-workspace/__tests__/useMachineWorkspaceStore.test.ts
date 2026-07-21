@@ -26,7 +26,7 @@ const seedMachine = (machineId: string) => {
 };
 
 const BRANCH_SCOPE = { projectName: 'app', branchName: 'main' };
-const SESSION = { ...BRANCH_SCOPE, name: 'claude-a1b2c3' };
+const SESSION = { ...BRANCH_SCOPE, name: 'shell-a1b2c3' };
 
 describe('useMachineWorkspaceStore', () => {
   beforeEach(() => {
@@ -422,7 +422,7 @@ describe('useMachineWorkspaceStore', () => {
   it('given a persisted blob this version CAN render, should restore the grid', () => {
     const workspace = {
       id: 'ws-1',
-      name: 'claude-a1b2c3',
+      name: 'shell-a1b2c3',
       scope: BRANCH_SCOPE,
       columns: [
         { id: 'c1', panes: [{ id: 'p1', scope: SESSION, pendingPrompt: 'stale prompt' }] },
@@ -484,7 +484,7 @@ describe('useMachineWorkspaceStore', () => {
     // One session opened from the sidebar (its own workspace), one spawned into it.
     store().openTerminal('m1', SESSION);
     const sessionWorkspace = activeOf('m1')!;
-    const spawned = { ...BRANCH_SCOPE, name: 'codex-b2c3d4' };
+    const spawned = { ...BRANCH_SCOPE, name: 'shell-b2c3d4' };
     store().splitRight('m1', sessionWorkspace.id, sessionWorkspace.activePaneId);
     store().bindPaneTerminal(
       'm1',
@@ -586,7 +586,7 @@ describe('useMachineWorkspaceStore', () => {
         id: 'ws-1',
         name: 'Workspace 1',
         scope: {},
-        columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: { name: 'claude-a1', kind: 'chat' } }] }],
+        columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: { name: 'pagespace-a1', kind: 'chat' } }] }],
       },
     ]);
 
@@ -594,7 +594,7 @@ describe('useMachineWorkspaceStore', () => {
       given: "the sync hook's initial hydrate carrying a pane tagged kind: 'chat'",
       should: 'round-trip the content kind into the store',
       actual: panesOf(activeOf('m1')!)[0]?.scope,
-      expected: { name: 'claude-a1', kind: 'chat' },
+      expected: { name: 'pagespace-a1', kind: 'chat' },
     });
   });
 

@@ -94,8 +94,13 @@ export const withoutSession =
  *   teardown into a rejection.
  */
 export const killMutateOptions = (name: string) => ({
-  optimisticData: (_committed: TerminalList, displayed: TerminalList) => withoutSession(name)(displayed),
-  populateCache: (_result: void, committed: TerminalList) => withoutSession(name)(committed),
+  // SWR's MutatorOptions require a non-undefined cache value from these — an
+  // unpopulated cache filters to an empty list (the row wasn't shown anyway),
+  // and the detached revalidation reconciles it with server truth.
+  optimisticData: (_committed: TerminalList, displayed: TerminalList) =>
+    withoutSession(name)(displayed) ?? { agentTerminals: [] },
+  populateCache: (_result: void, committed: TerminalList) =>
+    withoutSession(name)(committed) ?? { agentTerminals: [] },
   rollbackOnError: true,
   revalidate: true,
 });

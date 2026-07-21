@@ -77,14 +77,17 @@ export function resolvePaneSurface(params: {
   return { surface: 'terminal' };
 }
 
-/** What the chat agent presents as everywhere a picker lists it — agents and
- * chats are one thing, so it's an agent ("PageSpace Agent"), never a "chat". */
-const AGENT_TYPE_LABELS: Partial<Record<AgentRuntimeType, string>> = {
-  pagespace: 'PageSpace Agent',
+/** What each agent type presents as everywhere a picker lists it. TOTAL by
+ * design — a new registry entry fails compilation here until it declares its
+ * label, instead of silently leaking its raw key into the UI. `pagespace` is
+ * just "Agent": agents and chats are one thing, and PageSpace is the assumed
+ * context — we are pushing people toward it, not branding it as an add-on. */
+const AGENT_TYPE_LABELS: Record<AgentRuntimeType, string> = {
+  pagespace: 'Agent',
+  shell: 'Shell',
 };
 
-/** Display label for an agent type — PTY binaries under their real names, the
- * chat agent as "PageSpace Agent". */
+/** Display label for an agent type — "Agent" for the chat agent, "Shell" for the PTY. */
 export function agentTypeLabelOf(type: AgentRuntimeType): string {
-  return AGENT_TYPE_LABELS[type] ?? type;
+  return AGENT_TYPE_LABELS[type];
 }

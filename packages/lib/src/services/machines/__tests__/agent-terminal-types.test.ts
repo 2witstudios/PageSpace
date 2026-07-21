@@ -12,8 +12,7 @@ import {
 
 describe('isAgentRuntimeType', () => {
   it('given each first-party agent type, should recognize it', () => {
-    expect(isAgentRuntimeType('claude')).toBe(true);
-    expect(isAgentRuntimeType('codex')).toBe(true);
+    expect(isAgentRuntimeType('pagespace')).toBe(true);
     expect(isAgentRuntimeType('shell')).toBe(true);
   });
 
@@ -23,51 +22,45 @@ describe('isAgentRuntimeType', () => {
     expect(isAgentRuntimeType('constructor')).toBe(false);
   });
 
-  it('given the retired pagespace-cli agent type, should reject it as unrecognized (not crash)', () => {
+  it('given a retired agent type, should reject it as unrecognized (not crash)', () => {
+    // Retired types' DB rows degrade to remove-only sidebar listings — the
+    // registry must NOT resurrect them as launchable.
     expect(isAgentRuntimeType('pagespace-cli')).toBe(false);
-  });
-
-  it('given the pagespace agent type, should recognize it', () => {
-    expect(isAgentRuntimeType('pagespace')).toBe(true);
+    expect(isAgentRuntimeType('claude')).toBe(false);
+    expect(isAgentRuntimeType('codex')).toBe(false);
   });
 });
 
 describe('resolveAgentLaunchSpec', () => {
-  it('given claude, should resolve the claude binary', () => {
-    expect(resolveAgentLaunchSpec('claude')).toEqual({ command: 'claude', args: [] });
-  });
-
-  it('given codex, should resolve the codex binary', () => {
-    expect(resolveAgentLaunchSpec('codex')).toEqual({ command: 'codex', args: [] });
-  });
-
   it('given shell, should resolve the "shell" sentinel command (resolved to $SHELL by the launching layer)', () => {
     expect(resolveAgentLaunchSpec('shell')).toEqual({ command: 'shell', args: [] });
   });
 
   it('given two resolutions, should return independent arrays (no shared mutable state)', () => {
-    const a = resolveAgentLaunchSpec('claude');
+    const a = resolveAgentLaunchSpec('shell');
     a.args.push('--danger');
-    const b = resolveAgentLaunchSpec('claude');
+    const b = resolveAgentLaunchSpec('shell');
     expect(b.args).toEqual([]);
   });
 
-  it('should expose a registry entry for every AgentRuntimeType', () => {
-    expect(Object.keys(AGENT_LAUNCH_SPECS)).toEqual(['shell', 'claude', 'codex', 'pagespace']);
+  it('should expose a registry entry for every AgentRuntimeType, Agent first', () => {
+    expect(Object.keys(AGENT_LAUNCH_SPECS)).toEqual(['pagespace', 'shell']);
   });
 
-  it('should not expose a registry entry for the retired pagespace-cli agent type', () => {
+  it('should not expose registry entries for retired agent types', () => {
     expect(Object.keys(AGENT_LAUNCH_SPECS)).not.toContain('pagespace-cli');
+    expect(Object.keys(AGENT_LAUNCH_SPECS)).not.toContain('claude');
+    expect(Object.keys(AGENT_LAUNCH_SPECS)).not.toContain('codex');
   });
 });
 
 describe('PICKABLE_AGENT_TYPES', () => {
-  it('should include shell (primary) plus claude, codex, and pagespace (secondary) — only the retired pagespace-cli is excluded', () => {
-    expect(PICKABLE_AGENT_TYPES).toEqual(['shell', 'claude', 'codex', 'pagespace']);
+  it('should be exactly pagespace and shell — claude/codex are retired alongside pagespace-cli', () => {
+    expect(PICKABLE_AGENT_TYPES).toEqual(['pagespace', 'shell']);
   });
 
-  it('should list shell FIRST — a plain interactive shell is the default, primary way to work on a Machine', () => {
-    expect(PICKABLE_AGENT_TYPES[0]).toBe('shell');
+  it('should list pagespace FIRST — the Agent is the default, primary way to work on a Machine', () => {
+    expect(PICKABLE_AGENT_TYPES[0]).toBe('pagespace');
   });
 });
 
@@ -76,10 +69,8 @@ describe('agentSurfaceOf', () => {
     expect(agentSurfaceOf('pagespace')).toBe('chat');
   });
 
-  it('given shell, claude, or codex, should return pty', () => {
+  it('given shell, should return pty', () => {
     expect(agentSurfaceOf('shell')).toBe('pty');
-    expect(agentSurfaceOf('claude')).toBe('pty');
-    expect(agentSurfaceOf('codex')).toBe('pty');
   });
 });
 
@@ -88,10 +79,8 @@ describe('isPtyAgentType', () => {
     expect(isPtyAgentType('pagespace')).toBe(false);
   });
 
-  it('given shell, claude, or codex, should return true', () => {
+  it('given shell, should return true', () => {
     expect(isPtyAgentType('shell')).toBe(true);
-    expect(isPtyAgentType('claude')).toBe(true);
-    expect(isPtyAgentType('codex')).toBe(true);
   });
 });
 

@@ -175,7 +175,7 @@ describe('resolveMachineSandbox', () => {
     const result = await resolveMachineSandbox(
       { machineId: 'm-1', name: 'runner' },
       {
-        resolveAgentTerminal: async () => ({ ...resolvedOk, agentType: 'claude', command: 'claude --dangerously' }),
+        resolveAgentTerminal: async () => ({ ...resolvedOk, agentType: 'shell', command: 'htop --tree' }),
         getSprite: spyGetSprite().fn,
       },
     );
@@ -184,7 +184,7 @@ describe('resolveMachineSandbox', () => {
       given: 'a resolved row with a command override',
       should: 'expose the override plus the agentType launch command',
       actual: result.ok ? { command: result.command, commandOverride: result.commandOverride } : result,
-      expected: { command: 'claude', commandOverride: 'claude --dangerously' },
+      expected: { command: 'shell', commandOverride: 'htop --tree' },
     });
   });
 

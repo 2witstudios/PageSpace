@@ -4,17 +4,9 @@ import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { toast } from 'sonner';
 import type { Socket } from 'socket.io-client';
-import { SquareSplitHorizontal, SquareSplitVertical, X } from 'lucide-react';
+import { Bot, SquareSplitHorizontal, SquareSplitVertical, TerminalSquare, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import { Textarea } from '@/components/ui/textarea';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { useMobile } from '@/hooks/useMobile';
 import { useAgentTerminals, killAgentTerminal, type AgentTerminal } from '@/hooks/useAgentTerminals';
@@ -111,7 +103,7 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
    * resolves, so the agent belongs to a pane from the first frame it exists.
    */
   const spawnIntoPane = useCallback(
-    async (paneId: string, agentType: AgentRuntimeType, prompt?: string) => {
+    async (paneId: string, agentType: AgentRuntimeType) => {
       const created = await addAgentTerminal(autoSessionName(agentType, freshNameSuffix()), agentType);
       const bound = bindPaneTerminal(
         workspaceId,
@@ -133,12 +125,9 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
             ? { kind: 'chat' as const }
             : {}),
         },
-        // `spawnAgentTerminal` is an upsert: `resumed` means it handed back a session
-        // that ALREADY EXISTED rather than creating one. An agent that was already
-        // running must never be typed at, and the API says so right here — relying on
-        // the auto-name's entropy to make this unreachable would leave the invariant
-        // resting on luck instead of on the answer we were given.
-        created.resumed ? undefined : prompt,
+        // No starting prompt — instant spawn means the prompt is typed in the
+        // pane itself, so there is nothing to auto-send.
+        undefined,
       );
       if (!bound && !created.resumed) {
         // The pane went away while the Sprite booted (closed, or the page
@@ -277,7 +266,7 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
     onSplitRight: () => splitRight(workspaceId, pane.id),
     onSplitDown: () => splitDown(workspaceId, pane.id),
     onClose: () => closePaneAndKill(pane.id),
-    onSpawn: (agentType: AgentRuntimeType, prompt?: string) => spawnIntoPane(pane.id, agentType, prompt),
+    onSpawn: (agentType: AgentRuntimeType) => spawnIntoPane(pane.id, agentType),
     onPickerFocused: () => dismissPicker(machineId, workspaceId, pane.id),
     onPromptSent: () => clearPanePrompt(machineId, workspaceId, pane.id),
   });
@@ -442,7 +431,7 @@ function TerminalPane({
   onSplitRight(): void;
   onSplitDown(): void;
   onClose(): void;
-  onSpawn(agentType: AgentRuntimeType, prompt?: string): Promise<void>;
+  onSpawn(agentType: AgentRuntimeType): Promise<void>;
   onPickerFocused(): void;
   onPromptSent(): void;
 }) {
@@ -565,14 +554,12 @@ function TerminalPane({
 }
 
 /**
- * An empty pane's inline agent picker — the whole spawn flow, in the pane the
- * agent will run in. Pick a type, optionally say what it should start on, and
- * the agent is created AND placed here in one action: no modal, no name step,
- * no separate "now assign it to a pane" click.
- *
- * The starting prompt is optional on purpose — Enter on the type is the fast
- * path (the agent boots to its own prompt), and the textarea is there for when
- * the user already knows the first thing to say.
+ * An empty pane's inline agent picker — two instant-spawn buttons, in the pane
+ * the agent will run in. Click Agent or Shell and the agent is created AND
+ * placed here in one action: no modal, no name step, no type dropdown, no
+ * prompt form — the prompt is typed in the pane once it opens (same instant
+ * grammar as NodeActionPalette's spawn options). The buttons come from
+ * `PICKABLE_AGENT_TYPES`, so this stays registry-driven.
  */
 function PaneAgentPicker({
   focused,
@@ -582,29 +569,28 @@ function PaneAgentPicker({
 }: {
   focused: boolean;
   scopeLabel: string;
-  onSpawn(agentType: AgentRuntimeType, prompt?: string): Promise<void>;
+  onSpawn(agentType: AgentRuntimeType): Promise<void>;
   onFocused(): void;
 }) {
-  const [agentType, setAgentType] = useState<AgentRuntimeType>(AGENT_TYPES[0]);
-  const [prompt, setPrompt] = useState('');
   const [spawning, setSpawning] = useState(false);
-  const promptRef = useRef<HTMLTextAreaElement>(null);
+  const firstChoiceRef = useRef<HTMLButtonElement>(null);
 
   // Consume the focus intent once. Clearing it in the store (onFocused) is what
-  // stops a later unrelated re-render from yanking the caret back here while
-  // the user is typing in a sibling pane.
+  // stops a later unrelated re-render from yanking the focus back here while
+  // the user is typing in a sibling pane. Focus lands on the FIRST choice
+  // (Agent) — the split asked for a new agent, so Enter spawns the default.
   useEffect(() => {
     if (!focused) return;
-    promptRef.current?.focus();
+    firstChoiceRef.current?.focus();
     onFocused();
   }, [focused, onFocused]);
 
-  const submit = async () => {
+  const spawn = async (agentType: AgentRuntimeType) => {
     setSpawning(true);
     try {
       // A spawned pane re-renders with a terminal in it, unmounting this picker
       // — so `spawning` is only ever cleared on the failure path.
-      await onSpawn(agentType, prompt.trim() || undefined);
+      await onSpawn(agentType);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to spawn agent');
       setSpawning(false);
@@ -617,40 +603,21 @@ function PaneAgentPicker({
         <p className="text-sm font-medium">Spawn an agent</p>
         <p className="text-xs text-muted-foreground">Runs in {scopeLabel}.</p>
       </div>
-      <div className="flex w-full max-w-xs flex-col gap-2">
-        <Select value={agentType} onValueChange={(value) => setAgentType(value as AgentRuntimeType)}>
-          <SelectTrigger aria-label="Agent type" className="h-8">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {AGENT_TYPES.map((type) => (
-              <SelectItem key={type} value={type}>
-                {agentTypeLabelOf(type)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Textarea
-          ref={promptRef}
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          placeholder="Starting prompt (optional)"
-          aria-label="Starting prompt"
-          rows={2}
-          className="resize-none text-sm"
-          // Enter submits; Shift+Enter is a newline — the prompt is usually one
-          // line, and reaching for the button to spawn would put the click back
-          // into a flow whose whole point is not having one.
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              if (!spawning) void submit();
-            }
-          }}
-        />
-        <Button size="sm" disabled={spawning} onClick={() => void submit()}>
-          {spawning ? 'Spawning…' : 'Spawn agent'}
-        </Button>
+      <div className="flex gap-2">
+        {AGENT_TYPES.map((type, index) => (
+          <Button
+            key={type}
+            ref={index === 0 ? firstChoiceRef : undefined}
+            size="sm"
+            variant="outline"
+            disabled={spawning}
+            onClick={() => void spawn(type)}
+            className="gap-2"
+          >
+            {agentSurfaceOf(type) === 'chat' ? <Bot className="size-3.5" /> : <TerminalSquare className="size-3.5" />}
+            {agentTypeLabelOf(type)}
+          </Button>
+        ))}
       </div>
     </div>
   );
