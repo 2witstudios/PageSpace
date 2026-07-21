@@ -111,6 +111,15 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   DISTRIBUTED_RATE_LIMITS: { PAGE_WEBHOOK: {}, PAGE_WEBHOOK_TRIGGER: {} },
 }));
 
+// Replay idempotency (F4) is mocked as always-first-delivery: this file proves
+// trigger fan-out composability, and route.test.ts owns the dedup behavior.
+vi.mock('@pagespace/lib/security/webhook-delivery-idempotency', () => ({
+  deriveWebhookDeliveryId: () => 'delivery-1',
+  claimWebhookDelivery: vi.fn(async () => 'claimed'),
+  completeWebhookDelivery: vi.fn(async () => undefined),
+  releaseWebhookDelivery: vi.fn(async () => undefined),
+}));
+
 const mockIsUserDriveMember = vi.fn();
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   isUserDriveMember: (...args: unknown[]) => mockIsUserDriveMember(...args),

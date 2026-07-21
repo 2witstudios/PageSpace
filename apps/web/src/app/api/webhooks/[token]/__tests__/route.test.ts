@@ -20,6 +20,44 @@ vi.mock('@pagespace/db/db', () => ({
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({ eq: (a: unknown, b: unknown) => ({ a, b }) }));
+
+// The seen-id store, mocked at the lib-module boundary like every other
+// db-touching lib module here (the lib dist requires @pagespace/db natively,
+// outside vitest's mock interception). The Map faithfully emulates the store's
+// contract — claim marks pending, complete marks completed (→ duplicate),
+// release deletes — while `deriveWebhookDeliveryId` stays REAL, so the
+// signed-material-only identity rule the replay tests pin is the production
+// one. The SQL-level claim/complete/release logic has its own unit coverage
+// in packages/lib/src/security/__tests__/webhook-delivery-idempotency.test.ts.
+const seenStore = new Map<string, 'pending' | 'completed'>();
+const mockClaim = vi.fn(async (webhookId: string, deliveryId: string) => {
+  const key = `${webhookId}:${deliveryId}`;
+  const state = seenStore.get(key);
+  if (state === 'completed') return 'duplicate' as const;
+  if (state === 'pending') return 'pending' as const;
+  seenStore.set(key, 'pending');
+  return 'claimed' as const;
+});
+const mockComplete = vi.fn(async (webhookId: string, deliveryId: string) => {
+  // Like the real module's UPDATE, completing a key that holds no pending
+  // claim is a no-op — it must never conjure a completed marker from nothing.
+  if (seenStore.get(`${webhookId}:${deliveryId}`) === 'pending') {
+    seenStore.set(`${webhookId}:${deliveryId}`, 'completed');
+  }
+});
+const mockRelease = vi.fn(async (webhookId: string, deliveryId: string) => {
+  seenStore.delete(`${webhookId}:${deliveryId}`);
+});
+vi.mock('@pagespace/lib/security/webhook-delivery-idempotency', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@pagespace/lib/security/webhook-delivery-idempotency')>();
+  return {
+    deriveWebhookDeliveryId: actual.deriveWebhookDeliveryId,
+    claimWebhookDelivery: (...args: [string, string]) => mockClaim(...args),
+    completeWebhookDelivery: (...args: [string, string]) => mockComplete(...args),
+    releaseWebhookDelivery: (...args: [string, string]) => mockRelease(...args),
+  };
+});
 vi.mock('@pagespace/db/schema/page-webhooks', () => ({
   pageWebhooks: { id: 'pageWebhooks.id', webhookToken: 'pageWebhooks.webhookToken' },
 }));
@@ -82,6 +120,7 @@ const VALID_PAYLOAD = JSON.stringify({ content: 'deploy finished' });
 
 beforeEach(() => {
   vi.clearAllMocks();
+  seenStore.clear();
   mockFindFirst.mockResolvedValue(WEBHOOK);
   mockDispatch.mockResolvedValue({ kind: 'handled' });
   // Default: no workflow triggers bound. Composability tests override this.
@@ -293,6 +332,220 @@ describe('POST /api/webhooks/[token]', () => {
 
     expect(response.status).toBe(400);
     expect(mockFireTriggers).not.toHaveBeenCalled();
+  });
+
+  // ── Replay idempotency (F4) ─────────────────────────────────────────────
+  //
+  // The signature scheme's ±5-minute window alone lets a captured, correctly
+  // signed request replay unlimited times in-window — each replay re-posting
+  // the channel message AND re-firing every bound workflow. These tests pin
+  // the seen-id defense: one signed delivery is processed exactly once; a
+  // replay short-circuits as a no-op success AFTER signature verification and
+  // BEFORE any dispatch or trigger fan-out.
+
+  describe('replay idempotency', () => {
+    const params = () => ({ params: Promise.resolve({ token: 'tok-abc' }) });
+
+    function identicalSignedHeaders(body: string, extra: Record<string, string> = {}) {
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      return { 'x-pagespace-signature': sign(body, timestamp), 'x-pagespace-timestamp': timestamp, ...extra };
+    }
+
+    it('delivers the exact same signed request only ONCE — the replay is a duplicate no-op (no second channel post, no second workflow fire)', async () => {
+      const triggers = [{ id: 't1', workflowId: 'wf1', pageWebhookId: 'wh-1' }];
+      mockFindTriggers.mockResolvedValue({ success: true, data: triggers });
+      const headers = identicalSignedHeaders(VALID_PAYLOAD);
+
+      const first = await POST(makeRequest(VALID_PAYLOAD, headers), params());
+      expect(first.status).toBe(200);
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+      expect(mockFireTriggers).toHaveBeenCalledTimes(1);
+
+      const replay = await POST(makeRequest(VALID_PAYLOAD, headers), params());
+      expect(replay.status).toBe(200);
+      expect(await replay.json()).toEqual({ ok: true, duplicate: true });
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+      expect(mockFireTriggers).toHaveBeenCalledTimes(1);
+    });
+
+    it('never dedupes distinct signed deliveries (back-compat: existing senders keep working unchanged)', async () => {
+      const bodyA = JSON.stringify({ content: 'deploy one' });
+      const bodyB = JSON.stringify({ content: 'deploy two' });
+
+      const first = await POST(makeRequest(bodyA, identicalSignedHeaders(bodyA)), params());
+      const second = await POST(makeRequest(bodyB, identicalSignedHeaders(bodyB)), params());
+
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      expect(await second.json()).toEqual({ ok: true });
+      expect(mockDispatch).toHaveBeenCalledTimes(2);
+    });
+
+    it('cannot be bypassed by varying an unauthenticated delivery-id header on a replay — identity comes from the SIGNED material only', async () => {
+      // The v0 HMAC covers only timestamp+body, so any delivery-id header is
+      // attacker-writable on a captured request. If it participated in the
+      // identity, each replay could mint a fresh claim key and deliver again.
+      const headers = identicalSignedHeaders(VALID_PAYLOAD);
+
+      const first = await POST(
+        makeRequest(VALID_PAYLOAD, { ...headers, 'x-pagespace-delivery-id': 'attacker-1' }),
+        params(),
+      );
+      const replay = await POST(
+        makeRequest(VALID_PAYLOAD, { ...headers, 'x-pagespace-delivery-id': 'attacker-2' }),
+        params(),
+      );
+
+      expect(first.status).toBe(200);
+      expect(replay.status).toBe(200);
+      expect(await replay.json()).toEqual({ ok: true, duplicate: true });
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+    });
+
+    it('treats a RE-SIGNED retry (fresh timestamp, same body) as a new delivery — at-least-once semantics unchanged', async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const tsA = String(now - 30);
+      const tsB = String(now);
+
+      const first = await POST(
+        makeRequest(VALID_PAYLOAD, {
+          'x-pagespace-signature': sign(VALID_PAYLOAD, tsA),
+          'x-pagespace-timestamp': tsA,
+        }),
+        params(),
+      );
+      const resigned = await POST(
+        makeRequest(VALID_PAYLOAD, {
+          'x-pagespace-signature': sign(VALID_PAYLOAD, tsB),
+          'x-pagespace-timestamp': tsB,
+        }),
+        params(),
+      );
+
+      expect(first.status).toBe(200);
+      expect(resigned.status).toBe(200);
+      expect(await resigned.json()).toEqual({ ok: true });
+      expect(mockDispatch).toHaveBeenCalledTimes(2);
+    });
+
+    it('answers a retryable 409 (never a success) for an identical delivery still IN FLIGHT — a concurrent retry must not be acknowledged before the work is committed', async () => {
+      const headers = identicalSignedHeaders(VALID_PAYLOAD);
+      let finishDispatch!: (result: { kind: string }) => void;
+      mockDispatch.mockImplementationOnce(
+        () => new Promise((resolve) => { finishDispatch = resolve; }),
+      );
+
+      // First attempt reaches dispatch and hangs there, holding a pending claim.
+      const firstPromise = POST(makeRequest(VALID_PAYLOAD, headers), params());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // Identical concurrent retry: the work is NOT committed yet, so a 200
+      // here could lose the delivery if the first attempt later fails.
+      const concurrent = await POST(makeRequest(VALID_PAYLOAD, headers), params());
+      expect(concurrent.status).toBe(409);
+      expect(concurrent.headers.get('Retry-After')).toBe('5');
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+
+      // First attempt completes; from now on identical requests are duplicates.
+      finishDispatch({ kind: 'handled' });
+      const first = await firstPromise;
+      expect(first.status).toBe(200);
+
+      const afterCompletion = await POST(makeRequest(VALID_PAYLOAD, headers), params());
+      expect(afterCompletion.status).toBe(200);
+      expect(await afterCompletion.json()).toEqual({ ok: true, duplicate: true });
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+    });
+
+    it('releases the claim when the delivery FAILS, so a sender retry still delivers (at-least-once preserved)', async () => {
+      const headers = identicalSignedHeaders(VALID_PAYLOAD);
+      mockDispatch.mockResolvedValueOnce({ kind: 'failed', error: 'rate_limited' });
+
+      const failed = await POST(makeRequest(VALID_PAYLOAD, headers), params());
+      expect(failed.status).toBe(429);
+
+      const retry = await POST(makeRequest(VALID_PAYLOAD, headers), params());
+      expect(retry.status).toBe(200);
+      expect(await retry.json()).toEqual({ ok: true });
+      expect(mockDispatch).toHaveBeenCalledTimes(2);
+    });
+
+    it('releases the claim on a trigger-lookup 503 so the retry delivers both actions', async () => {
+      const headers = identicalSignedHeaders(VALID_PAYLOAD);
+      mockFindTriggers.mockResolvedValueOnce({ success: false, error: 'db down' });
+
+      const failed = await POST(makeRequest(VALID_PAYLOAD, headers), params());
+      expect(failed.status).toBe(503);
+      expect(mockDispatch).not.toHaveBeenCalled();
+
+      const retry = await POST(makeRequest(VALID_PAYLOAD, headers), params());
+      expect(retry.status).toBe(200);
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT un-commit a completed delivery when a failure happens AFTER acceptance — the retry is acknowledged as duplicate, never double-delivered', async () => {
+      // Defensive invariant: nothing in the CURRENT route throws between
+      // completion and the response in production (the real after() defers
+      // its callback past the response; only this file's inline after() mock
+      // lets the fan-out throw reach the catch). The test pins the catch-all
+      // contract for any future code on that path: once the work committed,
+      // a late failure answers 500 WITHOUT releasing, so the retry gets
+      // {duplicate:true} instead of re-posting.
+      const triggers = [{ id: 't1', workflowId: 'wf1', pageWebhookId: 'wh-1' }];
+      mockFindTriggers.mockResolvedValue({ success: true, data: triggers });
+      mockFireTriggers.mockImplementationOnce(() => {
+        throw new Error('fan-out scheduling blew up');
+      });
+      const headers = identicalSignedHeaders(VALID_PAYLOAD);
+
+      const failedAfterCommit = await POST(makeRequest(VALID_PAYLOAD, headers), params());
+      expect(failedAfterCommit.status).toBe(500);
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+
+      const retry = await POST(makeRequest(VALID_PAYLOAD, headers), params());
+      expect(retry.status).toBe(200);
+      expect(await retry.json()).toEqual({ ok: true, duplicate: true });
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+    });
+
+    it('proceeds normally when the claim store fails OPEN (verdict "claimed" on both of two identical requests) — a store outage must never swallow deliveries', async () => {
+      // The real module answers 'claimed' when the store is unreachable; at
+      // the route level that must mean both requests deliver (the composed
+      // system still bounds them: dispatch shares the same DB and its rate
+      // limit fails closed in production).
+      mockClaim.mockResolvedValueOnce('claimed').mockResolvedValueOnce('claimed');
+      const headers = identicalSignedHeaders(VALID_PAYLOAD);
+
+      const first = await POST(makeRequest(VALID_PAYLOAD, headers), params());
+      const second = await POST(makeRequest(VALID_PAYLOAD, headers), params());
+
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      expect(mockDispatch).toHaveBeenCalledTimes(2);
+    });
+
+    it('does NOT touch the claim store for a request that fails signature verification — an attacker cannot claim anything without the secret', async () => {
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const forged = await POST(
+        makeRequest(VALID_PAYLOAD, {
+          'x-pagespace-signature': sign(VALID_PAYLOAD, timestamp, 'wrong-secret'),
+          'x-pagespace-timestamp': timestamp,
+        }),
+        params(),
+      );
+      expect(forged.status).toBe(403);
+      expect(mockClaim).not.toHaveBeenCalled();
+
+      const genuine = await POST(
+        makeRequest(VALID_PAYLOAD, {
+          'x-pagespace-signature': sign(VALID_PAYLOAD, timestamp),
+          'x-pagespace-timestamp': timestamp,
+        }),
+        params(),
+      );
+      expect(genuine.status).toBe(200);
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('returns a retryable 503 (no dispatch, no fan-out) when the trigger lookup fails — never silently drops bound workflows', async () => {

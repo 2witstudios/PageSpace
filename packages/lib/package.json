@@ -1342,6 +1342,11 @@
       "import": "./dist/security/webhook-signature.js",
       "require": "./dist/security/webhook-signature.js"
     },
+    "./security/webhook-delivery-idempotency": {
+      "types": "./dist/security/webhook-delivery-idempotency.d.ts",
+      "import": "./dist/security/webhook-delivery-idempotency.js",
+      "require": "./dist/security/webhook-delivery-idempotency.js"
+    },
     "./auth/constants": {
       "types": "./dist/auth/constants.d.ts",
       "import": "./dist/auth/constants.js",
