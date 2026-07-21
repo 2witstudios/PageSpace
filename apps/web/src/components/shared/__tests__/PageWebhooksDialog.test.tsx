@@ -308,6 +308,34 @@ describe('PageWebhooksDialog', () => {
     });
   });
 
+  test('a rotation resolving after the component unmounts reveals on the next mount', async () => {
+    vi.mocked(fetchWithAuth).mockResolvedValue(
+      listResponse(200, { webhooks: [remoteWebhook()] }),
+    );
+    let resolvePost: (value: unknown) => void = () => {};
+    vi.mocked(post).mockImplementation(
+      () => new Promise<never>((resolve) => { resolvePost = resolve as (value: unknown) => void; }),
+    );
+
+    const first = renderDialog();
+    await waitFor(() => screen.getByText('Deploys'));
+    await userEvent.click(screen.getByRole('button', { name: /Rotate secret/ }));
+    first.unmount();
+
+    resolvePost({ webhook: remoteWebhook(), webhookSecret: 'whsec_after_unmount' });
+    await new Promise((r) => { setTimeout(r, 0); });
+
+    renderDialog();
+    await waitFor(() => screen.getByText('whsec_after_unmount'));
+
+    assert({
+      given: 'a rotation whose response landed after the page-scoped component unmounted (navigation)',
+      should: 'hold the one-time secret and reveal it on the next mount of this page’s dialog',
+      actual: screen.getByText('whsec_after_unmount') !== null,
+      expected: true,
+    });
+  });
+
   test('reveals the secret exactly once, dismissed only by explicit confirmation', async () => {
     vi.mocked(fetchWithAuth).mockResolvedValue(listResponse(200, { webhooks: [] }));
     vi.mocked(post).mockResolvedValue({

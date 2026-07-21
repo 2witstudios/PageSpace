@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useEffect, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { Check, Copy, Webhook } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR from 'swr';
@@ -33,6 +33,15 @@ interface PageWebhooksDialogProps {
   pageType: string;
 }
 
+type RevealedSecret = { webhookUrl: string; secret: string };
+
+// Holding pen for a one-time secret whose create/rotate response landed after
+// this page's dialog unmounted (CenterPanel remounts views by page id on
+// navigation). Rotate has already invalidated the predecessor server-side, so
+// the response is the only plaintext copy — parked here, keyed by page, and
+// consumed the next time that page's dialog opens.
+const orphanedReveals = new Map<string, RevealedSecret>();
+
 const webhooksFetcher = async (url: string): Promise<{ webhooks: WebhookRow[] } | { error: string; status: number }> => {
   const res = await fetchWithAuth(url);
   const body = await res.json().catch(() => ({}));
@@ -47,10 +56,36 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
   const [newName, setNewName] = useState('');
   const [creating, setCreating] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [revealed, setRevealed] = useState<{ webhookUrl: string; secret: string } | null>(null);
+  const [revealed, setRevealed] = useState<RevealedSecret | null>(null);
+
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  // Routes a fresh one-time secret to the live dialog, or parks it in the
+  // orphan pen when the response outlived this component instance.
+  const reveal = (webhook: WebhookRow, secret: string) => {
+    const value: RevealedSecret = {
+      webhookUrl: `${window.location.origin}/api/webhooks/${webhook.webhookToken}`,
+      secret,
+    };
+    if (!mountedRef.current) {
+      orphanedReveals.set(pageId, value);
+      return;
+    }
+    setRevealed(value);
+  };
 
   useEffect(() => {
-    if (!open) {
+    if (open) {
+      const orphan = orphanedReveals.get(pageId);
+      if (orphan) {
+        orphanedReveals.delete(pageId);
+        setRevealed(orphan);
+      }
+    } else {
       // Clears the secret from state on close — but deliberately does NOT
       // cancel an in-flight create/rotate: its response holds the only copy of
       // a one-time secret (rotate has already invalidated the old one), so a
@@ -59,7 +94,7 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
       setRevealed(null);
       setNewName('');
     }
-  }, [open]);
+  }, [open, pageId]);
 
   const errorStatus = data && 'error' in data ? data.status : null;
   const forbidden = errorStatus === 403;
@@ -78,10 +113,7 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
       setNewName('');
       // Reveal before refreshing the list: the secret exists only in this
       // response, so a failed (cosmetic) revalidation must never discard it.
-      setRevealed({
-        webhookUrl: `${window.location.origin}/api/webhooks/${res.webhook.webhookToken}`,
-        secret: res.webhookSecret,
-      });
+      reveal(res.webhook, res.webhookSecret);
       await refetch().catch(() => {});
     } catch {
       toast.error('Failed to create webhook');
@@ -111,10 +143,7 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
       // Reveal before refreshing the list: the old secret is already dead and
       // this response holds the only copy of the new one — a failed (cosmetic)
       // revalidation must never discard it.
-      setRevealed({
-        webhookUrl: `${window.location.origin}/api/webhooks/${res.webhook.webhookToken}`,
-        secret: res.webhookSecret,
-      });
+      reveal(res.webhook, res.webhookSecret);
       await refetch().catch(() => {});
     } catch (error) {
       // The rotate route's error bodies are user-actionable (e.g. "rotated by a
