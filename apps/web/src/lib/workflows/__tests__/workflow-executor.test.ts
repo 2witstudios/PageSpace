@@ -244,6 +244,30 @@ describe('executeWorkflow', () => {
     expect(result.error).toContain('AI provider error');
   });
 
+  test('usage tracking is awaited — the usage write is durable before executeWorkflow resolves', async () => {
+    // trackAIUsage's contract is explicit: it must be awaited so the usage log
+    // (and the billing settle it drives) is durable before the caller returns.
+    // A fire-and-forget call here would let a hold be released (and, in the
+    // billing-off ceiling path, a next run be admitted) before the cost lands.
+    setupSelectChain([mockAgent], [mockDrive]);
+    let usagePersisted = false;
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+    vi.mocked(AIMonitoring.trackUsage).mockImplementation(
+      () =>
+        new Promise((res) =>
+          setTimeout(() => {
+            usagePersisted = true;
+            res(undefined as never);
+          }, 0),
+        ),
+    );
+
+    const result = await executeWorkflow(createInputFixture());
+
+    expect(result.success).toBe(true);
+    expect(usagePersisted).toBe(true);
+  });
+
   test('successful execution with tools', async () => {
     setupSelectChain([mockAgent], [mockDrive]);
 

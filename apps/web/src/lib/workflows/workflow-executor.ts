@@ -382,9 +382,14 @@ async function runExecution(input: WorkflowExecutionInput, startTime: number): P
       },
     });
 
-    // 10. Track usage
+    // 10. Track usage. AWAITED per trackAIUsage's contract: the usage log (and
+    // the billing settle it drives) must be durable before this run reports
+    // completion — callers release credit-gate holds as soon as we return, and
+    // the webhook path's daily-ceiling accounting reads aiUsageLogs, so a
+    // detached write here would open a window where neither the hold nor the
+    // landed cost is visible to the next gate check.
     const usage = result.usage;
-    AIMonitoring.trackUsage({
+    await AIMonitoring.trackUsage({
       userId: input.createdBy,
       provider: providerResult.provider,
       model: providerResult.modelName,
