@@ -68,6 +68,11 @@ export function startStreamJoinPollFallback(
   // The `auth:refreshed` resume listener, tracked so the abort cleanup can remove it if the caller
   // gives up mid-suspend (before any refresh lands) — otherwise it would leak past this poll.
   let resumeListener: (() => void) | null = null;
+  // Set once the poll reaches its terminal row-gone state (`onNotFound`). Guards against a second,
+  // still-in-flight tick re-arming a resume listener AFTER the poll is already done — otherwise a
+  // later `auth:refreshed` (the very event this feature waits on) would resurrect polling for a
+  // stream already declared gone. See the not-found branch and `suspendUntilAuthRefreshed`.
+  let terminated = false;
 
   const startInterval = (): void => {
     intervalId = setInterval(() => void tick(), STREAM_JOIN_POLL_INTERVAL_MS);
@@ -103,6 +108,9 @@ export function startStreamJoinPollFallback(
   // fire both, spinning up two intervals but only tracking the last handle — the other orphaned
   // past abort. Removing any prior listener before registering guarantees exactly one at a time.
   const suspendUntilAuthRefreshed = (): void => {
+    // A terminal not-found may have already ended this poll while this (overlapping) tick was in
+    // flight — never arm a resume listener after that, or `auth:refreshed` would resurrect it.
+    if (terminated) return;
     clearResumeListener();
     stopInterval();
     resumeListener = () => {
@@ -129,7 +137,12 @@ export function startStreamJoinPollFallback(
       if (signal.aborted) return;
       const row = (data.streams ?? []).find((s) => s.messageId === messageId);
       if (!row) {
+        // Terminal. Mark first, then tear down BOTH the interval and any resume listener an
+        // overlapping 401 tick may already have armed — a finished poll must leave nothing behind
+        // that a later `auth:refreshed` could use to resurrect it.
+        terminated = true;
         stopInterval();
+        clearResumeListener();
         onNotFound();
         return;
       }
