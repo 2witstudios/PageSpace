@@ -325,7 +325,10 @@ export function dailyExposureCapForTier(tier: SubscriptionTier): number | null {
  * the webhook secret is a bearer credential handed to external systems, so an
  * unconfigured deployment must still have a hard monetary bound on what a leaked
  * secret can spend. Passed as `dailyCapCeilingCents` to canConsumeAI (effective cap =
- * min with any configured tier cap). 0 disables (not recommended). Default $5/day.
+ * min with any configured tier cap). The gate sums the user's TOTAL day spend (all
+ * sources), so a heavy interactive day can push webhook runs over this ceiling — a
+ * deliberate trade-off: only webhook-forced runs are ever denied by it, interactive
+ * use is never blocked. 0 disables (not recommended). Default $5/day.
  */
 export const WEBHOOK_DAILY_EXPOSURE_CAP_CENTS = envInt('WEBHOOK_DAILY_EXPOSURE_CAP_CENTS', 500);
 
