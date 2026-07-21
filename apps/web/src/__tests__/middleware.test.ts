@@ -347,6 +347,89 @@ describe('middleware — unauthenticated /dashboard rewrites instead of redirect
   });
 });
 
+// The Electron desktop shell navigates with COOKIES, not its Bearer token —
+// the renderer's real credential lives in the main process and is attached per
+// API call by authFetch. When the session cookie is missing or stale, the
+// middleware's page-navigation gate used to bounce the shell to the signin
+// form ("randomly logged out") even though the Bearer was perfectly valid.
+// For the Electron shell the gate must let the page load and let the client
+// recover via its Bearer; this relaxes only the navigation UX gate, never an
+// auth boundary — every API route still validates normally.
+describe('middleware — Electron shell page navigations are never bounced to signin', () => {
+  const ELECTRON_UA =
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) PageSpace/1.0.23 Chrome/130.0.6723.137 Electron/33.3.1 Safari/537.36';
+  const BROWSER_UA =
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.137 Safari/537.36';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetSessionFromCookies.mockReturnValue(undefined);
+    mockValidateOriginForMiddleware.mockReturnValue({ valid: true, origin: null, skipped: true, reason: 'no origin' });
+    mockIsOriginValidationBlocking.mockReturnValue(true);
+  });
+
+  it.each([['/dashboard'], ['/dashboard/drv_abc/pg_xyz']])(
+    'lets the Electron shell load %s with no session cookie — no redirect, no signin rewrite',
+    async (pathname) => {
+      const response = await middleware(buildRequest(pathname, { 'user-agent': ELECTRON_UA }));
+
+      // Neither bounce mechanism may fire: not the 307 redirect, not the
+      // /dashboard signin rewrite (which renders the signin form in place —
+      // the exact "logged out" the desktop user reports).
+      expect(response.status).not.toBe(307);
+      expect(response.headers.get('location')).toBeNull();
+      expect(response.headers.get('x-middleware-rewrite')).toBeNull();
+    },
+  );
+
+  it('lets the Electron shell load a non-dashboard page with no session cookie', async () => {
+    const response = await middleware(buildRequest('/activate?user_code=ABCD', { 'user-agent': ELECTRON_UA }));
+
+    expect(response.status).not.toBe(307);
+    expect(response.headers.get('location')).toBeNull();
+    expect(response.headers.get('x-middleware-rewrite')).toBeNull();
+  });
+
+  it('still redirects a BROWSER page navigation with no session cookie to signin, exactly as before', async () => {
+    const response = await middleware(buildRequest('/activate?user_code=ABCD-EFGH', { 'user-agent': BROWSER_UA }));
+
+    expect(response.status).toBe(307);
+    const location = new URL(response.headers.get('location') as string);
+    expect(location.pathname).toBe('/auth/signin');
+    expect(location.searchParams.get('next')).toBe('/activate?user_code=ABCD-EFGH');
+  });
+
+  it('leaves the iOS/Capacitor /dashboard signin REWRITE untouched for non-Electron UAs', async () => {
+    // The iOS shell is a WKWebView with no Electron/ token — it must keep the
+    // rewrite-in-place behavior (redirecting it black-screens the shell).
+    const response = await middleware(buildRequest('/dashboard/drv_abc', { 'user-agent': BROWSER_UA }));
+
+    const target = response.headers.get('x-middleware-rewrite');
+    expect(target).not.toBeNull();
+    expect(new URL(target as string).pathname).toBe('/auth/signin');
+    expect(response.status).not.toBe(307);
+  });
+
+  it.each([
+    ['Electron shell', 'Mozilla/5.0 PageSpace/1.0.23 Electron/33.3.1 Safari/537.36'],
+    ['browser', 'Mozilla/5.0 Chrome/130.0.6723.137 Safari/537.36'],
+  ])('keeps API routes fully gated for a %s request with no credentials — still 401', async (_kind, ua) => {
+    const response = await middleware(buildRequest('/api/ai/chat/active-streams', { 'user-agent': ua }));
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get('x-middleware-rewrite')).toBeNull();
+  });
+
+  it('changes nothing for the Electron shell when a session cookie IS present (pass-through, as for everyone)', async () => {
+    mockGetSessionFromCookies.mockReturnValue('ps_sess_valid');
+
+    const response = await middleware(buildRequest('/dashboard/drv_abc', { 'user-agent': ELECTRON_UA }));
+
+    expect(response.status).not.toBe(307);
+    expect(response.headers.get('x-middleware-rewrite')).toBeNull();
+  });
+});
+
 // The desktop/native OAuth callbacks return their own styled HTML "handoff
 // bridge" with a bespoke CSP that allows an inline <style> block. Middleware
 // must tell createSecureResponse to skip its own CSP for these paths, so the two

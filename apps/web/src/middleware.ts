@@ -24,6 +24,7 @@ import {
   OAUTH_ACCESS_TOKEN_PREFIX,
 } from '@/lib/auth/token-prefixes';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
+import { isElectronShell } from '@/lib/auth/native-shell';
 import { WELL_KNOWN_REWRITES } from '@/lib/well-known/rewrites';
 import { getClientIP } from '@/lib/security/edge-client-ip';
 
@@ -341,6 +342,25 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
 
       if (isAPIRoute) {
         return createSecureErrorResponse('Authentication required', 401, isProduction, isSecureRequest(req));
+      }
+
+      // Electron desktop shell: its page navigations carry COOKIES while the
+      // real credential (the Bearer token) lives in the Electron main process
+      // and is attached per API call — so a missing/stale session cookie says
+      // nothing about whether the desktop user is authenticated. Bouncing the
+      // shell to the signin form here IS the desktop "random logout". Let the
+      // page load and let the shell recover client-side via its Bearer. This
+      // relaxes only the navigation UX gate, never an auth boundary: the page
+      // shell is public and all data still comes from Bearer-validated API
+      // routes (the isAPIRoute 401 above is untouched). The iOS/Capacitor
+      // /dashboard rewrite below is a different shell (no Electron/ UA token)
+      // and keeps its own handling.
+      if (isElectronShell(req.headers.get('user-agent'))) {
+        const { response } = createSecureResponse(isProduction, req, {
+          isAPIRoute,
+          disableCOEP: shouldDisableCOEP(pathname),
+        });
+        return response;
       }
 
       if (isShellEntryPath(pathname)) {
