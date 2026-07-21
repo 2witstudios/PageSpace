@@ -34,6 +34,7 @@ vi.mock('../store', () => ({ store: { set: vi.fn() } }));
 vi.mock('../app-url', () => ({ getAppUrl: vi.fn(() => 'https://pagespace.ai/dashboard') }));
 vi.mock('../state', () => ({
   mainWindow: null,
+  setCachedSession: vi.fn(),
 }));
 vi.mock('../window', () => ({ reloadMainWindow: vi.fn() }));
 vi.mock('../mcp-manager', () => ({ getMCPManager: vi.fn(() => ({ setOnToolsReady: vi.fn() })) }));

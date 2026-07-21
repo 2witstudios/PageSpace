@@ -2,7 +2,7 @@ import * as os from 'node:os';
 import { app, ipcMain, session, shell } from 'electron';
 import { store } from './store';
 import { getAppUrl } from './app-url';
-import { mainWindow } from './state';
+import { mainWindow, setCachedSession } from './state';
 import { reloadMainWindow } from './window';
 import { getMCPManager } from './mcp-manager';
 import { getWSClient } from './ws-client';
@@ -120,6 +120,12 @@ export function registerIPCHandlers(): void {
       return { success: false };
     }
     await saveAuthSession(sessionData);
+    // Keep the in-memory cache in sync with what was just persisted. Without
+    // this, getOrLoadSession() keeps serving the STALE startup token after a
+    // refresh (it only re-reads disk when the cache is empty), so every API
+    // call starts failing ~when the old token expires — the desktop
+    // "random logout" — until a sleep/wake or restart repopulates the cache.
+    setCachedSession(sessionData);
 
     // Also set the session cookie on the BrowserWindow's session
     // so subsequent page loads/fetches include the cookie
@@ -149,6 +155,9 @@ export function registerIPCHandlers(): void {
     }
     try {
       await clearAuthSession();
+      // clearAuthSession only unlinks the file — invalidate the in-memory
+      // cache too so a known-bad token can't keep being served from memory.
+      setCachedSession(null);
       await session.defaultSession.clearStorageData({
         storages: ['cookies'],
       });
