@@ -172,11 +172,31 @@ describe('validateSessionWithReason', () => {
     expect(sessionRepository.touchSession).toHaveBeenCalledWith('hashed_sess_tok');
   });
 
-  it('given no active session and no user on the joined active row, yields not_found', async () => {
-    // Active row exists but the user was deleted (join null) — cannot mint claims.
+  it('given an orphaned active row (user deleted, session still non-revoked + future expiry), yields not_found — NOT expired', async () => {
+    // findActiveSession left-joins the user, so a userless row fails the `!session.user` guard and
+    // routes into the any-state path. The any-state lookup for the SAME hash returns that SAME
+    // still-active row (revokedAt null, expiresAt in the FUTURE). It must classify as not_found —
+    // an active row's future expiry is not an expiry at all. (Regression: CodeRabbit — orphaned
+    // session misclassified as `expired`.)
+    const futureExpiry = new Date(Date.now() + 60 * 60 * 1000);
     vi.mocked(sessionRepository.findActiveSession).mockResolvedValue(
-      activeSession({ user: null }) as never,
+      activeSession({ user: null, expiresAt: futureExpiry }) as never,
     );
+    vi.mocked(sessionRepository.findSessionByHashAnyState).mockResolvedValue({
+      id: 'sess_orphan01',
+      type: 'user',
+      revokedAt: null,
+      revokedReason: null,
+      expiresAt: futureExpiry, // still in the future — the session itself hasn't expired
+    } as never);
+
+    const result = await service.validateSessionWithReason('sess_tok');
+
+    expect(result.failureReason).toBe('not_found');
+  });
+
+  it('given no active session and no any-state row at all, yields not_found', async () => {
+    vi.mocked(sessionRepository.findActiveSession).mockResolvedValue(undefined);
     vi.mocked(sessionRepository.findSessionByHashAnyState).mockResolvedValue(undefined);
 
     const result = await service.validateSessionWithReason('sess_tok');

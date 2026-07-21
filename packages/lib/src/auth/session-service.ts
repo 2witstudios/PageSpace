@@ -154,10 +154,17 @@ export class SessionService {
           sessionIdPrefix,
         };
       }
-      // Not revoked but not active ⇒ its expiry is in the past. A grace-expiry
-      // (expireSessionByHashSoon) lands here: revokedAt null, expiresAt clamped to the retirement
-      // time.
-      return { failureReason: 'expired', expiresAt: anyState.expiresAt, sessionIdPrefix };
+      // Not revoked. Classify by expiry, NOT by "not active" — because we also reach here for a
+      // still-active row whose USER was deleted (findActiveSession left-joins the user, so a
+      // userless row fails the `!session.user` guard above while its own expiry is still in the
+      // future). Only an expiry actually in the past is `expired` (a grace-expiry from
+      // expireSessionByHashSoon: revokedAt null, expiresAt clamped into the past). A future expiry
+      // here means the session row exists but is unusable (orphaned by a deleted user) — that is
+      // `not_found`, not `expired`.
+      if (anyState.expiresAt.getTime() <= Date.now()) {
+        return { failureReason: 'expired', expiresAt: anyState.expiresAt, sessionIdPrefix };
+      }
+      return { failureReason: 'not_found', sessionIdPrefix };
     }
 
     const sessionIdPrefix = session.id.slice(0, 8);

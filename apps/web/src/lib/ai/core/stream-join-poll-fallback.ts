@@ -95,7 +95,15 @@ export function startStreamJoinPollFallback(
   // poll can never resume, and the `{ once: true }` listener never leaks. (No inner
   // `signal.aborted` re-check: an aborted signal removes this listener synchronously, so it
   // simply never fires afterward.)
+  //
+  // `clearResumeListener()` first — `setInterval` does NOT wait for a slow tick to resolve, so if
+  // a fetch outlives the 1s interval two ticks can be in flight at once; were both to see a
+  // 401/403 each would suspend, and without this a second suspend would overwrite `resumeListener`
+  // while leaving the FIRST listener registered on `window`. A later `auth:refreshed` would then
+  // fire both, spinning up two intervals but only tracking the last handle — the other orphaned
+  // past abort. Removing any prior listener before registering guarantees exactly one at a time.
   const suspendUntilAuthRefreshed = (): void => {
+    clearResumeListener();
     stopInterval();
     resumeListener = () => {
       resumeListener = null; // consumed — the browser already removed the once-listener

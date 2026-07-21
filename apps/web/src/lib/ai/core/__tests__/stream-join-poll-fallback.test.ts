@@ -485,6 +485,49 @@ describe('startStreamJoinPollFallback', () => {
       expect(mockFetchWithAuth).not.toHaveBeenCalled();
     });
 
+    // Regression (Codex P2 / CodeRabbit Major): setInterval does not wait for a slow tick, so two
+    // ticks can be in flight at once. If BOTH see a 401, each suspends — and a naive
+    // implementation would leave two `auth:refreshed` listeners registered, so one resume would
+    // spin up two intervals and orphan one past abort. Exactly one listener must survive, so a
+    // single resume yields a single interval, and abort stops everything.
+    it('given two overlapping in-flight ticks that both 401, should keep only ONE resume listener (no orphaned interval)', async () => {
+      // Both in-flight ticks resolve 401 (the slow-fetch race), then everything else is healthy.
+      mockFetchWithAuth
+        .mockResolvedValueOnce(notOkResponse(401)) // tick A (interval-driven)
+        .mockResolvedValueOnce(notOkResponse(401)) // tick B (overlapping, manually driven)
+        .mockResolvedValue(okResponse([{ messageId: 'msg-1', parts: [] }]));
+      const controller = newController();
+
+      startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, vi.fn(), vi.fn());
+      // First tick (A) resolves 401 → suspend #1.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+
+      // Simulate a second, overlapping tick (B) that also 401s → suspend #2 overwrites the
+      // listener. Trigger it by dispatching a resume (which fires tick B) — tick B's 401 suspends
+      // again. If the first listener leaked, TWO would now be registered.
+      window.dispatchEvent(new Event('auth:refreshed'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockFetchWithAuth).toHaveBeenCalledTimes(2); // tick B ran and re-suspended
+
+      // A single resume must now produce a SINGLE immediate tick (one listener), not two.
+      mockFetchWithAuth.mockClear();
+      window.dispatchEvent(new Event('auth:refreshed'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+
+      // ...and a SINGLE interval, not two orphaned ones (would be 2 fetches per interval if leaked).
+      mockFetchWithAuth.mockClear();
+      await vi.advanceTimersByTimeAsync(STREAM_JOIN_POLL_INTERVAL_MS);
+      expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+
+      // Abort must silence everything — proof no orphaned interval survives.
+      controller.abort();
+      mockFetchWithAuth.mockClear();
+      await vi.advanceTimersByTimeAsync(STREAM_JOIN_POLL_INTERVAL_MS * 5);
+      expect(mockFetchWithAuth).not.toHaveBeenCalled();
+    });
+
     it('given a second 401 after a resume, should suspend again (survives repeated auth failures)', async () => {
       mockFetchWithAuth
         .mockResolvedValueOnce(notOkResponse(401)) // tick 1 → suspend

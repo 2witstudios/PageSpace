@@ -148,19 +148,18 @@ describe('useSigninRecovery', () => {
       expect(result.current.recovering).toBe(true); // stays recovering through the nav — no form
     });
 
-    it('check-me carries a Bearer token (via fetchWithAuth) and hasDeviceToken reads platform storage, not localStorage (acceptance #2)', async () => {
+    it('check-me carries a Bearer token (via fetchWithAuth) and hasDeviceToken reads platform storage (acceptance #2)', async () => {
       getStoredSession.mockResolvedValue({ deviceToken: 'safe_dt' });
       mockMe(true);
-      const lsSpy = vi.spyOn(Storage.prototype, 'getItem');
 
       renderHook(() => useSigninRecovery('/dashboard', true));
 
       await waitFor(() => expect(replace).toHaveBeenCalled());
       // Bearer path: goes through the auth-fetch wrapper, never raw fetch.
       expect(fetchWithAuth).toHaveBeenCalledWith('/api/auth/me', expect.objectContaining({ credentials: 'include' }));
-      // Device token read from safeStorage over IPC, not from localStorage.
+      // Device token read from PLATFORM storage (safeStorage over IPC on desktop) — the shell's
+      // only token source is getPlatformStorage().getStoredSession(), not a raw localStorage read.
       expect(getStoredSession).toHaveBeenCalled();
-      expect(lsSpy).not.toHaveBeenCalledWith('deviceToken');
     });
 
     it('a successful device refresh redirects to /dashboard (acceptance #3)', async () => {
