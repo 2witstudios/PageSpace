@@ -114,6 +114,12 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
   const [confirmRotateId, setConfirmRotateId] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<RevealedSecret | null>(null);
 
+  const errorStatus = data && 'error' in data ? data.status : null;
+  const forbidden = errorStatus === 403;
+  const loadFailed = errorStatus !== null && errorStatus !== 403;
+  /** The list GET runs the same canManagePageWebhooks gate as rotation — a successful list IS the permission check. */
+  const managementConfirmed = Boolean(data && 'webhooks' in data);
+
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
@@ -188,15 +194,21 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
     // orphan is parked (orphanSignal), so queued secrets surface one at a time.
     if (revealed) return;
     const pen = penKey(userId, pageId);
+    // Pen delivery crosses a session boundary, so it must fail closed: a 403
+    // list means the owner/admin role was revoked since minting — purge the
+    // pen (a demoted manager must not recover a live credential), and don't
+    // deliver anything until a successful list re-confirms management.
+    if (forbidden) {
+      orphanedReveals.delete(pen);
+      return;
+    }
+    if (!managementConfirmed) return;
     const queue = orphanedReveals.get(pen);
     const next = queue?.shift();
     if (queue && queue.length === 0) orphanedReveals.delete(pen);
     if (next) setRevealed(next);
-  }, [open, pageId, userId, revealed, orphanSignal]);
+  }, [open, pageId, userId, revealed, orphanSignal, forbidden, managementConfirmed]);
 
-  const errorStatus = data && 'error' in data ? data.status : null;
-  const forbidden = errorStatus === 403;
-  const loadFailed = errorStatus !== null && errorStatus !== 403;
   const webhooks = data && 'webhooks' in data ? data.webhooks : [];
 
   const createWebhook = async () => {

@@ -60,7 +60,7 @@ describe('PageWebhooksDialog', () => {
   });
 
   test('lists webhooks under the Incoming Webhooks title', async () => {
-    vi.mocked(fetchWithAuth).mockResolvedValue(
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
       listResponse(200, { webhooks: [remoteWebhook()] }),
     );
 
@@ -79,7 +79,7 @@ describe('PageWebhooksDialog', () => {
   });
 
   test('shows the owner/admin explanation on a 403 — disabled, not hidden', async () => {
-    vi.mocked(fetchWithAuth).mockResolvedValue(
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
       listResponse(403, { error: 'Forbidden' }),
     );
 
@@ -101,7 +101,7 @@ describe('PageWebhooksDialog', () => {
   });
 
   test('description copy states the channel default action only on channels', async () => {
-    vi.mocked(fetchWithAuth).mockResolvedValue(listResponse(200, { webhooks: [] }));
+    vi.mocked(fetchWithAuth).mockImplementation(async () => listResponse(200, { webhooks: [] }));
 
     const channelRender = renderDialog('CHANNEL');
     await waitFor(() => screen.getByText(/post messages into this channel/));
@@ -124,7 +124,7 @@ describe('PageWebhooksDialog', () => {
   });
 
   test('distinguishes a server failure from missing permission', async () => {
-    vi.mocked(fetchWithAuth).mockResolvedValue(
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
       listResponse(500, { error: 'Failed to list webhooks' }),
     );
 
@@ -144,7 +144,7 @@ describe('PageWebhooksDialog', () => {
   });
 
   test('rotation is gated behind an explicit confirmation that names the consequence', async () => {
-    vi.mocked(fetchWithAuth).mockResolvedValue(
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
       listResponse(200, { webhooks: [remoteWebhook()] }),
     );
     vi.mocked(post).mockResolvedValue({
@@ -289,7 +289,7 @@ describe('PageWebhooksDialog', () => {
   });
 
   test('rotates a webhook secret in place and reveals the new secret exactly once', async () => {
-    vi.mocked(fetchWithAuth).mockResolvedValue(
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
       listResponse(200, { webhooks: [remoteWebhook()] }),
     );
     vi.mocked(post).mockResolvedValue({
@@ -322,7 +322,7 @@ describe('PageWebhooksDialog', () => {
   });
 
   test('surfaces the server explanation when rotation fails (e.g. concurrent rotation)', async () => {
-    vi.mocked(fetchWithAuth).mockResolvedValue(
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
       listResponse(200, { webhooks: [remoteWebhook()] }),
     );
     const conflict =
@@ -403,7 +403,7 @@ describe('PageWebhooksDialog', () => {
 
   test('a pending rotation disables every other secret-producing action', async () => {
     const second = { ...remoteWebhook(), id: 'wh-2', name: 'Alerts', webhookToken: 'tok_second_999999' };
-    vi.mocked(fetchWithAuth).mockResolvedValue(
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
       listResponse(200, { webhooks: [remoteWebhook(), second] }),
     );
     let resolvePost: (value: unknown) => void = () => {};
@@ -435,7 +435,7 @@ describe('PageWebhooksDialog', () => {
   });
 
   test('a rotation resolving after the dialog closes still reveals its secret on reopen', async () => {
-    vi.mocked(fetchWithAuth).mockResolvedValue(
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
       listResponse(200, { webhooks: [remoteWebhook()] }),
     );
     let resolvePost: (value: unknown) => void = () => {};
@@ -469,7 +469,7 @@ describe('PageWebhooksDialog', () => {
   });
 
   test('a rotation resolving after the component unmounts reveals on the next mount', async () => {
-    vi.mocked(fetchWithAuth).mockResolvedValue(
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
       listResponse(200, { webhooks: [remoteWebhook()] }),
     );
     let resolvePost: (value: unknown) => void = () => {};
@@ -497,7 +497,7 @@ describe('PageWebhooksDialog', () => {
   });
 
   test('a rotation from one page never reveals in another page’s dialog', async () => {
-    vi.mocked(fetchWithAuth).mockResolvedValue(
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
       listResponse(200, { webhooks: [remoteWebhook()] }),
     );
     let resolvePost: (value: unknown) => void = () => {};
@@ -685,8 +685,51 @@ describe('PageWebhooksDialog', () => {
     });
   });
 
+  test('a parked secret is discarded, never delivered, after management permission is revoked', async () => {
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
+      listResponse(200, { webhooks: [remoteWebhook()] }),
+    );
+    let resolvePost: (value: unknown) => void = () => {};
+    vi.mocked(post).mockImplementation(
+      () => new Promise<never>((resolve) => { resolvePost = resolve as (value: unknown) => void; }),
+    );
+
+    const first = renderDialog();
+    await waitFor(() => screen.getByText('Deploys'));
+    await startRotation();
+    first.unmount();
+    resolvePost({ webhook: remoteWebhook(), webhookSecret: 'whsec_revoked_manager' });
+    await new Promise((r) => { setTimeout(r, 0); });
+
+    // The user's owner/admin role is revoked before they reopen the dialog.
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
+      listResponse(403, { error: 'Forbidden' }),
+    );
+    const second = renderDialog();
+    await waitFor(() => screen.getByText(/Only this drive's owner or an admin/));
+    const shownWhileRevoked = screen.queryByText('whsec_revoked_manager');
+    second.unmount();
+
+    // Even re-promoted later, the discarded secret must not resurface.
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
+      listResponse(200, { webhooks: [remoteWebhook()] }),
+    );
+    renderDialog();
+    await waitFor(() => screen.getByText('Deploys'));
+
+    assert({
+      given: 'a parked one-time secret whose owner lost management permission before reopening',
+      should: 'never deliver the credential to the demoted user and discard it for good',
+      actual: {
+        shownWhileRevoked,
+        resurfacedAfterRepromotion: screen.queryByText('whsec_revoked_manager'),
+      },
+      expected: { shownWhileRevoked: null, resurfacedAfterRepromotion: null },
+    });
+  });
+
   test('reveals the secret exactly once, dismissed only by explicit confirmation', async () => {
-    vi.mocked(fetchWithAuth).mockResolvedValue(listResponse(200, { webhooks: [] }));
+    vi.mocked(fetchWithAuth).mockImplementation(async () => listResponse(200, { webhooks: [] }));
     vi.mocked(post).mockResolvedValue({
       webhook: remoteWebhook(),
       webhookSecret: 'whsec_only_shown_once',
