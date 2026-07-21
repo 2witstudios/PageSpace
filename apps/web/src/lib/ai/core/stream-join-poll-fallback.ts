@@ -13,6 +13,21 @@ interface ActiveStreamsPollResponse {
 }
 
 /**
+ * Pure decision core for what a failed (`!ok`) poll tick means.
+ *
+ * `'suspend'` — an auth failure (401/403). The 1s interval must STOP, not retry: the session
+ * cookie/bearer is dead, and re-polling every second just hammers the device-refresh endpoint
+ * ~1/sec until the rate limit locks the user out (the D2 "API-401 storm" that stranded desktop
+ * users). Polling resumes only once `auth-fetch` dispatches `auth:refreshed`.
+ *
+ * `'continue'` — any other non-ok status (network blip, 429, 5xx). Transient: swallow it and
+ * retry on the next interval, exactly as before.
+ */
+export function decidePollTickOutcome(status: number): 'continue' | 'suspend' {
+  return status === 401 || status === 403 ? 'suspend' : 'continue';
+}
+
+/**
  * Leaf 5.4 — cross-instance rejoin fallback. When an SSE stream-join 404s, the usual cause is
  * that the stream lives on another web instance: the multicast registry is per-process, so
  * this instance simply cannot see its live tokens (see `stream-join-client.ts`'s
@@ -46,6 +61,50 @@ export function startStreamJoinPollFallback(
 ): void {
   if (signal.aborted) return;
 
+  // The interval is stopped-and-restarted across auth-failure suspends, so it is a mutable
+  // handle rather than a `const`. `null` means "not currently polling" (suspended, or terminally
+  // stopped after a row-gone / abort).
+  let intervalId: ReturnType<typeof setInterval> | null = null;
+  // The `auth:refreshed` resume listener, tracked so the abort cleanup can remove it if the caller
+  // gives up mid-suspend (before any refresh lands) — otherwise it would leak past this poll.
+  let resumeListener: (() => void) | null = null;
+
+  const startInterval = (): void => {
+    intervalId = setInterval(() => void tick(), STREAM_JOIN_POLL_INTERVAL_MS);
+  };
+
+  const stopInterval = (): void => {
+    if (intervalId !== null) {
+      clearInterval(intervalId);
+      intervalId = null;
+    }
+  };
+
+  const clearResumeListener = (): void => {
+    if (resumeListener) {
+      window.removeEventListener('auth:refreshed', resumeListener);
+      resumeListener = null;
+    }
+  };
+
+  // Auth failure: kill the 1s interval and wait — once, no polling in the meantime — for
+  // `auth-fetch` to announce a healed session via `auth:refreshed`. On that event, resume with an
+  // immediate tick (don't make the user wait a full interval for fresh content) plus a fresh
+  // interval. "Unless the signal is aborted, restart" is enforced by the abort cleanup below,
+  // which removes this listener the instant the caller gives up — so a suspended-then-aborted
+  // poll can never resume, and the `{ once: true }` listener never leaks. (No inner
+  // `signal.aborted` re-check: an aborted signal removes this listener synchronously, so it
+  // simply never fires afterward.)
+  const suspendUntilAuthRefreshed = (): void => {
+    stopInterval();
+    resumeListener = () => {
+      resumeListener = null; // consumed — the browser already removed the once-listener
+      startInterval();
+      void tick();
+    };
+    window.addEventListener('auth:refreshed', resumeListener, { once: true });
+  };
+
   const tick = async (): Promise<void> => {
     if (signal.aborted) return;
     try {
@@ -53,12 +112,16 @@ export function startStreamJoinPollFallback(
         `/api/ai/chat/active-streams?channelId=${encodeURIComponent(channelId)}`,
         { credentials: 'include', signal },
       );
-      if (signal.aborted || !res.ok) return;
+      if (signal.aborted) return;
+      if (!res.ok) {
+        if (decidePollTickOutcome(res.status) === 'suspend') suspendUntilAuthRefreshed();
+        return;
+      }
       const data = (await res.json()) as ActiveStreamsPollResponse;
       if (signal.aborted) return;
       const row = (data.streams ?? []).find((s) => s.messageId === messageId);
       if (!row) {
-        clearInterval(intervalId);
+        stopInterval();
         onNotFound();
         return;
       }
@@ -70,9 +133,12 @@ export function startStreamJoinPollFallback(
   };
 
   void tick();
-  // `tick`'s closure references `intervalId` (in the `!row` branch) before this line runs — safe
-  // because that branch only executes asynchronously, after `intervalId` is fully initialized:
-  // `void tick()` above suspends at its first `await` and returns control here synchronously.
-  const intervalId = setInterval(() => void tick(), STREAM_JOIN_POLL_INTERVAL_MS);
-  signal.addEventListener('abort', () => clearInterval(intervalId), { once: true });
+  // `tick`'s closure references `intervalId`/`resumeListener` before this line runs — safe because
+  // those branches only execute asynchronously, after both are initialized: `void tick()` above
+  // suspends at its first `await` and returns control here synchronously.
+  startInterval();
+  signal.addEventListener('abort', () => {
+    stopInterval();
+    clearResumeListener();
+  }, { once: true });
 }
