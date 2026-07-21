@@ -97,6 +97,10 @@ export default defineConfig({
         // same as materialize-interrupted-stream above.
         'src/lib/ai/core/checkpoint-serialize.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/lib/ai/core/stream-join-poll-fallback.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        // Native-shell signin recovery (wave 1, D1): the pure decision core is gated at 100%
+        // branch. Per-file (not a dir glob) — useSigninRecovery.ts alongside it is the effectful
+        // shell.
+        'src/app/auth/signin/signin-recovery.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/stores/useConversationMessagesStore.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/stores/usePendingStreamsStore.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/stores/conversationMessages/*.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
