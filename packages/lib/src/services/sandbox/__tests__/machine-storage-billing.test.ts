@@ -96,6 +96,43 @@ describe('defaultReconcileMachineStorageDeps has NO provisioned-cap dependency',
   });
 });
 
+describe('defaultReconcileMachineStorageDeps.listBranchSprites', () => {
+  it('returns each branch filesystem ONCE even when the machine-session join fans out', async () => {
+    // machine_sessions.pageId carries no uniqueness guarantee — only sessionKey
+    // is unique — so two session rows sharing the owning page would duplicate
+    // every branch row through the left join, and reconcile would charge one
+    // branch disk once per duplicate. The freshest activity must win the
+    // staleness flag.
+    const dup = (lastActiveAt: Date | null) => ({
+      machineBranchId: 'br-1',
+      machinePageId: 'm-1',
+      storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
+      measuredBytes: 1_000,
+      measuredAt: new Date('2026-06-30T00:00:00.000Z'),
+      lastActiveAt,
+    });
+    mockDb.select.mockReturnValue({
+      from: () => ({
+        leftJoin: () => ({
+          where: async () => [
+            dup(new Date('2026-06-29T00:00:00.000Z')),
+            dup(new Date('2026-06-30T12:00:00.000Z')),
+            dup(null),
+          ],
+        }),
+      }),
+    });
+
+    const rows = await defaultReconcileMachineStorageDeps.listBranchSprites();
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      machineBranchId: 'br-1',
+      lastActiveAt: new Date('2026-06-30T12:00:00.000Z'),
+    });
+  });
+});
+
 describe('defaultReconcileMachineStorageDeps.lookupPageOwnerId', () => {
   it('is the shared machine-payer.ts lookup (pages -> drives join)', async () => {
     mockDb.select.mockReturnValue({

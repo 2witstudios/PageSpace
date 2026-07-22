@@ -72,7 +72,19 @@ export const defaultReconcileMachineStorageDeps: ReconcileMachineStorageDeps = {
       .from(machineBranches)
       .leftJoin(machineSessions, eq(machineSessions.pageId, machineBranches.machineId))
       .where(isNull(machineBranches.spriteTornDownAt));
-    return rows.map((row) => ({ ...row, lastActiveAt: row.lastActiveAt ?? new Date(0) }));
+    // `machine_sessions.pageId` carries NO uniqueness guarantee (only
+    // `sessionKey` is unique), so the join can fan a branch out into one row
+    // per matching session — and a fanned-out row here is a branch disk
+    // BILLED TWICE by reconcile. One row per branch, freshest activity wins
+    // (the join only feeds the staleness flag).
+    const byBranch = new Map<string, (typeof rows)[number]>();
+    for (const row of rows) {
+      const kept = byBranch.get(row.machineBranchId);
+      if (!kept || (row.lastActiveAt ?? new Date(0)) > (kept.lastActiveAt ?? new Date(0))) {
+        byBranch.set(row.machineBranchId, row);
+      }
+    }
+    return [...byBranch.values()].map((row) => ({ ...row, lastActiveAt: row.lastActiveAt ?? new Date(0) }));
   },
 
   lookupPageOwnerId,
