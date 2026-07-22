@@ -158,7 +158,10 @@ describe('MCP drive-scope enforcement', () => {
 
   it('canActorEditPage: root-create path — an in-scope drive id with no page row is allowed', async () => {
     // create_page passes the DRIVE id to canActorEditPage for root-level creates.
-    mockDbWhere.mockResolvedValue([AGENT_PAGE_ROW]); // no page row for a drive id (so no driveId)
+    // One mock serves both selects: the actor row resolves the agent, and the
+    // page-drive lookup finds no driveId (a drive id has no page row), so the
+    // scope check falls back to treating the id itself as the drive.
+    mockDbWhere.mockResolvedValue([AGENT_PAGE_ROW]);
     mockGetAgentAccessLevel.mockResolvedValue({ canEdit: true });
     expect(await canActorEditPage(scopedAgentCtx, 'drive-A')).toBe(true);
     // The scope ceiling passed (drive-A is in scope), so the agent ACL was consulted.
