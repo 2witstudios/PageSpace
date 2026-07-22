@@ -4,9 +4,12 @@ import { assert } from './riteway';
 import {
   createSessionTools,
   readSessionState,
+  type SessionIoInput,
   type SessionRow,
   type SessionToolsDeps,
 } from '../session-tools';
+import { readAgentSession, sendAgentSession } from '../session-io-agent';
+import { readPtySession, sendPtySession } from '../session-io-pty';
 import type { SessionView, SessionViewWrite } from '../session-layout';
 import type { ToolExecutionContext } from '../../core/types';
 import type {
@@ -61,11 +64,20 @@ function deps(
     applyViewWrites: async (machineId, writes) => {
       recorded.writes.push({ machineId, writes });
     },
+    io: {
+      agent: { read: notDispatched, send: notDispatched },
+      pty: { read: notDispatched, send: notDispatched },
+    },
     newId: () => `id${++ids}`,
     now: () => NOW,
   };
   return { deps: { ...base, ...overrides }, recorded };
 }
+
+/** The default IO seam for suites that are not about dispatch — reaching it is the failure. */
+const notDispatched = async (): Promise<never> => {
+  throw new Error('session IO must not be dispatched by this case');
+};
 
 function context(binding: MachineNodeHandleSet | undefined): ToolExecutionContext {
   return { userId: 'u1', conversationId: 'c1', machineBinding: binding };
@@ -585,6 +597,102 @@ describe('kill_session', () => {
       should: 'report the failure and close no panes',
       actual: { success: result.success, writes: recorded.writes.length },
       expected: { success: false, writes: 0 },
+    });
+  });
+});
+
+describe('session IO shells', () => {
+  interface Dispatched {
+    agent: { verb: string; name: string; node: string }[];
+    pty: { verb: string; name: string; node: string }[];
+  }
+
+  function ioDeps(row: SessionRow): { deps: SessionToolsDeps; dispatched: Dispatched } {
+    const dispatched: Dispatched = { agent: [], pty: [] };
+    const record = (surface: 'agent' | 'pty', verb: string) => async (input: SessionIoInput) => {
+      dispatched[surface].push({
+        verb,
+        name: input.identity.name,
+        node: input.identity.node.kind,
+      });
+      return { success: false as const, error: `${surface}/${verb} not implemented` };
+    };
+    const { deps: d } = deps({
+      findSession: async () => row,
+      io: {
+        agent: { read: record('agent', 'read'), send: record('agent', 'send') },
+        pty: { read: record('pty', 'read'), send: record('pty', 'send') },
+      },
+    });
+    return { deps: d, dispatched };
+  }
+
+  it('given an agent session, should dispatch read_session to the agent module', async () => {
+    const { deps: d, dispatched } = ioDeps(agentRow('worker'));
+    const tools = createSessionTools(d);
+
+    await exec(tools.read_session, { name: 'worker' }, context(rootBinding()));
+
+    assert({
+      given: 'a chat-surface session',
+      should: 'dispatch to the agent transcript module only',
+      actual: dispatched,
+      expected: { agent: [{ verb: 'read', name: 'worker', node: 'machine' }], pty: [] },
+    });
+  });
+
+  it('given a shell session, should dispatch send_session to the pty module', async () => {
+    const { deps: d, dispatched } = ioDeps(shellRow('sh1'));
+    const tools = createSessionTools(d);
+
+    await exec(tools.send_session, { name: 'sh1', input: 'ls\n' }, context(rootBinding()));
+
+    assert({
+      given: 'a pty-surface session',
+      should: 'dispatch to the pty stdin module only',
+      actual: dispatched,
+      expected: { agent: [], pty: [{ verb: 'send', name: 'sh1', node: 'machine' }] },
+    });
+  });
+
+  it('given a target outside the handle set, should deny before dispatching', async () => {
+    const { deps: d, dispatched } = ioDeps(agentRow('worker'));
+    const tools = createSessionTools(d);
+
+    const result = (await exec(
+      tools.read_session,
+      { name: 'worker', target: { project: 'sibling' } },
+      context(rootBinding()),
+    )) as { success: boolean };
+
+    assert({
+      given: 'a read aimed at a node the derived set never contained',
+      should: 'deny and dispatch nothing',
+      actual: { success: result.success, dispatched },
+      expected: { success: false, dispatched: { agent: [], pty: [] } },
+    });
+  });
+
+  it('given the shipped IO modules, should answer that they are not implemented yet', async () => {
+    const identity = {
+      node: machineHandle(),
+      name: 'worker',
+      address: { machineId: 'm1', name: 'worker' },
+    };
+    const actor = { userId: 'u1' };
+
+    const answers = await Promise.all([
+      readAgentSession({ identity, actor }),
+      sendAgentSession({ identity, actor, input: 'hello' }),
+      readPtySession({ identity, actor }),
+      sendPtySession({ identity, actor, input: 'ls\n' }),
+    ]);
+
+    assert({
+      given: 'the phase-4 IO stubs',
+      should: 'refuse every call honestly rather than pretending emptiness',
+      actual: answers.map((answer) => answer.success),
+      expected: [false, false, false, false],
     });
   });
 });

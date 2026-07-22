@@ -180,6 +180,7 @@ vi.mock('@/lib/ai/core/tool-filtering', () => ({
   filterToolsForWebSearch: vi.fn().mockReturnValue({}),
   filterToolsForMcpScope: vi.fn().mockReturnValue({}),
   filterToolsForMachineBinding: vi.fn().mockReturnValue({}),
+  withSessionFamilyTools: vi.fn((tools: unknown) => tools),
   buildPageAITools: vi.fn().mockReturnValue({}),
 }));
 vi.mock('@/lib/ai/core/page-tree-context', () => ({

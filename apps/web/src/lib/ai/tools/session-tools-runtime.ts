@@ -42,6 +42,8 @@ import { buildMachineWorkspacesDeps, toWorkspaceDTO } from '@/lib/machines/machi
 import { broadcastMachineWorkspaceEvent } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSessionTools, type SessionToolsDeps } from './session-tools';
+import { readAgentSession, sendAgentSession } from './session-io-agent';
+import { readPtySession, sendPtySession } from './session-io-pty';
 import type { SessionView, SessionViewWrite } from './session-layout';
 
 /** A node's `{projectName?, branchName?}` half, as the agent-terminal API takes it. */
@@ -205,6 +207,14 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       for (const write of writes) {
         await applyWrite(machineId, write, actor);
       }
+    },
+
+    // One module per surface, each owned end-to-end by its own phase. The
+    // dispatch decision itself lives in `session-tools.ts` (by the row's own
+    // agent type); this is only the wiring.
+    io: {
+      agent: { read: readAgentSession, send: sendAgentSession },
+      pty: { read: readPtySession, send: sendPtySession },
     },
 
     newId: () => crypto.randomUUID(),

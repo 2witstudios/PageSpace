@@ -305,12 +305,6 @@ export function planMoveSession(
   return { ok: true, writes: diffViews(before, placed.state), viewId: placed.viewId };
 }
 
-/** Whether any of a machine's views currently renders this session — used to report a move's no-op honestly. */
-export function isSessionManifested(views: SessionView[], scope: OpenTerminalScope): boolean {
-  const state = toMachineState(views);
-  return workspacesOf(state).some((workspace) => paneShowing(workspace, scope) !== undefined);
-}
-
 /** The views that hang under one node, as `list_sessions` reports them. */
 export function viewsAtNode(views: SessionView[], names: { projectName?: string; branchName?: string }): SessionView[] {
   const node = machineNodeScope(names);
