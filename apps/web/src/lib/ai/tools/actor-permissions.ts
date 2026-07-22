@@ -46,9 +46,7 @@ export async function hasAgentUserScopedAccess(agentPageId: string): Promise<boo
  * (`userScopedAccess`)? Kept as a single select so the type gate below costs
  * zero additional queries on a path every tool call runs through.
  */
-async function fetchActingPageRow(
-  agentPageId: string,
-): Promise<{ type: string; userScopedAccess: boolean } | undefined> {
+async function fetchActingPageRow(agentPageId: string) {
   const [row] = await db
     .select({ type: pages.type, userScopedAccess: pages.userScopedAccess })
     .from(pages)
