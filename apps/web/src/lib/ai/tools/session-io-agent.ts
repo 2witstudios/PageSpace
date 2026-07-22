@@ -141,6 +141,8 @@ function dispatchError(
       return `Session "${identity.name}" is already working on something (someone may be talking to it right now). Wait for it to finish — read_session shows what it is doing — and send again.`;
     case 'depth_exceeded':
       return 'This session was itself started by another agent session, and a dispatch chain may not go deeper. Do this work here, or ask the agent at the top of the chain.';
+    case 'credit_denied':
+      return `The dispatch was refused by the AI credit gate (${result.detail ?? 'limit reached'}) — the same admission control an interactive chat runs. The session was not started and nothing was written to its transcript.`;
     case 'failed':
       return `The message could not be delivered to session "${identity.name}": ${result.detail ?? 'unknown error'}.`;
   }

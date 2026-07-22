@@ -116,6 +116,17 @@ export interface HeadlessGenerateResult {
 export interface HeadlessSessionRunDeps {
   /** Resolve the addressed session into a runnable target, or null if it is not an agent session. */
   resolveTarget: (identity: SessionTerminalIdentity) => Promise<HeadlessSessionTarget | null>;
+  /**
+   * The SAME admission control the interactive path runs (`canConsumeAI`): a
+   * user at their limit must be refused here too, or send_session becomes the
+   * unmetered way around the chat route's gate. Checked BEFORE the claim, so a
+   * denied dispatch leaves nothing behind.
+   */
+  checkCredit: (input: {
+    userId: string;
+  }) => Promise<{ allowed: true; holdId: string | null } | { allowed: false; reason: string }>;
+  /** Release the gate's hold once the run settles — actual consumption flows through `trackUsage`. */
+  releaseHold: (holdId: string) => Promise<void>;
   /** Atomic claim on the conversation — the workflow_runs discipline, contended by live streams too. */
   claimRun: (input: {
     target: HeadlessSessionTarget;
@@ -180,7 +191,11 @@ export type HeadlessDispatchResult =
       accepted: true;
       messageId: string;
     }
-  | { ok: false; reason: 'not_an_agent_session' | 'busy' | 'depth_exceeded' | 'failed'; detail?: string };
+  | {
+      ok: false;
+      reason: 'not_an_agent_session' | 'busy' | 'depth_exceeded' | 'credit_denied' | 'failed';
+      detail?: string;
+    };
 
 /**
  * Dispatch one turn to an agent session.
@@ -210,9 +225,27 @@ export async function dispatchHeadlessSessionTurn(
   const target = await deps.resolveTarget(input.identity);
   if (!target) return { ok: false, reason: 'not_an_agent_session' };
 
+  // Admission control before the claim: a denied dispatch must leave no claim
+  // held and no message appended — the same "refuse before anything is
+  // persisted" rule as the depth cap.
+  const credit = await deps.checkCredit({ userId: input.actor.userId });
+  if (!credit.allowed) {
+    return { ok: false, reason: 'credit_denied', detail: credit.reason };
+  }
+  const holdId = credit.holdId;
+
+  const releaseHold = async () => {
+    if (holdId) await deps.releaseHold(holdId).catch(() => {});
+  };
+
   const messageId = deps.newId();
   const claimed = await deps.claimRun({ target, userId: input.actor.userId, messageId });
-  if (!claimed.ok) return { ok: false, reason: 'busy' };
+  if (!claimed.ok) {
+    // No run will happen — a hold left behind would strand spendable balance
+    // until it expires.
+    await releaseHold();
+    return { ok: false, reason: 'busy' };
+  }
   const claim = claimed.claim;
 
   try {
@@ -227,10 +260,11 @@ export async function dispatchHeadlessSessionTurn(
     // leaving the session unreachable until the claim goes stale.
     deps.onError?.('headless-session-run: append failed', error);
     await claim.release({ aborted: true, error: errorText(error) }).catch(() => {});
+    await releaseHold();
     return { ok: false, reason: 'failed', detail: errorText(error) };
   }
 
-  deps.defer(() => runClaimedTurn({ input, target, claim, deps }));
+  deps.defer(() => runClaimedTurn({ input, target, claim, holdId, deps }));
 
   return { ok: true, accepted: true, messageId: claim.messageId };
 }
@@ -244,11 +278,13 @@ async function runClaimedTurn({
   input,
   target,
   claim,
+  holdId,
   deps,
 }: {
   input: HeadlessDispatchInput;
   target: HeadlessSessionTarget;
   claim: HeadlessRunClaim;
+  holdId: string | null;
   deps: HeadlessSessionRunDeps;
 }): Promise<void> {
   let result: HeadlessGenerateResult | undefined;
@@ -305,6 +341,15 @@ async function runClaimedTurn({
   await claim.release({ aborted: failure !== undefined, error: failure }).catch((error) => {
     deps.onError?.('headless-session-run: claim release failed', error);
   });
+
+  // The hold has done its job (admission); actual consumption flowed through
+  // trackUsage above. Released last, and unconditionally — success, failure,
+  // or a generate that threw — so the user's spendable balance is accurate.
+  if (holdId) {
+    await deps.releaseHold(holdId).catch((error) => {
+      deps.onError?.('headless-session-run: hold release failed', error);
+    });
+  }
 }
 
 function errorText(error: unknown): string {

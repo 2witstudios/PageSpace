@@ -50,6 +50,8 @@ function target(): HeadlessSessionTarget {
 
 interface Recorded {
   claims: number;
+  creditChecks: string[];
+  holdsReleased: string[];
   appended: { content: string; conversationId: string }[];
   generated: { depth: number; cwd: string; sandboxId?: string; message: string }[];
   replies: { content: string; aborted: boolean }[];
@@ -65,6 +67,8 @@ function deps(
 ): { deps: HeadlessSessionRunDeps; recorded: Recorded; drain: () => Promise<void> } {
   const recorded: Recorded = {
     claims: 0,
+    creditChecks: [],
+    holdsReleased: [],
     appended: [],
     generated: [],
     replies: [],
@@ -77,6 +81,13 @@ function deps(
 
   const base: HeadlessSessionRunDeps = {
     resolveTarget: async () => target(),
+    checkCredit: async ({ userId }) => {
+      recorded.creditChecks.push(userId);
+      return { allowed: true, holdId: 'hold-1' };
+    },
+    releaseHold: async (holdId) => {
+      recorded.holdsReleased.push(holdId);
+    },
     claimRun: async () => {
       recorded.claims += 1;
       if (options.claimBusy) return { ok: false, reason: 'busy' };
@@ -126,6 +137,68 @@ function deps(
     },
   };
 }
+
+describe('dispatchHeadlessSessionTurn — credit gate', () => {
+  it('given a denied credit gate, should refuse BEFORE claiming or appending anything', async () => {
+    // The interactive path refuses a user at their limit up front
+    // (chat/route.ts's canConsumeAI gate); a dispatch reaching the same loop
+    // without that check would let send_session drive unbounded chains on an
+    // exhausted balance.
+    const { deps: d, recorded } = deps({
+      checkCredit: async () => ({ allowed: false, reason: 'insufficient_credits' }),
+    });
+
+    const result = await dispatchHeadlessSessionTurn(
+      { identity: identity(), actor: { userId: 'user-1' }, message: 'go', depth: 0 },
+      d,
+    );
+
+    expect(result).toEqual({ ok: false, reason: 'credit_denied', detail: 'insufficient_credits' });
+    expect(recorded.claims).toBe(0);
+    expect(recorded.appended).toEqual([]);
+  });
+
+  it('given an allowed gate with a hold, should release the hold after the run — success or not', async () => {
+    const { deps: d, recorded, drain } = deps();
+
+    await dispatchHeadlessSessionTurn(
+      { identity: identity(), actor: { userId: 'user-1' }, message: 'go', depth: 0 },
+      d,
+    );
+    await drain();
+
+    expect(recorded.creditChecks).toEqual(['user-1']);
+    expect(recorded.holdsReleased).toEqual(['hold-1']);
+  });
+
+  it('given the generate loop THROWS, should still release the hold', async () => {
+    const { deps: d, recorded, drain } = deps({
+      generate: async () => {
+        throw new Error('provider down');
+      },
+    });
+
+    await dispatchHeadlessSessionTurn(
+      { identity: identity(), actor: { userId: 'user-1' }, message: 'go', depth: 0 },
+      d,
+    );
+    await drain();
+
+    expect(recorded.holdsReleased).toEqual(['hold-1']);
+  });
+
+  it('given a depth-capped dispatch, should never even check credit', async () => {
+    const { deps: d, recorded } = deps();
+
+    const result = await dispatchHeadlessSessionTurn(
+      { identity: identity(), actor: { userId: 'user-1' }, message: 'go', depth: 2 },
+      d,
+    );
+
+    expect(result).toEqual({ ok: false, reason: 'depth_exceeded' });
+    expect(recorded.creditChecks).toEqual([]);
+  });
+});
 
 describe('dispatchHeadlessSessionTurn', () => {
   it('given a message for an agent session, should append it, ACK, and only then run the loop', async () => {

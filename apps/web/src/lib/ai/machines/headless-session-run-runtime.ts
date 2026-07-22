@@ -46,6 +46,10 @@ import { generateText, stepCountIs, hasToolCall, type ToolSet, type UIMessage } 
 import { db } from '@pagespace/db/db';
 import { and, eq, desc, ne } from '@pagespace/db/operators';
 import { chatMessages, pages } from '@pagespace/db/schema/core';
+import { users } from '@pagespace/db/schema/auth';
+import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
@@ -55,7 +59,11 @@ import { buildMachinePaneBindingDeps } from '@/lib/ai/machine-pane/machine-pane-
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import { filterToolsForMachineBinding, withSessionFamilyTools } from '@/lib/ai/core/tool-filtering';
+import {
+  filterToolsForMachineBinding,
+  filterToolsForAgentAllowlist,
+  withSessionFamilyTools,
+} from '@/lib/ai/core/tool-filtering';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { saveMessageToDatabase } from '@/lib/ai/core/message-utils';
@@ -321,7 +329,7 @@ async function generate(input: {
   const { target, userId, depth } = input;
 
   const [machinePage] = await db
-    .select({ id: pages.id, title: pages.title, type: pages.type, systemPrompt: pages.systemPrompt, aiProvider: pages.aiProvider, aiModel: pages.aiModel })
+    .select({ id: pages.id, title: pages.title, type: pages.type, systemPrompt: pages.systemPrompt, aiProvider: pages.aiProvider, aiModel: pages.aiModel, enabledTools: pages.enabledTools })
     .from(pages)
     .where(eq(pages.id, target.machineId));
 
@@ -333,13 +341,19 @@ async function generate(input: {
 
   // The bound-conversation tool surface, composed exactly as the chat route
   // composes it: machine tools minus switch_machine/list_machines, plus the
-  // session family. A dispatched session can therefore orchestrate in turn —
-  // bounded by the engine's depth cap, not by a narrower tool set.
+  // session family, MINUS whatever the page's saved allowlist excludes — a
+  // restriction the owner configured must not evaporate just because the same
+  // session was reached by dispatch instead of a browser. The session family
+  // survives the allowlist for the same reason it does interactively (it is
+  // the binding's orchestration surface; see filterToolsForAgentAllowlist).
   const { buildSessionTools } = await import('@/lib/ai/tools/session-tools-runtime');
-  const tools = withSessionFamilyTools(
-    filterToolsForMachineBinding(pageSpaceTools, true),
-    buildSessionTools(),
-    true,
+  const tools = filterToolsForAgentAllowlist(
+    withSessionFamilyTools(
+      filterToolsForMachineBinding(pageSpaceTools, true),
+      buildSessionTools(),
+      true,
+    ),
+    (machinePage?.enabledTools as string[] | null) ?? null,
   ) as ToolSet;
 
   const context: ToolExecutionContext = {
@@ -399,6 +413,23 @@ export function buildHeadlessSessionRunDeps(): HeadlessSessionRunDeps {
   return {
     resolveTarget,
     claimRun,
+
+    // The interactive path's admission control (chat/route.ts's canConsumeAI
+    // gate), applied to the dispatched path: a user at their limit is refused
+    // before the claim, and the hold is released by the engine once the run
+    // settles (consumption itself flows through trackUsage).
+    checkCredit: async ({ userId }) => {
+      const [user] = await db
+        .select({ subscriptionTier: users.subscriptionTier })
+        .from(users)
+        .where(eq(users.id, userId));
+      const gate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier);
+      if (!gate.allowed) return { allowed: false, reason: gate.reason ?? 'denied' };
+      return { allowed: true, holdId: gate.holdId ?? null };
+    },
+    releaseHold: async (holdId) => {
+      await releaseHold(holdId);
+    },
 
     appendMessage: async ({ target, userId, messageId, content }) => {
       const uiMessage: UIMessage = {
