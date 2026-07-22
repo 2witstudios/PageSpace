@@ -161,6 +161,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   // pipeline deep in the machines orchestration layer, not directly in route.ts) ---
   ['machines/branches', 'Audited via writeCodeExecutionAudit in machine-branches.ts (git clone/checkout on the branch Sprite)'],
   ['machines/projects', 'Audited via writeCodeExecutionAudit in machine-projects.ts (git clone on the owning Machine)'],
+  ['machines/projects/promote', 'Audited via writeCodeExecutionAudit inside promoteProject (machine-project-promotion.ts — provision/clone/credential propagation onto the project Sprite), the same deep audit path as machines/branches; the route is a thin operator surface over the same service the first project-scoped spawn calls'],
   ['machines/agent-terminals', 'Reserves/kills a named PTY session tracking row; the PTY itself is audited via writeCodeExecutionAudit when opened (see apps/realtime/src/index.ts)'],
   ['machines/files', 'Read-only working-tree browse (fixed `ls` + single file read on an already-provisioned branch Sprite) — no data write, no code execution/provisioning, no git; GET-only, view-gated by canViewMachine and path-confined to the branch checkout root, consistent with the other read-only machines/* and drive/page read sub-routes'],
   ['machines/git-blob', 'Audited via writeCodeExecutionAudit inside runGitInSandbox (machine-git-blob.ts\'s `git show <ref>:<path>` on the branch Sprite) — same deep audit path as machines/branches and machines/projects, not a direct route.ts call'],
