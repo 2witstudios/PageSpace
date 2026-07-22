@@ -50,6 +50,20 @@ export interface RealtimeSessionReadResponse {
   sessions: RealtimeSessionReadEntry[];
 }
 
+export interface RealtimeSessionSendResponse {
+  success: boolean;
+  live?: boolean;
+  delivered?: boolean;
+}
+
+export interface RealtimeSessionSendPayload {
+  machineId: string;
+  projectName?: string;
+  branchName?: string;
+  name: string;
+  input: string;
+}
+
 export interface RealtimeSessionReadPayload {
   machineId: string;
   projectName?: string;
@@ -66,6 +80,7 @@ export interface RealtimeSessionReadPayload {
  */
 export interface RealtimeSessionIoTransport {
   read: (payload: RealtimeSessionReadPayload) => Promise<RealtimeSessionReadResponse | null>;
+  send: (payload: RealtimeSessionSendPayload) => Promise<RealtimeSessionSendResponse | null>;
 }
 
 /** The `{projectName?, branchName?}` half of a node, as the endpoints take it. */
@@ -75,6 +90,9 @@ function nodeNames(node: { project?: string; branch?: string }): { projectName?:
     ...(node.branch ? { branchName: node.branch } : {}),
   };
 }
+
+const UNREACHABLE_SEND =
+  'Could not reach the terminal service, so this input was NOT delivered. Nothing was typed into the session.';
 
 const UNREACHABLE_READ =
   'Could not reach the terminal service to read this session, so its output is unknown — this does NOT mean the session produced nothing or has stopped. Try again.';
@@ -86,6 +104,7 @@ const UNREACHABLE_READ =
  */
 export function createPtySessionIo(transport: RealtimeSessionIoTransport): {
   read: (input: SessionReadInput) => Promise<SessionIoResult>;
+  send: (input: SessionSendInput) => Promise<SessionIoResult>;
   liveness: (node: MachineNodeHandle, names: string[]) => Promise<Set<string> | undefined>;
 } {
   return {
@@ -130,6 +149,43 @@ export function createPtySessionIo(transport: RealtimeSessionIoTransport): {
               note: 'This session has produced output, but none of it is still in the scrollback ring (a large burst pushed it out).',
             }
           : {}),
+      };
+    },
+
+    send: async ({ identity, input }) => {
+      const { machineId, projectName, branchName, name } = identity.address;
+      const answer = await transport.send({
+        machineId,
+        ...(projectName ? { projectName } : {}),
+        ...(branchName ? { branchName } : {}),
+        name,
+        // Control characters are NOT stripped: to a PTY they are keys, and
+        // Ctrl-C (\x03) / Ctrl-D (\x04) / ESC are the only way to interrupt a
+        // runaway process or answer a full-screen prompt. This is the opposite
+        // of `terminal-activity.ts`'s policy for a REASON — there the bytes are
+        // interpolated into a display line an xterm renders, where an ESC
+        // sequence could forge output; here they are delivered to a program's
+        // stdin, which is exactly what a keyboard does.
+        input,
+      });
+
+      if (!answer?.success) return { success: false, error: UNREACHABLE_SEND };
+
+      // Not live, or live but undelivered — either way nothing was typed, and
+      // reporting success would leave the model waiting on a command that was
+      // never run.
+      if (!answer.live || !answer.delivered) {
+        return {
+          success: false,
+          error: `Nothing was typed: session "${name}" has no running terminal right now. A shell session's PTY starts when a human first opens it; use bash (with target) to run a command at that node instead.`,
+        };
+      }
+
+      return {
+        success: true,
+        name,
+        delivered: true,
+        note: 'Input was typed into the session exactly as given — anyone watching that terminal saw it, and what it produces appears in the session\'s output. Use read_session to see the result.',
       };
     },
 
@@ -182,22 +238,13 @@ async function postSigned<T>(path: string, payload: unknown): Promise<T | null> 
 /** The production transport: signed POSTs to the realtime service that owns the PTYs. */
 export const realtimeSessionIoTransport: RealtimeSessionIoTransport = {
   read: (payload) => postSigned<RealtimeSessionReadResponse>('/api/session-read', payload),
+  send: (payload) => postSigned<RealtimeSessionSendResponse>('/api/session-input', payload),
 };
 
 const ptySessionIo = createPtySessionIo(realtimeSessionIoTransport);
 
 export const readPtySession = ptySessionIo.read;
 
-/**
- * `send_session`'s PTY half — the stdin endpoint is the next leaf. Until then
- * this refuses honestly rather than claiming a keystroke landed.
- */
-export async function sendPtySession(_input: SessionSendInput): Promise<SessionIoResult> {
-  return {
-    success: false,
-    error:
-      'Sending keystrokes to a shell session is not available yet. Use bash (with target) to run a command at that node instead.',
-  };
-}
+export const sendPtySession = ptySessionIo.send;
 /** The `list_sessions` liveness sweep — wired in as `SessionToolsDeps.ptyLiveness`. */
 export const readPtyLiveness = ptySessionIo.liveness;

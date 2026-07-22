@@ -24,6 +24,7 @@
  */
 
 import type { TerminalSession, TerminalSessionMap } from './terminal-session-map';
+import { resumeBillingClock } from './agent-terminal-handler';
 
 /**
  * How much scrollback one read may ship back. The ring itself holds 64 KiB;
@@ -95,6 +96,69 @@ export interface SessionSendResult {
   live?: boolean;
   delivered?: boolean;
   error?: string;
+}
+
+/**
+ * Type stdin into a live PTY on behalf of a machine-bound agent.
+ *
+ * The write goes through `session.command.write` — the SAME call a human
+ * viewer's keystroke makes — for two reasons. The shell echoes what it
+ * receives, so everyone attached sees the agent type exactly as they would see
+ * a teammate type (nothing is injected into their feed here, which would double
+ * the echo); and the input counts as ACTIVITY (`lastInputAt`), so a long silent
+ * run an agent kicks off is not mistaken for an idle session and reaped out
+ * from under itself by the platform task hold.
+ *
+ * Control characters are delivered VERBATIM. To a terminal they are keys, and
+ * Ctrl-C is the only way to interrupt a runaway process — the opposite of the
+ * stripping `terminal-activity.ts` does, which is right there because those
+ * bytes are interpolated into a display line an xterm renders (an ESC sequence
+ * could forge output) rather than delivered to a program's stdin.
+ */
+export async function handleSessionSendRequest(
+  deps: SessionIoDeps,
+  body: string,
+  now: () => number = Date.now,
+): Promise<{ status: number; body: SessionSendResult }> {
+  const payload = parseBody<SessionSendPayload>(body);
+  if (!payload || typeof payload !== 'object') {
+    return { status: 400, body: { success: false, error: 'Invalid JSON' } };
+  }
+
+  const nodeError = invalidNode(payload);
+  if (nodeError) return { status: 400, body: { success: false, error: nodeError } };
+  if (!isNonEmptyString(payload.name)) {
+    return { status: 400, body: { success: false, error: 'Missing or invalid name' } };
+  }
+  // Refused, never truncated: half a command typed into a live shell is a
+  // command the caller never wrote, and the PTY would run it.
+  if (
+    !isNonEmptyString(payload.input) ||
+    Buffer.byteLength(payload.input, 'utf8') > MAX_SESSION_INPUT_BYTES
+  ) {
+    return { status: 400, body: { success: false, error: 'Missing or invalid input' } };
+  }
+
+  const session = deps.sessionMap.getByKey(
+    deps.sessionKeyFor({
+      machineId: payload.machineId,
+      projectName: payload.projectName,
+      branchName: payload.branchName,
+      name: payload.name,
+    }),
+  );
+  // Nothing running: say so. Swallowing the keystrokes with a 200 would let the
+  // caller believe a command it never ran is running.
+  if (!session) return { status: 200, body: { success: true, live: false, delivered: false } };
+
+  session.lastInputAt = now();
+  // A keystroke also RESUMES a quiesced shell (and with it the Sprite), so the
+  // billing window has to restart at the instant of the write — the same call
+  // the socket input path makes, for the same reason.
+  resumeBillingClock(session);
+  session.command.write(payload.input);
+
+  return { status: 200, body: { success: true, live: true, delivered: true } };
 }
 
 /** How many sessions one read may ask about — a node's listing, not a crawl. */

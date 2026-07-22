@@ -4,6 +4,7 @@ import {
   createPtySessionIo,
   type RealtimeSessionIoTransport,
   type RealtimeSessionReadResponse,
+  type RealtimeSessionSendResponse,
 } from '../session-io-pty';
 import type { SessionTerminalIdentity } from '../session-tools';
 
@@ -17,12 +18,16 @@ const ACTOR = { userId: 'u1' };
 
 interface Recorded {
   reads: unknown[];
+  sends: unknown[];
 }
 
 function transport(
-  answers: { read?: RealtimeSessionReadResponse | null } = {},
+  answers: {
+    read?: RealtimeSessionReadResponse | null;
+    send?: RealtimeSessionSendResponse | null;
+  } = {},
 ): { transport: RealtimeSessionIoTransport; recorded: Recorded } {
-  const recorded: Recorded = { reads: [] };
+  const recorded: Recorded = { reads: [], sends: [] };
   return {
     recorded,
     transport: {
@@ -31,6 +36,10 @@ function transport(
         return answers.read === undefined
           ? { success: true, sessions: [{ name: 'sh', live: false, hasOutput: false, viewers: 0, output: '' }] }
           : answers.read;
+      },
+      send: async (payload) => {
+        recorded.sends.push(payload);
+        return answers.send === undefined ? { success: true, live: true, delivered: true } : answers.send;
       },
     },
   };
@@ -162,6 +171,59 @@ describe('readPtyLiveness (the list_sessions sweep)', () => {
       should: 'skip the round trip',
       actual: { live: live && [...live], calls: recorded.reads.length },
       expected: { live: [], calls: 0 },
+    });
+  });
+});
+
+describe('sendPtySession', () => {
+  it('given a live PTY, should type the input into it and say so', async () => {
+    const { transport: fake, recorded } = transport();
+    const result = await createPtySessionIo(fake).send({ identity: IDENTITY, actor: ACTOR, input: 'ls\n' });
+
+    assert({
+      given: 'input for a running shell session',
+      should: 'deliver it at the resolved address and report the delivery',
+      actual: { success: result.success, sent: recorded.sends },
+      expected: {
+        success: true,
+        sent: [{ machineId: 'm1', projectName: 'repo', branchName: 'feature', name: 'sh', input: 'ls\n' }],
+      },
+    });
+  });
+
+  it('given control characters, should send them VERBATIM as keys rather than stripping them', async () => {
+    const { transport: fake, recorded } = transport();
+    await createPtySessionIo(fake).send({ identity: IDENTITY, actor: ACTOR, input: '\x03' });
+
+    assert({
+      given: 'Ctrl-C',
+      should: 'reach the PTY byte-for-byte — interrupting a runaway process depends on it',
+      actual: (recorded.sends[0] as { input: string }).input,
+      expected: '\x03',
+    });
+  });
+
+  it('given no live PTY, should refuse rather than report a keystroke that never landed', async () => {
+    const { transport: fake } = transport({ send: { success: true, live: false, delivered: false } });
+    const result = await createPtySessionIo(fake).send({ identity: IDENTITY, actor: ACTOR, input: 'ls\n' });
+
+    assert({
+      given: 'a session whose PTY is not running',
+      should: 'fail — nothing was typed',
+      actual: result.success,
+      expected: false,
+    });
+  });
+
+  it('given the realtime service is unreachable, should refuse rather than assume delivery', async () => {
+    const { transport: fake } = transport({ send: null });
+    const result = await createPtySessionIo(fake).send({ identity: IDENTITY, actor: ACTOR, input: 'ls\n' });
+
+    assert({
+      given: 'a transport failure',
+      should: 'fail — an unanswered write is not a delivered one',
+      actual: result.success,
+      expected: false,
     });
   });
 });

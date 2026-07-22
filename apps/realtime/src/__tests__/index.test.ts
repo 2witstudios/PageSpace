@@ -784,6 +784,44 @@ describe('requestListener - /api/session-read', () => {
   });
 });
 
+describe('requestListener - /api/session-input', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const body = JSON.stringify({ machineId: 'machine-1', name: 'sh', input: 'ls\n' });
+
+  it('given no signature, should return 401 without typing anything', async () => {
+    const req = createMockReq({ method: 'POST', url: '/api/session-input', headers: {} });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(body));
+    req._emit('end');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(401, { 'Content-Type': 'application/json' });
+  });
+
+  // No PTY is live in this process, so the honest answer is delivered:false —
+  // the point is that a SIGNED send reaches the handler and reports what
+  // actually happened rather than swallowing the keystrokes.
+  it('given a valid signed send for a session with no live PTY, should answer delivered:false', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+
+    const req = createMockReq({ method: 'POST', url: '/api/session-input', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(body));
+    req._emit('end');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
+    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ success: true, live: false, delivered: false }));
+  });
+});
+
 describe('requestListener - 404', () => {
   it('given unknown route, should return 404', () => {
     const req = createMockReq({
