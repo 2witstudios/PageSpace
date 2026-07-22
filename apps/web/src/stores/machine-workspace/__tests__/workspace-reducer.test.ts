@@ -66,15 +66,16 @@ describe('newWorkspace', () => {
   });
 
   it('given a workspace born from a session, should open with that session running in its first pane', () => {
-    const scope = { ...BRANCH_SCOPE, name: 'claude-a1b2c3' };
+    // The checkout lands on the WORKSPACE; the pane gets the narrow half.
+    const pane = { name: 'claude-a1b2c3' };
 
     assert({
       given: 'a workspace created for an existing session',
       should: 'show that session immediately, rather than an empty pane the user must fill',
       actual: panesOf(
-        newWorkspace({ id: 'ws-1', name: scope.name, scope: BRANCH_SCOPE, firstPaneId: 'pane-1', firstPaneScope: scope })
+        newWorkspace({ id: 'ws-1', name: pane.name, scope: BRANCH_SCOPE, firstPaneId: 'pane-1', firstPaneScope: pane })
       ),
-      expected: [{ id: 'pane-1', scope }],
+      expected: [{ id: 'pane-1', scope: pane }],
     });
   });
 });
@@ -334,7 +335,8 @@ describe('assignPane (split-and-pick landing)', () => {
         pendingPickerPaneId: actual.pendingPickerPaneId,
       },
       expected: {
-        pane1: { id: 'pane-1', scope, pendingPrompt: 'fix the build' },
+        // Stored NARROW: the checkout is the workspace's, never a second copy.
+        pane1: { id: 'pane-1', scope: { name: scope.name }, pendingPrompt: 'fix the build' },
         pane2: { id: 'pane-2', scope: null },
         activePaneId: 'pane-1',
         pendingPickerPaneId: 'pane-2',
@@ -349,7 +351,7 @@ describe('assignPane (split-and-pick landing)', () => {
       given: 'a pane closed while its agent was still booting',
       should:
         'return the state untouched — the store reads that identity to know the session it just created is orphaned, and removes it',
-      actual: assignPane(state, 'closed-pane', { name: 'claude-a1b2c3' }),
+      actual: assignPane(state, 'closed-pane', { ...BRANCH_SCOPE, name: 'claude-a1b2c3' }),
       expected: state,
     });
   });
@@ -360,7 +362,7 @@ describe('assignPane — content kind round-trips on the bound scope (#2166 phas
     assert({
       given: 'assignPane with a scope tagged kind: "chat"',
       should: "round-trip the kind onto the pane's scope, unchanged",
-      actual: panesOf(assignPane(aWorkspace(), 'pane-1', { name: 'claude-a1b2c3', kind: 'chat' }))[0].scope,
+      actual: panesOf(assignPane(aWorkspace(), 'pane-1', { ...BRANCH_SCOPE, name: 'claude-a1b2c3', kind: 'chat' }))[0].scope,
       expected: { name: 'claude-a1b2c3', kind: 'chat' },
     });
   });
@@ -371,7 +373,7 @@ describe('assignPane — content kind round-trips on the bound scope (#2166 phas
     assert({
       given: 'a pane id that does not resolve, with a scope carrying a content kind',
       should: 'be a no-op, same as any other assignPane call',
-      actual: assignPane(state, 'gone', { name: 'claude-a1b2c3', kind: 'chat' }),
+      actual: assignPane(state, 'gone', { ...BRANCH_SCOPE, name: 'claude-a1b2c3', kind: 'chat' }),
       expected: state,
     });
   });
@@ -379,14 +381,13 @@ describe('assignPane — content kind round-trips on the bound scope (#2166 phas
 
 describe('clearPanePrompt', () => {
   it('given a prompt that has been typed into the PTY, should drop it', () => {
-    const scope = { name: 'claude-a1b2c3' };
-    const state = assignPane(aWorkspace(), 'pane-1', scope, 'fix the build');
+    const state = assignPane(aWorkspace(), 'pane-1', { ...BRANCH_SCOPE, name: 'claude-a1b2c3' }, 'fix the build');
 
     assert({
       given: 'a starting prompt already delivered to the agent',
       should: 'drop it — a pane that re-mounts must reattach, not retype the prompt at a running agent',
       actual: panesOf(clearPanePrompt(state, 'pane-1'))[0],
-      expected: { id: 'pane-1', scope, pendingPrompt: undefined },
+      expected: { id: 'pane-1', scope: { name: 'claude-a1b2c3' }, pendingPrompt: undefined },
     });
   });
 });
@@ -531,7 +532,7 @@ describe('showSessionIn — a clicked session must actually be on screen', () =>
   });
 
   it('given a workspace whose active pane is stale, should still put the session on screen', () => {
-    const full = assignPane({ ...aWorkspace(), activePaneId: 'closed-long-ago' }, 'pane-1', { name: 'other' });
+    const full = assignPane({ ...aWorkspace(), activePaneId: 'closed-long-ago' }, 'pane-1', { ...BRANCH_SCOPE, name: 'other' });
 
     const actual = showSessionIn(full, SESSION, 'new-pane');
 
@@ -545,9 +546,9 @@ describe('showSessionIn — a clicked session must actually be on screen', () =>
 
   it('given every pane is full of other agents, should split a new pane for it', () => {
     const full = assignPane(
-      assignPane(splitRight(aWorkspace(), 'pane-1', 'col-2', 'pane-2'), 'pane-1', { name: 'other-1' }),
+      assignPane(splitRight(aWorkspace(), 'pane-1', 'col-2', 'pane-2'), 'pane-1', { ...BRANCH_SCOPE, name: 'other-1' }),
       'pane-2',
-      { name: 'other-2' }
+      { ...BRANCH_SCOPE, name: 'other-2' }
     );
 
     const actual = showSessionIn(full, SESSION, 'new-pane');
@@ -560,14 +561,14 @@ describe('showSessionIn — a clicked session must actually be on screen', () =>
         session: panesOf(actual).find((pane) => pane.id === 'new-pane')?.scope,
         othersKept: panesOf(actual).filter((pane) => pane.scope?.name.startsWith('other')).length,
       },
-      expected: { panes: 3, session: SESSION, othersKept: 2 },
+      expected: { panes: 3, session: { name: SESSION.name }, othersKept: 2 },
     });
   });
 });
 
 describe('closePane on a lone pane — the grid level does not own this case', () => {
   it('given the only pane of a workspace, should be a no-op at the grid level', () => {
-    const workspace = assignPane(aWorkspace(), 'pane-1', { name: 'claude-a1b2c3' }, 'a prompt');
+    const workspace = assignPane(aWorkspace(), 'pane-1', { ...BRANCH_SCOPE, name: 'claude-a1b2c3' }, 'a prompt');
 
     assert({
       given: "a workspace's ONLY pane",
@@ -811,7 +812,7 @@ describe('mergeServerWorkspaces — reconciling the server\'s workspace list', (
   });
 
   it('given a surviving pane with a local pendingPrompt, should preserve it across the server\'s columns', () => {
-    const local = initialMachineWorkspaces(assignPane(aWorkspace('ws-1', 'pane-1'), 'pane-1', { name: 'claude-a1' }, 'fix the build'));
+    const local = initialMachineWorkspaces(assignPane(aWorkspace('ws-1', 'pane-1'), 'pane-1', { ...BRANCH_SCOPE, name: 'claude-a1' }, 'fix the build'));
 
     const merged = mergeServerWorkspaces(local, [
       serverWorkspace({ columns: [{ id: 'pane-1', panes: [{ id: 'pane-1', scope: { name: 'claude-a1' } }] }] }),
@@ -862,7 +863,7 @@ describe('mergeServerWorkspaces — round-trips the content kind (#2166 phase 9)
 
   it("given a surviving pane with a local pendingPrompt, should preserve both the prompt and the server's content kind", () => {
     const local = initialMachineWorkspaces(
-      assignPane(aWorkspace('ws-1', 'pane-1'), 'pane-1', { name: 'claude-a1' }, 'fix the build')
+      assignPane(aWorkspace('ws-1', 'pane-1'), 'pane-1', { ...BRANCH_SCOPE, name: 'claude-a1' }, 'fix the build')
     );
 
     const merged = mergeServerWorkspaces(local, [
@@ -1023,7 +1024,7 @@ describe('sanitizeMachines — what comes back from storage is untrusted', () =>
       m1: {
         workspaces: {
           'ws-1': {
-            ...assignPane(aWorkspace(), 'pane-1', { name: 'claude-a1' }, 'fix the build'),
+            ...assignPane(aWorkspace(), 'pane-1', { ...BRANCH_SCOPE, name: 'claude-a1' }, 'fix the build'),
             pendingPickerPaneId: 'pane-1',
           },
         },

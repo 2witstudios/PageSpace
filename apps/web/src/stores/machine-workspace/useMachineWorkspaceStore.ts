@@ -44,6 +44,8 @@ import {
   removedWorkspaceBy,
   selectPane as selectPaneTransition,
   nodeOfTerminalScope,
+  paneScopeOf,
+  paneTerminalScope,
   panesOf,
   workspacesOf,
   isSameNodeScope,
@@ -54,6 +56,8 @@ import {
   type MachineNodeScope,
   type MachineWorkspacesState,
   type OpenTerminalScope,
+  type PaneSessionScope,
+  type ServerColumnDTO,
   type ServerWorkspaceDTO,
   type TerminalColumnState,
   type TerminalPaneState,
@@ -64,6 +68,8 @@ export type {
   MachineNodeScope,
   MachineWorkspacesState,
   OpenTerminalScope,
+  PaneSessionScope,
+  ServerColumnDTO,
   ServerWorkspaceDTO,
   TerminalColumnState,
   TerminalPaneState,
@@ -71,6 +77,7 @@ export type {
 };
 export {
   autoSessionName,
+  paneTerminalScope,
   panesOf,
   workspacesOf,
   isSameNodeScope,
@@ -111,7 +118,12 @@ interface MachineWorkspaceStoreState {
   openTerminal: (machineId: string, scope: OpenTerminalScope) => void;
   /** Split-and-pick's landing step. Returns false when the pane is gone (its
    * workspace closed, the page navigated away) so the caller can clean up the
-   * session it just created rather than strand it. */
+   * session it just created rather than strand it.
+   *
+   * `scope` is the FULL session address so the bind-time node-equality
+   * assertion has something to check (see `assignPane`); only its narrow half
+   * is stored. A scope naming a node other than the workspace's THROWS — that
+   * is a caller bug, not the "pane went away" race `false` reports. */
   bindPaneTerminal: (
     machineId: string,
     workspaceId: string,
@@ -286,9 +298,11 @@ export const useMachineWorkspaceStore = create<MachineWorkspaceStoreState>()(
         const workspace = newWorkspace({
           id: workspaceId,
           name: scope.name,
+          // The session's node becomes the WORKSPACE's checkout — the single
+          // copy of that fact. The pane keeps only the name and surface kind.
           scope: nodeOfTerminalScope(scope),
           firstPaneId: crypto.randomUUID(),
-          firstPaneScope: scope,
+          firstPaneScope: paneScopeOf(scope),
         });
         set((state) => applyToMachine(state, machineId, (current) => addWorkspace(current, workspace)));
       },

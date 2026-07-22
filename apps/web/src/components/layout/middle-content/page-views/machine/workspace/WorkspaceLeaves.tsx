@@ -19,8 +19,8 @@
  * here; route to the machine first, there).
  *
  * Removing a workspace STOPS every agent its panes hold (`killAgentTerminal`
- * per running session, addressed by the PANE's own scope — a pane's checkout
- * can differ from its workspace's) before dropping the local grid — it must
+ * per running session, addressed by the checkout re-derived from the OWNING
+ * workspace — a pane stores only its name) before dropping the local grid — it must
  * not merely hide a still-running (and still-billing) agent with no row left
  * to reach it from. Sessions another workspace's pane still shows are spared
  * (same rule as TerminalPanes' close-and-kill: never pull a PTY out from under
@@ -51,7 +51,10 @@ import {
   panesOf,
   isSameNodeScope,
   sessionWorkspaceId,
+  paneTerminalScope,
   type MachineNodeScope,
+  type OpenTerminalScope,
+  type WorkspaceState,
 } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 import { useAgentTerminals, killAgentTerminal } from '@/hooks/useAgentTerminals';
 import { useSyncedWorkspaceActions } from '@/hooks/useMachineWorkspaceSync';
@@ -59,6 +62,12 @@ import { isAgentRuntimeType } from '@pagespace/lib/services/machines/agent-termi
 import type { MachineTreeNode } from './MachineTree';
 import ConfirmRemoveDialog from './ConfirmRemoveDialog';
 import RemoveButton from './RemoveButton';
+
+/** Every session a workspace's panes hold, as full (project, branch, name)
+ * addresses — the pane stores a name, the workspace supplies the checkout. */
+function sessionScopesOf(workspace: WorkspaceState): OpenTerminalScope[] {
+  return panesOf(workspace).flatMap((pane) => (pane.scope ? [paneTerminalScope(workspace.scope, pane.scope)] : []));
+}
 
 /** A tree node's scope, minus the session/workspace name it might carry. */
 export function nodeScopeOf(node: MachineTreeNode): MachineNodeScope {
@@ -121,9 +130,10 @@ export default function WorkspaceLeaves({
   const scope = nodeScopeOf(node);
   // Lists this node's server-reported sessions, and removes the unclaimed ones
   // — both genuinely AT this node's scope. Kills of a workspace's panes go
-  // through `killAgentTerminal` instead: a pane's session scope can differ
-  // from its workspace's node scope (restored server layouts), and a DELETE
-  // under the wrong scope kills a different same-named terminal, or nothing.
+  // through `killAgentTerminal` instead: the workspace being removed need not
+  // be one of THIS node's (the machine-wide sweep below spans every node), and
+  // a DELETE under the wrong scope kills a different same-named terminal, or
+  // nothing.
   const { agentTerminals, removeAgentTerminal } = useAgentTerminals(machineId, scope.projectName, scope.branchName);
 
   if (!machine) return null;
@@ -131,46 +141,38 @@ export default function WorkspaceLeaves({
   const workspaces = workspacesOf(machine).filter((workspace) => isSameNodeScope(workspace.scope, scope));
   const pendingWorkspace = workspaces.find((workspace) => workspace.id === pendingRemove);
   // What confirming the pending removal will actually stop: the workspace's
-  // panes' sessions, each addressed by the PANE's own scope, deduped by session
-  // identity (two panes can legitimately show one session — kill it once), and
-  // sparing any session a pane of ANOTHER workspace still shows — the same
-  // rule as TerminalPanes' close-and-kill, which must never pull a PTY out
-  // from under a pane still showing it.
+  // panes' sessions, each addressed by the checkout re-derived from the
+  // workspace that owns the pane, deduped by session identity (two panes can
+  // legitimately show one session — kill it once), and sparing any session a
+  // pane of ANOTHER workspace still shows — the same rule as TerminalPanes'
+  // close-and-kill, which must never pull a PTY out from under a pane still
+  // showing it.
   const shownElsewhere = new Set(
     workspacesOf(machine)
       .filter((workspace) => workspace.id !== pendingWorkspace?.id)
-      .flatMap(panesOf)
-      .flatMap((pane) => (pane.scope ? [sessionWorkspaceId(pane.scope)] : [])),
+      .flatMap(sessionScopesOf)
+      .map(sessionWorkspaceId),
   );
   const pendingKillScopes = pendingWorkspace
-    ? [
-        ...new Map(
-          panesOf(pendingWorkspace)
-            .flatMap((pane) => (pane.scope ? [pane.scope] : []))
-            .map((paneScope) => [sessionWorkspaceId(paneScope), paneScope] as const),
-        ),
-      ]
+    ? [...new Map(sessionScopesOf(pendingWorkspace).map((session) => [sessionWorkspaceId(session), session] as const))]
         .filter(([id]) => !shownElsewhere.has(id))
-        .map(([, paneScope]) => paneScope)
+        .map(([, session]) => session)
     : [];
 
   // "Claimed" compares full session identity — the (project, branch, name)
   // triple via `sessionWorkspaceId` — against every pane on the MACHINE, not
   // pane names at this node alone: a same-named session at another checkout
-  // must not mask this one, and a session shown by a cross-scope pane in some
-  // other workspace is not unclaimed.
-  const localSessionIds = new Set(
-    workspacesOf(machine)
-      .flatMap(panesOf)
-      .flatMap((pane) => (pane.scope ? [sessionWorkspaceId(pane.scope)] : [])),
-  );
+  // must not mask this one, and a session shown by a pane of a workspace at
+  // ANOTHER node is not unclaimed.
+  const localSessionIds = new Set(workspacesOf(machine).flatMap(sessionScopesOf).map(sessionWorkspaceId));
+  const sessionAt = (name: string): OpenTerminalScope => paneTerminalScope(scope, { name });
   const unclaimedSessions = agentTerminals.filter(
-    (terminal) => !localSessionIds.has(sessionWorkspaceId({ ...scope, name: terminal.name })),
+    (terminal) => !localSessionIds.has(sessionWorkspaceId(sessionAt(terminal.name))),
   );
 
   const adopt = (name: string) => {
-    openTerminal({ ...scope, name });
-    onSelectWorkspace(sessionWorkspaceId({ ...scope, name }));
+    openTerminal(sessionAt(name));
+    onSelectWorkspace(sessionWorkspaceId(sessionAt(name)));
   };
 
   const startRename = (workspace: { id: string; name: string }) => {

@@ -12,23 +12,18 @@
  * for what turns out to be a chat isn't a harmless flash, it's a connection.
  *
  * The list consulted is the WORKSPACE's (the one TerminalPanes already
- * subscribes to for spawning). A pane bound at a foreign checkout (a restored
- * server layout can hold one) is outside that list's world, so its name is
- * never matched against it — a same-name row at the workspace's scope would
- * be a different session — and a kind-less foreign pane reads as a terminal
- * immediately: every binding that predates the kind tag was a PTY.
+ * subscribes to for spawning), and it is unconditionally THIS pane's list: a
+ * pane stores only `{name, kind}` and runs at its workspace's checkout, so
+ * there is no foreign-scope case to opt out of. The old escape hatch —
+ * "unresolvable against this list, therefore a terminal" — resolved a
+ * kind-less chat pane to an Xterm the moment a layout carried one.
  */
 import {
   agentSurfaceOf,
   isAgentRuntimeType,
   type AgentRuntimeType,
 } from '@pagespace/lib/services/machines/agent-terminal-types';
-import {
-  isSameNodeScope,
-  nodeOfTerminalScope,
-  type MachineNodeScope,
-  type OpenTerminalScope,
-} from '@/stores/machine-workspace/workspace-reducer';
+import type { PaneSessionScope } from '@/stores/machine-workspace/workspace-reducer';
 
 /** The slice of an `AgentTerminal` row this decision reads. */
 export interface PaneSessionRow {
@@ -48,21 +43,17 @@ export type PaneSurface =
   | { surface: 'chat'; terminalId: string | null };
 
 export function resolvePaneSurface(params: {
-  scope: OpenTerminalScope;
-  /** The checkout the session list below was fetched at. */
-  workspaceScope: MachineNodeScope;
+  /** What the pane stores — its name within its workspace's checkout, and
+   * (when it was tagged at bind time) its surface. */
+  scope: PaneSessionScope;
   agentTerminals: readonly PaneSessionRow[];
   isLoading: boolean;
 }): PaneSurface {
-  const { scope, workspaceScope, agentTerminals, isLoading } = params;
+  const { scope, agentTerminals, isLoading } = params;
 
   if (scope.kind === 'terminal') return { surface: 'terminal' };
 
-  // A session's identity is (project, branch, name) — the list only speaks
-  // for the workspace's own checkout, so a foreign pane's name is never
-  // looked up in it (see module doc).
-  const resolvable = isSameNodeScope(nodeOfTerminalScope(scope), workspaceScope);
-  const row = resolvable ? agentTerminals.find((terminal) => terminal.name === scope.name) : undefined;
+  const row = agentTerminals.find((terminal) => terminal.name === scope.name);
 
   if (scope.kind === 'chat') return { surface: 'chat', terminalId: row?.id ?? null };
 
@@ -71,9 +62,9 @@ export function resolvePaneSurface(params: {
       ? { surface: 'chat', terminalId: row.id }
       : { surface: 'terminal' };
   }
-  if (resolvable && isLoading) return { surface: 'loading' };
-  // Loaded (or unresolvable) and absent: a kind-less binding predates chat
-  // panes, so the legacy reading — a PTY — is the safe one.
+  if (isLoading) return { surface: 'loading' };
+  // Loaded and absent: a kind-less binding predates chat panes, so the legacy
+  // reading — a PTY — is the safe one.
   return { surface: 'terminal' };
 }
 

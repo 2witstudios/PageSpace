@@ -63,12 +63,75 @@ export function isSameNodeScope(a: MachineNodeScope, b: MachineNodeScope): boole
   return (a.projectName ?? '') === (b.projectName ?? '') && (a.branchName ?? '') === (b.branchName ?? '');
 }
 
+/** A node scope rendered for an error message — never parsed, never persisted. */
+function scopeKey(scope: MachineNodeScope): string {
+  if (!scope.projectName) return 'the machine';
+  return scope.branchName ? `${scope.projectName}/${scope.branchName}` : scope.projectName;
+}
+
+/**
+ * What a bound pane STORES about its session: the name, and what it renders as.
+ * Deliberately NOT the checkout — that is {@link WorkspaceState.scope}, and a
+ * pane's checkout is always its workspace's.
+ *
+ * The pane used to carry a full {@link OpenTerminalScope}, which made a
+ * "foreign" pane (one whose project/branch disagreed with its workspace's)
+ * representable. Nothing ever wrote one — every bind path spawns at the
+ * workspace's scope — but every reader had to defend against one anyway, and
+ * the two copies of the checkout could in principle disagree with no rule for
+ * which wins. Narrowing deletes the whole class: `sessionWorkspaceId`,
+ * `paneSessionId`, the kill address and the surface decision all re-derive
+ * from one source. Rebuild the full address with {@link paneTerminalScope}.
+ */
+export interface PaneSessionScope {
+  name: string;
+  /** See {@link OpenTerminalScope.kind} — omitted means `'terminal'`. */
+  kind?: 'terminal' | 'chat';
+}
+
 export interface TerminalPaneState {
   id: string;
-  scope: OpenTerminalScope | null;
+  scope: PaneSessionScope | null;
   /** Typed into the agent's PTY once it's ready, then cleared — a pane that
    * re-mounts (tab switch, reattach) must not re-send the starting prompt. */
   pendingPrompt?: string;
+}
+
+/** The full session address a pane resolves to: its workspace's checkout plus
+ * its own name. THE join point — every read site that needs a (project,
+ * branch, name) triple builds it here rather than reading a stored copy. */
+export function paneTerminalScope(node: MachineNodeScope, pane: PaneSessionScope): OpenTerminalScope {
+  return {
+    projectName: node.projectName,
+    branchName: node.branchName,
+    name: pane.name,
+    ...(pane.kind === undefined ? {} : { kind: pane.kind }),
+  };
+}
+
+/** The half of a full session address a pane keeps — the projection applied at
+ * bind time. */
+export function paneScopeOf(scope: OpenTerminalScope): PaneSessionScope {
+  return scope.kind === undefined ? { name: scope.name } : { name: scope.name, kind: scope.kind };
+}
+
+/**
+ * Read-time projection of a STORED pane scope — the whole Phase-1 migration.
+ *
+ * A layout written by an older client (localStorage, or another browser's
+ * server payload) still carries `{projectName, branchName}` on the pane. There
+ * is nothing to reconcile: a wide pane was representable but never written
+ * disagreeing with its workspace, so the duplicated checkout is simply dropped
+ * on the way in. No backfill, no migration step, no version bump — both merge
+ * paths (`mergeColumns` and `sanitizeMachines`) funnel through here.
+ */
+export function projectStoredPaneScope(value: unknown): PaneSessionScope | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const candidate = value as { name?: unknown; kind?: unknown };
+  if (typeof candidate.name !== 'string') return null;
+  return candidate.kind === 'chat' || candidate.kind === 'terminal'
+    ? { name: candidate.name, kind: candidate.kind }
+    : { name: candidate.name };
 }
 
 export interface TerminalColumnState {
@@ -117,7 +180,7 @@ export function newWorkspace(params: {
   firstPaneId: string;
   /** A workspace born from an existing session opens with that session in its
    * first pane; one born empty opens with the agent picker. */
-  firstPaneScope?: OpenTerminalScope | null;
+  firstPaneScope?: PaneSessionScope | null;
 }): WorkspaceState {
   const { id, name, scope, firstPaneId, firstPaneScope = null } = params;
   return {
@@ -174,7 +237,20 @@ export function assignPane(
   scope: OpenTerminalScope,
   pendingPrompt?: string
 ): WorkspaceState {
-  const next = mapPane(state, paneId, (pane) => ({ ...pane, scope, pendingPrompt }));
+  // BIND-TIME NODE EQUALITY. A pane's checkout is its workspace's, so there is
+  // no representation for a session at another node — the narrow pane scope
+  // would silently record the NAME under this workspace's checkout, filing the
+  // session under a checkout it does not run in. That is a caller bug (a spawn
+  // addressed at the wrong node), not a race the UI can converge out of, so it
+  // throws rather than returning the "pane is gone" false, which callers answer
+  // by KILLING the session they just created.
+  if (!isSameNodeScope(nodeOfTerminalScope(scope), state.scope)) {
+    throw new Error(
+      `Cannot bind session "${scope.name}" at ${scopeKey(nodeOfTerminalScope(scope))} into workspace "${state.id}" at ${scopeKey(state.scope)} — a pane's checkout is its workspace's`
+    );
+  }
+
+  const next = mapPane(state, paneId, (pane) => ({ ...pane, scope: paneScopeOf(scope), pendingPrompt }));
   if (next === state) return state;
 
   return {
@@ -359,7 +435,9 @@ export function childSessionIds(state: MachineWorkspacesState): Set<string> {
   for (const workspace of workspacesOf(state)) {
     for (const pane of panesOf(workspace)) {
       if (!pane.scope) continue;
-      const id = sessionWorkspaceId(pane.scope);
+      // Re-derived through the OWNING workspace's checkout — the pane carries
+      // only a name, and a bare name is not a session identity.
+      const id = sessionWorkspaceId(paneTerminalScope(workspace.scope, pane.scope));
       if (id !== workspace.id) children.add(id);
     }
   }
@@ -379,10 +457,10 @@ export function runningPaneCount(state: MachineWorkspacesState, scope?: MachineN
 /** Is this session in one of `workspace`'s panes? */
 export function paneShowing(workspace: WorkspaceState, scope: OpenTerminalScope): TerminalPaneState | undefined {
   // A session IS its node scope plus a name, so both halves have to match: two
-  // branches of one project can each run an agent called `claude-a1b2c3`.
-  return panesOf(workspace).find(
-    (pane) => pane.scope != null && pane.scope.name === scope.name && isSameNodeScope(pane.scope, scope)
-  );
+  // branches of one project can each run an agent called `claude-a1b2c3`. The
+  // node half is now the WORKSPACE's — checked once, here, instead of per pane.
+  if (!isSameNodeScope(workspace.scope, nodeOfTerminalScope(scope))) return undefined;
+  return panesOf(workspace).find((pane) => pane.scope != null && pane.scope.name === scope.name);
 }
 
 /**
@@ -524,7 +602,20 @@ export interface ServerWorkspaceDTO {
   id: string;
   name: string;
   scope: MachineNodeScope;
-  columns: TerminalColumnState[];
+  columns: ServerColumnDTO[];
+}
+
+/** A pane AS IT ARRIVES. `{projectName, branchName}` are tolerated (and
+ * dropped) rather than rejected: a client running the pre-narrowing code, or a
+ * row it wrote before this shipped, still sends them. */
+export interface ServerPaneDTO {
+  id: string;
+  scope: (PaneSessionScope & { projectName?: string; branchName?: string }) | null;
+}
+
+export interface ServerColumnDTO {
+  id: string;
+  panes: ServerPaneDTO[];
 }
 
 /** This browser's own panes for a workspace, addressed by id — the one lookup
@@ -569,13 +660,15 @@ function panesById(existing: WorkspaceState | undefined): Map<string, TerminalPa
  * Panes the server DOESN'T list are still dropped: this guard defends an
  * existing pane's bind, it never resurrects a pane closed elsewhere.
  */
-function mergeColumns(existing: WorkspaceState | undefined, serverColumns: TerminalColumnState[]): TerminalColumnState[] {
+function mergeColumns(existing: WorkspaceState | undefined, serverColumns: ServerColumnDTO[]): TerminalColumnState[] {
   const localPanes = panesById(existing);
   return serverColumns.map((column) => ({
     id: column.id,
     panes: column.panes.map((pane) => {
       const local = localPanes.get(pane.id);
-      const scope = pane.scope ?? local?.scope ?? null;
+      // Projected on the way in (see `projectStoredPaneScope`): another
+      // client's payload can still carry the wide, pre-narrowing pane scope.
+      const scope = projectStoredPaneScope(pane.scope) ?? local?.scope ?? null;
       const pendingPrompt = local?.pendingPrompt;
       return pendingPrompt === undefined ? { id: pane.id, scope } : { id: pane.id, scope, pendingPrompt };
     }),
@@ -744,7 +837,9 @@ export function sanitizeMachines(value: unknown): Record<string, MachineWorkspac
 
       const columns = workspace.columns.map((column) => ({
         ...column,
-        panes: column.panes.map((pane) => ({ id: pane.id, scope: pane.scope })),
+        // Same read-time projection as `mergeColumns`: a blob written before
+        // the pane scope narrowed still carries the checkout per pane.
+        panes: column.panes.map((pane) => ({ id: pane.id, scope: projectStoredPaneScope(pane.scope) })),
       }));
       const paneIds = columns.flatMap((column) => column.panes.map((pane) => pane.id));
 
