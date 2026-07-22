@@ -48,6 +48,7 @@ import { createDbMachineProjectStore } from '@pagespace/lib/services/machines/ma
 import type { MachineActorContext, MachineProjectsDeps, MachineAcquireResult } from '@pagespace/lib/services/machines/machine-projects';
 import type { PromoteProjectDeps } from '@pagespace/lib/services/machines/machine-project-promotion';
 import { buildMachineBranchesDeps } from './machine-branches-runtime';
+import { measureProjectStorageOpportunistically } from '@pagespace/lib/services/sandbox/machine-storage-billing';
 
 // The Fly Sprites driver is loaded via a DYNAMIC import, never a static one —
 // @fly/sprites is ESM-only and @pagespace/lib compiles to CJS. Mirrors the
@@ -241,10 +242,14 @@ export function buildPromoteProjectDeps({ actorUserId }: { actorUserId: string }
     quota: projects.quota,
     buildEnv: projects.buildEnv,
     audit: projects.audit,
-    // Storage attribution is inherited from the branch seam (issue #2204 phase
-    // 3): a promoted project's bytes bill to the OWNING Machine page. Left
-    // UNBOUND until the storage reconcile grows its `machine_projects` arm —
-    // the seam is optional precisely so an unbound measurement degrades to the
-    // conservative never-measured floor rather than mis-attributing bytes.
+    // Storage attribution, inherited from the branch seam (issue #2204 phase 3):
+    // while the promoted Sprite is awake for its own clone (or a reattach),
+    // measure its used bytes onto its own `machine_projects` row so the storage
+    // reconcile bills them to the OWNING Machine page. Throttled, best-effort,
+    // and never wakes a hibernating Sprite. Without this a promotion would move
+    // a project's bytes OFF the machine's measured filesystem and they would
+    // stop being metered anywhere.
+    measureProjectStorage: ({ machineProjectId, machinePageId, handle }) =>
+      measureProjectStorageOpportunistically({ machineProjectId, machinePageId, handle }),
   };
 }

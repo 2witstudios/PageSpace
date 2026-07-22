@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, index, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, index, uniqueIndex, bigint } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
@@ -94,6 +94,36 @@ export const machineProjects = pgTable('machine_projects', {
    * rows away with it.
    */
   spriteTornDownAt: timestamp('spriteTornDownAt', { mode: 'date' }),
+
+  // ---------------------------------------------------------------------------
+  // Storage attribution for a PROMOTED project's own Sprite — the same three
+  // columns, with the same semantics, `machine_branches` carries (issue #2204
+  // phase 3, extended by phase 7). A promoted project's filesystem is its own,
+  // so measurement and watermark must live HERE (writing them onto the
+  // machine's `machine_sessions` row would clobber the machine's own
+  // footprint), while the CHARGE is attributed to `machineId` — the owning
+  // Machine page, which is the payer key and the field the per-machine usage
+  // breakdown groups on. See services/sandbox/machine-storage-attribution.ts,
+  // which froze exactly this contract for project Sprites.
+  //
+  // These stay NULL/inert for an UNPROMOTED project: it has no Sprite of its
+  // own, and its bytes are already inside the machine Sprite's own measurement.
+  // ---------------------------------------------------------------------------
+
+  // Watermark for the storage reconcile, per promoted project Sprite — bill only
+  // the elapsed window, then advance, so overlapping runs never double-bill.
+  // Defaults to now() so a row starts accruing from its creation/migration time,
+  // never retroactively.
+  storageLastBilledAt: timestamp('storageLastBilledAt', { mode: 'date' }).defaultNow().notNull(),
+
+  // Measured used BYTES on THIS project Sprite's filesystem, captured
+  // opportunistically while it is already awake for real work (the promotion's
+  // own clone, a reattach) — never by waking a hibernating Sprite. NULL = never
+  // measured → the reconcile bills a conservative 0 floor for that window.
+  storageMeasuredBytes: bigint('storageMeasuredBytes', { mode: 'number' }),
+  // When `storageMeasuredBytes` was captured — drives the measurement throttle
+  // and the reconcile's staleness signal.
+  storageMeasuredAt: timestamp('storageMeasuredAt', { mode: 'date' }),
 
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),

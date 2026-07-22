@@ -9,11 +9,12 @@
  * Mirrors `machine-billing.ts`'s composition for active-runtime metering.
  */
 
-import { eq, isNull } from '@pagespace/db/operators';
+import { eq, and, isNull, isNotNull } from '@pagespace/db/operators';
 import { db, getAdvisoryLockPool } from '@pagespace/db/db';
 import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
 import { machineSessions } from '@pagespace/db/schema/machine-sessions';
 import { machineBranches } from '@pagespace/db/schema/machine-branches';
+import { machineProjects } from '@pagespace/db/schema/machine-projects';
 import { lookupPageOwnerId } from '../../billing/machine-payer';
 import { MACHINE_MARKUP_BPS } from '../../billing/credit-pricing';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
@@ -87,6 +88,45 @@ export const defaultReconcileMachineStorageDeps: ReconcileMachineStorageDeps = {
     return [...byBranch.values()].map((row) => ({ ...row, lastActiveAt: row.lastActiveAt ?? new Date(0) }));
   },
 
+  /**
+   * Every PROMOTED project Sprite we still believe is LIVE (issue #2204 phase
+   * 7): `sandboxId IS NOT NULL` (an unpromoted project has no Sprite of its own
+   * — its bytes are inside the machine Sprite's own measurement, already
+   * metered there, so metering it here would DOUBLE-bill the same disk) AND
+   * `spriteTornDownAt IS NULL` (a destroyed filesystem is excluded, not billed
+   * at 0 — the row survives only as re-creatable config).
+   *
+   * `lastActiveAt` is joined from the OWNING machine's session row for the same
+   * reason a branch's is: promoted-project runs record activity on the machine
+   * key (`project-session.ts`). It feeds ONLY the staleness health flag.
+   */
+  async listProjectSprites() {
+    const rows = await db
+      .select({
+        machineProjectId: machineProjects.id,
+        machinePageId: machineProjects.machineId,
+        storageLastBilledAt: machineProjects.storageLastBilledAt,
+        measuredBytes: machineProjects.storageMeasuredBytes,
+        measuredAt: machineProjects.storageMeasuredAt,
+        lastActiveAt: machineSessions.lastActiveAt,
+      })
+      .from(machineProjects)
+      .leftJoin(machineSessions, eq(machineSessions.pageId, machineProjects.machineId))
+      .where(and(isNotNull(machineProjects.sandboxId), isNull(machineProjects.spriteTornDownAt)));
+    // Identical de-fan as `listBranchSprites`: `machine_sessions.pageId` has no
+    // uniqueness guarantee, so the join can emit one row per matching session —
+    // and a fanned-out row here is a project disk BILLED TWICE. One row per
+    // project, freshest activity wins (the join only feeds the staleness flag).
+    const byProject = new Map<string, (typeof rows)[number]>();
+    for (const row of rows) {
+      const kept = byProject.get(row.machineProjectId);
+      if (!kept || (row.lastActiveAt ?? new Date(0)) > (kept.lastActiveAt ?? new Date(0))) {
+        byProject.set(row.machineProjectId, row);
+      }
+    }
+    return [...byProject.values()].map((row) => ({ ...row, lastActiveAt: row.lastActiveAt ?? new Date(0) }));
+  },
+
   lookupPageOwnerId,
 
   async chargeStorage({ payerId, pageId, costDollars, gbMonths }) {
@@ -96,10 +136,11 @@ export const defaultReconcileMachineStorageDeps: ReconcileMachineStorageDeps = {
       model: 'terminal-machine-storage',
       source: 'terminal',
       // The ATTRIBUTION page (machine-storage-attribution.ts): the machine's own
-      // identifying page, or — for a branch-terminal Sprite — its OWNING
-      // machine's. The usage-breakdown's per-machine view groups on this (see
-      // machine-billing.ts's trackUsage for the same field), so a branch's
-      // storage lands under the Terminal the user actually sees.
+      // identifying page, or — for a branch-terminal or promoted-project Sprite
+      // — its OWNING machine's. The usage-breakdown's per-machine view groups on
+      // this (see machine-billing.ts's trackUsage for the same field), so a
+      // branch's or promoted project's storage lands under the Terminal the user
+      // actually sees.
       pageId,
       providerCostDollars: costDollars,
       // Not a wall-clock duration (this is a background storage charge, not a
@@ -132,6 +173,17 @@ export const defaultReconcileMachineStorageDeps: ReconcileMachineStorageDeps = {
       .update(machineBranches)
       .set({ storageLastBilledAt: billedThrough })
       .where(eq(machineBranches.id, machineBranchId));
+  },
+
+  // The promoted project Sprite's OWN watermark — on its `machine_projects`
+  // row, keyed by the project row id, even though the charge it follows was
+  // attributed to the owning machine page. A machine, its branches and its
+  // promoted projects each bill their own window.
+  async advanceProjectWatermark({ machineProjectId, billedThrough }) {
+    await db
+      .update(machineProjects)
+      .set({ storageLastBilledAt: billedThrough })
+      .where(eq(machineProjects.id, machineProjectId));
   },
 
   now: () => new Date(),
@@ -189,12 +241,13 @@ export async function reconcileMachineStorageSerialized(
 
 /**
  * Persist an opportunistic storage measurement onto the row of the Sprite that
- * was actually measured — the machine's `machine_sessions` row, or the branch
- * terminal's own `machine_branches` row. Writing a branch's footprint onto its
- * machine's row would clobber the machine's own measured bytes and over-bill it
- * (the reason branch storage was attributed nowhere before phase 3), so the
- * subject picks the table; only BILLING collapses both onto the machine page.
- * A no-op UPDATE if no such row exists, so callers need not pre-check.
+ * was actually measured — the machine's `machine_sessions` row, a branch
+ * terminal's `machine_branches` row, or a promoted project's `machine_projects`
+ * row. Writing a branch's or project's footprint onto its machine's row would
+ * clobber the machine's own measured bytes and over-bill it (the reason branch
+ * storage was attributed nowhere before phase 3), so the subject picks the
+ * table; only BILLING collapses all three onto the machine page. A no-op UPDATE
+ * if no such row exists, so callers need not pre-check.
  */
 export const persistStorageMeasurement: PersistStorageMeasurement = async ({
   subject,
@@ -208,10 +261,17 @@ export const persistStorageMeasurement: PersistStorageMeasurement = async ({
       .where(eq(machineSessions.pageId, subject.pageId));
     return;
   }
+  if (subject.kind === 'branch') {
+    await db
+      .update(machineBranches)
+      .set({ storageMeasuredBytes: measuredBytes, storageMeasuredAt: measuredAt })
+      .where(eq(machineBranches.id, subject.machineBranchId));
+    return;
+  }
   await db
-    .update(machineBranches)
+    .update(machineProjects)
     .set({ storageMeasuredBytes: measuredBytes, storageMeasuredAt: measuredAt })
-    .where(eq(machineBranches.id, subject.machineBranchId));
+    .where(eq(machineProjects.id, subject.machineProjectId));
 };
 
 /**
@@ -266,8 +326,10 @@ export function __resetStorageMeasurementCachesForTests(): void {
 /**
  * Read the measurement bookkeeping for a subject from ITS OWN table. `found:
  * false` is a DEFINITIVE "nothing to attribute a measurement to" — no billing
- * row (machine), or a branch whose Sprite is already torn down (its filesystem
- * is gone, so a measurement of it would be meaningless).
+ * row (machine), a branch whose Sprite is already torn down, or a project that
+ * is unpromoted or torn down (in each case there is no separate filesystem to
+ * measure, so a measurement of it would be meaningless or would mis-attribute
+ * the machine's own bytes).
  */
 async function readMeasurementState(
   subject: StorageSubject,
@@ -280,15 +342,31 @@ async function readMeasurementState(
       .limit(1);
     return row ? { found: true, lastMeasuredAt: row.storageMeasuredAt ?? null } : { found: false, lastMeasuredAt: null };
   }
+  if (subject.kind === 'branch') {
+    const [row] = await db
+      .select({
+        storageMeasuredAt: machineBranches.storageMeasuredAt,
+        spriteTornDownAt: machineBranches.spriteTornDownAt,
+      })
+      .from(machineBranches)
+      .where(eq(machineBranches.id, subject.machineBranchId))
+      .limit(1);
+    if (!row || row.spriteTornDownAt !== null) return { found: false, lastMeasuredAt: null };
+    return { found: true, lastMeasuredAt: row.storageMeasuredAt ?? null };
+  }
   const [row] = await db
     .select({
-      storageMeasuredAt: machineBranches.storageMeasuredAt,
-      spriteTornDownAt: machineBranches.spriteTornDownAt,
+      storageMeasuredAt: machineProjects.storageMeasuredAt,
+      sandboxId: machineProjects.sandboxId,
+      spriteTornDownAt: machineProjects.spriteTornDownAt,
     })
-    .from(machineBranches)
-    .where(eq(machineBranches.id, subject.machineBranchId))
+    .from(machineProjects)
+    .where(eq(machineProjects.id, subject.machineProjectId))
     .limit(1);
-  if (!row || row.spriteTornDownAt !== null) return { found: false, lastMeasuredAt: null };
+  // An UNPROMOTED project has no Sprite of its own — whatever handle the caller
+  // is holding is the MACHINE's, and recording its bytes here would both
+  // mis-attribute them and double-bill the machine's own row.
+  if (!row || !row.sandboxId || row.spriteTornDownAt !== null) return { found: false, lastMeasuredAt: null };
   return { found: true, lastMeasuredAt: row.storageMeasuredAt ?? null };
 }
 
@@ -421,6 +499,36 @@ export async function measureBranchStorageOpportunistically(input: {
     subject: {
       kind: 'branch',
       machineBranchId: input.machineBranchId,
+      machinePageId: input.machinePageId,
+    },
+    handle: input.handle,
+    resolveHandle: input.resolveHandle,
+  });
+}
+
+/**
+ * Measure a PROMOTED PROJECT's own Sprite (persists to its `machine_projects`
+ * row; billed to the owning machine page by the reconcile — see
+ * machine-storage-attribution.ts).
+ *
+ * Wired at the promotion wake paths that hold a live handle: `promoteProject`
+ * (right after the clone that writes the bulk of a project Sprite's footprint,
+ * and on every reattach of an already-promoted project), in
+ * `services/machines/machine-project-promotion.ts`. Same never-wake rule as the
+ * other two entry points — it only ever measures a Sprite the caller already
+ * has awake, and `readMeasurementState` refuses an unpromoted or torn-down row
+ * so a machine's own bytes can never be recorded here.
+ */
+export async function measureProjectStorageOpportunistically(input: {
+  machineProjectId: string;
+  machinePageId: string;
+  handle?: Pick<MachineHandle, 'exec'>;
+  resolveHandle?: () => Promise<Pick<MachineHandle, 'exec'> | null>;
+}): Promise<void> {
+  await measureStorageOpportunistically({
+    subject: {
+      kind: 'project',
+      machineProjectId: input.machineProjectId,
       machinePageId: input.machinePageId,
     },
     handle: input.handle,

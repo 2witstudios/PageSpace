@@ -16,16 +16,13 @@
  *     branch Sprite's storage shows up under its owning Terminal/Machine, not
  *     as an unattributed line the user cannot connect to anything they see.
  *
- * FROZEN CONTRACT for phase 7's lazy project Sprites: a promoted project's
- * Sprite is a third subject kind whose measurement persists on its own
- * `machine_projects` row and whose attribution key is the SAME
- * `machinePageId` — phase 7 adds a `{ kind: 'project'; machineProjectId;
- * machinePageId }` variant here and to the reconcile's row source, and
- * `storageAttributionPageId` keeps working unchanged. Nothing about who pays,
- * how the breakdown groups, or the never-wake rule changes with promotion: a
- * repo that was a checkout on the machine Sprite (billed via the machine's own
- * row) and the same repo after promotion (billed via its project row) both
- * charge the identical machine page.
+ * HONOURED BY PHASE 7 exactly as frozen: a promoted project's Sprite is the
+ * third subject kind, its measurement persists on its own `machine_projects`
+ * row, and its attribution key is the SAME `machinePageId`. Nothing about who
+ * pays, how the breakdown groups, or the never-wake rule changed with
+ * promotion: a repo that was a checkout on the machine Sprite (billed via the
+ * machine's own row) and the same repo after promotion (billed via its project
+ * row) charge the identical machine page.
  */
 
 /**
@@ -37,7 +34,9 @@ export type StorageSubject =
   /** A Machine's own persistent Sprite; its `machine_sessions` row IS the page's. */
   | { kind: 'machine'; pageId: string }
   /** A branch-terminal's separate Sprite (`machine_branches` row), owned by `machinePageId`. */
-  | { kind: 'branch'; machineBranchId: string; machinePageId: string };
+  | { kind: 'branch'; machineBranchId: string; machinePageId: string }
+  /** A PROMOTED project's separate Sprite (`machine_projects` row), owned by `machinePageId` (issue #2204 phase 7). */
+  | { kind: 'project'; machineProjectId: string; machinePageId: string };
 
 /**
  * The page id every charge, payer lookup and usage-breakdown grouping for this
@@ -52,8 +51,16 @@ export function storageAttributionPageId(subject: StorageSubject): string {
 /**
  * Stable string key for a subject, for in-process bookkeeping (measurement
  * throttle / in-flight dedup) that needs a Map key rather than an object.
- * Namespaced by kind so a branch row id can never collide with a page id.
+ * Namespaced by kind so a branch or project row id can never collide with a
+ * page id — or with each other.
  */
 export function storageSubjectKey(subject: StorageSubject): string {
-  return subject.kind === 'machine' ? `machine:${subject.pageId}` : `branch:${subject.machineBranchId}`;
+  switch (subject.kind) {
+    case 'machine':
+      return `machine:${subject.pageId}`;
+    case 'branch':
+      return `branch:${subject.machineBranchId}`;
+    case 'project':
+      return `project:${subject.machineProjectId}`;
+  }
 }
