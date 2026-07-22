@@ -12,6 +12,8 @@ import {
   isAccountLevelOnlyTool,
   hasSandboxGitTools,
   suppressGithubIntegrationTools,
+  withSessionFamilyTools,
+  SESSION_FAMILY_TOOL_NAMES,
 } from '../tool-filtering';
 
 const baseline = {
@@ -381,5 +383,38 @@ describe('suppressGithubIntegrationTools', () => {
   it('leaves integration tools untouched against an empty current tool set', () => {
     const result = suppressGithubIntegrationTools(integrationTools, {});
     expect(result).toEqual(integrationTools);
+  });
+});
+
+describe('withSessionFamilyTools', () => {
+  const driveAgentTools = {
+    read_page: 'read_page',
+    ask_agent: 'ask_agent',
+    bash: 'bash',
+  };
+  const sessionFamily = {
+    list_sessions: 'list_sessions',
+    add_session: 'add_session',
+    move_session: 'move_session',
+    kill_session: 'kill_session',
+    read_session: 'read_session',
+    send_session: 'send_session',
+  };
+
+  it('leaves the drive-agent tool set byte-unchanged when the conversation is not machine-bound', () => {
+    const result = withSessionFamilyTools(driveAgentTools, sessionFamily, false);
+    expect(result).toEqual(driveAgentTools);
+    expect(Object.keys(result)).toEqual(Object.keys(driveAgentTools));
+  });
+
+  it('registers the whole session family for a machine-bound conversation', () => {
+    const result = withSessionFamilyTools(driveAgentTools, sessionFamily, true);
+    expect(Object.keys(result).sort()).toEqual(
+      [...Object.keys(driveAgentTools), ...Object.keys(sessionFamily)].sort()
+    );
+  });
+
+  it('names every session-family tool it registers', () => {
+    expect([...SESSION_FAMILY_TOOL_NAMES].sort()).toEqual(Object.keys(sessionFamily).sort());
   });
 });

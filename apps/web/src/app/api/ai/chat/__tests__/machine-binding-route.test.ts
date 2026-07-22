@@ -169,6 +169,19 @@ vi.mock('@/lib/ai/core/tool-filtering', async (importOriginal) => {
     filterToolsForMachineBinding: vi.fn(actual.filterToolsForMachineBinding),
   };
 });
+// The session family's production wiring reaches the agent-terminal and
+// workspace stores; the route's job — which this file tests — is only WHETHER
+// it registers them, so the runtime is stubbed with a recognisable stand-in.
+vi.mock('@/lib/ai/tools/session-tools-runtime', () => ({
+  buildSessionTools: vi.fn(() => ({
+    list_sessions: {},
+    add_session: {},
+    move_session: {},
+    kill_session: {},
+    read_session: {},
+    send_session: {},
+  })),
+}));
 vi.mock('@/lib/ai/core/page-tree-context', () => ({
   getPageTreeContext: vi.fn(),
 }));
@@ -274,7 +287,7 @@ vi.mock('@/lib/ai/machine-pane/machine-pane-binding-runtime', () => ({
 }));
 
 import { authenticateRequestWithOptions } from '@/lib/auth';
-import { filterToolsForMachineBinding } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForMachineBinding, SESSION_FAMILY_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
 
 const mockUserId = 'user_123';
 const chatId = 'page_123'; // in drive_A per db mock above
@@ -387,6 +400,32 @@ describe('POST /api/ai/chat - machine-pane binding', () => {
       expect(prompt).toContain('project "repo"');
       expect(prompt).toContain('branch: "feature"');
     });
+  });
+
+  // The session family is the bound conversation's whole orchestration
+  // surface — and is meaningless without a handle set to resolve its targets
+  // against. A drive agent's tool set must therefore be byte-unchanged by it.
+  it('registers the session family for a bound conversation', async () => {
+    const self = { kind: 'machine' as const, machineId: chatId, cwd: '/workspace' };
+    deriveMachinePaneBindingMock.mockResolvedValue({ ok: true, binding: { self, handles: [self] } });
+
+    await POST(createChatRequest());
+
+    await vi.waitFor(() => expect(streamTextMock).toHaveBeenCalled());
+    const tools = (streamTextMock.mock.calls[0]?.[0] as { tools?: Record<string, unknown> }).tools ?? {};
+    expect(Object.keys(tools).filter((name) => SESSION_FAMILY_TOOL_NAMES.includes(name)).sort()).toEqual(
+      [...SESSION_FAMILY_TOOL_NAMES].sort(),
+    );
+  });
+
+  it('leaves a non-bound conversation\'s tool set free of the session family', async () => {
+    deriveMachinePaneBindingMock.mockResolvedValue(null);
+
+    await POST(createChatRequest());
+
+    await vi.waitFor(() => expect(streamTextMock).toHaveBeenCalled());
+    const tools = (streamTextMock.mock.calls[0]?.[0] as { tools?: Record<string, unknown> }).tools ?? {};
+    expect(Object.keys(tools).filter((name) => SESSION_FAMILY_TOOL_NAMES.includes(name))).toEqual([]);
   });
 
   it('returns 400 before streaming when row.machineId !== chatId', async () => {

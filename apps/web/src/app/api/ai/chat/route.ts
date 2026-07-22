@@ -64,7 +64,12 @@ import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-
 import { getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { buildInlineInstructions } from '@/lib/ai/core/inline-instructions';
 import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
-import { filterToolsForReadOnly, filterToolsForMcpScope, filterToolsForMachineBinding } from '@/lib/ai/core/tool-filtering';
+import {
+  filterToolsForReadOnly,
+  filterToolsForMcpScope,
+  filterToolsForMachineBinding,
+  withSessionFamilyTools,
+} from '@/lib/ai/core/tool-filtering';
 import { deriveMachinePaneBinding } from '@pagespace/lib/services/machines/machine-pane-binding';
 import { buildMachinePaneBindingDeps } from '@/lib/ai/machine-pane/machine-pane-binding-runtime';
 import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
@@ -933,12 +938,26 @@ export async function POST(request: Request) {
     // Step 1: Apply isReadOnly filter, hide account-level-only tools
     // (e.g. create_drive) from drive-scoped MCP tokens' tool list, then drop
     // switch_machine/list_machines when this conversation is bound to one
-    // machine (see machinePaneBindingResult above).
-    const baseTools = filterToolsForMachineBinding(
-      filterToolsForMcpScope(
-        filterToolsForReadOnly(pageSpaceTools, readOnlyMode),
-        isScopedMCPAuth(authResult)
+    // machine (see machinePaneBindingResult above) and register the SESSION
+    // FAMILY in their place.
+    //
+    // The family is added HERE, not in `pageSpaceTools`, on purpose: this is
+    // the one composition site that knows about the binding, and every other
+    // consumer of that registry (the global assistant, /v1 completions,
+    // consult, workflows, the agent-config listings) must keep its tool set
+    // byte-unchanged. The runtime module is loaded DYNAMICALLY, and only on
+    // this branch: it reaches the agent-terminal and workspace stores (and,
+    // through them, the Sprites driver seam), none of which an unbound
+    // request has any business pulling into its module graph.
+    const baseTools = withSessionFamilyTools(
+      filterToolsForMachineBinding(
+        filterToolsForMcpScope(
+          filterToolsForReadOnly(pageSpaceTools, readOnlyMode),
+          isScopedMCPAuth(authResult)
+        ),
+        machineBinding != null
       ),
+      machineBinding != null ? (await import('@/lib/ai/tools/session-tools-runtime')).buildSessionTools() : {},
       machineBinding != null
     );
 
