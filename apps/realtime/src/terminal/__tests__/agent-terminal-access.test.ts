@@ -108,15 +108,20 @@ describe('decideAgentTerminalAccess', () => {
 // resolveMachineSandbox — narrow integration with injected fakes
 // ---------------------------------------------------------------------------
 
+/** Machine scope: the node runs on the machine's OWN shared Sprite (`ownSprite: false`). */
 const resolvedOk: ResolveAgentTerminalResult = {
   ok: true,
   agentTerminalId: 'at-1',
   sandboxId: 'sbx-1',
   cwd: '/home/machine',
+  ownSprite: false,
   agentType: 'shell',
   command: null,
   streamSessionId: null,
 };
+
+/** A node with its OWN Sprite — a branch, or a PROMOTED project. */
+const resolvedOwnSprite: ResolveAgentTerminalResult = { ...resolvedOk, ownSprite: true, cwd: '/workspace/repo' };
 
 function spyGetSprite(impl?: (sandboxId: string) => Promise<SpriteInstanceLike>) {
   const calls: string[] = [];
@@ -256,20 +261,39 @@ describe('resolveMachineSandbox', () => {
     return { fn, calls };
   }
 
-  it('given a BRANCH-scope target, should refresh the branch credential with the resolved machineId and sandboxId', async () => {
+  it('given a BRANCH-scope target, should refresh the credential with the resolved machineId and sandboxId', async () => {
     const refresh = spyRefresh();
     await resolveMachineSandbox(
       { machineId: 'm-1', projectName: 'proj', branchName: 'feature-x', name: 'claude' },
       {
-        resolveAgentTerminal: async () => resolvedOk,
+        resolveAgentTerminal: async () => resolvedOwnSprite,
         getSprite: spyGetSprite().fn,
         refreshBranchCredential: refresh.fn,
       },
     );
 
     assert({
-      given: 'a branch-scope target (projectName + branchName both set)',
+      given: 'a branch-scope target, whose resolution has its own Sprite',
       should: 'call refreshBranchCredential exactly once with the resolved machineId + sandboxId',
+      actual: refresh.calls,
+      expected: [{ machineId: 'm-1', sandboxId: 'sbx-1' }],
+    });
+  });
+
+  it('given a PROMOTED PROJECT target, should refresh the credential too — its Sprite is as credential-less as a fresh branch', async () => {
+    const refresh = spyRefresh();
+    await resolveMachineSandbox(
+      { machineId: 'm-1', projectName: 'proj', name: 'claude' },
+      {
+        resolveAgentTerminal: async () => resolvedOwnSprite,
+        getSprite: spyGetSprite().fn,
+        refreshBranchCredential: refresh.fn,
+      },
+    );
+
+    assert({
+      given: 'a project-scope target whose project has been PROMOTED to its own Sprite',
+      should: 'call refreshBranchCredential — the old target-shape gate would have skipped it',
       actual: refresh.calls,
       expected: [{ machineId: 'm-1', sandboxId: 'sbx-1' }],
     });
@@ -290,7 +314,7 @@ describe('resolveMachineSandbox', () => {
     });
   });
 
-  it('given a PROJECT-scope target (projectName set, no branchName), should NOT refresh any credential', async () => {
+  it('given an UNPROMOTED project target, should NOT refresh any credential', async () => {
     const refresh = spyRefresh();
     await resolveMachineSandbox(
       { machineId: 'm-1', projectName: 'proj', name: 'shell' },
@@ -298,28 +322,23 @@ describe('resolveMachineSandbox', () => {
     );
 
     assert({
-      given: 'a project-scope target',
-      should: 'never call refreshBranchCredential — project scope shares the root Sprite too',
+      given: 'a project-scope target that resolved to the machine Sprite (unpromoted)',
+      should: 'never call refreshBranchCredential — it shares the root Sprite, which already has the credential',
       actual: refresh.calls.length,
       expected: 0,
     });
   });
 
-  it('given branchName set WITHOUT projectName (malformed — a real resolveAgentTerminal would reject this as invalid_target before ever reaching here), should still NOT refresh any credential even against a permissive fake resolver', async () => {
-    // A real `resolveAgentTerminal` (agent-terminals.ts) already rejects this
-    // shape as `invalid_target` before Sprite resolution — but this test's
-    // fake resolver deliberately does NOT enforce that, to prove the gate
-    // itself checks BOTH projectName and branchName rather than relying on
-    // that upstream invariant alone.
+  it('given a target that LOOKS branch-shaped but resolved to the machine Sprite, should NOT refresh — the gate reads the resolution, not the target', async () => {
     const refresh = spyRefresh();
     await resolveMachineSandbox(
-      { machineId: 'm-1', branchName: 'feature-x', name: 'claude' },
+      { machineId: 'm-1', projectName: 'proj', branchName: 'feature-x', name: 'claude' },
       { resolveAgentTerminal: async () => resolvedOk, getSprite: spyGetSprite().fn, refreshBranchCredential: refresh.fn },
     );
 
     assert({
-      given: 'a branchName-only target reaching a permissive fake resolver',
-      should: 'never call refreshBranchCredential — the gate requires projectName too, not branchName alone',
+      given: 'a branch-shaped target whose resolver reported ownSprite: false',
+      should: 'never call refreshBranchCredential — copying the root credential onto the root Sprite is meaningless',
       actual: refresh.calls.length,
       expected: 0,
     });
@@ -328,7 +347,7 @@ describe('resolveMachineSandbox', () => {
   it('given a branch-scope target with refreshBranchCredential OMITTED, should still resolve successfully', async () => {
     const result = await resolveMachineSandbox(
       { machineId: 'm-1', projectName: 'proj', branchName: 'feature-x', name: 'claude' },
-      { resolveAgentTerminal: async () => resolvedOk, getSprite: spyGetSprite().fn },
+      { resolveAgentTerminal: async () => resolvedOwnSprite, getSprite: spyGetSprite().fn },
     );
 
     assert({

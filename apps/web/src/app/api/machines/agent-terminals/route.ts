@@ -63,6 +63,9 @@ const SPAWN_DENIAL_STATUS: Record<string, number> = {
   invalid_agent_type: 400,
   invalid_command: 400,
   name_in_use: 409,
+  // A promotion refusal the caller can act on (commit or discard the work in
+  // the machine-side checkout), matching the promote route's own mapping.
+  promotion_failed: 409,
   error: 500,
 };
 
@@ -145,10 +148,16 @@ export async function POST(request: Request) {
     agentType: agentType.value,
     command: command.value,
     actor: { userId: auth.userId },
-    deps: buildSpawnAgentTerminalDeps(),
+    deps: buildSpawnAgentTerminalDeps(auth.userId),
   });
   if (!result.ok) {
-    return NextResponse.json({ error: result.reason, reason: result.reason }, { status: SPAWN_DENIAL_STATUS[result.reason] ?? 500 });
+    // `detail` carries a promotion refusal's actionable message (which file is
+    // dirty, what to do about it) — surfacing only the bare reason would leave
+    // the user with an unexplained 409.
+    return NextResponse.json(
+      { error: result.detail ?? result.reason, reason: result.reason },
+      { status: SPAWN_DENIAL_STATUS[result.reason] ?? 500 },
+    );
   }
 
   // A fresh `pagespace` row needs its shared conversation to exist before the client's

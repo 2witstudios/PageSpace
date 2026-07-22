@@ -427,21 +427,26 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
       if (target && (target.project || target.branch)) {
         return { ok: false, error: nodeTargetDeniedError('unbound', target) };
       }
-      return { ok: true, ctx: { ...ctx, driveId, tenantId, activeMachine, branchSandbox: undefined } };
+      return { ok: true, ctx: { ...ctx, driveId, tenantId, activeMachine, branchSandbox: undefined, projectSandbox: undefined } };
     }
     const resolved = resolveMachineNodeTarget(binding, target);
     if (!resolved.ok) return { ok: false, error: nodeTargetDeniedError(resolved.reason, target ?? {}) };
     const node = resolved.handle;
-    // A node with its own Sprite (a branch today; a promoted project later)
-    // routes acquireSandbox through the attach-only branch seam
-    // (acquireRequest in tool-runners.ts already forwards ctx.branchSandbox) —
-    // this is the one place the resolved node is translated onto the actor
-    // ctx. `machineId` comes off the handle, so the payer/guardrail key stays
-    // the owning machine page however deep the target reaches.
+    // A node with its own Sprite — a branch, or a PROMOTED project (issue
+    // #2204 phase 7) — routes acquireSandbox through that tier's attach-only
+    // seam (acquireRequest in tool-runners.ts forwards both keys); an
+    // unpromoted project carries neither and still runs on the machine's own
+    // Sprite at the checkout's cwd. This is the one place the resolved node is
+    // translated onto the actor ctx. `machineId` comes off the handle, so the
+    // payer/guardrail key stays the owning machine page however deep the
+    // target reaches.
     const branchSandbox = node.branchSandbox
       ? { machineId: node.machineId, machineBranchId: node.branchSandbox.machineBranchId }
       : undefined;
-    return { ok: true, ctx: { ...ctx, driveId, tenantId, activeMachine, branchSandbox }, node };
+    const projectSandbox = node.projectSandbox
+      ? { machineId: node.machineId, machineProjectId: node.projectSandbox.machineProjectId }
+      : undefined;
+    return { ok: true, ctx: { ...ctx, driveId, tenantId, activeMachine, branchSandbox, projectSandbox }, node };
   };
 
   return {

@@ -150,6 +150,9 @@ export async function runGitInSandbox({
       // branch-scoped run must attach to the BRANCH's Sprite. Omitting it here
       // silently ran every bound conversation's git against the machine root.
       branchSandbox: ctx.branchSandbox,
+      // Same for a PROMOTED project (issue #2204 phase 7): its repo lives on
+      // its own Sprite, so git must attach there, not to the machine root.
+      projectSandbox: ctx.projectSandbox,
     });
     if (!acquired.ok) {
       return { success: false, error: 'Could not provision a sandbox.', reason: 'provision_failed' };

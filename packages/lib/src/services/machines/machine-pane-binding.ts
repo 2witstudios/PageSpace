@@ -28,12 +28,31 @@
 import type { MachineAgentTerminalStore } from './agent-terminals-store';
 import { SANDBOX_ROOT } from '../sandbox/sandbox-paths';
 import { BRANCH_REPO_PATH } from './machine-branches';
+import { PROJECT_REPO_PATH } from './machine-project-promotion';
 import { isAgentRuntimeType, isPtyAgentType } from './agent-terminal-types';
 
 export type MachinePaneBindingFailureReason = 'binding_page_mismatch' | 'project_not_found' | 'branch_not_found';
 
 export interface MachinePaneBindingBranchSandbox {
   machineBranchId: string;
+  sandboxId: string;
+}
+
+/**
+ * A PROMOTED project's own Sprite (issue #2204 phase 7,
+ * `machine-project-promotion.ts`) — the project-tier twin of
+ * `MachinePaneBindingBranchSandbox`.
+ *
+ * Deliberately a SEPARATE optional field on the handle rather than a widened
+ * `branchSandbox`: the row id belongs to a different table, and every consumer
+ * that re-reads a branch row by `machineBranchId` (the attach-only branch seam,
+ * `services/sandbox/branch-session.ts`) would silently look up the wrong store
+ * if a project id were smuggled through that field. Adding a sibling keeps the
+ * derivation's existing shape intact — "has an own-Sprite descriptor" is still
+ * the one question consumers ask, they just now ask it of two fields.
+ */
+export interface MachinePaneBindingProjectSandbox {
+  machineProjectId: string;
   sandboxId: string;
 }
 
@@ -64,8 +83,10 @@ export interface MachineNodeHandle {
   branch?: string;
   /** Working directory for a call at this node. */
   cwd: string;
-  /** The node's own Sprite, when it has one. Absent → the machine's Sprite. */
+  /** The node's own Sprite, when the node is a BRANCH. Absent → see `projectSandbox`, else the machine's Sprite. */
   branchSandbox?: MachinePaneBindingBranchSandbox;
+  /** The node's own Sprite, when the node is a PROMOTED PROJECT. Absent on an unpromoted project (machine Sprite + cwd). */
+  projectSandbox?: MachinePaneBindingProjectSandbox;
 }
 
 /**
@@ -144,10 +165,19 @@ export interface DeriveMachinePaneBindingInput {
   conversationId: string;
 }
 
-/** A project row as this module sees it: its name and its clone path on the machine's filesystem. */
+/**
+ * A project row as this module sees it: its name, its clone path on the
+ * machine's filesystem, and the promotion identity that decides which of the
+ * two it actually resolves to. `id`/`sandboxId`/`spriteTornDownAt` are optional
+ * so an older `{ name, path }`-only lookup still type-checks and reads as
+ * UNPROMOTED — the pre-promotion behaviour, unchanged.
+ */
 export interface MachinePaneBindingProject {
   name: string;
   path: string;
+  id?: string;
+  sandboxId?: string | null;
+  spriteTornDownAt?: Date | null;
 }
 
 /** A branch row as this module sees it: its identity, its Sprite, and whether that Sprite is confirmed destroyed. */
@@ -240,9 +270,22 @@ export async function deriveMachinePaneBinding(
 }
 
 function projectHandle(machineId: string, project: MachinePaneBindingProject): MachineNodeHandle {
-  // No `branchSandbox`: an UNPROMOTED project is a checkout on the machine's
-  // own Sprite, addressed by cwd alone. Lazy project-Sprite promotion (the
-  // later epic phase) adds one here without changing any consumer.
+  // PROMOTED-FIRST: a promoted project has its own Sprite and its repo at
+  // `PROJECT_REPO_PATH`, so it resolves exactly like a branch does. An
+  // UNPROMOTED project is unchanged — a checkout on the machine's own Sprite,
+  // addressed by cwd alone, which is what keeps the cascade fully functional
+  // before anything is ever promoted. A project whose Sprite is CONFIRMED
+  // destroyed (`spriteTornDownAt`) falls back to the machine checkout rather
+  // than deriving a handle to a VM that no longer exists.
+  if (project.id && project.sandboxId && !project.spriteTornDownAt) {
+    return {
+      kind: 'project',
+      machineId,
+      project: project.name,
+      cwd: PROJECT_REPO_PATH,
+      projectSandbox: { machineProjectId: project.id, sandboxId: project.sandboxId },
+    };
+  }
   return { kind: 'project', machineId, project: project.name, cwd: project.path };
 }
 

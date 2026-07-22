@@ -233,9 +233,13 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
         name,
         agentType,
         actor: { userId },
-        deps: buildSpawnAgentTerminalDeps(),
+        deps: buildSpawnAgentTerminalDeps(userId),
       });
-      return result.ok ? { ok: true, id: result.id, resumed: result.resumed } : { ok: false, reason: result.reason };
+      // A promotion refusal's `detail` is the actionable half of the message —
+      // an agent told only `promotion_failed` cannot tell the user what to fix.
+      return result.ok
+        ? { ok: true, id: result.id, resumed: result.resumed }
+        : { ok: false, reason: result.detail ? `${result.reason}: ${result.detail}` : result.reason };
     },
 
     killSession: async ({ node, name, userId }) => {
