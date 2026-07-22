@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Check, Copy, Webhook } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR from 'swr';
@@ -89,6 +89,11 @@ const parkOrphan = (value: RevealedSecret) => {
 // (Other browsers/admins are covered by the server's 409 optimistic guard.)
 const rotatingWebhooks = new Set<string>();
 
+// Layout-effect timing on the client (passive effects leave a window between
+// commit and effect where a resolving mint would read stale refs), useEffect
+// on the server (Next SSRs client components; useLayoutEffect warns there).
+const useIsomorphicLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
+
 const webhooksFetcher = async (url: string): Promise<{ webhooks: WebhookRow[] } | { error: string; status: number }> => {
   const res = await fetchWithAuth(url);
   const body = await res.json().catch(() => ({}));
@@ -118,8 +123,12 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
   const forbidden = errorStatus === 403;
   const loadFailed = errorStatus !== null && errorStatus !== 403;
 
+  // Both refs are stamped in LAYOUT effects: they run synchronously inside the
+  // commit, so no promise callback can observe a committed close/unmount while
+  // the refs still claim the dialog is live (a passive useEffect would leave
+  // exactly that window, and reveal() would write a secret into doomed state).
   const mountedRef = useRef(true);
-  useEffect(() => {
+  useIsomorphicLayoutEffect(() => {
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
   }, []);
@@ -127,7 +136,7 @@ function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWe
   // Handlers resolve long after the render that created them — they must see
   // the dialog's CURRENT visibility, not the closure's stale `open`.
   const openRef = useRef(open);
-  useEffect(() => { openRef.current = open; }, [open]);
+  useIsomorphicLayoutEffect(() => { openRef.current = open; }, [open]);
 
   const orphanSignal = useSyncExternalStore(subscribeOrphans, getOrphanVersion, getOrphanVersion);
 

@@ -45,6 +45,15 @@ export async function POST(request: Request, context: { params: Promise<{ pageId
     // means a concurrent rotation makes this update match zero rows instead of
     // silently overwriting (which would 200 both callers but leave one holding
     // a plaintext secret that never verifies).
+    //
+    // Scope, deliberately: this rejects READ-BEFORE-WRITE interleavings only.
+    // A request that reads AFTER another rotation committed is sequential
+    // re-rotation and wins last-writer — the same contract as re-running
+    // rotation on any provider. The API can't do better without a
+    // client-echoed version (the ciphertext never leaves at rest, and the row
+    // has no version column); same-client overlap is additionally refused
+    // outright in the dialog. If cross-admin rotation contention ever becomes
+    // real, add a rotationVersion column + If-Match — don't widen this guard.
     const [row] = await db
       .update(pageWebhooks)
       .set({ webhookSecretEncrypted })
