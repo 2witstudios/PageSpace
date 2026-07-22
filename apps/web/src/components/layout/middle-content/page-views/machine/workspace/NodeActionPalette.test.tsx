@@ -298,6 +298,40 @@ describe('NodeActionPalette', () => {
     });
   });
 
+  test('a RESUMED session already shown in another workspace reports THAT workspace, not the session-derived one', async () => {
+    // openTerminal deliberately lands on the workspace already SHOWING the
+    // session (workspaceShowing) rather than materializing its own — so the
+    // spawn must report the id openTerminal actually selected. Reporting the
+    // session-derived id here would navigate to a workspace that does not
+    // contain the resumed session (or does not exist at all).
+    vi.mocked(post).mockResolvedValueOnce({
+      agentTerminal: { name: 'pagespace-resumed', agentType: 'pagespace', resumed: true },
+    });
+    const paneScope = { projectName: 'app', branchName: 'main', name: 'pagespace-resumed', kind: 'chat' as const };
+    useMachineWorkspaceStore.getState().hydrateFromServer('m1', [
+      {
+        id: 'ws-elsewhere',
+        name: 'Where it already lives',
+        scope: { projectName: 'app', branchName: 'main' },
+        columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: paneScope }] }],
+      },
+    ]);
+    const onWorkspaceCreated = vi.fn();
+    renderPalette(<NodeActionPalette machineId="m1" node={BRANCH_NODE} onWorkspaceCreated={onWorkspaceCreated} />);
+
+    const user = await openPalette();
+    await user.click(await screen.findByRole('option', { name: 'Agent' }));
+
+    await waitFor(() => {
+      assert({
+        given: 'a resumed session that another workspace is already showing',
+        should: 'report the workspace openTerminal selected — the one holding the session — not sessionWorkspaceId',
+        actual: onWorkspaceCreated.mock.calls[0]?.[0],
+        expected: 'ws-elsewhere',
+      });
+    });
+  });
+
   test('a spawn that fails after the palette closed toasts the error and never navigates', async () => {
     let rejectSpawn: (reason: Error) => void = () => {};
     vi.mocked(post).mockImplementationOnce(() => new Promise((resolve, reject) => { rejectSpawn = reject; }));

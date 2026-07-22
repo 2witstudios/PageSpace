@@ -283,8 +283,13 @@ function InstantSpawnGroup({
       // Born bound: one synchronous materialize-and-show, one already-bound
       // server push. No starting prompt — instant spawn means the prompt is
       // typed in the pane itself, so there is nothing to auto-send.
-      openTerminal(paneScope);
-      onSpawned(sessionWorkspaceId(paneScope));
+      //
+      // Report the workspace openTerminal ACTUALLY selected: a resumed
+      // session another workspace is already showing lands there, not in its
+      // own session-derived workspace. The fallback only covers the
+      // machine-missing edge, where the derived id is the best signal left.
+      const workspaceId = openTerminal(paneScope) ?? sessionWorkspaceId(paneScope);
+      onSpawned(workspaceId);
     } catch (err) {
       // `created` may be set even though we're here (e.g. the store write
       // itself threw) — clean up a session that was made but never

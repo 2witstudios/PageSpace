@@ -489,13 +489,21 @@ export function useSyncedWorkspaceActions(machineId: string) {
     /** `openTerminal` can materialize a new workspace, relocate an existing
      * one to front, or land in one already showing the session — push
      * whichever workspace it actually affected, resolved the same way the
-     * local action itself resolves "where does this session live". */
-    openTerminal(scope: OpenTerminalScope): void {
+     * local action itself resolves "where does this session live".
+     *
+     * RETURNS that workspace's id, because the caller cannot derive it: a
+     * session another workspace is already showing lands THERE
+     * (`workspaceShowing`), not in its own `sessionWorkspaceId` workspace —
+     * a spawn that assumed the derived id would navigate to a workspace that
+     * doesn't contain the session, or doesn't exist. `undefined` only when
+     * the machine itself is missing (nothing was opened). */
+    openTerminal(scope: OpenTerminalScope): string | undefined {
       openTerminalLocal(machineId, scope);
       const machine = useMachineWorkspaceStore.getState().machines[machineId];
-      if (!machine) return;
+      if (!machine) return undefined;
       const home = workspaceShowing(machine, scope) ?? machine.workspaces[sessionWorkspaceId(scope)];
       if (home) void pushWorkspaceUpdate(machineId, home.id, { columns: true });
+      return home?.id;
     },
   }), [
     machineId,
