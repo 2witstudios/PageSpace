@@ -11,6 +11,7 @@ vi.mock('@/lib/ai/core/compaction/prepare-context', () => ({
 }));
 // Avoid dragging the full tool registry into the test graph.
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
+  filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
   WRITE_TOOLS: new Set(['create_page', 'replace_lines']),
 }));
 // convertToModelMessages: identity — returns the messages array unchanged so tests

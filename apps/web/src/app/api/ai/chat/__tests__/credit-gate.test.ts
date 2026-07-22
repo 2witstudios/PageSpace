@@ -134,6 +134,7 @@ vi.mock('@/lib/ai/core/system-prompt', () => ({
   buildPersonalizationPrompt: vi.fn().mockReturnValue(''),
 }));
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
+  filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),
   filterToolsForWebSearch: vi.fn().mockReturnValue({}),
   filterToolsForMcpScope: vi.fn().mockReturnValue({}),
