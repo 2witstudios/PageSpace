@@ -200,6 +200,51 @@ describe('aggregateUsageBreakdown', () => {
       expect(r.byMachine[0]).toMatchObject({ pageId: 'page-d', activeSeconds: 0, spendCents: 5, calls: 1 });
     });
 
+    it('rolls a BRANCH Sprite\'s storage charge up under its owning machine (issue #2204 phase 3)', () => {
+      // The storage reconcile charges a branch Sprite's measured bytes against
+      // the OWNING Machine page (machine-storage-attribution.ts), so those rows
+      // are indistinguishable HERE from the machine's own storage — which is the
+      // point: one Terminal, one line, whatever internal Sprite wrote the bytes.
+      const storageRow = (over: Partial<UsageLedgerRow>): UsageLedgerRow =>
+        machineRow({ model: 'terminal-machine-storage', durationMs: 0, ...over });
+
+      const r = aggregateUsageBreakdown(
+        [
+          machineRow({ pageId: 'machine-page-1', pageTitle: 'My Terminal', chargeMillicents: 10_000, durationMs: 30_000 }),
+          // Two branch Sprites of that same machine, each metered separately.
+          storageRow({ pageId: 'machine-page-1', pageTitle: 'My Terminal', chargeMillicents: 4_000 }),
+          storageRow({ pageId: 'machine-page-1', pageTitle: 'My Terminal', chargeMillicents: 6_000 }),
+        ],
+        PERIOD,
+      );
+
+      expect(r.byMachine).toHaveLength(1);
+      expect(r.byMachine[0]).toMatchObject({
+        pageId: 'machine-page-1',
+        label: 'My Terminal',
+        spendCents: 20,
+        calls: 3,
+        activeSeconds: 30,
+      });
+    });
+
+    it('never lands branch-Sprite storage in the "Unattributed machine" bucket', () => {
+      const r = aggregateUsageBreakdown(
+        [
+          machineRow({
+            model: 'terminal-machine-storage',
+            pageId: 'machine-page-1',
+            pageTitle: 'My Terminal',
+            chargeMillicents: 4_000,
+            durationMs: 0,
+          }),
+        ],
+        PERIOD,
+      );
+
+      expect(r.byMachine.map((m) => m.pageId)).toEqual(['machine-page-1']);
+    });
+
     it('computes sharePct against TOTAL TERMINAL spend, not overall spend across all features', () => {
       const r = aggregateUsageBreakdown(
         [

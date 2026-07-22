@@ -6,7 +6,10 @@ const mockAdvisoryLockClient = vi.hoisted(() => ({ query: vi.fn(), release: vi.f
 const mockAdvisoryLockPool = vi.hoisted(() => ({ connect: vi.fn(async () => mockAdvisoryLockClient) }));
 const mockGetAdvisoryLockPool = vi.hoisted(() => vi.fn(() => mockAdvisoryLockPool));
 vi.mock('@pagespace/db/db', () => ({ db: mockDb, getAdvisoryLockPool: mockGetAdvisoryLockPool }));
-vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn((a, b) => ({ op: 'eq', a, b })) }));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
+  isNull: vi.fn((a) => ({ op: 'isNull', a })),
+}));
 vi.mock('@pagespace/db/schema/machine-sessions', () => ({
   machineSessions: {
     pageId: 'machine_sessions.pageId',
@@ -14,6 +17,16 @@ vi.mock('@pagespace/db/schema/machine-sessions', () => ({
     storageMeasuredBytes: 'machine_sessions.storageMeasuredBytes',
     storageMeasuredAt: 'machine_sessions.storageMeasuredAt',
     lastActiveAt: 'machine_sessions.lastActiveAt',
+  },
+}));
+vi.mock('@pagespace/db/schema/machine-branches', () => ({
+  machineBranches: {
+    id: 'machine_branches.id',
+    machineId: 'machine_branches.machineId',
+    storageLastBilledAt: 'machine_branches.storageLastBilledAt',
+    storageMeasuredBytes: 'machine_branches.storageMeasuredBytes',
+    storageMeasuredAt: 'machine_branches.storageMeasuredAt',
+    spriteTornDownAt: 'machine_branches.spriteTornDownAt',
   },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -28,6 +41,7 @@ import {
   defaultReconcileMachineStorageDeps,
   persistStorageMeasurement,
   measureMachineStorageOpportunistically,
+  measureBranchStorageOpportunistically,
   reconcileMachineStorageSerialized,
   __resetStorageMeasurementCachesForTests,
 } from '../machine-storage-billing';
@@ -181,7 +195,11 @@ describe('persistStorageMeasurement', () => {
     });
 
     const measuredAt = new Date('2026-07-01T00:00:00.000Z');
-    await persistStorageMeasurement({ pageId: 'page-1', measuredBytes: 204800 * 1024, measuredAt });
+    await persistStorageMeasurement({
+      subject: { kind: 'machine', pageId: 'page-1' },
+      measuredBytes: 204800 * 1024,
+      measuredAt,
+    });
 
     expect(setCalls).toEqual([{ storageMeasuredBytes: 204800 * 1024, storageMeasuredAt: measuredAt }]);
     expect(whereCalls).toHaveLength(1);
@@ -412,9 +430,11 @@ describe('reconcileMachineStorageSerialized', () => {
   function makeDeps(overrides: Partial<ReconcileMachineStorageDeps> = {}): ReconcileMachineStorageDeps {
     return {
       listMachines: vi.fn(async () => []),
+      listBranchSprites: vi.fn(async () => []),
       lookupPageOwnerId: vi.fn(async () => null),
       chargeStorage: vi.fn(async () => {}),
       advanceWatermark: vi.fn(async () => {}),
+      advanceBranchWatermark: vi.fn(async () => {}),
       now: () => new Date('2026-07-13T00:00:00.000Z'),
       ...overrides,
     };
@@ -509,5 +529,194 @@ describe('reconcileMachineStorageSerialized', () => {
     expect(client.release).toHaveBeenCalledTimes(1);
     expect(client.release.mock.calls[0][0]).toBeInstanceOf(Error);
     expect(deps.listMachines).not.toHaveBeenCalled();
+  });
+});
+
+describe('defaultReconcileMachineStorageDeps.listBranchSprites (issue #2204 phase 3)', () => {
+  it('selects each branch row\'s OWN measurement/watermark plus its owning machine page as the attribution key', async () => {
+    const rows = [
+      {
+        machineBranchId: 'branch-1',
+        machinePageId: 'machine-page-1',
+        storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
+        measuredBytes: 1_000_000_000,
+        measuredAt: new Date('2026-06-30T00:00:00.000Z'),
+        lastActiveAt: new Date('2026-06-30T12:00:00.000Z'),
+      },
+    ];
+    let selectedShape: Record<string, unknown> | undefined;
+    let whereArg: unknown;
+    mockDb.select.mockImplementation((shape: Record<string, unknown>) => {
+      selectedShape = shape;
+      return { from: () => ({ leftJoin: () => ({ where: (w: unknown) => { whereArg = w; return rows; } }) }) };
+    });
+
+    await expect(defaultReconcileMachineStorageDeps.listBranchSprites()).resolves.toEqual(rows);
+
+    expect(Object.keys(selectedShape ?? {}).sort()).toEqual(
+      ['lastActiveAt', 'machineBranchId', 'machinePageId', 'measuredAt', 'measuredBytes', 'storageLastBilledAt'].sort(),
+    );
+    // Torn-down branch Sprites have no filesystem left to meter.
+    expect(whereArg).toEqual({ op: 'isNull', a: 'machine_branches.spriteTornDownAt' });
+  });
+
+  it('falls back to the epoch when the owning machine has no session row (not awake, never a fabricated activity)', async () => {
+    mockDb.select.mockImplementation(() => ({
+      from: () => ({
+        leftJoin: () => ({
+          where: () => [
+            {
+              machineBranchId: 'branch-2',
+              machinePageId: 'machine-page-2',
+              storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
+              measuredBytes: null,
+              measuredAt: null,
+              lastActiveAt: null,
+            },
+          ],
+        }),
+      }),
+    }));
+
+    const [row] = await defaultReconcileMachineStorageDeps.listBranchSprites();
+
+    assert({
+      given: 'a branch whose owning machine has never had a session row',
+      should: 'report the epoch as lastActiveAt (treated as not awake)',
+      actual: row.lastActiveAt.getTime(),
+      expected: 0,
+    });
+  });
+});
+
+describe('defaultReconcileMachineStorageDeps.advanceBranchWatermark', () => {
+  it("updates the BRANCH row's own storageLastBilledAt, keyed by branch id", async () => {
+    const setCalls: unknown[] = [];
+    const whereCalls: unknown[] = [];
+    mockDb.update.mockReturnValue({
+      set: (values: unknown) => {
+        setCalls.push(values);
+        return {
+          where: async (w: unknown) => {
+            whereCalls.push(w);
+          },
+        };
+      },
+    });
+
+    const billedThrough = new Date('2026-07-01T00:00:00.000Z');
+    await defaultReconcileMachineStorageDeps.advanceBranchWatermark({ machineBranchId: 'branch-1', billedThrough });
+
+    expect(setCalls).toEqual([{ storageLastBilledAt: billedThrough }]);
+    expect(whereCalls).toEqual([{ op: 'eq', a: 'machine_branches.id', b: 'branch-1' }]);
+  });
+});
+
+describe('persistStorageMeasurement — branch subject', () => {
+  it("writes a branch Sprite's bytes onto ITS OWN machine_branches row, never the machine's", async () => {
+    const setCalls: unknown[] = [];
+    const whereCalls: unknown[] = [];
+    mockDb.update.mockReturnValue({
+      set: (values: unknown) => {
+        setCalls.push(values);
+        return {
+          where: async (w: unknown) => {
+            whereCalls.push(w);
+          },
+        };
+      },
+    });
+
+    const measuredAt = new Date('2026-07-01T00:00:00.000Z');
+    await persistStorageMeasurement({
+      subject: { kind: 'branch', machineBranchId: 'branch-1', machinePageId: 'machine-page-1' },
+      measuredBytes: 500_000_000,
+      measuredAt,
+    });
+
+    assert({
+      given: 'a measurement of a branch-terminal Sprite',
+      should: 'update the branch row by id (the machine row would clobber the machine\'s own footprint)',
+      actual: { set: setCalls, where: whereCalls },
+      expected: {
+        set: [{ storageMeasuredBytes: 500_000_000, storageMeasuredAt: measuredAt }],
+        where: [{ op: 'eq', a: 'machine_branches.id', b: 'branch-1' }],
+      },
+    });
+  });
+});
+
+describe('measureBranchStorageOpportunistically', () => {
+  const DU_OK = '209715200\t/workspace';
+
+  it('measures a live branch Sprite and persists onto its own row', async () => {
+    mockDb.select.mockReturnValue({
+      from: () => ({ where: () => ({ limit: async () => [{ storageMeasuredAt: null, spriteTornDownAt: null }] }) }),
+    });
+    const setCalls: unknown[] = [];
+    mockDb.update.mockReturnValue({
+      set: (v: unknown) => {
+        setCalls.push(v);
+        return { where: async () => {} };
+      },
+    });
+    const exec = vi.fn(async () => ({ exitCode: 0, stdout: DU_OK, stderr: '' }));
+
+    await measureBranchStorageOpportunistically({
+      machineBranchId: 'branch-measure-1',
+      machinePageId: 'machine-page-1',
+      handle: { exec },
+    });
+
+    expect(exec).toHaveBeenCalledTimes(1);
+    expect(setCalls).toEqual([expect.objectContaining({ storageMeasuredBytes: 209_715_200 })]);
+  });
+
+  it('never measures a TORN-DOWN branch Sprite (its filesystem is gone)', async () => {
+    mockDb.select.mockReturnValue({
+      from: () => ({
+        where: () => ({
+          limit: async () => [{ storageMeasuredAt: null, spriteTornDownAt: new Date('2026-06-01T00:00:00.000Z') }],
+        }),
+      }),
+    });
+    const exec = vi.fn();
+
+    await measureBranchStorageOpportunistically({
+      machineBranchId: 'branch-torn-down',
+      machinePageId: 'machine-page-1',
+      handle: { exec },
+    });
+
+    assert({
+      given: 'a branch row whose Sprite is already torn down',
+      should: 'run no du at all',
+      actual: exec.mock.calls.length,
+      expected: 0,
+    });
+  });
+
+  it('keys its throttle per SUBJECT: a branch measurement never suppresses its owning machine\'s', async () => {
+    mockDb.select.mockReturnValue({
+      from: () => ({
+        where: () => ({ limit: async () => [{ storageMeasuredAt: null, spriteTornDownAt: null }] }),
+      }),
+    });
+    mockDb.update.mockReturnValue({ set: () => ({ where: async () => {} }) });
+    const exec = vi.fn(async () => ({ exitCode: 0, stdout: DU_OK, stderr: '' }));
+
+    await measureBranchStorageOpportunistically({
+      machineBranchId: 'shared-id',
+      machinePageId: 'shared-id',
+      handle: { exec },
+    });
+    await measureMachineStorageOpportunistically({ pageId: 'shared-id', handle: { exec } });
+
+    assert({
+      given: 'a branch row id and a machine page id that happen to be the same string',
+      should: 'measure both filesystems (namespaced subject keys cannot collide)',
+      actual: exec.mock.calls.length,
+      expected: 2,
+    });
   });
 });

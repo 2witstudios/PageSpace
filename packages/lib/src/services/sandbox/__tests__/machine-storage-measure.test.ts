@@ -7,6 +7,7 @@ import {
   refreshStorageMeasurement,
   STORAGE_MEASUREMENT_THROTTLE_MS,
 } from '../machine-storage-measure';
+import type { StorageSubject } from '../machine-storage-attribution';
 
 describe('parseDuBytes', () => {
   it('parses `du -sbx` output → the leading byte total', () => {
@@ -95,13 +96,13 @@ const DU_OK = '209715200\t/workspace';
 describe('refreshStorageMeasurement', () => {
   const now = new Date('2026-07-01T00:00:00.000Z');
 
-  it('measures via `du -sbx`, parses bytes, and persists {pageId, measuredBytes, measuredAt}', async () => {
+  it('measures via `du -sbx`, parses bytes, and persists {subject, measuredBytes, measuredAt}', async () => {
     const { handle, exec } = fakeHandle({ exitCode: 0, stdout: DU_OK });
-    const persisted: Array<{ pageId: string; measuredBytes: number; measuredAt: Date }> = [];
+    const persisted: Array<{ subject: StorageSubject; measuredBytes: number; measuredAt: Date }> = [];
 
     const out = await refreshStorageMeasurement({
       handle,
-      pageId: 'page-1',
+      subject: { kind: 'machine', pageId: 'page-1' },
       lastMeasuredAt: null,
       now,
       persist: async (p) => {
@@ -114,7 +115,36 @@ describe('refreshStorageMeasurement', () => {
     // whole filesystem (df) and not apparent size (du -b).
     expect(exec.mock.calls[0][0]).toMatchObject({ cmd: 'du', args: ['-sxB1', '--', '/workspace'] });
     expect(out).toEqual({ measured: true, bytes: 209_715_200 });
-    expect(persisted).toEqual([{ pageId: 'page-1', measuredBytes: 209_715_200, measuredAt: now }]);
+    expect(persisted).toEqual([
+      { subject: { kind: 'machine', pageId: 'page-1' }, measuredBytes: 209_715_200, measuredAt: now },
+    ]);
+  });
+
+  it('persists a BRANCH Sprite measurement under its own branch subject, not a machine page', async () => {
+    const { handle } = fakeHandle({ exitCode: 0, stdout: DU_OK });
+    const persisted: Array<{ subject: StorageSubject; measuredBytes: number }> = [];
+
+    await refreshStorageMeasurement({
+      handle,
+      subject: { kind: 'branch', machineBranchId: 'branch-1', machinePageId: 'machine-page-1' },
+      lastMeasuredAt: null,
+      now,
+      persist: async (p) => {
+        persisted.push({ subject: p.subject, measuredBytes: p.measuredBytes });
+      },
+    });
+
+    assert({
+      given: 'a measurement of a branch-terminal Sprite',
+      should: 'persist under the branch subject (its own row), carrying the owning machine page for billing',
+      actual: persisted,
+      expected: [
+        {
+          subject: { kind: 'branch', machineBranchId: 'branch-1', machinePageId: 'machine-page-1' },
+          measuredBytes: 209_715_200,
+        },
+      ],
+    });
   });
 
   it('is throttled: a recent measurement short-circuits WITHOUT any sprite exec', async () => {
@@ -123,7 +153,7 @@ describe('refreshStorageMeasurement', () => {
 
     const out = await refreshStorageMeasurement({
       handle,
-      pageId: 'page-1',
+      subject: { kind: 'machine', pageId: 'page-1' },
       lastMeasuredAt: new Date(now.getTime() - 1_000), // 1s ago — within throttle
       now,
       persist,
@@ -148,7 +178,7 @@ describe('refreshStorageMeasurement', () => {
 
     const out = await refreshStorageMeasurement({
       handle,
-      pageId: 'p',
+      subject: { kind: 'machine', pageId: 'p' },
       lastMeasuredAt: null,
       now,
       persist: async (p) => {
@@ -164,7 +194,7 @@ describe('refreshStorageMeasurement', () => {
     const { handle } = fakeHandle({ exitCode: 1, stdout: 'du: cannot access /workspace' });
     const persist = vi.fn();
 
-    const out = await refreshStorageMeasurement({ handle, pageId: 'p', lastMeasuredAt: null, now, persist });
+    const out = await refreshStorageMeasurement({ handle, subject: { kind: 'machine', pageId: 'p' }, lastMeasuredAt: null, now, persist });
 
     expect(persist).not.toHaveBeenCalled();
     expect(out).toEqual({ measured: false });
@@ -178,7 +208,7 @@ describe('refreshStorageMeasurement', () => {
     };
     const persist = vi.fn();
 
-    const out = await refreshStorageMeasurement({ handle, pageId: 'p', lastMeasuredAt: null, now, persist });
+    const out = await refreshStorageMeasurement({ handle, subject: { kind: 'machine', pageId: 'p' }, lastMeasuredAt: null, now, persist });
 
     expect(persist).not.toHaveBeenCalled();
     expect(out).toEqual({ measured: false });
