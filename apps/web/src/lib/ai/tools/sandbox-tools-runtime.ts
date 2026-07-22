@@ -504,7 +504,7 @@ export function createMachineDirectory(
       // assistant's own configured machine list is never consulted — the
       // bound machine is the ONLY machine this run may ever see or switch to.
       if (rawContext?.machineBinding) {
-        return Promise.resolve([{ kind: 'existing' as const, machineId: rawContext.machineBinding.machineId }]);
+        return Promise.resolve([{ kind: 'existing' as const, machineId: rawContext.machineBinding.self.machineId }]);
       }
       return resolveConfiguredMachines(activeMachineAgentPageId(rawContext), rawContext?.userId, deps);
     },
@@ -533,7 +533,7 @@ export function createMachineDirectory(
       // trash/type/canActorViewPage above are NEVER bypassed. A DIFFERENT
       // machine (e.g. an attempted switch_machine away from the bound
       // checkout) still gets the full toggle check below.
-      if (rawContext.machineBinding?.machineId === machine.machineId) return { allowed: true };
+      if (rawContext.machineBinding?.self.machineId === machine.machineId) return { allowed: true };
       // Machine access toggles (Settings tab): pure policy in @pagespace/lib
       // machines/machine-access.ts. An agentPageId — the agent's own page or
       // the parent's for a sub-agent — marks the actor page-scoped; without

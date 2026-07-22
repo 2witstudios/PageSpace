@@ -6,6 +6,28 @@ import { describe, it, expect, vi } from 'vitest';
 import { createSandboxTools, type MachineDirectoryDeps, type ResolveSandboxContext, type SandboxGate } from '../sandbox-tools';
 import type { SandboxRunDeps, SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';
 import type { ToolExecutionContext } from '../../core/types';
+import type { MachineNodeHandle, MachineNodeHandleSet } from '@pagespace/lib/services/machines/machine-pane-binding';
+
+/**
+ * A machine-bound pane's handle set, as `deriveMachinePaneBinding` produces it.
+ * `handles` defaults to `[self]` — the leaf case — because these suites assert
+ * self-node behaviour; the cascade set itself is covered by the pure core's own
+ * suite (packages/lib machines/__tests__/machine-pane-binding.test.ts).
+ */
+function boundTo(
+  machineId: string,
+  cwd: string,
+  branchSandbox?: { machineBranchId: string; sandboxId: string },
+): MachineNodeHandleSet {
+  const self: MachineNodeHandle = {
+    kind: branchSandbox ? 'branch' : 'machine',
+    machineId,
+    cwd,
+    ...(branchSandbox ? { branchSandbox } : {}),
+  };
+  return { self, handles: [self] };
+}
+
 
 const ctx: SandboxActorContext = {
   userId: 'u1',
@@ -666,7 +688,7 @@ describe('createSandboxTools', () => {
       const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
       const rawContext: ToolExecutionContext = {
         userId: 'u1',
-        machineBinding: { machineId: 'm1', cwd: '/workspace/repo' },
+        machineBinding: boundTo('m1', '/workspace/repo'),
       };
       const result = await exec(tools.bash, { command: 'echo hi' }, rawContext);
       expect(result).toMatchObject({ success: true });
@@ -678,7 +700,7 @@ describe('createSandboxTools', () => {
       const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
       const rawContext: ToolExecutionContext = {
         userId: 'u1',
-        machineBinding: { machineId: 'm1', cwd: '/workspace/repo' },
+        machineBinding: boundTo('m1', '/workspace/repo'),
       };
       const result = await exec(tools.bash, { command: 'echo hi', cwd: '/workspace/other' }, rawContext);
       expect(result).toMatchObject({ success: true });
@@ -703,11 +725,7 @@ describe('createSandboxTools', () => {
       const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
       const rawContext: ToolExecutionContext = {
         userId: 'u1',
-        machineBinding: {
-          machineId: 'm1',
-          cwd: '/workspace/repo',
-          branchSandbox: { machineBranchId: 'branch-1', sandboxId: 'sbx-1' },
-        },
+        machineBinding: boundTo('m1', '/workspace/repo', { machineBranchId: 'branch-1', sandboxId: 'sbx-1' }),
       };
       const result = await exec(tools.bash, { command: 'echo hi' }, rawContext);
       expect(result).toMatchObject({ success: true });
@@ -746,11 +764,7 @@ describe('createSandboxTools', () => {
       const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
       const rawContext: ToolExecutionContext = {
         userId: 'u1',
-        machineBinding: {
-          machineId: 'm1',
-          cwd: '/workspace/repo',
-          branchSandbox: { machineBranchId: 'branch-1', sandboxId: 'sbx-1' },
-        },
+        machineBinding: boundTo('m1', '/workspace/repo', { machineBranchId: 'branch-1', sandboxId: 'sbx-1' }),
       };
       const result = await exec(tools.bash, { command: 'echo hi' }, rawContext);
       expect(result).toMatchObject({ success: false });

@@ -313,9 +313,10 @@ describe('POST /api/ai/chat - machine-pane binding', () => {
   });
 
   it('injects machineBinding + seeds activeMachine, and drops switch_machine/list_machines when bound', async () => {
+    const self = { kind: 'machine' as const, machineId: chatId, cwd: '/workspace' };
     deriveMachinePaneBindingMock.mockResolvedValue({
       ok: true,
-      binding: { cwd: '/workspace' },
+      binding: { self, handles: [self] },
     });
 
     await POST(createChatRequest());
@@ -333,11 +334,7 @@ describe('POST /api/ai/chat - machine-pane binding', () => {
 
     await vi.waitFor(() => expect(streamTextMock).toHaveBeenCalled());
     const streamTextArgs = streamTextMock.mock.calls[0]?.[0] as { experimental_context?: Record<string, unknown> };
-    expect(streamTextArgs.experimental_context?.machineBinding).toEqual({
-      machineId: chatId,
-      cwd: '/workspace',
-      branchSandbox: undefined,
-    });
+    expect(streamTextArgs.experimental_context?.machineBinding).toEqual({ self, handles: [self] });
     expect(streamTextArgs.experimental_context?.activeMachine).toEqual({
       kind: 'existing',
       machineId: chatId,

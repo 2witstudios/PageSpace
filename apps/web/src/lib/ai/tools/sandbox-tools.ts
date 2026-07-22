@@ -364,8 +364,8 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
     // (acquireRequest in tool-runners.ts already forwards ctx.branchSandbox) —
     // this is the one place that binding is translated onto the actor ctx.
     const binding = rawContext?.machineBinding;
-    const branchSandbox = binding?.branchSandbox
-      ? { machineId: binding.machineId, machineBranchId: binding.branchSandbox.machineBranchId }
+    const branchSandbox = binding?.self.branchSandbox
+      ? { machineId: binding.self.machineId, machineBranchId: binding.self.branchSandbox.machineBranchId }
       : undefined;
     return { ok: true, ctx: { ...ctx, driveId, tenantId, activeMachine, branchSandbox } };
   };
@@ -381,7 +381,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
         const rawContext = readContext(options);
         return runBashInSandbox({
           command,
-          cwd: bindingCwdFor(cwd, rawContext?.machineBinding),
+          cwd: bindingCwdFor(cwd, rawContext?.machineBinding?.self),
           timeoutMs,
           ctx: opened.ctx,
           deps: runDeps,

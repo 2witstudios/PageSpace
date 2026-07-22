@@ -39,9 +39,11 @@ export function buildMachinePaneBindingDeps(): DeriveMachinePaneBindingDeps {
     },
     projectLookup: {
       findByName: async (machineId, name) => (await getMachineProjectStore()).findByName(machineId, name),
+      list: async (machineId) => (await getMachineProjectStore()).list(machineId),
     },
     branchLookup: {
       findById: async (machineBranchId) => (await getMachineBranchStore()).findById(machineBranchId),
+      list: async (machineId, projectName) => (await getMachineBranchStore()).list(machineId, projectName),
     },
   };
 }

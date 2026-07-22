@@ -32,6 +32,28 @@ import {
 import { canActorViewPage } from '../actor-permissions';
 import type { ToolExecutionContext } from '../../core/types';
 import type { MachineRef } from '@/lib/repositories/page-agent-repository';
+import type { MachineNodeHandle, MachineNodeHandleSet } from '@pagespace/lib/services/machines/machine-pane-binding';
+
+/**
+ * A machine-bound pane's handle set, as `deriveMachinePaneBinding` produces it.
+ * `handles` defaults to `[self]` — the leaf case — because these suites assert
+ * self-node behaviour; the cascade set itself is covered by the pure core's own
+ * suite (packages/lib machines/__tests__/machine-pane-binding.test.ts).
+ */
+function boundTo(
+  machineId: string,
+  cwd: string,
+  branchSandbox?: { machineBranchId: string; sandboxId: string },
+): MachineNodeHandleSet {
+  const self: MachineNodeHandle = {
+    kind: branchSandbox ? 'branch' : 'machine',
+    machineId,
+    cwd,
+    ...(branchSandbox ? { branchSandbox } : {}),
+  };
+  return { self, handles: [self] };
+}
+
 
 function makeDeps(overrides: Partial<ResolveSandboxActorContextDeps> = {}): ResolveSandboxActorContextDeps {
   return {
@@ -367,7 +389,7 @@ describe('createMachineDirectory', () => {
         const context: ToolExecutionContext = {
           userId: 'u1',
           chatSource: { type: 'page', agentPageId: 'agent-1' },
-          machineBinding: { machineId: 'bound-1', cwd: '/workspace' },
+          machineBinding: boundTo('bound-1', '/workspace'),
         };
         await expect(directory.listMachines(context)).resolves.toEqual([
           { kind: 'existing', machineId: 'bound-1' },
@@ -383,7 +405,7 @@ describe('createMachineDirectory', () => {
         const context: ToolExecutionContext = {
           userId: 'u1',
           chatSource: { type: 'global' },
-          machineBinding: { machineId: 'bound-1', cwd: '/workspace' },
+          machineBinding: boundTo('bound-1', '/workspace'),
         };
         await expect(directory.listMachines(context)).resolves.toEqual([
           { kind: 'existing', machineId: 'bound-1' },
@@ -599,7 +621,7 @@ describe('createMachineDirectory', () => {
         const context: ToolExecutionContext = {
           userId: 'u1',
           chatSource: { type: 'page', agentPageId: 'agent-1' },
-          machineBinding: { machineId: 't1', cwd: '/workspace' },
+          machineBinding: boundTo('t1', '/workspace'),
         };
         await expect(
           directory.isMachineAccessible(context, { kind: 'existing', machineId: 't1' }),
@@ -613,7 +635,7 @@ describe('createMachineDirectory', () => {
         const context: ToolExecutionContext = {
           userId: 'u1',
           chatSource: { type: 'page', agentPageId: 'agent-1' },
-          machineBinding: { machineId: 'bound-1', cwd: '/workspace' },
+          machineBinding: boundTo('bound-1', '/workspace'),
         };
         const decision = await directory.isMachineAccessible(context, { kind: 'existing', machineId: 't1' });
         expect(decision).toMatchObject({ allowed: false, code: 'page_agents_disabled' });
@@ -635,7 +657,7 @@ describe('createMachineDirectory', () => {
         const context: ToolExecutionContext = {
           userId: 'u1',
           chatSource: { type: 'page', agentPageId: 'agent-1' },
-          machineBinding: { machineId: 't1', cwd: '/workspace' },
+          machineBinding: boundTo('t1', '/workspace'),
         };
         await expect(
           directory.isMachineAccessible(context, { kind: 'existing', machineId: 't1' }),
@@ -649,7 +671,7 @@ describe('createMachineDirectory', () => {
         const context: ToolExecutionContext = {
           userId: 'u1',
           chatSource: { type: 'page', agentPageId: 'agent-1' },
-          machineBinding: { machineId: 't1', cwd: '/workspace' },
+          machineBinding: boundTo('t1', '/workspace'),
         };
         await expect(
           directory.isMachineAccessible(context, { kind: 'existing', machineId: 't1' }),
@@ -761,7 +783,7 @@ describe('machine-pane agents (agentPageId is the MACHINE page) — real canActo
   const machinePaneContext: ToolExecutionContext = {
     userId: 'u1',
     chatSource: { type: 'page', agentPageId: 't1' },
-    machineBinding: { machineId: 't1', cwd: '/workspace' },
+    machineBinding: boundTo('t1', '/workspace'),
   };
   // The acting-page row the gate reads: the MACHINE page the pane is bound to.
   const machinePageRow = [{ type: 'MACHINE', userScopedAccess: false }];

@@ -580,13 +580,10 @@ export async function POST(request: Request) {
       });
       return NextResponse.json({ error: 'This conversation is not bound to this machine' }, { status: 400 });
     }
-    const machineBinding = machinePaneBindingResult?.ok
-      ? {
-          machineId: chatId!,
-          cwd: machinePaneBindingResult.binding.cwd,
-          branchSandbox: machinePaneBindingResult.binding.branchSandbox,
-        }
-      : undefined;
+    // The derived handle set IS the binding: every handle already carries the
+    // owning machine page id (checked against `chatId` inside the pure core),
+    // so nothing is re-stamped here.
+    const machineBinding = machinePaneBindingResult?.ok ? machinePaneBindingResult.binding : undefined;
 
     // Process @mentions in the user's message
     let mentionSystemPrompt = '';
@@ -1194,7 +1191,7 @@ export async function POST(request: Request) {
     // for the conversation's lifetime, so it belongs in the STABLE section,
     // not the per-turn locationPrompt below.
     if (machineBinding) {
-      systemPrompt += `\n\nMACHINE BINDING (this conversation)\n• This conversation is bound to machine "${machineBinding.machineId}" — code-execution tools (bash, readFile, writeFile, editFile, git/gh) operate from working directory: ${machineBinding.cwd}\n• switch_machine and list_machines are unavailable — this conversation cannot leave its bound machine`;
+      systemPrompt += `\n\nMACHINE BINDING (this conversation)\n• This conversation is bound to machine "${machineBinding.self.machineId}" — code-execution tools (bash, readFile, writeFile, editFile, git/gh) operate from working directory: ${machineBinding.self.cwd}\n• switch_machine and list_machines are unavailable — this conversation cannot leave its bound machine`;
     }
 
     // Build timestamp system prompt for temporal awareness
@@ -1561,7 +1558,7 @@ export async function POST(request: Request) {
                 // first tool call, without waiting for a switch_machine call.
                 machineBinding,
                 activeMachine: machineBinding
-                  ? { kind: 'existing' as const, machineId: machineBinding.machineId }
+                  ? { kind: 'existing' as const, machineId: machineBinding.self.machineId }
                   : undefined,
               }, // Pass userId, timezone, AI context, location context, model capabilities, and chat source to tools
               maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
