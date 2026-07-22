@@ -313,9 +313,10 @@ describe('POST /api/ai/chat - machine-pane binding', () => {
   });
 
   it('injects machineBinding + seeds activeMachine, and drops switch_machine/list_machines when bound', async () => {
+    const self = { kind: 'machine' as const, machineId: chatId, cwd: '/workspace' };
     deriveMachinePaneBindingMock.mockResolvedValue({
       ok: true,
-      binding: { cwd: '/workspace' },
+      binding: { self, handles: [self] },
     });
 
     await POST(createChatRequest());
@@ -333,14 +334,58 @@ describe('POST /api/ai/chat - machine-pane binding', () => {
 
     await vi.waitFor(() => expect(streamTextMock).toHaveBeenCalled());
     const streamTextArgs = streamTextMock.mock.calls[0]?.[0] as { experimental_context?: Record<string, unknown> };
-    expect(streamTextArgs.experimental_context?.machineBinding).toEqual({
-      machineId: chatId,
-      cwd: '/workspace',
-      branchSandbox: undefined,
-    });
+    expect(streamTextArgs.experimental_context?.machineBinding).toEqual({ self, handles: [self] });
     expect(streamTextArgs.experimental_context?.activeMachine).toEqual({
       kind: 'existing',
       machineId: chatId,
+    });
+  });
+
+  // The bound conversation's system prompt has to describe a NODE SCOPE, not a
+  // single checkout: which node it lives at, what it may address beneath it,
+  // and where to discover those nodes. "list_sessions" is a frozen contract
+  // string — the tool itself lands with the session family.
+  describe('MACHINE BINDING system prompt', () => {
+    const project = { kind: 'project' as const, machineId: chatId, project: 'repo', cwd: '/workspace/projects/repo' };
+    const branch = {
+      kind: 'branch' as const,
+      machineId: chatId,
+      project: 'repo',
+      branch: 'feature',
+      cwd: '/workspace/repo',
+      branchSandbox: { machineBranchId: 'branch-1', sandboxId: 'sbx-1' },
+    };
+
+    async function systemPromptFor(binding: unknown): Promise<string> {
+      streamTextMock.mockClear();
+      deriveMachinePaneBindingMock.mockResolvedValue({ ok: true, binding });
+      await POST(createChatRequest());
+      await vi.waitFor(() => expect(streamTextMock).toHaveBeenCalled());
+      return (streamTextMock.mock.calls[0]?.[0] as { system?: string }).system ?? '';
+    }
+
+    it('given a machine-root binding, should state the node scope, the target syntax, and reference list_sessions', async () => {
+      const self = { kind: 'machine' as const, machineId: chatId, cwd: '/workspace' };
+      const prompt = await systemPromptFor({ self, handles: [self, project, branch] });
+      expect(prompt).toContain('MACHINE BINDING (this conversation)');
+      expect(prompt).toContain('machine root');
+      expect(prompt).toContain('target');
+      expect(prompt).toContain('list_sessions');
+      expect(prompt).toContain('switch_machine');
+    });
+
+    it('given a branch binding, should name the branch node and say nothing lies beneath it', async () => {
+      const prompt = await systemPromptFor({ self: branch, handles: [branch] });
+      expect(prompt).toContain('branch "feature"');
+      expect(prompt).toContain('project "repo"');
+      expect(prompt).toContain('/workspace/repo');
+      expect(prompt).toContain('list_sessions');
+    });
+
+    it('given a project binding, should name the project node and its addressable branches', async () => {
+      const prompt = await systemPromptFor({ self: project, handles: [project, branch] });
+      expect(prompt).toContain('project "repo"');
+      expect(prompt).toContain('branch: "feature"');
     });
   });
 

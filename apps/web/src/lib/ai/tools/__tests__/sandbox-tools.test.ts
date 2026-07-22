@@ -6,6 +6,28 @@ import { describe, it, expect, vi } from 'vitest';
 import { createSandboxTools, type MachineDirectoryDeps, type ResolveSandboxContext, type SandboxGate } from '../sandbox-tools';
 import type { SandboxRunDeps, SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';
 import type { ToolExecutionContext } from '../../core/types';
+import type { MachineNodeHandle, MachineNodeHandleSet } from '@pagespace/lib/services/machines/machine-pane-binding';
+
+/**
+ * A machine-bound pane's handle set, as `deriveMachinePaneBinding` produces it.
+ * `handles` defaults to `[self]` — the leaf case — because these suites assert
+ * self-node behaviour; the cascade set itself is covered by the pure core's own
+ * suite (packages/lib machines/__tests__/machine-pane-binding.test.ts).
+ */
+function boundTo(
+  machineId: string,
+  cwd: string,
+  branchSandbox?: { machineBranchId: string; sandboxId: string },
+): MachineNodeHandleSet {
+  const self: MachineNodeHandle = {
+    kind: branchSandbox ? 'branch' : 'machine',
+    machineId,
+    cwd,
+    ...(branchSandbox ? { branchSandbox } : {}),
+  };
+  return { self, handles: [self] };
+}
+
 
 const ctx: SandboxActorContext = {
   userId: 'u1',
@@ -666,7 +688,7 @@ describe('createSandboxTools', () => {
       const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
       const rawContext: ToolExecutionContext = {
         userId: 'u1',
-        machineBinding: { machineId: 'm1', cwd: '/workspace/repo' },
+        machineBinding: boundTo('m1', '/workspace/repo'),
       };
       const result = await exec(tools.bash, { command: 'echo hi' }, rawContext);
       expect(result).toMatchObject({ success: true });
@@ -678,7 +700,7 @@ describe('createSandboxTools', () => {
       const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
       const rawContext: ToolExecutionContext = {
         userId: 'u1',
-        machineBinding: { machineId: 'm1', cwd: '/workspace/repo' },
+        machineBinding: boundTo('m1', '/workspace/repo'),
       };
       const result = await exec(tools.bash, { command: 'echo hi', cwd: '/workspace/other' }, rawContext);
       expect(result).toMatchObject({ success: true });
@@ -703,11 +725,7 @@ describe('createSandboxTools', () => {
       const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
       const rawContext: ToolExecutionContext = {
         userId: 'u1',
-        machineBinding: {
-          machineId: 'm1',
-          cwd: '/workspace/repo',
-          branchSandbox: { machineBranchId: 'branch-1', sandboxId: 'sbx-1' },
-        },
+        machineBinding: boundTo('m1', '/workspace/repo', { machineBranchId: 'branch-1', sandboxId: 'sbx-1' }),
       };
       const result = await exec(tools.bash, { command: 'echo hi' }, rawContext);
       expect(result).toMatchObject({ success: true });
@@ -746,15 +764,151 @@ describe('createSandboxTools', () => {
       const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
       const rawContext: ToolExecutionContext = {
         userId: 'u1',
-        machineBinding: {
-          machineId: 'm1',
-          cwd: '/workspace/repo',
-          branchSandbox: { machineBranchId: 'branch-1', sandboxId: 'sbx-1' },
-        },
+        machineBinding: boundTo('m1', '/workspace/repo', { machineBranchId: 'branch-1', sandboxId: 'sbx-1' }),
       };
       const result = await exec(tools.bash, { command: 'echo hi' }, rawContext);
       expect(result).toMatchObject({ success: false });
       expect(reconnected).toBe(false);
+    });
+  });
+
+  /**
+   * Direct child addressing: a bound conversation may aim any file tool at a
+   * node BENEATH it via `target`, resolved against the derived handle set. A
+   * node outside the set is not addressable — the set is the policy.
+   */
+  describe('target addressing (cascade)', () => {
+    const MACHINE: MachineNodeHandle = { kind: 'machine', machineId: 'm1', cwd: '/workspace' };
+    const PROJECT: MachineNodeHandle = {
+      kind: 'project',
+      machineId: 'm1',
+      project: 'repo',
+      cwd: '/workspace/projects/repo',
+    };
+    const BRANCH: MachineNodeHandle = {
+      kind: 'branch',
+      machineId: 'm1',
+      project: 'repo',
+      branch: 'feature',
+      cwd: '/workspace/repo',
+      branchSandbox: { machineBranchId: 'branch-1', sandboxId: 'sbx-1' },
+    };
+    const machineRootBinding: MachineNodeHandleSet = { self: MACHINE, handles: [MACHINE, PROJECT, BRANCH] };
+
+    function capturingRunDeps() {
+      const seenCwds: Array<string | undefined> = [];
+      const seenAcquisitions: Array<{ branchSandbox?: unknown }> = [];
+      const runDeps = fakeRunDeps();
+      runDeps.acquireSandbox = async (input) => {
+        seenAcquisitions.push(input);
+        return { ok: true, sandboxId: 'sbx', resumed: false };
+      };
+      runDeps.reconnect = async () => ({
+        sandboxId: 'sbx',
+        spriteInstanceId: null,
+        runCommand: async (args: { cwd?: string }) => {
+          seenCwds.push(args.cwd);
+          return { exitCode: 0, stdout: 'hi', stderr: '' };
+        },
+        writeFiles: async () => {},
+        readFileToBuffer: async () => Buffer.from('data'),
+        createCheckpoint: async () => {},
+      });
+      return { runDeps, seenCwds, seenAcquisitions };
+    }
+
+    it('bash: given target { project }, should run at the project\'s cwd on the MACHINE\'s own Sprite', async () => {
+      const { runDeps, seenCwds, seenAcquisitions } = capturingRunDeps();
+      const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
+      const result = await exec(
+        tools.bash,
+        { command: 'echo hi', target: { project: 'repo' } },
+        { userId: 'u1', machineBinding: machineRootBinding },
+      );
+      expect(result).toMatchObject({ success: true });
+      expect(seenCwds).toEqual(['/workspace/projects/repo']);
+      expect(seenAcquisitions).toEqual([expect.objectContaining({ branchSandbox: undefined })]);
+    });
+
+    it('bash: given target { branch }, should route to the branch Sprite at the branch cwd — matching a natively-bound branch conversation', async () => {
+      const { runDeps, seenCwds, seenAcquisitions } = capturingRunDeps();
+      const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
+      const result = await exec(
+        tools.bash,
+        { command: 'echo hi', target: { project: 'repo', branch: 'feature' } },
+        { userId: 'u1', machineBinding: machineRootBinding },
+      );
+      expect(result).toMatchObject({ success: true });
+      expect(seenCwds).toEqual(['/workspace/repo']);
+      expect(seenAcquisitions).toEqual([
+        expect.objectContaining({ branchSandbox: { machineId: 'm1', machineBranchId: 'branch-1' } }),
+      ]);
+    });
+
+    it('bash: given an explicit cwd alongside a target, the explicit cwd should still win', async () => {
+      const { runDeps, seenCwds } = capturingRunDeps();
+      const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
+      await exec(
+        tools.bash,
+        { command: 'echo hi', cwd: '/workspace/other', target: { project: 'repo' } },
+        { userId: 'u1', machineBinding: machineRootBinding },
+      );
+      expect(seenCwds).toEqual(['/workspace/other']);
+    });
+
+    it('bash: given a target outside the derived set, should deny without acquiring a sandbox', async () => {
+      const { runDeps, seenAcquisitions } = capturingRunDeps();
+      const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
+      const branchBinding: MachineNodeHandleSet = { self: BRANCH, handles: [BRANCH] };
+      const result = await exec(
+        tools.bash,
+        { command: 'echo hi', target: { project: 'sibling' } },
+        { userId: 'u1', machineBinding: branchBinding },
+      );
+      expect(result).toMatchObject({ success: false });
+      expect(seenAcquisitions).toEqual([]);
+    });
+
+    it('bash: given a target on an UNBOUND conversation, should deny — targets only exist inside a bound node scope', async () => {
+      const { runDeps, seenAcquisitions } = capturingRunDeps();
+      const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
+      const result = await exec(tools.bash, { command: 'echo hi', target: { project: 'repo' } }, { userId: 'u1' });
+      expect(result).toMatchObject({ success: false });
+      expect(seenAcquisitions).toEqual([]);
+    });
+
+    it('writeFile/readFile/editFile: given target { branch }, should each route to the branch Sprite', async () => {
+      const { runDeps, seenAcquisitions } = capturingRunDeps();
+      const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
+      const context = { userId: 'u1', machineBinding: machineRootBinding };
+      const target = { project: 'repo', branch: 'feature' };
+      await exec(tools.writeFile, { path: 'a.txt', content: 'x', target }, context);
+      await exec(tools.readFile, { path: 'a.txt', target }, context);
+      await exec(tools.editFile, { path: 'a.txt', oldString: 'data', newString: 'X', target }, context);
+      expect(seenAcquisitions).toEqual([
+        expect.objectContaining({ branchSandbox: { machineId: 'm1', machineBranchId: 'branch-1' } }),
+        expect.objectContaining({ branchSandbox: { machineId: 'm1', machineBranchId: 'branch-1' } }),
+        expect.objectContaining({ branchSandbox: { machineId: 'm1', machineBranchId: 'branch-1' } }),
+      ]);
+    });
+
+    it('bash: given a branch-targeted run, the billing/guardrail key should stay the owning machine page id', async () => {
+      const { runDeps, seenAcquisitions } = capturingRunDeps();
+      const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
+      await exec(
+        tools.bash,
+        { command: 'echo hi', target: { project: 'repo', branch: 'feature' } },
+        { userId: 'u1', machineBinding: machineRootBinding },
+      );
+      expect(seenAcquisitions[0]).toMatchObject({ branchSandbox: { machineId: 'm1' } });
+    });
+
+    it('bash: given no target, should run at the bound node exactly as before', async () => {
+      const { runDeps, seenCwds, seenAcquisitions } = capturingRunDeps();
+      const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
+      await exec(tools.bash, { command: 'echo hi' }, { userId: 'u1', machineBinding: machineRootBinding });
+      expect(seenCwds).toEqual(['/workspace']);
+      expect(seenAcquisitions).toEqual([expect.objectContaining({ branchSandbox: undefined })]);
     });
   });
 

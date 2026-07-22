@@ -146,6 +146,10 @@ export async function runGitInSandbox({
       requestOrigin: ctx.requestOrigin,
       agentPageId: ctx.agentPageId,
       activeMachine: ctx.activeMachine,
+      // Mirrors `acquireRequest` on the bash/file path (tool-runners.ts): a
+      // branch-scoped run must attach to the BRANCH's Sprite. Omitting it here
+      // silently ran every bound conversation's git against the machine root.
+      branchSandbox: ctx.branchSandbox,
     });
     if (!acquired.ok) {
       return { success: false, error: 'Could not provision a sandbox.', reason: 'provision_failed' };

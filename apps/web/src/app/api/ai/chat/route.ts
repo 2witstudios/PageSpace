@@ -117,7 +117,53 @@ import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import type { MachineNodeHandleSet } from '@pagespace/lib/services/machines/machine-pane-binding';
 
+
+/**
+ * The MACHINE BINDING prompt block for a machine-bound "PageSpace Agent" pane.
+ *
+ * A bound conversation lives at ONE node of a machine tree and may address any
+ * node BENEATH it (the derived handle set — `deriveMachinePaneBinding`), so the
+ * prompt states three things: which node this is, which nodes it can reach with
+ * `target`, and where to discover them. Discovery is deliberately delegated to
+ * `list_sessions` rather than enumerated here: the set can change mid-run (a
+ * branch spawned, a Sprite torn down) and a stale inline listing would read as
+ * authoritative. The name is a frozen contract — the tool itself ships with the
+ * session family.
+ *
+ * `switch_machine`/`list_machines` are dropped from the tool set for bound
+ * conversations (filterToolsForMachineBinding); the prompt says so rather than
+ * leaving the model to discover it by calling one.
+ */
+function buildMachineBindingPrompt(binding: MachineNodeHandleSet): string {
+  const { self, handles } = binding;
+  const where =
+    self.kind === 'branch'
+      ? `branch "${self.branch}" of project "${self.project}"`
+      : self.kind === 'project'
+        ? `project "${self.project}"`
+        : 'the machine root';
+  const beneath = handles.filter((handle) => handle !== self);
+  const reachable =
+    beneath.length === 0
+      ? '• Nothing lies beneath this node — every tool call runs here.'
+      : `• You can also address nodes BENEATH this one by passing target to bash/readFile/writeFile/editFile and the git/gh tools — e.g. target: { project: "my-repo" } or target: { project: "my-repo", branch: "my-branch" }. Omit target to run at your own node. Currently reachable: ${beneath
+          .map((handle) =>
+            handle.kind === 'branch'
+              ? `project "${handle.project}" / branch: "${handle.branch}"`
+              : `project "${handle.project}"`,
+          )
+          .join(', ')}.`;
+  return (
+    `\n\nMACHINE BINDING (this conversation)` +
+    `\n• This conversation is bound to machine "${self.machineId}" at ${where} — code-execution tools (bash, readFile, writeFile, editFile, git/gh) operate from working directory: ${self.cwd}` +
+    `\n${reachable}` +
+    `\n• A node outside this scope (a sibling project or branch, another machine) is not addressable — such a target is refused.` +
+    `\n• Call list_sessions to see the nodes in this scope and what is running in them; it is the only discovery tool for this machine.` +
+    `\n• switch_machine and list_machines are unavailable — this conversation cannot leave its bound machine`
+  );
+}
 
 // Allow streaming responses up to 5 minutes for complex AI agent interactions
 export const maxDuration = 300;
@@ -580,13 +626,10 @@ export async function POST(request: Request) {
       });
       return NextResponse.json({ error: 'This conversation is not bound to this machine' }, { status: 400 });
     }
-    const machineBinding = machinePaneBindingResult?.ok
-      ? {
-          machineId: chatId!,
-          cwd: machinePaneBindingResult.binding.cwd,
-          branchSandbox: machinePaneBindingResult.binding.branchSandbox,
-        }
-      : undefined;
+    // The derived handle set IS the binding: every handle already carries the
+    // owning machine page id (checked against `chatId` inside the pure core),
+    // so nothing is re-stamped here.
+    const machineBinding = machinePaneBindingResult?.ok ? machinePaneBindingResult.binding : undefined;
 
     // Process @mentions in the user's message
     let mentionSystemPrompt = '';
@@ -1194,7 +1237,7 @@ export async function POST(request: Request) {
     // for the conversation's lifetime, so it belongs in the STABLE section,
     // not the per-turn locationPrompt below.
     if (machineBinding) {
-      systemPrompt += `\n\nMACHINE BINDING (this conversation)\n• This conversation is bound to machine "${machineBinding.machineId}" — code-execution tools (bash, readFile, writeFile, editFile, git/gh) operate from working directory: ${machineBinding.cwd}\n• switch_machine and list_machines are unavailable — this conversation cannot leave its bound machine`;
+      systemPrompt += buildMachineBindingPrompt(machineBinding);
     }
 
     // Build timestamp system prompt for temporal awareness
@@ -1561,7 +1604,7 @@ export async function POST(request: Request) {
                 // first tool call, without waiting for a switch_machine call.
                 machineBinding,
                 activeMachine: machineBinding
-                  ? { kind: 'existing' as const, machineId: machineBinding.machineId }
+                  ? { kind: 'existing' as const, machineId: machineBinding.self.machineId }
                   : undefined,
               }, // Pass userId, timezone, AI context, location context, model capabilities, and chat source to tools
               maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
