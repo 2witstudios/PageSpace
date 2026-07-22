@@ -277,6 +277,15 @@ function projectHandle(machineId: string, project: MachinePaneBindingProject): M
   // before anything is ever promoted. A project whose Sprite is CONFIRMED
   // destroyed (`spriteTornDownAt`) falls back to the machine checkout rather
   // than deriving a handle to a VM that no longer exists.
+  //
+  // That fallback cwd may itself be GONE (promotion reclaims the machine-side
+  // checkout, and a machine teardown destroys the whole disk) — a file/bash
+  // call in this window fails with a missing-directory error. The node stays
+  // in the handle set ON PURPOSE: set membership is what authorizes the next
+  // project-scoped spawn, and that spawn RE-promotes (fresh Sprite, fresh
+  // clone, teardown marks cleared — pinned in agent-terminals.test.ts).
+  // Dropping the node here would make a torn-down project permanently
+  // unrecoverable from a bound conversation.
   if (project.id && project.sandboxId && !project.spriteTornDownAt) {
     return {
       kind: 'project',

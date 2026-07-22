@@ -481,6 +481,21 @@ describe('machine-pane conversations (agentPageId is a MACHINE page, not an agen
     expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
   });
 
+  it('ANY non-agent page type falls through to the user — never to a phantom agent, never beyond the user', async () => {
+    // Not just MACHINE panes: a chat on a DOCUMENT (or any future page type)
+    // carries that page as agentPageId too. Before the type gate it acted as a
+    // phantom agent that denied everything; now it acts as the INVOKING USER —
+    // an authority that user already has in any Global Assistant conversation,
+    // so the fall-through grants nothing beyond their own reach.
+    mockDbWhere.mockResolvedValue([{ type: 'DOCUMENT', userScopedAccess: false }]);
+    const { getUserAccessLevel } = await import('@pagespace/lib/permissions/permissions');
+    vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
+
+    expect(await canActorViewPage(machinePaneCtx, 'page-x')).toBe(true);
+    expect(vi.mocked(getUserAccessLevel)).toHaveBeenCalledWith('user-1', 'page-x');
+    expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
+  });
+
   it('an AI_CHAT page keeps the agent-scoped path (the gate only rejects non-agent pages)', async () => {
     mockDbWhere.mockResolvedValue([AGENT_PAGE_ROW]);
     mockGetAgentAccessLevel.mockResolvedValue(FULL);

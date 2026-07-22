@@ -648,6 +648,38 @@ describe('spawnAgentTerminal — lazy project promotion trigger', () => {
     };
   }
 
+  it('given a project whose Sprite was TORN DOWN (machine trash → restore), a project-scoped spawn should RE-promote it', async () => {
+    // The recovery path the handle set depends on: a torn-down row keeps its
+    // node addressable (machine-checkout fallback in machine-pane-binding), and
+    // the next project-scoped spawn re-promotes — fresh Sprite, fresh clone,
+    // teardown marks cleared by the store's promote CAS.
+    const { row, lookup } = makePromotableProject();
+    row.sandboxId = 'sprite-old-gen';
+    row.spriteTornDownAt = new Date('2026-01-01');
+    const { store } = makeStore();
+    const promotion = spyPromotion(async () => {
+      row.sandboxId = 'sprite-new-gen';
+      row.spriteTornDownAt = null;
+      return { ok: true };
+    });
+    const deps = makeDeps({ store, projectStore: lookup, projectPromotion: promotion.promotion });
+
+    const spawned = await spawnAgentTerminal({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      name: 'cli',
+      agentType: 'shell',
+      actor,
+      deps,
+    });
+
+    expect(spawned).toMatchObject({ ok: true });
+    expect(promotion.calls).toEqual([{ machineId: TERMINAL_ID, projectName: PROJECT_NAME }]);
+
+    const resolved = await resolveAgentTerminal({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, name: 'cli', deps });
+    expect(resolved).toMatchObject({ ok: true, sandboxId: 'sprite-new-gen', cwd: PROJECT_REPO_PATH });
+  });
+
   it('given a project-scoped spawn on an UNPROMOTED project, should promote it first and then resolve onto the project Sprite', async () => {
     const { row, lookup } = makePromotableProject();
     const { store } = makeStore();
