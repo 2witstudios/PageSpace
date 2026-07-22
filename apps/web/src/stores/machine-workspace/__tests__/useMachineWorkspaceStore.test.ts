@@ -617,6 +617,113 @@ describe('useMachineWorkspaceStore', () => {
     });
   });
 
+  // The monotone-merge invariant (spawn double-row field bug): a pane's scope
+  // only ever transitions null -> bound within its lifetime — no flow unbinds
+  // (closing REMOVES the pane) — so a server pane with a null scope landing on
+  // a same-id pane this browser already bound is always a STALE ECHO racing
+  // this browser's own push, never a legitimate state.
+  it('given a stale server echo with a null-scope pane, should keep the local pane\'s bind', () => {
+    store().hydrateFromServer('m1', [
+      { id: 'ws-1', name: 'W', scope: BRANCH_SCOPE, columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }] },
+    ]);
+    store().bindPaneTerminal('m1', 'ws-1', 'pane-1', { ...BRANCH_SCOPE, name: 'pagespace-x', kind: 'chat' });
+
+    // The empty `created` echo from the workspace's own POST, arriving late.
+    store().applyServerUpsert('m1', {
+      id: 'ws-1',
+      name: 'W',
+      scope: BRANCH_SCOPE,
+      columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }],
+    });
+
+    assert({
+      given: 'a bound pane hit by its workspace\'s own stale empty created-echo',
+      should: 'keep the bind — losing it is what showed one agent as an empty workspace plus an unclaimed row',
+      actual: panesOf(selectWorkspace('m1', 'ws-1')(store())!)[0]?.scope,
+      expected: { ...BRANCH_SCOPE, name: 'pagespace-x', kind: 'chat' },
+    });
+  });
+
+  it('given a stale full-list hydrate with a null-scope pane, should keep the local bind too', () => {
+    store().hydrateFromServer('m1', [
+      { id: 'ws-1', name: 'W', scope: BRANCH_SCOPE, columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }] },
+    ]);
+    store().bindPaneTerminal('m1', 'ws-1', 'pane-1', { ...BRANCH_SCOPE, name: 'pagespace-x' });
+
+    // A second sync instance's full-replace from a GET that predates the bind
+    // PATCH (both merge paths funnel through the same mergeColumns).
+    store().hydrateFromServer('m1', [
+      { id: 'ws-1', name: 'W', scope: BRANCH_SCOPE, columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }] },
+    ]);
+
+    assert({
+      given: 'a stale hydrate racing this browser\'s own bind',
+      should: 'keep the local pane bound',
+      actual: panesOf(selectWorkspace('m1', 'ws-1')(store())!)[0]?.scope,
+      expected: { ...BRANCH_SCOPE, name: 'pagespace-x' },
+    });
+  });
+
+  it('given a server pane with a NON-null scope, should still let the server win', () => {
+    store().hydrateFromServer('m1', [
+      { id: 'ws-1', name: 'W', scope: BRANCH_SCOPE, columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }] },
+    ]);
+    store().bindPaneTerminal('m1', 'ws-1', 'pane-1', { ...BRANCH_SCOPE, name: 'pagespace-old' });
+
+    store().applyServerUpsert('m1', {
+      id: 'ws-1',
+      name: 'W',
+      scope: BRANCH_SCOPE,
+      columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: { ...BRANCH_SCOPE, name: 'pagespace-new', kind: 'chat' } }] }],
+    });
+
+    assert({
+      given: 'a server pane carrying a real (non-null) scope',
+      should: 'apply it — the guard is null-over-bound only, never a general local-wins rule',
+      actual: panesOf(selectWorkspace('m1', 'ws-1')(store())!)[0]?.scope,
+      expected: { ...BRANCH_SCOPE, name: 'pagespace-new', kind: 'chat' },
+    });
+  });
+
+  it('given a server payload dropping a bound pane and adding an empty one, should mirror the server layout', () => {
+    store().hydrateFromServer('m1', [
+      { id: 'ws-1', name: 'W', scope: BRANCH_SCOPE, columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }, { id: 'pane-2', scope: null }] }] },
+    ]);
+    store().bindPaneTerminal('m1', 'ws-1', 'pane-1', { ...BRANCH_SCOPE, name: 'pagespace-x' });
+
+    // pane-1 removed server-side (closed elsewhere); pane-2 still empty; pane-3 new and empty.
+    store().applyServerUpsert('m1', {
+      id: 'ws-1',
+      name: 'W',
+      scope: BRANCH_SCOPE,
+      columns: [{ id: 'col-1', panes: [{ id: 'pane-2', scope: null }, { id: 'pane-3', scope: null }] }],
+    });
+
+    assert({
+      given: 'a server layout that removed the bound pane and added a fresh empty one',
+      should: 'drop the removed pane (the guard must not resurrect closed panes), keep null-over-null null, and admit the new empty pane',
+      actual: panesOf(selectWorkspace('m1', 'ws-1')(store())!).map((pane) => ({ id: pane.id, scope: pane.scope })),
+      expected: [
+        { id: 'pane-2', scope: null },
+        { id: 'pane-3', scope: null },
+      ],
+    });
+  });
+
+  it('given openTerminal with a chat-kind scope, should carry the kind onto the materialized pane', () => {
+    store().ensureMachine('m1');
+    const scope = { ...BRANCH_SCOPE, name: 'pagespace-k1', kind: 'chat' as const };
+
+    store().openTerminal('m1', scope);
+
+    assert({
+      given: 'the instant-spawn path materializing a session\'s own workspace',
+      should: 'preserve scope.kind on the first pane — the pane grid renders MachinePaneChat from this tag',
+      actual: panesOf(selectWorkspace('m1', sessionWorkspaceId(scope))(store())!)[0]?.scope,
+      expected: scope,
+    });
+  });
+
   it('given applyServerDelete for the active workspace, should show a neighbour', () => {
     seedMachine('m1');
     const first = activeOf('m1')!;
