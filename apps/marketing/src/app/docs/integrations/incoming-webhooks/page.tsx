@@ -17,8 +17,9 @@ Incoming Webhooks let an external system — CI, a monitoring tool, a cron job, 
 
 ## What you can do
 
-- Mint a named webhook on any non-trashed page — only the drive's **owner** or an **admin** can create, toggle, or delete one. The **Incoming Webhooks** dialog that does this from the UI is currently wired up on **Channel** and **AI Chat (agent)** pages; other page types can still mint one via the API.
+- Mint a named webhook on any non-trashed page — only the drive's **owner** or an **admin** can create, toggle, rotate, or delete one. The **Incoming Webhooks** dialog that does this from the UI is currently wired up on **Channel** and **AI Chat (agent)** pages; other page types can still mint one via the API.
 - Get back a URL (\`/api/webhooks/<token>\`) and a secret shown exactly once — save it, PageSpace never shows it again and can't recover it for you.
+- Rotate the secret in place (**Rotate secret** in the dialog, or \`POST /api/pages/<pageId>/webhooks/<id>/rotate\`) — the URL stays the same, so the external sender only swaps the secret. The old secret stops verifying the instant the rotation lands, and the new one is shown exactly once, just like at creation.
 - POST any JSON object to that URL, signed with the secret. A **Channel** webhook with no other wiring posts the payload's \`content\` into the channel verbatim, as if a bot had typed it.
 - Bind one or more **workflows** to a webhook (via the API — see below) so the same delivery also kicks off an agent run, with the full payload handed to it as context.
 - Disable a webhook without deleting it (its URL stops accepting deliveries but its history and bindings stay), or delete it outright.
@@ -113,7 +114,7 @@ Once bound, the workflow receives the full JSON payload as context (wrapped so t
 - **Least privilege by design.** A webhook secret only ever authenticates deliveries to the one page it was minted on — it can't read, list, or act on anything else in the drive, unlike a full API key or OAuth token.
 - **No dedupe, no event-type filtering (yet).** Every enabled trigger on a webhook fires on every accepted delivery; if you need "only fire on this kind of event," filter in the payload you send or in the workflow's own prompt.
 - **A page moved to a different drive after a trigger was bound** is re-checked at fire time — if the page's current drive no longer matches the workflow's drive, that trigger is skipped and recorded as a stale binding rather than silently executed.
-- **The secret is shown once.** If you lose it, delete the webhook and mint a new one — PageSpace stores it encrypted and can't display it again.
+- **The secret is shown once.** If you lose it (or suspect it leaked), rotate it — **Rotate secret** in the dialog mints a new one for the **same URL**, so your sender's configuration only changes the secret. PageSpace stores it encrypted and can't display it again; deleting and re-minting is never necessary just to replace a secret.
 
 ## Related
 

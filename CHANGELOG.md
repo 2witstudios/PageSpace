@@ -32,6 +32,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Rotate a webhook secret in place** — the Incoming Webhooks dialog (and
+  `POST /api/pages/[pageId]/webhooks/[id]/rotate`) now mints a fresh signing secret for the **same
+  webhook URL**, so replacing a lost or leaked secret no longer means deleting the webhook and
+  re-wiring the external sender to a new URL. The old secret stops verifying the moment the
+  rotation lands; the new one is shown exactly once, just like at creation. Owner/admin only,
+  audited, and concurrent rotations are serialized — the losing request gets a conflict instead of
+  silently minting a secret nobody can use.
 - **Incoming Webhooks** — mint a signed, page-scoped URL (owner/admin only, from the webhook icon
   on a Channel or AI Chat page) so an external system — CI, monitoring, a script — can push events
   into PageSpace without a full drive-scoped credential. A signed delivery to a Channel webhook
