@@ -4,13 +4,13 @@
  * binding falls back to resolving the session's agentType from the SWR list —
  * where "the list hasn't answered yet" must yield `loading`, never a mounted
  * Xterm that cold-starts a PTY for a session that turns out to be a chat.
+ *
+ * The list needs no checkout argument: a pane's node is its workspace's, so
+ * the workspace-scoped list is always the one this pane's name lives in.
  */
 import { describe, test } from 'vitest';
 import { assert } from '@/stores/__tests__/riteway';
 import { resolvePaneSurface, agentTypeLabelOf } from './pane-surface';
-
-/** The workspace's checkout — the scope its SWR session list is fetched at. */
-const NODE = { projectName: 'app', branchName: 'main' };
 
 const chatRow = { id: 'row-chat', name: 'pagespace-a1', agentType: 'pagespace', createdAt: '' };
 const ptyRow = { id: 'row-pty', name: 'shell-b2', agentType: 'shell', createdAt: '' };
@@ -21,8 +21,7 @@ describe('resolvePaneSurface', () => {
       given: 'a pane bound with kind "chat" whose session row is in the list',
       should: 'be a chat surface addressing that row — the row id IS the conversation id (Phase 4)',
       actual: resolvePaneSurface({
-        scope: { ...NODE, name: 'pagespace-a1', kind: 'chat' },
-        workspaceScope: NODE,
+        scope: { name: 'pagespace-a1', kind: 'chat' },
         agentTerminals: [chatRow],
         isLoading: false,
       }),
@@ -35,8 +34,7 @@ describe('resolvePaneSurface', () => {
       given: 'kind "chat" while the session list is still loading',
       should: 'stay a chat surface with a null terminalId (the caller shows loading) rather than fall back to a terminal',
       actual: resolvePaneSurface({
-        scope: { ...NODE, name: 'pagespace-a1', kind: 'chat' },
-        workspaceScope: NODE,
+        scope: { name: 'pagespace-a1', kind: 'chat' },
         agentTerminals: [],
         isLoading: true,
       }),
@@ -49,8 +47,7 @@ describe('resolvePaneSurface', () => {
       given: 'kind "terminal" while the list is still loading',
       should: 'be a terminal immediately — an explicit binding never waits on the list',
       actual: resolvePaneSurface({
-        scope: { ...NODE, name: 'shell-b2', kind: 'terminal' },
-        workspaceScope: NODE,
+        scope: { name: 'shell-b2', kind: 'terminal' },
         agentTerminals: [],
         isLoading: true,
       }),
@@ -63,8 +60,7 @@ describe('resolvePaneSurface', () => {
       given: 'a kind-less scope whose name the loaded list maps to agentType "pagespace"',
       should: 'resolve to the chat surface, with the row id',
       actual: resolvePaneSurface({
-        scope: { ...NODE, name: 'pagespace-a1' },
-        workspaceScope: NODE,
+        scope: { name: 'pagespace-a1' },
         agentTerminals: [chatRow],
         isLoading: false,
       }),
@@ -77,8 +73,7 @@ describe('resolvePaneSurface', () => {
       given: 'a kind-less scope whose name the loaded list maps to agentType "shell"',
       should: 'resolve to a terminal',
       actual: resolvePaneSurface({
-        scope: { ...NODE, name: 'shell-b2' },
-        workspaceScope: NODE,
+        scope: { name: 'shell-b2' },
         agentTerminals: [ptyRow],
         isLoading: false,
       }),
@@ -92,8 +87,7 @@ describe('resolvePaneSurface', () => {
       should:
         'hold at loading — mounting Xterm now would cold-start a PTY (and register a viewer) for a session that may turn out to be a chat',
       actual: resolvePaneSurface({
-        scope: { ...NODE, name: 'pagespace-a1' },
-        workspaceScope: NODE,
+        scope: { name: 'pagespace-a1' },
         agentTerminals: [],
         isLoading: true,
       }),
@@ -106,8 +100,7 @@ describe('resolvePaneSurface', () => {
       given: 'a kind-less scope the loaded list does not contain (a stale or killed session)',
       should: 'fall back to a terminal — omitted kind predates chat panes, so the legacy reading is the safe one',
       actual: resolvePaneSurface({
-        scope: { ...NODE, name: 'gone' },
-        workspaceScope: NODE,
+        scope: { name: 'gone' },
         agentTerminals: [chatRow],
         isLoading: false,
       }),
@@ -120,8 +113,7 @@ describe('resolvePaneSurface', () => {
       given: 'a row whose agentType is a since-removed AGENT_LAUNCH_SPECS entry',
       should: 'treat it as a PTY — the DB can hold rows from retired types (see AgentTerminal.agentType\'s doc)',
       actual: resolvePaneSurface({
-        scope: { ...NODE, name: 'old-cli' },
-        workspaceScope: NODE,
+        scope: { name: 'old-cli' },
         agentTerminals: [{ id: 'row-old', name: 'old-cli', agentType: 'pagespace-cli' }],
         isLoading: false,
       }),
@@ -129,18 +121,24 @@ describe('resolvePaneSurface', () => {
     });
   });
 
-  test('a pane at a FOREIGN checkout never resolves against this workspace\'s list', () => {
+  // Inverted (Phase 1): there is no such thing as a foreign pane any more. A
+  // pane stores {name, kind} and its checkout IS its workspace's, so the
+  // workspace's session list is unconditionally the list this name lives in —
+  // the old "unresolvable, therefore a terminal" escape hatch resolved a
+  // kind-less chat pane to an Xterm the moment a layout carried one.
+  test('a kind-less pane always resolves against its workspace\'s list — there is no foreign checkout to opt out to', () => {
     assert({
-      given: 'a kind-less pane whose node scope differs from the workspace\'s (a restored server layout), sharing a name with a chat row in the list',
+      given: 'a kind-less pane whose name the still-loading list will map to a chat row',
       should:
-        'be a terminal immediately, even mid-load — the workspace-scoped list says nothing about another checkout\'s sessions, and a same-name match across scopes would be a different session',
-      actual: resolvePaneSurface({
-        scope: { name: 'pagespace-a1' },
-        workspaceScope: NODE,
-        agentTerminals: [chatRow],
-        isLoading: true,
-      }),
-      expected: { surface: 'terminal' },
+        'hold at loading and then read as chat — the list speaks for this pane by construction, so falling back to a terminal would cold-start a PTY for a chat session',
+      actual: {
+        loading: resolvePaneSurface({ scope: { name: 'pagespace-a1' }, agentTerminals: [], isLoading: true }),
+        loaded: resolvePaneSurface({ scope: { name: 'pagespace-a1' }, agentTerminals: [chatRow], isLoading: false }),
+      },
+      expected: {
+        loading: { surface: 'loading' },
+        loaded: { surface: 'chat', terminalId: 'row-chat' },
+      },
     });
   });
 });

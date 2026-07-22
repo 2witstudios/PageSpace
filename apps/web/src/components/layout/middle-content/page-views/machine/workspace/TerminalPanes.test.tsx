@@ -295,12 +295,12 @@ describe('TerminalPanes (close means close)', () => {
     workspace = SPLIT_WORKSPACE;
   });
 
-  test('closing a pane kills the session it held — addressed by the PANE\'s own scope, not the workspace\'s', async () => {
-    // The pane's session lives at MACHINE scope while its workspace is scoped
-    // to app/main — a shape a restored server layout can legitimately hold. A
-    // kill routed through the workspace-scoped hook would DELETE name "solo"
-    // under app/main: a different terminal (or nothing), leaving the one the
-    // user closed running as an unclaimed session.
+  test('closing a pane kills the session it held — at the WORKSPACE\'s checkout, the pane\'s only checkout', async () => {
+    // Inverted (Phase 1). The pane stores a name and nothing else, so its
+    // session lives at ITS WORKSPACE's checkout — app/main here. The kill has
+    // to carry that, re-derived at the call site: a DELETE for a bare name
+    // would address the machine root, a different terminal (or nothing),
+    // leaving the one the user closed running as an unclaimed session.
     workspace = SOLO_WORKSPACE;
     render(<TerminalPanes machineId="m1" socket={socket} />);
     await screen.findByTestId('xterm');
@@ -308,15 +308,15 @@ describe('TerminalPanes (close means close)', () => {
     await userEvent.click(screen.getByTitle('Close pane'));
 
     assert({
-      given: 'the close control on a pane holding a session whose scope differs from its workspace\'s',
+      given: 'the close control on a pane holding a session',
       should:
-        'kill the PTY at the pane\'s own (project, branch, name) — detaching instead is what MANUFACTURES the unclaimed rows that cannot be removed from the sidebar',
+        'kill the PTY at the (project, branch, name) re-derived from the workspace — detaching instead is what MANUFACTURES the unclaimed rows that cannot be removed from the sidebar',
       actual: {
         kills: killAgentTerminal.mock.calls,
         viaWorkspaceHook: removeAgentTerminal.mock.calls.length,
       },
       expected: {
-        kills: [['m1', { name: 'solo' }]],
+        kills: [['m1', { ...WORKSPACE_SCOPE, name: 'solo' }]],
         viaWorkspaceHook: 0,
       },
     });
@@ -360,26 +360,36 @@ describe('TerminalPanes (close means close)', () => {
     });
   });
 
-  test('a same-NAME session in a different checkout is a different session, and does not block the kill', async () => {
-    // A session's identity is the (project, branch, name) triple — that is
-    // `machine_agent_terminals`' unique index — so the same name under another
-    // branch is a DIFFERENT terminal and must not be mistaken for this one.
+  // Inverted (Phase 1): a same-name session at another checkout can no longer
+  // sit in a sibling PANE — a pane's checkout is its workspace's. It sits in
+  // another WORKSPACE, and the "is this session shown elsewhere" test has to
+  // re-derive each candidate pane's identity through ITS OWN workspace's scope.
+  // Comparing bare names across workspaces would spare the kill and leave the
+  // closed pane's PTY running (and billing) with no view left to reach it.
+  test('a same-NAME session in another workspace\'s checkout is a different session, and does not block the kill', async () => {
     workspace = aWorkspace({
-      columns: [
-        { id: 'col-1', panes: [{ id: 'pane-1', scope: { ...WORKSPACE_SCOPE, name: 'shell-x' } }] },
-        { id: 'col-2', panes: [{ id: 'pane-2', scope: { projectName: 'app', branchName: 'other', name: 'shell-x' } }] },
-      ],
+      columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: { name: 'shell-x' } }] }],
       activePaneId: 'pane-1',
       pendingPickerPaneId: null,
     });
+    extraWorkspaces = [
+      {
+        id: 'ws-other-branch',
+        name: 'Other branch',
+        scope: { projectName: 'app', branchName: 'other' },
+        columns: [{ id: 'col-other', panes: [{ id: 'pane-other', scope: { name: 'shell-x' } }] }],
+        activePaneId: 'pane-other',
+        pendingPickerPaneId: null,
+      },
+    ];
     render(<TerminalPanes machineId="m1" socket={socket} />);
     await screen.findAllByTestId('xterm');
 
     await userEvent.click(screen.getAllByTitle('Close pane')[0]);
 
     assert({
-      given: 'two panes whose sessions share a name but sit in different branches',
-      should: 'still kill the closed one, at ITS checkout — comparing on name alone would silently skip it',
+      given: 'two workspaces at different branches, each holding a pane named shell-x',
+      should: 'still kill the closed one, at ITS workspace\'s checkout — comparing on name alone would silently skip it',
       actual: killAgentTerminal.mock.calls,
       expected: [['m1', { ...WORKSPACE_SCOPE, name: 'shell-x' }]],
     });
@@ -398,7 +408,7 @@ describe('TerminalPanes (close means close)', () => {
         name: 'Foreign',
         scope: WORKSPACE_SCOPE,
         columns: [
-          { id: 'col-foreign', panes: [{ id: 'pane-1', scope: { ...WORKSPACE_SCOPE, name: 'foreign-session' } }] },
+          { id: 'col-foreign', panes: [{ id: 'pane-1', scope: { name: 'foreign-session' } }] },
         ],
         activePaneId: 'pane-1',
         pendingPickerPaneId: null,
@@ -413,7 +423,7 @@ describe('TerminalPanes (close means close)', () => {
       given: "two workspaces each holding a pane with the SAME id, the foreign one first in the machine's order",
       should: "kill the session of the pane in THIS workspace — resolving the pane machine-wide would kill the foreign workspace's session and leave the closed one running",
       actual: killAgentTerminal.mock.calls,
-      expected: [['m1', { name: 'solo' }]],
+      expected: [['m1', { ...WORKSPACE_SCOPE, name: 'solo' }]],
     });
   });
 
@@ -780,7 +790,7 @@ describe('TerminalPanes (split-and-pick spawn)', () => {
 describe('TerminalPanes (PageSpace Agent panes)', () => {
   /** A pane bound to the chat agent — kind on the SCOPE (Phase 9), so the
    * surface decision survives every place a scope flows opaquely. */
-  const CHAT_SCOPE = { ...WORKSPACE_SCOPE, name: 'pagespace-a1', kind: 'chat' as const };
+  const CHAT_SCOPE = { name: 'pagespace-a1', kind: 'chat' as const };
   /** The chat session's own row — its id IS the conversation id (Phase 4). */
   const CHAT_ROW = { id: 'row-ps1', name: 'pagespace-a1', agentType: 'pagespace', createdAt: '' };
 
@@ -888,7 +898,7 @@ describe('TerminalPanes (PageSpace Agent panes)', () => {
   test('no kind hint + SWR resolving the name to pagespace renders chat', async () => {
     // A kind-less binding: made before the kind tag existed, or by a path that
     // didn't set it. The session list is the only witness to what it is.
-    workspace = soloPane({ scope: { ...WORKSPACE_SCOPE, name: 'pagespace-a1' } });
+    workspace = soloPane({ scope: { name: 'pagespace-a1' } });
     agentTerminalRows = [CHAT_ROW];
     render(<TerminalPanes machineId="m1" socket={socket} />);
 
@@ -904,7 +914,7 @@ describe('TerminalPanes (PageSpace Agent panes)', () => {
   });
 
   test('no kind hint + SWR resolving the name to shell renders xterm', async () => {
-    workspace = soloPane({ scope: { ...WORKSPACE_SCOPE, name: 'shell-b2' } });
+    workspace = soloPane({ scope: { name: 'shell-b2' } });
     agentTerminalRows = [{ id: 'row-c1', name: 'shell-b2', agentType: 'shell', createdAt: '' }];
     render(<TerminalPanes machineId="m1" socket={socket} />);
 
@@ -920,7 +930,7 @@ describe('TerminalPanes (PageSpace Agent panes)', () => {
   });
 
   test('no kind hint while the list is loading renders PaneLoading — NEVER xterm for a maybe-chat session', async () => {
-    workspace = soloPane({ scope: { ...WORKSPACE_SCOPE, name: 'pagespace-a1' } });
+    workspace = soloPane({ scope: { name: 'pagespace-a1' } });
     agentTerminalsLoading = true;
     render(<TerminalPanes machineId="m1" socket={socket} />);
 
@@ -942,7 +952,7 @@ describe('TerminalPanes (PageSpace Agent panes)', () => {
     workspace = aWorkspace({
       columns: [
         { id: 'col-1', panes: [{ id: 'pane-1', scope: CHAT_SCOPE }] },
-        { id: 'col-2', panes: [{ id: 'pane-2', scope: { ...WORKSPACE_SCOPE, name: 'shell-b2', kind: 'terminal' } }] },
+        { id: 'col-2', panes: [{ id: 'pane-2', scope: { name: 'shell-b2', kind: 'terminal' } }] },
       ],
       activePaneId: 'pane-2',
       pendingPickerPaneId: null,
@@ -981,7 +991,7 @@ describe('TerminalPanes (PageSpace Agent panes)', () => {
       should:
         'kill the session at the pane\'s own scope, same as any terminal — the row delete is cheap (Phase 2) and the conversation survives it',
       actual: killAgentTerminal.mock.calls,
-      expected: [['m1', CHAT_SCOPE]],
+      expected: [['m1', { ...WORKSPACE_SCOPE, ...CHAT_SCOPE }]],
     });
   });
 });

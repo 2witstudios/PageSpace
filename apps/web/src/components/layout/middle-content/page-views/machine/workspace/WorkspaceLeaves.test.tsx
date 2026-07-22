@@ -50,6 +50,7 @@ const killCalls = () =>
 
 const MACHINE_NODE: MachineTreeNode = { level: 'machine' };
 const PROJECT_NODE: MachineTreeNode = { level: 'project', projectName: 'app' };
+const BRANCH_NODE: MachineTreeNode = { level: 'branch', projectName: 'app', branchName: 'main' };
 
 const store = () => useMachineWorkspaceStore.getState();
 
@@ -294,23 +295,23 @@ describe('WorkspaceLeaves', () => {
     });
   });
 
-  // Regression (Codex P2): the kill must be addressed by the PANE's own
-  // (project, branch, name) scope, not the node's. A restored server layout
-  // can hold a pane whose checkout differs from its workspace's — DELETEing
-  // that pane's name under the NODE scope would kill a different same-named
-  // terminal (or nothing) while the one being removed lives on unclaimed.
-  test('removing a workspace kills each pane\'s session at the PANE\'s own scope, not the node\'s', async () => {
-    seedMachine('m1'); // machine-scope workspace at the machine node
+  // Inverted (Phase 1). The old shape this guarded — a pane bound at a
+  // checkout its workspace doesn't share — is now unrepresentable: a pane
+  // stores {name, kind} and the checkout comes from the workspace. So the kill
+  // re-derives (project, branch, name) from the WORKSPACE, and a bind naming
+  // another node is rejected outright rather than persisted and defended
+  // against forever after.
+  test('removing a workspace kills each pane\'s session at the WORKSPACE\'s checkout', async () => {
+    seedMachine('m1', { projectName: 'app', branchName: 'main' });
     const workspaceId = selectMachine('m1')(store())!.activeWorkspaceId;
     const workspace = selectMachine('m1')(store())!.workspaces[workspaceId];
-    // A pane bound at a DIFFERENT checkout than its (machine-scope) workspace.
     store().bindPaneTerminal('m1', workspaceId, workspace.activePaneId, {
       projectName: 'app',
       branchName: 'main',
       name: 'wanderer',
     });
 
-    renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
+    renderLeaves(<WorkspaceLeaves machineId="m1" node={BRANCH_NODE} onSelectWorkspace={vi.fn()} />);
 
     const row = (await screen.findByText('Workspace 1')).closest('.group') as HTMLElement;
     await userEvent.click(within(row).getByRole('button', { name: /Remove workspace/ }));
@@ -319,14 +320,38 @@ describe('WorkspaceLeaves', () => {
     await waitFor(() => {
       const killUrl = String(killCalls().find(([url]) => String(url).includes('name=wanderer'))?.[0] ?? '');
       assert({
-        given: 'a machine-scope workspace holding a pane bound at app/main, remove confirmed',
-        should: 'DELETE the session under the pane\'s own project and branch — the node scope would address a different terminal',
+        given: 'a workspace checked out at app/main holding a running pane, remove confirmed',
+        should: 'DELETE the session under that checkout — a bare name would address the machine root, a different terminal',
         actual: {
           project: killUrl.includes('projectName=app'),
           branch: killUrl.includes('branchName=main'),
         },
         expected: { project: true, branch: true },
       });
+    });
+  });
+
+  test('a pane bound at a node the workspace is not checked out at is REJECTED', async () => {
+    seedMachine('m1'); // machine-scope workspace
+    const workspaceId = selectMachine('m1')(store())!.activeWorkspaceId;
+    const paneId = selectMachine('m1')(store())!.workspaces[workspaceId].activePaneId;
+
+    let rejected = false;
+    try {
+      store().bindPaneTerminal('m1', workspaceId, paneId, { projectName: 'app', branchName: 'main', name: 'wanderer' });
+    } catch {
+      rejected = true;
+    }
+
+    assert({
+      given: 'a branch-scoped session bound into a machine-scoped workspace',
+      should:
+        'reject it and leave the pane empty — this is the shape every foreign-pane defence existed for, and it is now unrepresentable rather than defended',
+      actual: {
+        rejected,
+        pane: selectMachine('m1')(store())!.workspaces[workspaceId].columns[0].panes[0].scope,
+      },
+      expected: { rejected: true, pane: null },
     });
   });
 
