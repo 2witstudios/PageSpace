@@ -8,6 +8,7 @@ import {
 import type { MachineAgentTerminalRecord } from '../agent-terminals-store';
 import { SANDBOX_ROOT } from '../../sandbox/sandbox-paths';
 import { BRANCH_REPO_PATH } from '../machine-branches';
+import { PROJECT_REPO_PATH } from '../machine-project-promotion';
 
 const NOW = new Date('2026-07-20T12:00:00.000Z');
 const MACHINE_ID = 'machine-1';
@@ -43,7 +44,7 @@ function makeTerminalStore(row: MachineAgentTerminalRecord | null): DeriveMachin
   return { findById: async (id) => (id === CONVERSATION_ID ? row : null) };
 }
 
-type ProjectRow = { name: string; path: string };
+type ProjectRow = { name: string; path: string; id?: string; sandboxId?: string | null; spriteTornDownAt?: Date | null };
 type BranchRow = {
   id: string;
   projectName: string;
@@ -285,6 +286,43 @@ describe('deriveMachinePaneBinding — handle-set derivation (cascade)', () => {
     const project = binding.handles.find((h) => h.kind === 'project' && h.project === PROJECT_NAME);
     expect(project).toEqual({ kind: 'project', machineId: MACHINE_ID, project: PROJECT_NAME, cwd: PROJECT_PATH });
     expect(project?.branchSandbox).toBeUndefined();
+  });
+
+  it('given a PROMOTED project, should resolve to ITS OWN Sprite at /workspace/repo', async () => {
+    const row = makeRow({ scope: 'machine', projectName: null, machineBranchId: null });
+    const deps = makeDeps({
+      terminalStore: makeTerminalStore(row),
+      projectLookup: makeProjectLookup([
+        { name: PROJECT_NAME, path: PROJECT_PATH, id: 'proj-1', sandboxId: 'sprite-project-1', spriteTornDownAt: null },
+      ]),
+      branchLookup: makeBranchLookup([]),
+    });
+    const binding = await deriveOk(deps);
+    const project = binding.handles.find((h) => h.kind === 'project');
+    expect(project).toEqual({
+      kind: 'project',
+      machineId: MACHINE_ID,
+      project: PROJECT_NAME,
+      cwd: PROJECT_REPO_PATH,
+      projectSandbox: { machineProjectId: 'proj-1', sandboxId: 'sprite-project-1' },
+    });
+    // Its own-Sprite descriptor is the PROJECT one — never smuggled through
+    // `branchSandbox`, whose row id addresses a different table entirely.
+    expect(project?.branchSandbox).toBeUndefined();
+  });
+
+  it('given a promoted project whose Sprite was TORN DOWN, should fall back to the machine checkout', async () => {
+    const row = makeRow({ scope: 'machine', projectName: null, machineBranchId: null });
+    const deps = makeDeps({
+      terminalStore: makeTerminalStore(row),
+      projectLookup: makeProjectLookup([
+        { name: PROJECT_NAME, path: PROJECT_PATH, id: 'proj-1', sandboxId: 'sprite-project-1', spriteTornDownAt: NOW },
+      ]),
+      branchLookup: makeBranchLookup([]),
+    });
+    const binding = await deriveOk(deps);
+    const project = binding.handles.find((h) => h.kind === 'project');
+    expect(project).toEqual({ kind: 'project', machineId: MACHINE_ID, project: PROJECT_NAME, cwd: PROJECT_PATH });
   });
 
   it('given a torn-down branch Sprite, should omit that branch from a machine-root closure (fail closed, as today)', async () => {

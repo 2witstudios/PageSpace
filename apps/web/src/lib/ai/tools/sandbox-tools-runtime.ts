@@ -33,6 +33,8 @@ import {
 } from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { acquireMachineSandbox } from '@pagespace/lib/services/sandbox/machine-session';
 import { acquireBranchSandbox } from '@pagespace/lib/services/sandbox/branch-session';
+import { acquireProjectSandbox } from '@pagespace/lib/services/sandbox/project-session';
+import { createDbMachineProjectStore } from '@pagespace/lib/services/machines/machine-projects-store';
 import { createDbMachineBranchStore } from '@pagespace/lib/services/machines/machine-branches-store';
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/machine-billing';
 import { measureMachineStorageOpportunistically } from '@pagespace/lib/services/sandbox/machine-storage-billing';
@@ -82,6 +84,13 @@ let branchStorePromise: ReturnType<typeof createDbMachineBranchStore> | null = n
 function getBranchStore() {
   branchStorePromise ??= createDbMachineBranchStore();
   return branchStorePromise;
+}
+
+let projectStorePromise: ReturnType<typeof createDbMachineProjectStore> | null = null;
+
+function getProjectStore() {
+  projectStorePromise ??= createDbMachineProjectStore();
+  return projectStorePromise;
 }
 
 // The Fly Sprites driver is loaded via a DYNAMIC import, never a static one.
@@ -134,8 +143,28 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
     // attach-only branch seam instead of the machine's own persistent
     // session — a branch's Sprite is provisioned exclusively by the
     // branch-spawn path, never lazily here.
-    acquireSandbox: async ({ branchSandbox, ...input }) =>
-      branchSandbox
+    acquireSandbox: async ({ branchSandbox, projectSandbox, ...input }) =>
+      // A PROMOTED project (issue #2204 phase 7) routes to its OWN Sprite the
+      // same attach-only way a branch does — its repo is no longer on the
+      // machine's filesystem at all. An unpromoted project carries neither key
+      // and still falls through to the machine session below.
+      projectSandbox
+        ? acquireProjectSandbox({
+            driveId: input.driveId,
+            userId: input.userId,
+            requestOrigin: input.requestOrigin,
+            agentPageId: input.agentPageId,
+            machineId: projectSandbox.machineId,
+            machineProjectId: projectSandbox.machineProjectId,
+            deps: {
+              authorize: canRunCode,
+              now: () => new Date(),
+              checkMachineRuntimeGuardrail,
+              recordMachineActivity,
+              findProject: async (machineProjectId) => (await getProjectStore()).findById(machineProjectId),
+            },
+          })
+      : branchSandbox
         ? acquireBranchSandbox({
             driveId: input.driveId,
             userId: input.userId,

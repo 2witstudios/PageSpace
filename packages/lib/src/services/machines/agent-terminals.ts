@@ -39,6 +39,7 @@
 import { type MachineHandle, type MachineHost } from '../sandbox/machine-host';
 import { SANDBOX_ROOT } from '../sandbox/sandbox-paths';
 import { BRANCH_REPO_PATH } from './machine-branches';
+import { PROJECT_REPO_PATH } from './machine-project-promotion';
 import {
   isUniqueViolation,
   type MachineAgentTerminalStore,
@@ -65,9 +66,20 @@ export interface AgentTerminalBranchLookup {
   findById(machineBranchId: string): Promise<{ sandboxId: string } | null>;
 }
 
-/** The minimal slice of the Projects store this module needs — just enough to resolve a project's clone path. */
+/**
+ * The minimal slice of the Projects store this module needs — a project's
+ * clone path on the machine's filesystem, PLUS the promotion identity that
+ * says whether it still lives there at all.
+ *
+ * `sandboxId`/`spriteTornDownAt` are optional so a caller wiring an older
+ * `{ path }`-only lookup still type-checks; absent reads as UNPROMOTED, which
+ * is the pre-promotion behaviour byte-for-byte.
+ */
 export interface AgentTerminalProjectLookup {
-  findByName(machineId: string, name: string): Promise<{ path: string } | null>;
+  findByName(
+    machineId: string,
+    name: string,
+  ): Promise<{ path: string; sandboxId?: string | null; spriteTornDownAt?: Date | null } | null>;
 }
 
 export type AgentTerminalMachineSandboxResult =
@@ -155,10 +167,32 @@ async function resolveScopeKey({
 }
 
 type LocationResolution =
-  | { ok: true; sandboxId: string; cwd: string }
+  | {
+      ok: true;
+      sandboxId: string;
+      cwd: string;
+      /**
+       * Does this node run on its OWN Sprite (a branch, or a PROMOTED project)
+       * rather than the owning Machine's shared one? Consumers that must treat
+       * "own Sprite" differently — the realtime bridge's Claude-credential
+       * refresh, which only makes sense for a Sprite that does not already
+       * carry the user's own login — key off THIS, never off the shape of the
+       * (projectName, branchName) target, which cannot tell a promoted project
+       * from an unpromoted one.
+       */
+      ownSprite: boolean;
+    }
   | { ok: false; reason: AgentTerminalScopeDenialReason };
 
-/** Shared project/machine-scope location resolution — the SAME Machine Sprite either way, differing only in `cwd`. */
+/**
+ * Shared project/machine-scope location resolution, PROMOTED-FIRST.
+ *
+ * A project that has been promoted (issue #2204 phase 7,
+ * `machine-project-promotion.ts`) has its OWN Sprite and its repo at
+ * `PROJECT_REPO_PATH` — so it resolves exactly like a branch does, and never
+ * acquires the machine's Sprite at all. An UNPROMOTED project (and machine
+ * scope itself) is unchanged: the machine's own Sprite, addressed by `cwd`.
+ */
 async function resolveProjectOrMachineLocation({
   machineId,
   projectName,
@@ -173,13 +207,19 @@ async function resolveProjectOrMachineLocation({
     if (!deps.projectStore) return { ok: false, reason: 'scope_unsupported' };
     const project = await deps.projectStore.findByName(machineId, projectName);
     if (!project) return { ok: false, reason: 'project_not_found' };
+    // Promoted-first: check BEFORE falling through to the machine acquire, so a
+    // promoted project never wakes (or bills the wake of) a Sprite it no longer
+    // lives on.
+    if (project.sandboxId && !project.spriteTornDownAt) {
+      return { ok: true, sandboxId: project.sandboxId, cwd: PROJECT_REPO_PATH, ownSprite: true };
+    }
     cwd = project.path;
   }
 
   if (!deps.machineSandbox) return { ok: false, reason: 'scope_unsupported' };
   const acquired = await deps.machineSandbox.acquire(machineId);
   if (!acquired.ok) return { ok: false, reason: 'machine_unavailable' };
-  return { ok: true, sandboxId: acquired.sandboxId, cwd };
+  return { ok: true, sandboxId: acquired.sandboxId, cwd, ownSprite: false };
 }
 
 /** Resolve WHERE an already-known ROW's Sprite + working directory live, by its OWN scope columns — the level-agnostic path (no name lookup at all). */
@@ -190,7 +230,7 @@ async function resolveLocationForRow(
   if (row.machineBranchId) {
     const branch = await deps.branchStore.findById(row.machineBranchId);
     if (!branch) return { ok: false, reason: 'branch_not_found' };
-    return { ok: true, sandboxId: branch.sandboxId, cwd: BRANCH_REPO_PATH };
+    return { ok: true, sandboxId: branch.sandboxId, cwd: BRANCH_REPO_PATH, ownSprite: true };
   }
   return resolveProjectOrMachineLocation({ machineId: row.machineId, projectName: row.projectName, deps });
 }
@@ -284,6 +324,8 @@ export type ResolveAgentTerminalResult =
       agentTerminalId: string;
       sandboxId: string;
       cwd: string;
+      /** True when this terminal runs on the node's OWN Sprite — a branch, or a PROMOTED project. See `LocationResolution.ownSprite`. */
+      ownSprite: boolean;
       agentType: AgentRuntimeType;
       command: string | null;
       streamSessionId: string | null;
@@ -307,13 +349,14 @@ function checkPtyAgentRow(
 function toResolveResult(
   row: MachineAgentTerminalRecord,
   agentType: AgentRuntimeType,
-  location: { sandboxId: string; cwd: string },
+  location: { sandboxId: string; cwd: string; ownSprite: boolean },
 ): ResolveAgentTerminalResult {
   return {
     ok: true,
     agentTerminalId: row.id,
     sandboxId: location.sandboxId,
     cwd: location.cwd,
+    ownSprite: location.ownSprite,
     agentType,
     command: row.command,
     streamSessionId: row.streamSessionId,

@@ -91,13 +91,16 @@ export interface ResolveMachineSandboxDeps {
    */
   getSprite: (sandboxId: string) => Promise<SpriteInstanceLike>;
   /**
-   * BRANCH-scope only (never machine/project — those run ON the root
-   * Sprite, which already has its own credential): refresh the branch
+   * OWN-SPRITE scopes only — a branch, or a PROMOTED project (issue #2204
+   * phase 7) — never a machine-scope target or an UNPROMOTED project, which
+   * run ON the root Sprite and already have its credential: refresh that
    * Sprite's Claude Code credential from the root Machine's Sprite before
    * handing back a fresh PTY resolution. This is the actual attach path a
-   * user's branch agent terminal goes through — `spawnBranch`/`attachBranch`
-   * (`machine-branches.ts`) only cover branch creation and the navigator's
-   * explicit attach API, neither of which this realtime PTY bridge calls.
+   * user's node-scoped agent terminal goes through — `spawnBranch`/
+   * `attachBranch` (`machine-branches.ts`) and `promoteProject`
+   * (`machine-project-promotion.ts`) only cover creation/promotion and the
+   * navigator's explicit attach API, none of which this realtime PTY bridge
+   * calls.
    *
    * Optional so tests that don't exercise branch scope (or don't care about
    * credential propagation) can omit it. Awaited by `resolveMachineSandbox`,
@@ -184,15 +187,15 @@ export async function resolveMachineSandbox(
     return { ok: false, reason: 'provision_failed', sandboxId: resolved.sandboxId };
   }
 
-  // Both `projectName` AND `branchName` must be set for true branch scope —
-  // matching `resolveScopeKey`'s own discriminator (`agent-terminals.ts`),
-  // rather than relying on the implicit invariant
-  // that a real `resolveAgentTerminal` already rejects `branchName` without
-  // `projectName` as `invalid_target` before ever reaching here. Checking
-  // both explicitly means this gate stays correct even if that upstream
-  // validation ever changes, or a caller wires a resolver that doesn't
-  // enforce it (e.g. a test double).
-  if (target.projectName !== undefined && target.branchName !== undefined && deps.refreshBranchCredential) {
+  // Keyed on the RESOLUTION, not on the shape of the target. The old gate
+  // ("both projectName and branchName are set") could only ever describe a
+  // branch, and there is no target shape that distinguishes a promoted project
+  // from an unpromoted one — only the resolver knows, and it now says so
+  // (`ownSprite`). A promoted project's Sprite is as credential-less as a
+  // freshly spawned branch's, so it needs exactly the same refresh; an
+  // unpromoted project still resolves to the root Sprite and must NOT trigger
+  // one (it would copy the root's credential onto itself).
+  if (resolved.ownSprite && deps.refreshBranchCredential) {
     // Awaited, but bounded — NOT fire-and-forget (tried that, reverted: a
     // fresh branch-scoped Claude terminal calls `openShell` with `claude`
     // immediately after this resolves, and copying the credential moments

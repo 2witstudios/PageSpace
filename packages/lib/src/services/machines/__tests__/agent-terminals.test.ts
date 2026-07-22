@@ -18,6 +18,7 @@ import type { MachineAgentTerminalStore, MachineAgentTerminalRecord, AgentTermin
 import { type MachineHost, type MachineHandle } from '../../sandbox/machine-host';
 import { SANDBOX_ROOT } from '../../sandbox/sandbox-paths';
 import { BRANCH_REPO_PATH } from '../machine-branches';
+import { PROJECT_REPO_PATH } from '../machine-project-promotion';
 
 const NOW = new Date('2026-07-06T12:00:00.000Z');
 const TERMINAL_ID = 'terminal-1';
@@ -44,7 +45,9 @@ const defaultBranchLookup = makeBranchLookup({
   [`${TERMINAL_ID}\0${PROJECT_NAME}\0${BRANCH_NAME}`]: { id: BRANCH_ID, sandboxId: BRANCH_SANDBOX_ID },
 });
 
-function makeProjectLookup(rows: Record<string, { path: string }> = {}): AgentTerminalProjectLookup {
+function makeProjectLookup(
+  rows: Record<string, { path: string; sandboxId?: string | null; spriteTornDownAt?: Date | null }> = {},
+): AgentTerminalProjectLookup {
   return {
     findByName: async (machineId, name) => rows[`${machineId}\0${name}`] ?? null,
   };
@@ -671,6 +674,8 @@ describe('resolveAgentTerminal', () => {
       agentTerminalId: 'agent-terminal-1',
       sandboxId: BRANCH_SANDBOX_ID,
       cwd: BRANCH_REPO_PATH,
+      // A branch always has its OWN Sprite — the credential-refresh gate keys on this.
+      ownSprite: true,
       agentType: 'shell',
       command: null,
       streamSessionId: null,
@@ -710,6 +715,8 @@ describe('resolveAgentTerminal', () => {
       agentTerminalId: 'agent-terminal-1',
       sandboxId: MACHINE_SANDBOX_ID,
       cwd: PROJECT_PATH,
+      // Unpromoted project / machine root: the machine's own shared Sprite.
+      ownSprite: false,
       agentType: 'shell',
       command: null,
       streamSessionId: null,
@@ -739,10 +746,62 @@ describe('resolveAgentTerminal', () => {
       agentTerminalId: 'agent-terminal-1',
       sandboxId: MACHINE_SANDBOX_ID,
       cwd: SANDBOX_ROOT,
+      // Unpromoted project / machine root: the machine's own shared Sprite.
+      ownSprite: false,
       agentType: 'shell',
       command: null,
       streamSessionId: null,
     });
+  });
+
+  it('given a PROMOTED project, should resolve ITS OWN Sprite at /workspace/repo and never acquire the machine', async () => {
+    const { store } = makeStore();
+    const acquireCalls: string[] = [];
+    const deps = makeDeps({
+      store,
+      projectStore: makeProjectLookup({
+        [`${TERMINAL_ID}\0${PROJECT_NAME}`]: { path: PROJECT_PATH, sandboxId: 'sprite-project-1', spriteTornDownAt: null },
+      }),
+      machineSandbox: makeMachineSandbox({
+        acquire: async (machineId) => {
+          acquireCalls.push(machineId);
+          return { ok: true, sandboxId: MACHINE_SANDBOX_ID };
+        },
+      }),
+    });
+    await spawnAgentTerminal({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, name: 'cli', agentType: 'shell', actor, deps });
+
+    const result = await resolveAgentTerminal({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, name: 'cli', deps });
+
+    expect(result).toEqual({
+      ok: true,
+      agentTerminalId: 'agent-terminal-1',
+      sandboxId: 'sprite-project-1',
+      cwd: PROJECT_REPO_PATH,
+      // Its own Sprite — so the realtime bridge's credential refresh fires for it.
+      ownSprite: true,
+      agentType: 'shell',
+      command: null,
+      streamSessionId: null,
+    });
+    // Promoted-first: the machine's Sprite is never woken for a project that no
+    // longer lives on it.
+    expect(acquireCalls).toEqual([]);
+  });
+
+  it('given a promoted project whose Sprite was TORN DOWN, should fall back to the machine checkout', async () => {
+    const { store } = makeStore();
+    const deps = makeDeps({
+      store,
+      projectStore: makeProjectLookup({
+        [`${TERMINAL_ID}\0${PROJECT_NAME}`]: { path: PROJECT_PATH, sandboxId: 'sprite-project-1', spriteTornDownAt: NOW },
+      }),
+    });
+    await spawnAgentTerminal({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, name: 'cli', agentType: 'shell', actor, deps });
+
+    const result = await resolveAgentTerminal({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, name: 'cli', deps });
+
+    expect(result).toMatchObject({ ok: true, sandboxId: MACHINE_SANDBOX_ID, cwd: PROJECT_PATH, ownSprite: false });
   });
 
   it('given the machine Sprite fails to acquire, should deny as machine_unavailable', async () => {
@@ -841,6 +900,8 @@ describe('resolveAgentTerminalById — level-agnostic (PurePoint Attach{agent_id
       agentTerminalId: 'agent-terminal-1',
       sandboxId: BRANCH_SANDBOX_ID,
       cwd: BRANCH_REPO_PATH,
+      // A branch always has its OWN Sprite — the credential-refresh gate keys on this.
+      ownSprite: true,
       agentType: 'shell',
       command: null,
       streamSessionId: null,
@@ -860,6 +921,8 @@ describe('resolveAgentTerminalById — level-agnostic (PurePoint Attach{agent_id
       agentTerminalId: 'agent-terminal-1',
       sandboxId: MACHINE_SANDBOX_ID,
       cwd: PROJECT_PATH,
+      // Unpromoted project / machine root: the machine's own shared Sprite.
+      ownSprite: false,
       agentType: 'shell',
       command: null,
       streamSessionId: null,
@@ -878,6 +941,8 @@ describe('resolveAgentTerminalById — level-agnostic (PurePoint Attach{agent_id
       agentTerminalId: 'agent-terminal-1',
       sandboxId: MACHINE_SANDBOX_ID,
       cwd: SANDBOX_ROOT,
+      // Unpromoted project / machine root: the machine's own shared Sprite.
+      ownSprite: false,
       agentType: 'shell',
       command: null,
       streamSessionId: null,

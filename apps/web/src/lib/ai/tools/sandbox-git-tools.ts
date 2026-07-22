@@ -129,7 +129,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       return {
         ok: true,
         userId: ctx.userId,
-        ctx: { ...ctx, driveId, tenantId, activeMachine, branchSandbox: undefined } as SandboxActorContext & {
+        ctx: { ...ctx, driveId, tenantId, activeMachine, branchSandbox: undefined, projectSandbox: undefined } as SandboxActorContext & {
           activeMachine: MachineRef;
         },
       };
@@ -140,11 +140,15 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
     const branchSandbox = node.branchSandbox
       ? { machineId: node.machineId, machineBranchId: node.branchSandbox.machineBranchId }
       : undefined;
+    // Same flip for a PROMOTED project — its repo is on its own Sprite.
+    const projectSandbox = node.projectSandbox
+      ? { machineId: node.machineId, machineProjectId: node.projectSandbox.machineProjectId }
+      : undefined;
     return {
       ok: true,
       userId: ctx.userId,
       node,
-      ctx: { ...ctx, driveId, tenantId, activeMachine, branchSandbox } as SandboxActorContext & {
+      ctx: { ...ctx, driveId, tenantId, activeMachine, branchSandbox, projectSandbox } as SandboxActorContext & {
         activeMachine: MachineRef;
       },
     };

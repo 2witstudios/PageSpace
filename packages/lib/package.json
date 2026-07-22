@@ -1681,6 +1681,21 @@
       "types": "./dist/audit/security-audit-chain-verifier.d.ts",
       "import": "./dist/audit/security-audit-chain-verifier.js",
       "require": "./dist/audit/security-audit-chain-verifier.js"
+    },
+    "./services/sandbox/project-session": {
+      "types": "./dist/services/sandbox/project-session.d.ts",
+      "import": "./dist/services/sandbox/project-session.js",
+      "require": "./dist/services/sandbox/project-session.js"
+    },
+    "./services/machines/machine-project-promotion": {
+      "types": "./dist/services/machines/machine-project-promotion.d.ts",
+      "import": "./dist/services/machines/machine-project-promotion.js",
+      "require": "./dist/services/machines/machine-project-promotion.js"
+    },
+    "./services/machines/project-session": {
+      "types": "./dist/services/machines/project-session.d.ts",
+      "import": "./dist/services/machines/project-session.js",
+      "require": "./dist/services/machines/project-session.js"
     }
   },
   "typesVersions": {
@@ -2422,6 +2437,15 @@
       ],
       "canvas/cert-action": [
         "./dist/canvas/cert-action.d.ts"
+      ],
+      "services/sandbox/project-session": [
+        "./dist/services/sandbox/project-session.d.ts"
+      ],
+      "services/machines/machine-project-promotion": [
+        "./dist/services/machines/machine-project-promotion.d.ts"
+      ],
+      "services/machines/project-session": [
+        "./dist/services/machines/project-session.d.ts"
       ]
     }
   },
