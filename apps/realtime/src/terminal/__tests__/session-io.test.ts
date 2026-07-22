@@ -77,6 +77,32 @@ describe('handleSessionReadRequest — validation', () => {
       expected: { status: 400, error: 'Missing or invalid names' },
     });
   });
+
+  it('given a non-integer or negative limit, should refuse with 400', async () => {
+    const negative = await handleSessionReadRequest(deps(), readBody({ limit: -1 }));
+    const fractional = await handleSessionReadRequest(deps(), readBody({ limit: 1.5 }));
+    assert({
+      given: 'a limit that is not a non-negative integer',
+      should: 'refuse with 400 rather than coercing — a signed endpoint validates every field it interpolates into behavior',
+      actual: [negative, fractional].map((r) => ({ status: r.status, error: r.body.error })),
+      expected: [
+        { status: 400, error: 'Invalid limit' },
+        { status: 400, error: 'Invalid limit' },
+      ],
+    });
+  });
+});
+
+describe('handleSessionSendRequest — validation', () => {
+  it('given invalid JSON, should refuse with 400', async () => {
+    const result = await handleSessionSendRequest(deps(), 'not json');
+    assert({
+      given: 'a send body that is not JSON',
+      should: 'refuse with 400 rather than guessing a payload — stdin writes must never be reconstructed from a malformed request',
+      actual: { status: result.status, error: result.body.error },
+      expected: { status: 400, error: 'Invalid JSON' },
+    });
+  });
 });
 
 describe('handleSessionReadRequest — liveness', () => {
