@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Only the two IO seams the REAL canActorViewPage touches are faked (the
-// acting-page row lookup + the user ACL), so the machine-pane pin below runs
-// the actual actor-permissions chain end-to-end instead of a stubbed predicate.
+// Only the IO seams the REAL canActorViewPage touches are faked (the
+// acting-page row lookup, the user ACL, the agent ACL), so the machine-pane pin
+// at the bottom of this file runs the actual actor-permissions chain end-to-end
+// instead of a stubbed predicate. Every other describe here injects its own
+// `canViewPage` through makeMachineDirectoryDeps and never reaches these.
 const { mockDbWhere, mockGetUserAccessLevel, mockGetAgentAccessLevel } = vi.hoisted(() => ({
   mockDbWhere: vi.fn(),
   mockGetUserAccessLevel: vi.fn(),
