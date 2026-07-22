@@ -37,7 +37,12 @@ export function getAgentPageId(context: ToolExecutionContext): string | undefine
  * assistants that need the user's full reach rather than explicit membership.
  */
 export async function hasAgentUserScopedAccess(agentPageId: string): Promise<boolean> {
-  return (await fetchActingPageRow(agentPageId))?.userScopedAccess ?? false;
+  // Same AI_CHAT gate as resolveActingAgentId — the two seams answer the same
+  // question and consumers (MachineDirectoryRuntimeDeps.isUserScopedAgent)
+  // are documented as mirroring them. A non-agent page is never user-scoped,
+  // whatever its row happens to carry.
+  const row = await fetchActingPageRow(agentPageId);
+  return row?.type === PageType.AI_CHAT && row.userScopedAccess;
 }
 
 /**

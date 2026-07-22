@@ -507,4 +507,13 @@ describe('hasAgentUserScopedAccess', () => {
     mockDbWhere.mockResolvedValue([]);
     expect(await hasAgentUserScopedAccess('missing-agent')).toBe(false);
   });
+
+  it('a non-agent page is never user-scoped, even with the column set — lockstep with resolveActingAgentId', async () => {
+    // The two seams answer the same question ("is this an agent acting with
+    // the user's reach?") and MachineDirectoryRuntimeDeps.isUserScopedAgent is
+    // documented as mirroring them — a MACHINE page row that somehow carries
+    // userScopedAccess: true must not diverge the answers.
+    mockDbWhere.mockResolvedValue([{ type: 'MACHINE', userScopedAccess: true }]);
+    expect(await hasAgentUserScopedAccess('machine-page')).toBe(false);
+  });
 });
