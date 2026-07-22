@@ -35,6 +35,13 @@ export function getAgentPageId(context: ToolExecutionContext): string | undefine
  * would otherwise confine the agent to its own drive memberships should fall
  * back to the invoking user's own access instead — for personal/global-style
  * assistants that need the user's full reach rather than explicit membership.
+ *
+ * Deliberately a RAW flag read, unlike resolveActingAgentId's type-gated
+ * resolution: its only caller is the machine Settings-toggle exemption
+ * (sandbox-tools-runtime's isUserScopedAgent), which asks a different question
+ * — "did the owner widen this agent's reach?" — and the column is AI_CHAT-only
+ * by construction (packages/db/src/schema/core.ts), so a non-agent page reads
+ * the default `false` and is exempt from nothing.
  */
 export async function hasAgentUserScopedAccess(agentPageId: string): Promise<boolean> {
   return (await fetchActingPageRow(agentPageId))?.userScopedAccess ?? false;
