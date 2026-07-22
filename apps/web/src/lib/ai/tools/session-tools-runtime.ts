@@ -43,7 +43,7 @@ import { broadcastMachineWorkspaceEvent } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSessionTools, type SessionToolsDeps } from './session-tools';
 import { readAgentSession, sendAgentSession } from './session-io-agent';
-import { readPtySession, sendPtySession } from './session-io-pty';
+import { readPtyLiveness, readPtySession, sendPtySession } from './session-io-pty';
 import type { SessionView, SessionViewWrite } from './session-layout';
 
 /** A node's `{projectName?, branchName?}` half, as the agent-terminal API takes it. */
@@ -216,6 +216,11 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       agent: { read: readAgentSession, send: sendAgentSession },
       pty: { read: readPtySession, send: sendPtySession },
     },
+
+    // The realtime service owns the PTYs, so it is the only thing that knows
+    // which shells are actually running. Same signed endpoint `read_session`
+    // uses, asked for liveness only.
+    ptyLiveness: readPtyLiveness,
 
     newId: () => crypto.randomUUID(),
     now: () => new Date(),

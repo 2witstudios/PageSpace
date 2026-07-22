@@ -92,10 +92,28 @@ export interface SessionRow {
  * shell from reading as a live one (epic risk register #2). A `'chat'`-surface
  * row never has a stream session at all, so it is never `'reserved'`.
  */
-export function readSessionState(row: SessionRow, now: Date): SessionState {
+export function readSessionState(row: SessionRow, now: Date, live?: boolean): SessionState {
   const surface = isAgentRuntimeType(row.agentType) ? agentSurfaceOf(row.agentType) : 'pty';
   if (surface === 'pty' && row.streamSessionId === null) return 'reserved';
+  // The realtime service's live map is DIRECT evidence for a PTY — the row's
+  // `updatedAt` is only a proxy for it, and a wrong one in both directions: a
+  // shell sitting at a prompt for an hour is still running (proxy says idle),
+  // and a row touched moments before its PTY died reads active (proxy says
+  // active). When the sweep answered, its answer wins; when it did not answer
+  // at all (`undefined` — the service was unreachable), the proxy is still
+  // better than pretending to know.
+  if (live !== undefined) return live ? 'active' : 'idle';
   return now.getTime() - row.updatedAt.getTime() <= SESSION_ACTIVE_WINDOW_MS ? 'active' : 'idle';
+}
+
+/**
+ * Could this row have a PTY in the realtime service's live map? A `'chat'`
+ * surface never has one, and a `'pty'` row with no stream session has never
+ * started one (it is `reserved`, which no liveness answer may overwrite).
+ */
+function hasPtyStream(row: SessionRow): boolean {
+  const surface = isAgentRuntimeType(row.agentType) ? agentSurfaceOf(row.agentType) : 'pty';
+  return surface === 'pty' && row.streamSessionId !== null;
 }
 
 /** How a session type reads back out of a row — `'other'` for a retired agentType no picker offers. */
@@ -336,6 +354,14 @@ export interface SessionToolsDeps {
   applyViewWrites: (machineId: string, writes: SessionViewWrite[], actor: { userId: string }) => Promise<void>;
   /** Per-surface IO, dispatched to by `read_session`/`send_session`. */
   io: SessionIoDeps;
+  /**
+   * Which of a node's shell sessions have a PTY running RIGHT NOW, as the
+   * realtime service that owns them sees it. `undefined` means it could not be
+   * asked — every state then falls back to the row-only answer. Optional so a
+   * caller with no realtime seam (tests, and any future non-PTY host) still
+   * gets honest, if coarser, states.
+   */
+  ptyLiveness?: (node: MachineNodeHandle, names: string[]) => Promise<Set<string> | undefined>;
   /** Fresh ids for panes/columns (the layout planner stays pure). */
   newId: () => string;
   now: () => Date;
@@ -430,6 +456,14 @@ export function createSessionTools(deps: SessionToolsDeps): {
         const nodes = await Promise.all(
           handles.map(async (handle) => {
             const rows = await deps.listSessions(handle);
+            // One liveness sweep per node, over the rows that could HAVE a live
+            // PTY — a reserved row has never started one, and an agent session
+            // has no PTY at all, so neither is worth asking about.
+            const startedShells = rows.filter(hasPtyStream).map((row) => row.name);
+            const live =
+              deps.ptyLiveness && startedShells.length > 0
+                ? await deps.ptyLiveness(handle, startedShells)
+                : undefined;
             return {
               node: describeNode(handle),
               self: handle === binding.self,
@@ -439,7 +473,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
                 name: row.name,
                 type: sessionTypeOf(row.agentType),
                 agentType: row.agentType,
-                state: readSessionState(row, now),
+                state: readSessionState(row, now, live && hasPtyStream(row) ? live.has(row.name) : undefined),
               })),
             };
           }),

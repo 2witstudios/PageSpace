@@ -123,6 +123,28 @@ describe('readSessionState', () => {
     });
   });
 
+  it('given the realtime live map says a started PTY is running, should report active however stale the row is', () => {
+    assert({
+      given: 'a shell whose row has not been touched in an hour but whose PTY is live',
+      should: 'trust the live map over the row timestamp',
+      actual: readSessionState(
+        shellRow('sh', { streamSessionId: 'sess-1', updatedAt: new Date(NOW.getTime() - 3_600_000) }),
+        NOW,
+        true,
+      ),
+      expected: 'active',
+    });
+  });
+
+  it('given the realtime live map says a started PTY is NOT running, should report idle however fresh the row is', () => {
+    assert({
+      given: 'a shell touched a moment ago whose PTY is gone',
+      should: 'report idle rather than an active session nothing is running',
+      actual: readSessionState(shellRow('sh', { streamSessionId: 'sess-1' }), NOW, false),
+      expected: 'idle',
+    });
+  });
+
   it('given an agent session with no stream session id, should never report reserved', () => {
     assert({
       given: 'a chat-surface row (which never has a PTY stream)',
@@ -173,6 +195,76 @@ describe('list_sessions', () => {
           },
         ],
       },
+    });
+  });
+
+  it('given the realtime liveness sweep, should report each started shell by its ACTUAL PTY state', async () => {
+    const { deps: d } = deps({
+      listSessions: async (node) =>
+        node.kind === 'machine'
+          ? [
+              shellRow('running', { streamSessionId: 'sess-1' }),
+              shellRow('ended', { streamSessionId: 'sess-2' }),
+              shellRow('never-started'),
+            ]
+          : [],
+      ptyLiveness: async (_node, names) => new Set(names.filter((name) => name === 'running')),
+    });
+    const tools = createSessionTools(d);
+
+    const result = (await exec(tools.list_sessions, { target: {} }, context(rootBinding()))) as {
+      nodes: { sessions: { name: string; state: string }[] }[];
+    };
+
+    assert({
+      given: 'three shells: one live PTY, one whose PTY is gone, one never started',
+      should: 'report active / idle / reserved — liveness never overwrites reserved',
+      actual: result.nodes[0].sessions.map(({ name, state }) => ({ name, state })),
+      expected: [
+        { name: 'running', state: 'active' },
+        { name: 'ended', state: 'idle' },
+        { name: 'never-started', state: 'reserved' },
+      ],
+    });
+  });
+
+  it('given a node with no started shells, should not run a liveness sweep at all', async () => {
+    let swept = 0;
+    const { deps: d } = deps({
+      listSessions: async (node) => (node.kind === 'machine' ? [agentRow('a1'), shellRow('sh')] : []),
+      ptyLiveness: async (_node, names) => {
+        swept += 1;
+        return new Set(names);
+      },
+    });
+    const tools = createSessionTools(d);
+
+    await exec(tools.list_sessions, { target: {} }, context(rootBinding()));
+
+    assert({
+      given: 'a node holding only an agent session and a reserved shell',
+      should: 'ask the realtime service nothing at all',
+      actual: swept,
+      expected: 0,
+    });
+  });
+
+  it('given the realtime service cannot be asked, should fall back to the row-only state', async () => {
+    const { deps: d } = deps({
+      listSessions: async (node) => (node.kind === 'machine' ? [shellRow('sh', { streamSessionId: 'sess-1' })] : []),
+      ptyLiveness: async () => undefined,
+    });
+    const tools = createSessionTools(d);
+
+    const result = (await exec(tools.list_sessions, { target: {} }, context(rootBinding()))) as {
+      nodes: { sessions: { state: string }[] }[];
+    };
+
+    assert({
+      given: 'a liveness sweep that could not answer',
+      should: 'keep the data-only state rather than reporting the session dead',
+      actual: result.nodes[0].sessions.map((session) => session.state),
+      expected: ['active'],
     });
   });
 
@@ -673,7 +765,11 @@ describe('session IO shells', () => {
     });
   });
 
-  it('given the shipped IO modules, should answer that they are not implemented yet', async () => {
+  // The PTY half is live (see session-io-pty.test.ts): with no realtime
+  // service reachable from a unit test, its read refuses rather than
+  // fabricating an empty scrollback — which is the same honesty this case has
+  // always been about. The agent half is still a shipped stub.
+  it('given the shipped IO modules, should refuse rather than pretend emptiness', async () => {
     const identity = {
       node: machineHandle(),
       name: 'worker',
@@ -689,7 +785,7 @@ describe('session IO shells', () => {
     ]);
 
     assert({
-      given: 'the phase-4 IO stubs',
+      given: 'the shipped IO modules with no realtime service behind them',
       should: 'refuse every call honestly rather than pretending emptiness',
       actual: answers.map((answer) => answer.success),
       expected: [false, false, false, false],
