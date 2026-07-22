@@ -39,34 +39,92 @@ export interface OpenTerminalScope {
 }
 
 /**
- * The node container a workspace lives under — an {@link OpenTerminalScope}
- * minus the session name. Nodes are STRUCTURE, not the grid-owning unit: a
- * workspace's scope says which checkout its panes' agents run in (a branch
- * scope = that branch's working tree), while the grid itself belongs to the
- * workspace.
+ * The node container a workspace lives under. Nodes are STRUCTURE, not the
+ * grid-owning unit: a workspace's scope says which checkout its panes' agents
+ * run in (a branch scope = that branch's working tree), while the grid itself
+ * belongs to the workspace.
+ *
+ * A DISCRIMINATED UNION, mirroring `machine_workspaces.scope`'s
+ * `'machine' | 'project' | 'branch'` column. The old
+ * `{projectName?, branchName?}` bag made two nonsense shapes expressible — a
+ * branch with no project, and "did the caller mean machine scope or did it
+ * forget to pass one" — and left every consumer to re-derive which of the
+ * three it was holding, each with its own `if (!projectName)` ladder. With the
+ * discriminant, `nodeScopeOf`/`scopeLabelOf` are TOTAL switches: a fourth node
+ * kind fails compilation at every one of them instead of silently falling into
+ * somebody's `else`.
+ *
+ * The names are still what crosses the wire ({@link nodeScopeNames}) — the
+ * server derives its own discriminant from them (`deriveWorkspaceScope`), so
+ * this is a client-side modelling device, not a protocol change.
  */
-export interface MachineNodeScope {
-  projectName?: string;
-  branchName?: string;
-}
+export type MachineNodeScope =
+  | { level: 'machine' }
+  | { level: 'project'; projectName: string }
+  | { level: 'branch'; projectName: string; branchName: string };
 
 /** The Machine node itself (neither project nor branch). A shared constant so
  * callers can hand out a stable default without a new object per render. */
-export const MACHINE_NODE_SCOPE: MachineNodeScope = Object.freeze({});
+export const MACHINE_NODE_SCOPE: MachineNodeScope = Object.freeze({ level: 'machine' });
+
+/** The `{projectName?, branchName?}` half — what every API call that addresses
+ * a checkout sends, and what `machine_agent_terminals`/`machine_workspaces`
+ * actually store. The discriminant never crosses the wire. */
+export function nodeScopeNames(scope: MachineNodeScope): { projectName?: string; branchName?: string } {
+  switch (scope.level) {
+    case 'machine':
+      return {};
+    case 'project':
+      return { projectName: scope.projectName };
+    case 'branch':
+      return { projectName: scope.projectName, branchName: scope.branchName };
+  }
+}
+
+/**
+ * The client mirror of the server's `deriveWorkspaceScope`: which node kind a
+ * pair of names describes. The discriminant is DERIVED, never trusted from
+ * input — so a stored/received `level` that disagrees with the names it sits
+ * beside cannot exist, and every legacy `{projectName, branchName}` payload
+ * (localStorage, an older client's server row) reads correctly with no
+ * migration step.
+ *
+ * A branchName with no projectName is not a branch: branches are addressed
+ * under their project everywhere, so the name alone identifies nothing.
+ */
+export function machineNodeScope(names: { projectName?: string; branchName?: string }): MachineNodeScope {
+  if (!names.projectName) return MACHINE_NODE_SCOPE;
+  return names.branchName
+    ? { level: 'branch', projectName: names.projectName, branchName: names.branchName }
+    : { level: 'project', projectName: names.projectName };
+}
 
 /** The node a session lives under — a session's scope IS a node plus a name. */
 export function nodeOfTerminalScope(scope: OpenTerminalScope): MachineNodeScope {
-  return { projectName: scope.projectName, branchName: scope.branchName };
+  return machineNodeScope(scope);
 }
 
 export function isSameNodeScope(a: MachineNodeScope, b: MachineNodeScope): boolean {
-  return (a.projectName ?? '') === (b.projectName ?? '') && (a.branchName ?? '') === (b.branchName ?? '');
+  switch (a.level) {
+    case 'machine':
+      return b.level === 'machine';
+    case 'project':
+      return b.level === 'project' && b.projectName === a.projectName;
+    case 'branch':
+      return b.level === 'branch' && b.projectName === a.projectName && b.branchName === a.branchName;
+  }
 }
 
 /** A node scope rendered for an error message — never parsed, never persisted. */
 function scopeKey(scope: MachineNodeScope): string {
-  if (!scope.projectName) return 'the machine';
-  return scope.branchName ? `${scope.projectName}/${scope.branchName}` : scope.projectName;
+  switch (scope.level) {
+    case 'machine':
+      return 'the machine';
+    case 'project':
+      return scope.projectName;
+    case 'branch':
+      return `${scope.projectName}/${scope.branchName}`;
+  }
 }
 
 /**
@@ -102,8 +160,7 @@ export interface TerminalPaneState {
  * branch, name) triple builds it here rather than reading a stored copy. */
 export function paneTerminalScope(node: MachineNodeScope, pane: PaneSessionScope): OpenTerminalScope {
   return {
-    projectName: node.projectName,
-    branchName: node.branchName,
+    ...nodeScopeNames(node),
     name: pane.name,
     ...(pane.kind === undefined ? {} : { kind: pane.kind }),
   };
@@ -125,6 +182,25 @@ export function paneScopeOf(scope: OpenTerminalScope): PaneSessionScope {
  * on the way in. No backfill, no migration step, no version bump — both merge
  * paths (`mergeColumns` and `sanitizeMachines`) funnel through here.
  */
+/**
+ * Read-time projection of a STORED node scope, from either shape: the union
+ * this version writes, or the bare `{projectName, branchName}` an older client
+ * (or a not-yet-redeployed server) sends. The discriminant is re-derived from
+ * the names either way, so the two can never disagree.
+ */
+export function projectStoredNodeScope(value: unknown): MachineNodeScope | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const candidate = value as { projectName?: unknown; branchName?: unknown };
+  return machineNodeScope({
+    ...(typeof candidate.projectName === 'string' && candidate.projectName.length > 0
+      ? { projectName: candidate.projectName }
+      : {}),
+    ...(typeof candidate.branchName === 'string' && candidate.branchName.length > 0
+      ? { branchName: candidate.branchName }
+      : {}),
+  });
+}
+
 export function projectStoredPaneScope(value: unknown): PaneSessionScope | null {
   if (typeof value !== 'object' || value === null) return null;
   const candidate = value as { name?: unknown; kind?: unknown };
@@ -601,7 +677,11 @@ export function removedWorkspaceBy(
 export interface ServerWorkspaceDTO {
   id: string;
   name: string;
-  scope: MachineNodeScope;
+  /** The union, as `toWorkspaceDTO` now emits it — but read through
+   * {@link projectStoredNodeScope}, which re-derives the discriminant from the
+   * names so an older server (or an in-flight `{projectName, branchName}`
+   * payload) still lands correctly. */
+  scope: MachineNodeScope | { projectName?: string; branchName?: string };
   columns: ServerColumnDTO[];
 }
 
@@ -688,7 +768,14 @@ function toLocalWorkspace(existing: WorkspaceState | undefined, ws: ServerWorksp
   const pendingPickerPaneId =
     existing?.pendingPickerPaneId && paneIds.includes(existing.pendingPickerPaneId) ? existing.pendingPickerPaneId : null;
 
-  return { id: ws.id, name: ws.name, scope: ws.scope, columns, activePaneId, pendingPickerPaneId };
+  return {
+    id: ws.id,
+    name: ws.name,
+    scope: projectStoredNodeScope(ws.scope) ?? MACHINE_NODE_SCOPE,
+    columns,
+    activePaneId,
+    pendingPickerPaneId,
+  };
 }
 
 /**
@@ -785,6 +872,9 @@ function isWorkspace(value: unknown): value is WorkspaceState {
   return (
     typeof workspace.id === 'string' &&
     typeof workspace.name === 'string' &&
+    // Only "an object" — the shape is PROJECTED below, not validated: a blob
+    // written before the discriminant existed carries bare names, and dropping
+    // those workspaces would cost a returning user every pane layout they have.
     typeof workspace.scope === 'object' &&
     workspace.scope !== null &&
     Array.isArray(workspace.columns) &&
@@ -850,6 +940,7 @@ export function sanitizeMachines(value: unknown): Record<string, MachineWorkspac
       workspaces[migratedId] = {
         ...workspace,
         id: migratedId,
+        scope: projectStoredNodeScope(workspace.scope) ?? MACHINE_NODE_SCOPE,
         columns,
         // An activePaneId naming no pane is not merely cosmetic: every grid
         // transition no-ops on a pane it cannot resolve, so a split anchored on

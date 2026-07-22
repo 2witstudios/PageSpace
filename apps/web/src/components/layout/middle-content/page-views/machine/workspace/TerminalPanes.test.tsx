@@ -88,8 +88,8 @@ const dismissPicker = vi.fn();
 /** The spawn the picker performs — the only reason TerminalPanes touches the API. */
 const addAgentTerminal = vi.fn(async (name: string, agentType: string) => ({ name, agentType, resumed: false }));
 const removeAgentTerminal = vi.fn<(name: string) => Promise<void>>(async () => {});
-/** The close-kill path — addressed by the PANE's own scope, never through the
- * workspace-scoped hook, whose scope can differ from the closing pane's. */
+/** The close-kill path — addressed by the session address re-derived from the
+ * closing pane's OWN workspace, which need not be the active one. */
 const killAgentTerminal = vi.fn<
   (machineId: string, scope: { projectName?: string; branchName?: string; name: string }) => Promise<void>
 >(async () => {});
@@ -117,7 +117,9 @@ vi.mock('@/hooks/useAgentTerminals', () => ({
 
 const WORKSPACE_ID = 'ws-1';
 /** The checkout this workspace's agents run in. */
-const WORKSPACE_SCOPE = { projectName: 'app', branchName: 'main' };
+const WORKSPACE_SCOPE = { level: 'branch', projectName: 'app', branchName: 'main' } as const;
+/** The same checkout as it crosses the wire — what a spawn/kill is addressed by. */
+const WORKSPACE_NAMES = { projectName: 'app', branchName: 'main' };
 
 const aWorkspace = (grid: Pick<WorkspaceState, 'columns' | 'activePaneId' | 'pendingPickerPaneId'>): WorkspaceState => ({
   id: WORKSPACE_ID,
@@ -316,7 +318,7 @@ describe('TerminalPanes (close means close)', () => {
         viaWorkspaceHook: removeAgentTerminal.mock.calls.length,
       },
       expected: {
-        kills: [['m1', { ...WORKSPACE_SCOPE, name: 'solo' }]],
+        kills: [['m1', { ...WORKSPACE_NAMES, name: 'solo' }]],
         viaWorkspaceHook: 0,
       },
     });
@@ -376,7 +378,7 @@ describe('TerminalPanes (close means close)', () => {
       {
         id: 'ws-other-branch',
         name: 'Other branch',
-        scope: { projectName: 'app', branchName: 'other' },
+        scope: { level: 'branch', projectName: 'app', branchName: 'other' },
         columns: [{ id: 'col-other', panes: [{ id: 'pane-other', scope: { name: 'shell-x' } }] }],
         activePaneId: 'pane-other',
         pendingPickerPaneId: null,
@@ -391,7 +393,7 @@ describe('TerminalPanes (close means close)', () => {
       given: 'two workspaces at different branches, each holding a pane named shell-x',
       should: 'still kill the closed one, at ITS workspace\'s checkout — comparing on name alone would silently skip it',
       actual: killAgentTerminal.mock.calls,
-      expected: [['m1', { ...WORKSPACE_SCOPE, name: 'shell-x' }]],
+      expected: [['m1', { ...WORKSPACE_NAMES, name: 'shell-x' }]],
     });
   });
 
@@ -423,7 +425,7 @@ describe('TerminalPanes (close means close)', () => {
       given: "two workspaces each holding a pane with the SAME id, the foreign one first in the machine's order",
       should: "kill the session of the pane in THIS workspace — resolving the pane machine-wide would kill the foreign workspace's session and leave the closed one running",
       actual: killAgentTerminal.mock.calls,
-      expected: [['m1', { ...WORKSPACE_SCOPE, name: 'solo' }]],
+      expected: [['m1', { ...WORKSPACE_NAMES, name: 'solo' }]],
     });
   });
 
@@ -991,7 +993,7 @@ describe('TerminalPanes (PageSpace Agent panes)', () => {
       should:
         'kill the session at the pane\'s own scope, same as any terminal — the row delete is cheap (Phase 2) and the conversation survives it',
       actual: killAgentTerminal.mock.calls,
-      expected: [['m1', { ...WORKSPACE_SCOPE, ...CHAT_SCOPE }]],
+      expected: [['m1', { ...WORKSPACE_NAMES, ...CHAT_SCOPE }]],
     });
   });
 });

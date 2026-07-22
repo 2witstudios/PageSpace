@@ -666,6 +666,8 @@ describe('useSyncedWorkspaceActions', () => {
     // Exactly the shape the palette pushes: a chat-surface session bound into
     // the first pane of its own, session-derived workspace.
     const scope = { projectName: 'app', branchName: 'main', name: 'pagespace-x', kind: 'chat' as const };
+    // What the PANE keeps of it: the checkout is the workspace's (Phase 1).
+    const paneScope = { name: scope.name, kind: scope.kind };
     act(() => {
       result.current.openTerminal(scope);
     });
@@ -673,7 +675,7 @@ describe('useSyncedWorkspaceActions', () => {
     const workspaceId = sessionWorkspaceId(scope);
     const spawned = selectMachine('m-stale-echo')(useMachineWorkspaceStore.getState())!.workspaces[workspaceId];
     const paneId = spawned.columns[0].panes[0].id;
-    expect(spawned.columns[0].panes[0].scope).toEqual(scope);
+    expect(spawned.columns[0].panes[0].scope).toEqual(paneScope);
 
     act(() => {
       mockSocket.current!._trigger('machine-workspace:created', {
@@ -686,7 +688,7 @@ describe('useSyncedWorkspaceActions', () => {
     });
 
     const after = selectMachine('m-stale-echo')(useMachineWorkspaceStore.getState())!.workspaces[workspaceId];
-    expect(after.columns[0].panes[0].scope).toEqual(scope);
+    expect(after.columns[0].panes[0].scope).toEqual(paneScope);
   });
 
   it("renameWorkspace PATCHes name only — the layout it never touched is not sent", async () => {

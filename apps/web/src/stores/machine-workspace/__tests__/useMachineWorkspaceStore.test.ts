@@ -26,7 +26,11 @@ const seedMachine = (machineId: string) => {
   return store().createWorkspace(machineId);
 };
 
+/** The wire half — how a checkout arrives from the server, and how a session
+ * address carries it. The client's own node scope is the discriminated
+ * {@link BRANCH_NODE}, re-derived from these names on read. */
 const BRANCH_SCOPE = { projectName: 'app', branchName: 'main' };
+const BRANCH_NODE = { level: 'branch', ...BRANCH_SCOPE } as const;
 /** A session opened at MACHINE scope — the node `seedMachine`'s workspaces sit
  * at. It has to match: a pane's checkout IS its workspace's, so binding a
  * branch-scoped session into a machine-scoped workspace is not a layout this
@@ -328,7 +332,7 @@ describe('useMachineWorkspaceStore', () => {
   it('given a persisted machine whose active workspace is missing, should re-target the active id', () => {
     // What a bad rehydrate (or a future shape change) can leave behind: the key
     // exists, but the workspace it points at does not.
-    const workspace = { ...newWorkspace({ id: 'ws-real', name: 'W', scope: {}, firstPaneId: 'p1' }) };
+    const workspace = { ...newWorkspace({ id: 'ws-real', name: 'W', scope: MACHINE_NODE_SCOPE, firstPaneId: 'p1' }) };
     useMachineWorkspaceStore.setState({
       machines: { m1: { workspaces: { 'ws-real': workspace }, order: ['ws-real'], activeWorkspaceId: 'gone' } },
     });
@@ -637,7 +641,7 @@ describe('useMachineWorkspaceStore', () => {
       },
       expected: {
         pane: { name: 'pagespace-a1', kind: 'chat' },
-        checkout: BRANCH_SCOPE,
+        checkout: BRANCH_NODE,
       },
     });
   });
@@ -793,7 +797,7 @@ describe('useMachineWorkspaceStore', () => {
         pane: panesOf(selectWorkspace('m1', sessionWorkspaceId(scope))(store())!)[0]?.scope,
         checkout: selectWorkspace('m1', sessionWorkspaceId(scope))(store())?.scope,
       },
-      expected: { pane: { name: 'pagespace-k1', kind: 'chat' }, checkout: BRANCH_SCOPE },
+      expected: { pane: { name: 'pagespace-k1', kind: 'chat' }, checkout: BRANCH_NODE },
     });
   });
 

@@ -7,6 +7,7 @@ import { assert } from '@/stores/__tests__/riteway';
 import {
   useMachineWorkspaceStore,
   selectMachine,
+  MACHINE_NODE_SCOPE,
   sessionWorkspaceId,
   workspacesOf,
   type MachineNodeScope,
@@ -57,7 +58,7 @@ const store = () => useMachineWorkspaceStore.getState();
 /** A machine with one workspace at `scope`. Rendering alone no longer produces
  * one: `ensureMachine` creates the machine's entry and nothing else, because a
  * machine with no terminals is a legal state rather than a blank view to repair. */
-const seedMachine = (machineId: string, scope: MachineNodeScope = {}) => {
+const seedMachine = (machineId: string, scope: MachineNodeScope = MACHINE_NODE_SCOPE) => {
   store().ensureMachine(machineId);
   return store().createWorkspace(machineId, scope);
 };
@@ -194,7 +195,7 @@ describe('WorkspaceLeaves', () => {
 
   test('workspaces are filtered to the node\'s own scope', async () => {
     seedMachine('m1'); // machine-scope "Workspace 1"
-    store().createWorkspace('m1', { projectName: 'app' }); // project-scope "Workspace 2"
+    store().createWorkspace('m1', { level: 'project', projectName: 'app' }); // project-scope "Workspace 2"
 
     renderLeaves(<WorkspaceLeaves machineId="m1" node={PROJECT_NODE} onSelectWorkspace={vi.fn()} />);
 
@@ -302,7 +303,7 @@ describe('WorkspaceLeaves', () => {
   // another node is rejected outright rather than persisted and defended
   // against forever after.
   test('removing a workspace kills each pane\'s session at the WORKSPACE\'s checkout', async () => {
-    seedMachine('m1', { projectName: 'app', branchName: 'main' });
+    seedMachine('m1', { level: 'branch', projectName: 'app', branchName: 'main' });
     const workspaceId = selectMachine('m1')(store())!.activeWorkspaceId;
     const workspace = selectMachine('m1')(store())!.workspaces[workspaceId];
     store().bindPaneTerminal('m1', workspaceId, workspace.activePaneId, {

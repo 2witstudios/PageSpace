@@ -27,6 +27,7 @@ import {
   workspacesOf,
   sessionWorkspaceId,
   paneTerminalScope,
+  nodeScopeNames,
   MACHINE_NODE_SCOPE,
   type MachineNodeScope,
   type OpenTerminalScope,
@@ -58,11 +59,18 @@ function freshNameSuffix(): string {
 }
 
 /** The checkout a workspace's agents run in, named for the picker — the promise
- * the picker makes has to be the scope the spawn actually uses. */
+ * the picker makes has to be the scope the spawn actually uses. TOTAL over the
+ * node kinds: a fourth one fails compilation here rather than falling into a
+ * label meant for one of the other three. */
 function scopeLabelOf(scope: MachineNodeScope): string {
-  if (!scope.projectName) return 'the machine';
-  if (!scope.branchName) return scope.projectName;
-  return `${scope.projectName} / ${scope.branchName}`;
+  switch (scope.level) {
+    case 'machine':
+      return 'the machine';
+    case 'project':
+      return scope.projectName;
+    case 'branch':
+      return `${scope.projectName} / ${scope.branchName}`;
+  }
 }
 
 export default function TerminalPanes({ machineId, socket }: TerminalPanesProps) {
@@ -92,10 +100,11 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
   // `agentTerminals`/`isLoading` feed the per-pane surface decision
   // (`resolvePaneSurface`): a kind-less pane's surface is resolved from this
   // list, and a chat pane finds its conversation ROW id in it.
+  const scopeNames = nodeScopeNames(scope);
   const { agentTerminals, isLoading: agentTerminalsLoading, addAgentTerminal, removeAgentTerminal } = useAgentTerminals(
     machineId,
-    scope.projectName ?? null,
-    scope.branchName ?? null,
+    scopeNames.projectName ?? null,
+    scopeNames.branchName ?? null,
   );
 
   /**
@@ -111,8 +120,7 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
         workspaceId,
         paneId,
         {
-          projectName: scope.projectName,
-          branchName: scope.branchName,
+          ...nodeScopeNames(scope),
           name: created.name,
           // The surface decision, recorded at the one moment it is KNOWN
           // rather than re-derived from the SWR list on every future mount.
@@ -144,7 +152,7 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
         await removeAgentTerminal(created.name).catch(() => {});
       }
     },
-    [addAgentTerminal, removeAgentTerminal, bindPaneTerminal, workspaceId, scope.projectName, scope.branchName],
+    [addAgentTerminal, removeAgentTerminal, bindPaneTerminal, workspaceId, scope],
   );
 
   /**

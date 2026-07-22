@@ -44,6 +44,8 @@ import {
   removedWorkspaceBy,
   selectPane as selectPaneTransition,
   nodeOfTerminalScope,
+  nodeScopeNames,
+  machineNodeScope,
   paneScopeOf,
   paneTerminalScope,
   panesOf,
@@ -78,6 +80,8 @@ export type {
 export {
   autoSessionName,
   paneTerminalScope,
+  nodeScopeNames,
+  machineNodeScope,
   panesOf,
   workspacesOf,
   isSameNodeScope,

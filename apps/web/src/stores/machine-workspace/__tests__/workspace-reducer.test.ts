@@ -33,7 +33,7 @@ import {
   type ServerWorkspaceDTO,
 } from '../workspace-reducer';
 
-const BRANCH_SCOPE = { projectName: 'app', branchName: 'main' };
+const BRANCH_SCOPE = { level: 'branch', projectName: 'app', branchName: 'main' } as const;
 
 /** A one-pane workspace — what every workspace starts as. */
 const aWorkspace = (id = 'ws-1', firstPaneId = 'pane-1'): WorkspaceState =>
@@ -235,8 +235,8 @@ describe('sessionWorkspaceId', () => {
 describe('nextWorkspaceName', () => {
   it('given existing workspaces, should take the first free index', () => {
     const machine = addWorkspace(
-      initialMachineWorkspaces(newWorkspace({ id: 'a', name: 'Workspace 1', scope: {}, firstPaneId: 'p1' })),
-      newWorkspace({ id: 'b', name: 'Workspace 3', scope: {}, firstPaneId: 'p2' })
+      initialMachineWorkspaces(newWorkspace({ id: 'a', name: 'Workspace 1', scope: MACHINE_NODE_SCOPE, firstPaneId: 'p1' })),
+      newWorkspace({ id: 'b', name: 'Workspace 3', scope: MACHINE_NODE_SCOPE, firstPaneId: 'p2' })
     );
 
     assert({

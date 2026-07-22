@@ -52,6 +52,8 @@ import {
   isSameNodeScope,
   sessionWorkspaceId,
   paneTerminalScope,
+  nodeScopeNames,
+  MACHINE_NODE_SCOPE,
   type MachineNodeScope,
   type OpenTerminalScope,
   type WorkspaceState,
@@ -69,15 +71,18 @@ function sessionScopesOf(workspace: WorkspaceState): OpenTerminalScope[] {
   return panesOf(workspace).flatMap((pane) => (pane.scope ? [paneTerminalScope(workspace.scope, pane.scope)] : []));
 }
 
-/** A tree node's scope, minus the session/workspace name it might carry. */
+/** A tree node's scope, minus the session/workspace name it might carry. The
+ * tree node and the node scope now carry the SAME discriminant, so this is a
+ * total, mechanical projection rather than a shape translation with an
+ * "everything else is machine scope" fallthrough. */
 export function nodeScopeOf(node: MachineTreeNode): MachineNodeScope {
   switch (node.level) {
     case 'machine':
-      return {};
+      return MACHINE_NODE_SCOPE;
     case 'project':
-      return { projectName: node.projectName };
+      return { level: 'project', projectName: node.projectName };
     case 'branch':
-      return { projectName: node.projectName, branchName: node.branchName };
+      return { level: 'branch', projectName: node.projectName, branchName: node.branchName };
   }
 }
 
@@ -134,7 +139,8 @@ export default function WorkspaceLeaves({
   // be one of THIS node's (the machine-wide sweep below spans every node), and
   // a DELETE under the wrong scope kills a different same-named terminal, or
   // nothing.
-  const { agentTerminals, removeAgentTerminal } = useAgentTerminals(machineId, scope.projectName, scope.branchName);
+  const scopeNames = nodeScopeNames(scope);
+  const { agentTerminals, removeAgentTerminal } = useAgentTerminals(machineId, scopeNames.projectName, scopeNames.branchName);
 
   if (!machine) return null;
 
