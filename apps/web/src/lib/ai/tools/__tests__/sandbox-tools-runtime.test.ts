@@ -1,10 +1,35 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// Only the two IO seams the REAL canActorViewPage touches are faked (the
+// acting-page row lookup + the user ACL), so the machine-pane pin below runs
+// the actual actor-permissions chain end-to-end instead of a stubbed predicate.
+const { mockDbWhere, mockGetUserAccessLevel, mockGetAgentAccessLevel } = vi.hoisted(() => ({
+  mockDbWhere: vi.fn(),
+  mockGetUserAccessLevel: vi.fn(),
+  // A MACHINE page has no driveAgentMembers row — the agent path can only ever
+  // return null for it, which is exactly how the field bug denied every tool.
+  mockGetAgentAccessLevel: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@pagespace/db/db', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  db: { select: () => ({ from: () => ({ where: mockDbWhere }) }) },
+}));
+vi.mock('@pagespace/lib/permissions/permissions', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getUserAccessLevel: mockGetUserAccessLevel,
+}));
+vi.mock('@pagespace/lib/permissions/agent-permissions', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getAgentAccessLevel: mockGetAgentAccessLevel,
+}));
+
 import {
   createResolveSandboxActorContext,
   createMachineDirectory,
   type ResolveSandboxActorContextDeps,
   type MachineDirectoryRuntimeDeps,
 } from '../sandbox-tools-runtime';
+import { canActorViewPage } from '../actor-permissions';
 import type { ToolExecutionContext } from '../../core/types';
 import type { MachineRef } from '@/lib/repositories/page-agent-repository';
 
@@ -723,5 +748,89 @@ describe('createMachineDirectory', () => {
         directory.resolveTenantId?.(undefined, { kind: 'existing', machineId: 'gone' }, 'ambient-tenant'),
       ).resolves.toBe('ambient-tenant');
     });
+  });
+});
+
+// Field bug (pagespace.ai prod): every machine-pane PageSpace Agent was denied
+// by its own bash/git_* tools. chat/route.ts sets chatSource.agentPageId to the
+// MACHINE page id, so the acting-agent gate authorized as a page that is not an
+// agent and canActorViewPage denied before the binding exemption could apply.
+// Wired to the REAL canActorViewPage so the fix is pinned end-to-end.
+describe('machine-pane agents (agentPageId is the MACHINE page) — real canActorViewPage', () => {
+  const FULL = { canView: true, canEdit: true, canShare: true, canDelete: true };
+  const machinePaneContext: ToolExecutionContext = {
+    userId: 'u1',
+    chatSource: { type: 'page', agentPageId: 't1' },
+    machineBinding: { machineId: 't1', cwd: '/workspace' },
+  };
+  // The acting-page row the gate reads: the MACHINE page the pane is bound to.
+  const machinePageRow = [{ type: 'MACHINE', userScopedAccess: false }];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDbWhere.mockResolvedValue(machinePageRow);
+    mockGetUserAccessLevel.mockResolvedValue(FULL);
+    mockGetAgentAccessLevel.mockResolvedValue(null);
+  });
+
+  const directoryWithRealViewCheck = (overrides: Partial<MachineDirectoryRuntimeDeps> = {}) =>
+    createMachineDirectory(makeMachineDirectoryDeps({ canViewPage: canActorViewPage, ...overrides }));
+
+  it('given a bound machine and a user with page access, should allow — authorized as the USER, matching the PTY path', async () => {
+    await expect(
+      directoryWithRealViewCheck().isMachineAccessible(machinePaneContext, { kind: 'existing', machineId: 't1' }),
+    ).resolves.toEqual({ allowed: true });
+    expect(mockGetUserAccessLevel).toHaveBeenCalledWith('u1', 't1');
+    expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
+  });
+
+  it('given a bound machine whose page is TRASHED, should still deny', async () => {
+    const directory = directoryWithRealViewCheck({
+      findPage: async () => ({
+        title: 'Trashed Machine',
+        type: 'MACHINE',
+        driveId: 'drive-1',
+        isTrashed: true,
+        allowPageAgents: true,
+        visibleToGlobalAssistant: true,
+      }),
+    });
+    await expect(
+      directory.isMachineAccessible(machinePaneContext, { kind: 'existing', machineId: 't1' }),
+    ).resolves.toEqual({ allowed: false });
+  });
+
+  it('given a bound machine whose page is MISSING, should still deny', async () => {
+    const directory = directoryWithRealViewCheck({ findPage: async () => undefined });
+    await expect(
+      directory.isMachineAccessible(machinePaneContext, { kind: 'existing', machineId: 't1' }),
+    ).resolves.toEqual({ allowed: false });
+  });
+
+  it('given a bound id that is not a MACHINE page, should still deny', async () => {
+    const directory = directoryWithRealViewCheck({
+      findPage: async () => ({
+        title: 'Not a machine',
+        type: 'DOCUMENT',
+        driveId: 'drive-1',
+        isTrashed: false,
+        allowPageAgents: true,
+        visibleToGlobalAssistant: true,
+      }),
+    });
+    await expect(
+      directory.isMachineAccessible(machinePaneContext, { kind: 'existing', machineId: 't1' }),
+    ).resolves.toEqual({ allowed: false });
+  });
+
+  it('given an UNBOUND existing machine the user genuinely cannot view, should deny — the type gate grants nothing on its own', async () => {
+    mockGetUserAccessLevel.mockResolvedValue(null);
+    const unboundContext: ToolExecutionContext = {
+      userId: 'u1',
+      chatSource: { type: 'page', agentPageId: 'machine-page-1' },
+    };
+    await expect(
+      directoryWithRealViewCheck().isMachineAccessible(unboundContext, { kind: 'existing', machineId: 't1' }),
+    ).resolves.toEqual({ allowed: false });
   });
 });
