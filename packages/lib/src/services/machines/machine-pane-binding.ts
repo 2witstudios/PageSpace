@@ -26,9 +26,7 @@
  */
 
 import type { MachineAgentTerminalStore } from './agent-terminals-store';
-import { SANDBOX_ROOT } from '../sandbox/sandbox-paths';
-import { BRANCH_REPO_PATH } from './machine-branches';
-import { PROJECT_REPO_PATH } from './machine-project-promotion';
+import { SANDBOX_ROOT, BRANCH_REPO_PATH, PROJECT_REPO_PATH } from '../sandbox/sandbox-paths';
 import { isAgentRuntimeType, isPtyAgentType } from './agent-terminal-types';
 
 export type MachinePaneBindingFailureReason = 'binding_page_mismatch' | 'project_not_found' | 'branch_not_found';
@@ -195,10 +193,17 @@ export interface MachinePaneBindingProjectLookup {
   list(machineId: string): Promise<MachinePaneBindingProject[]>;
 }
 
-/** The minimal slice of the Branches store this module needs — the bound branch, plus a project's branch list for the cascade. */
+/** The minimal slice of the Branches store this module needs — the bound branch, plus branch lists for the cascade. */
 export interface MachinePaneBindingBranchLookup {
   findById(machineBranchId: string): Promise<MachinePaneBindingBranch | null>;
   list(machineId: string, projectName: string): Promise<MachinePaneBindingBranch[]>;
+  /**
+   * Every branch of the machine in ONE read. The machine-root closure uses
+   * this instead of one `list` per project: derivation runs on the hot path of
+   * every bound chat turn, and 1 + N reads is a per-turn tax that grows with
+   * the tree.
+   */
+  listAll(machineId: string): Promise<MachinePaneBindingBranch[]>;
 }
 
 export interface DeriveMachinePaneBindingDeps {
@@ -256,17 +261,26 @@ export async function deriveMachinePaneBinding(
   }
 
   const self: MachineNodeHandle = { kind: 'machine', machineId: row.machineId, cwd: SANDBOX_ROOT };
-  const projects = await deps.projectLookup.list(row.machineId);
+  // Two reads total for the whole closure, however big the tree.
+  const [projects, allBranches] = await Promise.all([
+    deps.projectLookup.list(row.machineId),
+    deps.branchLookup.listAll(row.machineId),
+  ]);
+  const liveBranchesByProject = new Map<string, MachinePaneBindingBranch[]>();
+  for (const branch of allBranches) {
+    if (branch.spriteTornDownAt !== null) continue; // same fail-closed rule as `branchHandles`
+    const group = liveBranchesByProject.get(branch.projectName) ?? [];
+    group.push(branch);
+    liveBranchesByProject.set(branch.projectName, group);
+  }
   // Depth-first, in the store's own project order: each project immediately
   // followed by its branches. Order is part of the contract only insofar as
   // self is first (see `MachineNodeHandleSet`); the rest is display sanity.
-  const descendants = await Promise.all(
-    projects.map(async (project) => [
-      projectHandle(row.machineId, project),
-      ...(await branchHandles(row.machineId, project, deps)),
-    ]),
-  );
-  return { ok: true, binding: { self, handles: [self, ...descendants.flat()] } };
+  const descendants = projects.flatMap((project) => [
+    projectHandle(row.machineId, project),
+    ...(liveBranchesByProject.get(project.name) ?? []).map((b) => branchHandle(row.machineId, b)),
+  ]);
+  return { ok: true, binding: { self, handles: [self, ...descendants] } };
 }
 
 function projectHandle(machineId: string, project: MachinePaneBindingProject): MachineNodeHandle {

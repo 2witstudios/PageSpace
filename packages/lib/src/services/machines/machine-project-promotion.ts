@@ -52,13 +52,11 @@ import type { MachineProjectRecord, MachineProjectStore } from './machine-projec
 
 export type { MachineActorContext };
 
-/**
- * The directory on a PROMOTED project's OWN Sprite the repo is cloned into.
- * Byte-identical to `BRANCH_REPO_PATH` on purpose — every node that owns a
- * Sprite puts its repo in the same place, so `cwd` is a property of "has its own
- * Sprite", not of which tier the node happens to be.
- */
-export const PROJECT_REPO_PATH = `${SANDBOX_ROOT}/repo`;
+// Defined in sandbox-paths.ts (so light-weight consumers don't import this
+// module's whole graph for a string); imported for local use and re-exported
+// for existing callers.
+import { PROJECT_REPO_PATH } from '../sandbox/sandbox-paths';
+export { PROJECT_REPO_PATH };
 
 export type PromoteProjectDenialReason =
   | 'kill_switch_off'

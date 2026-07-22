@@ -309,6 +309,12 @@ export function withSessionFamilyTools<T>(
  * `withSessionFamilyTools`), and a bound page whose allowlist was saved before
  * the family existed must not silently lose it. Unbound conversations never
  * have these names in their input, so the exemption cannot leak them.
+ *
+ * CAVEAT for whoever surfaces these names in the agent-config tool toggles:
+ * the exemption is unconditional, so a toggle for kill_session/send_session
+ * would be a silent no-op. If the family ever becomes operator-restrictable,
+ * gate this exemption on "the allowlist predates the family" instead of on
+ * the tool name.
  */
 export function filterToolsForAgentAllowlist<T>(
   tools: Record<string, T>,

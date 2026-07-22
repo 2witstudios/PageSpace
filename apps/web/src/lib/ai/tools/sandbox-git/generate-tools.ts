@@ -66,7 +66,14 @@ function targetOf(input: unknown): MachineNodeTarget | undefined {
  * stay pure data — none of them knows the machine tree exists.
  */
 function withNodeTarget(schema: z.ZodTypeAny): z.ZodTypeAny {
-  return schema instanceof z.ZodObject ? schema.extend({ target: nodeTargetSchema.optional() }) : schema;
+  // Loud, at factory-construction time: silently returning the schema
+  // unchanged would ship a git tool that LOOKS like every other one but
+  // ignores `target` — a row added later with a wrapped schema would lose
+  // node addressing with no signal anywhere.
+  if (!(schema instanceof z.ZodObject)) {
+    throw new Error('sandbox-git tool schemas must be plain z.object(...) so they can carry `target` node addressing');
+  }
+  return schema.extend({ target: nodeTargetSchema.optional() });
 }
 
 export function generateSandboxGitTools(

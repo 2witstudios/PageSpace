@@ -162,6 +162,7 @@ export function buildMachineBranchesDeps(): MachineBranchesDeps {
   return {
     store: {
       list: async (machineId, projectName) => (await getMachineBranchStore()).list(machineId, projectName),
+      listForMachine: async (machineId) => (await getMachineBranchStore()).listForMachine(machineId),
       findByName: async (machineId, projectName, branchName) =>
         (await getMachineBranchStore()).findByName(machineId, projectName, branchName),
       findById: async (id) => (await getMachineBranchStore()).findById(id),

@@ -22,7 +22,7 @@ the review skill's no-board fallback.
 
 ## Findings
 
-- [ ] **blocker** · `packages/lib/src/services/machines/machine-projects.ts:291` · A promoted project's
+- [x] **blocker** · `packages/lib/src/services/machines/machine-projects.ts:291` · A promoted project's
   Sprite is never destroyed on any teardown path, leaving a live billing microVM with no row pointing at
   it · `removeProject` deletes the `machine_projects` row without killing the project Sprite;
   `0209_sprite_reclaim_triggers.sql` installs `AFTER DELETE` triggers only on `machine_sessions` and
@@ -36,24 +36,27 @@ the review skill's no-board fallback.
   stamp + kill promoted project Sprites (identity-guarded CAS on `spriteInstanceId`, stamping
   `spriteTornDownAt` rather than deleting the row), and add the project row source to the orphan
   reconciler's tier-2 candidate query.
+  **Resolved** in `3ab154cbf`: migration 0219 `AFTER DELETE` trigger on `machine_projects`, teardown arm in `teardownOneMachine`, third row source + `markProjectTornDown` in the orphan reconciler, inline identity-guarded kill in `removeProject`; real-DB integration tests cover page/drive/erasure cascades.
 
-- [ ] **major** · `apps/web/src/lib/ai/machines/headless-session-run-runtime.ts:314` · The headless
+- [x] **major** · `apps/web/src/lib/ai/machines/headless-session-run-runtime.ts:314` · The headless
   dispatch engine runs a full agent loop with no AI credit gate · `apps/web/src/app/api/ai/chat/route.ts:628`
   calls `canConsumeAI` and holds credit before generating; `generate()` here only meters after the fact
   via `trackUsage`. A user at or over their limit can drive unbounded turns — and depth-2 chains — through
   `send_session` and `add_session.prompt`. Correct: gate the dispatch on the same `canConsumeAI` check
   (before `claimRun`, so a refusal leaves no message in the transcript) and settle the hold in
   `runClaimedTurn`'s `trackUsage` step.
+  **Resolved** in `78f51e6c1`: `checkCredit`/`releaseHold` engine deps run `canConsumeAI` BEFORE the claim; hold released on every exit path; new `credit_denied` refusal.
 
-- [ ] **major** · `apps/web/src/lib/ai/machines/headless-session-run-runtime.ts:339` · The headless run
+- [x] **major** · `apps/web/src/lib/ai/machines/headless-session-run-runtime.ts:339` · The headless run
   composes tools with `filterToolsForMachineBinding` + `withSessionFamilyTools` but never applies the
   page's saved allowlist · `chat/route.ts:933` applies `filterToolsForAgentAllowlist(..., page.enabledTools)`;
   the headless path does not, so a machine page configured to restrict its tool surface gets the *full*
   surface the moment it is reached via `send_session` instead of interactively. Correct: read the machine
   page's `enabledTools` in `generate()` and pipe the composed set through
   `filterToolsForAgentAllowlist` exactly as the route does.
+  **Resolved** in `78f51e6c1`: `generate()` pipes the composed set through `filterToolsForAgentAllowlist(machinePage.enabledTools)`, session family exempt for the same reason as the route.
 
-- [ ] **major** · `packages/lib/src/services/machines/machine-project-promotion.ts:466` · Promotion
+- [x] **major** · `packages/lib/src/services/machines/machine-project-promotion.ts:466` · Promotion
   `rm -rf`s the machine-side checkout but never clears or updates `machine_projects.path`, leaving the
   column pointing at a directory that no longer exists · `projectHandle`
   (`packages/lib/src/services/machines/machine-pane-binding.ts`) falls back to `cwd: project.path` for
@@ -62,8 +65,9 @@ the review skill's no-board fallback.
   data survives on its own Sprite. Correct: either null `path` on promotion and make the torn-down
   fallback an explicit refusal (mirroring the branch path's `branch_not_found`), or re-materialize the
   checkout before falling back.
+  **Resolved as designed** in `5e7c57ec7`'s follow-ups: the node deliberately STAYS in the handle set (set membership authorizes the next project-scoped spawn, which RE-promotes — pinned in agent-terminals.test.ts) and the dead-cwd window is documented at the derivation; an explicit refusal would make a torn-down project unrecoverable from a bound conversation.
 
-- [ ] **major** · `apps/web/src/lib/ai/tools/actor-permissions.ts:40,89` · Adding the `PageType.AI_CHAT`
+- [x] **major** · `apps/web/src/lib/ai/tools/actor-permissions.ts:40,89` · Adding the `PageType.AI_CHAT`
   gate makes *every* non-agent page chat fall through to the invoking user's full reach, not just machine
   panes · previously a non-agent `agentPageId` was fail-closed (no `driveAgentMembers` row could exist,
   so `getAgentAccessLevel` denied); now `resolveActingAgentId` returns `undefined` and tools act with the
@@ -71,50 +75,59 @@ the review skill's no-board fallback.
   change is unconditional. Correct: confirm no page type other than a Machine page reaches
   `chatSource.type: 'page'` with `agentPageId = chatId`, and if others can, scope the fall-through to
   machine pages rather than to "not AI_CHAT".
+  **Confirmed + pinned**: any non-agent page type (DOCUMENT pinned in actor-permissions.test.ts) falls through to the INVOKING USER's own authority — which that user already has in any Global Assistant conversation — never to a phantom agent, never beyond the user.
 
-- [ ] **minor** · `apps/web/src/lib/ai/core/tool-filtering.ts:313` · `filterToolsForAgentAllowlist`
+- [x] **minor** · `apps/web/src/lib/ai/core/tool-filtering.ts:313` · `filterToolsForAgentAllowlist`
   exempts `SESSION_FAMILY_TOOL_NAMES` unconditionally, so an operator can never restrict
   `kill_session`/`send_session` on a bound page · defensible today (the family is registered by addition
   and so never appears in the agent-config listing), but the exemption becomes a silent no-op toggle the
   moment those names are surfaced in the UI. Correct: leave as-is with a note, or gate the exemption on
   "the allowlist predates the family" rather than on the tool name.
+  **Resolved (note added)**: the caveat now lives on `filterToolsForAgentAllowlist` — if the family is ever surfaced in the config toggles, gate the exemption on allowlist age, not the tool name.
 
-- [ ] **minor** · `apps/realtime/src/index.ts:774,801` · `/api/session-read` and `/api/session-input`
+- [x] **minor** · `apps/realtime/src/index.ts:774,801` · `/api/session-read` and `/api/session-input`
   accumulate the request body into a string with no byte cap before the HMAC check runs · an unauthenticated
   caller can stream an arbitrarily large body and hold memory until the signature is finally rejected.
   Consistent with the pre-existing `/api/broadcast` handlers, so not a regression, but this doubles the
   surface. Correct: cap accumulated bytes and `destroy()` the request past the limit, ideally in one
   shared body reader for all five endpoints.
+  **Resolved**: one shared `readCappedBody` (1 MiB, destroy past the cap) now fronts all five signed endpoints; covered red-first (over-cap → destroyed, no response, no emit).
 
-- [ ] **minor** · `packages/lib/src/services/machines/machine-pane-binding.ts:250-260` ·
+- [x] **minor** · `packages/lib/src/services/machines/machine-pane-binding.ts:250-260` ·
   `deriveMachinePaneBinding` at machine root issues 1 + N queries (project list, then one branch list per
   project) on every bound chat request · fine at today's project counts, but it is on the hot path of
   every machine-pane turn. Correct: one joined read of projects + live branches.
+  **Resolved**: machine-root closure is two reads total (`projectLookup.list` + new `branchLookup.listAll`), grouped in memory; pinned by a no-per-project-reads test.
 
-- [ ] **minor** · `packages/lib/src/services/machines/machine-pane-binding.ts:31` · Importing
+- [x] **minor** · `packages/lib/src/services/machines/machine-pane-binding.ts:31` · Importing
   `PROJECT_REPO_PATH` from `machine-project-promotion.ts` drags the whole promotion graph (git runners,
   sandbox client, machine-host adapter) into the binding module for one string constant · the same
   pattern already exists for `BRANCH_REPO_PATH`. Correct: move both constants beside `SANDBOX_ROOT` in
   `services/sandbox/sandbox-paths.ts`.
+  **Resolved**: both repo-path constants are defined in `services/sandbox/sandbox-paths.ts` beside `SANDBOX_ROOT`; the service modules re-export for existing callers.
 
-- [ ] **minor** · `apps/web/src/lib/ai/machines/headless-session-run-runtime.ts:303,372` ·
+- [x] **minor** · `apps/web/src/lib/ai/machines/headless-session-run-runtime.ts:303,372` ·
   `buildSystemPrompt(target, basePrompt, timezone)` is only ever called with two arguments, so
   `buildTimestampSystemPrompt(undefined)` always renders the fallback timezone for every dispatched run ·
   a dispatched agent's sense of "now" silently differs from the same session's interactive turns. Correct:
   thread the dispatcher's timezone through `HeadlessDispatchInput`, or drop the parameter.
+  **Resolved**: the dead `timezone` parameter is dropped.
 
-- [ ] **nit** · `apps/web/src/lib/ai/tools/sandbox-git/generate-tools.ts:68` · `withNodeTarget` silently
+- [x] **nit** · `apps/web/src/lib/ai/tools/sandbox-git/generate-tools.ts:68` · `withNodeTarget` silently
   returns the schema unchanged when `row.schema` is not a `ZodObject`, so a git row added later with a
   wrapped schema loses `target` addressing with no signal · Correct: throw at factory construction time
   for a row whose schema cannot carry `target`.
+  **Resolved**: `withNodeTarget` now throws at factory-construction time for a schema that cannot carry `target`.
 
-- [ ] **nit** · `apps/web/src/lib/ai/core/types.ts:124` · File still ends without a trailing newline
+- [x] **nit** · `apps/web/src/lib/ai/core/types.ts:124` · File still ends without a trailing newline
   (`\ No newline at end of file` in the diff) · add one.
+  **Resolved**: trailing newline added.
 
-- [ ] **nit** · `apps/web/src/hooks/useMachineWorkspaceSync.ts:30-40` · Residual race (1) — a second
+- [x] **nit** · `apps/web/src/hooks/useMachineWorkspaceSync.ts:30-40` · Residual race (1) — a second
   hook instance's stale full-replace hydrate can drop a just-created workspace until reload — is
   documented as "tracked as a follow-up" but no issue reference is given · Correct: link the tracking
   issue in the comment so the accepted race stays accountable.
+  **Resolved**: the accepted race now cites issue #2202 (entity promotion) in the comment.
 
 ## What is good
 
@@ -130,7 +143,8 @@ messages conventional and informative.
 
 ## Verdict
 
-**1 blocker / 4 majors / 4 minors / 3 nits.** Do not merge until the promoted-project Sprite reclaim
-path (blocker) exists — it leaks live billable VMs on the ordinary "remove project" and "delete machine"
-flows. The two headless-path gaps (credit gate, tool allowlist) are the next priority: both are cases
-where a control enforced on the interactive path is simply absent on the dispatched one.
+**1 blocker / 4 majors / 4 minors / 3 nits — ALL RESOLVED** (commits `3ab154cbf`, `78f51e6c1`,
+`5e7c57ec7` and follow-ups on `pu/machine-pane-fixes`). The blocker's reclaim path now exists at all
+three layers (trigger / teardown / reconciler); both headless-path controls match the interactive path;
+the torn-down-project fallback and the actor-permissions fall-through are confirmed by design and pinned
+with tests. Original findings preserved above for the record.

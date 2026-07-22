@@ -38,8 +38,10 @@ import { deriveBranchSessionKey, normalizeBranchName } from './branch-session';
 import { normalizeProjectName } from './project-paths';
 import { isUniqueViolation, type MachineBranchStore, type MachineBranchRecord } from './machine-branches-store';
 
-/** The directory on a branch-terminal's OWN Sprite the project is cloned into. */
-export const BRANCH_REPO_PATH = `${SANDBOX_ROOT}/repo`;
+// Defined in sandbox-paths.ts (see there for why); imported for local use and
+// re-exported for existing callers.
+import { BRANCH_REPO_PATH } from '../sandbox/sandbox-paths';
+export { BRANCH_REPO_PATH };
 
 /**
  * Where Claude Code writes its OAuth credential/config on a Sprite's own

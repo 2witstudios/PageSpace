@@ -66,6 +66,7 @@ function makeBranchLookup(rows: BranchRow[] = []): DeriveMachinePaneBindingDeps[
     findById: async (id) => rows.find((r) => r.id === id) ?? null,
     list: async (machineId, projectName) =>
       machineId === MACHINE_ID ? rows.filter((r) => r.projectName === projectName) : [],
+    listAll: async (machineId) => (machineId === MACHINE_ID ? rows : []),
   };
 }
 
@@ -170,6 +171,31 @@ describe('deriveMachinePaneBinding', () => {
     const deps = makeDeps({ terminalStore: makeTerminalStore(row) });
     const result = await deriveMachinePaneBinding({ chatId: MACHINE_ID, conversationId: CONVERSATION_ID }, deps);
     expect(result).toEqual({ ok: false, reason: 'binding_page_mismatch' });
+  });
+
+  it('given machine scope, should read ALL branches in ONE query — never one per project', async () => {
+    // deriveMachinePaneBinding runs on the hot path of every bound chat turn;
+    // 1 + N per-project branch reads is a per-turn tax that grows with the tree.
+    const listCalls: string[] = [];
+    const lookup = makeBranchLookup(BRANCH_ROWS);
+    const row = makeRow({ scope: 'machine', projectName: null, machineBranchId: null });
+    const binding = await deriveOk(
+      makeDeps({
+        terminalStore: makeTerminalStore(row),
+        projectLookup: makeProjectLookup(PROJECT_ROWS),
+        branchLookup: {
+          ...lookup,
+          list: async (machineId, projectName) => {
+            listCalls.push(projectName);
+            return lookup.list(machineId, projectName);
+          },
+        },
+      }),
+    );
+
+    expect(listCalls).toEqual([]);
+    // Same closure as before: every project, each followed by its live branches.
+    expect(binding.handles.filter((h) => h.kind === 'branch').length).toBeGreaterThan(0);
   });
 
   it('given machine scope, should bind self to SANDBOX_ROOT', async () => {

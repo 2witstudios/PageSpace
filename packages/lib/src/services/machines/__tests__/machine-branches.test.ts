@@ -37,6 +37,7 @@ function makeStore(seed: MachineBranchRecord[] = []) {
   const store: MachineBranchStore = {
     list: async (machineId, projectName) =>
       [...rows.values()].filter((r) => r.machineId === machineId && r.projectName === projectName),
+    listForMachine: async (machineId) => [...rows.values()].filter((r) => r.machineId === machineId),
     findByName: async (machineId, projectName, branchName) => rows.get(key(machineId, projectName, branchName)) ?? null,
     findById: async (id) => [...rows.values()].find((r) => r.id === id) ?? null,
     create: async (input) => {

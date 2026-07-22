@@ -32,8 +32,9 @@
  *    the list from a payload that never contained it. No later event
  *    reintroduces it (`updated` skips unknown workspaces — see below); a
  *    reload or remount does. The real fix is per-machine, cross-instance
- *    hydration state (the shape `declinedBootstraps` already has), tracked as
- *    a follow-up.
+ *    hydration state (the shape `declinedBootstraps` already has) — or the
+ *    entity-promotion successor that removes the full-replace hydrate
+ *    entirely. Tracked in issue #2202.
  * 2. A `machine-workspace:created` missed while the socket was disconnected
  *    leaves this browser without that workspace until the next full hydrate —
  *    see `onUpdated`'s doc for why an `updated` event can't introduce one.

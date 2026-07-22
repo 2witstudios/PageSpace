@@ -308,10 +308,10 @@ async function loadHistory(target: HeadlessSessionTarget): Promise<HeadlessTrans
  * question and wait, and its answer reaches the dispatcher only by being
  * written into this transcript.
  */
-function buildSystemPrompt(target: HeadlessSessionTarget, basePrompt: string | null, timezone?: string): string {
+function buildSystemPrompt(target: HeadlessSessionTarget, basePrompt: string | null): string {
   return (
     (basePrompt || 'You are a PageSpace Agent running on a machine.') +
-    `\n\n${buildTimestampSystemPrompt(timezone)}` +
+    `\n\n${buildTimestampSystemPrompt()}` +
     buildMachineBindingPrompt(target.binding) +
     `\n\nDISPATCHED TURN (no one is watching this run)` +
     `\n• This turn was sent to you by another agent through send_session. There is no interactive user attached: do not ask a question and wait for an answer — nothing will answer.` +

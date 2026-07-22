@@ -345,6 +345,7 @@ function createMockReq(overrides: Partial<{
     url: '/api/broadcast',
     headers: {},
     socket: { remoteAddress: '127.0.0.1' },
+    destroy: vi.fn(),
     on: vi.fn((event: string, cb: (chunk: unknown) => void) => {
       listeners[event] = listeners[event] || [];
       listeners[event].push(cb);
@@ -410,6 +411,27 @@ describe('requestListener - /api/broadcast', () => {
 
     expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
     expect(res.end).toHaveBeenCalledWith(JSON.stringify({ success: true }));
+  });
+
+  it('given a body over the internal byte cap, should destroy the connection and answer NOTHING — the HMAC check must never be reachable by memory exhaustion', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    const req = createMockReq({
+      headers: { 'x-broadcast-signature': 'valid-sig' },
+    });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.alloc(1024 * 1024 + 1));
+    // Chunks after the cap are ignored, and 'end' (if the socket teardown still
+    // fires it) must not run the handler on a truncated body.
+    req._emit('data', Buffer.from('trailing'));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(req.destroy).toHaveBeenCalled();
+    expect(res.writeHead).not.toHaveBeenCalled();
+    expect(res.end).not.toHaveBeenCalled();
+    expect(mockIo.emit).not.toHaveBeenCalled();
   });
 
   it('given POST /api/broadcast with valid signature but disallowed audience channelId, should return 403 and not emit (#972)', async () => {
