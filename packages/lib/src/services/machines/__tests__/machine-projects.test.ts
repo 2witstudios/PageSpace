@@ -28,6 +28,13 @@ function makeRecord(overrides: Partial<MachineProjectRecord> = {}): MachineProje
     name: 'my-repo',
     repoUrl: 'https://github.com/o/r.git',
     path: `${PROJECTS_ROOT}/my-repo-p1`,
+    // Unpromoted: a project lives on the owning Machine's Sprite until
+    // `promoteProject` gives it one of its own (machine-project-promotion.ts).
+    sessionKey: null,
+    sandboxId: null,
+    spriteInstanceId: null,
+    teardownRequestedAt: null,
+    spriteTornDownAt: null,
     createdAt: NOW,
     updatedAt: NOW,
     ...overrides,
@@ -44,6 +51,16 @@ function makeStore(seed: MachineProjectRecord[] = []) {
     list: async (machineId) => [...rows.values()].filter((r) => r.machineId === machineId),
     findByName: async (machineId, name) =>
       [...rows.values()].find((r) => r.machineId === machineId && r.name === name) ?? null,
+    findById: async (id) => rows.get(id) ?? null,
+    // Promotion CAS — exercised by machine-project-promotion.test.ts; here it
+    // only has to exist and honour the compare, since nothing in this file
+    // promotes.
+    promote: async ({ id, previousSandboxId, sessionKey, sandboxId, spriteInstanceId, now }) => {
+      const row = rows.get(id);
+      if (!row || row.sandboxId !== previousSandboxId) return false;
+      rows.set(id, { ...row, sessionKey, sandboxId, spriteInstanceId, spriteTornDownAt: null, teardownRequestedAt: null, updatedAt: now });
+      return true;
+    },
     create: async (input) => {
       const duplicate = [...rows.values()].some(
         (r) => r.machineId === input.machineId && r.name === input.name,
@@ -51,7 +68,7 @@ function makeStore(seed: MachineProjectRecord[] = []) {
       if (duplicate || rows.has(input.id)) {
         throw Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' });
       }
-      const row: MachineProjectRecord = {
+      const row: MachineProjectRecord = makeRecord({
         id: input.id,
         ownerId: input.ownerId,
         machineId: input.machineId,
@@ -60,7 +77,7 @@ function makeStore(seed: MachineProjectRecord[] = []) {
         path: input.path,
         createdAt: input.now,
         updatedAt: input.now,
-      };
+      });
       rows.set(input.id, row);
       return row;
     },

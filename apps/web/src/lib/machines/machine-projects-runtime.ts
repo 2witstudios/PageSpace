@@ -46,6 +46,8 @@ import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { createDbMachineProjectStore } from '@pagespace/lib/services/machines/machine-projects-store';
 import type { MachineActorContext, MachineProjectsDeps, MachineAcquireResult } from '@pagespace/lib/services/machines/machine-projects';
+import type { PromoteProjectDeps } from '@pagespace/lib/services/machines/machine-project-promotion';
+import { buildMachineBranchesDeps } from './machine-branches-runtime';
 
 // The Fly Sprites driver is loaded via a DYNAMIC import, never a static one —
 // @fly/sprites is ESM-only and @pagespace/lib compiles to CJS. Mirrors the
@@ -139,6 +141,8 @@ export function buildMachineProjectsDeps({ actorUserId }: { actorUserId: string 
     store: {
       list: async (machineId) => (await getMachineProjectStore()).list(machineId),
       findByName: async (machineId, name) => (await getMachineProjectStore()).findByName(machineId, name),
+      findById: async (id) => (await getMachineProjectStore()).findById(id),
+      promote: async (input) => (await getMachineProjectStore()).promote(input),
       create: async (input) => (await getMachineProjectStore()).create(input),
       remove: async (machineId, id) => (await getMachineProjectStore()).remove(machineId, id),
     },
@@ -199,5 +203,48 @@ export function buildMachineProjectsDeps({ actorUserId }: { actorUserId: string 
     },
     buildEnv: defaultBuildEnv,
     audit: (input) => writeCodeExecutionAudit({ input }),
+  };
+}
+
+/**
+ * Production wiring for LAZY PROJECT-SPRITE PROMOTION
+ * (`@pagespace/lib/services/machines/machine-project-promotion`).
+ *
+ * Promotion straddles both tiers, so this composes both wirings rather than
+ * inventing a third: the project row + the OWNING Machine's Sprite come from
+ * `buildMachineProjectsDeps` above (the dirty-tree check and the post-promotion
+ * checkout reclaim run on the machine's own filesystem), while provisioning the
+ * project's OWN Sprite and copying the Claude credential off the root Sprite
+ * come from the Branches wiring's `MachineHost` seam + `resolveRootMachineHandle`
+ * — the exact template promotion generalizes.
+ */
+export function buildPromoteProjectDeps({ actorUserId }: { actorUserId: string }): PromoteProjectDeps {
+  const projects = buildMachineProjectsDeps({ actorUserId });
+  const branches = buildMachineBranchesDeps();
+  return {
+    store: {
+      findByName: projects.store.findByName,
+      findById: projects.store.findById,
+      promote: projects.store.promote,
+    },
+    isEnabled: projects.isEnabled,
+    now: projects.now,
+    host: branches.host,
+    substrate: branches.substrate,
+    options: branches.options,
+    secret: branches.secret,
+    checkFullEgressEnablement: branches.checkFullEgressEnablement,
+    resolveGitHubToken: projects.resolveGitHubToken,
+    resolveRootMachineHandle: branches.resolveRootMachineHandle,
+    acquireMachineSandbox: projects.acquireMachineSandbox,
+    reconnect: projects.reconnect,
+    quota: projects.quota,
+    buildEnv: projects.buildEnv,
+    audit: projects.audit,
+    // Storage attribution is inherited from the branch seam (issue #2204 phase
+    // 3): a promoted project's bytes bill to the OWNING Machine page. Left
+    // UNBOUND until the storage reconcile grows its `machine_projects` arm —
+    // the seam is optional precisely so an unbound measurement degrades to the
+    // conservative never-measured floor rather than mis-attributing bytes.
   };
 }
