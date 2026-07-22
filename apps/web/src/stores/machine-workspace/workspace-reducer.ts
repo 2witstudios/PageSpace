@@ -527,25 +527,57 @@ export interface ServerWorkspaceDTO {
   columns: TerminalColumnState[];
 }
 
-function pendingPromptsOf(workspace: WorkspaceState | undefined): Map<string, string> {
-  const prompts = new Map<string, string>();
-  if (!workspace) return prompts;
-  for (const pane of panesOf(workspace)) {
-    if (pane.pendingPrompt !== undefined) prompts.set(pane.id, pane.pendingPrompt);
-  }
-  return prompts;
+/** This browser's own panes for a workspace, addressed by id — the one lookup
+ * {@link mergeColumns} needs to reconcile an incoming server payload against
+ * what is already on screen. */
+function panesById(existing: WorkspaceState | undefined): Map<string, TerminalPaneState> {
+  const panes = new Map<string, TerminalPaneState>();
+  if (!existing) return panes;
+  for (const pane of panesOf(existing)) panes.set(pane.id, pane);
+  return panes;
 }
 
-/** Applies the server's columns, but keeps any surviving pane's local-only
- * `pendingPrompt` — a starting prompt not yet typed into its PTY must not be
- * dropped just because an unrelated layout change from another browser landed. */
+/**
+ * Applies the server's columns, but keeps two things the incoming payload
+ * cannot legitimately take away from a pane this browser already has:
+ *
+ * - its local-only `pendingPrompt` — a starting prompt not yet typed into its
+ *   PTY must not be dropped just because an unrelated layout change from
+ *   another browser landed (the server DTO has no such field at all);
+ * - its `scope`, when the server's copy of that same pane is null.
+ *
+ * The second is a **monotone invariant, not a special case**: a pane's scope
+ * only ever transitions null -> bound within that pane's lifetime. There is no
+ * unbind flow — closing a session REMOVES the pane (`closePane`), it never
+ * empties one — so a server pane whose scope is null landing on a same-id pane
+ * this browser has already bound is ALWAYS a stale echo (this browser's own
+ * pre-bind snapshot, or another instance's full-list GET, racing the bind
+ * PATCH), never a newer truth. That race is the spawn double-row field bug:
+ * losing the bind left one spawned agent showing as an empty workspace row PLUS
+ * an unclaimed session row. Both merge paths — `applyServerUpsert` echoes and
+ * the full-list hydrate — funnel through here, so both are covered.
+ *
+ * The rule is LOAD-BEARING ON "no unbind flow". If a pane ever gains a way to
+ * be emptied in place, this stops being sound (a real unbind would be
+ * indistinguishable from a stale echo) and must be replaced with rev-ordered
+ * upserts: compare a monotonically increasing revision per workspace and drop
+ * payloads older than what is applied. The schema has `updatedAt` but no rev,
+ * and neither the DTO nor the broadcasts carry either — versioned upserts are
+ * the eventual general mechanism, this is the invariant that makes them
+ * unnecessary today.
+ *
+ * Panes the server DOESN'T list are still dropped: this guard defends an
+ * existing pane's bind, it never resurrects a pane closed elsewhere.
+ */
 function mergeColumns(existing: WorkspaceState | undefined, serverColumns: TerminalColumnState[]): TerminalColumnState[] {
-  const prompts = pendingPromptsOf(existing);
+  const localPanes = panesById(existing);
   return serverColumns.map((column) => ({
     id: column.id,
     panes: column.panes.map((pane) => {
-      const pendingPrompt = prompts.get(pane.id);
-      return pendingPrompt === undefined ? { id: pane.id, scope: pane.scope } : { id: pane.id, scope: pane.scope, pendingPrompt };
+      const local = localPanes.get(pane.id);
+      const scope = pane.scope ?? local?.scope ?? null;
+      const pendingPrompt = local?.pendingPrompt;
+      return pendingPrompt === undefined ? { id: pane.id, scope } : { id: pane.id, scope, pendingPrompt };
     }),
   }));
 }

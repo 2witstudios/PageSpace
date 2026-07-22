@@ -647,6 +647,48 @@ describe('useSyncedWorkspaceActions', () => {
     }
   });
 
+  // Field repro (the spawn double-row bug), pinned end-to-end across the two
+  // halves of this module: the palette's instant spawn calls `openTerminal`,
+  // whose PATCH races the workspace's own `created` broadcast. If that echo —
+  // taken from a server snapshot older than the bind, or simply re-sent with
+  // the pre-bind columns — could unbind the pane, the user saw ONE spawned
+  // agent as an empty workspace row PLUS an unclaimed session row. The
+  // monotone merge guard in `mergeColumns` is what makes the echo harmless.
+  it('given a stale machine-workspace:created echo with null-scope columns for a just-spawned session, keeps the pane bound', async () => {
+    mockFetchWithAuth.mockResolvedValue(jsonResponse({ bootstrapped: true, workspaces: [] }));
+
+    const { result } = renderHook(() => {
+      useMachineWorkspaceSync('m-stale-echo');
+      return useSyncedWorkspaceActions('m-stale-echo');
+    });
+    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalled());
+
+    // Exactly the shape the palette pushes: a chat-surface session bound into
+    // the first pane of its own, session-derived workspace.
+    const scope = { projectName: 'app', branchName: 'main', name: 'pagespace-x', kind: 'chat' as const };
+    act(() => {
+      result.current.openTerminal(scope);
+    });
+
+    const workspaceId = sessionWorkspaceId(scope);
+    const spawned = selectMachine('m-stale-echo')(useMachineWorkspaceStore.getState())!.workspaces[workspaceId];
+    const paneId = spawned.columns[0].panes[0].id;
+    expect(spawned.columns[0].panes[0].scope).toEqual(scope);
+
+    act(() => {
+      mockSocket.current!._trigger('machine-workspace:created', {
+        machineId: 'm-stale-echo',
+        id: workspaceId,
+        name: scope.name,
+        scope: { projectName: 'app', branchName: 'main' },
+        columns: [{ id: spawned.columns[0].id, panes: [{ id: paneId, scope: null }] }],
+      });
+    });
+
+    const after = selectMachine('m-stale-echo')(useMachineWorkspaceStore.getState())!.workspaces[workspaceId];
+    expect(after.columns[0].panes[0].scope).toEqual(scope);
+  });
+
   it("renameWorkspace PATCHes name only — the layout it never touched is not sent", async () => {
     seedMachine(MACHINE_ID);
     const workspace = workspacesOf(selectMachine(MACHINE_ID)(useMachineWorkspaceStore.getState()))[0];

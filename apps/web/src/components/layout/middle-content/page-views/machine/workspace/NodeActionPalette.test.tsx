@@ -4,16 +4,16 @@ import userEvent from '@testing-library/user-event';
 import { SWRConfig } from 'swr';
 import type { ReactElement } from 'react';
 import { assert } from '@/stores/__tests__/riteway';
-import { useMachineWorkspaceStore, selectMachine } from '@/stores/machine-workspace/useMachineWorkspaceStore';
+import { useMachineWorkspaceStore, selectMachine, sessionWorkspaceId } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 import NodeActionPalette from './NodeActionPalette';
 import type { MachineTreeNode } from './MachineTree';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
-// `createWorkspace`/`bindPaneTerminal` (useSyncedWorkspaceActions, #2048) push
-// the resulting workspace to the server via these — fire-and-forget from this
-// component's point of view, but each must resolve rather than return
-// undefined, or `pushNewWorkspace`'s `.then()` throws synchronously.
+// `openTerminal` (useSyncedWorkspaceActions, #2048) pushes the resulting
+// workspace to the server via these — fire-and-forget from this component's
+// point of view, but each must resolve rather than return undefined, or the
+// pushes' `.then()` throws synchronously.
 vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: vi.fn(async () => new Response(JSON.stringify({ agentTerminals: [] }), { status: 200 })),
   post: vi.fn(async () => ({})),
@@ -29,7 +29,30 @@ vi.mock('@/hooks/useIntegrations', () => ({
 }));
 
 import { toast } from 'sonner';
-import { post } from '@/lib/auth/auth-fetch';
+import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
+
+interface WorkspacePushBody {
+  id?: string;
+  workspaceId?: string;
+  columns?: { id: string; panes: { id: string; scope: unknown }[] }[];
+}
+
+/** Every workspace-shaped write this spawn issued, whichever verb carried it:
+ * `pushNewWorkspace`/`pushWorkspaceUpdate`'s POST goes through `post()`, its
+ * PATCH through `fetchWithAuth` (it needs the raw 404 status). The field bug was
+ * a write that published a workspace with an UNBOUND pane, so the assertions
+ * below have to see both. */
+const workspacePushBodies = (): WorkspacePushBody[] => {
+  const posted = vi
+    .mocked(post)
+    .mock.calls.filter(([url]) => url === '/api/machines/workspaces')
+    .map(([, body]) => body as WorkspacePushBody);
+  const patched = vi
+    .mocked(fetchWithAuth)
+    .mock.calls.filter(([url, init]) => url === '/api/machines/workspaces' && init?.method === 'PATCH')
+    .map(([, init]) => JSON.parse(String(init?.body)) as WorkspacePushBody);
+  return [...posted, ...patched];
+};
 
 const MACHINE_NODE: MachineTreeNode = { level: 'machine' };
 const PROJECT_NODE: MachineTreeNode = { level: 'project', projectName: 'app' };
@@ -169,29 +192,77 @@ describe('NodeActionPalette', () => {
       });
     });
 
+    const expectedId = sessionWorkspaceId({ projectName: 'app', branchName: undefined, name: 'shell-mocked' });
+
     await waitFor(() => {
-      const workspaceId = onWorkspaceCreated.mock.calls[0]?.[0];
       const machine = selectMachine('m1')(store());
-      const workspace = workspaceId ? machine?.workspaces[workspaceId] : undefined;
+      const workspace = machine?.workspaces[expectedId];
       const pane = workspace?.columns[0]?.panes[0];
       assert({
         given: 'the spawn resolving, on a project node',
         should:
-          'create a workspace scoped to that project, bind the spawned shell into its first pane with NO pending prompt (the prompt is typed in the pane), and report the workspace id',
+          'materialize the SESSION\'s own workspace (deterministic id, named after the session) scoped to that project, born with the shell bound into its first pane and NO pending prompt (the prompt is typed in the pane), and report that id',
         actual: {
-          reported: workspaceId !== undefined,
+          reported: onWorkspaceCreated.mock.calls[0]?.[0],
+          workspaces: machine?.order.length,
+          name: workspace?.name,
           scope: workspace?.scope,
           paneAgentName: pane?.scope?.name,
           kind: pane?.scope?.kind,
           pendingPrompt: pane?.pendingPrompt,
         },
         expected: {
-          reported: true,
+          reported: expectedId,
+          workspaces: 1,
+          name: 'shell-mocked',
           scope: { projectName: 'app' },
           paneAgentName: 'shell-mocked',
           kind: undefined,
           pendingPrompt: undefined,
         },
+      });
+    });
+  });
+
+  // The field bug, pinned at its source: create-then-bind published the
+  // workspace EMPTY first and bound it in a second, unordered write, so the
+  // pre-bind snapshot could echo back last and unbind the pane — one agent
+  // showing as an empty "Workspace N" row plus an unclaimed session row.
+  test('every workspace write a spawn issues carries the pane already bound — no null-scope pane ever crosses the wire', async () => {
+    vi.mocked(post).mockResolvedValueOnce({
+      agentTerminal: { name: 'pagespace-born-bound', agentType: 'pagespace', resumed: false },
+    });
+    const onWorkspaceCreated = vi.fn();
+    renderPalette(<NodeActionPalette machineId="m1" node={BRANCH_NODE} onWorkspaceCreated={onWorkspaceCreated} />);
+
+    const user = await openPalette();
+    await user.click(await screen.findByRole('option', { name: 'Agent' }));
+
+    const expectedId = sessionWorkspaceId({ projectName: 'app', branchName: 'main', name: 'pagespace-born-bound' });
+
+    await waitFor(() => {
+      assert({
+        given: 'the spawn reported as complete',
+        should: 'have reported the session-derived workspace id',
+        actual: onWorkspaceCreated.mock.calls[0]?.[0],
+        expected: expectedId,
+      });
+    });
+
+    await waitFor(() => {
+      const bodies = workspacePushBodies();
+      assert({
+        given: 'every workspace push this spawn issued',
+        should:
+          'address the session workspace and carry ONLY bound panes — a published null-scope pane is exactly the stale echo that unbound the local pane in the field',
+        actual: {
+          pushes: bodies.length > 0,
+          ids: [...new Set(bodies.map((body) => body.id ?? body.workspaceId))],
+          nullScopePanes: bodies.flatMap((body) =>
+            (body.columns ?? []).flatMap((column) => column.panes.filter((pane) => pane.scope === null))
+          ),
+        },
+        expected: { pushes: true, ids: [expectedId], nullScopePanes: [] },
       });
     });
   });
@@ -206,17 +277,23 @@ describe('NodeActionPalette', () => {
     const user = await openPalette();
     await user.click(await screen.findByRole('option', { name: 'Agent' }));
 
+    const expectedId = sessionWorkspaceId({ projectName: 'app', branchName: 'main', name: 'pagespace-mocked' });
+
     await waitFor(() => {
-      const workspaceId = onWorkspaceCreated.mock.calls[0]?.[0];
       const machine = selectMachine('m1')(store());
-      const workspace = workspaceId ? machine?.workspaces[workspaceId] : undefined;
+      const workspace = machine?.workspaces[expectedId];
       const pane = workspace?.columns[0]?.panes[0];
       assert({
         given: 'the palette\'s Agent choice, spawned on a branch node',
         should:
-          'record kind "chat" on the bound pane scope — the pane grid renders MachinePaneChat from this tag, so a palette spawn that omitted it would open as a PTY',
-        actual: { name: pane?.scope?.name, kind: pane?.scope?.kind },
-        expected: { name: 'pagespace-mocked', kind: 'chat' },
+          'record kind "chat" on the bound pane scope of the session\'s own workspace — the pane grid renders MachinePaneChat from this tag, so a palette spawn that omitted it would open as a PTY',
+        actual: {
+          reported: onWorkspaceCreated.mock.calls[0]?.[0],
+          workspaces: machine?.order.length,
+          name: pane?.scope?.name,
+          kind: pane?.scope?.kind,
+        },
+        expected: { reported: expectedId, workspaces: 1, name: 'pagespace-mocked', kind: 'chat' },
       });
     });
   });
