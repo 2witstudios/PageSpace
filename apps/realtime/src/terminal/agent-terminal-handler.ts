@@ -535,7 +535,7 @@ async function settleAccruedWindow(
  * clock is already running — `connectedAt` is only ever `undefined` here because
  * a quiesce stopped it.
  */
-function resumeBillingClock(session: TerminalSession): void {
+export function resumeBillingClock(session: TerminalSession): void {
   if (!session.payerId) return;
   if (session.connectedAt !== undefined) return;
   session.connectedAt = Date.now();

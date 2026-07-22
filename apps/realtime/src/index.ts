@@ -42,6 +42,7 @@ import {
   type SocketLike,
 } from './terminal/agent-terminal-handler';
 import { handleTerminalActivityRequest } from './terminal/terminal-activity';
+import { handleSessionReadRequest, handleSessionSendRequest } from './terminal/session-io';
 import { deriveAgentTerminalSessionKey, agentTerminalScopeFromNames } from './terminal/agent-terminal-session-key';
 import { buildAgentTerminalCheckAuth, resolveMachineSandbox } from './terminal/agent-terminal-access';
 import { createTerminalSessionMap } from './terminal/terminal-session-map';
@@ -766,6 +767,64 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                 res.end(JSON.stringify(result.body));
             }).catch((error: unknown) => {
                 loggers.realtime.error('Terminal activity request failed', error instanceof Error ? error : new Error(String(error)));
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Internal error' }));
+            });
+        });
+    } else if (req.method === 'POST' && req.url === '/api/session-read') {
+        // read_session (PTY half) + the list_sessions liveness sweep. The bytes
+        // live in THIS process's session map, so the web tier — which has
+        // already resolved and authorized the session against the
+        // conversation's derived handle set — asks for them over a signed POST.
+        let body = '';
+        req.on('data', chunk => {
+            body += chunk.toString();
+        });
+        req.on('end', () => {
+            const signatureHeader = req.headers['x-broadcast-signature'] as string;
+            if (!verifySignature(signatureHeader, body)) {
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Authentication failed' }));
+                return;
+            }
+
+            handleSessionReadRequest(
+                { sessionMap: agentTerminalSessionMap, sessionKeyFor: buildAgentTerminalSessionKey },
+                body,
+            ).then((result) => {
+                res.writeHead(result.status, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result.body));
+            }).catch((error: unknown) => {
+                loggers.realtime.error('Session read request failed', error instanceof Error ? error : new Error(String(error)));
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Internal error' }));
+            });
+        });
+    } else if (req.method === 'POST' && req.url === '/api/session-input') {
+        // send_session (PTY half): types stdin into a live agent-terminal PTY
+        // through the same `session.command.write` a human viewer's keystroke
+        // takes, so anyone watching sees it echoed exactly as they would see a
+        // teammate type. Authorization happened in the web tier before signing.
+        let body = '';
+        req.on('data', chunk => {
+            body += chunk.toString();
+        });
+        req.on('end', () => {
+            const signatureHeader = req.headers['x-broadcast-signature'] as string;
+            if (!verifySignature(signatureHeader, body)) {
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Authentication failed' }));
+                return;
+            }
+
+            handleSessionSendRequest(
+                { sessionMap: agentTerminalSessionMap, sessionKeyFor: buildAgentTerminalSessionKey },
+                body,
+            ).then((result) => {
+                res.writeHead(result.status, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result.body));
+            }).catch((error: unknown) => {
+                loggers.realtime.error('Session input request failed', error instanceof Error ? error : new Error(String(error)));
                 res.writeHead(500, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: false, error: 'Internal error' }));
             });
