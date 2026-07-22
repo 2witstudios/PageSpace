@@ -158,7 +158,10 @@ describe('MCP drive-scope enforcement', () => {
 
   it('canActorEditPage: root-create path — an in-scope drive id with no page row is allowed', async () => {
     // create_page passes the DRIVE id to canActorEditPage for root-level creates.
-    mockDbWhere.mockResolvedValue([AGENT_PAGE_ROW]); // no page row for a drive id (so no driveId)
+    // One mock serves both selects: the actor row resolves the agent, and the
+    // page-drive lookup finds no driveId (a drive id has no page row), so the
+    // scope check falls back to treating the id itself as the drive.
+    mockDbWhere.mockResolvedValue([AGENT_PAGE_ROW]);
     mockGetAgentAccessLevel.mockResolvedValue({ canEdit: true });
     expect(await canActorEditPage(scopedAgentCtx, 'drive-A')).toBe(true);
     // The scope ceiling passed (drive-A is in scope), so the agent ACL was consulted.
@@ -493,6 +496,24 @@ describe('machine-pane conversations (agentPageId is a MACHINE page, not an agen
 
     expect(await canActorViewPage(machinePaneCtx, 'page-x')).toBe(true);
     expect(vi.mocked(getUserAccessLevel)).toHaveBeenCalledWith('user-1', 'page-x');
+    expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
+  });
+
+  // A consulted agent (ask_agent) inherits the PARENT's actor identity — the
+  // nested context spreads the caller's chatSource — so from a machine pane it
+  // resolves to the invoking user and can never exceed that user's own ACL.
+  it('a nested ask_agent run from a machine pane stays bounded by the invoking user', async () => {
+    const { getUserAccessLevel } = await import('@pagespace/lib/permissions/permissions');
+    vi.mocked(getUserAccessLevel).mockResolvedValue(null);
+    const nestedCtx = {
+      ...machinePaneCtx,
+      agentCallDepth: 1,
+      parentAgentId: 'machine-1',
+      requestOrigin: 'agent',
+    } as ToolExecutionContext;
+
+    expect(await canActorViewPage(nestedCtx, 'page-the-user-cannot-see')).toBe(false);
+    expect(vi.mocked(getUserAccessLevel)).toHaveBeenCalledWith('user-1', 'page-the-user-cannot-see');
     expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
   });
 

@@ -35,12 +35,16 @@ export function getAgentPageId(context: ToolExecutionContext): string | undefine
  * would otherwise confine the agent to its own drive memberships should fall
  * back to the invoking user's own access instead — for personal/global-style
  * assistants that need the user's full reach rather than explicit membership.
+ *
+ * Carries the SAME AI_CHAT type gate as resolveActingAgentId — the two seams
+ * answer the same question ("is this an agent acting with the user's reach?")
+ * and consumers (MachineDirectoryRuntimeDeps.isUserScopedAgent) are documented
+ * as mirroring them. The column is AI_CHAT-only by construction today, but a
+ * permissions seam does not lean on a schema invariant holding forever: a
+ * non-agent row that somehow carries the flag must not widen the machine
+ * Settings-toggle exemption.
  */
 export async function hasAgentUserScopedAccess(agentPageId: string): Promise<boolean> {
-  // Same AI_CHAT gate as resolveActingAgentId — the two seams answer the same
-  // question and consumers (MachineDirectoryRuntimeDeps.isUserScopedAgent)
-  // are documented as mirroring them. A non-agent page is never user-scoped,
-  // whatever its row happens to carry.
   const row = await fetchActingPageRow(agentPageId);
   return row?.type === PageType.AI_CHAT && row.userScopedAccess;
 }
@@ -51,9 +55,7 @@ export async function hasAgentUserScopedAccess(agentPageId: string): Promise<boo
  * (`userScopedAccess`)? Kept as a single select so the type gate below costs
  * zero additional queries on a path every tool call runs through.
  */
-async function fetchActingPageRow(
-  agentPageId: string,
-): Promise<{ type: string; userScopedAccess: boolean } | undefined> {
+async function fetchActingPageRow(agentPageId: string) {
   const [row] = await db
     .select({ type: pages.type, userScopedAccess: pages.userScopedAccess })
     .from(pages)
@@ -77,6 +79,15 @@ async function fetchActingPageRow(
  * matches the PTY path; the chat route already authorized that user against the
  * machine page. A missing page row is a non-agent for the same reason (and the
  * user's own ACL still denies a page that does not exist).
+ *
+ * Nested (ask_agent) runs inherit the PARENT's actor identity by design —
+ * agent-communication-tools.ts spreads the caller's context, and
+ * sandbox-tools-runtime's activeMachineAgentPageId documents the same "the
+ * agent's own page or the parent's for a sub-agent" rule. So a consulted agent
+ * reached FROM a machine pane also resolves to the invoking user: bounded by
+ * that user's own ACL, never beyond it, and never wider than what the pane's
+ * own tools already reach. Before this gate that whole path was dead, not
+ * tighter — ask_agent's own canActorViewPage gate denied at the door.
  *
  * Exported for tools that branch on the same "is this a membership-scoped
  * agent, or should it fall through to the user's own reach" question outside
