@@ -49,8 +49,10 @@ import {
   workspacesOf,
   workspaceShowing,
   sessionWorkspaceId,
+  nodeScopeNames,
   type MachineNodeScope,
   type OpenTerminalScope,
+  type ServerColumnDTO,
   type ServerWorkspaceDTO,
   type TerminalColumnState,
 } from '@/stores/machine-workspace/useMachineWorkspaceStore';
@@ -174,7 +176,7 @@ export function useMachineWorkspaceSync(machineId: string | null): void {
     const payload = (local ? workspacesOf(local) : []).map((workspace) => ({
       id: workspace.id,
       name: workspace.name,
-      scope: workspace.scope,
+      scope: nodeScopeNames(workspace.scope),
       columns: toWireColumns(workspace.columns),
     }));
 
@@ -250,7 +252,9 @@ export function useMachineWorkspaceSync(machineId: string | null): void {
       machineId: string;
       workspaceId: string;
       name?: string;
-      columns?: TerminalColumnState[];
+      // As they arrive: a client still running the pre-narrowing code sends
+      // panes carrying their own checkout. `applyServerUpsert` projects.
+      columns?: ServerColumnDTO[];
     }) => {
       if (payload.machineId !== mid) return;
       // `updated` only carries whichever of name/columns actually changed —
@@ -318,7 +322,7 @@ async function pushNewWorkspace(machineId: string, workspaceId: string): Promise
     machineId,
     id: workspace.id,
     name: workspace.name,
-    scope: workspace.scope,
+    scope: nodeScopeNames(workspace.scope),
     columns: toWireColumns(workspace.columns),
   })
     .then((res) => {
@@ -391,7 +395,7 @@ async function pushWorkspaceUpdate(machineId: string, workspaceId: string, chang
     machineId,
     id: workspace.id,
     name: workspace.name,
-    scope: workspace.scope,
+    scope: nodeScopeNames(workspace.scope),
     columns,
   }).catch(() => {});
 }

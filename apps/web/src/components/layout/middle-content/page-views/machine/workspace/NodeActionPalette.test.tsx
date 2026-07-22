@@ -215,7 +215,7 @@ describe('NodeActionPalette', () => {
           reported: expectedId,
           workspaces: 1,
           name: 'shell-mocked',
-          scope: { projectName: 'app' },
+          scope: { level: 'project', projectName: 'app' },
           paneAgentName: 'shell-mocked',
           kind: undefined,
           pendingPrompt: undefined,
@@ -312,7 +312,7 @@ describe('NodeActionPalette', () => {
       {
         id: 'ws-elsewhere',
         name: 'Where it already lives',
-        scope: { projectName: 'app', branchName: 'main' },
+        scope: { level: 'branch', projectName: 'app', branchName: 'main' },
         columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: paneScope }] }],
       },
     ]);

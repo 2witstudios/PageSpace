@@ -26,6 +26,8 @@ import {
   panesOf,
   workspacesOf,
   sessionWorkspaceId,
+  paneTerminalScope,
+  nodeScopeNames,
   MACHINE_NODE_SCOPE,
   type MachineNodeScope,
   type OpenTerminalScope,
@@ -57,11 +59,18 @@ function freshNameSuffix(): string {
 }
 
 /** The checkout a workspace's agents run in, named for the picker — the promise
- * the picker makes has to be the scope the spawn actually uses. */
+ * the picker makes has to be the scope the spawn actually uses. TOTAL over the
+ * node kinds: a fourth one fails compilation here rather than falling into a
+ * label meant for one of the other three. */
 function scopeLabelOf(scope: MachineNodeScope): string {
-  if (!scope.projectName) return 'the machine';
-  if (!scope.branchName) return scope.projectName;
-  return `${scope.projectName} / ${scope.branchName}`;
+  switch (scope.level) {
+    case 'machine':
+      return 'the machine';
+    case 'project':
+      return scope.projectName;
+    case 'branch':
+      return `${scope.projectName} / ${scope.branchName}`;
+  }
 }
 
 export default function TerminalPanes({ machineId, socket }: TerminalPanesProps) {
@@ -91,10 +100,11 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
   // `agentTerminals`/`isLoading` feed the per-pane surface decision
   // (`resolvePaneSurface`): a kind-less pane's surface is resolved from this
   // list, and a chat pane finds its conversation ROW id in it.
+  const scopeNames = nodeScopeNames(scope);
   const { agentTerminals, isLoading: agentTerminalsLoading, addAgentTerminal, removeAgentTerminal } = useAgentTerminals(
     machineId,
-    scope.projectName ?? null,
-    scope.branchName ?? null,
+    scopeNames.projectName ?? null,
+    scopeNames.branchName ?? null,
   );
 
   /**
@@ -110,8 +120,7 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
         workspaceId,
         paneId,
         {
-          projectName: scope.projectName,
-          branchName: scope.branchName,
+          ...nodeScopeNames(scope),
           name: created.name,
           // The surface decision, recorded at the one moment it is KNOWN
           // rather than re-derived from the SWR list on every future mount.
@@ -143,7 +152,7 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
         await removeAgentTerminal(created.name).catch(() => {});
       }
     },
-    [addAgentTerminal, removeAgentTerminal, bindPaneTerminal, workspaceId, scope.projectName, scope.branchName],
+    [addAgentTerminal, removeAgentTerminal, bindPaneTerminal, workspaceId, scope],
   );
 
   /**
@@ -159,11 +168,12 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
    * Read from the store rather than this render's `workspace`, since only the
    * machine-wide state can see panes in the workspaces we aren't rendering.
    *
-   * The kill is addressed by the PANE's own scope (`killAgentTerminal`), not
-   * through this component's workspace-scoped hook — a pane's checkout can
-   * differ from its workspace's, and a DELETE under the workspace scope would
-   * target a different same-named terminal (or nothing) while the one the user
-   * closed lives on.
+   * The kill is addressed by the session address RE-DERIVED from the closing
+   * pane's own workspace (`paneTerminalScope`), not by this component's
+   * workspace-scoped hook: the closing pane can belong to a workspace other
+   * than the active one, and a DELETE for a bare name would address the
+   * machine root — a different same-named terminal, or nothing — while the one
+   * the user closed lives on.
    */
   const closePaneAndKill = useCallback(
     (paneId: string) => {
@@ -174,15 +184,22 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
       // machine-wide id lookup could match a same-id pane in another
       // workspace and kill that pane's session instead.
       const closingWorkspace = current?.workspaces[workspaceId];
-      const closing = closingWorkspace
+      const closingPaneScope = closingWorkspace
         ? (panesOf(closingWorkspace).find((candidate) => candidate.id === paneId)?.scope ?? null)
         : null;
+      // The pane holds a name; its checkout is its workspace's. Joined here,
+      // once, and that address is what both the kill and the comparison below
+      // speak in.
+      const closing =
+        closingWorkspace && closingPaneScope ? paneTerminalScope(closingWorkspace.scope, closingPaneScope) : null;
 
       // Compared by `sessionWorkspaceId` — the session's real identity is the
       // (project, branch, name) triple (that is `machine_agent_terminals`' unique
-      // index), not the name alone, which two branches could legitimately share.
-      // "Another pane" is the (workspace, pane) TUPLE, for the same reason the
-      // lookup above is workspace-scoped.
+      // index), not the name alone, which two workspaces at different checkouts
+      // could legitimately share. Each candidate pane's identity is therefore
+      // re-derived through ITS OWN workspace's scope. "Another pane" is the
+      // (workspace, pane) TUPLE, for the same reason the lookup above is
+      // workspace-scoped.
       const boundElsewhere =
         closing !== null &&
         current !== undefined &&
@@ -191,7 +208,8 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
             (candidate) =>
               (candidateWorkspace.id !== workspaceId || candidate.id !== paneId) &&
               candidate.scope !== null &&
-              sessionWorkspaceId(candidate.scope) === sessionWorkspaceId(closing),
+              sessionWorkspaceId(paneTerminalScope(candidateWorkspace.scope, candidate.scope)) ===
+                sessionWorkspaceId(closing),
           ),
         );
 
@@ -444,12 +462,14 @@ function TerminalPane({
   onPickerFocused(): void;
   onPromptSent(): void;
 }) {
-  const sessionId = pane.scope ? paneSessionId(machineId, pane.scope) : null;
+  // The pane's session address: its workspace's checkout plus its own name.
+  const sessionScope = pane.scope ? paneTerminalScope(workspaceScope, pane.scope) : null;
+  const sessionId = sessionScope ? paneSessionId(machineId, sessionScope) : null;
   // Which surface this pane renders — decided by the pure helper, never by
   // defaulting: an Xterm mounted for what turns out to be a chat session
   // would open (and register a viewer on) a PTY stream that shouldn't exist.
   const resolved = pane.scope
-    ? resolvePaneSurface({ scope: pane.scope, workspaceScope, agentTerminals, isLoading: agentTerminalsLoading })
+    ? resolvePaneSurface({ scope: pane.scope, agentTerminals, isLoading: agentTerminalsLoading })
     : null;
   const hasControls = canSplit || canClose;
   const paneControls: PaneControlProps | undefined = hasControls
@@ -466,13 +486,9 @@ function TerminalPane({
           isActive={isActive}
           identity={
             pane.scope ? (
-              <PaneSessionIdentity
-                name={pane.scope.name}
-                // The PANE's own checkout, not the workspace's — a restored
-                // server layout can hold panes bound at other checkouts, and
-                // the chip exists to make exactly that visible.
-                scopeLabel={scopeLabelOf({ projectName: pane.scope.projectName, branchName: pane.scope.branchName })}
-              />
+              // One checkout per workspace, so the chip reads the workspace's
+              // label — the same string the picker promises a spawn will run in.
+              <PaneSessionIdentity name={pane.scope.name} scopeLabel={scopeLabel} />
             ) : (
               <span className="truncate">New pane</span>
             )
@@ -481,7 +497,7 @@ function TerminalPane({
         />
       )}
       <div className="relative min-h-0 flex-1">
-        {!pane.scope || !sessionId || !resolved ? (
+        {!sessionScope || !sessionId || !resolved ? (
           <PaneAgentPicker
             focused={pickerFocused}
             scopeLabel={scopeLabel}
@@ -524,7 +540,7 @@ function TerminalPane({
             key={sessionId}
             socket={socket}
             machineId={machineId}
-            scope={pane.scope}
+            scope={sessionScope}
             sessionId={sessionId}
             pendingPrompt={pane.pendingPrompt}
             onPromptSent={onPromptSent}

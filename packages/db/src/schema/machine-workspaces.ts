@@ -3,13 +3,23 @@ import { relations } from 'drizzle-orm';
 import { users } from './auth';
 import { pages } from './core';
 
-/** A session's scope plus its name — mirrors the client's `OpenTerminalScope`
- * (apps/web/src/stores/machine-workspace/workspace-reducer.ts), independently
- * expressed here since `packages/db` cannot depend on `apps/web`. */
+/**
+ * What a pane records about its session — mirrors the client's
+ * `PaneSessionScope` (apps/web/src/stores/machine-workspace/workspace-reducer.ts),
+ * independently expressed here since `packages/db` cannot depend on `apps/web`.
+ *
+ * NO project/branch. A pane's checkout is its WORKSPACE's — the `projectName`/
+ * `branchName` columns on this very row — so carrying it per pane would be a
+ * second copy of one fact, free to disagree with the row that owns it. Rows
+ * written before this narrowing may still hold the wider shape; the client
+ * projects them on read (`projectStoredPaneScope`), and no backfill is needed
+ * because no writer ever produced a pane that disagreed with its workspace.
+ */
 export interface WorkspaceLayoutScopeDTO {
-  projectName?: string;
-  branchName?: string;
   name: string;
+  /** What the pane renders once bound: a PTY, or the Agent chat UI (#2166).
+   * Omitted means `'terminal'`. */
+  kind?: 'terminal' | 'chat';
 }
 
 export interface WorkspaceLayoutPaneDTO {

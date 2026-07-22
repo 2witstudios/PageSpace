@@ -56,7 +56,7 @@ import {
   isAgentRuntimeType,
   type AgentRuntimeType,
 } from '@pagespace/lib/services/machines/agent-terminal-types';
-import { autoSessionName, sessionWorkspaceId } from '@/stores/machine-workspace/useMachineWorkspaceStore';
+import { autoSessionName, sessionWorkspaceId, nodeScopeNames } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 import { AddButton } from './RemoveButton';
 import { nodeScopeOf } from './WorkspaceLeaves';
 import { agentTypeLabelOf } from './pane-surface';
@@ -252,7 +252,8 @@ function InstantSpawnGroup({
   onSpawned(workspaceId: string): void;
 }) {
   const scope = nodeScopeOf(node);
-  const { addAgentTerminal, removeAgentTerminal } = useAgentTerminals(machineId, scope.projectName ?? null, scope.branchName ?? null);
+  const scopeNames = nodeScopeNames(scope);
+  const { addAgentTerminal, removeAgentTerminal } = useAgentTerminals(machineId, scopeNames.projectName ?? null, scopeNames.branchName ?? null);
   // Server-synced (#2048) — a workspace/pane created here must push to the
   // server like every other create/bind path, not just materialize locally.
   const { openTerminal } = useSyncedWorkspaceActions(machineId);
@@ -267,8 +268,7 @@ function InstantSpawnGroup({
       created = await addAgentTerminal(autoSessionName(agentType, freshNameSuffix()), agentType);
 
       const paneScope = {
-        projectName: scope.projectName,
-        branchName: scope.branchName,
+        ...scopeNames,
         name: created.name,
         // Same rule as TerminalPanes' spawnIntoPane: record the surface at bind
         // time, judged by the API's answer (`created.agentType` — a resumed
