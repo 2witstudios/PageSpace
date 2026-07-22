@@ -384,3 +384,207 @@ describe('add_session', () => {
     });
   });
 });
+
+describe('move_session', () => {
+  const boundView: SessionView = {
+    id: 'w1',
+    name: 'worker',
+    projectName: null,
+    branchName: null,
+    columns: [{ id: 'c1', panes: [{ id: 'p1', scope: { name: 'worker', kind: 'chat' } }] }],
+  };
+  const otherView: SessionView = {
+    id: 'w2',
+    name: 'Workspace 1',
+    projectName: null,
+    branchName: null,
+    columns: [{ id: 'c2', panes: [{ id: 'p2', scope: { name: 'other' } }] }],
+  };
+
+  it('given a re-home into another view at the same node, should close the old manifestation and place the new one', async () => {
+    const { deps: d, recorded } = deps({
+      listViews: async () => [boundView, otherView],
+      findSession: async () => agentRow('worker'),
+    });
+    const tools = createSessionTools(d);
+
+    const result = (await exec(
+      tools.move_session,
+      { name: 'worker', placement: { splitInto: 'w2', direction: 'down' } },
+      context(rootBinding()),
+    )) as { success: boolean; view?: { id: string } };
+
+    assert({
+      given: 'a session moved into another view at its own node',
+      should: 'remove the emptied source view and update the destination',
+      actual: {
+        success: result.success,
+        view: result.view?.id,
+        writes: recorded.writes[0]?.writes.map((write) => ({ kind: write.kind, id: write.id })),
+      },
+      expected: {
+        success: true,
+        view: 'w2',
+        writes: [
+          { kind: 'remove', id: 'w1' },
+          { kind: 'update', id: 'w2' },
+        ],
+      },
+    });
+  });
+
+  it('given a move into a view at another node, should refuse and write nothing', async () => {
+    const projectView: SessionView = {
+      id: 'w3',
+      name: 'Workspace 2',
+      projectName: 'repo',
+      branchName: null,
+      columns: [{ id: 'c3', panes: [{ id: 'p3', scope: null }] }],
+    };
+    const { deps: d, recorded } = deps({
+      listViews: async () => [boundView, projectView],
+      findSession: async () => agentRow('worker'),
+    });
+    const tools = createSessionTools(d);
+
+    const result = (await exec(
+      tools.move_session,
+      { name: 'worker', placement: { splitInto: 'w3', direction: 'down' } },
+      context(rootBinding()),
+    )) as { success: boolean };
+
+    assert({
+      given: 'a machine-scoped session moved into a project-scoped view',
+      should: 'refuse — a move never changes a session\'s sandbox',
+      actual: { success: result.success, writes: recorded.writes.length },
+      expected: { success: false, writes: 0 },
+    });
+  });
+
+  it('given a session that does not exist at the target node, should refuse', async () => {
+    const { deps: d, recorded } = deps({ listViews: async () => [otherView] });
+    const tools = createSessionTools(d);
+
+    const result = (await exec(
+      tools.move_session,
+      { name: 'ghost', placement: 'new-view' },
+      context(rootBinding()),
+    )) as { success: boolean };
+
+    assert({
+      given: 'a name no session at this node carries',
+      should: 'refuse and write nothing',
+      actual: { success: result.success, writes: recorded.writes.length },
+      expected: { success: false, writes: 0 },
+    });
+  });
+
+  it('given a target outside the handle set, should deny before reading anything', async () => {
+    const { deps: d, recorded } = deps({
+      findSession: async () => {
+        throw new Error('must not read a session at an unaddressable node');
+      },
+    });
+    const tools = createSessionTools(d);
+
+    const result = (await exec(
+      tools.move_session,
+      { name: 'worker', target: { project: 'sibling' }, placement: 'new-view' },
+      context(rootBinding()),
+    )) as { success: boolean };
+
+    assert({
+      given: 'a target outside the derived handle set',
+      should: 'deny',
+      actual: { success: result.success, writes: recorded.writes.length },
+      expected: { success: false, writes: 0 },
+    });
+  });
+});
+
+describe('kill_session', () => {
+  const view: SessionView = {
+    id: 'w1',
+    name: 'worker',
+    projectName: null,
+    branchName: null,
+    columns: [{ id: 'c1', panes: [{ id: 'p1', scope: { name: 'worker', kind: 'chat' } }] }],
+  };
+
+  it('given a session in the handle set, should kill it and close its manifestations', async () => {
+    const killed: string[] = [];
+    const { deps: d, recorded } = deps({
+      listViews: async () => [view],
+      findSession: async () => agentRow('worker'),
+      killSession: async ({ name }) => {
+        killed.push(name);
+        return { ok: true };
+      },
+    });
+    const tools = createSessionTools(d);
+
+    const result = (await exec(tools.kill_session, { name: 'worker' }, context(rootBinding()))) as {
+      success: boolean;
+    };
+
+    assert({
+      given: 'a session at the bound node',
+      should: 'kill the session and remove the view it was the only pane of',
+      actual: {
+        success: result.success,
+        killed,
+        writes: recorded.writes[0]?.writes,
+      },
+      expected: {
+        success: true,
+        killed: ['worker'],
+        writes: [{ kind: 'remove', id: 'w1' }],
+      },
+    });
+  });
+
+  it('given a target outside the handle set, should deny via the one policy site and kill nothing', async () => {
+    const { deps: d, recorded } = deps({
+      killSession: async () => {
+        throw new Error('must not kill outside the derived handle set');
+      },
+      findSession: async () => {
+        throw new Error('must not read a session at an unaddressable node');
+      },
+    });
+    const tools = createSessionTools(d);
+
+    const result = (await exec(
+      tools.kill_session,
+      { name: 'worker', target: { project: 'sibling' } },
+      context(rootBinding()),
+    )) as { success: boolean };
+
+    assert({
+      given: 'a kill aimed at a node the derived set never contained',
+      should: 'deny and touch nothing',
+      actual: { success: result.success, writes: recorded.writes.length },
+      expected: { success: false, writes: 0 },
+    });
+  });
+
+  it('given a kill the runtime refuses, should report it and leave the manifestation alone', async () => {
+    const { deps: d, recorded } = deps({
+      listViews: async () => [view],
+      findSession: async () => agentRow('worker'),
+      killSession: async () => ({ ok: false, reason: 'error' }),
+    });
+    const tools = createSessionTools(d);
+
+    const result = (await exec(tools.kill_session, { name: 'worker' }, context(rootBinding()))) as {
+      success: boolean;
+    };
+
+    assert({
+      given: 'a kill the runtime could not complete',
+      should: 'report the failure and close no panes',
+      actual: { success: result.success, writes: recorded.writes.length },
+      expected: { success: false, writes: 0 },
+    });
+  });
+});

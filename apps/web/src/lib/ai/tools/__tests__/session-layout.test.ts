@@ -1,7 +1,13 @@
 import { describe, it, beforeEach } from 'vitest';
 import { assert } from './riteway';
 
-import { planPlaceSession, toWireColumns, type SessionView } from '../session-layout';
+import {
+  planCloseSession,
+  planMoveSession,
+  planPlaceSession,
+  toWireColumns,
+  type SessionView,
+} from '../session-layout';
 import {
   useMachineWorkspaceStore,
   sessionWorkspaceId,
@@ -153,6 +159,224 @@ describe('planPlaceSession', () => {
           columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: { name: scope.name, kind: 'terminal' } }] }],
         },
       ],
+    });
+  });
+});
+
+describe('planCloseSession', () => {
+  it('given the session\'s only pane, should remove the whole view', () => {
+    const scope: OpenTerminalScope = { name: 'shell-a1', kind: 'terminal' };
+    const view: SessionView = {
+      id: 'w1',
+      name: 'shell-a1',
+      projectName: null,
+      branchName: null,
+      columns: [{ id: 'c1', panes: [{ id: 'p1', scope: { name: 'shell-a1', kind: 'terminal' } }] }],
+    };
+
+    assert({
+      given: 'a session that is the only pane of its view',
+      should: 'remove the view rather than leave an empty one',
+      actual: planCloseSession([view], scope),
+      expected: [{ kind: 'remove', id: 'w1' }],
+    });
+  });
+
+  it('given a session sharing a view, should close only its pane', () => {
+    const scope: OpenTerminalScope = { name: 'shell-a1', kind: 'terminal' };
+    const view: SessionView = {
+      id: 'w1',
+      name: 'Workspace 1',
+      projectName: null,
+      branchName: null,
+      columns: [
+        {
+          id: 'c1',
+          panes: [
+            { id: 'p1', scope: { name: 'other' } },
+            { id: 'p2', scope: { name: 'shell-a1', kind: 'terminal' } },
+          ],
+        },
+      ],
+    };
+
+    assert({
+      given: 'a session sharing its view with another',
+      should: 'update the view without its pane',
+      actual: planCloseSession([view], scope),
+      expected: [
+        { kind: 'update', id: 'w1', columns: [{ id: 'c1', panes: [{ id: 'p1', scope: { name: 'other' } }] }] },
+      ],
+    });
+  });
+
+  it('given a session at another node with the same name, should leave it alone', () => {
+    const scope: OpenTerminalScope = { name: 'shell-a1', kind: 'terminal' };
+    const view: SessionView = {
+      id: 'w1',
+      name: 'shell-a1',
+      projectName: 'repo',
+      branchName: null,
+      columns: [{ id: 'c1', panes: [{ id: 'p1', scope: { name: 'shell-a1', kind: 'terminal' } }] }],
+    };
+
+    assert({
+      given: 'a same-named session in a project-scoped view',
+      should: 'plan nothing for a machine-scoped kill',
+      actual: planCloseSession([view], scope),
+      expected: [],
+    });
+  });
+});
+
+describe('planMoveSession', () => {
+  beforeEach(resetStore);
+
+  it('given a re-home into another view at the same node, should close the old manifestation and place the new one', () => {
+    const scope: OpenTerminalScope = { name: 'shell-a1', kind: 'terminal' };
+    const source: SessionView = {
+      id: 'w1',
+      name: 'shell-a1',
+      projectName: null,
+      branchName: null,
+      columns: [{ id: 'c1', panes: [{ id: 'p1', scope: { name: 'shell-a1', kind: 'terminal' } }] }],
+    };
+    const destination: SessionView = {
+      id: 'w2',
+      name: 'Workspace 1',
+      projectName: null,
+      branchName: null,
+      columns: [{ id: 'c2', panes: [{ id: 'p2', scope: { name: 'other' } }] }],
+    };
+
+    const plan = planMoveSession([source, destination], scope, { splitInto: 'w2', direction: 'down' }, {
+      paneId: 'p3',
+      columnId: 'c3',
+    });
+
+    assert({
+      given: 'a session moved out of its own view into another',
+      should: 'remove the emptied source view and bind a fresh pane in the destination',
+      actual: plan.ok ? plan.writes : plan,
+      expected: [
+        { kind: 'remove', id: 'w1' },
+        {
+          kind: 'update',
+          id: 'w2',
+          columns: [
+            {
+              id: 'c2',
+              panes: [
+                { id: 'p2', scope: { name: 'other' } },
+                { id: 'p3', scope: { name: 'shell-a1', kind: 'terminal' } },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('given a move into a view at another node, should refuse — a move never changes a session\'s sandbox', () => {
+    const scope: OpenTerminalScope = { projectName: 'repo', name: 'pagespace-a1', kind: 'chat' };
+    const source: SessionView = {
+      id: 'w1',
+      name: 'pagespace-a1',
+      projectName: 'repo',
+      branchName: null,
+      columns: [{ id: 'c1', panes: [{ id: 'p1', scope: { name: 'pagespace-a1', kind: 'chat' } }] }],
+    };
+    const destination: SessionView = {
+      id: 'w2',
+      name: 'Workspace 1',
+      projectName: null,
+      branchName: null,
+      columns: [{ id: 'c2', panes: [{ id: 'p2', scope: null }] }],
+    };
+
+    assert({
+      given: 'a project-scoped session moved into a machine-root view',
+      should: 'refuse as a cross-node move',
+      actual: planMoveSession([source, destination], scope, { splitInto: 'w2', direction: 'down' }, {
+        paneId: 'p3',
+        columnId: 'c3',
+      }),
+      expected: { ok: false, reason: 'cross_node' },
+    });
+  });
+
+  it('given a moved session, should survive a stale null-scope echo of its new view', () => {
+    const scope: OpenTerminalScope = { name: 'shell-a1', kind: 'terminal' };
+    const source: SessionView = {
+      id: 'w1',
+      name: 'shell-a1',
+      projectName: null,
+      branchName: null,
+      columns: [{ id: 'c1', panes: [{ id: 'p1', scope: { name: 'shell-a1', kind: 'terminal' } }] }],
+    };
+    const destination: SessionView = {
+      id: 'w2',
+      name: 'Workspace 1',
+      projectName: null,
+      branchName: null,
+      columns: [{ id: 'c2', panes: [{ id: 'p2', scope: { name: 'other' } }] }],
+    };
+
+    // A browser holding both views, exactly as the server does.
+    const store = useMachineWorkspaceStore.getState();
+    store.hydrateFromServer(
+      MACHINE_ID,
+      [source, destination].map((view) => ({ id: view.id, name: view.name, scope: {}, columns: view.columns })),
+    );
+
+    const plan = planMoveSession([source, destination], scope, { splitInto: 'w2', direction: 'down' }, {
+      paneId: 'p3',
+      columnId: 'c3',
+    });
+    if (!plan.ok) throw new Error(`expected a plan, got ${plan.reason}`);
+
+    // Apply the move's broadcasts in plan order, the way the sync hook does.
+    for (const write of plan.writes) {
+      if (write.kind === 'remove') useMachineWorkspaceStore.getState().applyServerDelete(MACHINE_ID, write.id);
+      else if (write.kind === 'update') {
+        useMachineWorkspaceStore.getState().applyServerUpsert(MACHINE_ID, {
+          id: write.id,
+          name: destination.name,
+          scope: {},
+          columns: write.columns,
+        });
+      }
+    }
+
+    // …and then a STALE echo of the destination, snapshotted before the bind
+    // landed (another browser's in-flight full-list read).
+    useMachineWorkspaceStore.getState().applyServerUpsert(MACHINE_ID, {
+      id: 'w2',
+      name: destination.name,
+      scope: {},
+      columns: [
+        {
+          id: 'c2',
+          panes: [
+            { id: 'p2', scope: { name: 'other' } },
+            { id: 'p3', scope: null },
+          ],
+        },
+      ],
+    });
+
+    const machine = useMachineWorkspaceStore.getState().machines[MACHINE_ID];
+    assert({
+      given: 'a stale pre-bind echo of the view a session was moved into',
+      should: 'keep the moved session bound, and keep its old view gone',
+      actual: {
+        source: machine.workspaces.w1 !== undefined,
+        moved: machine.workspaces.w2.columns[0].panes.map((pane) => pane.scope),
+      },
+      expected: {
+        source: false,
+        moved: [{ name: 'other' }, { name: 'shell-a1', kind: 'terminal' }],
+      },
     });
   });
 });

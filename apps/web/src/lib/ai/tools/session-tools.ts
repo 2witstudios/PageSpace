@@ -42,6 +42,8 @@ import { autoSessionName, type OpenTerminalScope } from '@/stores/machine-worksp
 import type { ToolExecutionContext } from '../core/types';
 import { nodeTargetDeniedError, nodeTargetSchema } from './sandbox-tools';
 import {
+  planCloseSession,
+  planMoveSession,
   planPlaceSession,
   viewsAtNode,
   type SessionPlacement,
@@ -180,6 +182,19 @@ function terminalScopeOf(node: MachineNodeHandle, name: string, agentType: Agent
   return { ...nodeNames(node), name, kind: paneKindOf(agentType) };
 }
 
+/**
+ * The same address, for a session read back out of the store. A row whose
+ * `agentType` predates a since-retired registry entry still has panes on
+ * screen (the list endpoint is deliberately unfiltered) — those panes were
+ * bound as PTYs, so `'terminal'` is the surface that matches them and lets a
+ * kill actually find its manifestation.
+ */
+function storedTerminalScopeOf(node: MachineNodeHandle, row: SessionRow): OpenTerminalScope {
+  return isAgentRuntimeType(row.agentType)
+    ? terminalScopeOf(node, row.name, row.agentType)
+    : { ...nodeNames(node), name: row.name, kind: 'terminal' };
+}
+
 function unboundError(): { success: false; error: string } {
   return {
     success: false,
@@ -207,6 +222,21 @@ const placementSchema = z.union([
 
 export const listSessionsInputSchema = z
   .object({ target: nodeTargetSchema.optional() })
+  .strict();
+
+export const moveSessionInputSchema = z
+  .object({
+    target: nodeTargetSchema.optional(),
+    name: sessionNameSchema,
+    placement: placementSchema,
+  })
+  .strict();
+
+export const killSessionInputSchema = z
+  .object({
+    target: nodeTargetSchema.optional(),
+    name: sessionNameSchema,
+  })
   .strict();
 
 export const addSessionInputSchema = z
@@ -268,7 +298,40 @@ function readActor(context: ToolExecutionContext | undefined): { userId: string 
 export function createSessionTools(deps: SessionToolsDeps): {
   list_sessions: Tool;
   add_session: Tool;
+  move_session: Tool;
+  kill_session: Tool;
 } {
+  /**
+   * The (node, name) → existing session lookup every verb that acts on an
+   * ALREADY-RUNNING session shares: resolve the target against the handle set
+   * first (so an unaddressable node is refused before any read happens), then
+   * confirm the row exists at that node. The returned scope is the full
+   * session address a manifestation binds to.
+   */
+  const openSession = async (
+    context: ToolExecutionContext | undefined,
+    input: { target?: MachineNodeTarget; name: string },
+  ): Promise<
+    | { ok: true; node: MachineNodeHandle; scope: OpenTerminalScope; row: SessionRow }
+    | { ok: false; error: { success: false; error: string } }
+  > => {
+    const resolved = resolveSessionTarget(context?.machineBinding, input);
+    if (!resolved.ok) return { ok: false, error: resolved.error };
+    const { node } = resolved.identity;
+
+    const row = await deps.findSession(node, input.name);
+    if (!row) {
+      return {
+        ok: false,
+        error: {
+          success: false,
+          error: `There is no session named "${input.name}" at ${describeNode(node)}. Call list_sessions to see what is running.`,
+        },
+      };
+    }
+    return { ok: true, node, row, scope: storedTerminalScopeOf(node, row) };
+  };
+
   return {
     list_sessions: tool({
       description:
@@ -382,6 +445,73 @@ export function createSessionTools(deps: SessionToolsDeps): {
           resumed: spawned.resumed,
           state: row ? readSessionState(row, deps.now()) : reservedStateFor(agentType),
           view: { id: plan.viewId, name: view && view.kind === 'create' ? view.name : undefined },
+        };
+      },
+    }),
+
+    move_session: tool({
+      description:
+        'Re-home an existing session: close the pane(s) showing it and show it somewhere else. ' +
+        'placement is the same as add_session\'s — "new-view" gives it its own view again, { splitInto, direction } puts it beside what is in another view. ' +
+        'This only moves what is ON SCREEN. A session never changes the node it runs in, so a view at a different node is refused rather than silently re-homing the sandbox.',
+      inputSchema: moveSessionInputSchema,
+      execute: async ({ target, name, placement }, options) => {
+        const context = readContext(options);
+        const actor = readActor(context);
+        if (!actor) return { success: false, error: 'Moving a session requires an authenticated user.' };
+
+        const opened = await openSession(context, { target, name });
+        if (!opened.ok) return opened.error;
+
+        const views = await deps.listViews(opened.node.machineId);
+        // The SAME placement writer add_session uses, run after the close —
+        // re-homing introduces no layout code of its own (see planMoveSession).
+        const plan = planMoveSession(views, opened.scope, placement, {
+          paneId: deps.newId(),
+          columnId: deps.newId(),
+        });
+        if (!plan.ok) return placementDeniedError(plan.reason, placement, describeNode(opened.node));
+
+        await deps.applyViewWrites(opened.node.machineId, plan.writes, actor);
+
+        return {
+          success: true,
+          name,
+          node: describeNode(opened.node),
+          view: { id: plan.viewId },
+          moved: plan.writes.length > 0,
+        };
+      },
+    }),
+
+    kill_session: tool({
+      description:
+        'Stop a session and close every pane showing it. The session\'s process (if one was ever started) is terminated and its record is removed — this is not reversible, and a view left with no panes goes away with it.',
+      inputSchema: killSessionInputSchema,
+      execute: async ({ target, name }, options) => {
+        const context = readContext(options);
+        const actor = readActor(context);
+        if (!actor) return { success: false, error: 'Stopping a session requires an authenticated user.' };
+
+        const opened = await openSession(context, { target, name });
+        if (!opened.ok) return opened.error;
+
+        // Kill FIRST: closing the panes of a session that is still running
+        // would hide a live (billing) process with nothing left pointing at it.
+        const killed = await deps.killSession({ node: opened.node, name, userId: actor.userId });
+        if (!killed.ok) {
+          return { success: false, error: `Could not stop session "${name}": ${killed.reason}.` };
+        }
+
+        const views = await deps.listViews(opened.node.machineId);
+        const writes = planCloseSession(views, opened.scope);
+        await deps.applyViewWrites(opened.node.machineId, writes, actor);
+
+        return {
+          success: true,
+          name,
+          node: describeNode(opened.node),
+          closedViews: writes.filter((write) => write.kind === 'remove').length,
         };
       },
     }),
