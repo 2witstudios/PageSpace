@@ -11,10 +11,18 @@ import { tool, type Tool } from 'ai';
 import { z } from 'zod';
 import type { GitToolRow } from './tools/types';
 import type { SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';
+import type { MachineNodeHandle, MachineNodeTarget } from '@pagespace/lib/services/machines/machine-pane-binding';
 import type { MachineRef } from '@/lib/repositories/page-agent-repository';
+import { nodeTargetSchema } from '../sandbox-tools';
 
 export type OpenResult =
-  | { ok: true; userId: string; ctx: SandboxActorContext & { activeMachine: MachineRef } }
+  | {
+      ok: true;
+      userId: string;
+      ctx: SandboxActorContext & { activeMachine: MachineRef };
+      /** The machine-tree node this call resolved to; its `cwd` is the default working directory. */
+      node?: MachineNodeHandle;
+    }
   | { ok: false; error: { success: false; error: string } };
 
 /**
@@ -22,11 +30,12 @@ export type OpenResult =
  * they close over the factory deps; rows themselves stay pure data.
  */
 export interface GeneratorSeams {
-  open: (options: unknown) => Promise<OpenResult>;
+  open: (options: unknown, target?: MachineNodeTarget) => Promise<OpenResult>;
   git: (cmd: 'git' | 'gh', args: string[], ctx: SandboxActorContext, cwd?: string) => Promise<unknown>;
   withToken: (
     options: unknown,
-    run: (ctx: SandboxActorContext, token: string) => Promise<unknown>,
+    target: MachineNodeTarget | undefined,
+    run: (ctx: SandboxActorContext, token: string, node?: MachineNodeHandle) => Promise<unknown>,
   ) => Promise<unknown>;
   gitR: (
     cmd: 'git' | 'gh',
@@ -46,6 +55,20 @@ function cwdOf(input: unknown): string | undefined {
   return (input as { cwd?: string } | null | undefined)?.cwd;
 }
 
+function targetOf(input: unknown): MachineNodeTarget | undefined {
+  return (input as { target?: MachineNodeTarget } | null | undefined)?.target;
+}
+
+/**
+ * Direct child addressing for ALL 56 git/gh tools, added in ONE place: every
+ * row's object schema gains the same optional `target`, so a bound
+ * conversation can aim any git command at a project or branch beneath it. Rows
+ * stay pure data — none of them knows the machine tree exists.
+ */
+function withNodeTarget(schema: z.ZodTypeAny): z.ZodTypeAny {
+  return schema instanceof z.ZodObject ? schema.extend({ target: nodeTargetSchema.optional() }) : schema;
+}
+
 export function generateSandboxGitTools(
   rows: readonly GitToolRow[],
   seams: GeneratorSeams,
@@ -57,12 +80,13 @@ export function generateSandboxGitTools(
 
     // Wire the validator ONCE into the schema — the same function object runs in
     // execute below, so the schema and the defense-in-depth check can never drift.
+    const schemaWithTarget = withNodeTarget(row.schema);
     const inputSchema = validate
-      ? row.schema.superRefine((val: unknown, ctx: z.RefinementCtx) => {
+      ? schemaWithTarget.superRefine((val: unknown, ctx: z.RefinementCtx) => {
           const result = validate(val);
           if (!result.ok) ctx.addIssue({ code: z.ZodIssueCode.custom, message: result.error });
         })
-      : row.schema;
+      : schemaWithTarget;
 
     const execute = async (input: unknown, options: unknown) => {
       // 1. Pure precondition check BEFORE any sandbox is touched (fail-fast, no quota).
@@ -78,13 +102,18 @@ export function generateSandboxGitTools(
           : { success: false as const, error: built.error };
       }
       // 3. Effect seam, chosen by exec kind. cmd is the row's literal; args string[].
-      const cwd = cwdOf(input);
+      //    An explicit `cwd` still wins; absent one, the command runs at the
+      //    RESOLVED NODE's checkout (the bound node, or the one `target`
+      //    addressed) instead of silently falling back to the machine root.
+      const target = targetOf(input);
       if (row.exec === 'local') {
-        const opened = await seams.open(options);
+        const opened = await seams.open(options, target);
         if (!opened.ok) return opened.error;
-        return seams.git(row.cmd, built.args, opened.ctx, cwd);
+        return seams.git(row.cmd, built.args, opened.ctx, cwdOf(input) ?? opened.node?.cwd);
       }
-      return seams.withToken(options, (ctx, token) => seams.gitR(row.cmd, built.args, ctx, token, cwd));
+      return seams.withToken(options, target, (ctx, token, node) =>
+        seams.gitR(row.cmd, built.args, ctx, token, cwdOf(input) ?? node?.cwd),
+      );
     };
 
     out[row.key] = tool({

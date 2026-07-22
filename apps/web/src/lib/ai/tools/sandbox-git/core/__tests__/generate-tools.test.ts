@@ -25,7 +25,7 @@ function makeSeams() {
       calls.push({ cmd, args, cwd });
       return { success: true };
     },
-    withToken: async (_options, run) => run(ctx, 'ghp_test'),
+    withToken: async (_options, _target, run) => run(ctx, 'ghp_test'),
     gitR: async (cmd, args, _ctx, token, cwd) => {
       calls.push({ cmd, args, cwd, token });
       return { success: true };
