@@ -301,6 +301,28 @@ export function withSessionFamilyTools<T>(
 }
 
 /**
+ * Apply a page's saved per-agent tool allowlist (`page.enabledTools`).
+ *
+ * null = unconfigured page, no restriction; [] = every listed PageSpace tool
+ * blocked. The SESSION FAMILY is exempt: it is the machine BINDING's
+ * orchestration surface, present only when a conversation is bound (see
+ * `withSessionFamilyTools`), and a bound page whose allowlist was saved before
+ * the family existed must not silently lose it. Unbound conversations never
+ * have these names in their input, so the exemption cannot leak them.
+ */
+export function filterToolsForAgentAllowlist<T>(
+  tools: Record<string, T>,
+  allowlist: string[] | null
+): Record<string, T> {
+  if (allowlist == null) return tools;
+  return Object.fromEntries(
+    Object.entries(tools).filter(
+      ([name]) => allowlist.includes(name) || SESSION_FAMILY_TOOL_NAMES.includes(name)
+    )
+  );
+}
+
+/**
  * Filter tools based on web search toggle
  * Returns all tools if web search enabled, or excludes web_search if disabled
  */

@@ -13,6 +13,7 @@ import {
   hasSandboxGitTools,
   suppressGithubIntegrationTools,
   withSessionFamilyTools,
+  filterToolsForAgentAllowlist,
   SESSION_FAMILY_TOOL_NAMES,
 } from '../tool-filtering';
 
@@ -416,5 +417,45 @@ describe('withSessionFamilyTools', () => {
 
   it('names every session-family tool it registers', () => {
     expect([...SESSION_FAMILY_TOOL_NAMES].sort()).toEqual(Object.keys(sessionFamily).sort());
+  });
+});
+
+describe('filterToolsForAgentAllowlist', () => {
+  const boundTools = {
+    read_page: 'read_page',
+    create_page: 'create_page',
+    bash: 'bash',
+    list_sessions: 'list_sessions',
+    add_session: 'add_session',
+    move_session: 'move_session',
+    kill_session: 'kill_session',
+    read_session: 'read_session',
+    send_session: 'send_session',
+  };
+
+  it('leaves an unconfigured page unrestricted (null allowlist)', () => {
+    expect(filterToolsForAgentAllowlist(boundTools, null)).toEqual(boundTools);
+  });
+
+  it('keeps the session family for a bound conversation whose allowlist predates it', () => {
+    // A machine-bound page saved its allowlist before the session family
+    // existed. The family is the BINDING's orchestration surface, not a
+    // composer toggle — the allowlist must not silently strip it.
+    const result = filterToolsForAgentAllowlist(boundTools, ['read_page']);
+    expect(Object.keys(result).sort()).toEqual(
+      ['read_page', ...SESSION_FAMILY_TOOL_NAMES].sort()
+    );
+  });
+
+  it('still blocks every listed PageSpace tool under an empty allowlist, keeping only the binding surface', () => {
+    const result = filterToolsForAgentAllowlist(boundTools, []);
+    expect(Object.keys(result).sort()).toEqual([...SESSION_FAMILY_TOOL_NAMES].sort());
+  });
+
+  it('cannot leak session tools into an unbound conversation — they are never in its input', () => {
+    const driveTools = { read_page: 'read_page', ask_agent: 'ask_agent' };
+    expect(filterToolsForAgentAllowlist(driveTools, ['ask_agent'])).toEqual({
+      ask_agent: 'ask_agent',
+    });
   });
 });

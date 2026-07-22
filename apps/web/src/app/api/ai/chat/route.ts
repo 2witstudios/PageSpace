@@ -68,6 +68,7 @@ import {
   filterToolsForReadOnly,
   filterToolsForMcpScope,
   filterToolsForMachineBinding,
+  filterToolsForAgentAllowlist,
   withSessionFamilyTools,
 } from '@/lib/ai/core/tool-filtering';
 import { deriveMachinePaneBinding } from '@pagespace/lib/services/machines/machine-pane-binding';
@@ -929,14 +930,10 @@ export async function POST(request: Request) {
     // []            = zero tools selected — block all PageSpace tools.
     // ['tool1', …]  = only those tools.
     const agentEnabledTools = page.enabledTools as string[] | null;
-    let filteredTools: ToolSet;
-    if (agentEnabledTools != null) {
-      filteredTools = Object.fromEntries(
-        Object.entries(baseToolsWithoutOverrides).filter(([name]) => agentEnabledTools.includes(name))
-      ) as ToolSet;
-    } else {
-      filteredTools = baseToolsWithoutOverrides as ToolSet;
-    }
+    let filteredTools = filterToolsForAgentAllowlist(
+      baseToolsWithoutOverrides,
+      agentEnabledTools
+    ) as ToolSet;
 
     // Step 4: webSearchEnabled is a runtime input toggle that overrides the allowlist.
     // If the user toggled web search on in the composer, they get web_search regardless of enabledTools.

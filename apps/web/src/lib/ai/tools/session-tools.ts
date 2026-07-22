@@ -547,13 +547,9 @@ export function createSessionTools(deps: SessionToolsDeps): {
         const { node } = resolved.identity;
         const agentType = AGENT_TYPE_OF[type];
 
-        // Reserve the row FIRST: a manifestation pointing at a session that
-        // was never reserved is a pane that can never bind.
-        const spawned = await deps.spawnSession({ node, name: resolvedName, agentType, userId: actor.userId });
-        if (!spawned.ok) {
-          return { success: false, error: `Could not start session "${resolvedName}": ${spawned.reason}.` };
-        }
-
+        // Plan the placement BEFORE reserving the row: a rejected placement
+        // must not leave behind a reserved-but-unreachable session. The plan
+        // itself is pure — nothing is written yet.
         const scope = terminalScopeOf(node, resolvedName, agentType);
         const views = await deps.listViews(node.machineId);
         const plan = planPlaceSession(views, scope, placement ?? 'new-view', {
@@ -561,6 +557,14 @@ export function createSessionTools(deps: SessionToolsDeps): {
           columnId: deps.newId(),
         });
         if (!plan.ok) return placementDeniedError(plan.reason, placement, describeNode(node));
+
+        // Reserve the row before MATERIALIZING the plan: a manifestation
+        // pointing at a session that was never reserved is a pane that can
+        // never bind.
+        const spawned = await deps.spawnSession({ node, name: resolvedName, agentType, userId: actor.userId });
+        if (!spawned.ok) {
+          return { success: false, error: `Could not start session "${resolvedName}": ${spawned.reason}.` };
+        }
 
         await deps.applyViewWrites(node.machineId, plan.writes, actor);
 

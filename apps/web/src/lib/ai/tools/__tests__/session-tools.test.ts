@@ -440,6 +440,31 @@ describe('add_session', () => {
     });
   });
 
+  it('given a splitInto naming a view that does not exist, should refuse WITHOUT spawning', async () => {
+    // Placement is validated before the row is reserved: a rejected placement
+    // must not leave behind a reserved-but-unreachable session.
+    const { deps: d } = deps({
+      listViews: async () => [],
+      spawnSession: async () => {
+        throw new Error('must not reserve a session for a placement that was refused');
+      },
+    });
+    const tools = createSessionTools(d);
+
+    const result = (await exec(
+      tools.add_session,
+      { type: 'agent', name: 'worker', placement: { splitInto: 'nope', direction: 'down' } },
+      context(rootBinding()),
+    )) as { success: boolean };
+
+    assert({
+      given: 'a split into a nonexistent view',
+      should: 'refuse before anything is reserved',
+      actual: result.success,
+      expected: false,
+    });
+  });
+
   it('given a target outside the handle set, should deny without spawning', async () => {
     const { deps: d, recorded } = deps();
     const tools = createSessionTools(d);
