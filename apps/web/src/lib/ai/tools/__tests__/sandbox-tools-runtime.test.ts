@@ -54,6 +54,11 @@ function boundTo(
   return { self, handles: [self] };
 }
 
+/** A handle set built handle-by-handle: `self` first, then its downward closure. */
+function setOf(self: MachineNodeHandle, ...descendants: MachineNodeHandle[]): MachineNodeHandleSet {
+  return { self, handles: [self, ...descendants] };
+}
+
 
 function makeDeps(overrides: Partial<ResolveSandboxActorContextDeps> = {}): ResolveSandboxActorContextDeps {
   return {
@@ -411,6 +416,28 @@ describe('createMachineDirectory', () => {
           { kind: 'existing', machineId: 'bound-1' },
         ]);
       });
+
+      // The short-circuit's source of truth is the DERIVED SET, not `self`
+      // alone. Today's derivation only ever produces handles on one machine,
+      // so this fixture is synthetic — it exists to pin WHERE the answer comes
+      // from, so lazy project-Sprite promotion (phase 7) cannot quietly gain a
+      // machine the list never reports.
+      it('given a bound conversation, should return the machines of the whole derived set, deduped', async () => {
+        const directory = createMachineDirectory(makeMachineDirectoryDeps());
+        const context: ToolExecutionContext = {
+          userId: 'u1',
+          chatSource: { type: 'page', agentPageId: 'agent-1' },
+          machineBinding: setOf(
+            { kind: 'machine', machineId: 'bound-1', cwd: '/workspace' },
+            { kind: 'project', machineId: 'bound-1', project: 'repo', cwd: '/workspace/repo' },
+            { kind: 'project', machineId: 'bound-2', project: 'elsewhere', cwd: '/workspace/elsewhere' },
+          ),
+        };
+        await expect(directory.listMachines(context)).resolves.toEqual([
+          { kind: 'existing', machineId: 'bound-1' },
+          { kind: 'existing', machineId: 'bound-2' },
+        ]);
+      });
     });
   });
 
@@ -664,6 +691,23 @@ describe('createMachineDirectory', () => {
         ).resolves.toEqual({ allowed: false });
       });
 
+      it('given a machine reached only through a NON-self handle of the set, should exempt it too — membership is the policy, not self-identity', async () => {
+        const directory = createMachineDirectory(
+          makeMachineDirectoryDeps({ findPage: machineDenyingPageAgents }),
+        );
+        const context: ToolExecutionContext = {
+          userId: 'u1',
+          chatSource: { type: 'page', agentPageId: 'agent-1' },
+          machineBinding: setOf(
+            { kind: 'machine', machineId: 'bound-1', cwd: '/workspace' },
+            { kind: 'project', machineId: 't1', project: 'repo', cwd: '/workspace/repo' },
+          ),
+        };
+        await expect(
+          directory.isMachineAccessible(context, { kind: 'existing', machineId: 't1' }),
+        ).resolves.toEqual({ allowed: true });
+      });
+
       it('given the BOUND machine but the actor cannot view its page, should still deny — canActorViewPage is never bypassed', async () => {
         const directory = createMachineDirectory(
           makeMachineDirectoryDeps({ findPage: machineDenyingPageAgents, canViewPage: async () => false }),
@@ -760,6 +804,28 @@ describe('createMachineDirectory', () => {
       await expect(
         directory.resolveTenantId?.(undefined, { kind: 'existing', machineId: 't1' }, 'ambient-tenant'),
       ).resolves.toBe('real-drive-owner');
+    });
+
+    // Billing pin (epic risk 6): addressing a node DEEPER in the tree must
+    // never move the money. Every handle carries the owning machine page id,
+    // and that page — not the branch Sprite, not the project checkout — stays
+    // the payer key and the runtime-guardrail key.
+    it('given a branch-bound conversation, should key the payer on the owning MACHINE page id, not the branch', async () => {
+      const seen: string[] = [];
+      const directory = createMachineDirectory(
+        makeMachineDirectoryDeps({
+          lookupPageOwnerId: async (pageId) => {
+            seen.push(pageId);
+            return 'machine-owner';
+          },
+        }),
+      );
+      const binding = boundTo('t1', '/workspace/repo', { machineBranchId: 'branch-1', sandboxId: 'sbx-1' });
+      const context: ToolExecutionContext = { userId: 'u1', machineBinding: binding };
+      await expect(
+        directory.resolveTenantId?.(context, { kind: 'existing', machineId: binding.self.machineId }, 'ambient-tenant'),
+      ).resolves.toBe('machine-owner');
+      expect(seen).toEqual(['t1']);
     });
 
     it('given an existing machine whose page/drive can\'t be resolved, should fall back to the ambient tenantId', async () => {
