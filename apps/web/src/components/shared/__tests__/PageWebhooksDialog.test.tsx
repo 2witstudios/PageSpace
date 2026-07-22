@@ -18,7 +18,7 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
 import { toast } from 'sonner';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import { useAuthStore } from '@/stores/useAuthStore';
-import { PageWebhooksDialog } from '../PageWebhooksDialog';
+import { PageWebhooksDialog, __resetPageWebhooksDialogModuleState } from '../PageWebhooksDialog';
 
 const PAGE_ID = 'page-1';
 
@@ -56,6 +56,9 @@ const renderDialog = (pageType = 'AI_CHAT') =>
 describe('PageWebhooksDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Module-level pen/lock state survives vi.clearAllMocks — wipe it so a
+    // parked secret from one case can never leak into another.
+    __resetPageWebhooksDialogModuleState();
     useAuthStore.setState({ user: { id: 'user-a' } as never });
   });
 

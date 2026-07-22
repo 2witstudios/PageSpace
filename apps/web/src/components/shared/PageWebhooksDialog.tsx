@@ -89,6 +89,12 @@ const parkOrphan = (value: RevealedSecret) => {
 // (Other browsers/admins are covered by the server's 409 optimistic guard.)
 const rotatingWebhooks = new Set<string>();
 
+/** Test-only: wipe the module-level pen/lock state so cases stay isolated. */
+export const __resetPageWebhooksDialogModuleState = () => {
+  orphanedReveals.clear();
+  rotatingWebhooks.clear();
+};
+
 // Layout-effect timing on the client (passive effects leave a window between
 // commit and effect where a resolving mint would read stale refs), useEffect
 // on the server (Next SSRs client components; useLayoutEffect warns there).
