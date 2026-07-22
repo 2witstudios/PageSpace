@@ -81,6 +81,14 @@ export interface SessionRow {
   /** The Sprite exec session its PTY runs under — null until the realtime bridge opens one. */
   streamSessionId: string | null;
   updatedAt: Date;
+  /**
+   * True while a generation is IN FLIGHT on this session's conversation — a
+   * headless `send_session` run under its claim, or a human mid-turn in the
+   * pane (both register the same way). The send_session engine's upgrade,
+   * delivered as data into the ONE state-read function below rather than as a
+   * second state source, so no consumer of `readSessionState` changed.
+   */
+  streaming?: boolean;
 }
 
 /**
@@ -91,9 +99,14 @@ export interface SessionRow {
  * idle session that simply happens to be quiet — is what keeps a never-started
  * shell from reading as a live one (epic risk register #2). A `'chat'`-surface
  * row never has a stream session at all, so it is never `'reserved'`.
+ *
+ * `'streaming'` outranks every other state: a session generating right now is
+ * the one fact that changes what a caller should DO (send_session to it is
+ * refused under its run-claim), so it is answered before liveness or recency.
  */
 export function readSessionState(row: SessionRow, now: Date): SessionState {
   const surface = isAgentRuntimeType(row.agentType) ? agentSurfaceOf(row.agentType) : 'pty';
+  if (row.streaming) return 'streaming';
   if (surface === 'pty' && row.streamSessionId === null) return 'reserved';
   return now.getTime() - row.updatedAt.getTime() <= SESSION_ACTIVE_WINDOW_MS ? 'active' : 'idle';
 }
@@ -265,8 +278,8 @@ export const addSessionInputSchema = z
     type: z.enum(['agent', 'shell']),
     name: sessionNameSchema.optional(),
     placement: placementSchema.optional(),
-    /** Reserved for the send_session engine — refused until then (see `add_session`). */
-    prompt: z.string().min(1).optional(),
+    /** An agent session's first instruction, dispatched through the send_session engine. */
+    prompt: z.string().min(1).max(MAX_SESSION_INPUT_BYTES).optional(),
   })
   .strict();
 
@@ -467,21 +480,23 @@ export function createSessionTools(deps: SessionToolsDeps): {
         'Start a new session at a node you can reach: type "agent" (a PageSpace Agent, which you can later send work to) or "shell" (a plain terminal). ' +
         'A shell session is RESERVED until a human viewer first connects — its PTY starts then, not now — so it reports state "reserved" and produces no output until someone opens it. ' +
         'placement defaults to "new-view" (the session gets its own view); pass { splitInto: <view id from list_sessions>, direction: "right" | "down" } to put it beside what is already there. ' +
-        'A view only ever holds sessions from its own node. Omit name to have one minted for you.',
+        'A view only ever holds sessions from its own node. Omit name to have one minted for you. ' +
+        'For an agent session you may pass prompt to give it its first instruction — it starts working immediately and answers in its OWN transcript (read_session), not here.',
       inputSchema: addSessionInputSchema,
       execute: async ({ target, type, name, placement, prompt }, options) => {
         const context = readContext(options);
         const actor = readActor(context);
         if (!actor) return { success: false, error: 'Starting a session requires an authenticated user.' };
 
-        // The starting prompt belongs to the agent-dispatch engine (which owns
-        // the run-claim and the depth cap). Accepting it here and silently
-        // dropping it would look like a delivered instruction that never ran.
-        if (prompt !== undefined) {
+        // A starting prompt is a DISPATCH, and only an agent session has a loop
+        // to dispatch to. Refused up front, before anything is spawned: a shell
+        // that came into being with its instruction silently dropped is worse
+        // than one that was never started.
+        if (prompt !== undefined && type !== 'agent') {
           return {
             success: false,
             error:
-              'add_session cannot deliver a starting prompt yet. Start the session without prompt, then use send_session once it is available.',
+              'Only an agent session can be given a starting prompt — a shell session takes keystrokes. Start it without prompt and use send_session (with a trailing newline) to run a command in it.',
           };
         }
 
@@ -515,6 +530,21 @@ export function createSessionTools(deps: SessionToolsDeps): {
 
         await deps.applyViewWrites(node.machineId, plan.writes, actor);
 
+        // The first turn goes through the SAME seam send_session uses — same
+        // engine, same run-claim, same depth cap — so a session born with a
+        // prompt is in no different a state than one sent to a moment later.
+        // Dispatched AFTER the pane exists, so the human watching sees the work
+        // arrive in a pane rather than a pane appear around work in progress.
+        let dispatch: SessionIoResult | undefined;
+        if (prompt !== undefined) {
+          dispatch = await deps.io.agent.send({
+            identity: resolved.identity,
+            actor,
+            input: prompt,
+            depth: readDepth(context),
+          });
+        }
+
         const row = await deps.findSession(node, resolvedName);
         const view = plan.writes.find((write) => write.id === plan.viewId);
         return {
@@ -525,6 +555,14 @@ export function createSessionTools(deps: SessionToolsDeps): {
           resumed: spawned.resumed,
           state: row ? readSessionState(row, deps.now()) : reservedStateFor(agentType),
           view: { id: plan.viewId, name: view && view.kind === 'create' ? view.name : undefined },
+          // Reported, never thrown away: the session exists either way, so a
+          // prompt that could not be dispatched (the session is already busy,
+          // the chain is too deep) must be visible as exactly that.
+          ...(dispatch
+            ? dispatch.success
+              ? { prompt: { delivered: true } }
+              : { prompt: { delivered: false, error: dispatch.error } }
+            : {}),
         };
       },
     }),
