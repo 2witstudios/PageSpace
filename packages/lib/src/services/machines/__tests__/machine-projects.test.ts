@@ -484,6 +484,93 @@ describe('removeProject', () => {
     expect(await store.list(TERMINAL_ID)).toEqual([]);
   });
 
+  it('given a PROMOTED project with a live Sprite, should identity-guarded-kill it BEFORE deleting the row', async () => {
+    // A promoted project's Sprite is a real billing microVM findable only via
+    // this row. Deleting the row without the kill would leave the VM running
+    // with only the DB trigger's outbox pointer between it and billing forever.
+    const promoted = makeRecord({
+      sessionKey: 'sess-key-1',
+      sandboxId: 'pgs-sbx-proj',
+      spriteInstanceId: 'inst-proj',
+    });
+    const killCalls: Array<{ sandboxId: string; spriteInstanceId: string | null }> = [];
+    const { deps, store } = makeDeps(
+      {
+        killSprite: async (input) => {
+          killCalls.push(input);
+          return { ok: true };
+        },
+      },
+      [promoted],
+    );
+
+    const result = await removeProject({ machineId: TERMINAL_ID, name: 'my-repo', deps });
+
+    expect(result).toEqual({ ok: true });
+    expect(killCalls).toEqual([{ sandboxId: 'pgs-sbx-proj', spriteInstanceId: 'inst-proj' }]);
+    expect(await store.findByName(TERMINAL_ID, 'my-repo')).toBeNull();
+  });
+
+  it('given the promoted Sprite kill FAILS, should still remove the row — the delete trigger rescues the pointer', async () => {
+    const promoted = makeRecord({
+      sessionKey: 'sess-key-1',
+      sandboxId: 'pgs-sbx-proj',
+      spriteInstanceId: 'inst-proj',
+    });
+    const { deps, store } = makeDeps(
+      { killSprite: async () => ({ ok: false }) },
+      [promoted],
+    );
+
+    const result = await removeProject({ machineId: TERMINAL_ID, name: 'my-repo', deps });
+
+    expect(result).toEqual({ ok: true });
+    expect(await store.findByName(TERMINAL_ID, 'my-repo')).toBeNull();
+  });
+
+  it('given an UNPROMOTED project, should never call the Sprite kill', async () => {
+    const existing = makeRecord();
+    const killCalls: unknown[] = [];
+    const { deps } = makeDeps(
+      {
+        killSprite: async (input) => {
+          killCalls.push(input);
+          return { ok: true };
+        },
+      },
+      [existing],
+    );
+
+    await removeProject({ machineId: TERMINAL_ID, name: 'my-repo', deps });
+
+    expect(killCalls).toEqual([]);
+  });
+
+  it('given an already-torn-down promoted project, should not re-kill the reused Sprite name', async () => {
+    // sandboxId is a NAME reused across re-creates: killing it again could
+    // destroy a replacement VM that legitimately took the name.
+    const tornDown = makeRecord({
+      sessionKey: 'sess-key-1',
+      sandboxId: 'pgs-sbx-proj',
+      spriteInstanceId: 'inst-proj',
+      spriteTornDownAt: NOW,
+    });
+    const killCalls: unknown[] = [];
+    const { deps } = makeDeps(
+      {
+        killSprite: async (input) => {
+          killCalls.push(input);
+          return { ok: true };
+        },
+      },
+      [tornDown],
+    );
+
+    await removeProject({ machineId: TERMINAL_ID, name: 'my-repo', deps });
+
+    expect(killCalls).toEqual([]);
+  });
+
   it('given a non-existent project name, should return not_found without touching the sandbox', async () => {
     const { deps, runCommandCalls } = makeDeps();
     const result = await removeProject({ machineId: TERMINAL_ID, name: 'nope', deps });

@@ -204,6 +204,23 @@ export function buildMachineProjectsDeps({ actorUserId }: { actorUserId: string 
     },
     buildEnv: defaultBuildEnv,
     audit: (input) => writeCodeExecutionAudit({ input }),
+    killSprite: async ({ sandboxId, spriteInstanceId }) => {
+      // Identity-guarded, best-effort: a failure is fine — the machine_projects
+      // AFTER DELETE trigger rescues the pointer into the reclaim outbox and
+      // the orphan reconciler retries. A replaced instance means our target is
+      // already gone, which is the outcome we wanted.
+      const [{ getMachineHostForBranches }, { MachineSpriteReplacedError }] = await Promise.all([
+        import('./machine-branches-runtime'),
+        import('@pagespace/lib/services/sandbox/machine-host'),
+      ]);
+      try {
+        const host = await getMachineHostForBranches();
+        await host.kill({ machineId: sandboxId, expectedInstanceId: spriteInstanceId ?? undefined });
+        return { ok: true };
+      } catch (error) {
+        return { ok: error instanceof MachineSpriteReplacedError };
+      }
+    },
   };
 }
 

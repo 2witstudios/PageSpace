@@ -1534,6 +1534,13 @@
       "when": 1784751670586,
       "tag": "0218_smooth_gorilla_man",
       "breakpoints": true
+    },
+    {
+      "idx": 219,
+      "version": "7",
+      "when": 1784751730586,
+      "tag": "0219_project_sprite_reclaim_trigger",
+      "breakpoints": true
     }
   ]
 }
