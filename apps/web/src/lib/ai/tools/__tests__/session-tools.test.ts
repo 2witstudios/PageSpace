@@ -8,7 +8,6 @@ import {
   type SessionRow,
   type SessionToolsDeps,
 } from '../session-tools';
-import { readAgentSession, sendAgentSession } from '../session-io-agent';
 import { readPtySession, sendPtySession } from '../session-io-pty';
 import type { SessionView, SessionViewWrite } from '../session-layout';
 import type { ToolExecutionContext } from '../../core/types';
@@ -142,6 +141,27 @@ describe('readSessionState', () => {
       should: 'report idle rather than an active session nothing is running',
       actual: readSessionState(shellRow('sh', { streamSessionId: 'sess-1' }), NOW, false),
       expected: 'idle',
+    });
+  });
+
+  it('given an agent session with a run in flight, should report streaming', () => {
+    assert({
+      given: 'a chat-surface row whose conversation is generating right now',
+      should: 'report streaming — the state that says send_session will be refused',
+      actual: readSessionState(agentRow('a', { streaming: true }), NOW),
+      expected: 'streaming',
+    });
+  });
+
+  it('given a session that is streaming, should report that ahead of any recency reading', () => {
+    assert({
+      given: 'a row generating now but untouched in the database for an hour',
+      should: 'still report streaming rather than idle',
+      actual: readSessionState(
+        agentRow('a', { streaming: true, updatedAt: new Date(NOW.getTime() - 3_600_000) }),
+        NOW,
+      ),
+      expected: 'streaming',
     });
   });
 
@@ -433,24 +453,6 @@ describe('add_session', () => {
     assert({
       given: 'a target outside the derived handle set',
       should: 'deny and spawn nothing',
-      actual: { success: result.success, spawned: recorded.spawned.length },
-      expected: { success: false, spawned: 0 },
-    });
-  });
-
-  it('given a prompt, should refuse until the agent dispatch engine lands', async () => {
-    const { deps: d, recorded } = deps();
-    const tools = createSessionTools(d);
-
-    const result = (await exec(
-      tools.add_session,
-      { type: 'agent', name: 'worker', prompt: 'go fix the build' },
-      context(rootBinding()),
-    )) as { success: boolean };
-
-    assert({
-      given: 'a starting prompt',
-      should: 'refuse and spawn nothing',
       actual: { success: result.success, spawned: recorded.spawned.length },
       expected: { success: false, spawned: 0 },
     });
@@ -767,19 +769,21 @@ describe('session IO shells', () => {
 
   // The PTY half is live (see session-io-pty.test.ts): with no realtime
   // service reachable from a unit test, its read refuses rather than
-  // fabricating an empty scrollback — which is the same honesty this case has
-  // always been about. The agent half is still a shipped stub.
+  // fabricating an empty scrollback — the same honesty this case has always
+  // been about. The agent half is implemented and exercised through its own
+  // factory (session-io-agent.test.ts).
   it('given the shipped IO modules, should refuse rather than pretend emptiness', async () => {
     const identity = {
       node: machineHandle(),
-      name: 'worker',
-      address: { machineId: 'm1', name: 'worker' },
+      name: 'sh1',
+      address: { machineId: 'm1', name: 'sh1' },
     };
     const actor = { userId: 'u1' };
 
+    // The AGENT half is implemented (see session-io-agent.test.ts) and reaches
+    // the database, so it is exercised through its own factory rather than
+    // here; the PTY half remains a stub owned by the realtime phase.
     const answers = await Promise.all([
-      readAgentSession({ identity, actor }),
-      sendAgentSession({ identity, actor, input: 'hello' }),
       readPtySession({ identity, actor }),
       sendPtySession({ identity, actor, input: 'ls\n' }),
     ]);
@@ -788,7 +792,120 @@ describe('session IO shells', () => {
       given: 'the shipped IO modules with no realtime service behind them',
       should: 'refuse every call honestly rather than pretending emptiness',
       actual: answers.map((answer) => answer.success),
-      expected: [false, false, false, false],
+      expected: [false, false],
+    });
+  });
+
+  it('given a send to an agent session from inside a chain, should carry the caller\'s depth', async () => {
+    const sends: (number | undefined)[] = [];
+    const { deps: d } = deps({
+      findSession: async () => agentRow('worker'),
+      io: {
+        agent: {
+          read: notDispatched,
+          send: async (input) => {
+            sends.push(input.depth);
+            return { success: true };
+          },
+        },
+        pty: { read: notDispatched, send: notDispatched },
+      },
+    });
+    const tools = createSessionTools(d);
+
+    await exec(
+      tools.send_session,
+      { name: 'worker', input: 'go' },
+      { ...context(rootBinding()), agentCallDepth: 1 },
+    );
+
+    assert({
+      given: 'a send_session made by a run that is itself a dispatched turn',
+      should: 'hand the chain depth to the agent module so the cap can see it',
+      actual: sends,
+      expected: [1],
+    });
+  });
+});
+
+describe('add_session prompt', () => {
+  function promptDeps(sendResult: { success: boolean; error?: string } = { success: true }) {
+    const sent: { name: string; input: string; depth?: number }[] = [];
+    const { deps: d, recorded } = deps({
+      io: {
+        agent: {
+          read: notDispatched,
+          send: async (input) => {
+            sent.push({ name: input.identity.name, input: input.input, depth: input.depth });
+            return sendResult as never;
+          },
+        },
+        pty: { read: notDispatched, send: notDispatched },
+      },
+    });
+    return { deps: d, sent, recorded };
+  }
+
+  it('given add_session with a prompt on an agent session, should dispatch the first turn', async () => {
+    const { deps: d, sent } = promptDeps();
+    const tools = createSessionTools(d);
+
+    const result = (await exec(
+      tools.add_session,
+      { type: 'agent', name: 'worker', prompt: 'audit the repo' },
+      context(rootBinding()),
+    )) as { success: boolean; prompt?: { delivered: boolean } };
+
+    assert({
+      given: 'an agent session started with a prompt',
+      should: 'spawn it and dispatch that prompt through the send engine',
+      actual: { success: result.success, prompt: result.prompt, sent },
+      expected: {
+        success: true,
+        prompt: { delivered: true },
+        sent: [{ name: 'worker', input: 'audit the repo', depth: 0 }],
+      },
+    });
+  });
+
+  it('given a prompt for a SHELL session, should refuse before anything is spawned', async () => {
+    const { deps: d, sent, recorded } = promptDeps();
+    const tools = createSessionTools(d);
+
+    const result = (await exec(
+      tools.add_session,
+      { type: 'shell', name: 'sh1', prompt: 'ls' },
+      context(rootBinding()),
+    )) as { success: boolean };
+
+    assert({
+      given: 'a starting prompt aimed at a shell session',
+      should: 'refuse, spawning nothing and dispatching nothing',
+      actual: { success: result.success, spawned: recorded.spawned.length, sent },
+      expected: { success: false, spawned: 0, sent: [] },
+    });
+  });
+
+  it('given a prompt that could not be delivered, should report the session AND the undelivered prompt', async () => {
+    const { deps: d } = promptDeps({ success: false, error: 'Session "worker" is already working on something' });
+    const tools = createSessionTools(d);
+
+    const result = (await exec(
+      tools.add_session,
+      { type: 'agent', name: 'worker', prompt: 'go' },
+      context(rootBinding()),
+    )) as { success: boolean; name: string; prompt?: { delivered: boolean; error?: string } };
+
+    assert({
+      given: 'a session that started but whose first turn was refused',
+      should: 'report the session as started and the prompt as undelivered',
+      actual: {
+        success: result.success,
+        name: result.name,
+        delivered: result.prompt?.delivered,
+        hasReason: (result.prompt?.error ?? '').length > 0,
+      },
+      expected: { success: true, name: 'worker', delivered: false, hasReason: true },
     });
   });
 });

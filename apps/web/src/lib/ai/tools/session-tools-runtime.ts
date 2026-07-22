@@ -41,10 +41,59 @@ import {
 import { buildMachineWorkspacesDeps, toWorkspaceDTO } from '@/lib/machines/machine-workspaces-runtime';
 import { broadcastMachineWorkspaceEvent } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { agentSurfaceOf, isAgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
 import { createSessionTools, type SessionToolsDeps } from './session-tools';
 import { readAgentSession, sendAgentSession } from './session-io-agent';
 import { readPtyLiveness, readPtySession, sendPtySession } from './session-io-pty';
 import type { SessionView, SessionViewWrite } from './session-layout';
+
+/**
+ * Which of these sessions have a generation IN FLIGHT right now.
+ *
+ * One query per node listing, keyed by the conversation ids the rows already
+ * carry (a chat-surface row's id IS its conversation id). It answers for BOTH
+ * kinds of in-flight generation, because both register the same way: a
+ * `send_session` dispatch holding its run-claim, and a human mid-turn in the
+ * pane. Heartbeat-authoritative — a row whose process died stops beating and
+ * stops counting, so a crashed run never leaves a session reading as busy
+ * forever (see `stream-liveness.ts`).
+ *
+ * This is the `streaming` UPGRADE promised by phase 4's state-read function:
+ * it arrives as one more field on `SessionRow`, so `readSessionState` remains
+ * the only place a session's state is decided.
+ */
+async function readStreamingConversationIds(ids: string[]): Promise<Set<string>> {
+  if (ids.length === 0) return new Set();
+  try {
+    const { db } = await import('@pagespace/db/db');
+    const { and, eq, inArray } = await import('@pagespace/db/operators');
+    const { aiStreamSessions } = await import('@pagespace/db/schema/ai-streams');
+    const { STREAM_HEARTBEAT_STALE_MS } = await import('@/lib/ai/core/stream-liveness');
+
+    const rows = await db
+      .select({
+        conversationId: aiStreamSessions.conversationId,
+        lastHeartbeatAt: aiStreamSessions.lastHeartbeatAt,
+      })
+      .from(aiStreamSessions)
+      .where(and(inArray(aiStreamSessions.conversationId, ids), eq(aiStreamSessions.status, 'streaming')));
+
+    const now = Date.now();
+    return new Set(
+      rows
+        .filter((row) => now - row.lastHeartbeatAt.getTime() <= STREAM_HEARTBEAT_STALE_MS)
+        .map((row) => row.conversationId),
+    );
+  } catch (error) {
+    // A listing that fails here still lists every session with its other state
+    // intact; reporting nothing as streaming is the conservative degrade (the
+    // dispatch itself is refused by the claim regardless of what this said).
+    loggers.ai.warn('session-tools: streaming-state read failed', {
+      error: error instanceof Error ? error.message : 'unknown',
+    });
+    return new Set();
+  }
+}
 
 /** A node's `{projectName?, branchName?}` half, as the agent-terminal API takes it. */
 function scopeArgs(node: { project?: string; branch?: string }): { projectName?: string; branchName?: string } {
@@ -135,11 +184,19 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
         deps: buildListAgentTerminalsDeps(),
       });
       if (!result.ok) return [];
+      // Only chat-surface rows can have a conversation to stream on; a PTY row's
+      // id is never a conversation id, so asking about it would be meaningless.
+      const streaming = await readStreamingConversationIds(
+        result.terminals
+          .filter((row) => isAgentRuntimeType(row.agentType) && agentSurfaceOf(row.agentType) === 'chat')
+          .map((row) => row.id),
+      );
       return result.terminals.map((row) => ({
         name: row.name,
         agentType: row.agentType,
         streamSessionId: row.streamSessionId,
         updatedAt: row.updatedAt,
+        streaming: streaming.has(row.id),
       }));
     },
 
@@ -155,14 +212,18 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       });
       if (!result.ok) return null;
       const row = result.terminals.find((candidate) => candidate.name === name);
-      return row
-        ? {
-            name: row.name,
-            agentType: row.agentType,
-            streamSessionId: row.streamSessionId,
-            updatedAt: row.updatedAt,
-          }
-        : null;
+      if (!row) return null;
+      const streaming =
+        isAgentRuntimeType(row.agentType) && agentSurfaceOf(row.agentType) === 'chat'
+          ? (await readStreamingConversationIds([row.id])).has(row.id)
+          : false;
+      return {
+        name: row.name,
+        agentType: row.agentType,
+        streamSessionId: row.streamSessionId,
+        updatedAt: row.updatedAt,
+        streaming,
+      };
     },
 
     spawnSession: async ({ node, name, agentType, userId }) => {
