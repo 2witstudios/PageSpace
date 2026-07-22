@@ -293,6 +293,14 @@ export interface SessionSpawnInput {
 export interface SessionIoInput {
   identity: SessionTerminalIdentity;
   actor: { userId: string };
+  /**
+   * How deep in a dispatch CHAIN this call already is — the caller's own
+   * `agentCallDepth`, 0 for a human-driven turn. Read here (rather than
+   * inside the engine) because this is where the caller's execution context
+   * is in hand; the agent module caps on it so A→B→C→… terminates. The PTY
+   * module has no use for it: a keystroke starts no agent loop.
+   */
+  depth?: number;
 }
 
 export interface SessionReadInput extends SessionIoInput {
@@ -348,6 +356,11 @@ function readContext(options: unknown): ToolExecutionContext | undefined {
 /** The acting user, or a refusal — every session write is attributed to a real user. */
 function readActor(context: ToolExecutionContext | undefined): { userId: string } | undefined {
   return context?.userId ? { userId: context.userId } : undefined;
+}
+
+/** How deep in an agent-to-agent chain this tool call already is — the same counter `ask_agent` keeps. */
+function readDepth(context: ToolExecutionContext | undefined): number {
+  return context?.agentCallDepth ?? 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -603,7 +616,8 @@ export function createSessionTools(deps: SessionToolsDeps): {
     send_session: tool({
       description:
         'Send input to a session: a message to an agent session (it works on it and answers in its own transcript — read_session shows the result), or keystrokes to a shell session\'s terminal. ' +
-        'Shell input is typed literally, so include a trailing newline when you mean to submit a command.',
+        'Shell input is typed literally, so include a trailing newline when you mean to submit a command. ' +
+        'A message to an agent session returns as soon as the work is accepted — the answer is NOT returned here, and the session is refused further messages until it finishes (state "streaming" in list_sessions).',
       inputSchema: sendSessionInputSchema,
       execute: async ({ target, name, input }, options) => {
         const context = readContext(options);
@@ -613,7 +627,12 @@ export function createSessionTools(deps: SessionToolsDeps): {
         const opened = await openSession(context, { target, name });
         if (!opened.ok) return opened.error;
 
-        return moduleFor(deps.io, opened.row).send({ identity: opened.identity, actor, input });
+        return moduleFor(deps.io, opened.row).send({
+          identity: opened.identity,
+          actor,
+          input,
+          depth: readDepth(context),
+        });
       },
     }),
   };

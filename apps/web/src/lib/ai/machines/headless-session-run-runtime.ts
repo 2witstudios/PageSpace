@@ -1,0 +1,475 @@
+/**
+ * Production wiring for the headless session engine.
+ *
+ * Everything the pure core (`headless-session-run.ts`) declares as a dep is
+ * bound here to what the human path already uses, so a dispatched turn and a
+ * typed turn on the SAME conversation are the same kind of event:
+ *
+ *  • the target's binding comes from `deriveMachinePaneBinding` — the identical
+ *    call the chat route makes, against the TARGET row's own id, so the run's
+ *    code-execution tools land in the target's node and its downward closure;
+ *  • the tool set is composed the same way the route composes it
+ *    (`filterToolsForMachineBinding` + `withSessionFamilyTools`), so a session
+ *    dispatched to can do exactly what it could do if a human were typing;
+ *  • messages go through `saveMessageToDatabase` and the same
+ *    `chat:user_message` / `chat:stream_*` broadcasts, so an open pane renders
+ *    the dispatch live rather than on next refresh;
+ *  • usage is metered through `AIMonitoring.trackUsage` keyed on the OWNING
+ *    MACHINE PAGE.
+ *
+ * THE RUN-CLAIM, and why it is `ai_stream_sessions`.
+ *
+ * The claim follows `executeWorkflow`'s discipline exactly — one atomic
+ * INSERT … ON CONFLICT DO NOTHING against a UNIQUE index, the loser gets zero
+ * rows back and bails — but it is taken in the stream table rather than in
+ * `workflow_runs`. Two reasons, and the first is decisive:
+ *
+ *  1. The contention a session dispatch must lose to is a HUMAN typing in that
+ *     pane. A machine agent session is an ordinary chat conversation, and its
+ *     in-flight generations are registered in `ai_stream_sessions` — nowhere
+ *     else. A claim held in any other table would happily run a second
+ *     generation on a conversation a person is mid-turn in: two agents, two
+ *     sets of write tools, two bills, one interleaved transcript.
+ *  2. `workflow_runs.workflowId` is a foreign key into `workflows`. A session
+ *     has no workflow row, so the table cannot physically hold this claim.
+ *
+ * The claim key is a deterministic `streamId` (`session-run:<conversationId>`)
+ * carried on the `ai_stream_sessions.stream_id` UNIQUE index — so a second
+ * dispatch to the same session conflicts and loses, exactly as a second
+ * workflow fire does. A live human stream is caught by the liveness pre-check
+ * below (a heartbeat read, the same one the takeover guard trusts), because a
+ * client stream's row is keyed by its own messageId and would not collide.
+ */
+
+import { createId } from '@paralleldrive/cuid2';
+import { generateText, stepCountIs, hasToolCall, type ToolSet, type UIMessage } from 'ai';
+import { db } from '@pagespace/db/db';
+import { and, eq, desc, ne } from '@pagespace/db/operators';
+import { chatMessages, pages } from '@pagespace/db/schema/core';
+import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { deriveMachinePaneBinding } from '@pagespace/lib/services/machines/machine-pane-binding';
+import { agentSurfaceOf, isAgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
+import { buildMachinePaneBindingDeps } from '@/lib/ai/machine-pane/machine-pane-binding-runtime';
+import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
+import { DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
+import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { filterToolsForMachineBinding, withSessionFamilyTools } from '@/lib/ai/core/tool-filtering';
+import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
+import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
+import { saveMessageToDatabase } from '@/lib/ai/core/message-utils';
+import { broadcastChatUserMessage, broadcastAiStreamStart, broadcastAiStreamComplete } from '@/lib/websocket';
+import { STREAM_HEARTBEAT_STALE_MS } from '@/lib/ai/core/stream-liveness';
+import type { ToolExecutionContext } from '@/lib/ai/core/types';
+import { buildMachineBindingPrompt } from './machine-binding-prompt';
+import type {
+  HeadlessClaimResult,
+  HeadlessSessionRunDeps,
+  HeadlessSessionTarget,
+  HeadlessTranscriptMessage,
+} from './headless-session-run';
+
+/** How many prior turns a dispatched run is given as context. */
+const HISTORY_LIMIT = 40;
+
+/** Step budget for one dispatched turn — the workflow executor's shape, a session's scale. */
+const MAX_STEPS = 60;
+
+/** Heartbeat cadence for a held claim, matching `stream-lifecycle.ts`'s. */
+const HEARTBEAT_INTERVAL_MS = 20 * 1000;
+
+/** The claim key for one session's conversation — unique per conversation, by construction. */
+export function sessionRunClaimId(conversationId: string): string {
+  return `session-run:${conversationId}`;
+}
+
+/**
+ * Is a generation ALREADY in flight on this conversation?
+ *
+ * Heartbeat-authoritative, never status-alone: the terminal write that clears
+ * `status` is fire-and-forget and dies with its process, so a crashed stream
+ * would otherwise lock a session out of dispatches forever (see
+ * `stream-liveness.ts`'s own docblock on exactly this).
+ */
+async function hasLiveGeneration(conversationId: string, now: Date): Promise<boolean> {
+  const rows = await db
+    .select({ lastHeartbeatAt: aiStreamSessions.lastHeartbeatAt })
+    .from(aiStreamSessions)
+    .where(and(eq(aiStreamSessions.conversationId, conversationId), eq(aiStreamSessions.status, 'streaming')));
+
+  return rows.some((row) => now.getTime() - row.lastHeartbeatAt.getTime() <= STREAM_HEARTBEAT_STALE_MS);
+}
+
+/**
+ * Release a claim whose owner is provably gone.
+ *
+ * Only ever reached when `hasLiveGeneration` already said nothing is beating on
+ * this conversation, so this cannot free a claim from a running dispatch — and
+ * without it a crashed run's row would hold the unique key forever, making the
+ * session permanently un-dispatchable.
+ */
+async function releaseStaleClaim(claimId: string): Promise<void> {
+  await db
+    .update(aiStreamSessions)
+    .set({ status: 'aborted', completedAt: new Date(), streamId: null })
+    .where(and(eq(aiStreamSessions.streamId, claimId), eq(aiStreamSessions.status, 'streaming')));
+}
+
+async function claimRun({
+  target,
+  userId,
+  messageId,
+}: {
+  target: HeadlessSessionTarget;
+  userId: string;
+  messageId: string;
+}): Promise<HeadlessClaimResult> {
+  const claimId = sessionRunClaimId(target.conversationId);
+  const now = new Date();
+
+  // A human mid-turn in this pane, or a dispatch that is still beating.
+  if (await hasLiveGeneration(target.conversationId, now)) return { ok: false, reason: 'busy' };
+  await releaseStaleClaim(claimId).catch((error) => {
+    loggers.ai.warn('headless-session-run: stale claim release failed', {
+      conversationId: target.conversationId,
+      error: error instanceof Error ? error.message : 'unknown',
+    });
+  });
+
+  // THE claim. Losing the unique index is losing the race — never an error.
+  const [row] = await db
+    .insert(aiStreamSessions)
+    .values({
+      messageId,
+      channelId: target.machineId,
+      conversationId: target.conversationId,
+      userId,
+      displayName: target.title,
+      browserSessionId: '',
+      streamId: claimId,
+      status: 'streaming',
+      startedAt: now,
+      lastHeartbeatAt: now,
+    })
+    .onConflictDoNothing()
+    .returning({ messageId: aiStreamSessions.messageId });
+
+  if (!row) return { ok: false, reason: 'busy' };
+
+  // A dispatched run can sit inside a single long tool call for minutes, so the
+  // beat is a real timer — the same reason `stream-lifecycle.ts` refuses to ride
+  // its parts checkpoint. `unref` so a held claim never keeps the process alive.
+  const heartbeat = setInterval(() => {
+    void db
+      .update(aiStreamSessions)
+      .set({ lastHeartbeatAt: new Date() })
+      .where(eq(aiStreamSessions.messageId, messageId))
+      .catch(() => {});
+  }, HEARTBEAT_INTERVAL_MS);
+  heartbeat.unref?.();
+
+  void broadcastAiStreamStart({
+    messageId,
+    pageId: target.machineId,
+    conversationId: target.conversationId,
+    startedAt: now.toISOString(),
+    triggeredBy: { userId, displayName: target.title, browserSessionId: '' },
+  });
+
+  return {
+    ok: true,
+    claim: {
+      messageId,
+      release: async ({ aborted }) => {
+        clearInterval(heartbeat);
+        // `streamId: null` is what actually frees the claim — NULLs are distinct
+        // under the unique index, so the next dispatch can take it immediately
+        // rather than waiting for this row to go stale.
+        await db
+          .update(aiStreamSessions)
+          .set({
+            status: aborted ? 'aborted' : 'complete',
+            completedAt: new Date(),
+            streamId: null,
+          })
+          .where(eq(aiStreamSessions.messageId, messageId))
+          .catch((error) => {
+            loggers.ai.warn('headless-session-run: claim finalize failed', {
+              messageId,
+              error: error instanceof Error ? error.message : 'unknown',
+            });
+          });
+
+        void broadcastAiStreamComplete({
+          messageId,
+          pageId: target.machineId,
+          conversationId: target.conversationId,
+          aborted,
+        });
+      },
+    },
+  };
+}
+
+/**
+ * Resolve the addressed session into a runnable target.
+ *
+ * Returns null for anything that is not a chat-surface session — a shell row, a
+ * retired agentType, a row whose binding no longer derives (its project or
+ * branch is gone). Null is not an access decision: authorization already
+ * happened in `session-tools.ts` against the derived handle set, and this
+ * function is only asked about nodes that set already contained.
+ */
+async function resolveTarget(identity: {
+  node: { machineId: string };
+  name: string;
+  address: { machineId: string; projectName?: string; branchName?: string; name: string };
+}): Promise<HeadlessSessionTarget | null> {
+  const { listAgentTerminals } = await import('@pagespace/lib/services/machines/agent-terminals');
+  const { buildListAgentTerminalsDeps } = await import('@/lib/machines/agent-terminals-runtime');
+
+  const listed = await listAgentTerminals({
+    machineId: identity.address.machineId,
+    ...(identity.address.projectName ? { projectName: identity.address.projectName } : {}),
+    ...(identity.address.branchName ? { branchName: identity.address.branchName } : {}),
+    deps: buildListAgentTerminalsDeps(),
+  });
+  if (!listed.ok) return null;
+
+  const row = listed.terminals.find((candidate) => candidate.name === identity.address.name);
+  if (!row) return null;
+  if (!isAgentRuntimeType(row.agentType) || agentSurfaceOf(row.agentType) !== 'chat') return null;
+
+  // The TARGET's own binding — derived from the target row's id, exactly as the
+  // chat route derives a pane's. This is what puts the run's bash in the
+  // target's sandbox at the target's cwd rather than the dispatcher's.
+  const derived = await deriveMachinePaneBinding(
+    { chatId: row.machineId, conversationId: row.id },
+    buildMachinePaneBindingDeps(),
+  );
+  if (!derived || !derived.ok) return null;
+
+  const [machinePage] = await db
+    .select({ title: pages.title })
+    .from(pages)
+    .where(eq(pages.id, row.machineId));
+
+  return {
+    machineId: row.machineId,
+    conversationId: row.id,
+    node: derived.binding.self,
+    binding: derived.binding,
+    title: machinePage?.title ?? 'Machine Agent',
+    name: row.name,
+  };
+}
+
+async function loadHistory(target: HeadlessSessionTarget): Promise<HeadlessTranscriptMessage[]> {
+  const rows = await db
+    .select({ role: chatMessages.role, content: chatMessages.content })
+    .from(chatMessages)
+    .where(
+      and(
+        eq(chatMessages.pageId, target.machineId),
+        eq(chatMessages.conversationId, target.conversationId),
+        eq(chatMessages.isActive, true),
+        // Placeholders for a generation still in flight carry no content — this
+        // feeds a model's context, so they are excluded exactly as `ask_agent`
+        // excludes them.
+        ne(chatMessages.status, 'streaming'),
+      ),
+    )
+    .orderBy(desc(chatMessages.createdAt))
+    .limit(HISTORY_LIMIT);
+
+  return rows
+    .reverse()
+    .filter((row): row is { role: 'user' | 'assistant'; content: string } =>
+      row.role === 'user' || row.role === 'assistant',
+    )
+    .map((row) => ({ role: row.role, content: row.content }));
+}
+
+/**
+ * The dispatched turn's system prompt.
+ *
+ * Same three layers the human path assembles — the machine page's own prompt,
+ * timestamp context, and the FROZEN machine-binding block — plus one honest
+ * statement of the situation: nobody is watching this run, so it cannot ask a
+ * question and wait, and its answer reaches the dispatcher only by being
+ * written into this transcript.
+ */
+function buildSystemPrompt(target: HeadlessSessionTarget, basePrompt: string | null, timezone?: string): string {
+  return (
+    (basePrompt || 'You are a PageSpace Agent running on a machine.') +
+    `\n\n${buildTimestampSystemPrompt(timezone)}` +
+    buildMachineBindingPrompt(target.binding) +
+    `\n\nDISPATCHED TURN (no one is watching this run)` +
+    `\n• This turn was sent to you by another agent through send_session. There is no interactive user attached: do not ask a question and wait for an answer — nothing will answer.` +
+    `\n• Finish the work you were asked to do, then state the outcome plainly in your reply. Your reply is written to this session's transcript, which is the ONLY way the sender sees your result (they read it with read_session).`
+  );
+}
+
+async function generate(input: {
+  target: HeadlessSessionTarget;
+  message: string;
+  history: HeadlessTranscriptMessage[];
+  userId: string;
+  depth: number;
+}): Promise<{ text: string; usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number }; toolCallCount?: number }> {
+  const { target, userId, depth } = input;
+
+  const [machinePage] = await db
+    .select({ id: pages.id, title: pages.title, type: pages.type, systemPrompt: pages.systemPrompt, aiProvider: pages.aiProvider, aiModel: pages.aiModel })
+    .from(pages)
+    .where(eq(pages.id, target.machineId));
+
+  const providerResult = await createAIProvider(userId, {
+    selectedProvider: machinePage?.aiProvider || DEFAULT_PROVIDER,
+    selectedModel: machinePage?.aiModel || DEFAULT_MODEL,
+  });
+  if (isProviderError(providerResult)) throw new Error(`AI provider error: ${providerResult.error}`);
+
+  // The bound-conversation tool surface, composed exactly as the chat route
+  // composes it: machine tools minus switch_machine/list_machines, plus the
+  // session family. A dispatched session can therefore orchestrate in turn —
+  // bounded by the engine's depth cap, not by a narrower tool set.
+  const { buildSessionTools } = await import('@/lib/ai/tools/session-tools-runtime');
+  const tools = withSessionFamilyTools(
+    filterToolsForMachineBinding(pageSpaceTools, true),
+    buildSessionTools(),
+    true,
+  ) as ToolSet;
+
+  const context: ToolExecutionContext = {
+    userId,
+    conversationId: target.conversationId,
+    machineBinding: target.binding,
+    // Its own dispatches are one level deeper than this run — the cap in
+    // `headless-session-run.ts` reads this counter back off the context.
+    agentCallDepth: depth,
+    requestOrigin: 'agent',
+    locationContext: machinePage
+      ? {
+          currentPage: {
+            id: machinePage.id,
+            title: machinePage.title,
+            type: machinePage.type,
+            path: `/${machinePage.title}`,
+          },
+        }
+      : undefined,
+  } as ToolExecutionContext;
+
+  const messages = [
+    ...input.history.map((entry) => ({ role: entry.role, content: entry.content })),
+    { role: 'user' as const, content: input.message },
+  ];
+
+  const result = await generateText({
+    model: providerResult.model,
+    system: buildSystemPrompt(target, machinePage?.systemPrompt ?? null),
+    messages,
+    tools: { ...tools, ...finishTool },
+    toolChoice: 'auto',
+    maxRetries: 3,
+    experimental_context: context,
+    stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(MAX_STEPS)],
+  });
+
+  // Text from EVERY step: `result.text` is the final step alone, which is empty
+  // whenever the model's last act was calling the finish tool.
+  const text = result.steps?.map((step) => step.text).filter(Boolean).join('') || '';
+
+  return {
+    text,
+    usage: result.totalUsage
+      ? {
+          inputTokens: result.totalUsage.inputTokens,
+          outputTokens: result.totalUsage.outputTokens,
+          totalTokens: result.totalUsage.totalTokens,
+        }
+      : undefined,
+    toolCallCount: result.steps?.flatMap((step) => step.toolCalls ?? []).length ?? 0,
+  };
+}
+
+export function buildHeadlessSessionRunDeps(): HeadlessSessionRunDeps {
+  return {
+    resolveTarget,
+    claimRun,
+
+    appendMessage: async ({ target, userId, messageId, content }) => {
+      const uiMessage: UIMessage = {
+        id: messageId,
+        role: 'user',
+        parts: [{ type: 'text', text: content }],
+      };
+      await saveMessageToDatabase({
+        messageId,
+        pageId: target.machineId,
+        conversationId: target.conversationId,
+        userId,
+        role: 'user',
+        content,
+        uiMessage,
+      });
+      // The pane a human has open renders this immediately — a dispatched
+      // instruction that only appears on refresh looks like nothing happened.
+      void broadcastChatUserMessage({
+        message: uiMessage,
+        pageId: target.machineId,
+        conversationId: target.conversationId,
+        triggeredBy: { userId, displayName: target.title, browserSessionId: '' },
+      });
+    },
+
+    loadHistory,
+    generate,
+
+    persistReply: async ({ target, messageId, content, aborted }) => {
+      await saveMessageToDatabase({
+        messageId,
+        pageId: target.machineId,
+        conversationId: target.conversationId,
+        userId: null,
+        role: 'assistant',
+        content,
+        status: aborted ? 'interrupted' : 'complete',
+      });
+    },
+
+    trackUsage: async ({ userId, pageId, conversationId, usage, success }) => {
+      await AIMonitoring.trackUsage({
+        userId,
+        provider: DEFAULT_PROVIDER,
+        model: DEFAULT_MODEL,
+        source: 'page_agent',
+        inputTokens: usage?.inputTokens,
+        outputTokens: usage?.outputTokens,
+        totalTokens: usage?.totalTokens,
+        conversationId,
+        // The OWNING MACHINE PAGE — the runtime-guardrail/payer key every node
+        // of the tree bills against (see `MachineNodeHandle.machineId`).
+        pageId,
+        success,
+        metadata: { feature: 'send_session' },
+      });
+    },
+
+    newId: () => createId(),
+
+    // Fire-and-forget: the ACK returns to the dispatching model immediately and
+    // the loop keeps running. `after()` is unavailable inside tool execution
+    // (the same constraint ask_agent's compaction hits), so this is a detached
+    // promise with its own error handling inside the engine.
+    defer: (run) => {
+      void run();
+    },
+
+    onError: (message, error) => {
+      loggers.ai.error(message, error instanceof Error ? error : undefined);
+    },
+  };
+}

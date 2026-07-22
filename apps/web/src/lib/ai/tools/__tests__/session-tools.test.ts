@@ -8,7 +8,6 @@ import {
   type SessionRow,
   type SessionToolsDeps,
 } from '../session-tools';
-import { readAgentSession, sendAgentSession } from '../session-io-agent';
 import { readPtySession, sendPtySession } from '../session-io-pty';
 import type { SessionView, SessionViewWrite } from '../session-layout';
 import type { ToolExecutionContext } from '../../core/types';
@@ -673,26 +672,58 @@ describe('session IO shells', () => {
     });
   });
 
-  it('given the shipped IO modules, should answer that they are not implemented yet', async () => {
+  it('given the shipped PTY IO module, should answer that it is not implemented yet', async () => {
     const identity = {
       node: machineHandle(),
-      name: 'worker',
-      address: { machineId: 'm1', name: 'worker' },
+      name: 'sh1',
+      address: { machineId: 'm1', name: 'sh1' },
     };
     const actor = { userId: 'u1' };
 
+    // The AGENT half is implemented (see session-io-agent.test.ts) and reaches
+    // the database, so it is exercised through its own factory rather than
+    // here; the PTY half remains a stub owned by the realtime phase.
     const answers = await Promise.all([
-      readAgentSession({ identity, actor }),
-      sendAgentSession({ identity, actor, input: 'hello' }),
       readPtySession({ identity, actor }),
       sendPtySession({ identity, actor, input: 'ls\n' }),
     ]);
 
     assert({
-      given: 'the phase-4 IO stubs',
-      should: 'refuse every call honestly rather than pretending emptiness',
+      given: 'the shell IO stubs',
+      should: 'refuse honestly rather than pretending an empty scrollback',
       actual: answers.map((answer) => answer.success),
-      expected: [false, false, false, false],
+      expected: [false, false],
+    });
+  });
+
+  it('given a send to an agent session from inside a chain, should carry the caller\'s depth', async () => {
+    const sends: (number | undefined)[] = [];
+    const { deps: d } = deps({
+      findSession: async () => agentRow('worker'),
+      io: {
+        agent: {
+          read: notDispatched,
+          send: async (input) => {
+            sends.push(input.depth);
+            return { success: true };
+          },
+        },
+        pty: { read: notDispatched, send: notDispatched },
+      },
+    });
+    const tools = createSessionTools(d);
+
+    await exec(
+      tools.send_session,
+      { name: 'worker', input: 'go' },
+      { ...context(rootBinding()), agentCallDepth: 1 },
+    );
+
+    assert({
+      given: 'a send_session made by a run that is itself a dispatched turn',
+      should: 'hand the chain depth to the agent module so the cap can see it',
+      actual: sends,
+      expected: [1],
     });
   });
 });
