@@ -39,7 +39,7 @@
 import { type MachineHandle, type MachineHost } from '../sandbox/machine-host';
 import { SANDBOX_ROOT } from '../sandbox/sandbox-paths';
 import { BRANCH_REPO_PATH } from './machine-branches';
-import { PROJECT_REPO_PATH } from './machine-project-promotion';
+import { PROJECT_REPO_PATH, isPromotedProject } from './machine-project-promotion';
 import {
   isUniqueViolation,
   type MachineAgentTerminalStore,
@@ -82,6 +82,24 @@ export interface AgentTerminalProjectLookup {
   ): Promise<{ path: string; sandboxId?: string | null; spriteTornDownAt?: Date | null } | null>;
 }
 
+/**
+ * LAZY PROMOTION's trigger seam (issue #2204 phase 7). A project is a checkout
+ * on the owning Machine's Sprite until the first project-scoped spawn promotes
+ * it to its own; `spawnAgentTerminal` is where that spawn happens, so it is
+ * where the promotion fires — inline, before the row is reserved.
+ *
+ * Injected rather than imported so this module keeps its narrow, store-shaped
+ * deps: `promoteProject` needs a `MachineHost`, an egress gate, a GitHub token
+ * resolver and a full actor context, none of which spawning otherwise touches.
+ * Optional — a caller that omits it (a branch-only consumer, a test) gets the
+ * pre-promotion behaviour byte-for-byte.
+ */
+export interface AgentTerminalProjectPromotion {
+  promote(input: { machineId: string; projectName: string }): Promise<
+    { ok: true } | { ok: false; reason: string; detail?: string }
+  >;
+}
+
 export type AgentTerminalMachineSandboxResult =
   | { ok: true; sandboxId: string }
   | { ok: false; reason: string };
@@ -97,13 +115,18 @@ export interface AgentTerminalsDeps {
   projectStore?: AgentTerminalProjectLookup;
   /** Required only for project/machine-scope targets. */
   machineSandbox?: AgentTerminalMachineSandbox;
+  /** Lazy project-Sprite promotion, fired by a project-scoped spawn — see `AgentTerminalProjectPromotion`. */
+  projectPromotion?: AgentTerminalProjectPromotion;
   store: MachineAgentTerminalStore;
   host: MachineHost;
   now: () => Date;
 }
 
 /** Each function below asks for exactly the slice of `AgentTerminalsDeps` it touches — e.g. a read-only resolver never needs `host`, so a caller (like the realtime PTY bridge) doesn't have to fabricate one just to satisfy the type. */
-export type SpawnAgentTerminalDeps = Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'store' | 'now'>;
+export type SpawnAgentTerminalDeps = Pick<
+  AgentTerminalsDeps,
+  'branchStore' | 'projectStore' | 'store' | 'now' | 'projectPromotion'
+>;
 export type ResolveAgentTerminalDeps = Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'machineSandbox' | 'store'>;
 export type ListAgentTerminalsDeps = Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'store'>;
 export type KillAgentTerminalDeps = Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'machineSandbox' | 'store' | 'host'>;
@@ -240,6 +263,15 @@ export type SpawnAgentTerminalDenialReason =
   | 'invalid_agent_type'
   | 'invalid_command'
   | AgentTerminalScopeDenialReason
+  /**
+   * A project-scoped spawn could not promote its project to its own Sprite —
+   * most often the dirty-tree refusal, whose `detail` tells the user exactly
+   * what to commit or discard. Deliberately a FAILED SPAWN rather than a
+   * fallback to the machine Sprite: promotion reclaims the machine-side
+   * checkout, so a session silently born there would be pointing at a
+   * directory the next successful promotion deletes.
+   */
+  | 'promotion_failed'
   | 'name_in_use'
   | 'error';
 
@@ -257,7 +289,42 @@ export function planSpawnAgentTerminal(input: { name: string; agentType: string;
 
 export type SpawnAgentTerminalResult =
   | { ok: true; id: string; agentType: AgentRuntimeType; resumed: boolean }
-  | { ok: false; reason: SpawnAgentTerminalDenialReason };
+  /** `detail` carries a promotion refusal's actionable message; absent for every other denial. */
+  | { ok: false; reason: SpawnAgentTerminalDenialReason; detail?: string };
+
+/**
+ * Promote this project to its OWN Sprite if it has not been promoted yet.
+ *
+ * Idempotent and race-safe by construction: the promotion itself persists under
+ * a compare-and-swap (`MachineProjectStore.promote`), so two concurrent spawns
+ * of the same project cannot both win — the loser adopts the winner's Sprite
+ * instead of orphaning its own. The cheap `isPromotedProject` pre-check here is
+ * purely to avoid paying for a redundant attach on the overwhelmingly common
+ * already-promoted path; correctness does not depend on it.
+ */
+async function ensureProjectPromoted({
+  machineId,
+  projectName,
+  deps,
+}: {
+  machineId: string;
+  projectName: string;
+  deps: Pick<AgentTerminalsDeps, 'projectStore' | 'projectPromotion'>;
+}): Promise<{ ok: true } | { ok: false; reason: 'promotion_failed'; detail?: string }> {
+  if (!deps.projectPromotion || !deps.projectStore) return { ok: true };
+
+  const project = await deps.projectStore.findByName(machineId, projectName);
+  // A missing row is not this function's failure to report — `resolveScopeKey`
+  // already denied it as `project_not_found` before we got here.
+  if (!project) return { ok: true };
+  if (isPromotedProject({ sandboxId: project.sandboxId ?? null, spriteTornDownAt: project.spriteTornDownAt ?? null })) {
+    return { ok: true };
+  }
+
+  const promoted = await deps.projectPromotion.promote({ machineId, projectName });
+  if (promoted.ok) return { ok: true };
+  return { ok: false, reason: 'promotion_failed', detail: promoted.detail ?? promoted.reason };
+}
 
 /**
  * Spawn (or resume) a named agent terminal at a scope. Idempotent by (scope,
@@ -285,6 +352,20 @@ export async function spawnAgentTerminal({
 
   const scope = await resolveScopeKey({ machineId, projectName, branchName, deps });
   if (!scope.ok) return scope;
+
+  // LAZY PROMOTION, at its trigger. Only true PROJECT scope: a branch already
+  // has its own Sprite whatever its project's state, and machine scope IS the
+  // machine's Sprite. Runs BEFORE the row is reserved, so a refused promotion
+  // leaves nothing behind pointing at a checkout the next successful promotion
+  // would reclaim.
+  if (scope.scopeKey.projectName !== null && scope.scopeKey.machineBranchId === null) {
+    const promoted = await ensureProjectPromoted({
+      machineId: scope.scopeKey.machineId,
+      projectName: scope.scopeKey.projectName,
+      deps,
+    });
+    if (!promoted.ok) return promoted;
+  }
 
   const existing = await deps.store.findByName(scope.scopeKey, name);
   if (existing) {

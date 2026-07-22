@@ -614,6 +614,168 @@ describe('resolveAgentTerminalRow', () => {
   });
 });
 
+/**
+ * Lazy promotion's TRIGGER: the first project-scoped spawn. `spawnAgentTerminal`
+ * is where a project-scoped session is born, so it is where an unpromoted
+ * project must become its own Sprite — inline, before the row is reserved, the
+ * same way `spawnBranch` provisions+clones inside the spawn request rather than
+ * deferring it to first connect.
+ */
+describe('spawnAgentTerminal — lazy project promotion trigger', () => {
+  /** A project lookup whose row can be PROMOTED mid-test, exactly as promoteProject's CAS would. */
+  function makePromotableProject() {
+    const row: { path: string; sandboxId: string | null; spriteTornDownAt: Date | null } = {
+      path: PROJECT_PATH,
+      sandboxId: null,
+      spriteTornDownAt: null,
+    };
+    const lookup: AgentTerminalProjectLookup = {
+      findByName: async (machineId, name) => (machineId === TERMINAL_ID && name === PROJECT_NAME ? row : null),
+    };
+    return { row, lookup };
+  }
+
+  function spyPromotion(impl?: () => Promise<{ ok: true } | { ok: false; reason: string; detail?: string }>) {
+    const calls: Array<{ machineId: string; projectName: string }> = [];
+    return {
+      calls,
+      promotion: {
+        promote: async (input: { machineId: string; projectName: string }) => {
+          calls.push(input);
+          return impl ? impl() : ({ ok: true } as const);
+        },
+      },
+    };
+  }
+
+  it('given a project-scoped spawn on an UNPROMOTED project, should promote it first and then resolve onto the project Sprite', async () => {
+    const { row, lookup } = makePromotableProject();
+    const { store } = makeStore();
+    const promotion = spyPromotion(async () => {
+      // What the real promoteProject's CAS writes.
+      row.sandboxId = 'sprite-project-1';
+      return { ok: true };
+    });
+    const acquireCalls: string[] = [];
+    const deps = makeDeps({
+      store,
+      projectStore: lookup,
+      projectPromotion: promotion.promotion,
+      machineSandbox: makeMachineSandbox({
+        acquire: async (machineId) => {
+          acquireCalls.push(machineId);
+          return { ok: true, sandboxId: MACHINE_SANDBOX_ID };
+        },
+      }),
+    });
+
+    const spawned = await spawnAgentTerminal({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      name: 'cli',
+      agentType: 'shell',
+      actor,
+      deps,
+    });
+
+    expect(spawned).toEqual({ ok: true, id: 'agent-terminal-1', agentType: 'shell', resumed: false });
+    expect(promotion.calls).toEqual([{ machineId: TERMINAL_ID, projectName: PROJECT_NAME }]);
+    expect(row.sandboxId).toBe('sprite-project-1');
+
+    // ...and the session that spawn just reserved now resolves onto the
+    // project's OWN Sprite, never machine Sprite + checkout cwd.
+    const resolved = await resolveAgentTerminal({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, name: 'cli', deps });
+    expect(resolved).toMatchObject({
+      ok: true,
+      sandboxId: 'sprite-project-1',
+      cwd: PROJECT_REPO_PATH,
+      ownSprite: true,
+    });
+    expect(acquireCalls).toEqual([]);
+  });
+
+  it('given a DIRTY checkout, should fail the spawn with the actionable refusal — never a silent machine-Sprite fallback', async () => {
+    const { row, lookup } = makePromotableProject();
+    const { store } = makeStore();
+    const promotion = spyPromotion(async () => ({
+      ok: false,
+      reason: 'dirty_checkout',
+      detail: 'The checkout at /workspace/projects/my-repo has uncommitted changes',
+    }));
+    const deps = makeDeps({ store, projectStore: lookup, projectPromotion: promotion.promotion });
+
+    const spawned = await spawnAgentTerminal({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      name: 'cli',
+      agentType: 'shell',
+      actor,
+      deps,
+    });
+
+    expect(spawned).toEqual({
+      ok: false,
+      reason: 'promotion_failed',
+      detail: 'The checkout at /workspace/projects/my-repo has uncommitted changes',
+    });
+    // No row was reserved, and the project stayed put — a refused promotion must
+    // not leave a session pointing at a checkout we were about to reclaim.
+    expect(await deps.store.findByName({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, machineBranchId: null }, 'cli')).toBeNull();
+    expect(row.sandboxId).toBeNull();
+  });
+
+  it('given an ALREADY-promoted project, should not re-promote', async () => {
+    const { row, lookup } = makePromotableProject();
+    row.sandboxId = 'sprite-project-1';
+    const { store } = makeStore();
+    const promotion = spyPromotion();
+    const deps = makeDeps({ store, projectStore: lookup, projectPromotion: promotion.promotion });
+
+    await spawnAgentTerminal({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, name: 'cli', agentType: 'shell', actor, deps });
+
+    expect(promotion.calls).toEqual([]);
+  });
+
+  it('given a MACHINE-scope or BRANCH-scope spawn, should never promote anything', async () => {
+    const { lookup } = makePromotableProject();
+    const promotion = spyPromotion();
+
+    await spawnAgentTerminal({
+      machineId: TERMINAL_ID,
+      name: 'cli',
+      agentType: 'shell',
+      actor,
+      deps: makeDeps({ store: makeStore().store, projectStore: lookup, projectPromotion: promotion.promotion }),
+    });
+    await spawnAgentTerminal({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      branchName: BRANCH_NAME,
+      name: 'cli',
+      agentType: 'shell',
+      actor,
+      deps: makeDeps({ store: makeStore().store, projectStore: lookup, projectPromotion: promotion.promotion }),
+    });
+
+    // A branch has its OWN Sprite regardless of whether its project was ever
+    // promoted, and machine scope IS the machine Sprite.
+    expect(promotion.calls).toEqual([]);
+  });
+
+  it('given NO promotion dep wired, should spawn exactly as before (the dep is optional)', async () => {
+    const { lookup } = makePromotableProject();
+    const spawned = await spawnAgentTerminal({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      name: 'cli',
+      agentType: 'shell',
+      actor,
+      deps: makeDeps({ store: makeStore().store, projectStore: lookup }),
+    });
+    expect(spawned).toMatchObject({ ok: true, resumed: false });
+  });
+});
+
 describe('resolveAgentTerminal', () => {
   it('given an unknown branch, should deny', async () => {
     const deps = makeDeps({ branchStore: makeBranchLookup() });

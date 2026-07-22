@@ -47,7 +47,9 @@ import type {
   AgentTerminalProjectLookup,
   AgentTerminalMachineSandbox,
 } from '@pagespace/lib/services/machines/agent-terminals';
+import { promoteProject } from '@pagespace/lib/services/machines/machine-project-promotion';
 import { canAccessMachine, canViewMachine, getMachineHostForBranches } from './machine-branches-runtime';
+import { buildPromoteProjectDeps, resolveMachineActorContext } from './machine-projects-runtime';
 
 export { canAccessMachine, canViewMachine, isCodeExecutionEnabled };
 
@@ -180,8 +182,37 @@ function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
   };
 }
 
-export function buildSpawnAgentTerminalDeps(): SpawnAgentTerminalDeps {
-  return { ...buildBaseDeps(), projectStore: buildProjectStoreLookup(), now: () => new Date() };
+/**
+ * Spawn deps, including LAZY PROJECT PROMOTION (issue #2204 phase 7): a
+ * project-scoped spawn on an unpromoted project promotes it to its own Sprite
+ * first, then reserves the row — so the session it creates resolves onto that
+ * Sprite rather than the machine checkout the promotion is about to reclaim.
+ *
+ * `actorUserId` is required for exactly that: promotion provisions a billable
+ * VM, clones through the acting user's GitHub token, and re-checks page access
+ * on every machine acquire it makes, so it needs a real actor, not just the
+ * row-owner id spawn otherwise carries. The actor context is resolved LAZILY,
+ * inside the seam — a machine- or branch-scope spawn never promotes and must
+ * not pay for the lookup.
+ */
+export function buildSpawnAgentTerminalDeps(actorUserId: string): SpawnAgentTerminalDeps {
+  return {
+    ...buildBaseDeps(),
+    projectStore: buildProjectStoreLookup(),
+    now: () => new Date(),
+    projectPromotion: {
+      promote: async ({ machineId, projectName }) => {
+        const actor = await resolveMachineActorContext(actorUserId);
+        const result = await promoteProject({
+          machineId,
+          projectName,
+          actor,
+          deps: buildPromoteProjectDeps({ actorUserId }),
+        });
+        return result.ok ? { ok: true } : { ok: false, reason: result.reason, detail: result.detail };
+      },
+    },
+  };
 }
 
 export function buildListAgentTerminalsDeps(): ListAgentTerminalsDeps {
