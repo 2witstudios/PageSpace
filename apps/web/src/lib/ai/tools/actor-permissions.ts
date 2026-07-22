@@ -73,6 +73,15 @@ async function fetchActingPageRow(
  * machine page. A missing page row is a non-agent for the same reason (and the
  * user's own ACL still denies a page that does not exist).
  *
+ * Nested (ask_agent) runs inherit the PARENT's actor identity by design —
+ * agent-communication-tools.ts spreads the caller's context, and
+ * sandbox-tools-runtime's activeMachineAgentPageId documents the same "the
+ * agent's own page or the parent's for a sub-agent" rule. So a consulted agent
+ * reached FROM a machine pane also resolves to the invoking user: bounded by
+ * that user's own ACL, never beyond it, and never wider than what the pane's
+ * own tools already reach. Before this gate that whole path was dead, not
+ * tighter — ask_agent's own canActorViewPage gate denied at the door.
+ *
  * Exported for tools that branch on the same "is this a membership-scoped
  * agent, or should it fall through to the user's own reach" question outside
  * these chokepoints (e.g. drive discovery/creation) — reuse this instead of

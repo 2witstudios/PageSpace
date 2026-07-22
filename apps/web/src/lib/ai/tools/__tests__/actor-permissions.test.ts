@@ -481,6 +481,24 @@ describe('machine-pane conversations (agentPageId is a MACHINE page, not an agen
     expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
   });
 
+  // A consulted agent (ask_agent) inherits the PARENT's actor identity — the
+  // nested context spreads the caller's chatSource — so from a machine pane it
+  // resolves to the invoking user and can never exceed that user's own ACL.
+  it('a nested ask_agent run from a machine pane stays bounded by the invoking user', async () => {
+    const { getUserAccessLevel } = await import('@pagespace/lib/permissions/permissions');
+    vi.mocked(getUserAccessLevel).mockResolvedValue(null);
+    const nestedCtx = {
+      ...machinePaneCtx,
+      agentCallDepth: 1,
+      parentAgentId: 'machine-1',
+      requestOrigin: 'agent',
+    } as ToolExecutionContext;
+
+    expect(await canActorViewPage(nestedCtx, 'page-the-user-cannot-see')).toBe(false);
+    expect(vi.mocked(getUserAccessLevel)).toHaveBeenCalledWith('user-1', 'page-the-user-cannot-see');
+    expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
+  });
+
   it('an AI_CHAT page keeps the agent-scoped path (the gate only rejects non-agent pages)', async () => {
     mockDbWhere.mockResolvedValue([AGENT_PAGE_ROW]);
     mockGetAgentAccessLevel.mockResolvedValue(FULL);
