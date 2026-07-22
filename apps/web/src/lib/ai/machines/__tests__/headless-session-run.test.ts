@@ -55,7 +55,7 @@ interface Recorded {
   appended: { content: string; conversationId: string }[];
   generated: { depth: number; cwd: string; sandboxId?: string; message: string }[];
   replies: { content: string; aborted: boolean }[];
-  billed: { pageId: string; userId: string; success: boolean }[];
+  billed: { pageId: string; userId: string; success: boolean; provider?: string; model?: string }[];
   released: { aborted: boolean }[];
   /** Set at ACK time, so "did the loop run before the ACK?" is directly assertable. */
   ackedBeforeRun: boolean;
@@ -112,13 +112,18 @@ function deps(
         sandboxId: to.binding.self.branchSandbox?.sandboxId,
         message,
       });
-      return { text: 'done', usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } };
+      return {
+        text: 'done',
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+        provider: 'openrouter',
+        model: 'anthropic/claude-sonnet-5',
+      };
     },
     persistReply: async ({ content, aborted }) => {
       recorded.replies.push({ content, aborted });
     },
-    trackUsage: async ({ pageId, userId, success }) => {
-      recorded.billed.push({ pageId, userId, success });
+    trackUsage: async ({ pageId, userId, success, provider, model }) => {
+      recorded.billed.push({ pageId, userId, success, provider, model });
     },
     newId: () => `id${++ids}`,
     defer: (run) => {
@@ -137,6 +142,30 @@ function deps(
     },
   };
 }
+
+describe('dispatchHeadlessSessionTurn — billing identity', () => {
+  it('meters the run on the provider/model generate() ACTUALLY used — never a hardcoded default', async () => {
+    // The machine page picks its own provider/model; billing on the default
+    // rate would mischarge every non-default machine agent turn.
+    const { deps: d, recorded, drain } = deps();
+
+    await dispatchHeadlessSessionTurn(
+      { identity: identity(), actor: { userId: 'user-1' }, message: 'go', depth: 0 },
+      d,
+    );
+    await drain();
+
+    expect(recorded.billed).toEqual([
+      {
+        pageId: 'machine-page-1',
+        userId: 'user-1',
+        success: true,
+        provider: 'openrouter',
+        model: 'anthropic/claude-sonnet-5',
+      },
+    ]);
+  });
+});
 
 describe('dispatchHeadlessSessionTurn — credit gate', () => {
   it('given a denied credit gate, should refuse BEFORE claiming or appending anything', async () => {
@@ -315,7 +344,15 @@ describe('dispatchHeadlessSessionTurn', () => {
       given: 'a headless run at a branch node of a machine',
       should: 'meter against the owning machine page id, attributed to the dispatching user',
       actual: recorded.billed,
-      expected: [{ pageId: 'machine-page-1', userId: 'u1', success: true }],
+      expected: [
+        {
+          pageId: 'machine-page-1',
+          userId: 'u1',
+          success: true,
+          provider: 'openrouter',
+          model: 'anthropic/claude-sonnet-5',
+        },
+      ],
     });
   });
 

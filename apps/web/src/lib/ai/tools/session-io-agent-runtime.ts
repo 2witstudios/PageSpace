@@ -14,7 +14,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, desc, eq } from '@pagespace/db/operators';
+import { and, desc, eq, or } from '@pagespace/db/operators';
 import { chatMessages } from '@pagespace/db/schema/core';
 import { agentSurfaceOf, isAgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
 import { listAgentTerminals } from '@pagespace/lib/services/machines/agent-terminals';
@@ -73,6 +73,10 @@ export function buildAgentSessionIoDeps(): AgentSessionIoDeps {
             eq(chatMessages.pageId, identity.address.machineId),
             eq(chatMessages.conversationId, row.id),
             eq(chatMessages.isActive, true),
+            // In SQL, not JS: a post-LIMIT filter would let system/tool rows
+            // consume limit slots, silently shortening the tail the reader asked
+            // for.
+            or(eq(chatMessages.role, 'user'), eq(chatMessages.role, 'assistant')),
           ),
         )
         .orderBy(desc(chatMessages.createdAt))
@@ -82,7 +86,6 @@ export function buildAgentSessionIoDeps(): AgentSessionIoDeps {
         ok: true,
         entries: rows
           .reverse()
-          .filter((message) => message.role === 'user' || message.role === 'assistant')
           .map((message) => ({
             role: message.role as 'user' | 'assistant',
             content: message.content,

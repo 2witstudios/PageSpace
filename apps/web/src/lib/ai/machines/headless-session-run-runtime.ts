@@ -44,7 +44,7 @@
 import { createId } from '@paralleldrive/cuid2';
 import { generateText, stepCountIs, hasToolCall, type ToolSet, type UIMessage } from 'ai';
 import { db } from '@pagespace/db/db';
-import { and, eq, desc, ne } from '@pagespace/db/operators';
+import { and, eq, desc, ne, or } from '@pagespace/db/operators';
 import { chatMessages, pages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
@@ -286,6 +286,9 @@ async function loadHistory(target: HeadlessSessionTarget): Promise<HeadlessTrans
         // feeds a model's context, so they are excluded exactly as `ask_agent`
         // excludes them.
         ne(chatMessages.status, 'streaming'),
+        // In SQL, not JS: a post-LIMIT role filter would let system/tool rows
+        // consume HISTORY_LIMIT slots and silently shorten the run's context.
+        or(eq(chatMessages.role, 'user'), eq(chatMessages.role, 'assistant')),
       ),
     )
     .orderBy(desc(chatMessages.createdAt))
@@ -293,10 +296,7 @@ async function loadHistory(target: HeadlessSessionTarget): Promise<HeadlessTrans
 
   return rows
     .reverse()
-    .filter((row): row is { role: 'user' | 'assistant'; content: string } =>
-      row.role === 'user' || row.role === 'assistant',
-    )
-    .map((row) => ({ role: row.role, content: row.content }));
+    .map((row) => ({ role: row.role as 'user' | 'assistant', content: row.content }));
 }
 
 /**
@@ -325,7 +325,7 @@ async function generate(input: {
   history: HeadlessTranscriptMessage[];
   userId: string;
   depth: number;
-}): Promise<{ text: string; usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number }; toolCallCount?: number }> {
+}): Promise<{ text: string; usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number }; toolCallCount?: number; provider: string; model: string }> {
   const { target, userId, depth } = input;
 
   const [machinePage] = await db
@@ -406,6 +406,11 @@ async function generate(input: {
         }
       : undefined,
     toolCallCount: result.steps?.flatMap((step) => step.toolCalls ?? []).length ?? 0,
+    // What the loop ACTUALLY ran on — the factory's resolved identity, so a
+    // machine page with its own provider/model is billed at that rate, never
+    // the default's.
+    provider: providerResult.provider,
+    model: providerResult.modelName,
   };
 }
 
@@ -471,11 +476,14 @@ export function buildHeadlessSessionRunDeps(): HeadlessSessionRunDeps {
       });
     },
 
-    trackUsage: async ({ userId, pageId, conversationId, usage, success }) => {
+    trackUsage: async ({ userId, pageId, conversationId, usage, success, provider, model }) => {
       await AIMonitoring.trackUsage({
         userId,
-        provider: DEFAULT_PROVIDER,
-        model: DEFAULT_MODEL,
+        // The generate result's resolved identity; the defaults only for a run
+        // that failed before a provider was ever resolved (usage is absent
+        // there too, so nothing is charged at the wrong rate).
+        provider: provider ?? DEFAULT_PROVIDER,
+        model: model ?? DEFAULT_MODEL,
         source: 'page_agent',
         inputTokens: usage?.inputTokens,
         outputTokens: usage?.outputTokens,

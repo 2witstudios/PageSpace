@@ -111,6 +111,9 @@ export interface HeadlessGenerateResult {
   text: string;
   usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
   toolCallCount?: number;
+  /** The provider/model the loop ACTUALLY ran on — billing must record these, never a default. */
+  provider?: string;
+  model?: string;
 }
 
 export interface HeadlessSessionRunDeps {
@@ -158,6 +161,9 @@ export interface HeadlessSessionRunDeps {
     conversationId: string;
     usage: HeadlessGenerateResult['usage'];
     success: boolean;
+    /** From the generate result — absent when the run failed before generating. */
+    provider?: string;
+    model?: string;
   }) => Promise<void>;
   /** Fresh message ids. */
   newId: () => string;
@@ -333,6 +339,8 @@ async function runClaimedTurn({
       conversationId: target.conversationId,
       usage: result?.usage,
       success: failure === undefined,
+      provider: result?.provider,
+      model: result?.model,
     });
   } catch (error) {
     deps.onError?.('headless-session-run: usage tracking failed', error);
