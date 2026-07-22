@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, index, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, index, uniqueIndex, bigint } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
@@ -92,6 +92,37 @@ export const machineBranches = pgTable('machine_branches', {
    * live Sprite.
    */
   spriteTornDownAt: timestamp('spriteTornDownAt', { mode: 'date' }),
+
+  // ---------------------------------------------------------------------------
+  // Storage attribution (issue #2204 phase 3). A branch-terminal's Sprite has
+  // its OWN persistent filesystem (see the table doc), so it accrues storage
+  // cost independently of the owning Machine's — but it is NOT its own payer or
+  // its own line item: the reconcile bills these bytes to `machineId`, the
+  // owning Machine page, which is the guardrail/payer key every other
+  // branch-scoped cost already uses (services/sandbox/branch-session.ts) and the
+  // one field the per-machine usage breakdown groups on. Hence measurement and
+  // watermark live HERE (per-Sprite facts — writing them onto the machine's
+  // `machine_sessions` row would clobber the machine's own footprint), while
+  // attribution resolves to the machine page (machine-storage-attribution.ts).
+  // ---------------------------------------------------------------------------
+
+  // Watermark for the storage reconcile, per branch Sprite — same semantics as
+  // `machine_sessions.storageLastBilledAt` (bill only the elapsed window, then
+  // advance, so overlapping runs never double-bill). Defaults to now() so
+  // pre-existing branch rows start accruing from migration time, never
+  // retroactively.
+  storageLastBilledAt: timestamp('storageLastBilledAt', { mode: 'date' }).defaultNow().notNull(),
+
+  // Measured used BYTES on THIS branch Sprite's filesystem, captured
+  // opportunistically while it is already awake for real work (spawn/clone,
+  // reattach) — never by waking a hibernating Sprite. NULL = never measured →
+  // the reconcile bills a conservative 0 floor for that window (never the
+  // provisioned cap).
+  storageMeasuredBytes: bigint('storageMeasuredBytes', { mode: 'number' }),
+  // When `storageMeasuredBytes` was captured — drives the measurement throttle
+  // and the reconcile's staleness signal. NULL alongside NULL bytes = never
+  // measured.
+  storageMeasuredAt: timestamp('storageMeasuredAt', { mode: 'date' }),
 
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),

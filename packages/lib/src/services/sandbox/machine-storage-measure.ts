@@ -23,6 +23,7 @@
  */
 
 import type { MachineHandle } from './machine-host';
+import type { StorageSubject } from './machine-storage-attribution';
 import { SANDBOX_ROOT } from './sandbox-paths';
 
 /** Parse a non-negative integer env override; fall back on absence/garbage (mirrors credit-pricing.ts). */
@@ -105,7 +106,8 @@ export function shouldRefreshMeasurement(input: {
 }
 
 export type PersistStorageMeasurement = (input: {
-  pageId: string;
+  /** WHICH filesystem was measured — selects the row the writer updates (see machine-storage-attribution.ts). */
+  subject: StorageSubject;
   measuredBytes: number;
   measuredAt: Date;
 }) => Promise<void>;
@@ -113,9 +115,13 @@ export type PersistStorageMeasurement = (input: {
 export interface RefreshStorageMeasurementInput {
   /** An ALREADY-AWAKE machine handle (real work is happening on it) — measurement never provisions/wakes. */
   handle: Pick<MachineHandle, 'exec'>;
-  /** The machine_sessions page this machine bills against. */
-  pageId: string;
-  /** Last persisted measurement time for this page (null = never measured). */
+  /**
+   * The filesystem being measured: a Machine's own Sprite or a branch-terminal's
+   * separate one. Only ever decides WHERE the bytes are persisted — who pays is
+   * resolved from the same subject at billing time, never here.
+   */
+  subject: StorageSubject;
+  /** Last persisted measurement time for this subject (null = never measured). */
   lastMeasuredAt: Date | null;
   now: Date;
   throttleMs?: number;
@@ -177,6 +183,6 @@ export async function refreshStorageMeasurement(
   const bytes = parseDuBytes(run.stdout);
   if (bytes === null) return { measured: false };
 
-  await input.persist({ pageId: input.pageId, measuredBytes: bytes, measuredAt: input.now });
+  await input.persist({ subject: input.subject, measuredBytes: bytes, measuredAt: input.now });
   return { measured: true, bytes };
 }

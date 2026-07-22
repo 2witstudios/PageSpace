@@ -98,6 +98,42 @@ export interface MachineBranchesDeps {
   buildEnv: () => Record<string, string>;
   audit: (input: CodeExecutionAuditInput) => Promise<void>;
   screenOutput?: (text: string) => Promise<string>;
+  /**
+   * Optional opportunistic storage-measurement seam (issue #2204 phase 3).
+   * While this branch's Sprite is ALREADY awake for a spawn/clone or a reattach,
+   * capture its used bytes onto its own `machine_branches` row so the storage
+   * reconcile can bill them to the OWNING Machine page without ever waking a
+   * hibernating Sprite. Best-effort and fire-and-forget — a failure must never
+   * affect the spawn; omitting it disables measurement (the reconcile then bills
+   * this branch the conservative never-measured 0 floor).
+   */
+  measureBranchStorage?: (input: BranchStorageMeasurement) => Promise<void>;
+}
+
+/** Input to the branch storage-measurement seam — the branch's own row plus its attribution key. */
+export interface BranchStorageMeasurement {
+  /** The `machine_branches` row the measurement is persisted on. */
+  machineBranchId: string;
+  /** The owning Machine page the measured bytes bill to (machine-storage-attribution.ts). */
+  machinePageId: string;
+  /** The branch Sprite's ALREADY-LIVE handle — measurement never provisions or wakes one. */
+  handle: MachineHandle;
+}
+
+/**
+ * Fire the optional storage-measurement seam for a branch Sprite we currently
+ * hold awake. Deliberately NOT awaited: measurement is a background billing
+ * concern (throttled to at most one `du` per window inside the seam), and the
+ * user-facing spawn/attach must not wait on it or fail with it.
+ */
+function noteBranchStorage(
+  measure: ((input: BranchStorageMeasurement) => Promise<void>) | undefined,
+  input: BranchStorageMeasurement,
+): void {
+  if (!measure) return;
+  void measure(input).catch(() => {
+    /* Best-effort: the seam already logs; a spawn/attach must never fail on it. */
+  });
 }
 
 export type SpawnBranchResult =
@@ -547,6 +583,7 @@ export async function spawnBranch({
       // Refresh on every reattach, not just first spawn — Claude Code OAuth
       // credentials rotate, so a one-time copy would drift stale over time.
       await propagateClaudeCredential({ machineId, branchHandle: handle, resolveRootMachineHandle: deps.resolveRootMachineHandle });
+      noteBranchStorage(deps.measureBranchStorage, { machineBranchId: existing.id, machinePageId: machineId, handle });
       return { ok: true, sandboxId: handle.machineId, branchName, resumed: true };
     }
     // Vanished — fall through and re-provision under the SAME session key.
@@ -603,11 +640,15 @@ export async function spawnBranch({
       return { ok: false, reason: 'error', detail: 'lost a concurrent branch-terminal spawn race' };
     }
     await propagateClaudeCredential({ machineId, branchHandle: handle, resolveRootMachineHandle: deps.resolveRootMachineHandle });
+    // Measured right after the clone that wrote the bulk of this Sprite's
+    // footprint — the one moment a branch's bytes are guaranteed non-trivial.
+    noteBranchStorage(deps.measureBranchStorage, { machineBranchId: existing.id, machinePageId: machineId, handle });
     return { ok: true, sandboxId: handle.machineId, branchName, resumed: false, createdNew: cloned.createdNew };
   }
 
+  let created: MachineBranchRecord;
   try {
-    await deps.store.create({
+    created = await deps.store.create({
       ownerId: actor.userId,
       machineId,
       projectName,
@@ -639,6 +680,8 @@ export async function spawnBranch({
   }
 
   await propagateClaudeCredential({ machineId, branchHandle: handle, resolveRootMachineHandle: deps.resolveRootMachineHandle });
+  // See above: the post-clone footprint, captured while this Sprite is still awake.
+  noteBranchStorage(deps.measureBranchStorage, { machineBranchId: created.id, machinePageId: machineId, handle });
   return { ok: true, sandboxId: handle.machineId, branchName, resumed: false, createdNew: cloned.createdNew };
 }
 
@@ -660,6 +703,7 @@ export async function attachBranch({
   store,
   host,
   resolveRootMachineHandle,
+  measureBranchStorage,
 }: {
   machineId: string;
   projectName: string;
@@ -667,6 +711,8 @@ export async function attachBranch({
   store: MachineBranchStore;
   host: MachineHost;
   resolveRootMachineHandle: (machineId: string) => Promise<MachineHandle | null>;
+  /** Same optional storage-measurement seam as `MachineBranchesDeps.measureBranchStorage`. */
+  measureBranchStorage?: (input: BranchStorageMeasurement) => Promise<void>;
 }): Promise<AttachBranchResult> {
   // Shadow the raw params with their canonical forms, as `spawnBranch` does, so no
   // line below can reach the untrusted text by accident.
@@ -682,6 +728,7 @@ export async function attachBranch({
   // Refresh on every reattach — see `propagateClaudeCredential`'s doc comment
   // on why this isn't a one-time, spawn-only copy.
   await propagateClaudeCredential({ machineId, branchHandle: handle, resolveRootMachineHandle });
+  noteBranchStorage(measureBranchStorage, { machineBranchId: existing.id, machinePageId: machineId, handle });
   return { ok: true, sandboxId: handle.machineId, branchName };
 }
 

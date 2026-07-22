@@ -36,6 +36,7 @@ import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/per
 import { createDbMachineBranchStore } from '@pagespace/lib/services/machines/machine-branches-store';
 import { createDbMachineProjectStore } from '@pagespace/lib/services/machines/machine-projects-store';
 import type { MachineActorContext, MachineBranchesDeps } from '@pagespace/lib/services/machines/machine-branches';
+import { measureBranchStorageOpportunistically } from '@pagespace/lib/services/sandbox/machine-storage-billing';
 
 // The Fly Sprites driver is loaded via a DYNAMIC import, never a static one —
 // @fly/sprites is ESM-only and @pagespace/lib compiles to CJS. Mirrors the
@@ -196,6 +197,13 @@ export function buildMachineBranchesDeps(): MachineBranchesDeps {
     },
     buildEnv: defaultBuildEnv,
     audit: (input) => writeCodeExecutionAudit({ input }),
+    // Issue #2204 phase 3: while this branch's Sprite is awake for the spawn/
+    // clone or reattach, measure its used bytes onto its own `machine_branches`
+    // row so the storage reconcile bills them to the OWNING Machine page — the
+    // key the per-machine usage breakdown groups on. Throttled and best-effort
+    // inside the seam; never wakes a hibernating Sprite.
+    measureBranchStorage: ({ machineBranchId, machinePageId, handle }) =>
+      measureBranchStorageOpportunistically({ machineBranchId, machinePageId, handle }),
   };
 }
 
