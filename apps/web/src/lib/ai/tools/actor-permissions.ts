@@ -20,6 +20,7 @@ import {
   hasAppDriveMembership,
 } from '@pagespace/lib/permissions/app-permissions';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
+import { PageType } from '@pagespace/lib/utils/enums';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
@@ -36,11 +37,23 @@ export function getAgentPageId(context: ToolExecutionContext): string | undefine
  * assistants that need the user's full reach rather than explicit membership.
  */
 export async function hasAgentUserScopedAccess(agentPageId: string): Promise<boolean> {
+  return (await fetchActingPageRow(agentPageId))?.userScopedAccess ?? false;
+}
+
+/**
+ * The ONE row both actor gates read for `chatSource.agentPageId`: is this page
+ * actually an agent (`type`), and has it opted into user-scoped reach
+ * (`userScopedAccess`)? Kept as a single select so the type gate below costs
+ * zero additional queries on a path every tool call runs through.
+ */
+async function fetchActingPageRow(
+  agentPageId: string,
+): Promise<{ type: string; userScopedAccess: boolean } | undefined> {
   const [row] = await db
-    .select({ userScopedAccess: pages.userScopedAccess })
+    .select({ type: pages.type, userScopedAccess: pages.userScopedAccess })
     .from(pages)
     .where(eq(pages.id, agentPageId));
-  return row?.userScopedAccess ?? false;
+  return row;
 }
 
 /**
@@ -50,6 +63,16 @@ export async function hasAgentUserScopedAccess(agentPageId: string): Promise<boo
  * Invoker-scoped by design: a user-scoped agent acts with the CURRENT
  * chatter's reach, never its owner's.
  *
+ * "Not a page-agent" is a claim about the PAGE, not just about whether a
+ * chatSource carries an id: a machine-pane conversation carries the MACHINE
+ * page as agentPageId (api/ai/chat/route.ts sets it for every page chat), and a
+ * non-agent page must not be treated as an acting agent — no driveAgentMembers
+ * row can ever exist for it, so every getAgentAccessLevel lookup returned null
+ * and denied. Falling through to the authenticated user is the honest actor and
+ * matches the PTY path; the chat route already authorized that user against the
+ * machine page. A missing page row is a non-agent for the same reason (and the
+ * user's own ACL still denies a page that does not exist).
+ *
  * Exported for tools that branch on the same "is this a membership-scoped
  * agent, or should it fall through to the user's own reach" question outside
  * these chokepoints (e.g. drive discovery/creation) — reuse this instead of
@@ -58,7 +81,9 @@ export async function hasAgentUserScopedAccess(agentPageId: string): Promise<boo
 export async function resolveActingAgentId(context: ToolExecutionContext): Promise<string | undefined> {
   const agentPageId = getAgentPageId(context);
   if (!agentPageId) return undefined;
-  return (await hasAgentUserScopedAccess(agentPageId)) ? undefined : agentPageId;
+  const row = await fetchActingPageRow(agentPageId);
+  if (row?.type !== PageType.AI_CHAT) return undefined;
+  return row.userScopedAccess ? undefined : agentPageId;
 }
 
 /**

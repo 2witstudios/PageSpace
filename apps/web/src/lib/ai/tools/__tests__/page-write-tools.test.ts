@@ -125,14 +125,18 @@ vi.mock('@/services/api/task-sync-service', () => ({
   ensureTaskListForPage: vi.fn().mockResolvedValue({ id: 'tasklist-1' }),
 }));
 
-// resolveActingAgentId (internal to actor-permissions.ts) queries pages.userScopedAccess
-// directly via db — mock that query boundary rather than the actor-permissions exports,
-// since same-module internal calls aren't interceptable by mocking the module's exports.
+// resolveActingAgentId (internal to actor-permissions.ts) queries the acting
+// page's type/userScopedAccess directly via db — mock that query boundary rather
+// than the actor-permissions exports, since same-module internal calls aren't
+// interceptable by mocking the module's exports. AI_CHAT: these agent fixtures
+// are real agent pages, so they keep the agent-scoped path.
 vi.mock('@pagespace/db/db', () => ({
-  db: { select: () => ({ from: () => ({ where: () => Promise.resolve([{ userScopedAccess: false }]) }) }) },
+  db: { select: () => ({ from: () => ({ where: () => Promise.resolve([{ type: 'AI_CHAT', userScopedAccess: false }]) }) }) },
 }));
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
-vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'id', driveId: 'driveId' } }));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId', type: 'type', userScopedAccess: 'userScopedAccess' },
+}));
 
 import { pageWriteTools } from '../page-write-tools';
 import { ensureTaskListForPage } from '@/services/api/task-sync-service';
