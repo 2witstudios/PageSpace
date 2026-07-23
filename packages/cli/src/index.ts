@@ -280,6 +280,14 @@ export type { ResolveCredentialSourceInput, ResolvedCredentialSource } from './a
 export { PROBE_DRIVES_TIMEOUT_MS, probeDriveCount } from './auth/probe-drives.js';
 export type { ProbeDriveCount } from './auth/probe-drives.js';
 
+// The transport switch every consent-driven command goes through — loopback
+// browser flow or RFC 8628 device flow — with each transport carrying its own
+// delay adapter (they need opposite ref/unref semantics; see wait.ts).
+export { describeConsentFailure, renderDeviceCodePrompt, runConsent } from './auth/run-consent.js';
+export type { ConsentResult, DeviceConsentDeps, LoopbackConsentDeps, RunConsentParams } from './auth/run-consent.js';
+export { createSigintFlag } from './auth/sigint.js';
+export { parseTokenResponse } from './auth/token-response.js';
+
 export { buildAuthProvider, enforceAuth, FailingAuthProvider } from './auth/auth-context.js';
 export type { BuildAuthProviderDeps, DiscoverTokenEndpoint, EnforceAuthDeps } from './auth/auth-context.js';
 

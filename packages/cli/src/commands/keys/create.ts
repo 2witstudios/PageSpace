@@ -34,7 +34,7 @@ import { createDiscoverMetadata } from '../../auth/discover.js';
 import { createExchangeCode } from '../../auth/exchange-code.js';
 import { createLoopbackServer } from '../../auth/create-loopback-server.js';
 import { openBrowser } from '../../auth/open-browser.js';
-import { unrefWaitMs } from '../../auth/wait.js';
+import { unrefWaitMs, waitMs } from '../../auth/wait.js';
 import { renderDeviceCodePrompt, runConsent } from '../../auth/run-consent.js';
 import { createPollDeviceToken } from '../../auth/poll-device-token.js';
 import { createRequestDeviceAuthorization } from '../../auth/request-device-authorization.js';
@@ -253,6 +253,13 @@ export interface TokensCreateHandlerDeps {
   readonly requestDeviceAuthorization: RequestDeviceAuthorization;
   readonly pollDeviceToken: PollDeviceToken;
   readonly isInterrupted: () => boolean;
+  /**
+   * The device transport's delay adapter. Deliberately NOT `waitMs` above:
+   * that one is `unrefWaitMs` for the loopback timeout race, which would let
+   * Node exit right after printing the verification code, before the user
+   * could approve. See `auth/run-consent.ts`'s `DeviceConsentDeps.waitMs`.
+   */
+  readonly deviceWaitMs: WaitMs;
   readonly now: () => number;
   readonly timeoutMs?: number;
   readonly maxPortAttempts?: number;
@@ -385,6 +392,7 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
           requestDeviceAuthorization: deps.requestDeviceAuthorization,
           pollDeviceToken: deps.pollDeviceToken,
           isInterrupted: deps.isInterrupted,
+          waitMs: deps.deviceWaitMs,
           onDeviceCode: (authorization) => {
             // Routed through `info` so --show-token's one-line stdout contract
             // holds for the device flow too.
@@ -431,5 +439,7 @@ export const tokensCreateHandler: CommandHandler = createTokensCreateHandler({
   requestDeviceAuthorization: createRequestDeviceAuthorization(),
   pollDeviceToken: createPollDeviceToken(),
   isInterrupted: createSigintFlag(),
+  // The REF'D adapter for device polling — see `deviceWaitMs` above.
+  deviceWaitMs: waitMs,
   now: Date.now,
 });

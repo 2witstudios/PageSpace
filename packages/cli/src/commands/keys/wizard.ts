@@ -33,12 +33,13 @@ import { createDiscoverMetadata } from '../../auth/discover.js';
 import { createExchangeCode } from '../../auth/exchange-code.js';
 import { createLoopbackServer } from '../../auth/create-loopback-server.js';
 import { openBrowser } from '../../auth/open-browser.js';
-import { unrefWaitMs } from '../../auth/wait.js';
+import { unrefWaitMs, waitMs } from '../../auth/wait.js';
 import { createPollDeviceToken } from '../../auth/poll-device-token.js';
 import { createRequestDeviceAuthorization } from '../../auth/request-device-authorization.js';
 import { createSigintFlag } from '../../auth/sigint.js';
-import { runLoopbackLogin } from '../../auth/loopback-flow.js';
-import type { LoopbackLoginResult } from '../../auth/loopback-flow.js';
+import { renderDeviceCodePrompt, runConsent } from '../../auth/run-consent.js';
+import type { ConsentResult } from '../../auth/run-consent.js';
+import type { DeviceAuthorization } from '../../auth/device-flow.js';
 import { resolveConfig } from '../../config/resolve.js';
 import { credentialSecret } from '../../credentials/serialize.js';
 import type { HostCredential } from '../../credentials/serialize.js';
@@ -105,30 +106,6 @@ async function fetchKeys(ctx: HandlerContext): Promise<readonly KeySummary[] | n
   } catch (error) {
     clack.log.error(`Failed to load your keys: ${error instanceof Error ? error.message : String(error)}`);
     return null;
-  }
-}
-
-/** Mirrors `keys create`'s outcome-to-message mapping (`commands/keys/create.ts`) as plain strings for a spinner. */
-function describeMintFailure(result: Exclude<LoopbackLoginResult, { outcome: 'success' }>): string {
-  switch (result.outcome) {
-    case 'timeout':
-      return 'Consent timed out waiting for the browser redirect.';
-    case 'state_mismatch':
-      return 'Consent failed: the authorization response did not match this request.';
-    case 'access_denied':
-      return 'Consent was denied.';
-    case 'authorize_error':
-      return `Consent failed: ${result.error}`;
-    case 'token_exchange_failed':
-      return `Consent failed while exchanging the authorization code: ${result.message}`;
-    case 'port_bind_failed':
-      return 'Could not bind a local loopback port to receive the consent redirect.';
-    case 'discovery_failed':
-      return `Could not discover the OAuth server configuration: ${result.message}`;
-    default: {
-      const unreachable: never = result;
-      throw new Error(`Unhandled consent outcome: ${JSON.stringify(unreachable)}`);
-    }
   }
 }
 
@@ -207,51 +184,90 @@ async function isKeyWriteConfirmed(store: CredentialStore, host: string, keyName
 }
 
 /**
- * The runLoopbackLogin dep wiring shared by every wizard consent flow
- * (Create's mint, Edit's in-place update) — one place to thread a new
- * effect or default through, so the two flows can't silently diverge.
+ * The consent wiring shared by every wizard flow (Create's mint, Edit's
+ * in-place update) — one place to thread a new effect or default through, so
+ * the flows can't silently diverge.
+ *
+ * `device` selects the transport for THIS invocation: with `pagespace keys
+ * --device` the wizard prints a verification code instead of opening a
+ * browser, which is the only way Edit — a wizard-only operation — can be
+ * driven from a machine with no local browser at all.
  */
-function consentFlowDeps(deps: TokensCreateHandlerDeps, s: ReturnType<typeof clack.spinner>) {
+function consentFlowDeps(deps: TokensCreateHandlerDeps, s: ReturnType<typeof clack.spinner>, device: boolean) {
   return {
+    device,
     clientId: PAGESPACE_CLI_CLIENT_ID,
-    randomBytes: deps.randomBytes,
     discoverMetadata: deps.discoverMetadata,
-    startServer: deps.startServer,
-    maxPortAttempts: deps.maxPortAttempts ?? DEFAULT_MAX_PORT_ATTEMPTS,
-    openBrowser: deps.openBrowser,
-    onBrowserOpenFailed: (url: string) => {
-      s.message(`Could not open a browser automatically. Open this URL to continue: ${url}`);
-    },
-    waitMs: deps.waitMs,
-    timeoutMs: deps.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS,
     exchangeCode: deps.exchangeCode,
     confirmIdentity: deps.confirmIdentity,
+    waitMs: deps.waitMs,
+    timeoutMs: deps.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS,
     now: deps.now,
+    loopback: {
+      randomBytes: deps.randomBytes,
+      startServer: deps.startServer,
+      maxPortAttempts: deps.maxPortAttempts ?? DEFAULT_MAX_PORT_ATTEMPTS,
+      openBrowser: deps.openBrowser,
+      onBrowserOpenFailed: (url: string) => {
+        s.message(`Could not open a browser automatically. Open this URL to continue: ${url}`);
+      },
+    },
+    deviceDeps: {
+      requestDeviceAuthorization: deps.requestDeviceAuthorization,
+      pollDeviceToken: deps.pollDeviceToken,
+      isInterrupted: deps.isInterrupted,
+      waitMs: deps.deviceWaitMs,
+      onDeviceCode: (authorization: DeviceAuthorization) => {
+        // Through the spinner, not stdout: clack owns the terminal here, and a
+        // raw write would be overwritten by the next spinner frame.
+        s.message(renderDeviceCodePrompt(authorization).join(' '));
+      },
+    },
   };
+}
+
+/** The line a spinner shows while a consent is pending, per transport. */
+function consentPendingMessage(device: boolean, browserAction: string, deviceAction: string): string {
+  return device ? deviceAction : browserAction;
 }
 
 async function mintScopedKey(
   deps: TokensCreateHandlerDeps,
   store: CredentialStore,
-  params: { readonly host: string; readonly scope: string; readonly keyName: string; readonly displayScope?: string },
-): Promise<LoopbackLoginResult> {
+  params: {
+    readonly host: string;
+    readonly scope: string;
+    readonly keyName: string;
+    readonly displayScope?: string;
+    readonly device: boolean;
+  },
+): Promise<ConsentResult> {
   const s = clack.spinner();
-  s.start(`Opening your browser to approve access for key "${params.keyName}" on ${params.host}...`);
+  s.start(
+    consentPendingMessage(
+      params.device,
+      `Opening your browser to approve access for key "${params.keyName}" on ${params.host}...`,
+      `Waiting for approval of key "${params.keyName}" on ${params.host}...`,
+    ),
+  );
 
   // Captured, never printed while the spinner is live — only surfaced behind
   // the explicit show-once confirm below.
   let mintedToken: string | null = null;
 
-  const result = await runLoopbackLogin({
-    ...consentFlowDeps(deps, s),
-    host: params.host,
-    scope: params.scope,
-    credentialStore: store,
-    profile: params.keyName,
-    onMintedStaticToken: (token) => {
-      mintedToken = token;
+  const result = await runConsent(
+    {
+      ...consentFlowDeps(deps, s, params.device),
+      host: params.host,
+      scope: params.scope,
+      credentialStore: store,
+      profile: params.keyName,
+      onMintedStaticToken: (token) => {
+        mintedToken = token;
+      },
     },
-  });
+    `pagespace keys${params.device ? ' --device' : ''}`,
+  );
 
   if (result.outcome === 'success') {
     s.stop(`Created key "${params.keyName}" on ${params.host}, scoped to: ${params.displayScope ?? params.scope}.`);
@@ -263,7 +279,7 @@ async function mintScopedKey(
     }
     clack.note(renderAgentWiringGuidance({ keyName: params.keyName, host: params.host }).join('\n'), 'Wire up an agent');
   } else {
-    s.error(describeMintFailure(result));
+    s.error(result.message);
   }
   return result;
 }
@@ -301,7 +317,8 @@ async function selectScopeAndMint(
   drives: readonly DriveOption[],
   initialDriveIds: readonly string[],
   messages: ScopeAndMintMessages,
-): Promise<LoopbackLoginResult | null> {
+  device: boolean,
+): Promise<ConsentResult | null> {
   const target = await selectDriveTarget();
   if (target === null) {
     abortSubflow();
@@ -354,10 +371,16 @@ async function selectScopeAndMint(
     scope: scopeResult.scope,
     keyName,
     displayScope: scopeResult.driveScope,
+    device,
   });
 }
 
-async function runCreate(ctx: HandlerContext, deps: TokensCreateHandlerDeps, host: string): Promise<FlowOutcome> {
+async function runCreate(
+  ctx: HandlerContext,
+  deps: TokensCreateHandlerDeps,
+  host: string,
+  device: boolean,
+): Promise<FlowOutcome> {
   const drives = await fetchDrives(ctx);
   if (drives === null) return null;
   if (drives.length === 0) {
@@ -365,10 +388,18 @@ async function runCreate(ctx: HandlerContext, deps: TokensCreateHandlerDeps, hos
     return null;
   }
 
-  await selectScopeAndMint(ctx, deps, host, drives, [], {
-    selectDrives: 'Select drives to grant access to',
-    keyName: 'Name this key (agents on this machine reference it by this name)',
-  });
+  await selectScopeAndMint(
+    ctx,
+    deps,
+    host,
+    drives,
+    [],
+    {
+      selectDrives: 'Select drives to grant access to',
+      keyName: 'Name this key (agents on this machine reference it by this name)',
+    },
+    device,
+  );
   return null;
 }
 
@@ -384,7 +415,13 @@ async function runCreate(ctx: HandlerContext, deps: TokensCreateHandlerDeps, hos
  * non-"default" sentinel `profile` passed below is defense-in-depth only and
  * is never written on any reachable path.
  */
-async function runEdit(ctx: HandlerContext, deps: TokensCreateHandlerDeps, host: string, keys: readonly KeySummary[]): Promise<FlowOutcome> {
+async function runEdit(
+  ctx: HandlerContext,
+  deps: TokensCreateHandlerDeps,
+  host: string,
+  keys: readonly KeySummary[],
+  device: boolean,
+): Promise<FlowOutcome> {
   const keyId = await clack.select({ message: 'Which key would you like to edit?', options: [...keySelectOptions(keys)] });
   if (clack.isCancel(keyId)) return abortSubflow();
   const key = keys.find((candidate) => candidate.id === keyId);
@@ -433,18 +470,27 @@ async function runEdit(ctx: HandlerContext, deps: TokensCreateHandlerDeps, host:
   if (clack.isCancel(proceed) || !proceed) return abortSubflow();
 
   const s = clack.spinner();
-  s.start(`Opening your browser to approve the new scopes for "${key.name}" on ${host}...`);
+  s.start(
+    consentPendingMessage(
+      device,
+      `Opening your browser to approve the new scopes for "${key.name}" on ${host}...`,
+      `Waiting for approval of the new scopes for "${key.name}" on ${host}...`,
+    ),
+  );
 
-  const result = await runLoopbackLogin({
-    ...consentFlowDeps(deps, s),
-    host,
-    scope: updateScope.scope,
-    credentialStore: deps.createCredentialStore(),
-    profile: `edit-${key.id}`,
-  });
+  const result = await runConsent(
+    {
+      ...consentFlowDeps(deps, s, device),
+      host,
+      scope: updateScope.scope,
+      credentialStore: deps.createCredentialStore(),
+      profile: `edit-${key.id}`,
+    },
+    `pagespace keys${device ? ' --device' : ''}`,
+  );
 
-  if (result.outcome !== 'success') {
-    s.error(describeMintFailure(result));
+  if (result.outcome === 'failed') {
+    s.error(result.message);
     return null;
   }
 
@@ -502,7 +548,13 @@ function matchesServerKey(credential: HostCredential, key: KeySummary): boolean 
  * token it prefixes; a key with no local credential on this machine cannot
  * be activated here.
  */
-async function runUse(ctx: HandlerContext, deps: TokensCreateHandlerDeps, host: string, keys: readonly KeySummary[]): Promise<FlowOutcome> {
+async function runUse(
+  ctx: HandlerContext,
+  deps: TokensCreateHandlerDeps,
+  host: string,
+  keys: readonly KeySummary[],
+  device: boolean,
+): Promise<FlowOutcome> {
   const store = deps.createCredentialStore();
 
   const activeName = await ctx.activeKeyStore.getActiveKey(host);
@@ -556,7 +608,13 @@ async function runUse(ctx: HandlerContext, deps: TokensCreateHandlerDeps, host: 
   }
 
   const s = clack.spinner();
-  s.start(`Opening your browser to approve activating "${key.name}" on ${host}...`);
+  s.start(
+    consentPendingMessage(
+      device,
+      `Opening your browser to approve activating "${key.name}" on ${host}...`,
+      `Waiting for approval to activate "${key.name}" on ${host}...`,
+    ),
+  );
 
   const result = await runActivateCeremony(ctx, deps, {
     host,
@@ -565,6 +623,10 @@ async function runUse(ctx: HandlerContext, deps: TokensCreateHandlerDeps, host: 
     store,
     onBrowserOpenFailed: (url) => {
       s.message(`Could not open a browser automatically. Open this URL to continue: ${url}`);
+    },
+    device,
+    onDeviceCode: (lines) => {
+      s.message(lines.join(' '));
     },
   });
 
@@ -627,13 +689,13 @@ export function createKeysHandler(deps: TokensCreateHandlerDeps): CommandHandler
 
       const outcome =
         choice === 'create'
-          ? await runCreate(ctx, deps, host)
+          ? await runCreate(ctx, deps, host, intent.flags.device)
           : choice === 'list'
             ? await runList(keys)
             : choice === 'edit'
-              ? await runEdit(ctx, deps, host, keys)
+              ? await runEdit(ctx, deps, host, keys, intent.flags.device)
               : choice === 'use'
-                ? await runUse(ctx, deps, host, keys)
+                ? await runUse(ctx, deps, host, keys, intent.flags.device)
                 : await runRevoke(ctx, keys);
 
       if (outcome !== null) return outcome;
@@ -657,5 +719,7 @@ export const keysHandler: CommandHandler = createKeysHandler({
   requestDeviceAuthorization: createRequestDeviceAuthorization(),
   pollDeviceToken: createPollDeviceToken(),
   isInterrupted: createSigintFlag(),
+  // The REF'D adapter for device polling — see `deviceWaitMs` in create.ts.
+  deviceWaitMs: waitMs,
   now: Date.now,
 });

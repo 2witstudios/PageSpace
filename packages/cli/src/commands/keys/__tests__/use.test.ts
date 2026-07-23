@@ -134,6 +134,7 @@ function baseDeps(store: CredentialStore, fake = fakeLoopbackServer()) {
         throw new Error('device flow not exercised by this test — loopback transport expected');
       },
       isInterrupted: () => false,
+      deviceWaitMs: async () => {},
       now: () => Date.parse('2026-07-07T00:00:00.000Z'),
     },
   };

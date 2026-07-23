@@ -24,7 +24,7 @@ import { createDiscoverMetadata } from '../../auth/discover.js';
 import { createExchangeCode } from '../../auth/exchange-code.js';
 import { createLoopbackServer } from '../../auth/create-loopback-server.js';
 import { openBrowser } from '../../auth/open-browser.js';
-import { unrefWaitMs } from '../../auth/wait.js';
+import { unrefWaitMs, waitMs } from '../../auth/wait.js';
 import { createPollDeviceToken } from '../../auth/poll-device-token.js';
 import { createRequestDeviceAuthorization } from '../../auth/request-device-authorization.js';
 import { createSigintFlag } from '../../auth/sigint.js';
@@ -179,6 +179,7 @@ export async function runActivateCeremony(
         requestDeviceAuthorization: deps.requestDeviceAuthorization,
         pollDeviceToken: deps.pollDeviceToken,
         isInterrupted: deps.isInterrupted,
+        waitMs: deps.deviceWaitMs,
         onDeviceCode: (authorization) => {
           params.onDeviceCode?.(renderDeviceCodePrompt(authorization));
         },
@@ -315,5 +316,7 @@ export const keysUseHandler: CommandHandler = createKeysUseHandler({
   requestDeviceAuthorization: createRequestDeviceAuthorization(),
   pollDeviceToken: createPollDeviceToken(),
   isInterrupted: createSigintFlag(),
+  // The REF'D adapter for device polling — see `deviceWaitMs` in create.ts.
+  deviceWaitMs: waitMs,
   now: Date.now,
 });

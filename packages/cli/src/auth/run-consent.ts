@@ -47,6 +47,24 @@ export interface DeviceConsentDeps {
   readonly pollDeviceToken: PollDeviceToken;
   readonly isInterrupted: () => boolean;
   readonly onDeviceCode: (authorization: DeviceAuthorization) => void;
+  /**
+   * The device transport's OWN delay adapter, deliberately separate from
+   * `RunConsentParams.waitMs`.
+   *
+   * The two transports need opposite timer semantics and must never share one
+   * adapter. Loopback consent races its 5-minute timeout against the callback
+   * and needs `unrefWaitMs`, or the losing timer pins the event loop and hangs
+   * the CLI at exit. Device polling is a sequential loop where the delay
+   * between polls is often the ONLY live handle, so it needs the REF'd
+   * `waitMs` — an unref'd one lets Node exit right after printing the
+   * verification code, before the user has any chance to approve. See
+   * `auth/wait.ts`.
+   *
+   * Keeping it here rather than at the top level means each transport carries
+   * the timer it actually needs, so a command wiring `unrefWaitMs` for its
+   * loopback path cannot silently impose it on the device path too.
+   */
+  readonly waitMs: WaitMs;
 }
 
 export interface RunConsentParams {
@@ -59,6 +77,7 @@ export interface RunConsentParams {
   readonly exchangeCode: ExchangeCode;
   readonly confirmIdentity: ConfirmIdentity;
   readonly credentialStore: Pick<CredentialStore, 'set'>;
+  /** The LOOPBACK transport's delay adapter; the device transport carries its own (`DeviceConsentDeps.waitMs`). */
   readonly waitMs: WaitMs;
   readonly now: () => number;
   readonly timeoutMs: number;
@@ -131,7 +150,6 @@ export async function runConsent(params: RunConsentParams, retryCommand: string)
     discoverMetadata: params.discoverMetadata,
     confirmIdentity: params.confirmIdentity,
     credentialStore: params.credentialStore,
-    waitMs: params.waitMs,
     now: params.now,
     timeoutMs: params.timeoutMs,
     profile: params.profile,
@@ -141,6 +159,8 @@ export async function runConsent(params: RunConsentParams, retryCommand: string)
   const result = params.device
     ? await runDeviceLogin({
         ...shared,
+        // The ref'd adapter — never `params.waitMs`. See DeviceConsentDeps.waitMs.
+        waitMs: params.deviceDeps.waitMs,
         requestDeviceAuthorization: params.deviceDeps.requestDeviceAuthorization,
         pollDeviceToken: params.deviceDeps.pollDeviceToken,
         isInterrupted: params.deviceDeps.isInterrupted,
@@ -148,6 +168,7 @@ export async function runConsent(params: RunConsentParams, retryCommand: string)
       })
     : await runLoopbackLogin({
         ...shared,
+        waitMs: params.waitMs,
         exchangeCode: params.exchangeCode,
         randomBytes: params.loopback.randomBytes,
         startServer: params.loopback.startServer,
