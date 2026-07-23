@@ -25,13 +25,20 @@
 
 import type { TerminalSession, TerminalSessionMap } from './terminal-session-map';
 import { resumeBillingClock } from './agent-terminal-handler';
+import {
+  MAX_SCROLLBACK_TAIL_BYTES,
+  scrollbackLines,
+  tailOfLines,
+} from '@pagespace/lib/services/machines/session-scrollback';
 
 /**
  * How much scrollback one read may ship back. The ring itself holds 64 KiB;
  * this is a per-ANSWER cap, because the answer is going into a model's context
- * window rather than an xterm pane.
+ * window rather than an xterm pane. Re-exported (not just used) so existing
+ * importers of this module keep working unchanged — the pure implementation
+ * now lives in `session-scrollback.ts`, shared with the cold-tail persist path.
  */
-export const MAX_SCROLLBACK_TAIL_BYTES = 16 * 1024;
+export { MAX_SCROLLBACK_TAIL_BYTES };
 
 /** Tail size when the caller does not ask for one. */
 export const DEFAULT_SCROLLBACK_TAIL_LINES = 100;
@@ -200,31 +207,7 @@ export function scrollbackTail(
   session: Pick<TerminalSession, 'scrollback'>,
   limit: number,
 ): string {
-  if (limit <= 0) return '';
-  const lines = session.scrollback.join('').replace(/\r\n?/g, '\n').split('\n');
-  // A ring ending in a newline yields a trailing empty element that is not a
-  // line of output — dropping it keeps `limit` counting real lines.
-  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
-
-  let tail = lines.slice(-limit);
-  while (tail.length > 1 && Buffer.byteLength(tail.join('\n'), 'utf8') > MAX_SCROLLBACK_TAIL_BYTES) {
-    tail = tail.slice(1);
-  }
-  const joined = tail.join('\n');
-  if (Buffer.byteLength(joined, 'utf8') <= MAX_SCROLLBACK_TAIL_BYTES) return joined;
-
-  // One newline-free line wider than the whole cap (a minified bundle, a
-  // base64 blob) — there is no line boundary left to drop at, so the cap has
-  // to cut mid-line after all: keep the most RECENT bytes (the end is where a
-  // long line's news is), on a UTF-8 boundary, and say so with a leading
-  // marker so the cut never reads as complete output.
-  const bytes = Buffer.from(joined, 'utf8');
-  const MARKER = '…';
-  let start = bytes.length - MAX_SCROLLBACK_TAIL_BYTES + Buffer.byteLength(MARKER, 'utf8');
-  // 0b10xxxxxx marks a UTF-8 continuation byte — step forward off any
-  // mid-character cut.
-  while (start < bytes.length && (bytes[start] & 0b1100_0000) === 0b1000_0000) start += 1;
-  return `${MARKER}${bytes.subarray(start).toString('utf8')}`;
+  return tailOfLines(scrollbackLines(session.scrollback), limit);
 }
 
 /**

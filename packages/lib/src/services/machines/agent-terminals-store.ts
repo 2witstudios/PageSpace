@@ -24,6 +24,12 @@ export interface MachineAgentTerminalRecord {
   agentType: string;
   command: string | null;
   streamSessionId: string | null;
+  /** The tail of the LAST DEAD incarnation's scrollback — see `recordColdTail`. Null until the first teardown. */
+  coldTail: string | null;
+  /** When the PTY that produced `coldTail` ended. */
+  coldTailAt: Date | null;
+  /** Whether that dead PTY ever emitted a byte — carried separately from `coldTail` for the same reason `TerminalSession.hasOutput` is (an empty tail is not proof of silence). */
+  coldTailHasOutput: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -76,6 +82,13 @@ export interface MachineAgentTerminalStore {
   /** Throws a unique-violation error (see `isUniqueViolation`) if this (scope, name) already exists. */
   create(input: NewMachineAgentTerminalInput): Promise<MachineAgentTerminalRecord>;
   updateStreamSessionId(input: { id: string; streamSessionId: string; now: Date }): Promise<void>;
+  /**
+   * Overwrite this row's cold-tail columns IN PLACE — the tail of the incarnation
+   * that JUST ended, replacing whatever an earlier incarnation left. All three
+   * columns are always written together, so a fresh short-lived incarnation
+   * never leaves a stale tail paired with a new `hasOutput`/`endedAt`.
+   */
+  recordColdTail(input: { id: string; tail: string; hasOutput: boolean; endedAt: Date; now: Date }): Promise<void>;
   remove(scope: AgentTerminalScopeKey, name: string): Promise<void>;
 }
 
@@ -141,6 +154,9 @@ export async function createDbMachineAgentTerminalStore(): Promise<MachineAgentT
           agentType: input.agentType,
           command: input.command,
           streamSessionId: null,
+          coldTail: null,
+          coldTailAt: null,
+          coldTailHasOutput: false,
           createdAt: input.now,
           updatedAt: input.now,
         })
@@ -152,6 +168,13 @@ export async function createDbMachineAgentTerminalStore(): Promise<MachineAgentT
       await db
         .update(machineAgentTerminals)
         .set({ streamSessionId, updatedAt: now })
+        .where(eq(machineAgentTerminals.id, id));
+    },
+
+    async recordColdTail({ id, tail, hasOutput, endedAt, now }) {
+      await db
+        .update(machineAgentTerminals)
+        .set({ coldTail: tail, coldTailAt: endedAt, coldTailHasOutput: hasOutput, updatedAt: now })
         .where(eq(machineAgentTerminals.id, id));
     },
 

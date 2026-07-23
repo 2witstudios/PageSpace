@@ -1417,6 +1417,13 @@ io.on('connection', (socket: AuthSocket) => {
       const store = await dbMachineAgentTerminalStorePromise;
       await store.updateStreamSessionId({ id: agentTerminalId, streamSessionId: sessionId, now: new Date() });
     },
+    // Issue #2205: bounded scrollback tail persisted once per teardown, so a
+    // `read_session` after the PTY has died can still answer with its final
+    // output instead of `live:false` and nothing.
+    persistColdTail: async ({ agentTerminalId, tail, hasOutput, endedAt }) => {
+      const store = await dbMachineAgentTerminalStorePromise;
+      await store.recordColdTail({ id: agentTerminalId, tail, hasOutput, endedAt, now: new Date() });
+    },
     billing: defaultSandboxBillingDeps,
     // Sprites Tasks API hold (leaf 5-1): while an agent is running or a
     // viewer attached, a short-expiry platform task (refreshed on a
