@@ -81,6 +81,16 @@ export interface HeadlessSessionTarget {
 export interface HeadlessRunClaim {
   /** The assistant message id this run will write into. */
   messageId: string;
+  /**
+   * The claim's cancellation channel (issue #2204 follow-up, F7/F14).
+   *
+   * The claim is what watches the conversation, so the claim is what learns
+   * that the run must stop — a human taking the pane over (a durable
+   * `abortRequestedAt` mark), or the run outliving its lifetime backstop. The
+   * generation is handed this signal so those facts actually end the loop
+   * rather than merely being recorded next to a loop that keeps billing.
+   */
+  abortSignal?: AbortSignal;
   /** Release the claim, exactly once, whatever the outcome. */
   release: (outcome: { aborted: boolean; error?: string }) => Promise<void>;
 }
@@ -105,6 +115,10 @@ export interface HeadlessGenerateInput {
   userId: string;
   /** The depth THIS run executes at — what its own tools see as `agentCallDepth`. */
   depth: number;
+  /** The claim's cancellation channel — see {@link HeadlessRunClaim.abortSignal}. */
+  abortSignal?: AbortSignal;
+  /** Net spendable cents behind this run's reservation, or null when unmetered. */
+  balanceSnapshotCents?: number | null;
 }
 
 export interface HeadlessGenerateResult {
@@ -221,7 +235,20 @@ export interface HeadlessSessionRunDeps {
    */
   checkCredit: (input: {
     userId: string;
-  }) => Promise<{ allowed: true; holdId: string | null } | { allowed: false; reason: string }>;
+  }) => Promise<
+    | {
+        allowed: true;
+        holdId: string | null;
+        /**
+         * Net spendable cents behind this reservation, when the gate computed
+         * one. Threaded to `generate` so the run's per-step accumulator guards
+         * against ITS OWN slice of the balance rather than the gross figure —
+         * the same discipline the interactive route applies. (F5.)
+         */
+        balanceSnapshotCents?: number | null;
+      }
+    | { allowed: false; reason: string }
+  >;
   /** Release the gate's hold once the run settles — actual consumption flows through `trackUsage`. */
   releaseHold: (holdId: string) => Promise<void>;
   /** Atomic claim on the conversation — the workflow_runs discipline, contended by live streams too. */
@@ -341,13 +368,26 @@ export async function dispatchHeadlessSessionTurn(
     return { ok: false, reason: 'credit_denied', detail: credit.reason };
   }
   const holdId = credit.holdId;
+  const balanceSnapshotCents = credit.balanceSnapshotCents ?? null;
 
   const releaseHold = async () => {
     if (holdId) await deps.releaseHold(holdId).catch(() => {});
   };
 
   const messageId = deps.newId();
-  const claimed = await deps.claimRun({ target, userId: input.actor.userId, messageId });
+  // THROWS release the hold too (issue #2204 follow-up, F15). A `busy` result
+  // and an append failure both released it; a claimRun that rejected on a
+  // database or network blip exited before any cleanup, stranding spendable
+  // balance until the hold's TTL expired. Every exit after the hold exists is
+  // now a releasing exit.
+  let claimed: HeadlessClaimResult;
+  try {
+    claimed = await deps.claimRun({ target, userId: input.actor.userId, messageId });
+  } catch (error) {
+    deps.onError?.('headless-session-run: claim failed', error);
+    await releaseHold();
+    return { ok: false, reason: 'failed', detail: errorText(error) };
+  }
   if (!claimed.ok) {
     // No run will happen — a hold left behind would strand spendable balance
     // until it expires.
@@ -373,7 +413,7 @@ export async function dispatchHeadlessSessionTurn(
     return { ok: false, reason: 'failed', detail: errorText(error) };
   }
 
-  deps.defer(() => runClaimedTurn({ input, target, claim, holdId, userMessageId, deps }));
+  deps.defer(() => runClaimedTurn({ input, target, claim, holdId, balanceSnapshotCents, userMessageId, deps }));
 
   return { ok: true, accepted: true, messageId: claim.messageId };
 }
@@ -388,6 +428,7 @@ async function runClaimedTurn({
   target,
   claim,
   holdId,
+  balanceSnapshotCents,
   userMessageId,
   deps,
 }: {
@@ -395,6 +436,7 @@ async function runClaimedTurn({
   target: HeadlessSessionTarget;
   claim: HeadlessRunClaim;
   holdId: string | null;
+  balanceSnapshotCents: number | null;
   userMessageId: string;
   deps: HeadlessSessionRunDeps;
 }): Promise<void> {
@@ -411,6 +453,8 @@ async function runClaimedTurn({
       // The run executes one level deeper than the dispatcher, so a session it
       // dispatches to in turn sees the chain it is actually part of.
       depth: input.depth + 1,
+      ...(claim.abortSignal ? { abortSignal: claim.abortSignal } : {}),
+      balanceSnapshotCents,
     });
     await deps.persistReply({
       target,

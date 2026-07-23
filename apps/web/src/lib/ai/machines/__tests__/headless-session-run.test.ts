@@ -536,3 +536,109 @@ describe('buildHeadlessToolContext', () => {
     });
   });
 });
+
+/**
+ * Issue #2204 follow-up, F15 and F5/F7/F14 threading. The hold is created
+ * before the claim, so every exit after that point must release it — and the
+ * claim's cancellation channel must actually reach the generation.
+ */
+describe('dispatchHeadlessSessionTurn — hold release and abort threading', () => {
+  it('given a claim acquisition that THROWS, should release the hold rather than strand the reservation', async () => {
+    const { deps: d, recorded } = deps({
+      claimRun: async () => {
+        throw new Error('connection reset');
+      },
+    });
+
+    const result = await dispatchHeadlessSessionTurn(
+      { identity: identity(), actor: { userId: 'u1' }, message: 'hi', depth: 0 },
+      d,
+    );
+
+    assert({
+      given: 'a dispatch whose claim insert rejects on a database blip',
+      should: 'report the failure and free the credit hold',
+      actual: { ok: result.ok, holdsReleased: recorded.holdsReleased },
+      expected: { ok: false, holdsReleased: ['hold-1'] },
+    });
+  });
+
+  it('given a claim carrying an abort signal, should hand that signal to the generation', async () => {
+    const controller = new AbortController();
+    let seen: AbortSignal | undefined;
+    const { deps: d, drain } = deps({
+      claimRun: async () => ({
+        ok: true,
+        claim: {
+          messageId: 'assistant-1',
+          abortSignal: controller.signal,
+          release: async () => {},
+        },
+      }),
+      generate: async ({ abortSignal }) => {
+        seen = abortSignal;
+        return { text: 'done', provider: 'openrouter', model: 'm' };
+      },
+    });
+
+    await dispatchHeadlessSessionTurn(
+      { identity: identity(), actor: { userId: 'u1' }, message: 'hi', depth: 0 },
+      d,
+    );
+    await drain();
+
+    assert({
+      given: 'a claim that can be cancelled',
+      should: 'give the generation the same signal, so a takeover actually ends the loop',
+      actual: seen === controller.signal,
+      expected: true,
+    });
+  });
+
+  it('given a credit gate that reported a balance snapshot, should thread it to the generation', async () => {
+    let seen: number | null | undefined;
+    const { deps: d, drain } = deps({
+      checkCredit: async () => ({ allowed: true, holdId: 'hold-1', balanceSnapshotCents: 250 }),
+      generate: async ({ balanceSnapshotCents }) => {
+        seen = balanceSnapshotCents;
+        return { text: 'done', provider: 'openrouter', model: 'm' };
+      },
+    });
+
+    await dispatchHeadlessSessionTurn(
+      { identity: identity(), actor: { userId: 'u1' }, message: 'hi', depth: 0 },
+      d,
+    );
+    await drain();
+
+    assert({
+      given: 'a reservation with a known spendable balance',
+      should: 'give the run its own slice to guard against',
+      actual: seen,
+      expected: 250,
+    });
+  });
+
+  it('given a gate with no balance snapshot, should pass null rather than leave it undefined', async () => {
+    let seen: number | null | undefined = 1;
+    const { deps: d, drain } = deps({
+      generate: async ({ balanceSnapshotCents }) => {
+        seen = balanceSnapshotCents;
+        return { text: 'done', provider: 'openrouter', model: 'm' };
+      },
+    });
+
+    await dispatchHeadlessSessionTurn(
+      { identity: identity(), actor: { userId: 'u1' }, message: 'hi', depth: 0 },
+      d,
+    );
+    await drain();
+
+    assert({
+      given: 'an unmetered deployment where the gate reports no snapshot',
+      should: 'pass an explicit null',
+      actual: seen,
+      expected: null,
+    });
+  });
+});

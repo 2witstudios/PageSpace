@@ -9,7 +9,8 @@ import {
   type TextUIPart,
   type ToolSet,
 } from 'ai';
-import { ONPREM_ALLOWED_PROVIDERS, DEFAULT_PROVIDER, DEFAULT_MODEL, ADMIN_ONLY_PROVIDERS, resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
+import { ONPREM_ALLOWED_PROVIDERS, DEFAULT_PROVIDER, DEFAULT_MODEL, resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
+import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
 import { ALL_PROVIDER_NAMES } from '@/lib/ai/core/ai-utils';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
@@ -798,12 +799,19 @@ export async function POST(request: Request) {
 
     const isAdminUser = user?.role === 'admin';
 
-    if (ADMIN_ONLY_PROVIDERS.has(currentProvider) && !isAdminUser) {
-      return createAdminRestrictedResponse();
-    }
-
-    // Check if the selected model requires a paid plan
-    if (requiresProSubscription(currentProvider, currentModel, user?.subscriptionTier, isAdminUser)) {
+    // The SHARED entitlement decision (generation-admission.ts) — the same one
+    // the headless dispatch path applies, so a provider restriction cannot hold
+    // on one transport and evaporate on the other. This route only translates
+    // the answer into its HTTP shape.
+    const admission = resolveGenerationAdmission({
+      provider: currentProvider,
+      model: currentModel,
+      subscriptionTier: user?.subscriptionTier ?? undefined,
+      isAdmin: isAdminUser,
+      requiresProSubscription,
+    });
+    if (!admission.allowed) {
+      if (admission.reason === 'provider_admin_only') return createAdminRestrictedResponse();
       loggers.ai.warn('AI Chat API: paid plan required for model', {
         userId,
         provider: currentProvider,
@@ -905,16 +913,23 @@ export async function POST(request: Request) {
     // this branch: it reaches the agent-terminal and workspace stores (and,
     // through them, the Sprites driver seam), none of which an unbound
     // request has any business pulling into its module graph.
-    const baseTools = withSessionFamilyTools(
-      filterToolsForMachineBinding(
-        filterToolsForMcpScope(
-          filterToolsForReadOnly(pageSpaceTools, readOnlyMode),
-          isScopedMCPAuth(authResult)
+    //
+    // The read-only filter is applied LAST, to the COMPOSED set (issue #2204
+    // follow-up, F3). The session family is registered by ADDITION, so a filter
+    // applied to the baseline alone never saw it — and add/move/kill/send all
+    // mutate state, with send_session running a full agent loop in the target.
+    // Filtering the final set is the only placement a later addition cannot
+    // slip past.
+    const baseTools = filterToolsForReadOnly(
+      withSessionFamilyTools(
+        filterToolsForMachineBinding(
+          filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(authResult)),
+          machineBinding != null
         ),
+        machineBinding != null ? (await import('@/lib/ai/tools/session-tools-runtime')).buildSessionTools() : {},
         machineBinding != null
       ),
-      machineBinding != null ? (await import('@/lib/ai/tools/session-tools-runtime')).buildSessionTools() : {},
-      machineBinding != null
+      readOnlyMode
     );
 
     // Step 2: Extract web_search + generate_image so they can be handled as
@@ -2067,13 +2082,20 @@ async function validateProviderModel(
   try {
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     const isAdminUser = user?.role === 'admin';
-    if (ADMIN_ONLY_PROVIDERS.has(provider) && !isAdminUser) {
-      return { valid: false, reason: 'This provider is restricted to administrators.' };
-    }
-    if (requiresProSubscription(provider, model, user?.subscriptionTier, isAdminUser)) {
+    const admission = resolveGenerationAdmission({
+      provider,
+      model,
+      subscriptionTier: user?.subscriptionTier ?? undefined,
+      isAdmin: isAdminUser,
+      requiresProSubscription,
+    });
+    if (!admission.allowed) {
       return {
         valid: false,
-        reason: 'A paid plan is required for this model'
+        reason:
+          admission.reason === 'provider_admin_only'
+            ? 'This provider is restricted to administrators.'
+            : 'A paid plan is required for this model',
       };
     }
   } catch (error) {
