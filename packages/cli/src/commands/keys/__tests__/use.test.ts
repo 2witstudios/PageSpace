@@ -133,7 +133,7 @@ function baseDeps(store: CredentialStore, fake = fakeLoopbackServer()) {
       pollDeviceToken: async () => {
         throw new Error('device flow not exercised by this test — loopback transport expected');
       },
-      isInterrupted: () => false,
+      createIsInterrupted: () => () => false,
       deviceWaitMs: async () => {},
       now: () => Date.parse('2026-07-07T00:00:00.000Z'),
     },

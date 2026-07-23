@@ -397,7 +397,7 @@ function baseHandlerDeps(store: CredentialStore) {
     confirmIdentity: async () => ({ name: 'Ada Lovelace', email: 'ada@example.com' }),
     requestDeviceAuthorization: async () => DEVICE_AUTHORIZATION,
     pollDeviceToken: async () => ({ kind: 'success' as const, tokens: FIXED_MCP_TOKENS }),
-    isInterrupted: () => false,
+    createIsInterrupted: () => () => false,
     deviceWaitMs: async () => {},
     now: () => Date.parse('2026-07-03T00:00:00.000Z'),
   };

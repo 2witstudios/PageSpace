@@ -39,7 +39,7 @@ function params(overrides: Partial<RunConsentParams> = {}): RunConsentParams {
     exchangeCode: async () => OAUTH_TOKENS,
     confirmIdentity: async () => ({ name: 'Ada Lovelace', email: 'ada@example.com' }),
     credentialStore: { set: async () => {} },
-    waitMs: async () => {},
+    loopbackWaitMs: async () => {},
     now: () => Date.parse('2026-07-23T00:00:00.000Z'),
     timeoutMs: 60_000,
     loopback: {
@@ -54,7 +54,7 @@ function params(overrides: Partial<RunConsentParams> = {}): RunConsentParams {
     deviceDeps: {
       requestDeviceAuthorization: async () => AUTHORIZATION,
       pollDeviceToken: async () => ({ kind: 'success' as const, tokens: OAUTH_TOKENS }),
-      isInterrupted: () => false,
+      createIsInterrupted: () => () => false,
       waitMs: async () => {},
       onDeviceCode: () => {},
     },
@@ -80,7 +80,7 @@ describe('runConsent — transport selection', () => {
     const result = await runConsent(
       params({
         device: true,
-        waitMs: async () => {
+        loopbackWaitMs: async () => {
           used.push('loopback');
         },
         deviceDeps: {

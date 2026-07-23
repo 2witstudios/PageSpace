@@ -322,7 +322,6 @@ export {
   activationSuccessMessage,
   createKeysUseHandler,
   deactivationMessage,
-  describeActivateFailure,
   findServerTokenId,
   keysUseHandler,
   loginCredentialNotActivatableMessage,

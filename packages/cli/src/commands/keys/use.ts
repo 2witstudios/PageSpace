@@ -29,7 +29,6 @@ import { createPollDeviceToken } from '../../auth/poll-device-token.js';
 import { createRequestDeviceAuthorization } from '../../auth/request-device-authorization.js';
 import { createSigintFlag } from '../../auth/sigint.js';
 import { renderDeviceCodePrompt, runConsent } from '../../auth/run-consent.js';
-import type { LoopbackLoginResult } from '../../auth/loopback-flow.js';
 import { resolveConfig } from '../../config/resolve.js';
 import { createCredentialStore } from '../../credentials/store.js';
 import type { CredentialStore } from '../../credentials/store.js';
@@ -88,30 +87,6 @@ export function findServerTokenId(keys: readonly ServerKeyRef[], credential: Hos
   return match?.id ?? null;
 }
 
-/** Mirrors `keys create`'s outcome-to-message mapping as plain strings — the ceremony's callers render them. */
-export function describeActivateFailure(result: Exclude<LoopbackLoginResult, { outcome: 'success' }>): string {
-  switch (result.outcome) {
-    case 'timeout':
-      return 'Approval timed out waiting for the browser redirect. Run "pagespace keys use" again.';
-    case 'state_mismatch':
-      return 'Approval failed: the authorization response did not match this request. Run "pagespace keys use" again.';
-    case 'access_denied':
-      return 'Approval was denied.';
-    case 'authorize_error':
-      return `Approval failed: ${result.error}`;
-    case 'token_exchange_failed':
-      return `Approval failed while exchanging the authorization code: ${result.message}`;
-    case 'port_bind_failed':
-      return 'Could not bind a local loopback port to receive the approval redirect.';
-    case 'discovery_failed':
-      return `Could not discover the OAuth server configuration: ${result.message}`;
-    default: {
-      const unreachable: never = result;
-      throw new Error(`Unhandled approval outcome: ${JSON.stringify(unreachable)}`);
-    }
-  }
-}
-
 export interface ActivateCeremonyParams {
   readonly host: string;
   /** The LOCAL credential name to record as active on success. */
@@ -161,7 +136,7 @@ export async function runActivateCeremony(
       exchangeCode: deps.exchangeCode,
       confirmIdentity: deps.confirmIdentity,
       credentialStore: params.store,
-      waitMs: deps.waitMs,
+      loopbackWaitMs: deps.waitMs,
       now: deps.now,
       timeoutMs: deps.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS,
       // Defense-in-depth sentinel only: both flows persist nothing for an
@@ -178,7 +153,7 @@ export async function runActivateCeremony(
       deviceDeps: {
         requestDeviceAuthorization: deps.requestDeviceAuthorization,
         pollDeviceToken: deps.pollDeviceToken,
-        isInterrupted: deps.isInterrupted,
+        createIsInterrupted: deps.createIsInterrupted,
         waitMs: deps.deviceWaitMs,
         onDeviceCode: (authorization) => {
           params.onDeviceCode?.(renderDeviceCodePrompt(authorization));
@@ -315,7 +290,8 @@ export const keysUseHandler: CommandHandler = createKeysUseHandler({
   confirmIdentity,
   requestDeviceAuthorization: createRequestDeviceAuthorization(),
   pollDeviceToken: createPollDeviceToken(),
-  isInterrupted: createSigintFlag(),
+  // Passed UNCALLED — see create.ts.
+  createIsInterrupted: createSigintFlag,
   // The REF'D adapter for device polling — see `deviceWaitMs` in create.ts.
   deviceWaitMs: waitMs,
   now: Date.now,

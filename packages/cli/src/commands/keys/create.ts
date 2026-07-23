@@ -252,12 +252,17 @@ export interface TokensCreateHandlerDeps {
   readonly confirmIdentity: ConfirmIdentity;
   readonly requestDeviceAuthorization: RequestDeviceAuthorization;
   readonly pollDeviceToken: PollDeviceToken;
-  readonly isInterrupted: () => boolean;
   /**
-   * The device transport's delay adapter. Deliberately NOT `waitMs` above:
-   * that one is `unrefWaitMs` for the loopback timeout race, which would let
-   * Node exit right after printing the verification code, before the user
-   * could approve. See `auth/run-consent.ts`'s `DeviceConsentDeps.waitMs`.
+   * Creates the interrupt flag. A factory, not a flag: calling it installs a
+   * SIGINT listener, which must not happen for commands that never start a
+   * device flow. `runConsent` invokes it inside its device branch only.
+   */
+  readonly createIsInterrupted: () => () => boolean;
+  /**
+   * The device transport's REF'd delay adapter. Deliberately NOT `waitMs`
+   * above: that one is `unrefWaitMs` for the loopback timeout race, which
+   * would let Node exit right after printing the verification code, before the
+   * user could approve. See `auth/run-consent.ts`.
    */
   readonly deviceWaitMs: WaitMs;
   readonly now: () => number;
@@ -372,7 +377,7 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
         exchangeCode: deps.exchangeCode,
         confirmIdentity: deps.confirmIdentity,
         credentialStore: store,
-        waitMs: deps.waitMs,
+        loopbackWaitMs: deps.waitMs,
         now: deps.now,
         timeoutMs: deps.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS,
         profile: keyName,
@@ -391,7 +396,7 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
         deviceDeps: {
           requestDeviceAuthorization: deps.requestDeviceAuthorization,
           pollDeviceToken: deps.pollDeviceToken,
-          isInterrupted: deps.isInterrupted,
+          createIsInterrupted: deps.createIsInterrupted,
           waitMs: deps.deviceWaitMs,
           onDeviceCode: (authorization) => {
             // Routed through `info` so --show-token's one-line stdout contract
@@ -438,7 +443,10 @@ export const tokensCreateHandler: CommandHandler = createTokensCreateHandler({
   confirmIdentity,
   requestDeviceAuthorization: createRequestDeviceAuthorization(),
   pollDeviceToken: createPollDeviceToken(),
-  isInterrupted: createSigintFlag(),
+  // Passed UNCALLED — `runConsent` installs the SIGINT listener only if a
+  // device flow actually starts. Calling it here would install one on every
+  // `pagespace` invocation, since routes.ts imports every command module.
+  createIsInterrupted: createSigintFlag,
   // The REF'D adapter for device polling — see `deviceWaitMs` above.
   deviceWaitMs: waitMs,
   now: Date.now,

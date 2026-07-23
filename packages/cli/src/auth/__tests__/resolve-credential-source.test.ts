@@ -105,7 +105,7 @@ describe('resolveCredentialSource', () => {
 
     expect(resolved.keyName).toBe('work');
     expect(resolved.activeKeyName).toBeNull();
-    expect(resolved.credential).toEqual(KEY);
+    expect(resolved.source).toMatchObject({ kind: 'stored', credential: KEY });
     expect(resolved.explicit).toBe(true);
   });
 
@@ -117,7 +117,7 @@ describe('resolveCredentialSource', () => {
 
     expect(resolved.keyName).toBe('ALL');
     expect(resolved.activeKeyName).toBe('ALL');
-    expect(resolved.credential).toEqual(KEY);
+    expect(resolved.source).toMatchObject({ kind: 'stored', credential: KEY });
     expect(resolved.source.kind).toBe('stored');
     expect(resolved.explicit).toBe(false);
   });
@@ -131,7 +131,7 @@ describe('resolveCredentialSource', () => {
 
     expect(resolved.keyName).toBe('default');
     expect(resolved.activeKeyName).toBeNull();
-    expect(resolved.credential).toEqual(OAUTH);
+    expect(resolved.source).toMatchObject({ kind: 'stored', credential: OAUTH });
   });
 
   it('falls through to the default slot when the active key names a credential that is not stored', async () => {
@@ -142,7 +142,7 @@ describe('resolveCredentialSource', () => {
 
     expect(resolved.keyName).toBe('default');
     expect(resolved.activeKeyName).toBeNull();
-    expect(resolved.credential).toEqual(OAUTH);
+    expect(resolved.source).toMatchObject({ kind: 'stored', credential: OAUTH });
   });
 
   it('resolves to none when the active key is dangling and no default is stored', async () => {
@@ -152,7 +152,7 @@ describe('resolveCredentialSource', () => {
     });
 
     expect(resolved.source).toEqual({ kind: 'none', host: HOST });
-    expect(resolved.credential).toBeNull();
+    expect(resolved.source.kind).toBe('none');
   });
 
   it('an active key set for a DIFFERENT host is invisible', async () => {
@@ -175,7 +175,7 @@ describe('resolveCredentialSource', () => {
       activeKeyStore: activeKeys({ [HOST]: 'ALL' }),
     });
     expect(viaKey.keyName).toBe('work');
-    expect(viaKey.credential).toEqual(KEY);
+    expect(viaKey.source).toMatchObject({ kind: 'stored', credential: KEY });
   });
 });
 

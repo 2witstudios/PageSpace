@@ -3,14 +3,21 @@
  * transport: the loopback+PKCE browser flow (`runLoopbackLogin`) or the RFC
  * 8628 device flow (`runDeviceLogin`).
  *
- * Every consent-driven command — `login`, `keys create`, `keys use`, and the
- * wizard's mint/edit/activate steps — needs the same `--device` choice, and
- * each one previously hard-wired the loopback flow plus its own eight-case
- * outcome switch. Adding a second transport per command would have meant four
- * more copies of that switch, each free to drift on which failures are fatal
- * or what remediation they name. Instead the transports are normalized here
- * into one small result type, and the per-command copy is reduced to the retry
- * hint each one wants to print.
+ * Every key ceremony — `keys create`, `keys use`, and the wizard's
+ * mint/edit/activate steps — needs the same `--device` choice, and each one
+ * previously hard-wired the loopback flow plus its own eight-case outcome
+ * switch. Adding a second transport per command would have meant three more
+ * copies of that switch, each free to drift on which failures are fatal or
+ * what remediation they name. Instead the transports are normalized here into
+ * one small result type, and the per-command copy is reduced to the retry hint
+ * each one wants to print.
+ *
+ * `login` / `login --device` deliberately do NOT route through here yet: they
+ * are two separate handlers selected by `run.ts`, predating this seam, and
+ * each still carries its own outcome switch. Folding them in means collapsing
+ * `login-device.ts` into `login.ts`, which is a bigger change than this PR's
+ * scope — but it is the obvious follow-up, and until it happens this module is
+ * the seam for the KEY ceremonies only.
  *
  * The two flows differ in what can go wrong (a browser flow can fail to bind a
  * loopback port; a device flow can have its code expire before approval), so
@@ -45,24 +52,22 @@ export interface LoopbackConsentDeps {
 export interface DeviceConsentDeps {
   readonly requestDeviceAuthorization: RequestDeviceAuthorization;
   readonly pollDeviceToken: PollDeviceToken;
-  readonly isInterrupted: () => boolean;
+  /**
+   * Creates the interrupt flag. A FACTORY, not a flag: it installs a
+   * `process.once('SIGINT')` listener, and registering one replaces Node's
+   * default terminate-on-Ctrl-C — so it must run only when a device flow is
+   * actually starting, never at a command module's top level where every
+   * `pagespace` invocation would pay for it. `runConsent` calls it inside the
+   * device branch alone.
+   */
+  readonly createIsInterrupted: () => () => boolean;
   readonly onDeviceCode: (authorization: DeviceAuthorization) => void;
   /**
-   * The device transport's OWN delay adapter, deliberately separate from
-   * `RunConsentParams.waitMs`.
-   *
-   * The two transports need opposite timer semantics and must never share one
-   * adapter. Loopback consent races its 5-minute timeout against the callback
-   * and needs `unrefWaitMs`, or the losing timer pins the event loop and hangs
-   * the CLI at exit. Device polling is a sequential loop where the delay
-   * between polls is often the ONLY live handle, so it needs the REF'd
-   * `waitMs` — an unref'd one lets Node exit right after printing the
-   * verification code, before the user has any chance to approve. See
-   * `auth/wait.ts`.
-   *
-   * Keeping it here rather than at the top level means each transport carries
-   * the timer it actually needs, so a command wiring `unrefWaitMs` for its
-   * loopback path cannot silently impose it on the device path too.
+   * The REF'd delay adapter. Device polling is a sequential loop where the
+   * delay between polls is often the only live handle, so an unref'd timer
+   * lets Node exit right after printing the verification code, before the user
+   * can approve. Named per-transport (vs `loopbackWaitMs`) so the two can
+   * never be handed the same adapter by omission. See `auth/wait.ts`.
    */
   readonly waitMs: WaitMs;
 }
@@ -77,8 +82,12 @@ export interface RunConsentParams {
   readonly exchangeCode: ExchangeCode;
   readonly confirmIdentity: ConfirmIdentity;
   readonly credentialStore: Pick<CredentialStore, 'set'>;
-  /** The LOOPBACK transport's delay adapter; the device transport carries its own (`DeviceConsentDeps.waitMs`). */
-  readonly waitMs: WaitMs;
+  /**
+   * The UNREF'd delay adapter, for the loopback flow's timeout race. Ref'ing it
+   * would pin the event loop after a successful login; the device transport
+   * needs the opposite and carries its own (`DeviceConsentDeps.waitMs`).
+   */
+  readonly loopbackWaitMs: WaitMs;
   readonly now: () => number;
   readonly timeoutMs: number;
   readonly profile?: string;
@@ -159,16 +168,17 @@ export async function runConsent(params: RunConsentParams, retryCommand: string)
   const result = params.device
     ? await runDeviceLogin({
         ...shared,
-        // The ref'd adapter — never `params.waitMs`. See DeviceConsentDeps.waitMs.
         waitMs: params.deviceDeps.waitMs,
         requestDeviceAuthorization: params.deviceDeps.requestDeviceAuthorization,
         pollDeviceToken: params.deviceDeps.pollDeviceToken,
-        isInterrupted: params.deviceDeps.isInterrupted,
+        // Installed here, and only here: the SIGINT listener must not exist
+        // for invocations that never reach a device flow.
+        isInterrupted: params.deviceDeps.createIsInterrupted(),
         onDeviceCode: params.deviceDeps.onDeviceCode,
       })
     : await runLoopbackLogin({
         ...shared,
-        waitMs: params.waitMs,
+        waitMs: params.loopbackWaitMs,
         exchangeCode: params.exchangeCode,
         randomBytes: params.loopback.randomBytes,
         startServer: params.loopback.startServer,

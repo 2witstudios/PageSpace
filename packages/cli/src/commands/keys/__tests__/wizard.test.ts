@@ -119,7 +119,7 @@ function baseMintDeps(store: CredentialStore) {
     pollDeviceToken: async () => {
       throw new Error('device flow not exercised by this test — loopback transport expected');
     },
-    isInterrupted: () => false,
+    createIsInterrupted: () => () => false,
     deviceWaitMs: async () => {},
     now: () => Date.parse('2026-07-06T00:00:00.000Z'),
   };
@@ -805,7 +805,7 @@ describe('createKeysHandler — --device', () => {
         };
       },
       pollDeviceToken: async () => pollResult,
-      isInterrupted: () => false,
+      createIsInterrupted: () => () => false,
       deviceWaitMs: async () => {},
       discoverMetadata: async () => ({
         authorizationEndpoint: 'https://pagespace.ai/api/oauth/authorize',

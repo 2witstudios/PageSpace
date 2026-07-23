@@ -37,7 +37,7 @@
 import { resolveConfig } from '../config/resolve.js';
 import { createCredentialStore } from '../credentials/store.js';
 import type { CredentialStore } from '../credentials/store.js';
-import { DEFAULT_PROFILE_NAME, tokenPrefix } from '../credentials/serialize.js';
+import { credentialSecret, DEFAULT_PROFILE_NAME, tokenPrefix } from '../credentials/serialize.js';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS } from '../exit-codes.js';
 import type { CommandHandler } from '../router/router.js';
 import { confirmIdentity } from '../auth/confirm-identity.js';
@@ -197,40 +197,42 @@ export function createWhoamiHandler(deps: WhoamiHandlerDeps): CommandHandler {
       // only 401); anything else is tried as an OAuth access token first and
       // falls through to the drives probe when the server won't speak for it.
       if (source.kind === 'stored') {
-        // Narrowed by the `if` above: the only stored kind left here is
-        // `static`. Asserted structurally rather than cast so a future third
-        // credential kind fails to compile instead of silently landing here.
-        const credential = source.credential;
-        if (credential.kind === 'oauth') throw new Error('unreachable: oauth handled above');
-        secret = credential.token;
-        scopes = credential.scopes;
+        // `credentialSecret` reads whichever field carries the bearer for this
+        // credential kind, so a future third kind is its problem to handle
+        // rather than a new branch to remember here. Stored scopes are only
+        // meaningful for a static key — an oauth credential took the branch
+        // above.
+        secret = credentialSecret(source.credential);
+        scopes = source.credential.kind === 'static' ? source.credential.scopes : null;
       } else {
         secret = source.token;
         scopes = null;
       }
       shownTokenPrefix = tokenPrefix(secret);
 
-      if (!isScopedKeyToken(secret)) {
-        try {
-          identity = await deps.confirmIdentity({ host, accessToken: secret });
-        } catch {
-          identity = null;
-        }
-      }
+      // Concurrent, not sequential: neither call feeds the other, and this is
+      // an interactive status command — serializing them would double its
+      // latency for no gain.
+      const [identityResult, probeResult] = await Promise.allSettled([
+        isScopedKeyToken(secret)
+          ? Promise.reject(new Error('mcp_* tokens are not identity-bearing'))
+          : deps.confirmIdentity({ host, accessToken: secret }),
+        deps.probeDriveCount({ host, accessToken: secret }),
+      ]);
 
-      try {
-        driveCount = await deps.probeDriveCount({ host, accessToken: secret });
-      } catch (error) {
+      identity = identityResult.status === 'fulfilled' ? identityResult.value : null;
+
+      if (probeResult.status === 'fulfilled') {
+        driveCount = probeResult.value;
+      } else if (identity === null) {
         // A rejected probe is only fatal when nothing else vouched for the
         // credential: an OAuth access token that `/api/auth/me` already
         // answered for is live regardless of whether its scope reaches drives.
-        if (identity === null) {
-          ctx.stderr.write(
-            `The credential resolved for ${host} (${sourceLabel}) was rejected: ${messageOf(error)}\n` +
-              'Re-mint it with "pagespace keys create" (or "pagespace keys" for the guided wizard).\n',
-          );
-          return EXIT_RUNTIME_ERROR;
-        }
+        ctx.stderr.write(
+          `The credential resolved for ${host} (${sourceLabel}) was rejected: ${messageOf(probeResult.reason)}\n` +
+            'Re-mint it with "pagespace keys create" (or "pagespace keys" for the guided wizard).\n',
+        );
+        return EXIT_RUNTIME_ERROR;
       }
     }
 

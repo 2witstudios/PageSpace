@@ -51,10 +51,8 @@ export interface ResolvedCredentialSource {
   readonly source: AuthSource;
   /** The key name the credential was (or would be) read from. */
   readonly keyName: string;
-  /** Non-null only when the active key is what supplied `credential`. */
+  /** Non-null only when the active key is what supplied the credential. */
   readonly activeKeyName: string | null;
-  /** The stored credential backing `source`, when `source.kind === 'stored'`. */
-  readonly credential: HostCredential | null;
   /** True when `--token`/`--key`/either env var named a credential explicitly. */
   readonly explicit: boolean;
 }
@@ -68,7 +66,24 @@ export async function resolveCredentialSource(
   const envKey = resolveEnvKeyName(env);
   const explicit = hasExplicitCredential({ token: flags.token, key: flags.key }, env);
 
-  let keyName = resolveKeyName({ key: flags.key }, { PAGESPACE_KEY: envKey.name });
+  const keyNameFromFlags = resolveKeyName({ key: flags.key }, { PAGESPACE_KEY: envKey.name });
+
+  // A bearer token given directly outranks anything on disk, so resolving it
+  // needs no store read at all. Worth short-circuiting rather than reading and
+  // discarding: on macOS a credential-store read is a native keychain call
+  // that can surface an access prompt, and this resolver now runs for every
+  // invocation of every command.
+  const directToken = flags.token?.trim() || envToken.token?.trim();
+  if (directToken) {
+    return {
+      source: resolveAuth({ token: flags.token }, { PAGESPACE_TOKEN: envToken.token }, {}, host, keyNameFromFlags),
+      keyName: keyNameFromFlags,
+      activeKeyName: null,
+      explicit,
+    };
+  }
+
+  let keyName = keyNameFromFlags;
   let credential: HostCredential | null = null;
   let activeKeyName: string | null = null;
 
@@ -95,7 +110,7 @@ export async function resolveCredentialSource(
     keyName,
   );
 
-  return { source, keyName, activeKeyName, credential, explicit };
+  return { source, keyName, activeKeyName, explicit };
 }
 
 /**

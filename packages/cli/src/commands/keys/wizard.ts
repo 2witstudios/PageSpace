@@ -200,7 +200,7 @@ function consentFlowDeps(deps: TokensCreateHandlerDeps, s: ReturnType<typeof cla
     discoverMetadata: deps.discoverMetadata,
     exchangeCode: deps.exchangeCode,
     confirmIdentity: deps.confirmIdentity,
-    waitMs: deps.waitMs,
+    loopbackWaitMs: deps.waitMs,
     timeoutMs: deps.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS,
     now: deps.now,
     loopback: {
@@ -215,7 +215,7 @@ function consentFlowDeps(deps: TokensCreateHandlerDeps, s: ReturnType<typeof cla
     deviceDeps: {
       requestDeviceAuthorization: deps.requestDeviceAuthorization,
       pollDeviceToken: deps.pollDeviceToken,
-      isInterrupted: deps.isInterrupted,
+      createIsInterrupted: deps.createIsInterrupted,
       waitMs: deps.deviceWaitMs,
       onDeviceCode: (authorization: DeviceAuthorization) => {
         // Through the spinner, not stdout: clack owns the terminal here, and a
@@ -224,11 +224,6 @@ function consentFlowDeps(deps: TokensCreateHandlerDeps, s: ReturnType<typeof cla
       },
     },
   };
-}
-
-/** The line a spinner shows while a consent is pending, per transport. */
-function consentPendingMessage(device: boolean, browserAction: string, deviceAction: string): string {
-  return device ? deviceAction : browserAction;
 }
 
 async function mintScopedKey(
@@ -243,13 +238,7 @@ async function mintScopedKey(
   },
 ): Promise<ConsentResult> {
   const s = clack.spinner();
-  s.start(
-    consentPendingMessage(
-      params.device,
-      `Opening your browser to approve access for key "${params.keyName}" on ${params.host}...`,
-      `Waiting for approval of key "${params.keyName}" on ${params.host}...`,
-    ),
-  );
+  s.start(params.device ? `Waiting for approval of key "${params.keyName}" on ${params.host}...` : `Opening your browser to approve access for key "${params.keyName}" on ${params.host}...`);
 
   // Captured, never printed while the spinner is live — only surfaced behind
   // the explicit show-once confirm below.
@@ -470,13 +459,7 @@ async function runEdit(
   if (clack.isCancel(proceed) || !proceed) return abortSubflow();
 
   const s = clack.spinner();
-  s.start(
-    consentPendingMessage(
-      device,
-      `Opening your browser to approve the new scopes for "${key.name}" on ${host}...`,
-      `Waiting for approval of the new scopes for "${key.name}" on ${host}...`,
-    ),
-  );
+  s.start(device ? `Waiting for approval of the new scopes for "${key.name}" on ${host}...` : `Opening your browser to approve the new scopes for "${key.name}" on ${host}...`);
 
   const result = await runConsent(
     {
@@ -608,13 +591,7 @@ async function runUse(
   }
 
   const s = clack.spinner();
-  s.start(
-    consentPendingMessage(
-      device,
-      `Opening your browser to approve activating "${key.name}" on ${host}...`,
-      `Waiting for approval to activate "${key.name}" on ${host}...`,
-    ),
-  );
+  s.start(device ? `Waiting for approval to activate "${key.name}" on ${host}...` : `Opening your browser to approve activating "${key.name}" on ${host}...`);
 
   const result = await runActivateCeremony(ctx, deps, {
     host,
@@ -718,7 +695,8 @@ export const keysHandler: CommandHandler = createKeysHandler({
   confirmIdentity,
   requestDeviceAuthorization: createRequestDeviceAuthorization(),
   pollDeviceToken: createPollDeviceToken(),
-  isInterrupted: createSigintFlag(),
+  // Passed UNCALLED — see create.ts.
+  createIsInterrupted: createSigintFlag,
   // The REF'D adapter for device polling — see `deviceWaitMs` in create.ts.
   deviceWaitMs: waitMs,
   now: Date.now,
