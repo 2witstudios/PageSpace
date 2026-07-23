@@ -71,6 +71,54 @@ export interface PromoteMachineProjectInput {
   now: Date;
 }
 
+/**
+ * What a successful promotion CAS writes onto a `machine_projects` row (pure).
+ *
+ * Extracted from the update so the accounting rules are assertable without a
+ * database — the reason F11 shipped in the first place was that this field set
+ * lived only inside an IO call, where no test could see it.
+ *
+ * Two groups, and the second is the one that was missing:
+ *
+ *  • IDENTITY — the Sprite's name, WHICH VM it is, and the voiding of both
+ *    teardown marks (this row points at a LIVE Sprite; see the interface doc).
+ *  • ACCOUNTING — a new Sprite generation is a NEW ACCOUNTING PERIOD. The
+ *    watermark defaulted to row-CREATION time, so a project promoted months
+ *    later had its first measured clone bytes billed across the entire period
+ *    when no project Sprite existed; and re-provisioning after a teardown
+ *    carried the previous generation's measurement across the downtime. So the
+ *    watermark restarts here, and the measurement — which described a
+ *    filesystem that no longer exists — is dropped rather than inherited.
+ */
+export function promotedProjectColumns(input: {
+  sessionKey: string;
+  sandboxId: string;
+  spriteInstanceId: string | null;
+  now: Date;
+}): {
+  sessionKey: string;
+  sandboxId: string;
+  spriteInstanceId: string | null;
+  spriteTornDownAt: null;
+  teardownRequestedAt: null;
+  storageLastBilledAt: Date;
+  storageMeasuredBytes: null;
+  storageMeasuredAt: null;
+  updatedAt: Date;
+} {
+  return {
+    sessionKey: input.sessionKey,
+    sandboxId: input.sandboxId,
+    spriteInstanceId: input.spriteInstanceId,
+    spriteTornDownAt: null,
+    teardownRequestedAt: null,
+    storageLastBilledAt: input.now,
+    storageMeasuredBytes: null,
+    storageMeasuredAt: null,
+    updatedAt: input.now,
+  };
+}
+
 export interface MachineProjectStore {
   list(machineId: string): Promise<MachineProjectRecord[]>;
   findByName(machineId: string, name: string): Promise<MachineProjectRecord | null>;
@@ -147,27 +195,7 @@ export async function createDbMachineProjectStore(): Promise<MachineProjectStore
     async promote({ id, previousSandboxId, sessionKey, sandboxId, spriteInstanceId, now }) {
       const updated = await db
         .update(machineProjects)
-        .set({
-          sessionKey,
-          sandboxId,
-          spriteInstanceId,
-          // This row points at a LIVE Sprite, so BOTH teardown marks are void —
-          // see the interface doc.
-          spriteTornDownAt: null,
-          teardownRequestedAt: null,
-          // STORAGE ACCOUNTING STARTS AT THIS SPRITE'S BIRTH (issue #2204
-          // follow-up, F11). The watermark defaulted to row-CREATION time, so a
-          // project promoted months later had its first measured clone bytes
-          // billed across the whole period when no project Sprite existed — and
-          // re-provisioning after a teardown carried the previous generation's
-          // measurement across the downtime. A new Sprite generation is a new
-          // accounting period: reset the watermark, and drop the measurement
-          // that described a filesystem that no longer exists.
-          storageLastBilledAt: now,
-          storageMeasuredBytes: null,
-          storageMeasuredAt: null,
-          updatedAt: now,
-        })
+        .set(promotedProjectColumns({ sessionKey, sandboxId, spriteInstanceId, now }))
         // `eqOrIsNull`, not `eq`: a FIRST promotion compares against SQL NULL,
         // where `= NULL` is never true and would silently make every first
         // promotion a no-op loser.
