@@ -8,11 +8,9 @@ import { eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { parsePageTypesParam } from '@pagespace/lib/utils/enums';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
-
-const VALID_PAGE_TYPES = ['FOLDER', 'DOCUMENT', 'AI_CHAT', 'CHANNEL', 'CANVAS', 'SHEET', 'CODE', 'TASK_LIST'] as const;
-type PageType = (typeof VALID_PAGE_TYPES)[number];
 
 /**
  * GET /api/drives/[driveId]/search/glob
@@ -49,12 +47,10 @@ export async function GET(
       );
     }
 
-    // Parse includeTypes
-    const includeTypes = includeTypesParam
-      ? (includeTypesParam
-          .split(',')
-          .filter((t): t is PageType => VALID_PAGE_TYPES.includes(t as PageType)))
-      : undefined;
+    // Parse includeTypes. Derived from the canonical PageType enum — a
+    // hand-written list here had drifted and silently dropped FILE and
+    // MACHINE (#2150).
+    const includeTypes = parsePageTypesParam(includeTypesParam);
 
     // Check drive access. A scoped MCP token is its own drive member — gate on
     // the TOKEN's membership, not the owning user's.

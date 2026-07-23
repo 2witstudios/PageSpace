@@ -24,12 +24,28 @@ import { defineOperation } from '../registry/define.js';
 // ---------------------------------------------------------------------------
 
 /**
- * The route's current type filter (`search/glob/route.ts:14`, VALID_PAGE_TYPES,
- * post #1773/74 fix): CODE and TASK_LIST are both accepted today — the
- * operations-inventory D8 discrepancy (TASK_LIST silently dropped) is
- * resolved at the route, so the SDK enum matches the route enum exactly.
+ * The route's type filter (`search/glob/route.ts`), which since #2150 derives
+ * from the canonical `PageType` enum in `packages/lib/src/utils/enums.ts`
+ * rather than a hand-written list — so this must be all ten members.
+ *
+ * It stays inlined rather than imported because the published SDK must never
+ * runtime- or type-import `@pagespace/lib`: a published `.d.ts` referencing an
+ * unpublished internal package would break a consumer's `tsc`. Equality with
+ * the canonical enum is instead enforced at compile time by
+ * `__tests__/glob-page-types-drift-guard.test.ts`.
  */
-const GLOB_SEARCH_PAGE_TYPES = ['FOLDER', 'DOCUMENT', 'AI_CHAT', 'CHANNEL', 'CANVAS', 'SHEET', 'CODE', 'TASK_LIST'] as const;
+export const GLOB_SEARCH_PAGE_TYPES = [
+  'FOLDER',
+  'DOCUMENT',
+  'CHANNEL',
+  'AI_CHAT',
+  'CANVAS',
+  'FILE',
+  'SHEET',
+  'TASK_LIST',
+  'CODE',
+  'MACHINE',
+] as const;
 const globSearchPageTypeSchema = z.enum(GLOB_SEARCH_PAGE_TYPES);
 
 /**
