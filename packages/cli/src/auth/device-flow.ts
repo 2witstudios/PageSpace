@@ -131,10 +131,28 @@ export interface DeviceLoginDeps {
   readonly isInterrupted: () => boolean;
   /** Which named profile to store the credential under. Defaults to `"default"`, mirroring `loopback-flow.ts`. */
   readonly profile?: string;
+  /**
+   * Opt-in escape hatch for the "tokens never leave this function" rule,
+   * mirroring `loopback-flow.ts`'s hook of the same name: invoked
+   * synchronously with the raw `mcp_*` token immediately after persistence,
+   * ONLY when the redemption minted a static (`kind: 'mcp'`) token — never
+   * for the oauth pair, so `login --device` cannot surface a secret even if
+   * it wired this. Callers must capture-and-defer, never print inside the
+   * callback.
+   */
+  readonly onMintedStaticToken?: (token: string) => void;
 }
 
 export type DeviceLoginResult =
-  | { readonly outcome: 'success'; readonly identity: Identity | null; readonly scope: string }
+  | {
+      readonly outcome: 'success';
+      readonly identity: Identity | null;
+      readonly scope: string;
+      /** Set only for an `mcp_update` redemption — which existing key was re-scoped in place (no credential was stored). */
+      readonly updatedTokenId?: string;
+      /** Set only for an `mcp_activate` redemption — which existing key the human approved activating (nothing was stored). */
+      readonly activatedTokenId?: string;
+    }
   | { readonly outcome: 'access_denied' }
   | { readonly outcome: 'expired_token' }
   | { readonly outcome: 'timeout' }
@@ -202,33 +220,79 @@ export async function runDeviceLogin(deps: DeviceLoginDeps): Promise<DeviceLogin
     switch (decision.outcome.kind) {
       case 'success': {
         const { tokens } = decision.outcome;
-        // `login --device` only ever requests `manage_keys offline_access`
-        // (never a pure drive:* grant), so the token endpoint's
-        // `ok_mcp_token` branch (oauth-repository.ts) can't fire here — this
-        // is always the classic OAuth pair. Narrowed explicitly (not just
-        // asserted) so a future scope change to this flow fails loudly
-        // instead of silently mis-persisting an mcp token as an oauth grant.
-        if (tokens.kind !== 'oauth') {
-          return { outcome: 'poll_failed', message: `Unexpected token type from device grant: ${tokens.kind}` };
+
+        // An mcp_update redemption re-scoped an EXISTING key in place: the
+        // server returned no secret, the locally stored credential (if any) is
+        // unchanged, and there is no bearer in hand for confirmIdentity — so
+        // nothing is persisted and no identity call is made. Mirrors
+        // `runLoopbackLogin`.
+        if (tokens.kind === 'mcp_update') {
+          return { outcome: 'success', identity: null, scope: tokens.scope, updatedTokenId: tokens.tokenId };
         }
+
+        // An mcp_activate redemption approved a device activation ceremony:
+        // the server verified ownership and changed nothing. Same
+        // persist-nothing posture as mcp_update — the caller records the
+        // activation locally.
+        if (tokens.kind === 'mcp_activate') {
+          return { outcome: 'success', identity: null, scope: tokens.scope, activatedTokenId: tokens.tokenId };
+        }
+
+        // Flow-level invariant: only a request that actually ASKED for a mint
+        // may persist one. A mint-shaped grant always carries a `name:` token
+        // (the device authorization endpoint refuses a nameless mint outright),
+        // so its absence means this flow requested something else — an
+        // update/activate ceremony, or a plain `login --device`. A compromised
+        // or older server answering any of those with a real mint would
+        // otherwise leave a live secret in the keychain, stored under whatever
+        // profile the caller passed, that the user was never told exists —
+        // while the caller cheerfully reports the ceremony it asked for.
+        //
+        // Stricter than `runLoopbackLogin`'s equivalent guard, which only
+        // covers the update/activate case: this preserves the protection the
+        // device flow had when it rejected every non-oauth token outright,
+        // now that it legitimately accepts mints for `keys create --device`.
+        if (tokens.kind === 'mcp' && !deps.scope.split(' ').some((token) => token.startsWith('name:'))) {
+          return {
+            outcome: 'poll_failed',
+            message: 'The server minted a new credential for a request that did not ask for one; nothing was stored.',
+          };
+        }
+
+        const scopes = tokens.scope.split(' ').filter(Boolean);
+        const createdAt = new Date(deps.now()).toISOString();
 
         await deps.credentialStore.set(
           deps.host,
-          {
-            kind: 'oauth',
-            refreshToken: tokens.refreshToken,
-            clientId: deps.clientId,
-            scopes: tokens.scope.split(' ').filter(Boolean),
-            createdAt: new Date(deps.now()).toISOString(),
-          },
+          tokens.kind === 'oauth'
+            ? { kind: 'oauth', refreshToken: tokens.refreshToken, clientId: deps.clientId, scopes, createdAt }
+            : { kind: 'static', token: tokens.token, scopes, createdAt },
           deps.profile ?? DEFAULT_PROFILE_NAME,
         );
 
-        let identity: Identity | null;
-        try {
-          identity = await deps.confirmIdentity({ host: deps.host, accessToken: tokens.accessToken });
-        } catch {
-          identity = null;
+        if (tokens.kind === 'mcp') {
+          try {
+            deps.onMintedStaticToken?.(tokens.token);
+          } catch {
+            // Best-effort surfacing hook (same fail-soft posture as
+            // confirmIdentity below): the credential is already persisted, so
+            // a buggy callback must not turn a successful mint into a failure.
+          }
+        }
+
+        // Only an oauth grant has an identity to confirm. `/api/auth/me`
+        // deliberately refuses `mcp_*` tokens (a scoped key is its own
+        // principal — see `auth/probe-drives.ts`), so asking on behalf of a
+        // freshly minted key could only 401: a guaranteed-doomed round trip,
+        // billed at the confirm-identity timeout, on every `keys create
+        // --device`. `whoami` gates the same call the same way.
+        let identity: Identity | null = null;
+        if (tokens.kind === 'oauth') {
+          try {
+            identity = await deps.confirmIdentity({ host: deps.host, accessToken: tokens.accessToken });
+          } catch {
+            identity = null;
+          }
         }
 
         return { outcome: 'success', identity, scope: tokens.scope };

@@ -474,6 +474,27 @@ export function hasNewKeyName(scopes: ScopeSet): scopes is ScopeSet & { newKeyNa
   return scopes.newKeyName !== null;
 }
 
+/**
+ * True iff approving this grant escalates the approver's credentials — it
+ * mints a key (`name:`), re-scopes one (`update_key:`), or makes one a
+ * device's ambient default (`activate_key:`) — as opposed to merely
+ * establishing a login session.
+ *
+ * Exists so the two halves of the device-flow step-up gate cannot drift: the
+ * `/activate` verify route uses it to decide whether to advertise (and run)
+ * the second-factor ceremony, and the decision route uses it to decide whether
+ * to REQUIRE one. Two independent expressions of that rule would mean a fourth
+ * key-shaped scope could be added where the screen never runs the ceremony and
+ * the server then rejects a legitimate approval — or, worse, where the server
+ * stops demanding one.
+ *
+ * The loopback consent screen does not need this: `/api/oauth/authorize`
+ * requires step-up for EVERY consent, escalating or not.
+ */
+export function isCredentialEscalatingGrant(scopes: ScopeSet): boolean {
+  return hasNewKeyName(scopes) || isKeyUpdateGrant(scopes) || isKeyActivationGrant(scopes);
+}
+
 /** Bridge to the capability model: rows in mcp_token_drives shape (Decision 2). */
 export function scopeSetToDriveScopes(scopes: ScopeSet): DriveScopeRow[] {
   const sortedDriveIds = [...scopes.drives.keys()].sort();

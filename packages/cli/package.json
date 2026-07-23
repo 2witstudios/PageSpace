@@ -1,6 +1,6 @@
 {
   "name": "@pagespace/cli",
-  "version": "1.6.1",
+  "version": "1.7.0",
   "description": "pagespace — the official CLI for PageSpace: browser-based login, drive/page/task management, and a `pagespace mcp` stdio server for coding agents.",
   "license": "MIT",
   "repository": {

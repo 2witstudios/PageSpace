@@ -1,26 +1,23 @@
+import { computeKeysToClear } from './clear-user-stores-core';
+
 const LAST_USER_KEY = 'ps-last-user-id';
 
-const USER_SPECIFIC_STORAGE_KEYS = [
-  'drive-storage',
-  'favorites-storage',
-  'tabs-storage',
-  'open-tabs-storage',
-  'ui-store',
-  'mcp-settings',
-  'pagespace:sidebar:selectedAgentData',
-] as const;
+type KeyValueStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
-/** Clear all user-specific persisted stores if the user identity changed. */
-export function clearStoresIfUserChanged(newUserId: string): void {
-  if (typeof window === 'undefined') return;
+/**
+ * Clear user-specific persisted stores if the user identity changed, and always
+ * purge keys left behind by deleted stores. Effects are injectable for tests.
+ */
+export function clearStoresIfUserChanged(
+  newUserId: string,
+  storage?: KeyValueStorage,
+): void {
+  const target = storage ?? (typeof window === 'undefined' ? null : window.localStorage);
+  if (!target) return;
 
-  const lastUserId = localStorage.getItem(LAST_USER_KEY);
-
-  if (lastUserId && lastUserId !== newUserId) {
-    for (const key of USER_SPECIFIC_STORAGE_KEYS) {
-      localStorage.removeItem(key);
-    }
+  for (const key of computeKeysToClear(target.getItem(LAST_USER_KEY), newUserId)) {
+    target.removeItem(key);
   }
 
-  localStorage.setItem(LAST_USER_KEY, newUserId);
+  target.setItem(LAST_USER_KEY, newUserId);
 }

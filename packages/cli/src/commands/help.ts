@@ -20,6 +20,7 @@ const GLOBAL_FLAG_LINES = [
   '  --host <url>    Override the API host',
   '  --token <tok>   Override the credential',
   `  --key <name>    Use a stored key by name (env: ${KEY_ENV_VAR_NAME})`,
+  '  --device        Approve on another device via a code, without a local browser',
   '  --yes           Assume yes to confirmation prompts',
   '  --all           Apply to every stored credential (logout)',
   '  --force         Proceed despite a non-fatal failure (logout)',
