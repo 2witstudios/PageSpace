@@ -198,15 +198,35 @@ async function resolveClient(form: URLSearchParams, clientId: string, grantType:
   return { client, clientDbId };
 }
 
+/** The outcomes that mean a key was minted, re-scoped, or approved for activation. */
+const KEY_GRANT_OUTCOMES = ['ok_mcp_token', 'ok_mcp_update', 'ok_mcp_activate'] as const;
+
+type KeyGrantOutcome = (typeof KEY_GRANT_OUTCOMES)[number];
+
 /**
- * The three key-shaped success outcomes, rendered identically no matter which
+ * Narrows either flow's result union down to just its key-shaped successes, so
+ * `keyGrantSuccessResponse` can take a precisely-typed argument (no optional
+ * fields, no non-null assertions) and each caller's remaining `else` branch is
+ * narrowed to the outcomes its own error map must cover.
+ */
+function isKeyGrantSuccess<T extends { outcome: string }>(
+  result: T,
+): result is Extract<T, { outcome: KeyGrantOutcome }> {
+  return (KEY_GRANT_OUTCOMES as readonly string[]).includes(result.outcome);
+}
+
+type KeyGrantSuccess =
+  | Extract<Awaited<ReturnType<typeof exchangeAuthorizationCode>>, { outcome: KeyGrantOutcome }>
+  | Extract<Awaited<ReturnType<typeof pollDeviceToken>>, { outcome: KeyGrantOutcome }>;
+
+/**
+ * Renders the three key-shaped success outcomes identically no matter which
  * flow carried the grant. Both the loopback authorization-code exchange and
  * the RFC 8628 device poll produce them (the repository applies them through
  * one shared `applyKeyGrant`), and a client must not be able to tell the two
  * doors apart from the response body — so the serialization, the audit event
  * types, and the activity trail live here once rather than being mirrored per
- * handler. Returns `null` when the outcome is not key-shaped, leaving the
- * caller's own ok/error handling to run.
+ * handler.
  *
  * `oauthEventPrefix` is the ONLY thing that differs between the two: the audit
  * detail records which door was used.
@@ -214,16 +234,16 @@ async function resolveClient(form: URLSearchParams, clientId: string, grantType:
 function keyGrantSuccessResponse(
   req: NextRequest,
   clientId: string,
-  result: { outcome: string; userId?: string; scopes?: string[]; mcpToken?: string; tokenId?: string },
+  result: KeyGrantSuccess,
   oauthEventPrefix: 'code_exchange' | 'device_poll',
-): NextResponse | null {
+): NextResponse {
   if (result.outcome === 'ok_mcp_token') {
     auditRequest(req, {
       eventType: 'auth.token.created',
       userId: result.userId,
       details: { clientId, oauthEvent: `${oauthEventPrefix}_mcp_token` },
     });
-    return noStoreJson(mcpTokenSuccessBody(result.mcpToken!, result.scopes!), 200);
+    return noStoreJson(mcpTokenSuccessBody(result.mcpToken, result.scopes), 200);
   }
 
   if (result.outcome === 'ok_mcp_update') {
@@ -232,8 +252,7 @@ function keyGrantSuccessResponse(
     // door. Fire-and-forget end to end: getActorInfo does a user lookup +
     // PII decrypts, and it feeds only logTokenActivity (itself explicitly
     // never awaited), so none of it belongs on the response path.
-    const userId = result.userId!;
-    const tokenId = result.tokenId!;
+    const { userId, tokenId } = result;
     void getActorInfo(userId)
       .then((actorInfo) => {
         logTokenActivity(userId, 'token_update', { tokenId, tokenType: 'mcp' }, actorInfo);
@@ -246,22 +265,21 @@ function keyGrantSuccessResponse(
       userId,
       details: { clientId, oauthEvent: `${oauthEventPrefix}_mcp_update` },
     });
-    return noStoreJson(mcpUpdateSuccessBody(tokenId, result.scopes!), 200);
+    return noStoreJson(mcpUpdateSuccessBody(tokenId, result.scopes), 200);
   }
 
-  if (result.outcome === 'ok_mcp_activate') {
-    // Approval ceremony only — nothing was minted or changed, so this is an
-    // access-granted audit event (not token.created/updated), and there is
-    // no activity-trail write: the key row is untouched.
+  // The remaining outcome, by exhaustion over `KEY_GRANT_OUTCOMES`: an
+  // approval ceremony only — nothing was minted or changed, so this is an
+  // access-granted audit event (not token.created/updated), and there is no
+  // activity-trail write since the key row is untouched.
+  {
     auditRequest(req, {
       eventType: 'authz.access.granted',
       userId: result.userId,
       details: { clientId, oauthEvent: `${oauthEventPrefix}_mcp_activate` },
     });
-    return noStoreJson(mcpActivateSuccessBody(result.tokenId!, result.scopes!), 200);
+    return noStoreJson(mcpActivateSuccessBody(result.tokenId, result.scopes), 200);
   }
-
-  return null;
 }
 
 async function handleAuthorizationCodeGrant(req: NextRequest, form: URLSearchParams): Promise<NextResponse> {
@@ -289,8 +307,9 @@ async function handleAuthorizationCodeGrant(req: NextRequest, form: URLSearchPar
     now: new Date(),
   });
 
-  const keyGrantResponse = keyGrantSuccessResponse(req, client.clientId, result, 'code_exchange');
-  if (keyGrantResponse) return keyGrantResponse;
+  if (isKeyGrantSuccess(result)) {
+    return keyGrantSuccessResponse(req, client.clientId, result, 'code_exchange');
+  }
 
   if (result.outcome !== 'ok') {
     auditRequest(req, {
@@ -408,15 +427,8 @@ async function handleDeviceCodeGrant(req: NextRequest, form: URLSearchParams): P
 
   const result = await pollDeviceToken({ deviceCode, clientDbId, now: new Date() });
 
-  const keyGrantResponse = keyGrantSuccessResponse(req, client.clientId, result, 'device_poll');
-  if (keyGrantResponse) return keyGrantResponse;
-
-  // `keyGrantSuccessResponse` returning null means the outcome was not one of
-  // the three key-shaped successes — but it is a runtime check the type system
-  // can't see through, so the remaining successes are excluded explicitly here
-  // to keep the error map exhaustively typed.
-  if (result.outcome === 'ok_mcp_token' || result.outcome === 'ok_mcp_update' || result.outcome === 'ok_mcp_activate') {
-    throw new Error('unreachable: key-grant outcomes are rendered by keyGrantSuccessResponse');
+  if (isKeyGrantSuccess(result)) {
+    return keyGrantSuccessResponse(req, client.clientId, result, 'device_poll');
   }
 
   if (result.outcome !== 'ok') {
