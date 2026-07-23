@@ -95,7 +95,7 @@ pagespace pages export <pageId> --format md --out -
 pagespace pages trash <pageId> --yes
 \`\`\`
 
-Page types are \`FOLDER\`, \`DOCUMENT\`, \`CHANNEL\`, \`AI_CHAT\`, \`CANVAS\`, \`FILE\`, \`SHEET\`, \`TASK_LIST\`, and \`CODE\`.
+Page types are \`FOLDER\`, \`DOCUMENT\`, \`CHANNEL\`, \`AI_CHAT\`, \`CANVAS\`, \`FILE\`, \`SHEET\`, \`TASK_LIST\`, \`CODE\`, and \`MACHINE\`.
 
 **Search**
 
