@@ -78,13 +78,13 @@ describe('reorderTaskListChildren concurrency (Postgres row lock)', () => {
     const [task] = await db.insert(taskItems).values({
       userId: owner.id,
       pageId: childPage.id,
-      position: 0,
     }).returning();
 
     const HOLD_MS = 500;
     let backendPid: number | undefined;
 
-    const plan = computeReorderPlan([{ id: task.id, position: 9 }]);
+    // A fractional position also proves the `real` cast: an ::int cast would store 9.
+    const plan = computeReorderPlan([{ id: task.id, position: 9.5 }]);
     const reorderPromise = db.transaction(async (tx) => {
       const pidResult = await tx.execute(sql`SELECT pg_backend_pid() as pid`);
       backendPid = (pidResult.rows[0] as { pid: number }).pid;
@@ -118,10 +118,10 @@ describe('reorderTaskListChildren concurrency (Postgres row lock)', () => {
     // reported as locked/updated rather than silently dropped.
     expect(lockedIds).toEqual([task.id]);
 
-    const [updatedTask] = await db.select().from(taskItems).where(eq(taskItems.id, task.id));
-    expect(updatedTask.position).toBe(9);
-
+    // The write lands on pages.position — the single ordering rail (#2143) — with the
+    // fraction intact.
     const [updatedPage] = await db.select().from(pages).where(eq(pages.id, childPage.id));
+    expect(updatedPage.position).toBe(9.5);
     expect(updatedPage.isTrashed).toBe(true);
   });
 });

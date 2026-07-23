@@ -393,10 +393,13 @@ describe('Task API Routes', () => {
       expect(body.tasks[0].title).toBe('Active');
     });
 
-    it('uses task.position as fallback when page.position is undefined', async () => {
+    it('sorts a task whose page failed to hydrate last rather than to slot 0 (#2143)', async () => {
+      // pages.position is the only ordering rail; a task row carries no position of
+      // its own, so a missing page means no position at all — it must not be coerced
+      // to 0 and jump the list.
       const mockTasks = [
-        { id: 'task-1', position: 5, page: null },
-        { id: 'task-2', position: 3, page: { id: 'p-2', title: 'Has Page', position: 2, isTrashed: false } },
+        { id: 'task-1', page: null },
+        { id: 'task-2', page: { id: 'p-2', title: 'Has Page', position: 2, isTrashed: false } },
       ];
       const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
 
@@ -409,9 +412,10 @@ describe('Task API Routes', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      // task-2 has page.position 2, task-1 has no page so uses task.position 5
       expect(body.tasks[0].id).toBe('task-2');
       expect(body.tasks[1].id).toBe('task-1');
+      // And the position it reports comes from the page, not from a task row field.
+      expect(body.tasks[0].position).toBe(2);
     });
 
     it('inserts default status configs when existing task list has none (migration path)', async () => {
@@ -528,7 +532,7 @@ describe('Task API Routes', () => {
 
     it('tiebreaks the phase-1 order by taskItems.id (regression: non-deterministic paging when positions collide)', async () => {
       const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
-      // A read-then-write race in POST's nextPosition, or a backfilled row that never got
+      // A read-then-write race in POST's nextPosition, or a backfilled page that never got
       // a distinct position, can leave two tasks sharing the same page.position — without a
       // secondary sort key, LIMIT/OFFSET has no guaranteed stable order across repeated calls.
       const phase1Chain = makeSelectChain([{ id: 'task-1' }]);
@@ -548,7 +552,7 @@ describe('Task API Routes', () => {
 
       expect(response.status).toBe(200);
       expect(phase1Chain.orderBy).toHaveBeenCalledTimes(1);
-      // Primary sort key (page.position/task.position) plus a taskItems.id tiebreaker.
+      // Primary sort key (pages.position) plus a taskItems.id tiebreaker.
       expect((phase1Chain.orderBy as ReturnType<typeof vi.fn>).mock.calls[0]).toHaveLength(2);
     });
 
@@ -1125,14 +1129,18 @@ describe('Task API Routes', () => {
       expect(capturedTaskInsert).toMatchObject({ metadata: { note: 'remember this' } });
     });
 
-    it('uses the explicit position for the new task when provided', async () => {
+    it('applies an explicit position by writing the resolved pages.position in the creation transaction, not a task-row position (#2143)', async () => {
+      // Resolving and writing the position inline (rather than creating, then moving
+      // in a second transaction) keeps creation atomic: a failure can no longer leave
+      // a committed task that a client retry would then duplicate.
       const mockTaskList = { id: mockTaskListId };
-      const mockNewTask = { id: 'new-task', title: 'Task', status: 'pending', priority: 'medium', position: 7 };
-      const mockNewPage = { id: 'new-page', title: 'Task', type: 'DOCUMENT' };
+      const mockNewTask = { id: 'new-task', title: 'Task', status: 'pending', priority: 'medium' };
+      const mockNewPage = { id: 'new-page', title: 'Task', type: 'DOCUMENT', position: 7.5 };
 
       transactionPageResult = [mockNewPage];
       transactionTaskResult = [mockNewTask];
 
+      let capturedPageInsert: Record<string, unknown> | null = null;
       let capturedTaskInsert: Record<string, unknown> | null = null;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (vi.mocked(db.transaction) as any).mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => {
@@ -1141,6 +1149,7 @@ describe('Task API Routes', () => {
           insert: vi.fn(() => ({
             values: vi.fn((vals: Record<string, unknown>) => {
               insertCallCount++;
+              if (insertCallCount === 1) capturedPageInsert = vals;
               if (insertCallCount === 2) capturedTaskInsert = vals;
               return {
                 returning: vi.fn().mockResolvedValue(insertCallCount === 1 ? transactionPageResult : transactionTaskResult),
@@ -1161,11 +1170,68 @@ describe('Task API Routes', () => {
       vi.mocked(db.query.taskItems.findFirst)
         .mockResolvedValueOnce(null as never)
         .mockResolvedValueOnce({ ...mockNewTask, assignee: null, user: null, assignees: [] } as never);
+      // The peer lookup that resolves the requested slot into a pages.position —
+      // index 1 falls between these two peers, so the midpoint is 7.5.
+      vi.mocked(db.select).mockImplementationOnce(() => makeSelectChain([
+        { id: 'peer-a', position: 7 },
+        { id: 'peer-b', position: 8 },
+      ]) as never);
 
-      const response = await POST(createRequest({ title: 'Task', position: 7 }), { params: mockParams });
+      const response = await POST(createRequest({ title: 'Task', position: 1 }), { params: mockParams });
+      const body = await response.json();
 
       expect(response.status).toBe(201);
-      expect(capturedTaskInsert).toMatchObject({ position: 7 });
+      // The task row carries no position at all — order lives on the linked page.
+      expect(capturedTaskInsert).not.toHaveProperty('position');
+      // The page insert itself carries the resolved position — no second write.
+      expect(capturedPageInsert).toMatchObject({ position: 7.5 });
+      expect(body.position).toBe(7.5);
+    });
+
+    it('leaves a task created without an explicit position at the end of the list', async () => {
+      const mockTaskList = { id: mockTaskListId };
+      const mockNewTask = { id: 'new-task', title: 'Task', status: 'pending', priority: 'medium' };
+      const mockNewPage = { id: 'new-page', title: 'Task', type: 'DOCUMENT', position: 4 };
+
+      transactionPageResult = [mockNewPage];
+      transactionTaskResult = [mockNewTask];
+
+      let capturedPageInsert: Record<string, unknown> | null = null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (vi.mocked(db.transaction) as any).mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => {
+        let insertCallCount = 0;
+        const tx = {
+          insert: vi.fn(() => ({
+            values: vi.fn((vals: Record<string, unknown>) => {
+              insertCallCount++;
+              if (insertCallCount === 1) capturedPageInsert = vals;
+              return {
+                returning: vi.fn().mockResolvedValue(insertCallCount === 1 ? transactionPageResult : transactionTaskResult),
+              };
+            }),
+          })),
+        };
+        return callback(tx);
+      });
+
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(db.query.pages.findFirst)
+        .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' } as never) // taskListPage
+        .mockResolvedValueOnce({ position: 3 } as never); // lastChildPage
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
+      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
+      vi.mocked(db.query.taskItems.findFirst)
+        .mockResolvedValueOnce(null as never)
+        .mockResolvedValueOnce({ ...mockNewTask, assignee: null, user: null, assignees: [] } as never);
+
+      const response = await POST(createRequest({ title: 'Task' }), { params: mockParams });
+      const body = await response.json();
+
+      expect(response.status).toBe(201);
+      // No explicit position means no peer lookup — the page is appended directly.
+      expect(capturedPageInsert).toMatchObject({ position: 4 });
+      expect(body.position).toBe(4);
     });
 
     it('uses the request body timezone for the agent trigger workflow', async () => {
