@@ -752,3 +752,53 @@ describe('dispatchHeadlessSessionTurn — usage survives an aborted run', () => 
     });
   });
 });
+
+describe('dispatchHeadlessSessionTurn — usage accumulator edge cases', () => {
+  it('given steps that report nothing measurable, should leave usage undefined rather than a zero row', async () => {
+    // An all-zero total reads as "measured and free"; undefined reads as
+    // "never measured". Only the second is true here.
+    const { deps: d, recorded, drain } = deps({
+      generate: async ({ onStepUsage }) => {
+        onStepUsage?.({});
+        onStepUsage?.({ inputTokens: 0, outputTokens: 0 });
+        throw new Error('AbortError');
+      },
+    });
+
+    await dispatchHeadlessSessionTurn(
+      { identity: identity(), actor: { userId: 'u1' }, message: 'hi', depth: 0 },
+      d,
+    );
+    await drain();
+
+    assert({
+      given: 'an aborted run whose steps reported no measurable tokens',
+      should: 'report no usage at all',
+      actual: recorded.billed[0]?.usage,
+      expected: undefined,
+    });
+  });
+
+  it('given a mix of empty and charged steps, should bill only what was actually charged', async () => {
+    const { deps: d, recorded, drain } = deps({
+      generate: async ({ onStepUsage }) => {
+        onStepUsage?.({});
+        onStepUsage?.({ inputTokens: 12, outputTokens: 4, totalTokens: 16 });
+        throw new Error('AbortError');
+      },
+    });
+
+    await dispatchHeadlessSessionTurn(
+      { identity: identity(), actor: { userId: 'u1' }, message: 'hi', depth: 0 },
+      d,
+    );
+    await drain();
+
+    assert({
+      given: 'one empty step and one charged step',
+      should: 'bill the charged step only',
+      actual: recorded.billed[0]?.usage,
+      expected: { inputTokens: 12, outputTokens: 4, totalTokens: 16 },
+    });
+  });
+});

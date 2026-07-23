@@ -491,9 +491,12 @@ async function generate(input: {
   // ALWAYS registered, not only when a balance guard exists: this is also how
   // the engine learns what the provider already charged for, so an aborted run
   // still bills its completed steps (see HeadlessGenerateInput.onStepUsage).
-  const onStepFinish = ({ usage }: { usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number } }) => {
-    input.onStepUsage?.(usage);
-    guardBalance?.(usage);
+  const onStepFinish = ({ usage }: { usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number } }) => {
+    // Defensive default: a provider that reports no usage for a step must not
+    // throw inside the step callback and take the whole generation down.
+    const step = usage ?? {};
+    input.onStepUsage?.(step);
+    guardBalance?.(step);
   };
 
   const result = await generateText({

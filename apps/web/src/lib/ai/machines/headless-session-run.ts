@@ -475,10 +475,17 @@ async function runClaimedTurn({
       ...(claim.abortSignal ? { abortSignal: claim.abortSignal } : {}),
       balanceSnapshotCents,
       onStepUsage: (usage) => {
+        const input = usage?.inputTokens ?? 0;
+        const output = usage?.outputTokens ?? 0;
+        const total = usage?.totalTokens ?? input + output;
+        // A step that reports nothing measurable must not flip this: it would
+        // turn `undefined` usage into an all-zero row, which reads as "measured
+        // and free" rather than "never measured".
+        if (input === 0 && output === 0 && total === 0) return;
         spentAnything = true;
-        spent.inputTokens += usage.inputTokens ?? 0;
-        spent.outputTokens += usage.outputTokens ?? 0;
-        spent.totalTokens += usage.totalTokens ?? (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
+        spent.inputTokens += input;
+        spent.outputTokens += output;
+        spent.totalTokens += total;
       },
     });
     await deps.persistReply({
