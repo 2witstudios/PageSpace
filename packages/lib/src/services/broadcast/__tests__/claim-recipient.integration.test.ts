@@ -216,6 +216,8 @@ describe('claimRecipient against a real database', () => {
     // this has no NULL hole — Postgres treats NULLs as distinct.
     await claimRecipient(broadcastId, { userId, email: 'ada@example.com' });
 
+    // drizzle-orm wraps the driver error as `Failed query: ...`; the actual Postgres
+    // message ("duplicate key value violates ...") is on `.cause`, not `.message`.
     await expect(
       db.insert(broadcastRecipients).values({
         broadcastId,
@@ -223,7 +225,7 @@ describe('claimRecipient against a real database', () => {
         recipientEmail: 'ada@example.com',
         status: 'pending',
       }),
-    ).rejects.toThrow(/duplicate key|unique/i);
+    ).rejects.toMatchObject({ cause: { message: expect.stringMatching(/duplicate key|unique/i) } });
   });
 
   it('should erase a recipient row when the user is erased', async () => {

@@ -1,0 +1,3 @@
+ALTER TABLE "siem_delivery_cursors" ADD CONSTRAINT "siem_delivery_cursors_delivered_cursor_pair" CHECK (("siem_delivery_cursors"."lastDeliveredId" IS NULL) = ("siem_delivery_cursors"."lastDeliveredAt" IS NULL));--> statement-breakpoint
+ALTER TABLE "credit_holds" ADD CONSTRAINT "credit_holds_est_cents_nonneg" CHECK ("credit_holds"."estCents" >= 0);--> statement-breakpoint
+ALTER TABLE "conversation_compactions" ADD CONSTRAINT "conversation_compactions_source_chk" CHECK ("conversation_compactions"."source" IN ('page', 'global'));

@@ -1936,7 +1936,13 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "favorites_item_type_consistency_chk": {
+          "name": "favorites_item_type_consistency_chk",
+          "value": "((\"itemType\" = 'page' AND \"pageId\" IS NOT NULL AND \"driveId\" IS NULL) OR (\"itemType\" = 'drive' AND \"driveId\" IS NOT NULL AND \"pageId\" IS NULL))"
+        }
+      }
     },
     "public.mentions": {
       "name": "mentions",
@@ -5855,7 +5861,21 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "activity_logs_content_size_limit": {
+          "name": "activity_logs_content_size_limit",
+          "value": "\"activity_logs\".\"contentSize\" IS NULL OR \"activity_logs\".\"contentSize\" <= 1048576"
+        },
+        "activity_logs_stream_pair": {
+          "name": "activity_logs_stream_pair",
+          "value": "(\"activity_logs\".\"streamId\" IS NULL) = (\"activity_logs\".\"streamSeq\" IS NULL)"
+        },
+        "activity_logs_change_group_pair": {
+          "name": "activity_logs_change_group_pair",
+          "value": "(\"activity_logs\".\"changeGroupId\" IS NULL) = (\"activity_logs\".\"changeGroupType\" IS NULL)"
+        }
+      }
     },
     "public.ai_usage_logs": {
       "name": "ai_usage_logs",
@@ -8194,7 +8214,13 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "drive_backups_change_group_pair": {
+          "name": "drive_backups_change_group_pair",
+          "value": "(\"drive_backups\".\"changeGroupId\" IS NULL) = (\"drive_backups\".\"changeGroupType\" IS NULL)"
+        }
+      }
     },
     "public.page_versions": {
       "name": "page_versions",
@@ -8444,7 +8470,13 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "page_versions_change_group_pair": {
+          "name": "page_versions_change_group_pair",
+          "value": "(\"page_versions\".\"changeGroupId\" IS NULL) = (\"page_versions\".\"changeGroupType\" IS NULL)"
+        }
+      }
     },
     "public.connections": {
       "name": "connections",
@@ -10429,6 +10461,12 @@
             "agentPageId"
           ]
         }
+      },
+      "checkConstraints": {
+        "task_assignees_has_assignee": {
+          "name": "task_assignees_has_assignee",
+          "value": "(\"userId\" IS NOT NULL OR \"agentPageId\" IS NOT NULL)"
+        }
       }
     },
     "public.task_items": {
@@ -12160,6 +12198,12 @@
             "drive_id",
             "provider_id"
           ]
+        }
+      },
+      "checkConstraints": {
+        "integration_connections_scope_chk": {
+          "name": "integration_connections_scope_chk",
+          "value": "(\"integration_connections\".\"user_id\" IS NOT NULL AND \"integration_connections\".\"drive_id\" IS NULL) OR (\"integration_connections\".\"user_id\" IS NULL AND \"integration_connections\".\"drive_id\" IS NOT NULL)"
         }
       }
     },
@@ -16000,6 +16044,12 @@
             "eventType"
           ]
         }
+      },
+      "checkConstraints": {
+        "webhook_triggers_anchor_chk": {
+          "name": "webhook_triggers_anchor_chk",
+          "value": "(\"webhook_triggers\".\"connectionId\" IS NOT NULL AND \"webhook_triggers\".\"pageWebhookId\" IS NULL) OR (\"webhook_triggers\".\"connectionId\" IS NULL AND \"webhook_triggers\".\"pageWebhookId\" IS NOT NULL)"
+        }
       }
     },
     "public.message_drafts": {
@@ -16516,7 +16566,33 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "credit_balances_monthly_remaining_nonneg": {
+          "name": "credit_balances_monthly_remaining_nonneg",
+          "value": "\"credit_balances\".\"monthlyRemainingCents\" >= 0"
+        },
+        "credit_balances_monthly_allowance_nonneg": {
+          "name": "credit_balances_monthly_allowance_nonneg",
+          "value": "\"credit_balances\".\"monthlyAllowanceCents\" >= 0"
+        },
+        "credit_balances_topup_remaining_nonneg": {
+          "name": "credit_balances_topup_remaining_nonneg",
+          "value": "\"credit_balances\".\"topupRemainingCents\" >= 0"
+        },
+        "credit_balances_debt_cents_nonneg": {
+          "name": "credit_balances_debt_cents_nonneg",
+          "value": "\"credit_balances\".\"debtCents\" >= 0"
+        },
+        "credit_balances_pending_millicents_range": {
+          "name": "credit_balances_pending_millicents_range",
+          "value": "\"credit_balances\".\"pendingMillicents\" >= 0 AND \"credit_balances\".\"pendingMillicents\" < 1000"
+        },
+        "credit_balances_period_order": {
+          "name": "credit_balances_period_order",
+          "value": "\"credit_balances\".\"monthlyPeriodStart\" IS NULL OR \"credit_balances\".\"monthlyPeriodEnd\" IS NULL OR \"credit_balances\".\"monthlyPeriodStart\" <= \"credit_balances\".\"monthlyPeriodEnd\""
+        }
+      }
     },
     "public.credit_holds": {
       "name": "credit_holds",
@@ -17011,6 +17087,16 @@
             "drive_id",
             "trigger"
           ]
+        }
+      },
+      "checkConstraints": {
+        "commands_scope_chk": {
+          "name": "commands_scope_chk",
+          "value": "(\"commands\".\"user_id\" IS NOT NULL AND \"commands\".\"drive_id\" IS NULL) OR (\"commands\".\"user_id\" IS NULL AND \"commands\".\"drive_id\" IS NOT NULL)"
+        },
+        "commands_type_chk": {
+          "name": "commands_type_chk",
+          "value": "\"commands\".\"type\" IN ('document', 'prompt_template', 'builtin')"
         }
       }
     },
