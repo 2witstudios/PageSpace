@@ -74,12 +74,12 @@ describe('POST /api/machines/projects/promote', () => {
   });
 
   it('given a successful promotion, returns the new sandboxId and promoted:true', async () => {
-    mockPromoteProject.mockResolvedValue({ ok: true, sandboxId: 'sbx-p1', sessionKey: 'pgs-prj-x', promoted: true, resumed: false });
+    mockPromoteProject.mockResolvedValue({ ok: true, sandboxId: 'sbx-p1', sessionKey: 'pgs-prj-x', promoted: true, resumed: false, carried: false });
     const res = await POST(post({ machineId: 'm-1', name: 'repo' }));
     expect(res.status).toBe(200);
-    // Exactly these three fields: the `sessionKey` is a server-held HMAC Sprite
+    // Exactly these fields: the `sessionKey` is a server-held HMAC Sprite
     // name and is deliberately NOT echoed to a client.
-    expect(await res.json()).toEqual({ sandboxId: 'sbx-p1', promoted: true, resumed: false });
+    expect(await res.json()).toEqual({ sandboxId: 'sbx-p1', promoted: true, resumed: false, carried: false });
   });
 
   it('given a DIRTY checkout, returns 409 with the actionable detail', async () => {
@@ -97,5 +97,48 @@ describe('POST /api/machines/projects/promote', () => {
   it('given the kill switch off, returns 503', async () => {
     mockPromoteProject.mockResolvedValue({ ok: false, reason: 'kill_switch_off' });
     expect((await POST(post({ machineId: 'm-1', name: 'repo' }))).status).toBe(503);
+  });
+});
+
+/**
+ * Issue #2207 — the carry opt-in. The operator route is the ONLY surface that
+ * exposes it: an implicit project-scoped spawn must never silently relocate
+ * someone's uncommitted work.
+ */
+describe('POST /api/machines/projects/promote — carryDirty (#2207)', () => {
+  it('given carryDirty:true, threads it to the service and reports what was carried', async () => {
+    mockPromoteProject.mockResolvedValue({ ok: true, sandboxId: 'sbx-p1', sessionKey: 'pgs-prj-x', promoted: true, resumed: false, carried: true });
+    const res = await POST(post({ machineId: 'm-1', name: 'repo', carryDirty: true }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ sandboxId: 'sbx-p1', promoted: true, resumed: false, carried: true });
+    expect(mockPromoteProject).toHaveBeenCalledWith(expect.objectContaining({ carryDirty: true }));
+  });
+
+  it('given carryDirty omitted, defaults to NOT carrying', async () => {
+    mockPromoteProject.mockResolvedValue({ ok: true, sandboxId: 'sbx-p1', sessionKey: 'pgs-prj-x', promoted: true, resumed: false, carried: false });
+    await POST(post({ machineId: 'm-1', name: 'repo' }));
+    expect(mockPromoteProject).toHaveBeenCalledWith(expect.objectContaining({ carryDirty: false }));
+  });
+
+  it('given a non-boolean carryDirty, returns 400 without promoting', async () => {
+    // A truthy string would silently opt a caller into moving their work.
+    const res = await POST(post({ machineId: 'm-1', name: 'repo', carryDirty: 'yes' }));
+    expect(res.status).toBe(400);
+    expect(mockPromoteProject).not.toHaveBeenCalled();
+  });
+
+  it('given UNPUSHED commits, returns 409 — a refusal the caller can act on, not a server fault', async () => {
+    mockPromoteProject.mockResolvedValue({ ok: false, reason: 'unpushed_commits', detail: 'push the branch' });
+    expect((await POST(post({ machineId: 'm-1', name: 'repo' }))).status).toBe(409);
+  });
+
+  it('given a bundle over the size cap, returns 409', async () => {
+    mockPromoteProject.mockResolvedValue({ ok: false, reason: 'carry_too_large', detail: 'too big' });
+    expect((await POST(post({ machineId: 'm-1', name: 'repo', carryDirty: true }))).status).toBe(409);
+  });
+
+  it('given the carry itself failing, returns 502 — the sandbox side let us down', async () => {
+    mockPromoteProject.mockResolvedValue({ ok: false, reason: 'carry_failed', detail: 'bundle is corrupt' });
+    expect((await POST(post({ machineId: 'm-1', name: 'repo', carryDirty: true }))).status).toBe(502);
   });
 });

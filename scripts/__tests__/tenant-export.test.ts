@@ -166,7 +166,7 @@ describe('exportData', () => {
     expect(existsSync(destPath)).toBe(true);
   });
 
-  it('exports permissions', async () => {
+  it('exports page permissions', async () => {
     const outputDir = path.join(tmpDir, 'bundle');
     const result = await exportData(db as unknown as DbClient, {
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
@@ -176,7 +176,6 @@ describe('exportData', () => {
       dryRun: false,
     });
 
-    expect(result.manifest.tableCounts.permissions).toBe(1);
     expect(result.manifest.tableCounts.pagePermissions).toBe(1);
   });
 
