@@ -159,16 +159,20 @@ function makeMachineSandbox({
   status = { exitCode: 0, stdout: '', stderr: '' },
 }: {
   checkoutExists?: boolean;
-  status?: SandboxRunResult;
+  /** One result for every `git status`, or a sequence consumed per call (last one repeats). */
+  status?: SandboxRunResult | SandboxRunResult[];
 } = {}) {
   const calls: RunCommandArgs[] = [];
+  const statusQueue = Array.isArray(status) ? [...status] : [status];
   const sandbox: ExecutableSandbox = {
     sandboxId: MACHINE_SANDBOX_ID,
     spriteInstanceId: null,
     runCommand: async (opts) => {
       calls.push(opts);
       if (opts.cmd === 'test') return { exitCode: checkoutExists ? 0 : 1, stdout: '', stderr: '' };
-      if (opts.cmd === 'git' || opts.args?.includes('status')) return status;
+      if (opts.cmd === 'git' || opts.args?.includes('status')) {
+        return statusQueue.length > 1 ? statusQueue.shift()! : statusQueue[0];
+      }
       return { exitCode: 0, stdout: '', stderr: '' };
     },
     writeFiles: async () => {},
@@ -357,6 +361,26 @@ describe('promoteProject — post-promotion checkout reclaim', () => {
     expect(machineSandbox.calls.filter((c) => c.cmd === 'rm').map((c) => c.args)).toEqual([['-rf', PROJECT_PATH]]);
   });
 
+  it('given a checkout that turned DIRTY while provisioning/cloning ran, should NOT reclaim it', async () => {
+    // The dirty-tree check passes, then the user (or a terminal) writes into
+    // the old checkout during the slow provision+clone. An unconditional rm at
+    // the end would destroy that work — the reclaim re-checks cleanliness
+    // immediately before deleting, and a leftover directory is an annoyance
+    // where deleted work is a loss.
+    const machine = makeMachineSandbox({
+      status: [
+        { exitCode: 0, stdout: '', stderr: '' }, // the gate: clean
+        { exitCode: 0, stdout: '?? new-work.ts\n', stderr: '' }, // the recheck: dirty now
+      ],
+    });
+    const { deps, machineSandbox } = makeDeps({}, { machine });
+
+    const result = await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, deps });
+
+    expect(result).toMatchObject({ ok: true, promoted: true });
+    expect(machineSandbox.calls.filter((c) => c.cmd === 'rm')).toEqual([]);
+  });
+
   it('given a refused promotion, should NOT touch the machine checkout', async () => {
     const machine = makeMachineSandbox({ status: { exitCode: 0, stdout: ' M src/index.ts\n', stderr: '' } });
     const { deps, machineSandbox } = makeDeps({}, { machine });
@@ -394,6 +418,26 @@ describe('promoteProject — races and half-promotions', () => {
       resumed: true,
     });
     expect(killCalls).toEqual([]);
+  });
+
+  it('given a CAS loss to a winner holding the SAME NAME but a DIFFERENT INSTANCE, should still tear ours down', async () => {
+    // A name is reused across re-creates: two concurrent provisions can hold
+    // two different VMs answering to one sandboxId. Comparing the name alone
+    // would skip the kill and leave the losing INSTANCE alive, untracked, and
+    // billing. The kill is identity-guarded, so if the instances turn out to
+    // be the same VM after all, the guard makes the extra attempt a no-op.
+    const { deps, store, rows, killCalls } = makeDeps();
+    store.promote = async (input) => {
+      const row = rows.get(input.id);
+      // Winner recorded the SAME Sprite NAME with a DIFFERENT instance id.
+      if (row) rows.set(input.id, { ...row, sessionKey: SESSION_KEY, sandboxId: input.sandboxId, spriteInstanceId: 'inst-other-generation' });
+      return false;
+    };
+
+    const result = await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, deps });
+
+    expect(result).toMatchObject({ ok: true, promoted: false, resumed: true });
+    expect(killCalls).toEqual(['sbx-project-1']);
   });
 
   it('given a CAS loss to a winner on a DIFFERENT Sprite, should tear down our redundant Sprite', async () => {

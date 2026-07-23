@@ -295,7 +295,16 @@ async function reconcilePromotionCollision({
 }): Promise<PromoteProjectResult> {
   const row = await deps.store.findById(projectId);
   if (row?.sandboxId && row.sessionKey) {
-    if (row.sandboxId !== handle.machineId) await safeKillSprite(deps.host, handle);
+    // The INSTANCE, not just the name: a name is reused across re-creates, so
+    // two concurrent provisions can hold two DIFFERENT VMs answering to the
+    // same sandboxId. If ours is not the exact instance the winner persisted,
+    // it is unrecorded and must die — and the kill is identity-guarded, so if
+    // the two handles turn out to be one physical VM the attempt is a no-op
+    // rather than a friendly-fire kill of the winner's Sprite.
+    const isPersistedInstance =
+      row.sandboxId === handle.machineId &&
+      (row.spriteInstanceId ?? null) === (handle.spriteInstanceId ?? null);
+    if (!isPersistedInstance) await safeKillSprite(deps.host, handle);
     return { ok: true, sandboxId: row.sandboxId, sessionKey: row.sessionKey, promoted: false, resumed: true };
   }
   // Nobody actually won (the row vanished, or the CAS failed for a reason other
@@ -461,7 +470,16 @@ export async function promoteProject({
   // redundant one and kill it. Everything below is best-effort follow-up work
   // on a promotion that has already succeeded.
   await propagateClaudeCredential({ machineId, branchHandle: handle, resolveRootMachineHandle: deps.resolveRootMachineHandle });
-  if (checkout.kind === 'clean') await reclaimMachineCheckout(machineId, project.path, deps);
+  if (checkout.kind === 'clean') {
+    // Re-inspected IMMEDIATELY before the rm: the gate above ran before the
+    // slow provision+clone, and a terminal or tool may have written into the
+    // old checkout in that window. Anything but a fresh `clean` skips the
+    // reclaim — a leftover directory is an annoyance; deleting work someone
+    // just wrote is a loss. (The window between this recheck and the rm is
+    // milliseconds; the one it closes was the whole clone.)
+    const recheck = await inspectMachineCheckout({ machineId, project, actor, deps });
+    if (recheck.kind === 'clean') await reclaimMachineCheckout(machineId, project.path, deps);
+  }
   // Measured right after the clone that wrote the bulk of this Sprite's
   // footprint — the one moment its bytes are guaranteed non-trivial.
   noteProjectStorage(deps.measureProjectStorage, { machineProjectId: project.id, machinePageId: machineId, handle });

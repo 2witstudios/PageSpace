@@ -116,6 +116,31 @@ export interface HeadlessGenerateResult {
   model?: string;
 }
 
+/**
+ * The post-insert half of the conversation claim.
+ *
+ * The runtime's pre-insert liveness check and its claim INSERT are two steps,
+ * not one: a human stream can register in between, and a client stream's row
+ * (keyed by its own streamId) never collides with `session-run:<id>`'s unique
+ * index. So after the claim row is visible, the runtime re-reads the
+ * conversation's streaming rows and asks THIS question: is any FOREIGN row
+ * (not our claim) still beating? If so, the dispatch backs off and releases —
+ * the human always wins, and exactly one side yields, so the pair of checks
+ * serializes the conversation without a table lock. Heartbeat-authoritative
+ * for the same reason the pre-check is (a crashed stream must not lock the
+ * session forever). A NULL streamId still contests: it is not ours.
+ */
+export function isClaimContested(
+  rows: ReadonlyArray<{ streamId: string | null; lastHeartbeatAt: Date }>,
+  claimId: string,
+  staleMs: number,
+  now: Date,
+): boolean {
+  return rows.some(
+    (row) => row.streamId !== claimId && now.getTime() - row.lastHeartbeatAt.getTime() <= staleMs,
+  );
+}
+
 export interface HeadlessSessionRunDeps {
   /** Resolve the addressed session into a runnable target, or null if it is not an agent session. */
   resolveTarget: (identity: SessionTerminalIdentity) => Promise<HeadlessSessionTarget | null>;
@@ -143,8 +168,16 @@ export interface HeadlessSessionRunDeps {
     messageId: string;
     content: string;
   }) => Promise<void>;
-  /** The target conversation's prior turns, oldest first. */
-  loadHistory: (target: HeadlessSessionTarget) => Promise<HeadlessTranscriptMessage[]>;
+  /**
+   * The target conversation's prior turns, oldest first — EXCLUDING the
+   * message this dispatch just appended (`excludeMessageId`): the run passes
+   * that message to `generate` explicitly, and a history read that also
+   * returned it would hand the model every dispatched instruction twice.
+   */
+  loadHistory: (
+    target: HeadlessSessionTarget,
+    opts: { excludeMessageId: string },
+  ) => Promise<HeadlessTranscriptMessage[]>;
   /** Run the target's own agent loop under the target's binding. */
   generate: (input: HeadlessGenerateInput) => Promise<HeadlessGenerateResult>;
   /** Persist the reply into the transcript (and broadcast its arrival). */
@@ -254,11 +287,12 @@ export async function dispatchHeadlessSessionTurn(
   }
   const claim = claimed.claim;
 
+  const userMessageId = deps.newId();
   try {
     await deps.appendMessage({
       target,
       userId: input.actor.userId,
-      messageId: deps.newId(),
+      messageId: userMessageId,
       content: input.message,
     });
   } catch (error) {
@@ -270,7 +304,7 @@ export async function dispatchHeadlessSessionTurn(
     return { ok: false, reason: 'failed', detail: errorText(error) };
   }
 
-  deps.defer(() => runClaimedTurn({ input, target, claim, holdId, deps }));
+  deps.defer(() => runClaimedTurn({ input, target, claim, holdId, userMessageId, deps }));
 
   return { ok: true, accepted: true, messageId: claim.messageId };
 }
@@ -285,19 +319,21 @@ async function runClaimedTurn({
   target,
   claim,
   holdId,
+  userMessageId,
   deps,
 }: {
   input: HeadlessDispatchInput;
   target: HeadlessSessionTarget;
   claim: HeadlessRunClaim;
   holdId: string | null;
+  userMessageId: string;
   deps: HeadlessSessionRunDeps;
 }): Promise<void> {
   let result: HeadlessGenerateResult | undefined;
   let failure: string | undefined;
 
   try {
-    const history = await deps.loadHistory(target);
+    const history = await deps.loadHistory(target, { excludeMessageId: userMessageId });
     result = await deps.generate({
       target,
       message: input.message,

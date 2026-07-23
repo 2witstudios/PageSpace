@@ -210,7 +210,21 @@ export function scrollbackTail(
   while (tail.length > 1 && Buffer.byteLength(tail.join('\n'), 'utf8') > MAX_SCROLLBACK_TAIL_BYTES) {
     tail = tail.slice(1);
   }
-  return tail.join('\n');
+  const joined = tail.join('\n');
+  if (Buffer.byteLength(joined, 'utf8') <= MAX_SCROLLBACK_TAIL_BYTES) return joined;
+
+  // One newline-free line wider than the whole cap (a minified bundle, a
+  // base64 blob) — there is no line boundary left to drop at, so the cap has
+  // to cut mid-line after all: keep the most RECENT bytes (the end is where a
+  // long line's news is), on a UTF-8 boundary, and say so with a leading
+  // marker so the cut never reads as complete output.
+  const bytes = Buffer.from(joined, 'utf8');
+  const MARKER = '…';
+  let start = bytes.length - MAX_SCROLLBACK_TAIL_BYTES + Buffer.byteLength(MARKER, 'utf8');
+  // 0b10xxxxxx marks a UTF-8 continuation byte — step forward off any
+  // mid-character cut.
+  while (start < bytes.length && (bytes[start] & 0b1100_0000) === 0b1000_0000) start += 1;
+  return `${MARKER}${bytes.subarray(start).toString('utf8')}`;
 }
 
 /**

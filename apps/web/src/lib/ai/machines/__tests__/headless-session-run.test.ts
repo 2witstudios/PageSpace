@@ -3,6 +3,7 @@ import { assert } from '@/lib/ai/tools/__tests__/riteway';
 
 import {
   dispatchHeadlessSessionTurn,
+  isClaimContested,
   MAX_AGENT_DEPTH,
   type HeadlessSessionRunDeps,
   type HeadlessSessionTarget,
@@ -56,6 +57,7 @@ interface Recorded {
   generated: { depth: number; cwd: string; sandboxId?: string; message: string }[];
   replies: { content: string; aborted: boolean }[];
   billed: { pageId: string; userId: string; success: boolean; provider?: string; model?: string }[];
+  historyLoads: { excludeMessageId: string }[];
   released: { aborted: boolean }[];
   /** Set at ACK time, so "did the loop run before the ACK?" is directly assertable. */
   ackedBeforeRun: boolean;
@@ -73,6 +75,7 @@ function deps(
     generated: [],
     replies: [],
     billed: [],
+    historyLoads: [],
     released: [],
     ackedBeforeRun: false,
   };
@@ -104,7 +107,10 @@ function deps(
     appendMessage: async ({ content, target: to }) => {
       recorded.appended.push({ content, conversationId: to.conversationId });
     },
-    loadHistory: async () => [],
+    loadHistory: async (_target, opts) => {
+      recorded.historyLoads.push(opts);
+      return [];
+    },
     generate: async ({ depth, target: to, message }) => {
       recorded.generated.push({
         depth,
@@ -142,6 +148,49 @@ function deps(
     },
   };
 }
+
+describe('isClaimContested — the post-insert half of the conversation claim', () => {
+  const NOW = new Date('2026-07-22T12:00:00Z');
+  const STALE = 60_000;
+  const fresh = new Date(NOW.getTime() - 1_000);
+  const stale = new Date(NOW.getTime() - STALE - 1);
+
+  it('a fresh FOREIGN stream on the conversation contests the claim — the human registered in the check→insert window', () => {
+    expect(isClaimContested([{ streamId: 'client-stream-9', lastHeartbeatAt: fresh }], 'session-run:c1', STALE, NOW)).toBe(true);
+  });
+
+  it('a foreign stream with a NULL streamId still contests — released rows keep beating until their writer stops', () => {
+    expect(isClaimContested([{ streamId: null, lastHeartbeatAt: fresh }], 'session-run:c1', STALE, NOW)).toBe(true);
+  });
+
+  it('our OWN claim row never contests itself', () => {
+    expect(isClaimContested([{ streamId: 'session-run:c1', lastHeartbeatAt: fresh }], 'session-run:c1', STALE, NOW)).toBe(false);
+  });
+
+  it('a stale foreign row does not contest — same heartbeat authority as the pre-check', () => {
+    expect(isClaimContested([{ streamId: 'client-stream-9', lastHeartbeatAt: stale }], 'session-run:c1', STALE, NOW)).toBe(false);
+  });
+});
+
+describe('dispatchHeadlessSessionTurn — the dispatched message appears in the context ONCE', () => {
+  it('loadHistory is told to exclude the just-appended message — generate carries it explicitly', async () => {
+    // The dispatch appends the user message BEFORE the deferred run starts, so
+    // an unfiltered history read returns it — and generate() appends
+    // input.message again, handing the model every instruction twice.
+    const { deps: d, recorded, drain } = deps();
+
+    await dispatchHeadlessSessionTurn(
+      { identity: identity(), actor: { userId: 'user-1' }, message: 'go', depth: 0 },
+      d,
+    );
+    await drain();
+
+    expect(recorded.appended).toHaveLength(1);
+    expect(recorded.historyLoads).toHaveLength(1);
+    // The exclusion id IS the appended message's id.
+    expect(recorded.historyLoads[0].excludeMessageId).toBeTruthy();
+  });
+});
 
 describe('dispatchHeadlessSessionTurn — billing identity', () => {
   it('meters the run on the provider/model generate() ACTUALLY used — never a hardcoded default', async () => {

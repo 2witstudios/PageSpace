@@ -148,3 +148,115 @@ messages conventional and informative.
 three layers (trigger / teardown / reconciler); both headless-path controls match the interactive path;
 the torn-down-project fallback and the actor-permissions fall-through are confirmed by design and pinned
 with tests. Original findings preserved above for the record.
+
+---
+
+# Code Review — second pass
+
+Reviewed 2026-07-22 against `master` (merge-base `a9711406e`), at HEAD `acb3e680f`. This pass
+re-verified the twelve first-pass findings and hunted for what the first pass missed, with particular
+attention to the commits that landed *after* it (`3ad1906a6`, `8511463f0`, and the
+`pu/machine-pane-actor-fix` merge).
+
+**First-pass findings: all twelve re-verified as genuinely fixed.** The reclaim path exists at all
+three layers (migration 0219's `AFTER DELETE` trigger, the `teardownOneMachine` project arm, the
+reconciler's third row source + `markProjectTornDown`); the headless credit gate runs before
+`claimRun` and releases the hold on every exit path; `filterToolsForAgentAllowlist` is applied on both
+the interactive and headless paths; `readCappedBody` (1 MiB) fronts all five signed realtime
+endpoints; the machine-root closure is two reads (`projectLookup.list` + `branchLookup.listAll`); both
+repo-path constants now live in `services/sandbox/sandbox-paths.ts`; the dead `timezone` parameter is
+gone; `withNodeTarget` throws at factory-construction time; `types.ts` has its trailing newline; the
+accepted sync race cites issue #2202.
+
+Gates run locally at HEAD, all green:
+- `bun run typecheck` ✅ (16/16) · `bun run lint` ✅ (14/14, only pre-existing warnings)
+- `vitest run` on `packages/lib` machines + sandbox — **1308 pass / 0 fail** (51 files)
+- `vitest run` on the web session family, sandbox tools, promote route, workspace stores —
+  **569 pass / 0 fail** (14 files)
+- `vitest run` on the machine UI, sync hook, audit coverage, usage breakdown — **383 pass / 0 fail**
+- `vitest run` on `apps/realtime` index + session-io + agent-terminal-access — **169 pass / 0 fail**
+
+Two suite failures observed mid-review were traced and are NOT product defects — see
+"Environment notes" below.
+
+## Findings
+
+- [ ] **blocker** · `packages/lib/src/services/machines/machine-project-promotion.ts:473` (at
+  `acb3e680f`) · A successful promotion `rm -rf`s the machine-side checkout with no re-check, so
+  uncommitted work written during the provision+clone window is destroyed · the dirty-tree gate
+  (`inspectMachineCheckout`) runs BEFORE `MachineHost.provision` and the full `git clone` — seconds to
+  minutes — and `reclaimMachineCheckout` is then called unconditionally on `checkout.kind === 'clean'`,
+  reading the *pre-clone* verdict. Its own docblock claims "CLEAN-TREE GATED by construction", which
+  is true only of the stale gate. A user or a terminal session writing into the old checkout during
+  that window loses the work silently. Correct: re-inspect immediately before the `rm` and skip the
+  reclaim on anything but a fresh `clean` — a leftover directory is wasted bytes, deleted work is a
+  loss. **Fix in flight** in the working tree (uncommitted): a `recheck` call guarding the reclaim.
+
+- [ ] **major** · `apps/realtime/src/terminal/session-io.ts:210` (at `acb3e680f`) ·
+  `scrollbackTail`'s byte cap does not bind on a single newline-free line, so one giant line ships the
+  ring's full 64 KiB into a model's context · the trim loop is
+  `while (tail.length > 1 && … > MAX_SCROLLBACK_TAIL_BYTES)`, so a lone oversized element (a minified
+  bundle, a base64 blob, a `curl` of a binary) exits immediately and is returned whole — 4× the
+  16 KiB per-answer cap the module documents as "a per-ANSWER contract with the model's context
+  window". Correct: when no line boundary is left to drop at, cut mid-line on a UTF-8 boundary keeping
+  the most recent bytes, and mark the cut so it never reads as complete output. **Fix in flight** in
+  the working tree (uncommitted).
+
+- [ ] **major** · `apps/web/src/lib/ai/machines/headless-session-run.ts:300` (at `acb3e680f`) · The
+  headless run hands the model every dispatched instruction TWICE · `dispatchHeadlessSessionTurn`
+  appends the dispatched message to the transcript, then `runClaimedTurn` calls `deps.loadHistory(target)`
+  — which re-reads that same row — and ALSO passes `message: input.message` to `generate()`. Every
+  `send_session` / `add_session.prompt` turn therefore sees its own instruction duplicated, and the
+  duplicate is the most recent context. Correct: exclude the just-appended message id from the history
+  read. **Fix in flight** in the working tree (uncommitted): `loadHistory(target, { excludeMessageId })`.
+
+- [ ] **major** · `apps/web/src/lib/ai/machines/headless-session-run-runtime.ts:166` (at `acb3e680f`) ·
+  `claimRun`'s pre-insert liveness check and its claim INSERT are not atomic, so a human stream that
+  registers between them is never yielded to · a client stream's row is keyed by its own `streamId`
+  and so never collides with `session-run:<id>`'s unique index — the dispatch wins a claim the human
+  already holds, and both drive the same conversation. Correct: after the claim row is visible,
+  re-read the conversation's streaming rows and back off if any foreign row is still beating (only the
+  dispatch side yields, so there is no livelock). **Fix in flight** in the working tree (uncommitted):
+  `isClaimContested`.
+
+- [ ] **nit** · `apps/web/src/stores/machine-workspace/workspace-reducer.ts:175-184` · Two stacked
+  docblocks on `projectStoredNodeScope`; the first ("Read-time projection of a STORED **pane** scope —
+  the whole Phase-1 migration") describes `projectStoredPaneScope`, which sits twenty lines below with
+  no doc of its own · the orphan misdescribes the function it precedes, and tooling attributes only
+  the second block. Correct: move the pane-scope block down onto `projectStoredPaneScope`.
+
+## Environment notes (not findings)
+
+- `packages/lib/src/services/machines/__tests__/machine-project-promotion.test.ts` failed twice early
+  in the review and then passed 18 consecutive runs. Cause: a **stale `packages/lib/dist`** being
+  rewritten by a concurrent `turbo` build — the compiled artifact predated the source under test.
+  `bun run build` in `packages/lib` resolves it. Worth knowing when a lib suite fails inexplicably in
+  a fresh worktree (see also the worktree-setup note in the team's env memo).
+- The working tree was being **actively edited by another process during this review** (clean at
+  session start; seven files modified by the end — precisely the four defects above). Findings are
+  therefore recorded against the committed HEAD `acb3e680f`; the in-flight fixes are noted per finding
+  and are **not yet verified or committed**.
+
+## What is good
+
+The post-review work holds up. Billing now records the provider/model `generate()` actually resolved
+rather than the defaults, with the defaults reachable only on a path where `usage` is absent too — so
+nothing is charged at the wrong rate. Both transcript reads pushed their role filters into SQL, which
+is the correct fix and for the stated reason (a post-LIMIT filter lets system/tool rows eat the limit
+and silently shorten context). The machine-root closure went from 1+N to two reads with the grouping
+done in memory and a no-per-project-reads test pinning it. Migration 0219 is careful in the two places
+that matter — `sandboxId IS NULL` means unpromoted (nothing to rescue) and a stamped `spriteTornDownAt`
+means already gone (re-enqueueing a reused name could kill a replacement VM) — and matches 0209's
+`SECURITY DEFINER` + pinned `search_path` precedent, including its no-snapshot convention. The
+promote route is session-only, CSRF-guarded, EDIT-level, and maps each refusal to an honest status
+(409 for the dirty tree the caller can fix, 503 for kill-switch/containment, 502 for provider
+failures). `resolveMachineNodeTarget` refuses upward addressing and refuses an ambiguous bare branch
+name rather than guessing, and the storage de-fan comments name the exact consequence of the join
+fanning out (a disk billed twice). No `any`; typecheck and lint clean.
+
+## Verdict
+
+**1 blocker / 3 majors / 1 nit — all NEW, all open at `acb3e680f`.** The twelve first-pass findings
+are confirmed fixed. The blocker (promotion destroying uncommitted work) and the three majors have
+uncommitted fixes in the working tree that were not present at the reviewed commit; they need to be
+committed and re-gated before this branch lands. The nit is cosmetic.

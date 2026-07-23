@@ -190,6 +190,24 @@ describe('scrollbackTail', () => {
     });
   });
 
+  it('given ONE newline-free line larger than the byte cap, should keep only its TAIL bytes — the cap binds even when there is no line boundary to drop at', () => {
+    // A command printing a giant single line (a minified bundle, a base64
+    // blob) must not inflate the answer to the ring's full 64 KiB: the cap is
+    // a per-ANSWER contract with the model's context window.
+    const session = sessionWithOutput('x'.repeat(40_000));
+    const tail = scrollbackTail(session, 5);
+    assert({
+      given: 'a single line wider than the byte cap',
+      should: 'return at most the cap, keeping the most recent bytes',
+      actual: {
+        withinCap: Buffer.byteLength(tail, 'utf8') <= MAX_SCROLLBACK_TAIL_BYTES,
+        keepsTheEnd: tail.endsWith('x'),
+        marked: tail.startsWith('…'),
+      },
+      expected: { withinCap: true, keepsTheEnd: true, marked: true },
+    });
+  });
+
   it('given a tail larger than the byte cap, should drop whole leading lines until it fits', () => {
     const session = sessionWithOutput(`${'x'.repeat(4000)}\r\n`.repeat(8));
     const tail = scrollbackTail(session, 500);

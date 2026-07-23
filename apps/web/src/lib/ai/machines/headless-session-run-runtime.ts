@@ -71,6 +71,7 @@ import { broadcastChatUserMessage, broadcastAiStreamStart, broadcastAiStreamComp
 import { STREAM_HEARTBEAT_STALE_MS } from '@/lib/ai/core/stream-liveness';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import { buildMachineBindingPrompt } from './machine-binding-prompt';
+import { isClaimContested } from './headless-session-run';
 import type {
   HeadlessClaimResult,
   HeadlessSessionRunDeps,
@@ -164,6 +165,22 @@ async function claimRun({
     .returning({ messageId: aiStreamSessions.messageId });
 
   if (!row) return { ok: false, reason: 'busy' };
+
+  // The pre-insert liveness check and the insert above are NOT one atomic
+  // step: a human stream that registered in between has its own streamId and
+  // sailed past our unique index. Now that OUR row is visible, re-read and
+  // yield to any fresh foreign stream (see isClaimContested — the human always
+  // wins, and only this side backs off, so there is no livelock).
+  const contenders = await db
+    .select({ streamId: aiStreamSessions.streamId, lastHeartbeatAt: aiStreamSessions.lastHeartbeatAt })
+    .from(aiStreamSessions)
+    .where(and(eq(aiStreamSessions.conversationId, target.conversationId), eq(aiStreamSessions.status, 'streaming')));
+  if (isClaimContested(contenders, claimId, STREAM_HEARTBEAT_STALE_MS, new Date())) {
+    // Nothing has run under the claim — delete the row outright rather than
+    // aborting it, so no released-claim residue is left on the conversation.
+    await db.delete(aiStreamSessions).where(eq(aiStreamSessions.messageId, messageId)).catch(() => {});
+    return { ok: false, reason: 'busy' };
+  }
 
   // A dispatched run can sit inside a single long tool call for minutes, so the
   // beat is a real timer — the same reason `stream-lifecycle.ts` refuses to ride
@@ -273,7 +290,10 @@ async function resolveTarget(identity: {
   };
 }
 
-async function loadHistory(target: HeadlessSessionTarget): Promise<HeadlessTranscriptMessage[]> {
+async function loadHistory(
+  target: HeadlessSessionTarget,
+  opts: { excludeMessageId: string },
+): Promise<HeadlessTranscriptMessage[]> {
   const rows = await db
     .select({ role: chatMessages.role, content: chatMessages.content })
     .from(chatMessages)
@@ -282,6 +302,9 @@ async function loadHistory(target: HeadlessSessionTarget): Promise<HeadlessTrans
         eq(chatMessages.pageId, target.machineId),
         eq(chatMessages.conversationId, target.conversationId),
         eq(chatMessages.isActive, true),
+        // The dispatched message itself — generate() carries it explicitly, so
+        // history returning it too would double every instruction.
+        ne(chatMessages.id, opts.excludeMessageId),
         // Placeholders for a generation still in flight carry no content — this
         // feeds a model's context, so they are excluded exactly as `ask_agent`
         // excludes them.
