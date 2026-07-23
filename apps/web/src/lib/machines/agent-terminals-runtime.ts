@@ -49,7 +49,7 @@ import type {
   AgentTerminalLiveSessions,
 } from '@pagespace/lib/services/machines/agent-terminals';
 import { promoteProject } from '@pagespace/lib/services/machines/machine-project-promotion';
-import { canAccessMachine, canViewMachine, getMachineHostForBranches } from './machine-branches-runtime';
+import { canAccessMachine, canViewMachine, getMachineHostForBranches, resolveRootMachineHandle } from './machine-branches-runtime';
 import { buildPromoteProjectDeps, resolveMachineActorContext } from './machine-projects-runtime';
 
 export { canAccessMachine, canViewMachine, isCodeExecutionEnabled };
@@ -205,15 +205,19 @@ function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
  * and make the answer trivially "nothing is running" anyway. A machine with no
  * live Sprite has no live PTY, which is the empty list — not an unknown.
  */
-function buildLiveSessions(actorUserId: string): AgentTerminalLiveSessions {
+function buildLiveSessions(): AgentTerminalLiveSessions {
   return {
     list: async (machineId) => {
       try {
-        const acquired = await buildMachineSandbox(actorUserId).acquire(machineId);
-        if (!acquired.ok) return null;
-        const host = await getMachineHostForBranches();
-        const handle = await host.attach({ machineId: acquired.sandboxId });
-        // No Sprite to attach to means nothing is running on it.
+        // `resolveRootMachineHandle`, NOT `acquire`: the acquire path goes
+        // through `getOrCreate`, which wakes a hibernating VM and re-provisions
+        // a destroyed one. Paying that to ask "is anything running?" would be
+        // absurd — and the answer for a machine we had to create is trivially
+        // "no". This resolver looks up a LIVE session id and attaches, or
+        // returns null when there is none.
+        const handle = await resolveRootMachineHandle(machineId);
+        // No live Sprite means no live PTY. That is an empty list, not an
+        // unknown — the caller must not fail closed on it.
         if (!handle) return [];
         return (await handle.listStreams()).map((session) => session.id);
       } catch {
@@ -228,7 +232,7 @@ export function buildSpawnAgentTerminalDeps(actorUserId: string): SpawnAgentTerm
   return {
     ...buildBaseDeps(),
     projectStore: buildProjectStoreLookup(),
-    liveSessions: buildLiveSessions(actorUserId),
+    liveSessions: buildLiveSessions(),
     now: () => new Date(),
     projectPromotion: {
       promote: async ({ machineId, projectName }) => {
