@@ -1555,13 +1555,6 @@
       "when": 1784825674996,
       "tag": "0221_swift_sway",
       "breakpoints": true
-    },
-    {
-      "idx": 222,
-      "version": "7",
-      "when": 1784828236950,
-      "tag": "0222_broken_skin",
-      "breakpoints": true
     }
   ]
 }
