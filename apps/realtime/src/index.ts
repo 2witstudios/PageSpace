@@ -849,15 +849,21 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
      * viewer's socket connect uses — learns to bail rather than start a PTY
      * (and write input into it) for a caller who already gave up and may retry.
      *
-     * `req`'s `'close'` fires whenever the underlying connection tears down,
-     * including a normal end-of-response — so it is only evidence of
-     * abandonment when the response was NOT already sent
-     * (`!res.writableEnded`); a request that finished cleanly must not be
-     * mistaken for one the caller walked away from.
+     * Listens on `res`, NOT `req`. `req` (`IncomingMessage`) fires `'close'`
+     * once its own body finishes being READ — for an ordinary POST that is
+     * moments after `readCappedBody`'s `'end'`, while the async handler is
+     * still doing real work (`resolveSandbox`, a liveness check) and the
+     * RESPONSE hasn't been written yet. Wiring this to `req` would flag every
+     * normal request as abandoned and silently break headless start outright.
+     * `res` (`ServerResponse`) `'close'` fires when the underlying CONNECTION
+     * tears down — which happens on an ordinary request too, but only once
+     * the response has actually been sent, which is exactly what
+     * `!res.writableEnded` distinguishes: a request that finished cleanly
+     * must not be mistaken for one the caller walked away from.
      */
     const trackRequestAbandonment = (): (() => boolean) => {
         let requestAbandoned = false;
-        req.on('close', () => {
+        res.on('close', () => {
             if (!res.writableEnded) requestAbandoned = true;
         });
         return () => requestAbandoned;

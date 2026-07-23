@@ -927,8 +927,21 @@ export async function ensureAgentTerminalSession(
   /** Bundled once — see `SessionEndDeps`. Every teardown-path call below threads this through instead of `billing` alone. */
   const sessionEndDeps: SessionEndDeps = { billing, persistColdTail };
 
+  // A session discovered here was found or created by SOMEONE ELSE — never
+  // awaited into existence by this call — but handing it back is still only
+  // safe if this caller is still there to receive it. A headless caller whose
+  // request already timed out (`abandoned()` true) must not be told "here is
+  // your session": `session-io.ts` would go on to WRITE into it, and a retry
+  // after that timeout would then run the same input twice — precisely the
+  // race `abandoned` exists to close. `'abandoned'` costs nothing extra for
+  // the socket path either: `connectFailureMessage` answers it with no
+  // message, the same silent no-op `establishConnection`'s own (now
+  // redundant, still harmless) abandonment check already produced.
   const alreadyLive = sessionMap.getByKey(sessionKey);
-  if (alreadyLive !== undefined) return { kind: 'existing', session: alreadyLive };
+  if (alreadyLive !== undefined) {
+    if (request.abandoned()) return { kind: 'failed', reason: 'abandoned' };
+    return { kind: 'existing', session: alreadyLive };
+  }
 
   // The cold path — slow (it resolves, and may wake, a Sprite), which makes it
   // exactly the window a double-mount's second connect lands in. Join a create
@@ -944,7 +957,13 @@ export async function ensureAgentTerminalSession(
     if (inFlight === undefined) break;
     await inFlight.catch(() => {});
     const created = sessionMap.getByKey(sessionKey);
-    if (created !== undefined) return { kind: 'existing', session: created };
+    if (created !== undefined) {
+      // Same reasoning as the `alreadyLive` check above — this join crossed a
+      // real await (`inFlight`), the one place abandonment could have newly
+      // become true since the caller last checked.
+      if (request.abandoned()) return { kind: 'failed', reason: 'abandoned' };
+      return { kind: 'existing', session: created };
+    }
     // That create failed and installed nothing — see if another is in flight,
     // otherwise fall through and create it ourselves.
   }

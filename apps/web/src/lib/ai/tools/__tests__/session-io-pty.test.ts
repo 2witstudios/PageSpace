@@ -221,6 +221,38 @@ describe('readPtySession', () => {
       expected: [{ machineId: 'm1', projectName: 'repo', branchName: 'feature', names: ['sh'], limit: 7, start: true, userId: 'u1' }],
     });
   });
+
+  // Issue #2205 + #2206 interaction: a row with a persisted cold tail already
+  // has a better answer than a fresh, empty PTY — starting one would bury it
+  // and bill a session nobody asked for.
+  it('given a row with a cold tail, should NOT ask the realtime tier to start a fresh PTY', async () => {
+    const { transport: fake, recorded } = transport({ read: liveRead() });
+    await createPtySessionIo(fake).read({
+      identity: IDENTITY,
+      actor: ACTOR,
+      limit: 7,
+      cold: { tail: 'final output\n', at: new Date('2026-01-01T00:00:00Z'), hasOutput: true },
+    });
+
+    assert({
+      given: 'a read of a row that already has a persisted cold tail',
+      should: 'omit start/userId entirely — restarting would strand the cold-tail answer',
+      actual: recorded.reads,
+      expected: [{ machineId: 'm1', projectName: 'repo', branchName: 'feature', names: ['sh'], limit: 7 }],
+    });
+  });
+
+  it('given a row with NO cold tail, should still ask to start — the genuinely never-run case', async () => {
+    const { transport: fake, recorded } = transport({ read: liveRead() });
+    await createPtySessionIo(fake).read({ identity: IDENTITY, actor: ACTOR, limit: 7, cold: undefined });
+
+    assert({
+      given: 'a read of a row with no cold-tail history at all',
+      should: 'still ask the realtime tier to start it — issue #2206 unchanged for this case',
+      actual: recorded.reads,
+      expected: [{ machineId: 'm1', projectName: 'repo', branchName: 'feature', names: ['sh'], limit: 7, start: true, userId: 'u1' }],
+    });
+  });
 });
 
 describe('planColdReadAnswer (pure — issue #2205)', () => {

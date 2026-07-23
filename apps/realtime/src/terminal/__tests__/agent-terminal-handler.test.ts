@@ -2773,6 +2773,31 @@ describe('ensureAgentTerminalSession — headless start', () => {
     });
   });
 
+  it('given a session already live under this key but the caller has ABANDONED, should refuse rather than hand it back', async () => {
+    // A timed-out `send_session` retried by its caller must not be told "here
+    // is your session" for one it will go on to WRITE into — that is exactly
+    // the double-execution race the abandonment plumbing exists to close, and
+    // this is the ONE path `alreadyLive` skips straight past without ever
+    // reaching the create's own `abandoned()` check.
+    const access = makeAuthSuccess();
+    await ensureAgentTerminalSession(
+      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      headlessRequest(access),
+    );
+
+    const result = await ensureAgentTerminalSession(
+      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      { ...headlessRequest(makeAuthSuccess()), abandoned: () => true },
+    );
+
+    assert({
+      given: 'a caller who abandoned the request before an already-live session was found',
+      should: 'refuse rather than hand back a session it will go on to use',
+      actual: result,
+      expected: { kind: 'failed', reason: 'abandoned' },
+    });
+  });
+
   it('given two headless starts racing the same key, should open exactly one PTY', async () => {
     // Two `send_session` calls landing together on a reserved shell. Without the
     // per-key create claim both would open a PTY against the SAME persisted Sprite
@@ -2798,6 +2823,37 @@ describe('ensureAgentTerminalSession — headless start', () => {
         opened: openShell.mock.calls.length,
       },
       expected: { kinds: ['created', 'existing'], opened: 1 },
+    });
+  });
+
+  it('given a racing start joins a winner but the caller has ABANDONED by then, should refuse rather than hand it back', async () => {
+    // Same hazard as the alreadyLive case, on the OTHER path that can return
+    // 'existing': joining a create already in flight. The `await inFlight` is
+    // exactly the kind of real suspension point abandonment can newly become
+    // true across.
+    const gate = deferred<void>();
+    const access = makeAuthSuccess();
+    access.resolveSandbox = vi.fn(async () => {
+      await gate.promise;
+      return (await makeAuthSuccess().resolveSandbox()) as unknown as Awaited<ReturnType<typeof access.resolveSandbox>>;
+    }) as unknown as typeof access.resolveSandbox;
+
+    const deps = { sessionMap, openShell, checkAuth, persistStreamSessionId };
+    let loserAbandoned = false;
+    const winner = ensureAgentTerminalSession(deps, headlessRequest(access));
+    const loser = ensureAgentTerminalSession(deps, {
+      ...headlessRequest(makeAuthSuccess()),
+      abandoned: () => loserAbandoned,
+    });
+    loserAbandoned = true;
+    gate.resolve();
+    const results = await Promise.all([winner, loser]);
+
+    assert({
+      given: 'a racing start that joined the winner only after its own caller had abandoned',
+      should: 'refuse the join rather than hand back a session it will go on to use',
+      actual: results[1],
+      expected: { kind: 'failed', reason: 'abandoned' },
     });
   });
 

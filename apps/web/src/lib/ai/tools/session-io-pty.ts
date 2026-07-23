@@ -240,9 +240,14 @@ export function createPtySessionIo(transport: RealtimeSessionIoTransport): {
         limit: limit ?? DEFAULT_TAIL_LINES,
         // Reading a shell that has never run STARTS it (issue #2206): a reader
         // has no other way to get one going, and "it starts when a human opens
-        // it" is not an answer an agent can act on.
-        start: true,
-        userId: actor.userId,
+        // it" is not an answer an agent can act on. BUT only when there is no
+        // COLD tail to fall back on (issue #2205): a `cold` record means this
+        // row already ran and ended, so a start here would boot a fresh, EMPTY
+        // PTY (billing a new session) and bury the very answer — the final
+        // scrollback — `planColdReadAnswer` exists to serve. A row with no
+        // cold record at all is the genuinely reserved/never-run case #2206
+        // targets, so that one still starts.
+        ...(cold === undefined ? { start: true as const, userId: actor.userId } : {}),
       });
 
       const entry = answer?.success ? answer.sessions.find((session) => session.name === name) : undefined;

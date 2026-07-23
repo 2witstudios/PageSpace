@@ -359,16 +359,25 @@ function createMockReq(overrides: Partial<{
 }
 
 function createMockRes() {
+  const listeners: Record<string, ((chunk?: unknown) => void)[]> = {};
   const res = {
     writeHead: vi.fn(),
     // Real `http.ServerResponse#writableEnded` flips true the instant `end()`
     // is called — `trackRequestAbandonment` (index.ts) reads it to tell a
-    // late `req` 'close' (ordinary connection teardown after a completed
+    // late `res` 'close' (ordinary connection teardown after a completed
     // response) apart from an early one (the client walked away first).
     writableEnded: false,
     end: vi.fn(function (this: { writableEnded: boolean }) {
       this.writableEnded = true;
     }),
+    on: vi.fn((event: string, cb: (chunk?: unknown) => void) => {
+      listeners[event] = listeners[event] || [];
+      listeners[event].push(cb);
+    }),
+    _listeners: listeners,
+    _emit: (event: string, data?: unknown) => {
+      (listeners[event] || []).forEach(cb => cb(data));
+    },
   };
   return res;
 }
@@ -828,8 +837,8 @@ describe('requestListener - /api/session-read', () => {
     req._emit('data', Buffer.from(body));
     req._emit('end');
 
-    expect(req._listeners['close']).toBeDefined();
-    expect(req._listeners['close']!.length).toBeGreaterThan(0);
+    expect(res._listeners['close']).toBeDefined();
+    expect(res._listeners['close']!.length).toBeGreaterThan(0);
   });
 
   it('given the client disconnects only AFTER the response was already sent, should not be flagged abandoned', async () => {
@@ -846,7 +855,7 @@ describe('requestListener - /api/session-read', () => {
     // Ordinary connection teardown once the answer is already on the wire —
     // must not be mistaken for the caller having walked away mid-request.
     expect(res.writableEnded).toBe(true);
-    expect(() => req._emit('close')).not.toThrow();
+    expect(() => res._emit('close')).not.toThrow();
   });
 
   it('given the client disconnects BEFORE the response was sent, should still answer safely once processing finishes', async () => {
@@ -863,7 +872,7 @@ describe('requestListener - /api/session-read', () => {
     // has been written yet, which is what makes this the abandoned case
     // rather than ordinary post-response teardown.
     expect(res.writableEnded).toBe(false);
-    req._emit('close');
+    res._emit('close');
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
@@ -917,8 +926,8 @@ describe('requestListener - /api/session-input', () => {
     req._emit('data', Buffer.from(body));
     req._emit('end');
 
-    expect(req._listeners['close']).toBeDefined();
-    expect(req._listeners['close']!.length).toBeGreaterThan(0);
+    expect(res._listeners['close']).toBeDefined();
+    expect(res._listeners['close']!.length).toBeGreaterThan(0);
   });
 
   it('given the client disconnects only AFTER the response was already sent, should not be flagged abandoned', async () => {
@@ -933,7 +942,7 @@ describe('requestListener - /api/session-input', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(res.writableEnded).toBe(true);
-    expect(() => req._emit('close')).not.toThrow();
+    expect(() => res._emit('close')).not.toThrow();
   });
 
   it('given the client disconnects BEFORE the response was sent, should still answer safely once processing finishes', async () => {
@@ -947,7 +956,7 @@ describe('requestListener - /api/session-input', () => {
     req._emit('end');
 
     expect(res.writableEnded).toBe(false);
-    req._emit('close');
+    res._emit('close');
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
