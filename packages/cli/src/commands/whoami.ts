@@ -212,24 +212,31 @@ export function createWhoamiHandler(deps: WhoamiHandlerDeps): CommandHandler {
 
       // Concurrent, not sequential: neither call feeds the other, and this is
       // an interactive status command — serializing them would double its
-      // latency for no gain.
-      const [identityResult, probeResult] = await Promise.allSettled([
+      // latency for no gain. Each carries its own failure, so neither can fail
+      // the other.
+      const [resolvedIdentity, probe] = await Promise.all([
+        // Nothing to ask for an `mcp_*` key — `/api/auth/me` refuses it by
+        // design (see `auth/probe-drives.ts`). Any other token is tried, and a
+        // server that won't speak for it simply yields null.
         isScopedKeyToken(secret)
-          ? Promise.reject(new Error('mcp_* tokens are not identity-bearing'))
-          : deps.confirmIdentity({ host, accessToken: secret }),
-        deps.probeDriveCount({ host, accessToken: secret }),
+          ? Promise.resolve(null)
+          : deps.confirmIdentity({ host, accessToken: secret }).catch(() => null),
+        deps
+          .probeDriveCount({ host, accessToken: secret })
+          .then((count) => ({ ok: true as const, count }))
+          .catch((error: unknown) => ({ ok: false as const, error })),
       ]);
 
-      identity = identityResult.status === 'fulfilled' ? identityResult.value : null;
+      identity = resolvedIdentity;
 
-      if (probeResult.status === 'fulfilled') {
-        driveCount = probeResult.value;
+      if (probe.ok) {
+        driveCount = probe.count;
       } else if (identity === null) {
         // A rejected probe is only fatal when nothing else vouched for the
         // credential: an OAuth access token that `/api/auth/me` already
         // answered for is live regardless of whether its scope reaches drives.
         ctx.stderr.write(
-          `The credential resolved for ${host} (${sourceLabel}) was rejected: ${messageOf(probeResult.reason)}\n` +
+          `The credential resolved for ${host} (${sourceLabel}) was rejected: ${messageOf(probe.error)}\n` +
             'Re-mint it with "pagespace keys create" (or "pagespace keys" for the guided wizard).\n',
         );
         return EXIT_RUNTIME_ERROR;
