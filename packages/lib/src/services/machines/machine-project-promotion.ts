@@ -62,11 +62,36 @@ export { PROJECT_REPO_PATH };
 const PROMOTION_RACE_POLLS = 3;
 const PROMOTION_RACE_POLL_MS = 250;
 
+/**
+ * Where a carry bundle is staged on BOTH Sprites.
+ *
+ * The Sprite user's persistent home, deliberately OUTSIDE `SANDBOX_ROOT` — the
+ * same rule `GH_CONFIG_DIR` follows (`git-tool-runners.ts`): a stray file under
+ * `/workspace` makes the root non-empty and breaks a no-path `git clone`.
+ */
+const CARRY_BUNDLE_DIR = '/home/sprite';
+/** The ref namespace the bundle is fetched into on the project Sprite, and the fallback branch name for a detached HEAD. */
+const CARRY_REF_NAMESPACE = 'pagespace-carry';
+const CARRY_COMMIT_MESSAGE = 'pagespace: carried working tree during project promotion';
+
+/**
+ * Hard cap on a carry bundle, because the transfer reads the WHOLE file into
+ * this process's memory (`readFileToBuffer` → `writeFiles`). Without it, one
+ * project with a large history is an OOM of the web server, not a failed
+ * promotion. Refusing over the cap is recoverable — the user can push and
+ * promote without a carry — so the cap is the safe side.
+ */
+export const MAX_CARRY_BUNDLE_BYTES = 64 * 1024 * 1024;
+
 export type PromoteProjectDenialReason =
   | 'kill_switch_off'
   | 'project_not_found'
   /** The machine-side checkout has uncommitted work — promoting would destroy it. */
   | 'dirty_checkout'
+  /** `carryDirty` was asked for and the carry could not be completed (issue #2207). */
+  | 'carry_failed'
+  /** The carry bundle exceeds `MAX_CARRY_BUNDLE_BYTES` — see that constant. */
+  | 'carry_too_large'
   /**
    * The machine-side checkout is CLEAN but holds commits that exist nowhere
    * else. A fresh clone from `repoUrl` cannot reproduce them. (Issue #2204
@@ -165,6 +190,13 @@ export type PromoteProjectResult =
       promoted: boolean;
       /** `true` when the Sprite already existed (an already-promoted project, or a race we lost). */
       resumed: boolean;
+      /**
+       * `true` when work was CARRIED from the machine checkout onto this Sprite
+       * (issue #2207). The carried working-tree changes land as UNCOMMITTED
+       * changes, but the staged/unstaged split is not preserved — everything
+       * comes back unstaged.
+       */
+      carried: boolean;
     }
   | { ok: false; reason: PromoteProjectDenialReason | FullEgressDenialReason; detail?: string };
 
@@ -229,7 +261,7 @@ function buildGitDepsForMachine(machineId: string, deps: PromoteProjectDeps): Gi
   };
 }
 
-type CheckoutState =
+export type CheckoutState =
   /** Nothing to lose — the machine-side checkout is gone (or was never cloned). */
   | { kind: 'absent' }
   | { kind: 'clean' }
@@ -311,6 +343,116 @@ export function classifyCheckoutStatus(stdout: string): CheckoutState {
 }
 
 /**
+ * The LOCAL branch name from a porcelain branch header, or `null` when the
+ * checkout has none (detached HEAD, or output we cannot read). Pure.
+ *
+ * The carry needs a NAME because `git bundle` can only carry refs and the far
+ * side has to check something out. A detached HEAD has none, which is why
+ * `buildCarryPlan` answers that case by MAKING one rather than failing.
+ */
+export function parseCheckoutBranchName(stdout: string): string | null {
+  const branchLine = stdout.split('\n').find((line) => line.startsWith('## '));
+  if (!branchLine) return null;
+  const header = branchLine.slice(3).trim();
+  if (header.startsWith('HEAD (no branch)')) return null;
+  // A repo with no commits yet: `## No commits yet on main`. The branch exists
+  // (it is just unborn), and the carry commit is what gives it a tip.
+  const unborn = 'No commits yet on ';
+  const named = header.startsWith(unborn) ? header.slice(unborn.length) : header;
+  // A branch name can contain neither a space nor `...` (git forbids both), so
+  // cutting at the first of each leaves exactly the local name — and, unlike a
+  // pattern, cannot backtrack on a hostile name (see `classifyCheckoutStatus`).
+  const local = named.split(' ')[0].split('...')[0];
+  return local.length > 0 ? local : null;
+}
+
+/**
+ * Is this checkout state one a carry could rescue? (Pure.)
+ *
+ * `unknown` is deliberately NOT carryable, and that is the whole fail-closed
+ * argument restated: we could not read the checkout, so we cannot bundle it
+ * either — carrying would mean promoting on the PROMISE that the work came
+ * across, which is exactly the silent loss the refusal exists to prevent.
+ */
+export function isCarryableState(state: CheckoutState): boolean {
+  return state.kind === 'dirty' || state.kind === 'unpushed';
+}
+
+/** The ordered decisions a carry makes, derived from the checkout state alone. */
+export interface CarryPlan {
+  /** Dirty tree ⇒ everything becomes one commit first. A clean-but-unpushed tree has nothing to commit. */
+  needsCommit: boolean;
+  /** Detached HEAD ⇒ mint `pagespace-carry` so `bundle --all` has a ref to carry. */
+  needsBranchCreate: boolean;
+  /** Undo the carry commit on the FAR side, so the work reappears as uncommitted changes. Exactly `needsCommit`. */
+  needsReset: boolean;
+  branch: string;
+  bundlePath: string;
+  fetchRefspec: string;
+  checkoutTarget: string;
+}
+
+export function buildCarryPlan({
+  state,
+  branchName,
+  projectId,
+}: {
+  state: CheckoutState;
+  branchName: string | null;
+  projectId: string;
+}): CarryPlan {
+  const needsCommit = state.kind === 'dirty';
+  const branch = branchName ?? CARRY_REF_NAMESPACE;
+  // The id is ours (a database key), but it reaches a filesystem path, so it is
+  // reduced to a tame filename rather than trusted — a path component that
+  // escapes would stage the bundle somewhere nobody expects.
+  const safeId = projectId.replace(/[^A-Za-z0-9_-]/g, '');
+  return {
+    needsCommit,
+    needsBranchCreate: branchName === null,
+    needsReset: needsCommit,
+    branch,
+    bundlePath: `${CARRY_BUNDLE_DIR}/${CARRY_REF_NAMESPACE}-${safeId}.bundle`,
+    fetchRefspec: `+refs/heads/*:refs/remotes/${CARRY_REF_NAMESPACE}/*`,
+    checkoutTarget: `${CARRY_REF_NAMESPACE}/${branch}`,
+  };
+}
+
+/** `stat -c %s` output → byte count, or `null` when it is not a plain integer (the caller then fails closed). Pure. */
+export function parseFileSizeBytes(stdout: string): number | null {
+  const text = stdout.trim();
+  if (!/^\d+$/.test(text)) return null;
+  return Number(text);
+}
+
+/**
+ * May the old checkout be reclaimed after a CARRY? (Pure.)
+ *
+ * The ordinary reclaim gate demands a fresh `clean`, which a carried checkout
+ * can never be: we committed the work, so the tree is clean but one commit
+ * ahead — `unpushed`. Left at that, every carried promotion would leak its old
+ * checkout, billed on the machine AND on the new Sprite forever.
+ *
+ * So the question becomes "is this tree still EXACTLY what we bundled": no
+ * working-tree changes, and HEAD at the very commit we made. Anything else —
+ * new edits, a HEAD someone moved, a sha we could not read — skips the `rm`,
+ * because leftover bytes are an annoyance and deleted work is not.
+ */
+export function isReclaimableAfterCarry({
+  recheckKind,
+  headSha,
+  carrySha,
+}: {
+  recheckKind: CheckoutState['kind'];
+  headSha: string | null;
+  carrySha: string | null;
+}): boolean {
+  if (recheckKind !== 'clean' && recheckKind !== 'unpushed') return false;
+  if (headSha === null || carrySha === null) return false;
+  return headSha === carrySha;
+}
+
+/**
  * Inspect the project's OLD home on the machine Sprite. Promotion is only safe
  * when this returns `absent` or `clean`.
  *
@@ -363,6 +505,205 @@ async function inspectMachineCheckout({
   if (status.exitCode !== 0) return { kind: 'unknown', detail: status.stderr || status.stdout };
 
   return classifyCheckoutStatus(status.stdout);
+}
+
+/** Acquire + reconnect the OWNING Machine's Sprite, or `null` when either step fails. */
+async function openMachineSandbox(machineId: string, deps: PromoteProjectDeps): Promise<ExecutableSandbox | null> {
+  const acquired = await deps.acquireMachineSandbox(machineId);
+  if (!acquired.ok) return null;
+  return deps.reconnect(acquired.sandboxId);
+}
+
+/** The machine checkout's current HEAD sha, or `null` when it cannot be read (the reclaim guard then refuses). */
+async function readMachineHeadSha({
+  machineId,
+  project,
+  actor,
+  deps,
+}: {
+  machineId: string;
+  project: MachineProjectRecord;
+  actor: MachineActorContext;
+  deps: PromoteProjectDeps;
+}): Promise<string | null> {
+  const head = await runGitInSandbox({
+    cmd: 'git',
+    args: ['rev-parse', 'HEAD'],
+    cwd: project.path,
+    ctx: buildActorCtx(`${machineId}:${project.name}`, actor),
+    deps: buildGitDepsForMachine(machineId, deps),
+  });
+  if (!head.success || head.exitCode !== 0) return null;
+  const sha = head.stdout.trim();
+  return sha.length > 0 ? sha : null;
+}
+
+type CarryOutcome =
+  | { ok: true; carrySha: string | null }
+  | { ok: false; reason: 'carry_failed' | 'carry_too_large'; detail: string };
+
+/**
+ * Carry the machine-side work onto the freshly-cloned project Sprite (issue
+ * #2207) — the migration path out of the dirty/unpushed refusals.
+ *
+ * A GIT BUNDLE, moved as BYTES, is the mechanism, and both halves of that are
+ * load-bearing:
+ *
+ *  • A bundle is a self-contained pack of REFS, so one mechanism carries both
+ *    kinds of loss — uncommitted work (committed here first, un-committed again
+ *    on the far side) and commits that never reached the remote.
+ *  • It travels through `readFileToBuffer` → `writeFiles`, NOT through command
+ *    stdout. Everything `runGitInSandbox` returns is screened for injection and
+ *    truncated at `SANDBOX_MAX_OUTPUT_BYTES`; a patch that came back that way
+ *    would apply SILENTLY CORRUPTED, which is the same data loss the refusal
+ *    exists to prevent, wearing a success message.
+ *
+ * Runs AFTER the clone (it needs a repo to fetch into) and BEFORE the CAS, so a
+ * failure is still a promotion that never happened: the caller kills the Sprite
+ * and the machine checkout keeps everything (at worst plus a recoverable carry
+ * commit).
+ */
+async function carryCheckoutToProjectSprite({
+  machineId,
+  project,
+  projectName,
+  state,
+  actor,
+  handle,
+  deps,
+}: {
+  machineId: string;
+  project: MachineProjectRecord;
+  projectName: string;
+  state: CheckoutState;
+  actor: MachineActorContext;
+  handle: MachineHandle;
+  deps: PromoteProjectDeps;
+}): Promise<CarryOutcome> {
+  const ctx = buildActorCtx(`${machineId}:${projectName}`, actor);
+  const machineGit = buildGitDepsForMachine(machineId, deps);
+  const projectGit = buildGitDepsForHandle(handle, deps);
+
+  const runOnMachine = (args: string[]) =>
+    runGitInSandbox({ cmd: 'git', args, cwd: project.path, ctx, deps: machineGit });
+  const runOnProject = (args: string[]) =>
+    runGitInSandbox({ cmd: 'git', args, cwd: PROJECT_REPO_PATH, ctx, deps: projectGit });
+
+  const failed = (step: string, result: Awaited<ReturnType<typeof runOnMachine>>): CarryOutcome => ({
+    ok: false,
+    reason: 'carry_failed',
+    detail: `${step} failed: ${result.success ? result.stderr || result.stdout : (result.error ?? 'no detail')}`,
+  });
+
+  const branchStatus = await runOnMachine(['status', '--porcelain', '-b']);
+  if (!branchStatus.success || branchStatus.exitCode !== 0) return failed('reading the checkout branch', branchStatus);
+  const plan = buildCarryPlan({
+    state,
+    branchName: parseCheckoutBranchName(branchStatus.stdout),
+    projectId: project.id,
+  });
+
+  if (plan.needsCommit) {
+    const staged = await runOnMachine(['add', '-A']);
+    if (!staged.success || staged.exitCode !== 0) return failed('staging the working tree', staged);
+    // Identity supplied per-invocation: a Sprite has no configured committer,
+    // and `--no-verify` because a repo's own hooks are not ours to run on a
+    // commit the user did not ask for.
+    const committed = await runOnMachine([
+      '-c',
+      `user.email=${actor.actorEmail}`,
+      '-c',
+      'user.name=PageSpace Carry',
+      'commit',
+      '--no-verify',
+      '-m',
+      CARRY_COMMIT_MESSAGE,
+    ]);
+    if (!committed.success || committed.exitCode !== 0) return failed('committing the working tree', committed);
+  }
+
+  if (plan.needsBranchCreate) {
+    const branched = await runOnMachine(['branch', '-f', plan.branch, 'HEAD']);
+    if (!branched.success || branched.exitCode !== 0) return failed('naming the detached HEAD', branched);
+  }
+
+  // Read AFTER the carry commit: this sha is what licenses the post-promotion
+  // reclaim (`isReclaimableAfterCarry`).
+  const carrySha = await readMachineHeadSha({ machineId, project, actor, deps });
+
+  const bundled = await runOnMachine(['bundle', 'create', plan.bundlePath, '--all']);
+  if (!bundled.success || bundled.exitCode !== 0) return failed('bundling the checkout', bundled);
+
+  const machineSandbox = await openMachineSandbox(machineId, deps);
+  if (!machineSandbox) {
+    return { ok: false, reason: 'carry_failed', detail: 'the machine sandbox became unreachable mid-carry' };
+  }
+
+  // Size BEFORE the read — the read is what would OOM.
+  let bytes: number | null;
+  try {
+    const sized = await machineSandbox.runCommand({
+      cmd: 'stat',
+      args: ['-c', '%s', plan.bundlePath],
+      timeoutMs: SANDBOX_TIMEOUT_MS,
+      maxBytes: SANDBOX_MAX_OUTPUT_BYTES,
+    });
+    bytes = sized.exitCode === 0 ? parseFileSizeBytes(sized.stdout) : null;
+  } catch (error) {
+    bytes = null;
+    void error;
+  }
+  if (bytes === null) {
+    return { ok: false, reason: 'carry_failed', detail: `could not measure the carry bundle at ${plan.bundlePath}` };
+  }
+  if (bytes > MAX_CARRY_BUNDLE_BYTES) {
+    return {
+      ok: false,
+      reason: 'carry_too_large',
+      detail:
+        `The work to carry is ${bytes} bytes, over the ${MAX_CARRY_BUNDLE_BYTES}-byte carry limit. Push the ` +
+        `branch (git -C ${project.path} push) and promote without a carry instead.`,
+    };
+  }
+
+  let bundle: Buffer | null;
+  try {
+    bundle = await machineSandbox.readFileToBuffer({ path: plan.bundlePath });
+  } catch (error) {
+    return { ok: false, reason: 'carry_failed', detail: error instanceof Error ? error.message : String(error) };
+  }
+  if (!bundle) return { ok: false, reason: 'carry_failed', detail: 'the carry bundle could not be read back' };
+
+  try {
+    await handle.writeFiles([{ path: plan.bundlePath, content: new Uint8Array(bundle) }]);
+  } catch (error) {
+    return { ok: false, reason: 'carry_failed', detail: error instanceof Error ? error.message : String(error) };
+  }
+
+  const fetched = await runOnProject(['fetch', plan.bundlePath, plan.fetchRefspec]);
+  if (!fetched.success || fetched.exitCode !== 0) return failed('fetching the carried refs', fetched);
+
+  const checkedOut = await runOnProject(['checkout', '-B', plan.branch, plan.checkoutTarget]);
+  if (!checkedOut.success || checkedOut.exitCode !== 0) return failed('checking out the carried branch', checkedOut);
+
+  if (plan.needsReset) {
+    // `--mixed`, so the carry commit dissolves back into the working tree:
+    // modified files return modified-but-unstaged, and files that were
+    // untracked return untracked. The staged/unstaged split is the one thing
+    // not preserved — everything comes back unstaged.
+    const reset = await runOnProject(['reset', '--mixed', 'HEAD~1']);
+    if (!reset.success || reset.exitCode !== 0) return failed('restoring the carried working tree', reset);
+  }
+
+  // Best-effort cleanup of the staged bundle on both sides: it is a duplicate of
+  // work that now lives in a repo, and neither copy is worth failing a completed
+  // carry over.
+  await Promise.allSettled([
+    machineSandbox.runCommand({ cmd: 'rm', args: ['-f', plan.bundlePath], timeoutMs: SANDBOX_TIMEOUT_MS, maxBytes: SANDBOX_MAX_OUTPUT_BYTES }),
+    handle.exec({ cmd: 'rm', args: ['-f', plan.bundlePath], timeoutMs: SANDBOX_TIMEOUT_MS, maxBytes: SANDBOX_MAX_OUTPUT_BYTES }),
+  ]);
+
+  return { ok: true, carrySha };
 }
 
 /**
@@ -465,7 +806,7 @@ async function reconcilePromotionCollision({
       row.sandboxId === handle.machineId &&
       (row.spriteInstanceId ?? null) === (handle.spriteInstanceId ?? null);
     if (!isPersistedInstance) await safeKillSprite(deps.host, handle);
-    return { ok: true, sandboxId: row.sandboxId, sessionKey: row.sessionKey, promoted: false, resumed: true };
+    return { ok: true, sandboxId: row.sandboxId, sessionKey: row.sessionKey, promoted: false, resumed: true, carried: false };
   }
   // Nobody actually won (the row vanished, or the CAS failed for a reason other
   // than a competing promotion) — our Sprite is unrecorded, so it can only be
@@ -519,11 +860,19 @@ export async function promoteProject({
   machineId,
   projectName: requestedProjectName,
   actor,
+  carryDirty = false,
   deps,
 }: {
   machineId: string;
   projectName: string;
   actor: MachineActorContext;
+  /**
+   * Opt in to CARRYING the machine-side work across instead of refusing
+   * (issue #2207). Off by default, and exposed only on the explicit operator
+   * route — a project-scoped SPAWN must never silently relocate someone's
+   * uncommitted work as a side effect of starting a terminal.
+   */
+  carryDirty?: boolean;
   deps: PromoteProjectDeps;
 }): Promise<PromoteProjectResult> {
   if (!deps.isEnabled()) return { ok: false, reason: 'kill_switch_off' };
@@ -540,7 +889,7 @@ export async function promoteProject({
       // reason `spawnBranch` re-copies on every reattach).
       await propagateClaudeCredential({ machineId, branchHandle: handle, resolveRootMachineHandle: deps.resolveRootMachineHandle });
       noteProjectStorage(deps.measureProjectStorage, { machineProjectId: project.id, machinePageId: machineId, handle });
-      return { ok: true, sandboxId: handle.machineId, sessionKey: project.sessionKey, promoted: false, resumed: true };
+      return { ok: true, sandboxId: handle.machineId, sessionKey: project.sessionKey, promoted: false, resumed: true, carried: false };
     }
     // Vanished — fall through and re-provision under the SAME session key.
   }
@@ -550,24 +899,30 @@ export async function promoteProject({
   // provisioned for a promotion we are about to refuse would have to be cleaned
   // up on a path that has no reason to exist.
   const checkout = await inspectMachineCheckout({ machineId, project, actor, deps });
-  if (checkout.kind === 'dirty') {
+  // `carryDirty` moves the work instead of refusing it (issue #2207) — but only
+  // for the two states we can actually READ and bundle. `unknown` still refuses
+  // below: carrying what we could not inspect would promote on a promise.
+  const carrying = carryDirty && isCarryableState(checkout);
+  if (checkout.kind === 'dirty' && !carrying) {
     return {
       ok: false,
       reason: 'dirty_checkout',
       detail:
         `The checkout at ${project.path} has uncommitted changes, and promoting this project would ` +
         `replace it with a fresh clone on its own sandbox — losing that work. Commit or discard the ` +
-        `changes (git -C ${project.path} status) and retry.\n${checkout.detail}`,
+        `changes (git -C ${project.path} status) and retry, or promote with carryDirty to bring the ` +
+        `work across.\n${checkout.detail}`,
     };
   }
-  if (checkout.kind === 'unpushed') {
+  if (checkout.kind === 'unpushed' && !carrying) {
     return {
       ok: false,
       reason: 'unpushed_commits',
       detail:
         `The checkout at ${project.path} holds commits that are not on the remote, and promoting this ` +
         `project would replace it with a fresh clone of ${project.repoUrl} — losing them. Push the ` +
-        `branch (git -C ${project.path} push) and retry.\n${checkout.detail}`,
+        `branch (git -C ${project.path} push) and retry, or promote with carryDirty to bring the ` +
+        `commits across.\n${checkout.detail}`,
     };
   }
   if (checkout.kind === 'unknown') {
@@ -606,7 +961,7 @@ export async function promoteProject({
     // exists"). Reconcile before treating this as a failure.
     const row = await deps.store.findById(project.id);
     if (row?.sandboxId === handle.machineId && row.sessionKey) {
-      return { ok: true, sandboxId: row.sandboxId, sessionKey: row.sessionKey, promoted: false, resumed: true };
+      return { ok: true, sandboxId: row.sandboxId, sessionKey: row.sessionKey, promoted: false, resumed: true, carried: false };
     }
     const detail = clone.success ? clone.stderr || clone.stdout : clone.error;
     // The winner may not have PERSISTED yet — provision is name-keyed, so the
@@ -641,10 +996,31 @@ export async function promoteProject({
       ? await awaitPromotionWinner(project.id, deps)
       : null;
     if (winner?.sandboxId && winner.sessionKey) {
-      return { ok: true, sandboxId: winner.sandboxId, sessionKey: winner.sessionKey, promoted: false, resumed: true };
+      return { ok: true, sandboxId: winner.sandboxId, sessionKey: winner.sessionKey, promoted: false, resumed: true, carried: false };
     }
     await safeKillSprite(deps.host, handle);
     return { ok: false, reason: 'clone_failed', detail };
+  }
+
+  // The carry sits between the clone (which it needs) and the CAS (which it must
+  // precede): until the row points here, a failed carry is a promotion that
+  // never happened, and the only cleanup owed is the Sprite.
+  let carrySha: string | null = null;
+  if (carrying) {
+    const carried = await carryCheckoutToProjectSprite({
+      machineId,
+      project,
+      projectName,
+      state: checkout,
+      actor,
+      handle,
+      deps,
+    });
+    if (!carried.ok) {
+      await safeKillSprite(deps.host, handle);
+      return { ok: false, reason: carried.reason, detail: carried.detail };
+    }
+    carrySha = carried.carrySha;
   }
 
   let persisted: boolean;
@@ -677,15 +1053,26 @@ export async function promoteProject({
   // redundant one and kill it. Everything below is best-effort follow-up work
   // on a promotion that has already succeeded.
   await propagateClaudeCredential({ machineId, branchHandle: handle, resolveRootMachineHandle: deps.resolveRootMachineHandle });
-  if (checkout.kind === 'clean') {
+  if (checkout.kind === 'clean' || carrying) {
     // Re-inspected IMMEDIATELY before the rm: the gate above ran before the
     // slow provision+clone, and a terminal or tool may have written into the
     // old checkout in that window. Anything but a fresh `clean` skips the
     // reclaim — a leftover directory is an annoyance; deleting work someone
     // just wrote is a loss. (The window between this recheck and the rm is
     // milliseconds; the one it closes was the whole clone.)
+    //
+    // A CARRIED checkout can never come back `clean` — we committed the work
+    // there, so it is clean-but-one-ahead — hence its own predicate, which asks
+    // the equivalent question: is this still exactly the tree we bundled?
     const recheck = await inspectMachineCheckout({ machineId, project, actor, deps });
-    if (recheck.kind === 'clean') {
+    const reclaimable = carrying
+      ? isReclaimableAfterCarry({
+          recheckKind: recheck.kind,
+          headSha: await readMachineHeadSha({ machineId, project, actor, deps }),
+          carrySha,
+        })
+      : recheck.kind === 'clean';
+    if (reclaimable) {
       const reclaimed = await reclaimMachineCheckout(machineId, project.path, deps);
       // The ROOT just got smaller, and its last persisted measurement still
       // includes the bytes we removed. Until some unrelated root operation
@@ -701,5 +1088,5 @@ export async function promoteProject({
   // footprint — the one moment its bytes are guaranteed non-trivial.
   noteProjectStorage(deps.measureProjectStorage, { machineProjectId: project.id, machinePageId: machineId, handle });
 
-  return { ok: true, sandboxId: handle.machineId, sessionKey, promoted: true, resumed: false };
+  return { ok: true, sandboxId: handle.machineId, sessionKey, promoted: true, resumed: false, carried: carrying };
 }
