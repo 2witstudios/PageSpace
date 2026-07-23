@@ -677,6 +677,11 @@
       "import": "./dist/services/machines/machine-settings.js",
       "require": "./dist/services/machines/machine-settings.js"
     },
+    "./services/machines/machine-ref-sweep": {
+      "types": "./dist/services/machines/machine-ref-sweep.d.ts",
+      "import": "./dist/services/machines/machine-ref-sweep.js",
+      "require": "./dist/services/machines/machine-ref-sweep.js"
+    },
     "./services/machines/agent-terminal-types": {
       "types": "./dist/services/machines/agent-terminal-types.d.ts",
       "import": "./dist/services/machines/agent-terminal-types.js",
@@ -686,6 +691,11 @@
       "types": "./dist/services/machines/agent-terminals-store.d.ts",
       "import": "./dist/services/machines/agent-terminals-store.js",
       "require": "./dist/services/machines/agent-terminals-store.js"
+    },
+    "./services/machines/session-scrollback": {
+      "types": "./dist/services/machines/session-scrollback.d.ts",
+      "import": "./dist/services/machines/session-scrollback.js",
+      "require": "./dist/services/machines/session-scrollback.js"
     },
     "./services/machines/agent-terminals": {
       "types": "./dist/services/machines/agent-terminals.d.ts",
@@ -1943,11 +1953,17 @@
       "services/machines/machine-settings": [
         "./dist/services/machines/machine-settings.d.ts"
       ],
+      "services/machines/machine-ref-sweep": [
+        "./dist/services/machines/machine-ref-sweep.d.ts"
+      ],
       "services/machines/agent-terminal-types": [
         "./dist/services/machines/agent-terminal-types.d.ts"
       ],
       "services/machines/agent-terminals-store": [
         "./dist/services/machines/agent-terminals-store.d.ts"
+      ],
+      "services/machines/session-scrollback": [
+        "./dist/services/machines/session-scrollback.d.ts"
       ],
       "services/machines/agent-terminals": [
         "./dist/services/machines/agent-terminals.d.ts"

@@ -10,6 +10,7 @@ import {
   type AgentTerminalConnectPayload,
 } from './validation';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { scrollbackLines, capTailBytes } from '@pagespace/lib/services/machines/session-scrollback';
 
 /**
  * Realtime PTY bridge for a named, pluggable-agent-typed terminal at one of
@@ -168,6 +169,49 @@ export type SocketLike = {
   emit(event: string, payload?: unknown): void;
 };
 
+/** The args `persistColdTail` writes on teardown — see `planColdTailPersist`. */
+export type PersistColdTailArgs = {
+  agentTerminalId: string;
+  tail: string;
+  hasOutput: boolean;
+  endedAt: Date;
+};
+
+export type PersistColdTailFn = (args: PersistColdTailArgs) => Promise<void>;
+
+/**
+ * The teardown-time deps every session-ending helper needs, bundled into one
+ * object rather than a growing list of leading positionals (issue #2205 adds
+ * the second one). Both are optional -> the corresponding effect is skipped,
+ * exactly like `billing` alone was before this bundling.
+ */
+export type SessionEndDeps = {
+  billing?: SandboxBillingDeps;
+  persistColdTail?: PersistColdTailFn;
+};
+
+/**
+ * Pure: what to persist for this session's scrollback on teardown, or
+ * `undefined` when there is no row to persist onto (a session that somehow
+ * never carried an `agentTerminalId`). Keeping this decision — and the byte-cap
+ * composition — OUT of the effectful funnel is what makes it unit-testable
+ * without a fake store: same shared core `session-io.ts`'s live answer uses
+ * (`session-scrollback.ts`), applied to the WHOLE ring rather than a
+ * reader-chosen line count, since a cold read has no `limit` to honor yet.
+ */
+export function planColdTailPersist(
+  session: Pick<TerminalSession, 'agentTerminalId' | 'scrollback' | 'hasOutput'>,
+  endedAt: Date,
+): PersistColdTailArgs | undefined {
+  if (!session.agentTerminalId) return undefined;
+  return {
+    agentTerminalId: session.agentTerminalId,
+    tail: capTailBytes(scrollbackLines(session.scrollback)),
+    hasOutput: session.hasOutput,
+    endedAt,
+  };
+}
+
 export type AgentTerminalHandlerDeps = {
   sessionMap: TerminalSessionMap;
   openShell: OpenShellFn;
@@ -177,6 +221,15 @@ export type AgentTerminalHandlerDeps = {
   persistStreamSessionId: (args: { agentTerminalId: string; sessionId: string }) => Promise<void>;
   /** Terminal Epic 3 metering seam — see module doc. Omitted -> unmetered. */
   billing?: SandboxBillingDeps;
+  /**
+   * Best-effort: persists a bounded tail of this session's scrollback on
+   * teardown (issue #2205), so a `read_session` after the PTY has died can
+   * still answer with its final output rather than nothing. Called from the
+   * ONE teardown funnel (`endAgentTerminalSession`) every teardown path goes
+   * through — a failed write must never block cleanup, exactly like billing.
+   * Omitted -> no cold tail is ever persisted (today's behavior).
+   */
+  persistColdTail?: PersistColdTailFn;
   /**
    * Sprites Tasks API hold seam (leaf 5-1). Called once per COLD create with
    * the resolved Sprite; the controller it returns keeps a self-expiring
@@ -248,7 +301,7 @@ export function resolveAgentTerminalCommand({
  * billing failure must never block session cleanup.
  */
 function endAgentTerminalSession(
-  billing: SandboxBillingDeps | undefined,
+  deps: SessionEndDeps,
   sessionMap: TerminalSessionMap,
   session: TerminalSession,
   sessionKey: string,
@@ -288,15 +341,27 @@ function endAgentTerminalSession(
     session.taskHold.end();
     session.taskHold = undefined;
   }
-  if (billing && session.payerId && session.connectedAt !== undefined) {
+  if (deps.billing && session.payerId && session.connectedAt !== undefined) {
     const activeSeconds = Math.max(0, (Date.now() - session.connectedAt) / 1000);
-    void billing
+    void deps.billing
       .trackUsage({ payerId: session.payerId, holdId: session.holdId, activeSeconds, pageId: session.pageId })
       .catch((error) => {
         loggers.realtime.error('Agent terminal session billing settle failed', error instanceof Error ? error : new Error(String(error)), {
           sessionKey,
         });
       });
+  }
+  // Best-effort, fire-and-forget — exactly like the billing settle above: a
+  // failed cold-tail write must never block session cleanup. This is the ONE
+  // funnel every teardown path goes through, so it is the only site that needs
+  // to call this at all.
+  const coldTail = planColdTailPersist(session, new Date());
+  if (deps.persistColdTail && coldTail) {
+    void deps.persistColdTail(coldTail).catch((error) => {
+      loggers.realtime.error('Failed to persist agent terminal cold tail', error instanceof Error ? error : new Error(String(error)), {
+        sessionKey,
+      });
+    });
   }
 }
 
@@ -313,7 +378,7 @@ function endAgentTerminalSession(
  * reading this trigger off a log line should not conclude the user did it.
  */
 function teardownAgentTerminalSession(
-  billing: SandboxBillingDeps | undefined,
+  deps: SessionEndDeps,
   sessionMap: TerminalSessionMap,
   session: TerminalSession,
   sessionKey: string,
@@ -321,7 +386,7 @@ function teardownAgentTerminalSession(
 ): void {
   session.releaseSlot();
   session.command.kill('forced-teardown');
-  endAgentTerminalSession(billing, sessionMap, session, sessionKey);
+  endAgentTerminalSession(deps, sessionMap, session, sessionKey);
   broadcastClosed(session, exitCode);
   // Nothing may emit to those panes again. `deleteByKey` (inside
   // endAgentTerminalSession) already dropped every binding; clearing the
@@ -351,7 +416,7 @@ function teardownAgentTerminalSession(
  * does this (a fresh UUID per mount, and a dead pane refuses to re-bind).
  */
 function removeViewer(
-  billing: SandboxBillingDeps | undefined,
+  deps: SessionEndDeps,
   sessionMap: TerminalSessionMap,
   session: TerminalSession,
   viewerKey: string,
@@ -393,7 +458,7 @@ function removeViewer(
     // what actually reaches it — see `planTeardown`.
     session.command.kill('idle-reap');
     // Clears all of the session's timers (re-auth, settle heartbeat, idle).
-    endAgentTerminalSession(billing, sessionMap, session, sessionKey);
+    endAgentTerminalSession(deps, sessionMap, session, sessionKey);
     loggers.realtime.info('Agent terminal session reaped (idle)', { sessionKey, sandboxId: session.sandboxId });
   }, DETACHED_IDLE_MS);
 }
@@ -413,7 +478,7 @@ function removeViewer(
  * -2") for a process that did not exit.
  */
 function evictViewer(
-  billing: SandboxBillingDeps | undefined,
+  deps: SessionEndDeps,
   sessionMap: TerminalSessionMap,
   session: TerminalSession,
   viewerKey: string,
@@ -421,7 +486,7 @@ function evictViewer(
   reason: string,
 ): void {
   viewer.emitError(reason);
-  removeViewer(billing, sessionMap, session, viewerKey);
+  removeViewer(deps, sessionMap, session, viewerKey);
 }
 
 /**
@@ -556,6 +621,7 @@ function startSettleHeartbeat(
   sessionMap: TerminalSessionMap,
   session: TerminalSession,
   sessionKey: string,
+  persistColdTail: PersistColdTailFn | undefined,
 ): ReturnType<typeof setInterval> {
   let settling = false;
   const interval = setInterval(async () => {
@@ -575,7 +641,7 @@ function startSettleHeartbeat(
           sessionKey,
           sandboxId: session.sandboxId,
         });
-        teardownAgentTerminalSession(billing, sessionMap, session, sessionKey, -2);
+        teardownAgentTerminalSession({ billing, persistColdTail }, sessionMap, session, sessionKey, -2);
       }
     } finally {
       settling = false;
@@ -732,7 +798,11 @@ export function buildAgentTerminalHandlers({
   persistStreamSessionId,
   billing,
   createTaskHold,
+  persistColdTail,
 }: AgentTerminalHandlerDeps): AgentTerminalHandlers {
+  /** Bundled once per handler build — see `SessionEndDeps`. Every teardown-path call threads this through instead of `billing` alone. */
+  const sessionEndDeps: SessionEndDeps = { billing, persistColdTail };
+
   /**
    * Every connectionId this SOCKET currently has a live agent-terminal
    * session under. `buildAgentTerminalHandlers` is instantiated once per
@@ -821,7 +891,7 @@ export function buildAgentTerminalHandlers({
     // Removing the viewer's registry entry IS the silencing: nothing emits to
     // this pane again. Other viewers (and the detach transition, when this was
     // the last one) are `removeViewer`'s business.
-    removeViewer(billing, sessionMap, session, socketKey(connectionId));
+    removeViewer(sessionEndDeps, sessionMap, session, socketKey(connectionId));
   }
 
   /**
@@ -1095,6 +1165,7 @@ export function buildAgentTerminalHandlers({
         holdId,
         connectedAt,
         pageId: machineId,
+        agentTerminalId: sandbox.agentTerminalId,
         // The creator is viewer #1, registered in the literal — BEFORE
         // `openShell` — so output arriving between the shell opening and
         // `setNew` still reaches their pane (`onOutput` reads `viewers` live).
@@ -1182,7 +1253,7 @@ export function buildAgentTerminalHandlers({
             loggers.realtime.info('Agent terminal session closed', { exitCode, sandboxId, sessionKey });
             broadcastClosed(session, exitCode);
             // Clears all of the session's timers (re-auth, settle heartbeat, idle).
-            endAgentTerminalSession(billing, sessionMap, session, sessionKey);
+            endAgentTerminalSession(sessionEndDeps, sessionMap, session, sessionKey);
           },
           // A fresh Sprite session was created and announced its own id (on its
           // own socket — see `readSessionInfoId`): this terminal's first shell,
@@ -1237,7 +1308,7 @@ export function buildAgentTerminalHandlers({
       // of runtime, not the whole session. A gate DENIAL (payer out of credits)
       // tears the session down exactly like a failed re-auth below.
       if (billing) {
-        session.settleInterval = startSettleHeartbeat(billing, sessionMap, session, sessionKey);
+        session.settleInterval = startSettleHeartbeat(billing, sessionMap, session, sessionKey, persistColdTail);
       }
 
       // Periodically re-check authorization while the session is alive.
@@ -1328,7 +1399,7 @@ export function buildAgentTerminalHandlers({
             // Still the SAME viewer entry? It may have detached during the await —
             // and a same-key rejoin is a fresh object, checked next tick.
             if (liveSession.viewers.get(viewerKey) !== viewer) continue;
-            evictViewer(billing, sessionMap, liveSession, viewerKey, viewer, 'Machine access revoked');
+            evictViewer(sessionEndDeps, sessionMap, liveSession, viewerKey, viewer, 'Machine access revoked');
           }
 
           // Whole-session teardown ONLY with nobody watching: re-derived from
@@ -1342,7 +1413,7 @@ export function buildAgentTerminalHandlers({
           // checked this tick (and the revoked ones evicted) or they joined
           // mid-check and are checked next tick.
           if (liveSession.viewers.size === 0 && revoked.has(liveSession.lastViewerUserId)) {
-            teardownAgentTerminalSession(billing, sessionMap, liveSession, sessionKey, -2);
+            teardownAgentTerminalSession(sessionEndDeps, sessionMap, liveSession, sessionKey, -2);
           }
         } finally {
           reauthing = false;

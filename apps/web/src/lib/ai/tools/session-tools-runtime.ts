@@ -195,6 +195,9 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
         name: row.name,
         agentType: row.agentType,
         streamSessionId: row.streamSessionId,
+        coldTail: row.coldTail,
+        coldTailAt: row.coldTailAt,
+        coldTailHasOutput: row.coldTailHasOutput,
         updatedAt: row.updatedAt,
         streaming: streaming.has(row.id),
       }));
@@ -221,6 +224,9 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
         name: row.name,
         agentType: row.agentType,
         streamSessionId: row.streamSessionId,
+        coldTail: row.coldTail,
+        coldTailAt: row.coldTailAt,
+        coldTailHasOutput: row.coldTailHasOutput,
         updatedAt: row.updatedAt,
         streaming,
       };
