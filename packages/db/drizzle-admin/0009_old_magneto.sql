@@ -1,0 +1,1 @@
+ALTER TABLE "siem_delivery_cursors" ADD CONSTRAINT "siem_delivery_cursors_delivered_cursor_pair" CHECK (("siem_delivery_cursors"."lastDeliveredId" IS NULL) = ("siem_delivery_cursors"."lastDeliveredAt" IS NULL));

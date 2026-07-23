@@ -19,14 +19,14 @@
     "@pagespace/lib": "workspace:*",
     "@paralleldrive/cuid2": "^2.2.2",
     "@sentry/node": "^10.56.0",
-    "drizzle-orm": "^0.32.2",
+    "drizzle-orm": "^0.45.2",
     "fastify": "^5.3.3",
     "fastify-plugin": "^5.1.0",
     "postgres": "^3.4.5",
     "stripe": "^20.1.0"
   },
   "devDependencies": {
-    "drizzle-kit": "^0.23.2",
+    "drizzle-kit": "^0.31.10",
     "eslint": "^10.2.1",
     "tsx": "^4.16.2",
     "typescript": "^5.8.3",

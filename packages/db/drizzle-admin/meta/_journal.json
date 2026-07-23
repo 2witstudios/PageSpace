@@ -64,6 +64,13 @@
       "when": 1783689170084,
       "tag": "0008_revoke_app_chain_insert",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1784826780946,
+      "tag": "0009_old_magneto",
+      "breakpoints": true
     }
   ]
 }

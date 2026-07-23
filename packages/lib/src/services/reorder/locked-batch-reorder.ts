@@ -7,8 +7,16 @@ import type { ReorderPlan } from './compute-reorder-plan';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-export interface LockedBatchReorderOptions<T extends PgTable> {
-  table: T;
+export interface LockedBatchReorderOptions {
+  /**
+   * Deliberately typed as the non-generic `PgTable` rather than a `<T extends
+   * PgTable>` parameter: drizzle's `.from()` overload resolves a conditional
+   * type (`TableLikeHasEmptySelection`) against its argument, which an
+   * unresolved generic can't satisfy. Nothing here depends on the concrete
+   * table type — the projection is `{ id: idColumn }` and the write goes
+   * through raw SQL — so the generic bought no type safety anyway.
+   */
+  table: PgTable;
   idColumn: AnyPgColumn;
   positionColumn: AnyPgColumn;
   scopeWhere: SQL;
@@ -56,9 +64,9 @@ export interface LockedBatchReorderOptions<T extends PgTable> {
  * window between those N updates that let concurrent reorders interleave in
  * the first place.
  */
-export async function lockedBatchReorder<T extends PgTable>(
+export async function lockedBatchReorder(
   tx: Tx,
-  opts: LockedBatchReorderOptions<T>
+  opts: LockedBatchReorderOptions
 ): Promise<string[]> {
   const { table, idColumn, positionColumn, scopeWhere, plan, touchColumns = [] } = opts;
 

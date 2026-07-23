@@ -310,12 +310,12 @@
   "dependencies": {
     "@paralleldrive/cuid2": "^2.2.2",
     "dotenv": "^17.2.0",
-    "drizzle-orm": "^0.32.2",
+    "drizzle-orm": "^0.45.2",
     "pg": "^8.16.3"
   },
   "devDependencies": {
     "@types/pg": "^8.15.4",
-    "drizzle-kit": "^0.23.2",
+    "drizzle-kit": "^0.31.10",
     "eslint": "^9.36.0",
     "tsx": "^4.20.3",
     "typescript-eslint": "^8.59.0"
