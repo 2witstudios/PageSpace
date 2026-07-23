@@ -616,6 +616,19 @@ export async function promoteProject({
     // unreferenced Sprite, fail the same clone, and leave it billing forever.
     // So the message only buys a BOUNDED WAIT for the supposed winner to
     // persist; if the row never claims a Sprite, ours is unreferenced and dies.
+    //
+    // WHY KILLING IS THE SAFE SIDE OF THIS BET. The two mistakes are not
+    // symmetric, and not in the direction one might assume:
+    //
+    //  • Killing a Sprite a slow winner then CASes onto is RECOVERABLE. Their
+    //    row points at a dead instance, and the next promotion attempt attaches,
+    //    gets null, and re-provisions under the same deterministic session key
+    //    (the `Vanished — fall through` path above). The system self-heals.
+    //  • Leaving an unreferenced Sprite alive is PERMANENT. Nothing reclaims it:
+    //    `machine-orphan-reconcile` works from the delete outbox (which needs a
+    //    row to have existed and been deleted) and from rows stamped
+    //    `teardownRequestedAt` — a Sprite that was provisioned but never
+    //    persisted has neither, so no sweep will ever find it. It bills forever.
     const winner = isCloneBlockedByExistingCheckout(detail ?? '')
       ? await awaitPromotionWinner(project.id, deps)
       : null;
