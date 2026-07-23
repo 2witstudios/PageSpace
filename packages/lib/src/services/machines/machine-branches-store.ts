@@ -47,6 +47,54 @@ export interface NewMachineBranchInput {
   now: Date;
 }
 
+/**
+ * What recording a live replacement Sprite writes onto a `machine_branches` row
+ * (pure) — the branch-tier twin of `promotedProjectColumns`.
+ *
+ * IDENTITY. The new Sprite's name and WHICH VM it is, plus the voiding of both
+ * teardown marks: `spriteTornDownAt` (it is not torn down) and
+ * `teardownRequestedAt` (that request was against the PREVIOUS VM). Leaving the
+ * request set would let the reconciler destroy this live VM, and would turn a
+ * later REVERSIBLE trash of the restored Machine into an irreversible kill.
+ *
+ * ACCOUNTING. A new Sprite generation is a NEW ACCOUNTING PERIOD, and this is
+ * the tier where getting it wrong costs the most. A torn-down branch row is
+ * EXCLUDED from the storage reconcile (`listBranchSprites` filters
+ * `spriteTornDownAt IS NULL`), so its watermark freezes for the whole teardown.
+ * Reviving it without resetting that watermark makes the next reconcile bill
+ * `now - storageLastBilledAt` — the entire period the branch did not exist —
+ * at the DEAD generation's measured size. The measurement is dropped for the
+ * same reason it is on promotion: it described a filesystem that is gone.
+ *
+ * (Issue #2204 follow-up F11 covered the project tier only; this is the same
+ * defect in the branch tier, found by the machines-feature audit.)
+ */
+export function revivedBranchColumns(input: {
+  sandboxId: string;
+  spriteInstanceId: string | null;
+  now: Date;
+}): {
+  sandboxId: string;
+  spriteInstanceId: string | null;
+  spriteTornDownAt: null;
+  teardownRequestedAt: null;
+  storageLastBilledAt: Date;
+  storageMeasuredBytes: null;
+  storageMeasuredAt: null;
+  updatedAt: Date;
+} {
+  return {
+    sandboxId: input.sandboxId,
+    spriteInstanceId: input.spriteInstanceId,
+    spriteTornDownAt: null,
+    teardownRequestedAt: null,
+    storageLastBilledAt: input.now,
+    storageMeasuredBytes: null,
+    storageMeasuredAt: null,
+    updatedAt: input.now,
+  };
+}
+
 export interface MachineBranchStore {
   list(machineId: string, projectName: string): Promise<MachineBranchRecord[]>;
   /** Every branch of the machine in one read — the machine-root cascade derivation's query (see `MachinePaneBindingBranchLookup.listAll`). */
@@ -167,18 +215,7 @@ export async function createDbMachineBranchStore(): Promise<MachineBranchStore> 
     async updateSandboxId({ id, previousSandboxId, sandboxId, spriteInstanceId, now }) {
       const updated = await db
         .update(machineBranches)
-        .set({
-          sandboxId,
-          spriteInstanceId,
-          // This row points at a LIVE Sprite again, so BOTH teardown marks are void:
-          // `spriteTornDownAt` (it is not torn down) and `teardownRequestedAt` (the
-          // request was against the PREVIOUS VM). Leaving the request set would let
-          // the reconciler destroy this live VM — and would turn a later REVERSIBLE
-          // trash of the restored Machine into an irreversible kill.
-          spriteTornDownAt: null,
-          teardownRequestedAt: null,
-          updatedAt: now,
-        })
+        .set(revivedBranchColumns({ sandboxId, spriteInstanceId, now }))
         .where(and(eq(machineBranches.id, id), eq(machineBranches.sandboxId, previousSandboxId)))
         .returning({ id: machineBranches.id });
       return updated.length > 0;

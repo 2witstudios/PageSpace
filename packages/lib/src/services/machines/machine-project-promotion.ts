@@ -294,6 +294,14 @@ export function classifyCheckoutStatus(stdout: string): CheckoutState {
   if (ahead) {
     return { kind: 'unpushed', detail: `${ahead[1]} commit(s) not on the remote (${branch})` };
   }
+  // `[gone]` — the branch still NAMES an upstream, but that ref no longer
+  // exists on the remote (deleted after a merge, or a force-pruned fork). Git
+  // then reports no ahead/behind counts at all, so the `...` below would read
+  // this as tracked-and-in-sync when in fact NOTHING on the remote can
+  // reproduce this branch. That is the same loss as having no upstream at all.
+  if (/\bgone\b/.test(divergence)) {
+    return { kind: 'unpushed', detail: `the upstream branch no longer exists on the remote (${branch})` };
+  }
   // `## name...upstream` is the only shape that names a remote ref. Anything
   // else — `## name`, `## HEAD (no branch)` — has nothing to be reproduced from.
   if (!branch.includes('...')) {
