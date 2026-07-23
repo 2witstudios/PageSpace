@@ -68,11 +68,16 @@ interface GlobalConfigRow extends MachineRefHolder {
 const HOLDS_AN_EXISTING_REF = sql`@> '[{"kind":"existing"}]'::jsonb`;
 
 function holdsAnyOf(column: unknown, candidateMachineIds: readonly string[]) {
-  // The `jsonb_typeof` guard is not belt-and-braces: `jsonb_array_elements`
-  // RAISES on a non-array blob, so without it one malformed row would abort the
-  // whole listing. The containment form below is total for the same reason.
-  return sql`jsonb_typeof(${column}) = 'array' AND EXISTS (
-    SELECT 1 FROM jsonb_array_elements(${column}) AS elem
+  // `jsonb_array_elements` RAISES on a non-array blob, so a malformed row would
+  // abort the whole listing — and Postgres does NOT guarantee left-to-right `AND`
+  // evaluation, so a separate `jsonb_typeof(...) = 'array' AND EXISTS(...)`
+  // guard is not reliable: the planner may evaluate the EXISTS branch first. The
+  // guard is instead baked directly into `jsonb_array_elements`'s own argument
+  // via CASE, which Postgres must evaluate before the call can run.
+  return sql`EXISTS (
+    SELECT 1 FROM jsonb_array_elements(
+      CASE WHEN jsonb_typeof(${column}) = 'array' THEN ${column} ELSE '[]'::jsonb END
+    ) AS elem
     WHERE elem->>'kind' = 'existing' AND elem->>'machineId' = ANY(${[...candidateMachineIds]}::text[])
   )`;
 }
