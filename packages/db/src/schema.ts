@@ -1,7 +1,6 @@
 export * from './schema/auth';
 export * from './schema/sessions';
 export * from './schema/core';
-export * from './schema/permissions';
 export * from './schema/members';
 export * from './schema/chat';
 export * from './schema/dashboard';
@@ -63,7 +62,6 @@ export * from './schema/page-webhooks';
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
 import * as core from './schema/core';
-import * as permissions from './schema/permissions';
 import * as members from './schema/members';
 import * as chat from './schema/chat';
 import * as dashboard from './schema/dashboard';
@@ -126,7 +124,6 @@ export const schema = {
   ...auth,
   ...sessions,
   ...core,
-  ...permissions,
   ...members,
   ...chat,
   ...dashboard,
