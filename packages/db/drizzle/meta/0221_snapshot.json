@@ -1,6 +1,6 @@
 {
-  "id": "67b2f17d-4e82-47e3-b335-ecfd6c2c3403",
-  "prevId": "6b135b1d-0d3c-4b6b-b054-b4b80bd0c6ea",
+  "id": "e48c64f5-d194-4c71-8e22-fcce5b59c18c",
+  "prevId": "67b2f17d-4e82-47e3-b335-ecfd6c2c3403",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2793,133 +2793,6 @@
             "id"
           ],
           "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
-    },
-    "public.permissions": {
-      "name": "permissions",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "action": {
-          "name": "action",
-          "type": "PermissionAction",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "subjectType": {
-          "name": "subjectType",
-          "type": "SubjectType",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "subjectId": {
-          "name": "subjectId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "pageId": {
-          "name": "pageId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "permissions_page_id_idx": {
-          "name": "permissions_page_id_idx",
-          "columns": [
-            {
-              "expression": "pageId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "permissions_subject_id_subject_type_idx": {
-          "name": "permissions_subject_id_subject_type_idx",
-          "columns": [
-            {
-              "expression": "subjectId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "subjectType",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "permissions_page_id_subject_id_subject_type_idx": {
-          "name": "permissions_page_id_subject_id_subject_type_idx",
-          "columns": [
-            {
-              "expression": "pageId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "subjectId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "subjectType",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "permissions_pageId_pages_id_fk": {
-          "name": "permissions_pageId_pages_id_fk",
-          "tableFrom": "permissions",
-          "tableTo": "pages",
-          "columnsFrom": [
-            "pageId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
@@ -20466,23 +20339,6 @@
         "TASK_LIST",
         "CODE",
         "MACHINE"
-      ]
-    },
-    "public.PermissionAction": {
-      "name": "PermissionAction",
-      "schema": "public",
-      "values": [
-        "VIEW",
-        "EDIT",
-        "SHARE",
-        "DELETE"
-      ]
-    },
-    "public.SubjectType": {
-      "name": "SubjectType",
-      "schema": "public",
-      "values": [
-        "USER"
       ]
     },
     "public.MemberRole": {
