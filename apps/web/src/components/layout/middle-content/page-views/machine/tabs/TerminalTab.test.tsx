@@ -99,7 +99,7 @@ describe('TerminalTab', () => {
           count: Object.keys(machine.workspaces).length,
           activeScope: machine.workspaces[machine.activeWorkspaceId].scope,
         },
-        expected: { count: 1, activeScope: {} },
+        expected: { count: 1, activeScope: { level: 'machine' } },
       });
     });
   });

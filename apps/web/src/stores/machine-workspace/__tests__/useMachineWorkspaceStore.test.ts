@@ -8,6 +8,7 @@ import {
   selectChildSessionIds,
   selectRunningPaneCount,
   panesOf,
+  MACHINE_NODE_SCOPE,
   type WorkspaceState,
 } from '../useMachineWorkspaceStore';
 import { workspacesOf, sessionWorkspaceId, newWorkspace } from '../workspace-reducer';
@@ -25,8 +26,16 @@ const seedMachine = (machineId: string) => {
   return store().createWorkspace(machineId);
 };
 
+/** The wire half — how a checkout arrives from the server, and how a session
+ * address carries it. The client's own node scope is the discriminated
+ * {@link BRANCH_NODE}, re-derived from these names on read. */
 const BRANCH_SCOPE = { projectName: 'app', branchName: 'main' };
-const SESSION = { ...BRANCH_SCOPE, name: 'shell-a1b2c3' };
+const BRANCH_NODE = { level: 'branch', ...BRANCH_SCOPE } as const;
+/** A session opened at MACHINE scope — the node `seedMachine`'s workspaces sit
+ * at. It has to match: a pane's checkout IS its workspace's, so binding a
+ * branch-scoped session into a machine-scoped workspace is not a layout this
+ * model can express (see the bind-time assertion test below). */
+const SESSION = { name: 'shell-a1b2c3' };
 
 describe('useMachineWorkspaceStore', () => {
   beforeEach(() => {
@@ -191,7 +200,7 @@ describe('useMachineWorkspaceStore', () => {
         isOwnWorkspace: true,
         scope: SESSION,
         name: SESSION.name,
-        workspaceScope: BRANCH_SCOPE,
+        workspaceScope: MACHINE_NODE_SCOPE,
       },
     });
   });
@@ -323,7 +332,7 @@ describe('useMachineWorkspaceStore', () => {
   it('given a persisted machine whose active workspace is missing, should re-target the active id', () => {
     // What a bad rehydrate (or a future shape change) can leave behind: the key
     // exists, but the workspace it points at does not.
-    const workspace = { ...newWorkspace({ id: 'ws-real', name: 'W', scope: {}, firstPaneId: 'p1' }) };
+    const workspace = { ...newWorkspace({ id: 'ws-real', name: 'W', scope: MACHINE_NODE_SCOPE, firstPaneId: 'p1' }) };
     useMachineWorkspaceStore.setState({
       machines: { m1: { workspaces: { 'ws-real': workspace }, order: ['ws-real'], activeWorkspaceId: 'gone' } },
     });
@@ -425,7 +434,11 @@ describe('useMachineWorkspaceStore', () => {
       name: 'shell-a1b2c3',
       scope: BRANCH_SCOPE,
       columns: [
-        { id: 'c1', panes: [{ id: 'p1', scope: SESSION, pendingPrompt: 'stale prompt' }] },
+        // Stored WIDE, by a version of this app that duplicated the checkout
+        // onto every pane. Read-time projection is the whole migration: the
+        // checkout comes back off the workspace, so the pane keeps only its
+        // name (and, when tagged, its surface kind).
+        { id: 'c1', panes: [{ id: 'p1', scope: { ...BRANCH_SCOPE, ...SESSION }, pendingPrompt: 'stale prompt' }] },
         { id: 'c2', panes: [{ id: 'p2', scope: null }] },
       ],
       activePaneId: 'p1',
@@ -443,9 +456,9 @@ describe('useMachineWorkspaceStore', () => {
 
     const restored = activeOf('m1');
     assert({
-      given: 'a workspace restored from storage after a reload (its PTYs survive their reap window)',
+      given: 'a workspace restored from storage after a reload, its panes written in the WIDE pre-narrowing shape',
       should:
-        'come back with its panes intact so they reattach — but WITHOUT the transient bits: an undelivered prompt must never be typed at an agent that has been running since, and a picker must not steal the caret on load',
+        'come back with its panes intact so they reattach — PROJECTED to {name, kind} (the checkout is the workspace\'s, never a second copy per pane) and WITHOUT the transient bits: an undelivered prompt must never be typed at an agent that has been running since, and a picker must not steal the caret on load',
       actual: {
         panes: paneIds(restored).length,
         session: panesOf(restored!)[0].scope,
@@ -484,7 +497,7 @@ describe('useMachineWorkspaceStore', () => {
     // One session opened from the sidebar (its own workspace), one spawned into it.
     store().openTerminal('m1', SESSION);
     const sessionWorkspace = activeOf('m1')!;
-    const spawned = { ...BRANCH_SCOPE, name: 'shell-b2c3d4' };
+    const spawned = { name: 'shell-b2c3d4' };
     store().splitRight('m1', sessionWorkspace.id, sessionWorkspace.activePaneId);
     store().bindPaneTerminal(
       'm1',
@@ -598,6 +611,65 @@ describe('useMachineWorkspaceStore', () => {
     });
   });
 
+  // Migration is READ-TIME PROJECTION, not a backfill: a wide pane was
+  // representable but never written by any path that disagreed with its
+  // workspace, so there is nothing to reconcile — the duplicated checkout is
+  // simply dropped on the way in, from BOTH merge paths (this one and
+  // localStorage's `sanitizeMachines`, covered by the rehydrate test above).
+  it('given hydrateFromServer with a WIDE pane scope, should project it to {name, kind}', () => {
+    store().hydrateFromServer('m1', [
+      {
+        id: 'ws-1',
+        name: 'W',
+        scope: BRANCH_SCOPE,
+        columns: [
+          {
+            id: 'col-1',
+            panes: [{ id: 'pane-1', scope: { projectName: 'app', branchName: 'main', name: 'pagespace-a1', kind: 'chat' } }],
+          },
+        ],
+      },
+    ]);
+
+    assert({
+      given: 'a server layout whose pane still carries the pre-narrowing {projectName, branchName}',
+      should:
+        'keep only {name, kind} — the checkout is read back from the workspace, so storing it per pane is a second copy of one fact that could disagree with it',
+      actual: {
+        pane: panesOf(activeOf('m1')!)[0]?.scope,
+        checkout: activeOf('m1')?.scope,
+      },
+      expected: {
+        pane: { name: 'pagespace-a1', kind: 'chat' },
+        checkout: BRANCH_NODE,
+      },
+    });
+  });
+
+  // The bind-time assertion. A pane's checkout is its workspace's, so a bind
+  // naming a DIFFERENT node has no representation to fall back on — it is a
+  // caller bug (a spawn addressed at the wrong node), not a race, and swallowing
+  // it would silently file the session under a checkout it does not run in.
+  it('given a bind whose node differs from the workspace\'s, should reject it', () => {
+    store().hydrateFromServer('m1', [
+      { id: 'ws-1', name: 'W', scope: BRANCH_SCOPE, columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }] },
+    ]);
+
+    let rejected = false;
+    try {
+      store().bindPaneTerminal('m1', 'ws-1', 'pane-1', { projectName: 'other', name: 'shell-x' });
+    } catch {
+      rejected = true;
+    }
+
+    assert({
+      given: 'a session at project "other" bound into a workspace checked out at app/main',
+      should: 'reject the bind and leave the pane empty — foreign panes are unrepresentable, not merely discouraged',
+      actual: { rejected, pane: panesOf(selectWorkspace('m1', 'ws-1')(store())!)[0]?.scope },
+      expected: { rejected: true, pane: null },
+    });
+  });
+
   it('given applyServerUpsert for an unseen workspace id, should add it', () => {
     seedMachine('m1');
     const existing = activeOf('m1')!;
@@ -614,6 +686,118 @@ describe('useMachineWorkspaceStore', () => {
       should: "add it alongside this machine's existing workspace",
       actual: workspacesOf(selectMachine('m1')(store())).map((w) => w.id).sort(),
       expected: [existing.id, 'ws-from-elsewhere'].sort(),
+    });
+  });
+
+  // The monotone-merge invariant (spawn double-row field bug): a pane's scope
+  // only ever transitions null -> bound within its lifetime — no flow unbinds
+  // (closing REMOVES the pane) — so a server pane with a null scope landing on
+  // a same-id pane this browser already bound is always a STALE ECHO racing
+  // this browser's own push, never a legitimate state.
+  it('given a stale server echo with a null-scope pane, should keep the local pane\'s bind', () => {
+    store().hydrateFromServer('m1', [
+      { id: 'ws-1', name: 'W', scope: BRANCH_SCOPE, columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }] },
+    ]);
+    store().bindPaneTerminal('m1', 'ws-1', 'pane-1', { ...BRANCH_SCOPE, name: 'pagespace-x', kind: 'chat' });
+
+    // The empty `created` echo from the workspace's own POST, arriving late.
+    store().applyServerUpsert('m1', {
+      id: 'ws-1',
+      name: 'W',
+      scope: BRANCH_SCOPE,
+      columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }],
+    });
+
+    assert({
+      given: 'a bound pane hit by its workspace\'s own stale empty created-echo',
+      should:
+        'keep the bind — losing it is what showed one agent as an empty workspace plus an unclaimed row; the null->bound invariant is unchanged in shape on the narrow pane type',
+      actual: panesOf(selectWorkspace('m1', 'ws-1')(store())!)[0]?.scope,
+      expected: { name: 'pagespace-x', kind: 'chat' },
+    });
+  });
+
+  it('given a stale full-list hydrate with a null-scope pane, should keep the local bind too', () => {
+    store().hydrateFromServer('m1', [
+      { id: 'ws-1', name: 'W', scope: BRANCH_SCOPE, columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }] },
+    ]);
+    store().bindPaneTerminal('m1', 'ws-1', 'pane-1', { ...BRANCH_SCOPE, name: 'pagespace-x' });
+
+    // A second sync instance's full-replace from a GET that predates the bind
+    // PATCH (both merge paths funnel through the same mergeColumns).
+    store().hydrateFromServer('m1', [
+      { id: 'ws-1', name: 'W', scope: BRANCH_SCOPE, columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }] },
+    ]);
+
+    assert({
+      given: 'a stale hydrate racing this browser\'s own bind',
+      should: 'keep the local pane bound',
+      actual: panesOf(selectWorkspace('m1', 'ws-1')(store())!)[0]?.scope,
+      expected: { name: 'pagespace-x' },
+    });
+  });
+
+  it('given a server pane with a NON-null scope, should still let the server win', () => {
+    store().hydrateFromServer('m1', [
+      { id: 'ws-1', name: 'W', scope: BRANCH_SCOPE, columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }] },
+    ]);
+    store().bindPaneTerminal('m1', 'ws-1', 'pane-1', { ...BRANCH_SCOPE, name: 'pagespace-old' });
+
+    store().applyServerUpsert('m1', {
+      id: 'ws-1',
+      name: 'W',
+      scope: BRANCH_SCOPE,
+      columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: { ...BRANCH_SCOPE, name: 'pagespace-new', kind: 'chat' } }] }],
+    });
+
+    assert({
+      given: 'a server pane carrying a real (non-null) scope',
+      should: 'apply it — the guard is null-over-bound only, never a general local-wins rule — projected to the narrow shape like every other incoming pane',
+      actual: panesOf(selectWorkspace('m1', 'ws-1')(store())!)[0]?.scope,
+      expected: { name: 'pagespace-new', kind: 'chat' },
+    });
+  });
+
+  it('given a server payload dropping a bound pane and adding an empty one, should mirror the server layout', () => {
+    store().hydrateFromServer('m1', [
+      { id: 'ws-1', name: 'W', scope: BRANCH_SCOPE, columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }, { id: 'pane-2', scope: null }] }] },
+    ]);
+    store().bindPaneTerminal('m1', 'ws-1', 'pane-1', { ...BRANCH_SCOPE, name: 'pagespace-x' });
+
+    // pane-1 removed server-side (closed elsewhere); pane-2 still empty; pane-3 new and empty.
+    store().applyServerUpsert('m1', {
+      id: 'ws-1',
+      name: 'W',
+      scope: BRANCH_SCOPE,
+      columns: [{ id: 'col-1', panes: [{ id: 'pane-2', scope: null }, { id: 'pane-3', scope: null }] }],
+    });
+
+    assert({
+      given: 'a server layout that removed the bound pane and added a fresh empty one',
+      should: 'drop the removed pane (the guard must not resurrect closed panes), keep null-over-null null, and admit the new empty pane',
+      actual: panesOf(selectWorkspace('m1', 'ws-1')(store())!).map((pane) => ({ id: pane.id, scope: pane.scope })),
+      expected: [
+        { id: 'pane-2', scope: null },
+        { id: 'pane-3', scope: null },
+      ],
+    });
+  });
+
+  it('given openTerminal with a chat-kind scope, should carry the kind onto the materialized pane', () => {
+    store().ensureMachine('m1');
+    const scope = { ...BRANCH_SCOPE, name: 'pagespace-k1', kind: 'chat' as const };
+
+    store().openTerminal('m1', scope);
+
+    assert({
+      given: 'the instant-spawn path materializing a session\'s own workspace',
+      should:
+        'preserve scope.kind on the first pane — the pane grid renders MachinePaneChat from this tag — while the checkout lands on the WORKSPACE, not a second copy on the pane',
+      actual: {
+        pane: panesOf(selectWorkspace('m1', sessionWorkspaceId(scope))(store())!)[0]?.scope,
+        checkout: selectWorkspace('m1', sessionWorkspaceId(scope))(store())?.scope,
+      },
+      expected: { pane: { name: 'pagespace-k1', kind: 'chat' }, checkout: BRANCH_NODE },
     });
   });
 

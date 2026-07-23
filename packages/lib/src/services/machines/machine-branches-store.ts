@@ -49,6 +49,8 @@ export interface NewMachineBranchInput {
 
 export interface MachineBranchStore {
   list(machineId: string, projectName: string): Promise<MachineBranchRecord[]>;
+  /** Every branch of the machine in one read — the machine-root cascade derivation's query (see `MachinePaneBindingBranchLookup.listAll`). */
+  listForMachine(machineId: string): Promise<MachineBranchRecord[]>;
   findByName(machineId: string, projectName: string, branchName: string): Promise<MachineBranchRecord | null>;
   /** Level-agnostic lookup by the branch-terminal's own row id — no project/branch name path required (mirrors PurePoint's `Attach{agent_id}`). */
   findById(id: string): Promise<MachineBranchRecord | null>;
@@ -113,6 +115,14 @@ export async function createDbMachineBranchStore(): Promise<MachineBranchStore> 
         .select()
         .from(machineBranches)
         .where(and(eq(machineBranches.machineId, machineId), eq(machineBranches.projectName, projectName)));
+      return rows;
+    },
+
+    async listForMachine(machineId) {
+      const rows = await db
+        .select()
+        .from(machineBranches)
+        .where(eq(machineBranches.machineId, machineId));
       return rows;
     },
 

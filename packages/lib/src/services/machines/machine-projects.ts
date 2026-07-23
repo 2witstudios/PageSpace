@@ -122,6 +122,17 @@ export interface MachineProjectsDeps {
   buildEnv: () => Record<string, string>;
   audit: (input: CodeExecutionAuditInput) => Promise<void>;
   screenOutput?: (text: string) => Promise<string>;
+  /**
+   * Identity-guarded kill of a PROMOTED project's own Sprite (`MachineHost.kill`
+   * shape) — used by `removeProject` so deleting a promoted project stops its
+   * billing microVM immediately rather than leaving it to the reclaim outbox
+   * cron. Optional: absent (older wiring) means the DELETE trigger's outbox
+   * pointer is the only reclaim path, which is safe but slower.
+   */
+  killSprite?: (input: {
+    sandboxId: string;
+    spriteInstanceId: string | null;
+  }) => Promise<{ ok: boolean }>;
 }
 
 function buildGitRunDeps(machineId: string, deps: MachineProjectsDeps): GitSandboxRunDeps {
@@ -300,6 +311,24 @@ export async function removeProject({
   const name = normalizeProjectName(requestedName);
   const existing = await deps.store.findByName(machineId, name);
   if (!existing) return { ok: false, reason: 'not_found' };
+
+  // A PROMOTED project's Sprite is a real billing microVM, findable only via
+  // this row. Best-effort identity-guarded kill BEFORE the row goes away: on
+  // failure the delete still proceeds — the AFTER DELETE trigger copies the
+  // pointer into the reclaim outbox, and the orphan reconciler retries the
+  // kill forever — but waiting for a cron is a worse default than stopping the
+  // meter now. Skipped for a torn-down row: `sandboxId` is a NAME reused
+  // across re-creates, and re-killing it could destroy a replacement VM.
+  if (existing.sandboxId && !existing.spriteTornDownAt && deps.killSprite) {
+    try {
+      await deps.killSprite({
+        sandboxId: existing.sandboxId,
+        spriteInstanceId: existing.spriteInstanceId,
+      });
+    } catch {
+      // Best-effort; the delete trigger's outbox pointer covers this Sprite.
+    }
+  }
 
   // Best-effort filesystem cleanup of THIS ROW's own directory (its persisted
   // `path` — never a path re-derived from the name, which for pre-per-row-path

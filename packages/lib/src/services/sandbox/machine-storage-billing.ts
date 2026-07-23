@@ -9,10 +9,12 @@
  * Mirrors `machine-billing.ts`'s composition for active-runtime metering.
  */
 
-import { eq } from '@pagespace/db/operators';
+import { eq, and, isNull, isNotNull } from '@pagespace/db/operators';
 import { db, getAdvisoryLockPool } from '@pagespace/db/db';
 import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
 import { machineSessions } from '@pagespace/db/schema/machine-sessions';
+import { machineBranches } from '@pagespace/db/schema/machine-branches';
+import { machineProjects } from '@pagespace/db/schema/machine-projects';
 import { lookupPageOwnerId } from '../../billing/machine-payer';
 import { MACHINE_MARKUP_BPS } from '../../billing/credit-pricing';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
@@ -29,6 +31,7 @@ import {
   type ReconcileMachineStorageDeps,
   type ReconcileMachineStorageResult,
 } from './machine-storage-reconcile';
+import { storageSubjectKey, type StorageSubject } from './machine-storage-attribution';
 
 export const defaultReconcileMachineStorageDeps: ReconcileMachineStorageDeps = {
   async listMachines() {
@@ -44,6 +47,86 @@ export const defaultReconcileMachineStorageDeps: ReconcileMachineStorageDeps = {
     return rows;
   },
 
+  /**
+   * Every branch-terminal Sprite we still believe is LIVE. `spriteTornDownAt IS
+   * NOT NULL` rows are excluded, not billed at 0: their filesystem is gone, and
+   * the row survives only as re-creatable config (see the column's doc in
+   * `@pagespace/db/schema/machine-branches`) — metering a destroyed disk would
+   * bill for storage nobody holds.
+   *
+   * `lastActiveAt` is joined from the OWNING machine's session row because that
+   * is where branch runs record activity (`branch-session.ts` keys the guardrail
+   * and activity by `machineId`). It feeds ONLY the staleness health flag; a
+   * branch whose machine has no session row at all (never opened) falls back to
+   * the epoch — i.e. "not awake", the honest conservative reading.
+   */
+  async listBranchSprites() {
+    const rows = await db
+      .select({
+        machineBranchId: machineBranches.id,
+        machinePageId: machineBranches.machineId,
+        storageLastBilledAt: machineBranches.storageLastBilledAt,
+        measuredBytes: machineBranches.storageMeasuredBytes,
+        measuredAt: machineBranches.storageMeasuredAt,
+        lastActiveAt: machineSessions.lastActiveAt,
+      })
+      .from(machineBranches)
+      .leftJoin(machineSessions, eq(machineSessions.pageId, machineBranches.machineId))
+      .where(isNull(machineBranches.spriteTornDownAt));
+    // `machine_sessions.pageId` carries NO uniqueness guarantee (only
+    // `sessionKey` is unique), so the join can fan a branch out into one row
+    // per matching session — and a fanned-out row here is a branch disk
+    // BILLED TWICE by reconcile. One row per branch, freshest activity wins
+    // (the join only feeds the staleness flag).
+    const byBranch = new Map<string, (typeof rows)[number]>();
+    for (const row of rows) {
+      const kept = byBranch.get(row.machineBranchId);
+      if (!kept || (row.lastActiveAt ?? new Date(0)) > (kept.lastActiveAt ?? new Date(0))) {
+        byBranch.set(row.machineBranchId, row);
+      }
+    }
+    return [...byBranch.values()].map((row) => ({ ...row, lastActiveAt: row.lastActiveAt ?? new Date(0) }));
+  },
+
+  /**
+   * Every PROMOTED project Sprite we still believe is LIVE (issue #2204 phase
+   * 7): `sandboxId IS NOT NULL` (an unpromoted project has no Sprite of its own
+   * — its bytes are inside the machine Sprite's own measurement, already
+   * metered there, so metering it here would DOUBLE-bill the same disk) AND
+   * `spriteTornDownAt IS NULL` (a destroyed filesystem is excluded, not billed
+   * at 0 — the row survives only as re-creatable config).
+   *
+   * `lastActiveAt` is joined from the OWNING machine's session row for the same
+   * reason a branch's is: promoted-project runs record activity on the machine
+   * key (`project-session.ts`). It feeds ONLY the staleness health flag.
+   */
+  async listProjectSprites() {
+    const rows = await db
+      .select({
+        machineProjectId: machineProjects.id,
+        machinePageId: machineProjects.machineId,
+        storageLastBilledAt: machineProjects.storageLastBilledAt,
+        measuredBytes: machineProjects.storageMeasuredBytes,
+        measuredAt: machineProjects.storageMeasuredAt,
+        lastActiveAt: machineSessions.lastActiveAt,
+      })
+      .from(machineProjects)
+      .leftJoin(machineSessions, eq(machineSessions.pageId, machineProjects.machineId))
+      .where(and(isNotNull(machineProjects.sandboxId), isNull(machineProjects.spriteTornDownAt)));
+    // Identical de-fan as `listBranchSprites`: `machine_sessions.pageId` has no
+    // uniqueness guarantee, so the join can emit one row per matching session —
+    // and a fanned-out row here is a project disk BILLED TWICE. One row per
+    // project, freshest activity wins (the join only feeds the staleness flag).
+    const byProject = new Map<string, (typeof rows)[number]>();
+    for (const row of rows) {
+      const kept = byProject.get(row.machineProjectId);
+      if (!kept || (row.lastActiveAt ?? new Date(0)) > (kept.lastActiveAt ?? new Date(0))) {
+        byProject.set(row.machineProjectId, row);
+      }
+    }
+    return [...byProject.values()].map((row) => ({ ...row, lastActiveAt: row.lastActiveAt ?? new Date(0) }));
+  },
+
   lookupPageOwnerId,
 
   async chargeStorage({ payerId, pageId, costDollars, gbMonths }) {
@@ -52,8 +135,12 @@ export const defaultReconcileMachineStorageDeps: ReconcileMachineStorageDeps = {
       provider: 'sprites',
       model: 'terminal-machine-storage',
       source: 'terminal',
-      // The machine's identifying page — the usage-breakdown's per-machine view
-      // groups on this (see machine-billing.ts's trackUsage for the same field).
+      // The ATTRIBUTION page (machine-storage-attribution.ts): the machine's own
+      // identifying page, or — for a branch-terminal or promoted-project Sprite
+      // — its OWNING machine's. The usage-breakdown's per-machine view groups on
+      // this (see machine-billing.ts's trackUsage for the same field), so a
+      // branch's or promoted project's storage lands under the Terminal the user
+      // actually sees.
       pageId,
       providerCostDollars: costDollars,
       // Not a wall-clock duration (this is a background storage charge, not a
@@ -76,6 +163,27 @@ export const defaultReconcileMachineStorageDeps: ReconcileMachineStorageDeps = {
       .update(machineSessions)
       .set({ storageLastBilledAt: billedThrough })
       .where(eq(machineSessions.pageId, pageId));
+  },
+
+  // The branch Sprite's OWN watermark — on its `machine_branches` row, keyed by
+  // the branch row id, even though the charge it follows was attributed to the
+  // owning machine page. Two branches of one machine each bill their own window.
+  async advanceBranchWatermark({ machineBranchId, billedThrough }) {
+    await db
+      .update(machineBranches)
+      .set({ storageLastBilledAt: billedThrough })
+      .where(eq(machineBranches.id, machineBranchId));
+  },
+
+  // The promoted project Sprite's OWN watermark — on its `machine_projects`
+  // row, keyed by the project row id, even though the charge it follows was
+  // attributed to the owning machine page. A machine, its branches and its
+  // promoted projects each bill their own window.
+  async advanceProjectWatermark({ machineProjectId, billedThrough }) {
+    await db
+      .update(machineProjects)
+      .set({ storageLastBilledAt: billedThrough })
+      .where(eq(machineProjects.id, machineProjectId));
   },
 
   now: () => new Date(),
@@ -132,54 +240,77 @@ export async function reconcileMachineStorageSerialized(
 }
 
 /**
- * Persist an opportunistic storage measurement onto the machine's
- * `machine_sessions` row. Keyed by pageId — a no-op UPDATE if no row exists
- * for the page (nothing to bill against), so callers need not pre-check.
+ * Persist an opportunistic storage measurement onto the row of the Sprite that
+ * was actually measured — the machine's `machine_sessions` row, a branch
+ * terminal's `machine_branches` row, or a promoted project's `machine_projects`
+ * row. Writing a branch's or project's footprint onto its machine's row would
+ * clobber the machine's own measured bytes and over-bill it (the reason branch
+ * storage was attributed nowhere before phase 3), so the subject picks the
+ * table; only BILLING collapses all three onto the machine page. A no-op UPDATE
+ * if no such row exists, so callers need not pre-check.
  */
 export const persistStorageMeasurement: PersistStorageMeasurement = async ({
-  pageId,
+  subject,
   measuredBytes,
   measuredAt,
 }) => {
+  if (subject.kind === 'machine') {
+    await db
+      .update(machineSessions)
+      .set({ storageMeasuredBytes: measuredBytes, storageMeasuredAt: measuredAt })
+      .where(eq(machineSessions.pageId, subject.pageId));
+    return;
+  }
+  if (subject.kind === 'branch') {
+    await db
+      .update(machineBranches)
+      .set({ storageMeasuredBytes: measuredBytes, storageMeasuredAt: measuredAt })
+      .where(eq(machineBranches.id, subject.machineBranchId));
+    return;
+  }
   await db
-    .update(machineSessions)
+    .update(machineProjects)
     .set({ storageMeasuredBytes: measuredBytes, storageMeasuredAt: measuredAt })
-    .where(eq(machineSessions.pageId, pageId));
+    .where(eq(machineProjects.id, subject.machineProjectId));
 };
 
 /**
- * In-process per-page clock recording the last DEFINITIVE measurement outcome
+ * In-process per-SUBJECT clock recording the last DEFINITIVE measurement outcome
  * (a successful measure, an already-fresh row, or a confirmed no-billing-row).
  * The tool runner calls the helper below on EVERY bash/read/write/edit op, but a
- * machine only needs measuring once per throttle window — this lets the common
+ * sprite only needs measuring once per throttle window — this lets the common
  * case (within-window, after a definitive outcome) short-circuit BEFORE touching
  * the DB, so a 30-tool-call turn does one measurement attempt, not 30 wasted
  * `SELECT`s. It is a best-effort hint only: the authoritative throttle is the
  * PERSISTED `storageMeasuredAt` (survives restart, shared across instances).
  *
+ * Keyed by `storageSubjectKey`, NOT a bare id: a machine and one of its branch
+ * Sprites are two independent filesystems measured on their own windows, and the
+ * namespaced key keeps a branch row id from ever colliding with a page id.
+ *
  * Deliberately NOT stamped on a transient failure (unreachable sprite / failed
  * attach / failed exec) so continuous real work keeps retrying the measurement
  * within the window instead of being locked out until it elapses. Bounded to
  * {@link MEASURE_CACHE_MAX} entries with oldest-first eviction so a long-lived
- * process serving many ephemeral pageIds cannot leak memory.
+ * process serving many ephemeral subjects cannot leak memory.
  */
 const MEASURE_CACHE_MAX = 10_000;
 const lastMeasureAttemptAtMs = new Map<string, number>();
 
 /**
- * Pages with a measurement IN FLIGHT on this instance right now. The window
+ * Subjects with a measurement IN FLIGHT on this instance right now. The window
  * clock above is only stamped on a definitive OUTCOME (after the awaits), so it
- * cannot collapse a synchronous BURST — N parallel ops for the same page fired
+ * cannot collapse a synchronous BURST — N parallel ops for the same sprite fired
  * in one tick would all pass the window gate and each spawn a DB read + attach +
  * `du` walk. This set is added-to synchronously before the first await and
  * cleared in `finally`, so all-but-the-first concurrent call short-circuits.
  */
 const measurementInFlight = new Set<string>();
 
-function noteMeasureAttempt(pageId: string, nowMs: number): void {
+function noteMeasureAttempt(key: string, nowMs: number): void {
   // delete-then-set moves the key to the end so eviction is oldest-first (LRU-ish).
-  lastMeasureAttemptAtMs.delete(pageId);
-  lastMeasureAttemptAtMs.set(pageId, nowMs);
+  lastMeasureAttemptAtMs.delete(key);
+  lastMeasureAttemptAtMs.set(key, nowMs);
   if (lastMeasureAttemptAtMs.size > MEASURE_CACHE_MAX) {
     const oldest = lastMeasureAttemptAtMs.keys().next().value;
     if (oldest !== undefined) lastMeasureAttemptAtMs.delete(oldest);
@@ -193,13 +324,139 @@ export function __resetStorageMeasurementCachesForTests(): void {
 }
 
 /**
- * Opportunistically measure a machine's used storage bytes while it is ALREADY
- * awake for real work, throttled and fully non-fatal. Fast-paths on an
- * in-process per-page clock to avoid a DB read on every tool op; on a due page
- * it reads the persisted measurement time, measures via `du -sxB1`, and persists.
- * Never throws to the caller and never wakes a paused sprite — the handle is
- * already live because real work is happening on it. Skips silently when the
- * page has no `machine_sessions` row.
+ * Read the measurement bookkeeping for a subject from ITS OWN table. `found:
+ * false` is a DEFINITIVE "nothing to attribute a measurement to" — no billing
+ * row (machine), a branch whose Sprite is already torn down, or a project that
+ * is unpromoted or torn down (in each case there is no separate filesystem to
+ * measure, so a measurement of it would be meaningless or would mis-attribute
+ * the machine's own bytes).
+ */
+async function readMeasurementState(
+  subject: StorageSubject,
+): Promise<{ found: boolean; lastMeasuredAt: Date | null }> {
+  if (subject.kind === 'machine') {
+    const [row] = await db
+      .select({ storageMeasuredAt: machineSessions.storageMeasuredAt })
+      .from(machineSessions)
+      .where(eq(machineSessions.pageId, subject.pageId))
+      .limit(1);
+    return row ? { found: true, lastMeasuredAt: row.storageMeasuredAt ?? null } : { found: false, lastMeasuredAt: null };
+  }
+  if (subject.kind === 'branch') {
+    const [row] = await db
+      .select({
+        storageMeasuredAt: machineBranches.storageMeasuredAt,
+        spriteTornDownAt: machineBranches.spriteTornDownAt,
+      })
+      .from(machineBranches)
+      .where(eq(machineBranches.id, subject.machineBranchId))
+      .limit(1);
+    if (!row || row.spriteTornDownAt !== null) return { found: false, lastMeasuredAt: null };
+    return { found: true, lastMeasuredAt: row.storageMeasuredAt ?? null };
+  }
+  const [row] = await db
+    .select({
+      storageMeasuredAt: machineProjects.storageMeasuredAt,
+      sandboxId: machineProjects.sandboxId,
+      spriteTornDownAt: machineProjects.spriteTornDownAt,
+    })
+    .from(machineProjects)
+    .where(eq(machineProjects.id, subject.machineProjectId))
+    .limit(1);
+  // An UNPROMOTED project has no Sprite of its own — whatever handle the caller
+  // is holding is the MACHINE's, and recording its bytes here would both
+  // mis-attribute them and double-bill the machine's own row.
+  if (!row || !row.sandboxId || row.spriteTornDownAt !== null) return { found: false, lastMeasuredAt: null };
+  return { found: true, lastMeasuredAt: row.storageMeasuredAt ?? null };
+}
+
+/**
+ * Opportunistically measure a Sprite's used storage bytes while it is ALREADY
+ * awake for real work, throttled and fully non-fatal — the ONE core both the
+ * machine and branch entry points below share, so neither can drift onto its own
+ * throttle, dedup or persist rule. Fast-paths on an in-process per-subject clock
+ * to avoid a DB read on every tool op; on a due subject it reads the persisted
+ * measurement time, measures via `du -sxB1`, and persists to the subject's own
+ * row. Never throws to the caller and NEVER wakes a paused sprite — the handle is
+ * already live because real work is happening on it (a lazy `resolveHandle` is
+ * only ever called for a sprite the caller already holds/attached).
+ */
+async function measureStorageOpportunistically(input: {
+  subject: StorageSubject;
+  handle?: Pick<MachineHandle, 'exec'>;
+  resolveHandle?: () => Promise<Pick<MachineHandle, 'exec'> | null>;
+}): Promise<void> {
+  const key = storageSubjectKey(input.subject);
+  const nowMs = Date.now();
+  // Cheap in-process gate: skip entirely (no DB, no attach, no exec) if THIS
+  // instance reached a DEFINITIVE outcome for this subject within the window. NOT
+  // stamped yet — a transient failure below must leave the subject retryable.
+  const lastAttempt = lastMeasureAttemptAtMs.get(key);
+  if (lastAttempt !== undefined && nowMs - lastAttempt < STORAGE_MEASUREMENT_THROTTLE_MS) {
+    return;
+  }
+  // Synchronous concurrent-dedup: a burst of parallel ops for the same subject in
+  // one tick must collapse to a single measurement (the window clock above only
+  // stamps AFTER the awaits, so it can't dedup within a tick).
+  if (measurementInFlight.has(key)) return;
+  measurementInFlight.add(key);
+
+  try {
+    const state = await readMeasurementState(input.subject);
+    // Nothing to attribute the measurement to (no billing row / torn-down
+    // Sprite). Definitive: cache so we don't re-SELECT every op for it.
+    if (!state.found) {
+      noteMeasureAttempt(key, nowMs);
+      return;
+    }
+
+    // Authoritative (persisted) throttle: if another process/instance measured
+    // this subject within the window, skip BEFORE resolving the handle so a lazy
+    // caller with a cold in-process cache (e.g. a freshly-restarted realtime
+    // node) never pays a wasted network attach. refreshStorageMeasurement
+    // re-checks this too — this is purely to gate the attach. Definitive: cache.
+    if (
+      !shouldRefreshMeasurement({
+        lastMeasuredAt: state.lastMeasuredAt,
+        now: new Date(nowMs),
+        throttleMs: STORAGE_MEASUREMENT_THROTTLE_MS,
+      })
+    ) {
+      noteMeasureAttempt(key, nowMs);
+      return;
+    }
+
+    // Resolve the handle only now that we know a measurement is actually due,
+    // so a lazy caller's network attach is never paid on a throttled wake. A
+    // null handle is a TRANSIENT failure (sprite vanished / attach failed) — do
+    // NOT cache, so a later op this window retries.
+    const handle = input.handle ?? (input.resolveHandle ? await input.resolveHandle() : null);
+    if (!handle) return;
+
+    const result = await refreshStorageMeasurement({
+      handle,
+      subject: input.subject,
+      lastMeasuredAt: state.lastMeasuredAt,
+      now: new Date(nowMs),
+      persist: persistStorageMeasurement,
+    });
+    // Cache only on a successful measure. A failed/unparseable `du` (measured:
+    // false) is transient — leave the subject retryable within the window.
+    if (result.measured) noteMeasureAttempt(key, nowMs);
+  } catch (error) {
+    // Best-effort: a measurement failure must never break the real work that
+    // woke the sprite.
+    loggers.ai.warn('Opportunistic storage measurement failed', {
+      subject: key,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  } finally {
+    measurementInFlight.delete(key);
+  }
+}
+
+/**
+ * Measure a MACHINE's own Sprite (persists to its `machine_sessions` row).
  *
  * Provide the live `handle` directly when the caller already holds one (the
  * agent tool-runner), or a lazy `resolveHandle` when obtaining one costs a
@@ -214,74 +471,67 @@ export async function measureMachineStorageOpportunistically(input: {
   handle?: Pick<MachineHandle, 'exec'>;
   resolveHandle?: () => Promise<Pick<MachineHandle, 'exec'> | null>;
 }): Promise<void> {
-  const nowMs = Date.now();
-  // Cheap in-process gate: skip entirely (no DB, no attach, no exec) if THIS
-  // instance reached a DEFINITIVE outcome for this page within the window. NOT
-  // stamped yet — a transient failure below must leave the page retryable.
-  const lastAttempt = lastMeasureAttemptAtMs.get(input.pageId);
-  if (lastAttempt !== undefined && nowMs - lastAttempt < STORAGE_MEASUREMENT_THROTTLE_MS) {
-    return;
-  }
-  // Synchronous concurrent-dedup: a burst of parallel ops for the same page in
-  // one tick must collapse to a single measurement (the window clock above only
-  // stamps AFTER the awaits, so it can't dedup within a tick).
-  if (measurementInFlight.has(input.pageId)) return;
-  measurementInFlight.add(input.pageId);
+  await measureStorageOpportunistically({
+    subject: { kind: 'machine', pageId: input.pageId },
+    handle: input.handle,
+    resolveHandle: input.resolveHandle,
+  });
+}
 
-  try {
-    const [row] = await db
-      .select({ storageMeasuredAt: machineSessions.storageMeasuredAt })
-      .from(machineSessions)
-      .where(eq(machineSessions.pageId, input.pageId))
-      .limit(1);
-    // No billing row for this page → nothing to attribute the measurement to.
-    // Definitive: cache so we don't re-SELECT every op for a page we can't bill.
-    if (!row) {
-      noteMeasureAttempt(input.pageId, nowMs);
-      return;
-    }
+/**
+ * Measure a BRANCH-TERMINAL's own Sprite (persists to its `machine_branches`
+ * row; billed to the owning machine page by the reconcile — see
+ * machine-storage-attribution.ts).
+ *
+ * Wired at the branch wake paths that hold a live handle: `spawnBranch` (right
+ * after the clone that writes the bulk of a branch Sprite's footprint) and
+ * `attachBranch` (every reattach), both in
+ * `services/machines/machine-branches.ts`. Same never-wake rule as the machine
+ * entry point — it only ever measures a sprite the caller already has awake.
+ */
+export async function measureBranchStorageOpportunistically(input: {
+  machineBranchId: string;
+  machinePageId: string;
+  handle?: Pick<MachineHandle, 'exec'>;
+  resolveHandle?: () => Promise<Pick<MachineHandle, 'exec'> | null>;
+}): Promise<void> {
+  await measureStorageOpportunistically({
+    subject: {
+      kind: 'branch',
+      machineBranchId: input.machineBranchId,
+      machinePageId: input.machinePageId,
+    },
+    handle: input.handle,
+    resolveHandle: input.resolveHandle,
+  });
+}
 
-    // Authoritative (persisted) throttle: if another process/instance measured
-    // this page within the window, skip BEFORE resolving the handle so a lazy
-    // caller with a cold in-process cache (e.g. a freshly-restarted realtime
-    // node) never pays a wasted network attach. refreshStorageMeasurement
-    // re-checks this too — this is purely to gate the attach. Definitive: cache.
-    if (
-      !shouldRefreshMeasurement({
-        lastMeasuredAt: row.storageMeasuredAt ?? null,
-        now: new Date(nowMs),
-        throttleMs: STORAGE_MEASUREMENT_THROTTLE_MS,
-      })
-    ) {
-      noteMeasureAttempt(input.pageId, nowMs);
-      return;
-    }
-
-    // Resolve the handle only now that we know a measurement is actually due,
-    // so a lazy caller's network attach is never paid on a throttled wake. A
-    // null handle is a TRANSIENT failure (sprite vanished / attach failed) — do
-    // NOT cache, so a later op this window retries.
-    const handle = input.handle ?? (input.resolveHandle ? await input.resolveHandle() : null);
-    if (!handle) return;
-
-    const result = await refreshStorageMeasurement({
-      handle,
-      pageId: input.pageId,
-      lastMeasuredAt: row.storageMeasuredAt ?? null,
-      now: new Date(nowMs),
-      persist: persistStorageMeasurement,
-    });
-    // Cache only on a successful measure. A failed/unparseable `du` (measured:
-    // false) is transient — leave the page retryable within the window.
-    if (result.measured) noteMeasureAttempt(input.pageId, nowMs);
-  } catch (error) {
-    // Best-effort: a measurement failure must never break the real work that
-    // woke the sprite.
-    loggers.ai.warn('Opportunistic machine storage measurement failed', {
-      pageId: input.pageId,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  } finally {
-    measurementInFlight.delete(input.pageId);
-  }
+/**
+ * Measure a PROMOTED PROJECT's own Sprite (persists to its `machine_projects`
+ * row; billed to the owning machine page by the reconcile — see
+ * machine-storage-attribution.ts).
+ *
+ * Wired at the promotion wake paths that hold a live handle: `promoteProject`
+ * (right after the clone that writes the bulk of a project Sprite's footprint,
+ * and on every reattach of an already-promoted project), in
+ * `services/machines/machine-project-promotion.ts`. Same never-wake rule as the
+ * other two entry points — it only ever measures a Sprite the caller already
+ * has awake, and `readMeasurementState` refuses an unpromoted or torn-down row
+ * so a machine's own bytes can never be recorded here.
+ */
+export async function measureProjectStorageOpportunistically(input: {
+  machineProjectId: string;
+  machinePageId: string;
+  handle?: Pick<MachineHandle, 'exec'>;
+  resolveHandle?: () => Promise<Pick<MachineHandle, 'exec'> | null>;
+}): Promise<void> {
+  await measureStorageOpportunistically({
+    subject: {
+      kind: 'project',
+      machineProjectId: input.machineProjectId,
+      machinePageId: input.machinePageId,
+    },
+    handle: input.handle,
+    resolveHandle: input.resolveHandle,
+  });
 }

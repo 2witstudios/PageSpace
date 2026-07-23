@@ -8,6 +8,8 @@ import {
   STALE_MEASUREMENT_MS,
   type ReconcileMachineStorageDeps,
   type MachineStorageRow,
+  type BranchStorageRow,
+  type ProjectStorageRow,
 } from '../machine-storage-reconcile';
 
 describe('computeElapsedGbMonths', () => {
@@ -117,11 +119,17 @@ function makeDeps(over: Partial<ReconcileMachineStorageDeps> = {}): {
   deps: ReconcileMachineStorageDeps;
   chargeCalls: Array<{ payerId: string; pageId: string; costDollars: number; gbMonths: number }>;
   advanceCalls: Array<{ pageId: string; billedThrough: Date }>;
+  branchAdvanceCalls: Array<{ machineBranchId: string; billedThrough: Date }>;
+  projectAdvanceCalls: Array<{ machineProjectId: string; billedThrough: Date }>;
 } {
   const chargeCalls: Array<{ payerId: string; pageId: string; costDollars: number; gbMonths: number }> = [];
   const advanceCalls: Array<{ pageId: string; billedThrough: Date }> = [];
+  const branchAdvanceCalls: Array<{ machineBranchId: string; billedThrough: Date }> = [];
+  const projectAdvanceCalls: Array<{ machineProjectId: string; billedThrough: Date }> = [];
   const deps: ReconcileMachineStorageDeps = {
     listMachines: async () => [],
+    listBranchSprites: async () => [],
+    listProjectSprites: async () => [],
     lookupPageOwnerId: async () => 'owner-1',
     chargeStorage: async (input) => {
       chargeCalls.push(input);
@@ -129,10 +137,42 @@ function makeDeps(over: Partial<ReconcileMachineStorageDeps> = {}): {
     advanceWatermark: async (input) => {
       advanceCalls.push(input);
     },
+    advanceBranchWatermark: async (input) => {
+      branchAdvanceCalls.push(input);
+    },
+    advanceProjectWatermark: async (input) => {
+      projectAdvanceCalls.push(input);
+    },
     now: () => new Date('2026-07-01T00:00:00.000Z'),
     ...over,
   };
-  return { deps, chargeCalls, advanceCalls };
+  return { deps, chargeCalls, advanceCalls, branchAdvanceCalls, projectAdvanceCalls };
+}
+
+/** A measured PROMOTED-project Sprite: 1GB written, measured just before `now`, owned by `machine-page-1`. */
+function project(over: Partial<ProjectStorageRow> = {}): ProjectStorageRow {
+  return {
+    machineProjectId: 'project-1',
+    machinePageId: 'machine-page-1',
+    storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
+    measuredBytes: 1_000_000_000, // 1 GB
+    measuredAt: new Date('2026-06-30T23:00:00.000Z'),
+    lastActiveAt: new Date('2026-06-30T23:59:00.000Z'),
+    ...over,
+  };
+}
+
+/** A measured branch Sprite: 1GB written, measured just before `now`, owned by `machine-page-1`. */
+function branch(over: Partial<BranchStorageRow> = {}): BranchStorageRow {
+  return {
+    machineBranchId: 'branch-1',
+    machinePageId: 'machine-page-1',
+    storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
+    measuredBytes: 1_000_000_000, // 1 GB
+    measuredAt: new Date('2026-06-30T23:00:00.000Z'),
+    lastActiveAt: new Date('2026-06-30T23:59:00.000Z'),
+    ...over,
+  };
 }
 
 /** A measured machine: 1GB written, measured just before `now`, active (awake). */
@@ -217,6 +257,8 @@ describe('reconcileMachineStorage', () => {
 
     const deps: ReconcileMachineStorageDeps = {
       listMachines: async () => [machine({ pageId: 'page-1', storageLastBilledAt: watermark })],
+      listBranchSprites: async () => [],
+    listProjectSprites: async () => [],
       lookupPageOwnerId: async () => 'owner-1',
       chargeStorage: async (input) => {
         chargeCalls.push(input);
@@ -225,6 +267,8 @@ describe('reconcileMachineStorage', () => {
         advanceCalls.push(input);
         watermark = input.billedThrough;
       },
+      advanceBranchWatermark: async () => {},
+    advanceProjectWatermark: async () => {},
       now: () => now,
     };
 
@@ -256,6 +300,8 @@ describe('reconcileMachineStorage', () => {
           lastActiveAt: new Date('2026-05-01T00:00:00.000Z'),
         },
       ],
+      listBranchSprites: async () => [],
+    listProjectSprites: async () => [],
       lookupPageOwnerId: async () => 'owner-1',
       chargeStorage: async (input) => {
         chargeCalls.push(input);
@@ -263,6 +309,8 @@ describe('reconcileMachineStorage', () => {
       advanceWatermark: async (input) => {
         watermark = input.billedThrough;
       },
+      advanceBranchWatermark: async () => {},
+    advanceProjectWatermark: async () => {},
       now: () => now,
     };
 
@@ -300,6 +348,8 @@ describe('reconcileMachineStorage', () => {
           lastActiveAt: new Date('2026-06-30T23:30:00.000Z'),
         },
       ],
+      listBranchSprites: async () => [],
+    listProjectSprites: async () => [],
       lookupPageOwnerId: async () => 'owner-1',
       chargeStorage: async (input) => {
         chargeCalls.push(input);
@@ -307,6 +357,8 @@ describe('reconcileMachineStorage', () => {
       advanceWatermark: async (input) => {
         advanceCalls.push(input);
       },
+      advanceBranchWatermark: async () => {},
+    advanceProjectWatermark: async () => {},
       now: () => now,
     };
 
@@ -332,6 +384,8 @@ describe('reconcileMachineStorage', () => {
       listMachines: async () => [
         { pageId: 'grower', storageLastBilledAt: watermark, measuredBytes, measuredAt, lastActiveAt: measuredAt },
       ],
+      listBranchSprites: async () => [],
+    listProjectSprites: async () => [],
       lookupPageOwnerId: async () => 'owner-1',
       chargeStorage: async (input) => {
         chargeCalls.push({ gbMonths: input.gbMonths });
@@ -339,6 +393,8 @@ describe('reconcileMachineStorage', () => {
       advanceWatermark: async (input) => {
         watermark = input.billedThrough;
       },
+      advanceBranchWatermark: async () => {},
+    advanceProjectWatermark: async () => {},
       now: () => new Date(nowIso),
     };
 
@@ -381,6 +437,8 @@ describe('reconcileMachineStorage', () => {
           lastActiveAt: new Date('2026-05-15T00:00:00.000Z'),
         },
       ],
+      listBranchSprites: async () => [],
+    listProjectSprites: async () => [],
       lookupPageOwnerId: async () => 'owner-1',
       chargeStorage: async (input) => {
         chargeCalls.push({ gbMonths: input.gbMonths });
@@ -388,6 +446,8 @@ describe('reconcileMachineStorage', () => {
       advanceWatermark: async (input) => {
         watermark = input.billedThrough;
       },
+      advanceBranchWatermark: async () => {},
+    advanceProjectWatermark: async () => {},
       now: () => new Date(nowIso),
     };
 
@@ -432,6 +492,8 @@ describe('reconcileMachineStorage', () => {
         if (input.pageId === 'boom') throw new Error('ledger write failed');
         chargeCalls.push(input);
       },
+      advanceBranchWatermark: async () => {},
+    advanceProjectWatermark: async () => {},
     });
 
     const result = await reconcileMachineStorage(deps);
@@ -495,5 +557,227 @@ describe('reconcileMachineStorage', () => {
     expect(result.processed).toBe(2);
     expect(result.charged).toBe(2);
     expect(result.totalCostDollars).toBeGreaterThan(0);
+  });
+});
+
+describe('reconcileMachineStorage — branch-Sprite attribution (issue #2204 phase 3)', () => {
+  it('bills a branch Sprite to its OWNING machine page, not to the branch row', async () => {
+    const { deps, chargeCalls } = makeDeps({
+      listBranchSprites: async () => [branch({ machineBranchId: 'branch-1', machinePageId: 'machine-page-1' })],
+    });
+
+    const result = await reconcileMachineStorage(deps);
+
+    assert({
+      given: 'a provisioned branch Sprite with a measured 1GB footprint',
+      should: "charge its owning Machine page — the key the per-machine usage breakdown groups on",
+      actual: { charged: result.charged, pageId: chargeCalls[0]?.pageId },
+      expected: { charged: 1, pageId: 'machine-page-1' },
+    });
+    expect(chargeCalls[0].gbMonths).toBeCloseTo(1, 5);
+    expect(chargeCalls[0].costDollars).toBeGreaterThan(0);
+  });
+
+  it('resolves the payer from the OWNING machine page (branch storage is owner-pays like every other branch cost)', async () => {
+    const lookup = vi.fn(async (pageId: string) => `owner-of-${pageId}`);
+    const { deps, chargeCalls } = makeDeps({
+      listBranchSprites: async () => [branch({ machinePageId: 'machine-page-9' })],
+      lookupPageOwnerId: lookup,
+    });
+
+    await reconcileMachineStorage(deps);
+
+    expect(lookup).toHaveBeenCalledWith('machine-page-9');
+    expect(chargeCalls[0]).toMatchObject({ payerId: 'owner-of-machine-page-9', pageId: 'machine-page-9' });
+  });
+
+  it('advances the BRANCH row watermark (never the machine session watermark) after charging', async () => {
+    const { deps, advanceCalls, branchAdvanceCalls } = makeDeps({
+      listBranchSprites: async () => [branch({ machineBranchId: 'branch-7' })],
+    });
+
+    await reconcileMachineStorage(deps);
+
+    assert({
+      given: 'a charged branch Sprite',
+      should: "advance only its own machine_branches watermark",
+      actual: { branchAdvanceCalls, machineAdvanceCalls: advanceCalls.length },
+      expected: {
+        branchAdvanceCalls: [{ machineBranchId: 'branch-7', billedThrough: new Date('2026-07-01T00:00:00.000Z') }],
+        machineAdvanceCalls: 0,
+      },
+    });
+  });
+
+  it('meters a machine and its branches as independent footprints billed to the same page', async () => {
+    const { deps, chargeCalls } = makeDeps({
+      listMachines: async () => [machine({ pageId: 'machine-page-1' })],
+      listBranchSprites: async () => [
+        branch({ machineBranchId: 'branch-a', machinePageId: 'machine-page-1' }),
+        branch({ machineBranchId: 'branch-b', machinePageId: 'machine-page-1', measuredBytes: 2_000_000_000 }),
+      ],
+    });
+
+    const result = await reconcileMachineStorage(deps);
+
+    expect(result.processed).toBe(3);
+    expect(result.charged).toBe(3);
+    // Each Sprite's own measured bytes, all attributed to the one machine page.
+    expect(chargeCalls.map((c) => c.pageId)).toEqual(['machine-page-1', 'machine-page-1', 'machine-page-1']);
+    expect(chargeCalls.map((c) => Math.round(c.gbMonths))).toEqual([1, 1, 2]);
+  });
+
+  it('NEVER wakes a hibernating branch Sprite to measure — it bills the last PERSISTED bytes only', async () => {
+    // The deps seam exposes no sprite handle for branches either: a never-measured
+    // branch bills the conservative 0 floor rather than being woken for a `du`.
+    const { deps, chargeCalls, branchAdvanceCalls } = makeDeps({
+      listBranchSprites: async () => [branch({ measuredBytes: null, measuredAt: null })],
+    });
+
+    const result = await reconcileMachineStorage(deps);
+
+    assert({
+      given: 'a hibernating branch Sprite that has never been measured',
+      should: 'bill nothing (0 floor, no wake) while still advancing its watermark',
+      actual: { charged: result.charged, charges: chargeCalls.length, advanced: branchAdvanceCalls.length },
+      expected: { charged: 0, charges: 0, advanced: 1 },
+    });
+    expect(deps).not.toHaveProperty('attach');
+    expect(deps).not.toHaveProperty('exec');
+  });
+
+  it('flags a stale branch measurement but still bills it (never wakes to refresh)', async () => {
+    const { deps, chargeCalls } = makeDeps({
+      listBranchSprites: async () => [
+        branch({
+          measuredAt: new Date(new Date('2026-07-01T00:00:00.000Z').getTime() - STALE_MEASUREMENT_MS - 1),
+          lastActiveAt: new Date('2026-06-01T00:00:00.000Z'),
+        }),
+      ],
+    });
+
+    const result = await reconcileMachineStorage(deps);
+
+    assert({
+      given: 'a hibernating branch Sprite whose measurement is older than the stale window',
+      should: 'still bill the last measured bytes and flag the staleness',
+      actual: { staleMeasurements: result.staleMeasurements, charged: result.charged },
+      expected: { staleMeasurements: 1, charged: 1 },
+    });
+    expect(chargeCalls[0].costDollars).toBeGreaterThan(0);
+  });
+
+  it('isolates a failing branch row from the rest of the batch', async () => {
+    const { deps, chargeCalls } = makeDeps({
+      listBranchSprites: async () => [branch({ machineBranchId: 'bad' }), branch({ machineBranchId: 'good' })],
+      advanceBranchWatermark: async ({ machineBranchId }) => {
+        if (machineBranchId === 'bad') throw new Error('watermark write failed');
+      },
+    });
+
+    const result = await reconcileMachineStorage(deps);
+
+    expect(result).toMatchObject({ processed: 2, charged: 1, failed: 1 });
+    expect(chargeCalls).toHaveLength(2);
+  });
+});
+
+
+describe('reconcileMachineStorage — promoted project-Sprite attribution (issue #2204 phase 7)', () => {
+  it('bills a promoted project Sprite to its OWNING machine page — the key the usage breakdown groups on', async () => {
+    const { deps, chargeCalls } = makeDeps({
+      listProjectSprites: async () => [project({ machineProjectId: 'project-1', machinePageId: 'machine-page-1' })],
+    });
+
+    const result = await reconcileMachineStorage(deps);
+
+    assert({
+      given: 'a promoted project Sprite with a measured 1GB footprint',
+      should: 'charge its owning Machine page, exactly as a branch Sprite does',
+      actual: { charged: result.charged, pageId: chargeCalls[0]?.pageId },
+      expected: { charged: 1, pageId: 'machine-page-1' },
+    });
+    expect(chargeCalls[0].gbMonths).toBeCloseTo(1, 5);
+    expect(chargeCalls[0].costDollars).toBeGreaterThan(0);
+  });
+
+  it('resolves the payer from the OWNING machine page (a promoted project is never its own payer)', async () => {
+    const lookup = vi.fn(async (pageId: string) => `owner-of-${pageId}`);
+    const { deps, chargeCalls } = makeDeps({
+      listProjectSprites: async () => [project({ machinePageId: 'machine-page-9' })],
+      lookupPageOwnerId: lookup,
+    });
+
+    await reconcileMachineStorage(deps);
+
+    expect(lookup).toHaveBeenCalledWith('machine-page-9');
+    expect(chargeCalls[0]).toMatchObject({ payerId: 'owner-of-machine-page-9', pageId: 'machine-page-9' });
+  });
+
+  it('advances the PROJECT row watermark only — never the machine session or a branch watermark', async () => {
+    const { deps, advanceCalls, branchAdvanceCalls, projectAdvanceCalls } = makeDeps({
+      listProjectSprites: async () => [project({ machineProjectId: 'project-7' })],
+    });
+
+    await reconcileMachineStorage(deps);
+
+    assert({
+      given: 'a charged promoted-project Sprite',
+      should: 'advance only its own machine_projects watermark',
+      actual: { projectAdvanceCalls, machineAdvanceCalls: advanceCalls.length, branchAdvanceCalls: branchAdvanceCalls.length },
+      expected: {
+        projectAdvanceCalls: [{ machineProjectId: 'project-7', billedThrough: new Date('2026-07-01T00:00:00.000Z') }],
+        machineAdvanceCalls: 0,
+        branchAdvanceCalls: 0,
+      },
+    });
+  });
+
+  it('meters a machine, its branch and its promoted project as three independent footprints on one page', async () => {
+    const { deps, chargeCalls } = makeDeps({
+      listMachines: async () => [machine({ pageId: 'machine-page-1' })],
+      listBranchSprites: async () => [branch({ machineBranchId: 'branch-a', machinePageId: 'machine-page-1' })],
+      listProjectSprites: async () => [project({ machineProjectId: 'project-a', machinePageId: 'machine-page-1' })],
+    });
+
+    const result = await reconcileMachineStorage(deps);
+
+    expect(result.processed).toBe(3);
+    expect(result.charged).toBe(3);
+    // Three separate filesystems, one attribution page.
+    expect(chargeCalls.map((c) => c.pageId)).toEqual(['machine-page-1', 'machine-page-1', 'machine-page-1']);
+  });
+
+  it('bills the never-measured 0 floor for a just-promoted project and still advances its own watermark', async () => {
+    const { deps, chargeCalls, projectAdvanceCalls } = makeDeps({
+      listProjectSprites: async () => [project({ measuredBytes: null, measuredAt: null })],
+    });
+
+    const result = await reconcileMachineStorage(deps);
+
+    assert({
+      given: 'a promoted project whose Sprite has never been measured',
+      should: 'charge nothing (the 0 floor, never a provisioned cap) but still advance its watermark',
+      actual: { charged: result.charged, charges: chargeCalls.length, advanced: projectAdvanceCalls.length },
+      expected: { charged: 0, charges: 0, advanced: 1 },
+    });
+  });
+
+  it('reports a project failure distinguishably rather than aborting the batch', async () => {
+    const { deps } = makeDeps({
+      listMachines: async () => [machine({ pageId: 'machine-page-1' })],
+      listProjectSprites: async () => [project()],
+      advanceProjectWatermark: async () => {
+        throw new Error('watermark write failed');
+      },
+    });
+
+    const result = await reconcileMachineStorage(deps);
+
+    expect({ processed: result.processed, charged: result.charged, failed: result.failed }).toEqual({
+      processed: 2,
+      charged: 1,
+      failed: 1,
+    });
   });
 });

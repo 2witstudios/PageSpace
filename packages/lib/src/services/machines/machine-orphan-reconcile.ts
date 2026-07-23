@@ -114,7 +114,9 @@ export type OrphanRow =
    */
   | { kind: 'reclaim'; sandboxId: string; spriteInstanceId: string | null }
   | { kind: 'session'; pageId: string; sessionKey: string; sandboxId: string; spriteInstanceId: string | null }
-  | { kind: 'branch'; pageId: string; id: string; sandboxId: string; spriteInstanceId: string | null };
+  | { kind: 'branch'; pageId: string; id: string; sandboxId: string; spriteInstanceId: string | null }
+  /** A PROMOTED project's Sprite — same row-outlives-Sprite contract as a branch, released by the same CAS-stamp. */
+  | { kind: 'project'; pageId: string; id: string; sandboxId: string; spriteInstanceId: string | null };
 
 export interface ReconcileOrphanSpritesDeps {
   /**
@@ -152,6 +154,12 @@ export interface ReconcileOrphanSpritesDeps {
   }) => Promise<boolean>;
   /** CAS-stamp `spriteTornDownAt` on the branch row (never delete it — it is re-creatable config): only if the page is STILL trashed and the row still points at the INSTANCE we killed. Reports whether it actually wrote. */
   markBranchTornDown: (input: {
+    id: string;
+    sandboxId: string;
+    spriteInstanceId: string | null;
+  }) => Promise<boolean>;
+  /** CAS-stamp `spriteTornDownAt` on the promoted-project row — identical contract to `markBranchTornDown` (a re-promotion that raced us must not have its live Sprite marked dead). */
+  markProjectTornDown: (input: {
     id: string;
     sandboxId: string;
     spriteInstanceId: string | null;
@@ -253,11 +261,17 @@ export async function reconcileOrphanSprites(
               sandboxId: row.sandboxId,
               spriteInstanceId: row.spriteInstanceId,
             })
-          : await deps.markBranchTornDown({
-              id: row.id,
-              sandboxId: row.sandboxId,
-              spriteInstanceId: row.spriteInstanceId,
-            });
+          : row.kind === 'branch'
+            ? await deps.markBranchTornDown({
+                id: row.id,
+                sandboxId: row.sandboxId,
+                spriteInstanceId: row.spriteInstanceId,
+              })
+            : await deps.markProjectTornDown({
+                id: row.id,
+                sandboxId: row.sandboxId,
+                spriteInstanceId: row.spriteInstanceId,
+              });
 
       if (!released) {
         skipped += 1;

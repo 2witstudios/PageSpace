@@ -27,6 +27,7 @@ const {
   mockBroadcastPageEvent,
   mockCreatePageEventPayload,
   mockSelectWhere,
+  mockProjectSelectWhere,
   mockUpdateSet,
   mockUpdateWhere,
   mockFindPage,
@@ -45,6 +46,7 @@ const {
     return { driveId, pageId, event, payload };
   }),
   mockSelectWhere: vi.fn(),
+  mockProjectSelectWhere: vi.fn(),
   mockUpdateSet: vi.fn(),
   mockUpdateWhere: vi.fn(),
   mockFindPage: vi.fn(),
@@ -57,7 +59,14 @@ const {
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
-    select: () => ({ from: () => ({ where: (...args: unknown[]) => mockSelectWhere(...args) }) }),
+    select: () => ({
+      from: (table: unknown) => ({
+        where: (...args: unknown[]) =>
+          (table as { __table?: string } | undefined)?.__table === 'machine_projects'
+            ? mockProjectSelectWhere(...args)
+            : mockSelectWhere(...args),
+      }),
+    }),
     update: () => ({
       set: (values: unknown) => {
         mockUpdateSet(values);
@@ -75,6 +84,8 @@ vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((...args: unknown[]) => ({ eq: args })),
   inArray: vi.fn((...args: unknown[]) => ({ inArray: args })),
   isNull: vi.fn((column: unknown) => ({ isNull: column })),
+  isNotNull: vi.fn((column: unknown) => ({ isNotNull: column })),
+  eqOrIsNull: vi.fn((...args: unknown[]) => ({ eqOrIsNull: args })),
   sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ sql: strings.join('?'), values })),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -94,6 +105,17 @@ vi.mock('@pagespace/db/schema/integrations', () => ({
 }));
 vi.mock('@pagespace/db/schema/machine-branches', () => ({
   machineBranches: { id: 'id', machineId: 'machineId', sandboxId: 'sandboxId', spriteTornDownAt: 'spriteTornDownAt' },
+}));
+vi.mock('@pagespace/db/schema/machine-projects', () => ({
+  machineProjects: {
+    __table: 'machine_projects',
+    id: 'id',
+    machineId: 'machineId',
+    sandboxId: 'sandboxId',
+    spriteInstanceId: 'spriteInstanceId',
+    teardownRequestedAt: 'teardownRequestedAt',
+    spriteTornDownAt: 'spriteTornDownAt',
+  },
 }));
 vi.mock('@pagespace/lib/services/sandbox/machine-session-manager', () => ({
   createDbMachineSessionStore: vi.fn(async () => ({
@@ -144,6 +166,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockGetActorInfo.mockResolvedValue({ actorEmail: 'jono@x.test', actorDisplayName: 'Jono' });
   mockSelectWhere.mockResolvedValue([]);
+  mockProjectSelectWhere.mockResolvedValue([]);
   mockUpdateWhere.mockResolvedValue(undefined);
   mockApplyPageMutation.mockResolvedValue({});
   mockFindPage.mockResolvedValue({ driveId: 'drive-1' });
@@ -351,6 +374,30 @@ describe('createMachineSpriteTeardown().teardown', () => {
       // we just killed, and deleting the row of a live replacement orphans it.
       spriteInstanceId: `inst-key-${MACHINE}`,
     });
+  });
+
+  it('kills PROMOTED-project Sprites too, stamping their rows — an unwired table here is a VM that bills forever', async () => {
+    mockSelectWhere
+      .mockResolvedValueOnce([]) // children of the root — none
+      .mockResolvedValueOnce([]); // root's branch rows — none
+    mockProjectSelectWhere.mockResolvedValueOnce([
+      { id: 'proj-1', sandboxId: 'sb-project', spriteInstanceId: 'inst-project' },
+    ]);
+
+    await createMachineSpriteTeardown().teardown(MACHINE);
+
+    expect(mockHostKill.mock.calls.map((c) => (c[0] as { machineId: string }).machineId)).toEqual([
+      'sb-project',
+      `own-key-${MACHINE}`,
+    ]);
+    expect(mockHostKill).toHaveBeenCalledWith(
+      expect.objectContaining({ machineId: 'sb-project', expectedInstanceId: 'inst-project' }),
+    );
+    // Teardown INTENT stamped on the project rows, then spriteTornDownAt on the
+    // confirmed kill — the same two writes the branch loop makes.
+    const setCalls = mockUpdateSet.mock.calls.map((c) => Object.keys(c[0] as object)[0]);
+    expect(setCalls).toContain('teardownRequestedAt');
+    expect(setCalls).toContain('spriteTornDownAt');
   });
 
   it('records teardown INTENT before any kill, so a failed kill is reclaimable by the reconciler', async () => {

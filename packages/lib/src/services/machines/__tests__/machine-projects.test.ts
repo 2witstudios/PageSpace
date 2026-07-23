@@ -28,6 +28,13 @@ function makeRecord(overrides: Partial<MachineProjectRecord> = {}): MachineProje
     name: 'my-repo',
     repoUrl: 'https://github.com/o/r.git',
     path: `${PROJECTS_ROOT}/my-repo-p1`,
+    // Unpromoted: a project lives on the owning Machine's Sprite until
+    // `promoteProject` gives it one of its own (machine-project-promotion.ts).
+    sessionKey: null,
+    sandboxId: null,
+    spriteInstanceId: null,
+    teardownRequestedAt: null,
+    spriteTornDownAt: null,
     createdAt: NOW,
     updatedAt: NOW,
     ...overrides,
@@ -44,6 +51,16 @@ function makeStore(seed: MachineProjectRecord[] = []) {
     list: async (machineId) => [...rows.values()].filter((r) => r.machineId === machineId),
     findByName: async (machineId, name) =>
       [...rows.values()].find((r) => r.machineId === machineId && r.name === name) ?? null,
+    findById: async (id) => rows.get(id) ?? null,
+    // Promotion CAS — exercised by machine-project-promotion.test.ts; here it
+    // only has to exist and honour the compare, since nothing in this file
+    // promotes.
+    promote: async ({ id, previousSandboxId, sessionKey, sandboxId, spriteInstanceId, now }) => {
+      const row = rows.get(id);
+      if (!row || row.sandboxId !== previousSandboxId) return false;
+      rows.set(id, { ...row, sessionKey, sandboxId, spriteInstanceId, spriteTornDownAt: null, teardownRequestedAt: null, updatedAt: now });
+      return true;
+    },
     create: async (input) => {
       const duplicate = [...rows.values()].some(
         (r) => r.machineId === input.machineId && r.name === input.name,
@@ -51,7 +68,7 @@ function makeStore(seed: MachineProjectRecord[] = []) {
       if (duplicate || rows.has(input.id)) {
         throw Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' });
       }
-      const row: MachineProjectRecord = {
+      const row: MachineProjectRecord = makeRecord({
         id: input.id,
         ownerId: input.ownerId,
         machineId: input.machineId,
@@ -60,7 +77,7 @@ function makeStore(seed: MachineProjectRecord[] = []) {
         path: input.path,
         createdAt: input.now,
         updatedAt: input.now,
-      };
+      });
       rows.set(input.id, row);
       return row;
     },
@@ -465,6 +482,93 @@ describe('removeProject', () => {
     expect(runCommandCalls).toMatchObject([{ cmd: 'rm', args: ['-rf', `${PROJECTS_ROOT}/old-repo`] }]);
     expect(removeCalls).toEqual([{ machineId: TERMINAL_ID, id: 'legacyid' }]);
     expect(await store.list(TERMINAL_ID)).toEqual([]);
+  });
+
+  it('given a PROMOTED project with a live Sprite, should identity-guarded-kill it BEFORE deleting the row', async () => {
+    // A promoted project's Sprite is a real billing microVM findable only via
+    // this row. Deleting the row without the kill would leave the VM running
+    // with only the DB trigger's outbox pointer between it and billing forever.
+    const promoted = makeRecord({
+      sessionKey: 'sess-key-1',
+      sandboxId: 'pgs-sbx-proj',
+      spriteInstanceId: 'inst-proj',
+    });
+    const killCalls: Array<{ sandboxId: string; spriteInstanceId: string | null }> = [];
+    const { deps, store } = makeDeps(
+      {
+        killSprite: async (input) => {
+          killCalls.push(input);
+          return { ok: true };
+        },
+      },
+      [promoted],
+    );
+
+    const result = await removeProject({ machineId: TERMINAL_ID, name: 'my-repo', deps });
+
+    expect(result).toEqual({ ok: true });
+    expect(killCalls).toEqual([{ sandboxId: 'pgs-sbx-proj', spriteInstanceId: 'inst-proj' }]);
+    expect(await store.findByName(TERMINAL_ID, 'my-repo')).toBeNull();
+  });
+
+  it('given the promoted Sprite kill FAILS, should still remove the row — the delete trigger rescues the pointer', async () => {
+    const promoted = makeRecord({
+      sessionKey: 'sess-key-1',
+      sandboxId: 'pgs-sbx-proj',
+      spriteInstanceId: 'inst-proj',
+    });
+    const { deps, store } = makeDeps(
+      { killSprite: async () => ({ ok: false }) },
+      [promoted],
+    );
+
+    const result = await removeProject({ machineId: TERMINAL_ID, name: 'my-repo', deps });
+
+    expect(result).toEqual({ ok: true });
+    expect(await store.findByName(TERMINAL_ID, 'my-repo')).toBeNull();
+  });
+
+  it('given an UNPROMOTED project, should never call the Sprite kill', async () => {
+    const existing = makeRecord();
+    const killCalls: unknown[] = [];
+    const { deps } = makeDeps(
+      {
+        killSprite: async (input) => {
+          killCalls.push(input);
+          return { ok: true };
+        },
+      },
+      [existing],
+    );
+
+    await removeProject({ machineId: TERMINAL_ID, name: 'my-repo', deps });
+
+    expect(killCalls).toEqual([]);
+  });
+
+  it('given an already-torn-down promoted project, should not re-kill the reused Sprite name', async () => {
+    // sandboxId is a NAME reused across re-creates: killing it again could
+    // destroy a replacement VM that legitimately took the name.
+    const tornDown = makeRecord({
+      sessionKey: 'sess-key-1',
+      sandboxId: 'pgs-sbx-proj',
+      spriteInstanceId: 'inst-proj',
+      spriteTornDownAt: NOW,
+    });
+    const killCalls: unknown[] = [];
+    const { deps } = makeDeps(
+      {
+        killSprite: async (input) => {
+          killCalls.push(input);
+          return { ok: true };
+        },
+      },
+      [tornDown],
+    );
+
+    await removeProject({ machineId: TERMINAL_ID, name: 'my-repo', deps });
+
+    expect(killCalls).toEqual([]);
   });
 
   it('given a non-existent project name, should return not_found without touching the sandbox', async () => {

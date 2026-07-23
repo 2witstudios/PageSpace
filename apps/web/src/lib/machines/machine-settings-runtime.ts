@@ -74,11 +74,12 @@
  * path as well.
  */
 
-import { and, eq, eqOrIsNull, inArray, isNull, sql } from '@pagespace/db/operators';
+import { and, eq, eqOrIsNull, inArray, isNotNull, isNull, sql } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { globalAssistantConfig } from '@pagespace/db/schema/integrations';
 import { machineBranches } from '@pagespace/db/schema/machine-branches';
+import { machineProjects } from '@pagespace/db/schema/machine-projects';
 import { machineSessions } from '@pagespace/db/schema/machine-sessions';
 import {
   createDbMachineSessionStore,
@@ -333,6 +334,23 @@ async function teardownOneMachine(machineId: string): Promise<void> {
     .from(machineBranches)
     .where(and(eq(machineBranches.machineId, machineId), isNull(machineBranches.spriteTornDownAt)));
 
+  // PROMOTED projects only: an unpromoted project is a checkout inside the
+  // machine's own Sprite, which the machine-session kill below already frees.
+  const projectRows = await db
+    .select({
+      id: machineProjects.id,
+      sandboxId: machineProjects.sandboxId,
+      spriteInstanceId: machineProjects.spriteInstanceId,
+    })
+    .from(machineProjects)
+    .where(
+      and(
+        eq(machineProjects.machineId, machineId),
+        isNotNull(machineProjects.sandboxId),
+        isNull(machineProjects.spriteTornDownAt),
+      ),
+    );
+
   const drive = await db.query.drives.findFirst({
     where: eq(drives.id, page.driveId),
     columns: { ownerId: true },
@@ -348,7 +366,7 @@ async function teardownOneMachine(machineId: string): Promise<void> {
   const sessionStore = await createDbMachineSessionStore();
   const session = sessionKey ? await sessionStore.findBySessionKey(sessionKey) : null;
 
-  if (branchRows.length === 0 && !session) return; // Nothing live to tear down.
+  if (branchRows.length === 0 && projectRows.length === 0 && !session) return; // Nothing live to tear down.
 
   // Record the INTENT to destroy, BEFORE any kill — this is what licenses the
   // orphan reconciler to finish the job if a kill below fails (or if this process
@@ -372,6 +390,17 @@ async function teardownOneMachine(machineId: string): Promise<void> {
         inArray(
           machineBranches.id,
           branchRows.map((branch) => branch.id),
+        ),
+      );
+  }
+  if (projectRows.length > 0) {
+    await db
+      .update(machineProjects)
+      .set({ teardownRequestedAt })
+      .where(
+        inArray(
+          machineProjects.id,
+          projectRows.map((project) => project.id),
         ),
       );
   }
@@ -409,6 +438,32 @@ async function teardownOneMachine(machineId: string): Promise<void> {
             eq(machineBranches.id, branch.id),
             eq(machineBranches.sandboxId, branch.sandboxId),
             eqOrIsNull(machineBranches.spriteInstanceId, branch.spriteInstanceId),
+          ),
+        );
+    } catch {
+      // Best-effort; leave the row unstamped for the reconciler to retry.
+    }
+  }
+
+  // Promoted-project Sprites: same best-effort contract as branches — a failed
+  // kill leaves the row unstamped for the orphan reconciler to retry.
+  for (const project of projectRows) {
+    if (!project.sandboxId) continue;
+    try {
+      await host.kill({
+        machineId: project.sandboxId,
+        expectedInstanceId: project.spriteInstanceId ?? undefined,
+      });
+      await db
+        .update(machineProjects)
+        .set({ spriteTornDownAt: new Date() })
+        // CAS on the INSTANCE — a concurrent re-promotion may already have
+        // written a LIVE replacement into this row (see the branch loop).
+        .where(
+          and(
+            eq(machineProjects.id, project.id),
+            eq(machineProjects.sandboxId, project.sandboxId),
+            eqOrIsNull(machineProjects.spriteInstanceId, project.spriteInstanceId),
           ),
         );
     } catch {

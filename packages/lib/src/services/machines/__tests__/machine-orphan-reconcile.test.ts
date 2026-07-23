@@ -10,12 +10,14 @@ function makeDeps(over: Partial<ReconcileOrphanSpritesDeps> = {}): {
   killed: string[];
   releasedSessions: string[];
   stampedBranches: string[];
+  stampedProjects: string[];
   releasedReclaims: string[];
   notedFailures: string[];
 } {
   const killed: string[] = [];
   const releasedSessions: string[] = [];
   const stampedBranches: string[] = [];
+  const stampedProjects: string[] = [];
   const releasedReclaims: string[] = [];
   const notedFailures: string[] = [];
   const deps: ReconcileOrphanSpritesDeps = {
@@ -33,6 +35,10 @@ function makeDeps(over: Partial<ReconcileOrphanSpritesDeps> = {}): {
       stampedBranches.push(id);
       return true;
     },
+    markProjectTornDown: async ({ id }) => {
+      stampedProjects.push(id);
+      return true;
+    },
     releaseReclaim: async (sandboxId) => {
       releasedReclaims.push(sandboxId);
     },
@@ -41,7 +47,7 @@ function makeDeps(over: Partial<ReconcileOrphanSpritesDeps> = {}): {
     },
     ...over,
   };
-  return { deps, killed, releasedSessions, stampedBranches, releasedReclaims, notedFailures };
+  return { deps, killed, releasedSessions, stampedBranches, stampedProjects, releasedReclaims, notedFailures };
 }
 
 const sessionRow: OrphanRow = {
@@ -144,6 +150,47 @@ describe('reconcileOrphanSprites', () => {
     expect(killed).toEqual(['pgs-sbx-2']);
     expect(stampedBranches).toEqual(['branch-1']);
     expect(releasedSessions).toEqual([]);
+  });
+
+  it('kills an orphaned PROMOTED-PROJECT Sprite and STAMPS its row rather than deleting it', async () => {
+    // Same shape as the branch case: a promoted project's row is re-creatable
+    // config (name + repoUrl + sessionKey re-provision and re-clone), so the
+    // reconciler stamps spriteTornDownAt, never deletes.
+    const projectRow: OrphanRow = {
+      kind: 'project',
+      pageId: 'machine-3',
+      id: 'project-1',
+      sandboxId: 'pgs-sbx-3',
+      spriteInstanceId: 'inst-3',
+    };
+    const { deps, killed, stampedProjects, stampedBranches } = makeDeps({
+      listOrphanCandidates: async () => ({ rows: [projectRow], capped: false }),
+    });
+
+    const result = await reconcileOrphanSprites(deps);
+
+    expect(result).toEqual({ processed: 1, capped: false, torndown: 1, skipped: 0, failed: 0 });
+    expect(killed).toEqual(['pgs-sbx-3']);
+    expect(stampedProjects).toEqual(['project-1']);
+    expect(stampedBranches).toEqual([]);
+  });
+
+  it('counts a project CAS lost to a concurrent re-promotion as skipped, not torn down', async () => {
+    const projectRow: OrphanRow = {
+      kind: 'project',
+      pageId: 'machine-3',
+      id: 'project-1',
+      sandboxId: 'pgs-sbx-3',
+      spriteInstanceId: 'inst-3',
+    };
+    const { deps } = makeDeps({
+      listOrphanCandidates: async () => ({ rows: [projectRow], capped: false }),
+      markProjectTornDown: async () => false,
+    });
+
+    const result = await reconcileOrphanSprites(deps);
+
+    expect(result).toEqual({ processed: 1, capped: false, torndown: 0, skipped: 1, failed: 0 });
   });
 
   it('releases the row for a Sprite that is ALREADY gone — the idempotent kill reports ok', async () => {

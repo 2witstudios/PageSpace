@@ -355,10 +355,12 @@ function MachineTreeSection({
   // (`ensureMachine` no longer fabricates a phantom "Workspace 1" for a machine
   // this browser hasn't hydrated — an un-hydrated machine now simply shows no
   // rows. So the failure this guards against is narrower than it was: acting on
-  // stale local state, not inventing rows. Note this hook's own doc asks to be
-  // mounted once per machine and it is mounted twice for the machine currently
-  // open; that is idempotent — the bootstrap claim table makes the second POST a
-  // no-op — but it is not by design.)
+  // stale local state, not inventing rows. The machine currently open therefore
+  // has TWO instances of the sync hook — this one and `MachineView`'s — which is
+  // by design and documented as such in that hook's module doc, along with the
+  // residual races it accepts: the server claim table makes the second bootstrap
+  // POST a no-op, and the module-level `declinedBootstraps` shares the
+  // "nothing to migrate" decision across instances.)
   //
   // Mounted once per machine row (this component's own lifetime in the sidebar
   // list, not tied to the tree node's expand/collapse) so it doesn't re-join the

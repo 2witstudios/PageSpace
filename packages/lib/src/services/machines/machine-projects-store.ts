@@ -20,6 +20,24 @@ export interface MachineProjectRecord {
   name: string;
   repoUrl: string;
   path: string;
+  /**
+   * The opaque HMAC name this project's OWN Sprite is provisioned under, once
+   * it has been PROMOTED (`deriveProjectSessionKey`). NULL while the project is
+   * still just a checkout on the owning Machine's Sprite.
+   */
+  sessionKey: string | null;
+  /**
+   * The promoted Sprite's NAME — reused across re-creates, so NOT an identity.
+   * NULL IS the unpromoted state, and it is what every promotion CAS compares
+   * against (see `promote`).
+   */
+  sandboxId: string | null;
+  /** WHICH VM this row points at. Every teardown CAS keys on this, because `sandboxId` cannot tell a replacement Sprite from its predecessor. */
+  spriteInstanceId: string | null;
+  /** When a teardown of this project's Sprite was REQUESTED. Cleared whenever a live Sprite is recorded — a stale request must never license destroying a VM the user can still restore. */
+  teardownRequestedAt: Date | null;
+  /** When `sandboxId`'s Sprite was CONFIRMED destroyed; NULL while we believe it is live. The row outlives its Sprite on purpose — it is re-creatable config. */
+  spriteTornDownAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -39,9 +57,45 @@ export interface NewMachineProjectInput {
   now: Date;
 }
 
+export interface PromoteMachineProjectInput {
+  id: string;
+  /**
+   * The `sandboxId` this row must STILL hold for the write to land: `null` for
+   * a first promotion (the row is unpromoted), or the vanished Sprite's name
+   * when re-provisioning a promoted project whose VM disappeared.
+   */
+  previousSandboxId: string | null;
+  sessionKey: string;
+  sandboxId: string;
+  spriteInstanceId: string | null;
+  now: Date;
+}
+
 export interface MachineProjectStore {
   list(machineId: string): Promise<MachineProjectRecord[]>;
   findByName(machineId: string, name: string): Promise<MachineProjectRecord | null>;
+  /** Level-agnostic lookup by the project row's own id — used by the promotion CAS's reconcile and by the promoted-project sandbox acquire. */
+  findById(id: string): Promise<MachineProjectRecord | null>;
+  /**
+   * Compare-and-swap promotion: record this project's OWN Sprite, but ONLY
+   * while the row still holds `previousSandboxId`. Returns whether it actually
+   * wrote.
+   *
+   * The CAS is the whole point. Two concurrent project-scoped spawns both
+   * derive the SAME `sessionKey`, so `MachineHost.provision` (name-keyed,
+   * auto-resuming) can hand them the same Sprite OR two different ones
+   * depending on timing. A last-write-wins update would let the loser's write
+   * replace the winner's recorded Sprite, orphaning a live, billing VM that
+   * nothing — not even the orphan reconciler — could then find. The loser
+   * instead sees `false` and reconciles against the row that actually won.
+   *
+   * Recording a live Sprite also CLEARS both teardown marks, for the identical
+   * reason `MachineBranchStore.updateSandboxId` does: a surviving
+   * `spriteTornDownAt` would hide a brand-new VM from the reconciler and the
+   * hard-purge guard, and a surviving `teardownRequestedAt` would license
+   * destroying it.
+   */
+  promote(input: PromoteMachineProjectInput): Promise<boolean>;
   /** Throws a unique-violation error (see `isUniqueViolation`) if `name` already exists on this machine. */
   create(input: NewMachineProjectInput): Promise<MachineProjectRecord>;
   /**
@@ -61,7 +115,7 @@ export { isUniqueViolation };
  * the DB module graph.
  */
 export async function createDbMachineProjectStore(): Promise<MachineProjectStore> {
-  const [{ db }, { eq, and }, { machineProjects }] = await Promise.all([
+  const [{ db }, { eq, and, eqOrIsNull }, { machineProjects }] = await Promise.all([
     import('@pagespace/db/db'),
     import('@pagespace/db/operators'),
     import('@pagespace/db/schema/machine-projects'),
@@ -83,6 +137,32 @@ export async function createDbMachineProjectStore(): Promise<MachineProjectStore
         .where(and(eq(machineProjects.machineId, machineId), eq(machineProjects.name, name)))
         .limit(1);
       return row ?? null;
+    },
+
+    async findById(id) {
+      const [row] = await db.select().from(machineProjects).where(eq(machineProjects.id, id)).limit(1);
+      return row ?? null;
+    },
+
+    async promote({ id, previousSandboxId, sessionKey, sandboxId, spriteInstanceId, now }) {
+      const updated = await db
+        .update(machineProjects)
+        .set({
+          sessionKey,
+          sandboxId,
+          spriteInstanceId,
+          // This row points at a LIVE Sprite, so BOTH teardown marks are void —
+          // see the interface doc.
+          spriteTornDownAt: null,
+          teardownRequestedAt: null,
+          updatedAt: now,
+        })
+        // `eqOrIsNull`, not `eq`: a FIRST promotion compares against SQL NULL,
+        // where `= NULL` is never true and would silently make every first
+        // promotion a no-op loser.
+        .where(and(eq(machineProjects.id, id), eqOrIsNull(machineProjects.sandboxId, previousSandboxId)))
+        .returning({ id: machineProjects.id });
+      return updated.length > 0;
     },
 
     async create(input) {

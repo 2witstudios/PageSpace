@@ -33,6 +33,8 @@ import {
 } from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { acquireMachineSandbox } from '@pagespace/lib/services/sandbox/machine-session';
 import { acquireBranchSandbox } from '@pagespace/lib/services/sandbox/branch-session';
+import { acquireProjectSandbox } from '@pagespace/lib/services/sandbox/project-session';
+import { createDbMachineProjectStore } from '@pagespace/lib/services/machines/machine-projects-store';
 import { createDbMachineBranchStore } from '@pagespace/lib/services/machines/machine-branches-store';
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/machine-billing';
 import { measureMachineStorageOpportunistically } from '@pagespace/lib/services/sandbox/machine-storage-billing';
@@ -62,6 +64,7 @@ import { createSandboxTools, type MachineDirectoryDeps, type ResolveSandboxConte
 import { canActorViewPage, getAgentPageId, hasAgentUserScopedAccess } from './actor-permissions';
 import { pageAgentRepository, type MachineRef } from '@/lib/repositories/page-agent-repository';
 import { globalMachineConfigRepository } from '@/lib/repositories/global-machine-config-repository';
+import type { MachineNodeHandleSet } from '@pagespace/lib/services/machines/machine-pane-binding';
 import type { ToolExecutionContext } from '../core/types';
 import { notifyTerminalAgentActivity } from '@/lib/websocket/socket-utils';
 
@@ -81,6 +84,13 @@ let branchStorePromise: ReturnType<typeof createDbMachineBranchStore> | null = n
 function getBranchStore() {
   branchStorePromise ??= createDbMachineBranchStore();
   return branchStorePromise;
+}
+
+let projectStorePromise: ReturnType<typeof createDbMachineProjectStore> | null = null;
+
+function getProjectStore() {
+  projectStorePromise ??= createDbMachineProjectStore();
+  return projectStorePromise;
 }
 
 // The Fly Sprites driver is loaded via a DYNAMIC import, never a static one.
@@ -133,8 +143,28 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
     // attach-only branch seam instead of the machine's own persistent
     // session — a branch's Sprite is provisioned exclusively by the
     // branch-spawn path, never lazily here.
-    acquireSandbox: async ({ branchSandbox, ...input }) =>
-      branchSandbox
+    acquireSandbox: async ({ branchSandbox, projectSandbox, ...input }) =>
+      // A PROMOTED project (issue #2204 phase 7) routes to its OWN Sprite the
+      // same attach-only way a branch does — its repo is no longer on the
+      // machine's filesystem at all. An unpromoted project carries neither key
+      // and still falls through to the machine session below.
+      projectSandbox
+        ? acquireProjectSandbox({
+            driveId: input.driveId,
+            userId: input.userId,
+            requestOrigin: input.requestOrigin,
+            agentPageId: input.agentPageId,
+            machineId: projectSandbox.machineId,
+            machineProjectId: projectSandbox.machineProjectId,
+            deps: {
+              authorize: canRunCode,
+              now: () => new Date(),
+              checkMachineRuntimeGuardrail,
+              recordMachineActivity,
+              findProject: async (machineProjectId) => (await getProjectStore()).findById(machineProjectId),
+            },
+          })
+      : branchSandbox
         ? acquireBranchSandbox({
             driveId: input.driveId,
             userId: input.userId,
@@ -490,6 +520,37 @@ function activeMachineAgentPageId(rawContext: ToolExecutionContext | undefined):
 }
 
 /**
+ * The distinct machines a derived handle set reaches, in first-seen order
+ * (self's machine first). Today every handle of a set names the SAME machine
+ * page — a project/branch node lives on its machine — so this is a one-element
+ * list; it is written as a projection of the set rather than of `self` so the
+ * set stays the single source of truth as promotion (phase 7) extends handle
+ * resolution.
+ */
+function machinesOfHandleSet(binding: MachineNodeHandleSet): MachineRef[] {
+  const seen = new Set<string>();
+  const machines: MachineRef[] = [];
+  for (const handle of binding.handles) {
+    if (seen.has(handle.machineId)) continue;
+    seen.add(handle.machineId);
+    machines.push({ kind: 'existing', machineId: handle.machineId });
+  }
+  return machines;
+}
+
+/**
+ * Whether `machineId` is reachable through the bound conversation's derived
+ * handle set. THE membership test behind the binding exemption in
+ * `isMachineAccessible` — the one policy site for machine access.
+ */
+function handleSetContainsMachine(
+  binding: MachineNodeHandleSet | undefined,
+  machineId: string,
+): boolean {
+  return binding?.handles.some((handle) => handle.machineId === machineId) ?? false;
+}
+
+/**
  * Factory for the machine directory, with injected deps for testing. The
  * default export (`machineDirectory`) wires the real DB.
  */
@@ -502,9 +563,12 @@ export function createMachineDirectory(
       // binding IS the entitlement (established by the route's page-edit
       // check before deriveMachinePaneBinding ran), so the agent's/global
       // assistant's own configured machine list is never consulted — the
-      // bound machine is the ONLY machine this run may ever see or switch to.
+      // DERIVED HANDLE SET is the only machine list this run may ever see.
+      // Read from `handles`, not from `self`: the set is the single
+      // authorization fact, and a node deeper in the tree must never be
+      // reachable through a machine this list doesn't report.
       if (rawContext?.machineBinding) {
-        return Promise.resolve([{ kind: 'existing' as const, machineId: rawContext.machineBinding.machineId }]);
+        return Promise.resolve(machinesOfHandleSet(rawContext.machineBinding));
       }
       return resolveConfiguredMachines(activeMachineAgentPageId(rawContext), rawContext?.userId, deps);
     },
@@ -525,15 +589,21 @@ export function createMachineDirectory(
       if (!page || page.isTrashed || !isMachinePage(page.type as PageType)) return { allowed: false };
       const canView = await deps.canViewPage(rawContext, machine.machineId);
       if (!canView) return { allowed: false };
-      // A machine-bound "PageSpace Agent" pane (issue #2166 phase 7): the
-      // pane's OWN bound machine is exempt from the Settings-toggle decision
-      // below — same rationale as the user-scoped-agent exemption just below
-      // (the binding IS the entitlement, established by the route's
+      // A machine-bound "PageSpace Agent" pane (issue #2166 phase 7): any
+      // machine IN THE DERIVED HANDLE SET is exempt from the Settings-toggle
+      // decision below — same rationale as the user-scoped-agent exemption
+      // just below (the binding IS the entitlement, established by the route's
       // page-edit check before deriveMachinePaneBinding ran) — but existence/
-      // trash/type/canActorViewPage above are NEVER bypassed. A DIFFERENT
-      // machine (e.g. an attempted switch_machine away from the bound
-      // checkout) still gets the full toggle check below.
-      if (rawContext.machineBinding?.machineId === machine.machineId) return { allowed: true };
+      // trash/type/canActorViewPage above are NEVER bypassed. A machine
+      // OUTSIDE the set (an attempted switch away from the bound tree, or a
+      // sibling node's machine) still gets the full toggle check below.
+      //
+      // This membership test is THE policy site for the cascade: `open()`'s
+      // `target` resolution (sandbox-tools.ts) addresses nodes out of the same
+      // set, so a node this check would deny is a node the set never contained.
+      // Adding a second place that decides node access is the review
+      // failure-mode for every later phase of this epic.
+      if (handleSetContainsMachine(rawContext.machineBinding, machine.machineId)) return { allowed: true };
       // Machine access toggles (Settings tab): pure policy in @pagespace/lib
       // machines/machine-access.ts. An agentPageId — the agent's own page or
       // the parent's for a sub-agent — marks the actor page-scoped; without

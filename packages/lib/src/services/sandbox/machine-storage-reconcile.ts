@@ -34,6 +34,17 @@
  *     it self-corrects on the next wake. `staleMeasurements` surfaces how many
  *     rows are billing on an ageing measurement so this is observable.
  *
+ * THREE row sources, one meter (issue #2204 phases 3 and 7): a Machine's own
+ * Sprite (`machine_sessions`), every live branch-terminal Sprite
+ * (`machine_branches`), and every PROMOTED project Sprite (`machine_projects`)
+ * — each a separate persistent filesystem. Each one's measurement and watermark
+ * live on its OWN row, but every CHARGE is attributed to the owning Machine page
+ * — the payer key and the field the per-machine usage breakdown groups on (see
+ * `machine-storage-attribution.ts`). Before phase 3, branch Sprites accrued
+ * storage cost that was billed nowhere at all; a promoted project's Sprite would
+ * have had the same hole, since promotion moves its bytes off the machine's own
+ * measured filesystem.
+ *
  * `machine_sessions` already enumerates every known machine: a row is only
  * ever deleted on explicit session-end/crash, NOT on idle — persistent
  * sessions hibernate in place and keep their row (machine-session-manager.ts's
@@ -64,6 +75,7 @@
 
 import { calculateMachineStorageCostDollars } from '../../monitoring/machine-pricing';
 import { bytesToGB } from './machine-storage-measure';
+import { storageAttributionPageId, type StorageSubject } from './machine-storage-attribution';
 import { loggers } from '../../logging/logger-config';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -125,15 +137,99 @@ export interface MachineStorageRow {
   lastActiveAt: Date;
 }
 
+/**
+ * A branch-terminal's OWN Sprite (issue #2204 phase 3). Its filesystem is
+ * separate from the owning Machine's, so its measurement and watermark live on
+ * its own `machine_branches` row — but it is billed to `machinePageId`, the
+ * owning Machine page (see machine-storage-attribution.ts). Torn-down branches
+ * have no filesystem left to meter and are expected to be filtered out by the
+ * row source, not billed at 0 here.
+ */
+export interface BranchStorageRow {
+  /** The `machine_branches` row id — where THIS Sprite's measurement/watermark are persisted. */
+  machineBranchId: string;
+  /** The owning Machine page — the attribution key (payer + usage-breakdown grouping). */
+  machinePageId: string;
+  storageLastBilledAt: Date;
+  /** Last opportunistically-measured used bytes on the BRANCH Sprite; null when never measured. */
+  measuredBytes: number | null;
+  /** When `measuredBytes` was captured; null when never measured. */
+  measuredAt: Date | null;
+  /**
+   * The OWNING machine's last real-work activity — branch runs record activity
+   * on the machine key (`branch-session.ts` keys the guardrail/activity by
+   * `machineId`), so this is the only awake signal a branch row has. Used
+   * solely for the staleness health flag, never for billing.
+   */
+  lastActiveAt: Date;
+}
+
+/**
+ * A PROMOTED project's OWN Sprite (issue #2204 phase 7) — the project-tier twin
+ * of `BranchStorageRow`, and identical in every billing respect. Promotion moves
+ * a project's bytes OFF the machine's own filesystem onto this one, so without
+ * this row source those bytes would stop being metered anywhere the moment a
+ * project was promoted. Unpromoted and torn-down projects have no Sprite of
+ * their own and are expected to be filtered out by the row source, not billed at
+ * 0 here.
+ */
+export interface ProjectStorageRow {
+  /** The `machine_projects` row id — where THIS Sprite's measurement/watermark are persisted. */
+  machineProjectId: string;
+  /** The owning Machine page — the attribution key (payer + usage-breakdown grouping). */
+  machinePageId: string;
+  storageLastBilledAt: Date;
+  /** Last opportunistically-measured used bytes on the PROJECT Sprite; null when never measured. */
+  measuredBytes: number | null;
+  /** When `measuredBytes` was captured; null when never measured. */
+  measuredAt: Date | null;
+  /**
+   * The OWNING machine's last real-work activity — a promoted project's runs
+   * record activity on the machine key (`project-session.ts` keys the
+   * guardrail/activity by `machineId`), so this is the only awake signal it has.
+   * Used solely for the staleness health flag, never for billing.
+   */
+  lastActiveAt: Date;
+}
+
+/** One metered filesystem, kind-agnostic: what to bill, and who to bill it to. */
+interface BillableStorage {
+  subject: StorageSubject;
+  storageLastBilledAt: Date;
+  measuredBytes: number | null;
+  measuredAt: Date | null;
+  lastActiveAt: Date;
+}
+
 export interface ReconcileMachineStorageDeps {
   /** Every machine with a persistent fs to meter (see module doc — hibernated rows are included). */
   listMachines: () => Promise<MachineStorageRow[]>;
+  /**
+   * Every LIVE branch-terminal Sprite to meter — a second persistent filesystem
+   * per row, billed to its owning Machine page. Same never-wake rule: this reads
+   * persisted measurements only.
+   */
+  listBranchSprites: () => Promise<BranchStorageRow[]>;
+  /**
+   * Every PROMOTED project Sprite to meter (`sandboxId` set, not torn down) —
+   * a third persistent filesystem per row, billed to its owning Machine page.
+   * Same never-wake rule: this reads persisted measurements only.
+   */
+  listProjectSprites: () => Promise<ProjectStorageRow[]>;
   /** Resolves a page's owning drive's ownerId; null when it can't be resolved (e.g. an orphaned row). */
   lookupPageOwnerId: (pageId: string) => Promise<string | null>;
   /** Charges the payer for this machine's accrued storage cost. Not hold-gated — a background reconcile charge, mirroring reconcile-ai-cost. */
   chargeStorage: (input: { payerId: string; pageId: string; costDollars: number; gbMonths: number }) => Promise<void>;
   /** Persists the new watermark so the next run only bills the following window. */
   advanceWatermark: (input: { pageId: string; billedThrough: Date }) => Promise<void>;
+  /**
+   * The same watermark advance for a BRANCH Sprite — a separate writer because
+   * the watermark lives on the branch's own `machine_branches` row, even though
+   * the CHARGE it follows is attributed to the owning Machine page.
+   */
+  advanceBranchWatermark: (input: { machineBranchId: string; billedThrough: Date }) => Promise<void>;
+  /** The same watermark advance for a PROMOTED PROJECT Sprite, on its own `machine_projects` row. */
+  advanceProjectWatermark: (input: { machineProjectId: string; billedThrough: Date }) => Promise<void>;
   now: () => Date;
 }
 
@@ -159,8 +255,53 @@ export interface ReconcileMachineStorageResult {
 export async function reconcileMachineStorage(
   deps: ReconcileMachineStorageDeps,
 ): Promise<ReconcileMachineStorageResult> {
-  const machines = await deps.listMachines();
+  // Both row sources are read the same way — persisted measurements only, no
+  // sprite handle anywhere in the deps seam — then metered by ONE loop, so a
+  // branch Sprite can never drift onto a different pricing/watermark/staleness
+  // rule than a machine's own. Only two things vary by kind: which row the
+  // watermark advance writes to, and nothing else (the charge always keys on
+  // the attribution page — see machine-storage-attribution.ts).
+  const [machines, branches, projects] = await Promise.all([
+    deps.listMachines(),
+    deps.listBranchSprites(),
+    deps.listProjectSprites(),
+  ]);
   const now = deps.now();
+
+  const billable: BillableStorage[] = [
+    ...machines.map((m) => ({
+      subject: { kind: 'machine', pageId: m.pageId } as const,
+      storageLastBilledAt: m.storageLastBilledAt,
+      measuredBytes: m.measuredBytes,
+      measuredAt: m.measuredAt,
+      lastActiveAt: m.lastActiveAt,
+    })),
+    ...branches.map((b) => ({
+      subject: { kind: 'branch', machineBranchId: b.machineBranchId, machinePageId: b.machinePageId } as const,
+      storageLastBilledAt: b.storageLastBilledAt,
+      measuredBytes: b.measuredBytes,
+      measuredAt: b.measuredAt,
+      lastActiveAt: b.lastActiveAt,
+    })),
+    ...projects.map((p) => ({
+      subject: { kind: 'project', machineProjectId: p.machineProjectId, machinePageId: p.machinePageId } as const,
+      storageLastBilledAt: p.storageLastBilledAt,
+      measuredBytes: p.measuredBytes,
+      measuredAt: p.measuredAt,
+      lastActiveAt: p.lastActiveAt,
+    })),
+  ];
+
+  const advanceWatermark = (subject: StorageSubject, billedThrough: Date): Promise<void> => {
+    switch (subject.kind) {
+      case 'machine':
+        return deps.advanceWatermark({ pageId: subject.pageId, billedThrough });
+      case 'branch':
+        return deps.advanceBranchWatermark({ machineBranchId: subject.machineBranchId, billedThrough });
+      case 'project':
+        return deps.advanceProjectWatermark({ machineProjectId: subject.machineProjectId, billedThrough });
+    }
+  };
 
   let charged = 0;
   let skipped = 0;
@@ -168,7 +309,11 @@ export async function reconcileMachineStorage(
   let staleMeasurements = 0;
   let totalCostDollars = 0;
 
-  for (const machine of machines) {
+  for (const machine of billable) {
+    // The page this filesystem bills to — the machine's own page, or, for a
+    // branch Sprite, its OWNING machine page. One key for the payer lookup, the
+    // charge's `pageId`, and therefore the per-machine usage breakdown.
+    const attributionPageId = storageAttributionPageId(machine.subject);
     try {
       const elapsedMs = now.getTime() - machine.storageLastBilledAt.getTime();
       const lastMeasuredGB = machine.measuredBytes === null ? null : bytesToGB(machine.measuredBytes);
@@ -200,12 +345,12 @@ export async function reconcileMachineStorage(
       // A back-to-back rerun (elapsedMs === 0) advances nothing, a pure no-op.
       if (costDollars <= 0) {
         if (elapsedMs > 0) {
-          await deps.advanceWatermark({ pageId: machine.pageId, billedThrough: now });
+          await advanceWatermark(machine.subject, now);
         }
         continue;
       }
 
-      const ownerId = await deps.lookupPageOwnerId(machine.pageId);
+      const ownerId = await deps.lookupPageOwnerId(attributionPageId);
       if (!ownerId) {
         // Can't resolve who to bill (e.g. the page/drive vanished). Leave the
         // watermark untouched so this window keeps accruing until it either
@@ -214,8 +359,8 @@ export async function reconcileMachineStorage(
         continue;
       }
 
-      await deps.chargeStorage({ payerId: ownerId, pageId: machine.pageId, costDollars, gbMonths });
-      await deps.advanceWatermark({ pageId: machine.pageId, billedThrough: now });
+      await deps.chargeStorage({ payerId: ownerId, pageId: attributionPageId, costDollars, gbMonths });
+      await advanceWatermark(machine.subject, now);
       totalCostDollars += costDollars;
       charged += 1;
     } catch (error) {
@@ -227,10 +372,13 @@ export async function reconcileMachineStorage(
       loggers.ai.error(
         'Machine storage reconcile failed for machine',
         error instanceof Error ? error : new Error(String(error)),
-        { pageId: machine.pageId },
+        // The attribution page plus the subject kind: a branch or promoted-project
+        // failure must be distinguishable from its owning machine's own row
+        // failing, since all three log the same pageId.
+        { pageId: attributionPageId, subject: machine.subject.kind },
       );
     }
   }
 
-  return { processed: machines.length, charged, skipped, failed, staleMeasurements, totalCostDollars };
+  return { processed: billable.length, charged, skipped, failed, staleMeasurements, totalCostDollars };
 }

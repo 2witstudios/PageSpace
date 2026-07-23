@@ -125,6 +125,28 @@ const WEB_SEARCH_TOOLS = new Set(['web_search', 'web_fetch']);
 // is moot.
 const MACHINE_BINDING_LOCKED_TOOLS = new Set(['switch_machine', 'list_machines']);
 
+/**
+ * The SESSION FAMILY — the orchestration surface of a machine-BOUND
+ * conversation, and only of a machine-bound one.
+ *
+ * Registered by ADDITION rather than by filtering (see
+ * `withSessionFamilyTools`): these tools are meaningless without a derived
+ * handle set to resolve their targets against, and a drive agent's tool set
+ * must stay byte-identical to what it is today. Adding them to the baseline
+ * registry and filtering them back out for everyone else would leak them into
+ * every other surface that composes `pageSpaceTools` without the binding
+ * filter (the global assistant, /v1 completions, consult, workflows, and the
+ * agent-config tool listings).
+ */
+export const SESSION_FAMILY_TOOL_NAMES: readonly string[] = [
+  'list_sessions',
+  'add_session',
+  'move_session',
+  'kill_session',
+  'read_session',
+  'send_session',
+];
+
 // Image-generation tools (a runtime composer toggle, like web search — filtered
 // independently of the saved per-agent allow-list).
 const IMAGE_GEN_TOOLS = new Set(['generate_image']);
@@ -256,6 +278,53 @@ export function filterToolsForMachineBinding<T>(
 
   return Object.fromEntries(
     Object.entries(tools).filter(([name]) => !MACHINE_BINDING_LOCKED_TOOLS.has(name))
+  );
+}
+
+/**
+ * Register the session family for a machine-BOUND conversation.
+ *
+ * The exact counterpart of `filterToolsForMachineBinding`: that one takes away
+ * what a bound conversation must not have (`switch_machine`/`list_machines` —
+ * it cannot leave its machine), this one adds what only a bound conversation
+ * can use. An unbound conversation gets its input back UNCHANGED — same object
+ * contents, same key order — because the drive-agent tool set is not this
+ * epic's to change.
+ */
+export function withSessionFamilyTools<T>(
+  tools: Record<string, T>,
+  sessionTools: Record<string, T>,
+  isBound: boolean
+): Record<string, T> {
+  if (!isBound) return tools;
+  return { ...tools, ...sessionTools };
+}
+
+/**
+ * Apply a page's saved per-agent tool allowlist (`page.enabledTools`).
+ *
+ * null = unconfigured page, no restriction; [] = every listed PageSpace tool
+ * blocked. The SESSION FAMILY is exempt: it is the machine BINDING's
+ * orchestration surface, present only when a conversation is bound (see
+ * `withSessionFamilyTools`), and a bound page whose allowlist was saved before
+ * the family existed must not silently lose it. Unbound conversations never
+ * have these names in their input, so the exemption cannot leak them.
+ *
+ * CAVEAT for whoever surfaces these names in the agent-config tool toggles:
+ * the exemption is unconditional, so a toggle for kill_session/send_session
+ * would be a silent no-op. If the family ever becomes operator-restrictable,
+ * gate this exemption on "the allowlist predates the family" instead of on
+ * the tool name.
+ */
+export function filterToolsForAgentAllowlist<T>(
+  tools: Record<string, T>,
+  allowlist: string[] | null
+): Record<string, T> {
+  if (allowlist == null) return tools;
+  return Object.fromEntries(
+    Object.entries(tools).filter(
+      ([name]) => allowlist.includes(name) || SESSION_FAMILY_TOOL_NAMES.includes(name)
+    )
   );
 }
 

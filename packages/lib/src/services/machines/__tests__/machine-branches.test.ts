@@ -8,6 +8,7 @@ import {
   BRANCH_REPO_PATH,
   type MachineBranchesDeps,
   type MachineBranchProjectLookup,
+  type BranchStorageMeasurement,
 } from '../machine-branches';
 import type { MachineBranchStore, MachineBranchRecord } from '../machine-branches-store';
 import { deriveBranchSessionKey } from '../branch-session';
@@ -36,6 +37,7 @@ function makeStore(seed: MachineBranchRecord[] = []) {
   const store: MachineBranchStore = {
     list: async (machineId, projectName) =>
       [...rows.values()].filter((r) => r.machineId === machineId && r.projectName === projectName),
+    listForMachine: async (machineId) => [...rows.values()].filter((r) => r.machineId === machineId),
     findByName: async (machineId, projectName, branchName) => rows.get(key(machineId, projectName, branchName)) ?? null,
     findById: async (id) => [...rows.values()].find((r) => r.id === id) ?? null,
     create: async (input) => {
@@ -1276,5 +1278,81 @@ describe('listBranches', () => {
     const result = await listBranches({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, store });
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({ branchName: 'main', projectName: PROJECT_NAME });
+  });
+});
+
+describe('branch-Sprite storage measurement seam (issue #2204 phase 3)', () => {
+  /** Collects seam calls without their handle, which is the fake Sprite object. */
+  function makeMeasureSeam() {
+    const calls: Array<{ machineBranchId: string; machinePageId: string; hasHandle: boolean }> = [];
+    const measureBranchStorage = async (input: BranchStorageMeasurement) => {
+      calls.push({
+        machineBranchId: input.machineBranchId,
+        machinePageId: input.machinePageId,
+        hasHandle: typeof input.handle?.exec === 'function',
+      });
+    };
+    return { calls, measureBranchStorage };
+  }
+
+  it('given a freshly spawned branch, should measure the branch row and attribute it to the OWNING machine page', async () => {
+    const { calls, measureBranchStorage } = makeMeasureSeam();
+    const { deps, store } = makeDeps({ measureBranchStorage });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    expect(result.ok).toBe(true);
+    const row = await store.findByName(TERMINAL_ID, PROJECT_NAME, 'main');
+
+    // Measured against its OWN row, while it is still awake, keyed to the
+    // owning Machine page — the attribution key the reconcile bills on.
+    expect(calls).toEqual([{ machineBranchId: row?.id, machinePageId: TERMINAL_ID, hasHandle: true }]);
+  });
+
+  it('given a reattach of an existing branch, should measure again (footprints change between sessions)', async () => {
+    const { calls, measureBranchStorage } = makeMeasureSeam();
+    const { deps } = makeDeps({ measureBranchStorage });
+
+    await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    const resumed = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+
+    expect(resumed).toMatchObject({ ok: true, resumed: true });
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toMatchObject({ machinePageId: TERMINAL_ID, hasHandle: true });
+  });
+
+  it('given attachBranch, should measure the attached branch Sprite', async () => {
+    const { calls, measureBranchStorage } = makeMeasureSeam();
+    const { deps, store, host } = makeDeps({ measureBranchStorage });
+    await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    calls.length = 0;
+
+    const attached = await attachBranch({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      branchName: 'main',
+      store,
+      host,
+      resolveRootMachineHandle: async () => null,
+      measureBranchStorage,
+    });
+
+    expect(attached.ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ machinePageId: TERMINAL_ID, hasHandle: true });
+  });
+
+  it('given a measurement seam that rejects, should NOT fail the spawn (best-effort billing telemetry)', async () => {
+    const { deps } = makeDeps({ measureBranchStorage: async () => { throw new Error('db down'); } });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+
+    // Billing telemetry is best-effort: it must never fail a user-facing spawn.
+    expect(result.ok).toBe(true);
+  });
+
+  it('given no measurement seam wired, should spawn exactly as before (fully optional)', async () => {
+    const { deps } = makeDeps();
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    expect(result).toMatchObject({ ok: true, resumed: false });
   });
 });

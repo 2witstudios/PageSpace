@@ -6,6 +6,7 @@
 import { ModelCapabilities } from './model-capabilities';
 import type { CommandExecutionData } from './command-processor';
 import type { MachineRef } from '@/lib/repositories/page-agent-repository';
+import type { MachineNodeHandleSet } from '@pagespace/lib/services/machines/machine-pane-binding';
 
 export interface ToolExecutionContext {
   userId: string;
@@ -104,17 +105,20 @@ export interface ToolExecutionContext {
   turnId?: string;
 
   // "PageSpace Agent" panes (Terminal epics, issue #2166): the server-derived
-  // binding that pins THIS run's default-mode code-exec tools (bash/readFile/
-  // writeFile/editFile) to the machine checkout the pane is bound to —
-  // computed once per request from `deriveMachinePaneBinding`
-  // (@pagespace/lib/services/machines/machine-pane-binding) and never
-  // mutated in place afterward (unlike `activeMachine`, a pagespace pane's
-  // binding is fixed for the conversation's lifetime, not switchable
-  // mid-turn). Undefined for every conversation that isn't a machine-bound
-  // pagespace pane.
-  machineBinding?: {
-    machineId: string;
-    cwd: string;
-    branchSandbox?: { machineBranchId: string; sandboxId: string };
-  };
+  // HANDLE SET that pins THIS run's default-mode code-exec tools (bash/
+  // readFile/writeFile/editFile/git) to the machine node the pane is bound to
+  // AND to every node beneath it — `self` is the pane's own node (its cwd and,
+  // for a branch, its Sprite); `handles` is the downward closure a `target`
+  // argument may address. Computed once per request from
+  // `deriveMachinePaneBinding` (@pagespace/lib/services/machines/
+  // machine-pane-binding) and never mutated in place afterward (unlike
+  // `activeMachine`, a pagespace pane's binding is fixed for the
+  // conversation's lifetime, not switchable mid-turn). Undefined for every
+  // conversation that isn't a machine-bound pagespace pane.
+  //
+  // This set is the ONLY authorization fact for the machine tool surface:
+  // `isMachineAccessible` (sandbox-tools-runtime.ts) exempts a machine because
+  // it is in this set, and `open()`'s target resolution addresses a node
+  // because it is in this set. Nothing else may decide node access.
+  machineBinding?: MachineNodeHandleSet;
 }

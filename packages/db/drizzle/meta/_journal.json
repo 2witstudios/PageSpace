@@ -1513,6 +1513,34 @@
       "when": 1784504348073,
       "tag": "0215_adorable_stepford_cuckoos",
       "breakpoints": true
+    },
+    {
+      "idx": 216,
+      "version": "7",
+      "when": 1784736915491,
+      "tag": "0216_easy_raider",
+      "breakpoints": true
+    },
+    {
+      "idx": 217,
+      "version": "7",
+      "when": 1784750028281,
+      "tag": "0217_famous_blue_blade",
+      "breakpoints": true
+    },
+    {
+      "idx": 218,
+      "version": "7",
+      "when": 1784751670586,
+      "tag": "0218_smooth_gorilla_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 219,
+      "version": "7",
+      "when": 1784751730586,
+      "tag": "0219_project_sprite_reclaim_trigger",
+      "breakpoints": true
     }
   ]
 }

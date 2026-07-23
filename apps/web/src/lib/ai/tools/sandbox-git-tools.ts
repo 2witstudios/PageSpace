@@ -28,11 +28,17 @@ import type { GitSandboxRunDeps } from '@pagespace/lib/services/sandbox/git-tool
 import { runGitInSandbox } from '@pagespace/lib/services/sandbox/git-tool-runners';
 import {
   machineAccessDeniedError,
+  nodeTargetDeniedError,
   resolveActiveMachine,
   type MachineDirectoryDeps,
   type ResolveSandboxContext,
   type SandboxGate,
 } from './sandbox-tools';
+import {
+  resolveMachineNodeTarget,
+  type MachineNodeHandle,
+  type MachineNodeTarget,
+} from '@pagespace/lib/services/machines/machine-pane-binding';
 import type { MachineRef } from '@/lib/repositories/page-agent-repository';
 import type { ToolExecutionContext } from '../core/types';
 import {
@@ -74,7 +80,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
    * use in sandbox-tools.ts, so git commands run against the same active
    * machine as the rest of the terminal tool group.
    */
-  const open = async (options: unknown): Promise<OpenResult> => {
+  const open = async (options: unknown, target?: MachineNodeTarget): Promise<OpenResult> => {
     const rawContext = readContext(options);
     const ctx = await resolveContext(rawContext);
     if ('error' in ctx) return { ok: false, error: { success: false, error: ctx.error } };
@@ -109,7 +115,43 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
     const tenantId = machines.resolveTenantId
       ? await machines.resolveTenantId(rawContext, activeMachine, ctx.tenantId)
       : ctx.tenantId;
-    return { ok: true, userId: ctx.userId, ctx: { ...ctx, driveId, tenantId, activeMachine } as SandboxActorContext & { activeMachine: MachineRef } };
+    // Node resolution, identical to sandbox-tools.ts's `open()`: the bound
+    // node by default, or the one `target` addresses, resolved by membership
+    // in the derived handle set (the single policy site). Threading
+    // `branchSandbox` here is what routes git through the attach-only branch
+    // seam — without it every bound conversation, branch or not, ran git
+    // against the machine's own checkout while bash ran against the branch's.
+    const binding = rawContext?.machineBinding;
+    if (!binding) {
+      if (target && (target.project || target.branch)) {
+        return { ok: false, error: nodeTargetDeniedError('unbound', target) };
+      }
+      return {
+        ok: true,
+        userId: ctx.userId,
+        ctx: { ...ctx, driveId, tenantId, activeMachine, branchSandbox: undefined, projectSandbox: undefined } as SandboxActorContext & {
+          activeMachine: MachineRef;
+        },
+      };
+    }
+    const resolved = resolveMachineNodeTarget(binding, target);
+    if (!resolved.ok) return { ok: false, error: nodeTargetDeniedError(resolved.reason, target ?? {}) };
+    const node = resolved.handle;
+    const branchSandbox = node.branchSandbox
+      ? { machineId: node.machineId, machineBranchId: node.branchSandbox.machineBranchId }
+      : undefined;
+    // Same flip for a PROMOTED project — its repo is on its own Sprite.
+    const projectSandbox = node.projectSandbox
+      ? { machineId: node.machineId, machineProjectId: node.projectSandbox.machineProjectId }
+      : undefined;
+    return {
+      ok: true,
+      userId: ctx.userId,
+      node,
+      ctx: { ...ctx, driveId, tenantId, activeMachine, branchSandbox, projectSandbox } as SandboxActorContext & {
+        activeMachine: MachineRef;
+      },
+    };
   };
 
   /** Direct-exec seam for local git commands (no token needed). */
@@ -122,13 +164,14 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
    */
   const withToken = async (
     options: unknown,
-    run: (ctx: SandboxActorContext, token: string) => Promise<unknown>,
+    target: MachineNodeTarget | undefined,
+    run: (ctx: SandboxActorContext, token: string, node?: MachineNodeHandle) => Promise<unknown>,
   ) => {
-    const opened = await open(options);
+    const opened = await open(options, target);
     if (!opened.ok) return opened.error;
     const token = await gitRunDeps.resolveGitHubToken(opened.userId);
     if (!token) return NO_CONNECTION_ERROR;
-    return run(opened.ctx, token);
+    return run(opened.ctx, token, opened.node);
   };
 
   /** Remote-exec seam: passes the pre-resolved token to skip the second DB lookup. */

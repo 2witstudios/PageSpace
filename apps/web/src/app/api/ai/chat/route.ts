@@ -64,7 +64,13 @@ import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-
 import { getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { buildInlineInstructions } from '@/lib/ai/core/inline-instructions';
 import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
-import { filterToolsForReadOnly, filterToolsForMcpScope, filterToolsForMachineBinding } from '@/lib/ai/core/tool-filtering';
+import {
+  filterToolsForReadOnly,
+  filterToolsForMcpScope,
+  filterToolsForMachineBinding,
+  filterToolsForAgentAllowlist,
+  withSessionFamilyTools,
+} from '@/lib/ai/core/tool-filtering';
 import { deriveMachinePaneBinding } from '@pagespace/lib/services/machines/machine-pane-binding';
 import { buildMachinePaneBindingDeps } from '@/lib/ai/machine-pane/machine-pane-binding-runtime';
 import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
@@ -117,6 +123,7 @@ import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { buildMachineBindingPrompt } from '@/lib/ai/machines/machine-binding-prompt';
 
 
 // Allow streaming responses up to 5 minutes for complex AI agent interactions
@@ -580,13 +587,10 @@ export async function POST(request: Request) {
       });
       return NextResponse.json({ error: 'This conversation is not bound to this machine' }, { status: 400 });
     }
-    const machineBinding = machinePaneBindingResult?.ok
-      ? {
-          machineId: chatId!,
-          cwd: machinePaneBindingResult.binding.cwd,
-          branchSandbox: machinePaneBindingResult.binding.branchSandbox,
-        }
-      : undefined;
+    // The derived handle set IS the binding: every handle already carries the
+    // owning machine page id (checked against `chatId` inside the pure core),
+    // so nothing is re-stamped here.
+    const machineBinding = machinePaneBindingResult?.ok ? machinePaneBindingResult.binding : undefined;
 
     // Process @mentions in the user's message
     let mentionSystemPrompt = '';
@@ -890,12 +894,26 @@ export async function POST(request: Request) {
     // Step 1: Apply isReadOnly filter, hide account-level-only tools
     // (e.g. create_drive) from drive-scoped MCP tokens' tool list, then drop
     // switch_machine/list_machines when this conversation is bound to one
-    // machine (see machinePaneBindingResult above).
-    const baseTools = filterToolsForMachineBinding(
-      filterToolsForMcpScope(
-        filterToolsForReadOnly(pageSpaceTools, readOnlyMode),
-        isScopedMCPAuth(authResult)
+    // machine (see machinePaneBindingResult above) and register the SESSION
+    // FAMILY in their place.
+    //
+    // The family is added HERE, not in `pageSpaceTools`, on purpose: this is
+    // the one composition site that knows about the binding, and every other
+    // consumer of that registry (the global assistant, /v1 completions,
+    // consult, workflows, the agent-config listings) must keep its tool set
+    // byte-unchanged. The runtime module is loaded DYNAMICALLY, and only on
+    // this branch: it reaches the agent-terminal and workspace stores (and,
+    // through them, the Sprites driver seam), none of which an unbound
+    // request has any business pulling into its module graph.
+    const baseTools = withSessionFamilyTools(
+      filterToolsForMachineBinding(
+        filterToolsForMcpScope(
+          filterToolsForReadOnly(pageSpaceTools, readOnlyMode),
+          isScopedMCPAuth(authResult)
+        ),
+        machineBinding != null
       ),
+      machineBinding != null ? (await import('@/lib/ai/tools/session-tools-runtime')).buildSessionTools() : {},
       machineBinding != null
     );
 
@@ -912,14 +930,10 @@ export async function POST(request: Request) {
     // []            = zero tools selected — block all PageSpace tools.
     // ['tool1', …]  = only those tools.
     const agentEnabledTools = page.enabledTools as string[] | null;
-    let filteredTools: ToolSet;
-    if (agentEnabledTools != null) {
-      filteredTools = Object.fromEntries(
-        Object.entries(baseToolsWithoutOverrides).filter(([name]) => agentEnabledTools.includes(name))
-      ) as ToolSet;
-    } else {
-      filteredTools = baseToolsWithoutOverrides as ToolSet;
-    }
+    let filteredTools = filterToolsForAgentAllowlist(
+      baseToolsWithoutOverrides,
+      agentEnabledTools
+    ) as ToolSet;
 
     // Step 4: webSearchEnabled is a runtime input toggle that overrides the allowlist.
     // If the user toggled web search on in the composer, they get web_search regardless of enabledTools.
@@ -1194,7 +1208,7 @@ export async function POST(request: Request) {
     // for the conversation's lifetime, so it belongs in the STABLE section,
     // not the per-turn locationPrompt below.
     if (machineBinding) {
-      systemPrompt += `\n\nMACHINE BINDING (this conversation)\n• This conversation is bound to machine "${machineBinding.machineId}" — code-execution tools (bash, readFile, writeFile, editFile, git/gh) operate from working directory: ${machineBinding.cwd}\n• switch_machine and list_machines are unavailable — this conversation cannot leave its bound machine`;
+      systemPrompt += buildMachineBindingPrompt(machineBinding);
     }
 
     // Build timestamp system prompt for temporal awareness
@@ -1561,7 +1575,7 @@ export async function POST(request: Request) {
                 // first tool call, without waiting for a switch_machine call.
                 machineBinding,
                 activeMachine: machineBinding
-                  ? { kind: 'existing' as const, machineId: machineBinding.machineId }
+                  ? { kind: 'existing' as const, machineId: machineBinding.self.machineId }
                   : undefined,
               }, // Pass userId, timezone, AI context, location context, model capabilities, and chat source to tools
               maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits

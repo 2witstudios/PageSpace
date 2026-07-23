@@ -31,6 +31,11 @@ import {
 import { MAX_COMMAND_BYTES } from '@pagespace/lib/services/sandbox/command-policy';
 import type { SandboxToolGateResult } from '@pagespace/lib/services/sandbox/tool-gate';
 import type { MachineToggleDenialCode } from '@pagespace/lib/services/machines/machine-access';
+import {
+  resolveMachineNodeTarget,
+  type MachineNodeHandle,
+  type MachineNodeTarget,
+} from '@pagespace/lib/services/machines/machine-pane-binding';
 import type { ToolExecutionContext } from '../core/types';
 import type { MachineRef } from '@/lib/repositories/page-agent-repository';
 
@@ -48,14 +53,59 @@ export function machineRefEquals(a: MachineRef, b: MachineRef): boolean {
 /**
  * `bash`'s cwd-default policy for a machine-bound "PageSpace Agent" pane
  * (issue #2166 phase 7): an explicit `cwd` argument always wins; absent one,
- * the binding's own `cwd` (the pane's checkout) is used. Returns `undefined`
- * when neither is present, preserving the runner's own SANDBOX_ROOT default.
+ * the RESOLVED NODE's `cwd` (the pane's own checkout, or the checkout of the
+ * node its `target` addressed) is used. Returns `undefined` when neither is
+ * present, preserving the runner's own SANDBOX_ROOT default.
  */
 export function bindingCwdFor(
   explicitCwd: string | undefined,
   binding: { cwd: string } | undefined,
 ): string | undefined {
   return explicitCwd ?? binding?.cwd;
+}
+
+/**
+ * Direct child addressing (node epic): every code-execution tool may aim at a
+ * node BENEATH the conversation's own — a project, or a branch — instead of
+ * the node it is bound to. Resolution runs against the derived handle set
+ * (`resolveMachineNodeTarget`), so a node outside the set is simply not
+ * addressable. `branch` alone is enough when the conversation already lives in
+ * a project, or when the name is unique across the whole set.
+ */
+export const nodeTargetSchema = z
+  .object({
+    project: z.string().min(1).max(MAX_PATH_LENGTH).optional(),
+    branch: z.string().min(1).max(MAX_PATH_LENGTH).optional(),
+  })
+  .strict();
+
+/** The tool-facing denial for a `target` that the conversation's node scope doesn't contain. */
+export function nodeTargetDeniedError(
+  reason: 'target_not_in_set' | 'ambiguous_target' | 'unbound',
+  target: MachineNodeTarget,
+): { success: false; error: string } {
+  const described = [
+    target.project ? `project "${target.project}"` : undefined,
+    target.branch ? `branch "${target.branch}"` : undefined,
+  ]
+    .filter(Boolean)
+    .join(' / ');
+  if (reason === 'ambiguous_target') {
+    return {
+      success: false,
+      error: `The target ${described} is ambiguous — that branch name exists under more than one project. Name the project as well.`,
+    };
+  }
+  if (reason === 'unbound') {
+    return {
+      success: false,
+      error: `This conversation is not bound to a machine, so it has no node scope to address — remove the target (${described}).`,
+    };
+  }
+  return {
+    success: false,
+    error: `The target ${described} is not part of this conversation's machine scope. Call list_sessions to see the nodes you can address.`,
+  };
 }
 
 /** Resolves an agent-facing id (from switch_machine's input) back to a configured MachineRef. */
@@ -73,6 +123,7 @@ export const bashInputSchema = z
     // Opt-in override for long-running commands (e.g. `bun install`), clamped
     // to SANDBOX_MAX_TIMEOUT_MS by the runner. Omit for the default (120s).
     timeoutMs: z.number().int().positive().optional(),
+    target: nodeTargetSchema.optional(),
   })
   .strict();
 
@@ -80,12 +131,14 @@ export const writeFileInputSchema = z
   .object({
     path: z.string().min(1, 'path is required').max(MAX_PATH_LENGTH),
     content: z.string().max(MAX_WRITE_BYTES, 'content is too large'),
+    target: nodeTargetSchema.optional(),
   })
   .strict();
 
 export const readFileInputSchema = z
   .object({
     path: z.string().min(1, 'path is required').max(MAX_PATH_LENGTH),
+    target: nodeTargetSchema.optional(),
   })
   .strict();
 
@@ -95,6 +148,7 @@ export const editFileInputSchema = z
     oldString: z.string().min(1, 'oldString is required'),
     newString: z.string(),
     replaceAll: z.boolean().optional(),
+    target: nodeTargetSchema.optional(),
   })
   .strict();
 
@@ -325,8 +379,9 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
   // session acquisition to that machine's persistent Sprite (machine-session.ts).
   const open = async (
     options: unknown,
+    target?: MachineNodeTarget,
   ): Promise<
-    | { ok: true; ctx: SandboxActorContext & { activeMachine: MachineRef } }
+    | { ok: true; ctx: SandboxActorContext & { activeMachine: MachineRef }; node?: MachineNodeHandle }
     | { ok: false; error: { success: false; error: string; retryAfter?: number } }
   > => {
     const rawContext = readContext(options);
@@ -359,29 +414,52 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
     const tenantId = machines.resolveTenantId
       ? await machines.resolveTenantId(rawContext, activeMachine, ctx.tenantId)
       : ctx.tenantId;
-    // A machine-bound "PageSpace Agent" pane's branchSandbox (issue #2166
-    // phase 7) routes acquireSandbox through the attach-only branch seam
-    // (acquireRequest in tool-runners.ts already forwards ctx.branchSandbox) —
-    // this is the one place that binding is translated onto the actor ctx.
+    // Which NODE this call runs at: the conversation's own by default, or the
+    // one its `target` addresses. Resolution is pure set membership
+    // (resolveMachineNodeTarget) — an unaddressable node is one the derived
+    // set never contained, which is the same fact `isMachineAccessible`
+    // enforces for the machine itself. No second policy lives here.
     const binding = rawContext?.machineBinding;
-    const branchSandbox = binding?.branchSandbox
-      ? { machineId: binding.machineId, machineBranchId: binding.branchSandbox.machineBranchId }
+    if (!binding) {
+      // A target without a node scope to resolve it in is a mistake, not a
+      // silent no-op: answering it at the machine root would run the call
+      // somewhere the model didn't ask for.
+      if (target && (target.project || target.branch)) {
+        return { ok: false, error: nodeTargetDeniedError('unbound', target) };
+      }
+      return { ok: true, ctx: { ...ctx, driveId, tenantId, activeMachine, branchSandbox: undefined, projectSandbox: undefined } };
+    }
+    const resolved = resolveMachineNodeTarget(binding, target);
+    if (!resolved.ok) return { ok: false, error: nodeTargetDeniedError(resolved.reason, target ?? {}) };
+    const node = resolved.handle;
+    // A node with its own Sprite — a branch, or a PROMOTED project (issue
+    // #2204 phase 7) — routes acquireSandbox through that tier's attach-only
+    // seam (acquireRequest in tool-runners.ts forwards both keys); an
+    // unpromoted project carries neither and still runs on the machine's own
+    // Sprite at the checkout's cwd. This is the one place the resolved node is
+    // translated onto the actor ctx. `machineId` comes off the handle, so the
+    // payer/guardrail key stays the owning machine page however deep the
+    // target reaches.
+    const branchSandbox = node.branchSandbox
+      ? { machineId: node.machineId, machineBranchId: node.branchSandbox.machineBranchId }
       : undefined;
-    return { ok: true, ctx: { ...ctx, driveId, tenantId, activeMachine, branchSandbox } };
+    const projectSandbox = node.projectSandbox
+      ? { machineId: node.machineId, machineProjectId: node.projectSandbox.machineProjectId }
+      : undefined;
+    return { ok: true, ctx: { ...ctx, driveId, tenantId, activeMachine, branchSandbox, projectSandbox }, node };
   };
 
   return {
     bash: tool({
       description:
-        'Run a shell command in this conversation\'s isolated sandbox. Returns stdout, stderr, and the exit code. The filesystem is scoped to the sandbox.',
+        'Run a shell command in this conversation\'s isolated sandbox. Returns stdout, stderr, and the exit code. The filesystem is scoped to the sandbox. In a machine-bound conversation you may add target: { project?, branch? } to run against a project or branch beneath your node instead of your own; omit it to use your own node.',
       inputSchema: bashInputSchema,
-      execute: async ({ command, cwd, timeoutMs }, options) => {
-        const opened = await open(options);
+      execute: async ({ command, cwd, timeoutMs, target }, options) => {
+        const opened = await open(options, target);
         if (!opened.ok) return opened.error;
-        const rawContext = readContext(options);
         return runBashInSandbox({
           command,
-          cwd: bindingCwdFor(cwd, rawContext?.machineBinding),
+          cwd: bindingCwdFor(cwd, opened.node),
           timeoutMs,
           ctx: opened.ctx,
           deps: runDeps,
@@ -391,10 +469,10 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
 
     writeFile: tool({
       description:
-        'Write a file inside this conversation\'s sandbox. The path is relative to the sandbox root and cannot escape it.',
+        'Write a file inside this conversation\'s sandbox. The path is relative to the sandbox root and cannot escape it. In a machine-bound conversation you may add target: { project?, branch? } to run against a project or branch beneath your node instead of your own; omit it to use your own node.',
       inputSchema: writeFileInputSchema,
-      execute: async ({ path, content }, options) => {
-        const opened = await open(options);
+      execute: async ({ path, content, target }, options) => {
+        const opened = await open(options, target);
         if (!opened.ok) return opened.error;
         return writeSandboxFile({ path, content, ctx: opened.ctx, deps: runDeps });
       },
@@ -402,10 +480,10 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
 
     readFile: tool({
       description:
-        'Read a file from this conversation\'s sandbox. The path is relative to the sandbox root and cannot escape it.',
+        'Read a file from this conversation\'s sandbox. The path is relative to the sandbox root and cannot escape it. In a machine-bound conversation you may add target: { project?, branch? } to run against a project or branch beneath your node instead of your own; omit it to use your own node.',
       inputSchema: readFileInputSchema,
-      execute: async ({ path }, options) => {
-        const opened = await open(options);
+      execute: async ({ path, target }, options) => {
+        const opened = await open(options, target);
         if (!opened.ok) return opened.error;
         return readSandboxFile({ path, ctx: opened.ctx, deps: runDeps });
       },
@@ -413,10 +491,10 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
 
     editFile: tool({
       description:
-        'Edit a file in this conversation\'s sandbox by replacing oldString with newString. oldString must be unique in the file unless replaceAll is set. Prefer this over writeFile for targeted changes — it does not rewrite the whole file. The path is relative to the sandbox root and cannot escape it.',
+        'Edit a file in this conversation\'s sandbox by replacing oldString with newString. oldString must be unique in the file unless replaceAll is set. Prefer this over writeFile for targeted changes — it does not rewrite the whole file. The path is relative to the sandbox root and cannot escape it. In a machine-bound conversation you may add target: { project?, branch? } to run against a project or branch beneath your node instead of your own; omit it to use your own node.',
       inputSchema: editFileInputSchema,
-      execute: async ({ path, oldString, newString, replaceAll }, options) => {
-        const opened = await open(options);
+      execute: async ({ path, oldString, newString, replaceAll, target }, options) => {
+        const opened = await open(options, target);
         if (!opened.ok) return opened.error;
         return editSandboxFile({ path, oldString, newString, replaceAll, ctx: opened.ctx, deps: runDeps });
       },

@@ -56,7 +56,7 @@ import {
   isAgentRuntimeType,
   type AgentRuntimeType,
 } from '@pagespace/lib/services/machines/agent-terminal-types';
-import { useMachineWorkspaceStore, autoSessionName } from '@/stores/machine-workspace/useMachineWorkspaceStore';
+import { autoSessionName, sessionWorkspaceId, nodeScopeNames } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 import { AddButton } from './RemoveButton';
 import { nodeScopeOf } from './WorkspaceLeaves';
 import { agentTypeLabelOf } from './pane-surface';
@@ -208,8 +208,25 @@ export default function NodeActionPalette({ machineId, node, onAddProject, onAdd
  * or Shell closes the palette on the spot and spawns that type into a new
  * workspace at the node's scope. Mirrors TerminalPanes' `spawnIntoPane`
  * closely — same upsert/`resumed` handling, same "only clean up what we
- * created" guard — but binds into the new workspace's first pane, since
- * there is no pane yet: the palette click IS the "give me an agent" click.
+ * created" guard — but there is no pane to pick INTO: the palette click IS the
+ * "give me an agent" click, so the session gets its OWN workspace.
+ *
+ * That workspace is materialized by `openTerminal`, not by a create-then-bind
+ * pair. Create-then-bind published an EMPTY workspace first and bound it in a
+ * second, unordered write; when those two echoes reordered, the bind was lost
+ * and one spawned agent showed up as an empty "Workspace N" row PLUS an
+ * unclaimed session row — and clicking that row minted a THIRD artifact. Since
+ * `openTerminal` derives the workspace id from the session
+ * (`sessionWorkspaceId`) and pushes ONE already-bound snapshot, there is no
+ * empty intermediate state to echo and the adopt-click lands on the SAME id it
+ * already has — the "second workspace" failure is structurally impossible, not
+ * merely raced-away. A resumed session that is already on screen dedups for
+ * free via `openTerminal`'s own `workspaceShowing` lookup.
+ *
+ * DELIBERATE PRODUCT CHANGE: the sidebar row is therefore named after the
+ * session (`pagespace-…`) rather than "Workspace N". That matches the approved
+ * design canvas (session-named leaves) and removes the dual-naming confusion
+ * the field report described; rows stay renameable (double-click).
  *
  * This component (not the palette) owns the SWR/workspace hooks so the bare
  * Diff/Files trees never subscribe: it renders only when `onWorkspaceCreated`
@@ -235,10 +252,11 @@ function InstantSpawnGroup({
   onSpawned(workspaceId: string): void;
 }) {
   const scope = nodeScopeOf(node);
-  const { addAgentTerminal, removeAgentTerminal } = useAgentTerminals(machineId, scope.projectName ?? null, scope.branchName ?? null);
+  const scopeNames = nodeScopeNames(scope);
+  const { addAgentTerminal, removeAgentTerminal } = useAgentTerminals(machineId, scopeNames.projectName ?? null, scopeNames.branchName ?? null);
   // Server-synced (#2048) — a workspace/pane created here must push to the
   // server like every other create/bind path, not just materialize locally.
-  const { createWorkspace, bindPaneTerminal } = useSyncedWorkspaceActions(machineId);
+  const { openTerminal } = useSyncedWorkspaceActions(machineId);
 
   const spawn = async (agentType: AgentRuntimeType) => {
     onClose();
@@ -249,45 +267,33 @@ function InstantSpawnGroup({
     try {
       created = await addAgentTerminal(autoSessionName(agentType, freshNameSuffix()), agentType);
 
-      const workspaceId = createWorkspace(scope);
-      const workspace = useMachineWorkspaceStore.getState().machines[machineId]?.workspaces[workspaceId];
-      const bound = workspace
-        ? bindPaneTerminal(
-            workspaceId,
-            workspace.activePaneId,
-            {
-              projectName: scope.projectName,
-              branchName: scope.branchName,
-              name: created.name,
-              // Same rule as TerminalPanes' spawnIntoPane: record the surface
-              // at bind time, judged by the API's answer (`created.agentType`
-              // — a resumed session's type can differ from the picked one);
-              // only `chat` is written, since an omitted kind already means
-              // `terminal` (see OpenTerminalScope).
-              ...(isAgentRuntimeType(created.agentType) && agentSurfaceOf(created.agentType) === 'chat'
-                ? { kind: 'chat' as const }
-                : {}),
-            },
-            // No starting prompt — instant spawn means the prompt is typed in
-            // the pane itself, so there is nothing to auto-send.
-            undefined,
-          )
-        : false;
+      const paneScope = {
+        ...scopeNames,
+        name: created.name,
+        // Same rule as TerminalPanes' spawnIntoPane: record the surface at bind
+        // time, judged by the API's answer (`created.agentType` — a resumed
+        // session's type can differ from the picked one); only `chat` is
+        // written, since an omitted kind already means `terminal` (see
+        // OpenTerminalScope).
+        ...(isAgentRuntimeType(created.agentType) && agentSurfaceOf(created.agentType) === 'chat'
+          ? { kind: 'chat' as const }
+          : {}),
+      };
 
-      if (!bound) {
-        // The pane went away (or never existed) before the bind landed. Take
-        // back only what THIS call created — a resumed session may already be
-        // open in someone else's pane — and report failure, not success.
-        if (!created.resumed) await removeAgentTerminal(created.name).catch(() => {});
-        toast.error('Failed to spawn agent');
-        return;
-      }
-
+      // Born bound: one synchronous materialize-and-show, one already-bound
+      // server push. No starting prompt — instant spawn means the prompt is
+      // typed in the pane itself, so there is nothing to auto-send.
+      //
+      // Report the workspace openTerminal ACTUALLY selected: a resumed
+      // session another workspace is already showing lands there, not in its
+      // own session-derived workspace. The fallback only covers the
+      // machine-missing edge, where the derived id is the best signal left.
+      const workspaceId = openTerminal(paneScope) ?? sessionWorkspaceId(paneScope);
       onSpawned(workspaceId);
     } catch (err) {
-      // `created` may be set even though we're here (e.g. createWorkspace
+      // `created` may be set even though we're here (e.g. the store write
       // itself threw) — clean up a session that was made but never
-      // successfully handed off, the same guard as the `!bound` path above.
+      // successfully handed off.
       if (created && !created.resumed) {
         await removeAgentTerminal(created.name).catch(() => {});
       }

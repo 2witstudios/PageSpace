@@ -45,6 +45,7 @@ import {
   type MachineRefLike,
 } from './machine-session';
 import type { AcquireBranchSandboxResult } from './branch-session';
+import type { AcquireProjectSandboxResult } from './project-session';
 import type { ExecutableSandbox, SandboxRunResult } from './sandbox-client/types';
 import type { CodeExecutionAuditInput, CodeExecutionAnomaly } from './audit';
 
@@ -85,6 +86,17 @@ export interface SandboxActorContext {
    * persistent session. Undefined for every other run.
    */
   branchSandbox?: { machineId: string; machineBranchId: string };
+  /**
+   * Present when this run is bound to a PROMOTED project node (issue #2204
+   * phase 7) — the owning Machine page id plus the `machine_projects` row
+   * backing it. The project-tier twin of `branchSandbox`: it routes
+   * `acquireSandbox` through the attach-only PROJECT seam
+   * (`acquireProjectSandbox`, project-session.ts) instead of the machine's own
+   * persistent session, because a promoted project no longer lives there.
+   * Undefined for an unpromoted project (which still runs on the machine's
+   * Sprite at the checkout's cwd) and for every other run.
+   */
+  projectSandbox?: { machineId: string; machineProjectId: string };
 }
 
 export interface SandboxQuotaDeps {
@@ -173,12 +185,16 @@ export interface SandboxCheckpointDeps {
  */
 export type AcquireSandboxRequest = Omit<AcquireMachineSandboxInput, 'deps'> & {
   branchSandbox?: { machineId: string; machineBranchId: string };
+  /** Promoted-project routing key — see `SandboxActorContext.projectSandbox`. */
+  projectSandbox?: { machineId: string; machineProjectId: string };
 };
 
 export interface SandboxRunDeps {
   isEnabled: () => boolean;
   /** Pre-bound `acquireMachineSandbox` / `acquireBranchSandbox` (lifecycle deps already injected). */
-  acquireSandbox: (input: AcquireSandboxRequest) => Promise<AcquireMachineSandboxResult | AcquireBranchSandboxResult>;
+  acquireSandbox: (
+    input: AcquireSandboxRequest,
+  ) => Promise<AcquireMachineSandboxResult | AcquireBranchSandboxResult | AcquireProjectSandboxResult>;
   /** Reconnect to the executable handle for an acquired sandbox id. */
   reconnect: (sandboxId: string) => Promise<ExecutableSandbox | null>;
   quota: SandboxQuotaDeps;
@@ -335,6 +351,7 @@ function acquireRequest(ctx: SandboxActorContext): AcquireSandboxRequest {
     agentPageId: ctx.agentPageId,
     activeMachine: ctx.activeMachine,
     branchSandbox: ctx.branchSandbox,
+    projectSandbox: ctx.projectSandbox,
   };
 }
 
@@ -385,10 +402,11 @@ async function safeNotifyTerminalActivity(
 }
 
 // Map a denial from the lifecycle acquire onto the tool-facing reason set.
-// `branch_not_found` (acquireBranchSandbox's own fail-closed reason, no
-// tool-facing equivalent) falls through to 'error' with the rest.
+// `branch_not_found`/`project_not_found` (the attach-only seams' own
+// fail-closed reasons, with no tool-facing equivalent) fall through to 'error'
+// with the rest.
 function reasonFromAcquire(
-  result: Extract<AcquireMachineSandboxResult | AcquireBranchSandboxResult, { ok: false }>,
+  result: Extract<AcquireMachineSandboxResult | AcquireBranchSandboxResult | AcquireProjectSandboxResult, { ok: false }>,
 ): SandboxToolDenialReason {
   switch (result.reason) {
     case 'app_admin_required':

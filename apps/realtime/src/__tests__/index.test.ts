@@ -345,6 +345,7 @@ function createMockReq(overrides: Partial<{
     url: '/api/broadcast',
     headers: {},
     socket: { remoteAddress: '127.0.0.1' },
+    destroy: vi.fn(),
     on: vi.fn((event: string, cb: (chunk: unknown) => void) => {
       listeners[event] = listeners[event] || [];
       listeners[event].push(cb);
@@ -410,6 +411,27 @@ describe('requestListener - /api/broadcast', () => {
 
     expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
     expect(res.end).toHaveBeenCalledWith(JSON.stringify({ success: true }));
+  });
+
+  it('given a body over the internal byte cap, should destroy the connection and answer NOTHING — the HMAC check must never be reachable by memory exhaustion', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    const req = createMockReq({
+      headers: { 'x-broadcast-signature': 'valid-sig' },
+    });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.alloc(1024 * 1024 + 1));
+    // Chunks after the cap are ignored, and 'end' (if the socket teardown still
+    // fires it) must not run the handler on a truncated body.
+    req._emit('data', Buffer.from('trailing'));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(req.destroy).toHaveBeenCalled();
+    expect(res.writeHead).not.toHaveBeenCalled();
+    expect(res.end).not.toHaveBeenCalled();
+    expect(mockIo.emit).not.toHaveBeenCalled();
   });
 
   it('given POST /api/broadcast with valid signature but disallowed audience channelId, should return 403 and not emit (#972)', async () => {
@@ -727,6 +749,98 @@ describe('requestListener - /api/terminal-activity', () => {
     expect(mockFindBySessionKey).toHaveBeenCalled();
     expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
     expect(res.end).toHaveBeenCalledWith(JSON.stringify({ success: true, delivered: false }));
+  });
+});
+
+describe('requestListener - /api/session-read', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const body = JSON.stringify({ machineId: 'machine-1', names: ['sh'] });
+
+  it('given no signature, should return 401 without answering liveness', async () => {
+    const req = createMockReq({ method: 'POST', url: '/api/session-read', headers: {} });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(body));
+    req._emit('end');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(401, { 'Content-Type': 'application/json' });
+  });
+
+  // Nothing is attached in this process, so every named session is honestly
+  // cold — the point of the case is that a SIGNED read reaches the handler and
+  // answers live:false rather than an empty scrollback.
+  it('given a valid signed read for a session with no live PTY, should answer live:false', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+
+    const req = createMockReq({ method: 'POST', url: '/api/session-read', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(body));
+    req._emit('end');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
+    expect(res.end).toHaveBeenCalledWith(
+      JSON.stringify({ success: true, sessions: [{ name: 'sh', live: false, hasOutput: false, viewers: 0, output: '' }] }),
+    );
+  });
+
+  it('given a signed request with an unusable payload, should return 400', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+
+    const req = createMockReq({ method: 'POST', url: '/api/session-read', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from('not json'));
+    req._emit('end');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(400, { 'Content-Type': 'application/json' });
+  });
+});
+
+describe('requestListener - /api/session-input', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const body = JSON.stringify({ machineId: 'machine-1', name: 'sh', input: 'ls\n' });
+
+  it('given no signature, should return 401 without typing anything', async () => {
+    const req = createMockReq({ method: 'POST', url: '/api/session-input', headers: {} });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(body));
+    req._emit('end');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(401, { 'Content-Type': 'application/json' });
+  });
+
+  // No PTY is live in this process, so the honest answer is delivered:false —
+  // the point is that a SIGNED send reaches the handler and reports what
+  // actually happened rather than swallowing the keystrokes.
+  it('given a valid signed send for a session with no live PTY, should answer delivered:false', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+
+    const req = createMockReq({ method: 'POST', url: '/api/session-input', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(body));
+    req._emit('end');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
+    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ success: true, live: false, delivered: false }));
   });
 });
 

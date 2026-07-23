@@ -30,6 +30,7 @@ import { db } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
 import { machineSessions } from '@pagespace/db/schema/machine-sessions';
 import { machineBranches } from '@pagespace/db/schema/machine-branches';
+import { machineProjects } from '@pagespace/db/schema/machine-projects';
 import { machineSpriteReclaims } from '@pagespace/db/schema/machine-sprite-reclaims';
 import type {
   OrphanRow,
@@ -39,7 +40,9 @@ import { MachineSpriteReplacedError } from '@pagespace/lib/services/sandbox/mach
 import { getMachineHostForBranches } from './machine-branches-runtime';
 
 /** The owning page is still trashed — the precondition every release write is conditional on. */
-function owningPageStillTrashed(pageIdColumn: typeof machineSessions.pageId | typeof machineBranches.machineId) {
+function owningPageStillTrashed(
+  pageIdColumn: typeof machineSessions.pageId | typeof machineBranches.machineId | typeof machineProjects.machineId,
+) {
   return exists(
     db
       .select({ one: sql`1` })
@@ -78,7 +81,7 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
     // down nothing. Only an explicit teardown INTENT licenses destroying a
     // tracking row's Sprite (see `machine-orphan-reconcile.ts`). Outbox rows need
     // no such check: their page is already gone.
-    const [reclaimRows, sessionRows, branchRows] = await Promise.all([
+    const [reclaimRows, sessionRows, branchRows, projectRows] = await Promise.all([
       db
         .select({
           sandboxId: machineSpriteReclaims.sandboxId,
@@ -136,6 +139,31 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
         )
         .orderBy(asc(pages.trashedAt))
         .limit(LOOKAHEAD),
+      db
+        .select({
+          pageId: machineProjects.machineId,
+          id: machineProjects.id,
+          sandboxId: machineProjects.sandboxId,
+          spriteInstanceId: machineProjects.spriteInstanceId,
+        })
+        .from(machineProjects)
+        .innerJoin(pages, eq(machineProjects.machineId, pages.id))
+        // sandboxId IS NOT NULL — an UNPROMOTED project has no Sprite of its
+        // own (it is a checkout on the machine's Sprite); spriteTornDownAt IS
+        // NULL for the same reason as branches.
+        .where(
+          and(
+            eq(pages.isTrashed, true),
+            isNotNull(machineProjects.sandboxId),
+            isNull(machineProjects.spriteTornDownAt),
+            isNotNull(machineProjects.teardownRequestedAt),
+            // See the session query: a stale intent must never license a kill on a
+            // LATER, reversible trash.
+            gte(machineProjects.teardownRequestedAt, pages.trashedAt),
+          ),
+        )
+        .orderBy(asc(pages.trashedAt))
+        .limit(LOOKAHEAD),
     ]);
 
     return {
@@ -145,6 +173,12 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
         ...reclaimRows.slice(0, MAX_CANDIDATES_PER_TABLE).map((row): OrphanRow => ({ kind: 'reclaim', ...row })),
         ...sessionRows.slice(0, MAX_CANDIDATES_PER_TABLE).map((row): OrphanRow => ({ kind: 'session', ...row })),
         ...branchRows.slice(0, MAX_CANDIDATES_PER_TABLE).map((row): OrphanRow => ({ kind: 'branch', ...row })),
+        ...projectRows
+          .slice(0, MAX_CANDIDATES_PER_TABLE)
+          // The query's isNotNull(sandboxId) guarantees this; the filter narrows the type.
+          .flatMap((row): OrphanRow[] =>
+            row.sandboxId ? [{ kind: 'project', ...row, sandboxId: row.sandboxId }] : [],
+          ),
       ],
       // The lookahead row is what makes this honest: a source that came back
       // exactly full might have had nothing more to give, and reporting a backlog
@@ -152,7 +186,8 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
       capped:
         reclaimRows.length > MAX_CANDIDATES_PER_TABLE ||
         sessionRows.length > MAX_CANDIDATES_PER_TABLE ||
-        branchRows.length > MAX_CANDIDATES_PER_TABLE,
+        branchRows.length > MAX_CANDIDATES_PER_TABLE ||
+        projectRows.length > MAX_CANDIDATES_PER_TABLE,
     };
   },
 
@@ -250,6 +285,25 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
         ),
       )
       .returning({ id: machineBranches.id });
+    return marked.length > 0;
+  },
+
+  async markProjectTornDown({ id, sandboxId, spriteInstanceId }) {
+    // Identical contract to markBranchTornDown: the row is re-creatable config
+    // (name + repoUrl + sessionKey re-provision and re-clone), and a
+    // re-promotion that raced us must not have its live Sprite marked dead.
+    const marked = await db
+      .update(machineProjects)
+      .set({ spriteTornDownAt: new Date() })
+      .where(
+        and(
+          eq(machineProjects.id, id),
+          eq(machineProjects.sandboxId, sandboxId),
+          eqOrIsNull(machineProjects.spriteInstanceId, spriteInstanceId),
+          owningPageStillTrashed(machineProjects.machineId),
+        ),
+      )
+      .returning({ id: machineProjects.id });
     return marked.length > 0;
   },
 };

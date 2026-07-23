@@ -7,14 +7,37 @@
  * Two exports, split because they have different mount-cardinality needs:
  *
  * - {@link useMachineWorkspaceSync} owns the stateful side effects (SWR fetch,
- *   the one-time bootstrap race, the socket subscription) and must be mounted
- *   exactly ONCE per machine — at `MachineView`, the true per-machine root
- *   that survives Terminal-tab unmount/remount (Radix `TabsContent` unmounts
- *   inactive tabs; `MachineView` doesn't).
+ *   the one-time bootstrap race, the socket subscription). It is mounted MORE
+ *   THAN ONCE for the machine the user has open: `DevelopmentSidebar` mounts
+ *   one instance per machine ROW (so an expanded row renders live workspaces
+ *   without ever visiting the machine), and `MachineView` mounts one for the
+ *   open machine — the true per-machine root that survives Terminal-tab
+ *   unmount/remount (Radix `TabsContent` unmounts inactive tabs; `MachineView`
+ *   doesn't). Dual mount is DESIGNED FOR, not tolerated: the bootstrap claim
+ *   is resolved server-side by the claim table, and the "nothing to migrate"
+ *   decision is shared across instances by the module-level
+ *   {@link declinedBootstraps} precisely because instances see each other's
+ *   writes through the one shared store.
  * - {@link useSyncedWorkspaceActions} has no internal state to coordinate (see
  *   its own doc for why), so it's safe to call from every component that
  *   mutates a workspace — `WorkspaceLeaves` (sidebar) and `TerminalPanes`
  *   (pane grid) each call it independently.
+ *
+ * Two races remain, both ACCEPTED (each is a lost view of a row, never lost
+ * server state — the server row survives in both):
+ *
+ * 1. A stale full-replace hydrate landing AFTER a workspace's bound `created`
+ *    echo can still drop a just-created workspace: `hydratedOnce` is
+ *    per-instance, so a second instance whose GET predates the create replaces
+ *    the list from a payload that never contained it. No later event
+ *    reintroduces it (`updated` skips unknown workspaces — see below); a
+ *    reload or remount does. The real fix is per-machine, cross-instance
+ *    hydration state (the shape `declinedBootstraps` already has) — or the
+ *    entity-promotion successor that removes the full-replace hydrate
+ *    entirely. Tracked in issue #2202.
+ * 2. A `machine-workspace:created` missed while the socket was disconnected
+ *    leaves this browser without that workspace until the next full hydrate —
+ *    see `onUpdated`'s doc for why an `updated` event can't introduce one.
  */
 
 import { useEffect, useMemo, useRef } from 'react';
@@ -27,8 +50,10 @@ import {
   workspacesOf,
   workspaceShowing,
   sessionWorkspaceId,
+  nodeScopeNames,
   type MachineNodeScope,
   type OpenTerminalScope,
+  type ServerColumnDTO,
   type ServerWorkspaceDTO,
   type TerminalColumnState,
 } from '@/stores/machine-workspace/useMachineWorkspaceStore';
@@ -116,9 +141,17 @@ export function useMachineWorkspaceSync(machineId: string | null): void {
   // request hasn't round-tripped (and broadcast) yet. So this only ever runs
   // ONCE per mount; every subsequent change to the store comes from the socket
   // subscription below. Safe as a plain ref (not reset on `machineId` change)
-  // because this hook is mounted once per machine at `MachineView`, which
-  // `MachineKeepAliveHost` keeps as one distinct component instance per
-  // machine rather than reusing one instance across different machineIds.
+  // because no instance is ever reused across machineIds: `MachineView` is kept
+  // by `MachineKeepAliveHost` as one distinct component instance per machine,
+  // and `DevelopmentSidebar`'s instances are one per machine row.
+  //
+  // It is per-INSTANCE, though, and the machine the user has open has two
+  // instances (sidebar row + `MachineView` — see this module's doc). Each
+  // hydrates once from its own GET, so a second instance's stale full-replace
+  // can still land after the first has applied a `created` echo and drop that
+  // workspace locally. That is residual race (1) in the module doc: accepted,
+  // server row intact, recovered by a reload; the fix is cross-instance
+  // hydration state, not a second per-instance ref.
   const hydratedOnce = useRef(false);
 
   useEffect(() => {
@@ -144,7 +177,7 @@ export function useMachineWorkspaceSync(machineId: string | null): void {
     const payload = (local ? workspacesOf(local) : []).map((workspace) => ({
       id: workspace.id,
       name: workspace.name,
-      scope: workspace.scope,
+      scope: nodeScopeNames(workspace.scope),
       columns: toWireColumns(workspace.columns),
     }));
 
@@ -220,7 +253,9 @@ export function useMachineWorkspaceSync(machineId: string | null): void {
       machineId: string;
       workspaceId: string;
       name?: string;
-      columns?: TerminalColumnState[];
+      // As they arrive: a client still running the pre-narrowing code sends
+      // panes carrying their own checkout. `applyServerUpsert` projects.
+      columns?: ServerColumnDTO[];
     }) => {
       if (payload.machineId !== mid) return;
       // `updated` only carries whichever of name/columns actually changed —
@@ -288,7 +323,7 @@ async function pushNewWorkspace(machineId: string, workspaceId: string): Promise
     machineId,
     id: workspace.id,
     name: workspace.name,
-    scope: workspace.scope,
+    scope: nodeScopeNames(workspace.scope),
     columns: toWireColumns(workspace.columns),
   })
     .then((res) => {
@@ -361,7 +396,7 @@ async function pushWorkspaceUpdate(machineId: string, workspaceId: string, chang
     machineId,
     id: workspace.id,
     name: workspace.name,
-    scope: workspace.scope,
+    scope: nodeScopeNames(workspace.scope),
     columns,
   }).catch(() => {});
 }
@@ -459,13 +494,21 @@ export function useSyncedWorkspaceActions(machineId: string) {
     /** `openTerminal` can materialize a new workspace, relocate an existing
      * one to front, or land in one already showing the session — push
      * whichever workspace it actually affected, resolved the same way the
-     * local action itself resolves "where does this session live". */
-    openTerminal(scope: OpenTerminalScope): void {
+     * local action itself resolves "where does this session live".
+     *
+     * RETURNS that workspace's id, because the caller cannot derive it: a
+     * session another workspace is already showing lands THERE
+     * (`workspaceShowing`), not in its own `sessionWorkspaceId` workspace —
+     * a spawn that assumed the derived id would navigate to a workspace that
+     * doesn't contain the session, or doesn't exist. `undefined` only when
+     * the machine itself is missing (nothing was opened). */
+    openTerminal(scope: OpenTerminalScope): string | undefined {
       openTerminalLocal(machineId, scope);
       const machine = useMachineWorkspaceStore.getState().machines[machineId];
-      if (!machine) return;
+      if (!machine) return undefined;
       const home = workspaceShowing(machine, scope) ?? machine.workspaces[sessionWorkspaceId(scope)];
       if (home) void pushWorkspaceUpdate(machineId, home.id, { columns: true });
+      return home?.id;
     },
   }), [
     machineId,
