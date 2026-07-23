@@ -3,6 +3,8 @@ import {
   promoteProject,
   isPromotedProject,
   PROJECT_REPO_PATH,
+  classifyCheckoutStatus,
+  isCloneBlockedByExistingCheckout,
   type PromoteProjectDeps,
   type ProjectStorageMeasurement,
 } from '../machine-project-promotion';
@@ -150,13 +152,18 @@ function makeFakeHost() {
   return { host, byId, provisionCalls, killCalls, makeHandle };
 }
 
+/** `git status --porcelain -b` output for a checkout that is clean AND fully pushed. */
+const CLEAN_STATUS = '## main...origin/main\n';
+
 /**
  * The OWNING Machine's Sprite: `test -e` reports the checkout present, and
- * `git status --porcelain` reports it clean, unless a test says otherwise.
+ * `git status --porcelain -b` reports it clean and pushed, unless a test says
+ * otherwise. The branch header is part of the fixture because it is part of the
+ * command — a clean tree alone no longer licenses promotion (F1).
  */
 function makeMachineSandbox({
   checkoutExists = true,
-  status = { exitCode: 0, stdout: '', stderr: '' },
+  status = { exitCode: 0, stdout: CLEAN_STATUS, stderr: '' },
 }: {
   checkoutExists?: boolean;
   /** One result for every `git status`, or a sequence consumed per call (last one repeats). */
@@ -316,7 +323,7 @@ describe('promoteProject — first promotion', () => {
 
 describe('promoteProject — dirty-tree refusal', () => {
   it('given a dirty machine checkout, should REFUSE with an actionable error and provision nothing', async () => {
-    const machine = makeMachineSandbox({ status: { exitCode: 0, stdout: ' M src/index.ts\n?? notes.md\n', stderr: '' } });
+    const machine = makeMachineSandbox({ status: { exitCode: 0, stdout: `${CLEAN_STATUS} M src/index.ts\n?? notes.md\n`, stderr: '' } });
     const { deps, provisionCalls, rows } = makeDeps({}, { machine });
 
     const result = await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, deps });
@@ -369,8 +376,8 @@ describe('promoteProject — post-promotion checkout reclaim', () => {
     // where deleted work is a loss.
     const machine = makeMachineSandbox({
       status: [
-        { exitCode: 0, stdout: '', stderr: '' }, // the gate: clean
-        { exitCode: 0, stdout: '?? new-work.ts\n', stderr: '' }, // the recheck: dirty now
+        { exitCode: 0, stdout: CLEAN_STATUS, stderr: '' }, // the gate: clean
+        { exitCode: 0, stdout: `${CLEAN_STATUS}?? new-work.ts\n`, stderr: '' }, // the recheck: dirty now
       ],
     });
     const { deps, machineSandbox } = makeDeps({}, { machine });
@@ -382,7 +389,7 @@ describe('promoteProject — post-promotion checkout reclaim', () => {
   });
 
   it('given a refused promotion, should NOT touch the machine checkout', async () => {
-    const machine = makeMachineSandbox({ status: { exitCode: 0, stdout: ' M src/index.ts\n', stderr: '' } });
+    const machine = makeMachineSandbox({ status: { exitCode: 0, stdout: `${CLEAN_STATUS} M src/index.ts\n`, stderr: '' } });
     const { deps, machineSandbox } = makeDeps({}, { machine });
 
     await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, deps });
@@ -544,5 +551,187 @@ describe('isPromotedProject', () => {
     expect(isPromotedProject({ sandboxId: 'sbx-1', spriteTornDownAt: null })).toBe(true);
     expect(isPromotedProject({ sandboxId: 'sbx-1', spriteTornDownAt: NOW })).toBe(false);
     expect(isPromotedProject({ sandboxId: null, spriteTornDownAt: null })).toBe(false);
+  });
+});
+
+/**
+ * Issue #2204 follow-up, F1. `git status --porcelain` reports a checkout with
+ * unpushed commits as pristine, so promotion deleted the only copy of that work
+ * on its way to a fresh clone. Cleanliness was never the right question —
+ * REPRODUCIBILITY FROM THE REMOTE is.
+ */
+describe('classifyCheckoutStatus', () => {
+  it('given a clean tree tracking an upstream, should report clean', () => {
+    expect(classifyCheckoutStatus('## main...origin/main\n')).toEqual({ kind: 'clean' });
+  });
+
+  it('given working-tree changes, should report dirty with just the changes', () => {
+    expect(classifyCheckoutStatus('## main...origin/main\n M src/a.ts\n?? b.md\n')).toEqual({
+      kind: 'dirty',
+      detail: ' M src/a.ts\n?? b.md',
+    });
+  });
+
+  it('given a CLEAN tree that is ahead of its upstream, should refuse as unpushed', () => {
+    const result = classifyCheckoutStatus('## main...origin/main [ahead 2]\n');
+    expect(result.kind).toBe('unpushed');
+    expect(result.kind === 'unpushed' && result.detail).toContain('2 commit(s)');
+  });
+
+  it('given a branch both ahead AND behind, should still refuse — the ahead commits are the loss', () => {
+    expect(classifyCheckoutStatus('## main...origin/main [ahead 1, behind 3]\n').kind).toBe('unpushed');
+  });
+
+  it('given a branch merely BEHIND its upstream, should report clean — nothing local is at risk', () => {
+    expect(classifyCheckoutStatus('## main...origin/main [behind 3]\n')).toEqual({ kind: 'clean' });
+  });
+
+  it('given a branch with NO upstream, should refuse — there is no remote ref to reproduce it from', () => {
+    const result = classifyCheckoutStatus('## scratch\n');
+    expect(result.kind).toBe('unpushed');
+    expect(result.kind === 'unpushed' && result.detail).toContain('no upstream');
+  });
+
+  it('given a detached HEAD, should refuse for the same reason', () => {
+    expect(classifyCheckoutStatus('## HEAD (no branch)\n').kind).toBe('unpushed');
+  });
+
+  it('given dirty changes AND unpushed commits, should report dirty — the nearer, more actionable fix', () => {
+    expect(classifyCheckoutStatus('## main...origin/main [ahead 1]\n M a.ts\n').kind).toBe('dirty');
+  });
+
+  it('given output with NO branch header, should be unknown rather than assumed clean', () => {
+    // `-b` always emits one, so its absence means we are not reading what we think.
+    expect(classifyCheckoutStatus('').kind).toBe('unknown');
+  });
+});
+
+/**
+ * Issue #2204 follow-up, F2. Two promotions of one project derive the same
+ * deterministic session key, so a name-keyed provision can hand both racers the
+ * SAME physical Sprite — and the loser's clone fails precisely because the
+ * winner already populated the destination.
+ */
+describe('isCloneBlockedByExistingCheckout', () => {
+  it('given git\'s "already exists and is not an empty directory", should recognise a shared Sprite', () => {
+    expect(
+      isCloneBlockedByExistingCheckout(
+        "fatal: destination path '/workspace/repo' already exists and is not an empty directory.",
+      ),
+    ).toBe(true);
+  });
+
+  it('given an authentication failure, should NOT — that Sprite is ours alone and must be torn down', () => {
+    expect(isCloneBlockedByExistingCheckout('fatal: Authentication failed for https://github.com/o/r.git')).toBe(false);
+  });
+
+  it('given a missing repository, should NOT', () => {
+    expect(isCloneBlockedByExistingCheckout('fatal: repository not found')).toBe(false);
+  });
+
+  it('given empty output, should NOT — an unexplained failure is not evidence of a racer', () => {
+    expect(isCloneBlockedByExistingCheckout('')).toBe(false);
+  });
+});
+
+describe('promoteProject — unpushed-commit refusal (F1)', () => {
+  it('given a clean checkout holding unpushed commits, should REFUSE and provision nothing', async () => {
+    const machine = makeMachineSandbox({
+      status: { exitCode: 0, stdout: '## main...origin/main [ahead 2]\n', stderr: '' },
+    });
+    const { deps, provisionCalls } = makeDeps({}, { machine });
+
+    const result = await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, deps });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('unpushed_commits');
+    expect(result.detail).toContain('push');
+    expect(provisionCalls).toEqual([]);
+  });
+});
+
+describe('promoteProject — shared-Sprite protection on clone failure (F2)', () => {
+  it('given a clone blocked by an existing checkout, should NOT kill the Sprite a racer may be promoting on', async () => {
+    const { deps, killCalls } = makeDeps({}, {});
+    const blocked: PromoteProjectDeps = {
+      ...deps,
+      host: {
+        ...deps.host,
+        provision: async (args) => {
+          const handle = await deps.host.provision(args);
+          return {
+            ...handle,
+            exec: async () => ({
+              exitCode: 128,
+              stdout: '',
+              stderr: "fatal: destination path '/workspace/repo' already exists and is not an empty directory.",
+            }),
+          };
+        },
+      },
+    };
+
+    const result = await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, deps: blocked });
+
+    expect(result.ok).toBe(false);
+    expect(killCalls).toEqual([]);
+  });
+
+  it('given a clone that failed for our OWN reason, should still tear the unrecorded Sprite down', async () => {
+    const { deps, killCalls } = makeDeps({}, {});
+    const failing: PromoteProjectDeps = {
+      ...deps,
+      host: {
+        ...deps.host,
+        provision: async (args) => {
+          const handle = await deps.host.provision(args);
+          return {
+            ...handle,
+            exec: async () => ({ exitCode: 128, stdout: '', stderr: 'fatal: repository not found' }),
+          };
+        },
+      },
+    };
+
+    const result = await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, deps: failing });
+
+    expect(result.ok).toBe(false);
+    expect(killCalls.length).toBe(1);
+  });
+});
+
+describe('promoteProject — root re-measurement after reclaim (F12)', () => {
+  it('given a successful reclaim, should refresh the ROOT measurement so the removed bytes stop being billed', async () => {
+    const remeasured: string[] = [];
+    const { deps } = makeDeps({
+      remeasureMachineStorage: async ({ machinePageId }) => {
+        remeasured.push(machinePageId);
+      },
+    });
+
+    const result = await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, deps });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(result.ok).toBe(true);
+    expect(remeasured).toEqual([MACHINE_ID]);
+  });
+
+  it('given a checkout that was ABSENT, should not re-measure — nothing was removed', async () => {
+    const remeasured: string[] = [];
+    const machine = makeMachineSandbox({ checkoutExists: false });
+    const { deps } = makeDeps(
+      {
+        remeasureMachineStorage: async ({ machinePageId }) => {
+          remeasured.push(machinePageId);
+        },
+      },
+      { machine },
+    );
+
+    await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, deps });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(remeasured).toEqual([]);
   });
 });

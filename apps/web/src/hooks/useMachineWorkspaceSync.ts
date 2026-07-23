@@ -51,6 +51,7 @@ import {
   workspaceShowing,
   sessionWorkspaceId,
   nodeScopeNames,
+  paneScopeForWire,
   type MachineNodeScope,
   type OpenTerminalScope,
   type ServerColumnDTO,
@@ -93,13 +94,20 @@ const fetcher = (url: string) =>
  */
 const declinedBootstraps = new Set<string>();
 
-/** Strips local-only pane state (`pendingPrompt`) before a layout crosses the
+/**
+ * Strips local-only pane state (`pendingPrompt`) before a layout crosses the
  * wire — the server's layout DTO has no such field, and a starting prompt not
- * yet typed into its PTY must never be persisted or broadcast to other browsers. */
-function toWireColumns(columns: TerminalColumnState[]) {
+ * yet typed into its PTY must never be persisted or broadcast to other browsers.
+ *
+ * Also WIDENS each pane scope back to a full session address
+ * ({@link paneScopeForWire}), which is why the workspace's node scope is a
+ * parameter: local state keeps the narrow pane, the wire keeps the address a
+ * pre-narrowing client needs to resolve it correctly.
+ */
+function toWireColumns(node: MachineNodeScope, columns: TerminalColumnState[]) {
   return columns.map((column) => ({
     id: column.id,
-    panes: column.panes.map((pane) => ({ id: pane.id, scope: pane.scope })),
+    panes: column.panes.map((pane) => ({ id: pane.id, scope: paneScopeForWire(node, pane.scope) })),
   }));
 }
 
@@ -178,7 +186,7 @@ export function useMachineWorkspaceSync(machineId: string | null): void {
       id: workspace.id,
       name: workspace.name,
       scope: nodeScopeNames(workspace.scope),
-      columns: toWireColumns(workspace.columns),
+      columns: toWireColumns(workspace.scope, workspace.columns),
     }));
 
     // Nothing local to seed — so claim nothing. Bootstrap is first-writer-wins
@@ -324,7 +332,7 @@ async function pushNewWorkspace(machineId: string, workspaceId: string): Promise
     id: workspace.id,
     name: workspace.name,
     scope: nodeScopeNames(workspace.scope),
-    columns: toWireColumns(workspace.columns),
+    columns: toWireColumns(workspace.scope, workspace.columns),
   })
     .then((res) => {
       // Lost the first-writer-wins race (another browser materialized the
@@ -367,7 +375,7 @@ type ChangedFields = { name?: true; columns?: true };
 async function pushWorkspaceUpdate(machineId: string, workspaceId: string, changed: ChangedFields): Promise<void> {
   const workspace = useMachineWorkspaceStore.getState().machines[machineId]?.workspaces[workspaceId];
   if (!workspace) return;
-  const columns = toWireColumns(workspace.columns);
+  const columns = toWireColumns(workspace.scope, workspace.columns);
 
   try {
     const response = await fetchWithAuth('/api/machines/workspaces', {

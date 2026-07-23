@@ -9,6 +9,7 @@ import {
   killAgentTerminalById,
   listAgentTerminals,
   deriveAgentTerminalScope,
+  findStrandedLiveSessions,
   type AgentTerminalsDeps,
   type AgentTerminalBranchLookup,
   type AgentTerminalProjectLookup,
@@ -1631,5 +1632,127 @@ describe('killAgentTerminalById — level-agnostic (PurePoint Attach{agent_id} p
     expect(acquireCalls).toEqual([]);
     expect(attachCalls).toEqual([]);
     expect(rows.size).toBe(0);
+  });
+});
+
+/**
+ * Issue #2204 follow-up, F10. Promotion deletes the root checkout and points
+ * every project row at the new Sprite — but a PTY's process lives in the old
+ * Sprite and cannot follow, so a pre-existing live session would be left
+ * running somewhere no reconnect can reach.
+ */
+describe('findStrandedLiveSessions', () => {
+  it('given rows with launched PTYs, should name them', () => {
+    expect(
+      findStrandedLiveSessions([
+        { name: 'build', streamSessionId: 'stream-1' },
+        { name: 'notes', streamSessionId: null },
+        { name: 'watch', streamSessionId: 'stream-2' },
+      ]),
+    ).toEqual(['build', 'watch']);
+  });
+
+  it('given only reserved-but-never-launched rows, should find nothing to strand', () => {
+    expect(findStrandedLiveSessions([{ name: 'cli', streamSessionId: null }])).toEqual([]);
+  });
+
+  it('given no rows at all, should find nothing', () => {
+    expect(findStrandedLiveSessions([])).toEqual([]);
+  });
+});
+
+describe('spawnAgentTerminal — live sessions block promotion (F10)', () => {
+  function promotableProject() {
+    const row: { path: string; sandboxId: string | null; spriteTornDownAt: Date | null } = {
+      path: PROJECT_PATH,
+      sandboxId: null,
+      spriteTornDownAt: null,
+    };
+    const lookup: AgentTerminalProjectLookup = {
+      findByName: async (machineId, name) => (machineId === TERMINAL_ID && name === PROJECT_NAME ? row : null),
+    };
+    return { row, lookup };
+  }
+
+  it('given an unpromoted project with a LIVE PTY, should refuse and promote nothing', async () => {
+    const { lookup } = promotableProject();
+    const { store } = makeStore();
+    // A session reserved and launched BEFORE this rollout, on the machine's own Sprite.
+    const existing = await store.create({
+      ownerId: actor.userId,
+      machineId: TERMINAL_ID,
+      scope: 'project',
+      projectName: PROJECT_NAME,
+      machineBranchId: null,
+      name: 'build',
+      agentType: 'shell',
+      command: null,
+      now: new Date('2026-01-01'),
+    });
+    await store.updateStreamSessionId({ id: existing.id, streamSessionId: 'stream-1', now: new Date('2026-01-01') });
+
+    const promotionCalls: unknown[] = [];
+    const deps = makeDeps({
+      store,
+      projectStore: lookup,
+      projectPromotion: {
+        promote: async (input) => {
+          promotionCalls.push(input);
+          return { ok: true };
+        },
+      },
+    });
+
+    const spawned = await spawnAgentTerminal({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      name: 'cli',
+      agentType: 'shell',
+      actor,
+      deps,
+    });
+
+    expect(spawned).toMatchObject({ ok: false, reason: 'live_sessions_block_promotion' });
+    expect(spawned.ok === false && spawned.detail).toContain('build');
+    expect(promotionCalls).toEqual([]);
+  });
+
+  it('given an unpromoted project whose rows never launched a PTY, should promote as before', async () => {
+    const { row, lookup } = promotableProject();
+    const { store } = makeStore();
+    await store.create({
+      ownerId: actor.userId,
+      machineId: TERMINAL_ID,
+      scope: 'project',
+      projectName: PROJECT_NAME,
+      machineBranchId: null,
+      name: 'notes',
+      agentType: 'claude',
+      command: null,
+      now: new Date('2026-01-01'),
+    });
+
+    const deps = makeDeps({
+      store,
+      projectStore: lookup,
+      projectPromotion: {
+        promote: async () => {
+          row.sandboxId = 'sprite-project-1';
+          return { ok: true };
+        },
+      },
+    });
+
+    const spawned = await spawnAgentTerminal({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      name: 'cli',
+      agentType: 'shell',
+      actor,
+      deps,
+    });
+
+    expect(spawned).toMatchObject({ ok: true });
+    expect(row.sandboxId).toBe('sprite-project-1');
   });
 });

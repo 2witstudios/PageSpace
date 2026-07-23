@@ -155,6 +155,17 @@ export async function createDbMachineProjectStore(): Promise<MachineProjectStore
           // see the interface doc.
           spriteTornDownAt: null,
           teardownRequestedAt: null,
+          // STORAGE ACCOUNTING STARTS AT THIS SPRITE'S BIRTH (issue #2204
+          // follow-up, F11). The watermark defaulted to row-CREATION time, so a
+          // project promoted months later had its first measured clone bytes
+          // billed across the whole period when no project Sprite existed — and
+          // re-provisioning after a teardown carried the previous generation's
+          // measurement across the downtime. A new Sprite generation is a new
+          // accounting period: reset the watermark, and drop the measurement
+          // that described a filesystem that no longer exists.
+          storageLastBilledAt: now,
+          storageMeasuredBytes: null,
+          storageMeasuredAt: null,
           updatedAt: now,
         })
         // `eqOrIsNull`, not `eq`: a FIRST promotion compares against SQL NULL,

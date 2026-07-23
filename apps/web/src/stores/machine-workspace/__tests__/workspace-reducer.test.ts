@@ -3,6 +3,9 @@ import { assert } from '@/stores/__tests__/riteway';
 import { isValidAgentTerminalName, AGENT_LAUNCH_SPECS } from '@pagespace/lib/services/machines/agent-terminal-types';
 import {
   newWorkspace,
+  paneScopeForWire,
+  paneTerminalScope,
+  projectStoredPaneScope,
   addWorkspace,
   setActiveWorkspace,
   updateWorkspace,
@@ -1123,6 +1126,76 @@ describe('sanitizeMachines — what comes back from storage is untrusted', () =>
         'repoint active at the real pane and keep the content kind intact — same no-op-on-unknown-id contract as every other transition here',
       actual: { activePaneId: actual.activePaneId, scope: panesOf(actual)[0].scope },
       expected: { activePaneId: 'pane-1', scope: { name: 'claude-a1', kind: 'chat' } },
+    });
+  });
+});
+
+/**
+ * Issue #2204 follow-up, F13. Narrowing the pane shape also narrowed the WIRE
+ * shape, and pane scopes are persisted and broadcast. A pre-narrowing client —
+ * mid rolling-deploy, or a stale tab — reads a name-only pane as a MACHINE-ROOT
+ * session, so a project pane named `worker` resolves to the root's `worker` and
+ * can be connected to or killed instead.
+ */
+describe('paneScopeForWire — pre-narrowing client compatibility', () => {
+  it('given a PROJECT workspace, should put the project name on the wire', () => {
+    assert({
+      given: 'a pane in a project-scoped workspace',
+      should: 'send the full address, not just the name',
+      actual: paneScopeForWire({ level: 'project', projectName: 'repo' }, { name: 'worker' }),
+      expected: { name: 'worker', projectName: 'repo' },
+    });
+  });
+
+  it('given a BRANCH workspace, should put both checkout names on the wire', () => {
+    assert({
+      given: 'a chat pane in a branch-scoped workspace',
+      should: 'send project and branch alongside the name and kind',
+      actual: paneScopeForWire(
+        { level: 'branch', projectName: 'repo', branchName: 'feature' },
+        { name: 'worker', kind: 'chat' },
+      ),
+      expected: { name: 'worker', kind: 'chat', projectName: 'repo', branchName: 'feature' },
+    });
+  });
+
+  it('given a MACHINE-ROOT workspace, should stay name-only — there is no checkout to name', () => {
+    assert({
+      given: 'a pane in a root workspace',
+      should: 'send only the name',
+      actual: paneScopeForWire({ level: 'machine' }, { name: 'worker' }),
+      expected: { name: 'worker' },
+    });
+  });
+
+  it('given an UNBOUND pane, should stay null', () => {
+    assert({
+      given: 'an empty pane',
+      should: 'send null rather than a scope with no session',
+      actual: paneScopeForWire({ level: 'project', projectName: 'repo' }, null),
+      expected: null,
+    });
+  });
+
+  it('given a wire pane carrying the compat fields, this version should ignore them on the way in', () => {
+    assert({
+      given: 'a stored pane with a duplicated checkout',
+      should: 'project down to the narrowed shape, so the copy can never be believed here',
+      actual: projectStoredPaneScope({ name: 'worker', projectName: 'repo', branchName: 'feature' }),
+      expected: { name: 'worker' },
+    });
+  });
+
+  it('given a stale duplicated checkout, the READ path should still trust the WORKSPACE', () => {
+    // The compat fields are write-only; paneTerminalScope is the single join point.
+    assert({
+      given: 'a project workspace and a pane whose compat fields say otherwise',
+      should: "address the session at the workspace's checkout",
+      actual: paneTerminalScope(
+        { level: 'project', projectName: 'real-repo' },
+        projectStoredPaneScope({ name: 'worker', projectName: 'stale-repo' })!,
+      ),
+      expected: { projectName: 'real-repo', name: 'worker' },
     });
   });
 });

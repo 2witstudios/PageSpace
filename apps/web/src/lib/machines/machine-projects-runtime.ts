@@ -48,7 +48,7 @@ import { createDbMachineProjectStore } from '@pagespace/lib/services/machines/ma
 import type { MachineActorContext, MachineProjectsDeps, MachineAcquireResult } from '@pagespace/lib/services/machines/machine-projects';
 import type { PromoteProjectDeps } from '@pagespace/lib/services/machines/machine-project-promotion';
 import { buildMachineBranchesDeps } from './machine-branches-runtime';
-import { measureProjectStorageOpportunistically } from '@pagespace/lib/services/sandbox/machine-storage-billing';
+import { measureProjectStorageOpportunistically, measureMachineStorageOpportunistically } from '@pagespace/lib/services/sandbox/machine-storage-billing';
 
 // The Fly Sprites driver is loaded via a DYNAMIC import, never a static one —
 // @fly/sprites is ESM-only and @pagespace/lib compiles to CJS. Mirrors the
@@ -268,5 +268,16 @@ export function buildPromoteProjectDeps({ actorUserId }: { actorUserId: string }
     // stop being metered anywhere.
     measureProjectStorage: ({ machineProjectId, machinePageId, handle }) =>
       measureProjectStorageOpportunistically({ machineProjectId, machinePageId, handle }),
+    // The other half of the same move (issue #2204 follow-up, F12): the bytes
+    // left the ROOT when its checkout was reclaimed, so the root's stale
+    // measurement must be refreshed or the reconcile bills them twice. Lazy
+    // handle — the root Sprite may be hibernating, and `resolveHandle` is only
+    // called once the measurement is known to be due.
+    remeasureMachineStorage: ({ machinePageId }) =>
+      measureMachineStorageOpportunistically({
+        pageId: machinePageId,
+        resolveHandle: () => branches.resolveRootMachineHandle(machinePageId),
+        force: true,
+      }),
   };
 }

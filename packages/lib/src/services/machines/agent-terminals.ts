@@ -272,8 +272,37 @@ export type SpawnAgentTerminalDenialReason =
    * directory the next successful promotion deletes.
    */
   | 'promotion_failed'
+  /**
+   * The project cannot be promoted because it still has LIVE PTY sessions on
+   * the machine's own Sprite (issue #2204 follow-up, F10). See
+   * `findStrandedLiveSessions`.
+   */
+  | 'live_sessions_block_promotion'
   | 'name_in_use'
   | 'error';
+
+/**
+ * Which existing project-scoped rows would a promotion STRAND? (Pure.)
+ *
+ * A promotion moves the project's home to a new Sprite and deletes the old
+ * checkout. A row whose PTY was launched before that (`streamSessionId` set)
+ * names a process living in the OLD Sprite: promotion cannot carry it across —
+ * the process is not data — and the row is redirected to the new Sprite, so
+ * every reconnect then asks a Sprite where that session has never existed. The
+ * process is left running, unreachable, and billing.
+ *
+ * Migration is impossible, so promotion is REFUSED while any such row is live,
+ * naming them so the user can kill or let them finish. Same shape as the
+ * dirty-tree refusal, and for the same reason: the alternative is silent loss
+ * of something the user did not ask us to destroy.
+ *
+ * Chat-surface rows never hold a `streamSessionId` and so never block.
+ */
+export function findStrandedLiveSessions(
+  rows: ReadonlyArray<{ name: string; streamSessionId: string | null }>,
+): string[] {
+  return rows.filter((row) => row.streamSessionId !== null).map((row) => row.name);
+}
 
 /** Pure decision: is this (name, agentType, command?) safe to reserve as an agent terminal? */
 export function planSpawnAgentTerminal(input: { name: string; agentType: string; command?: string }):
@@ -305,12 +334,17 @@ export type SpawnAgentTerminalResult =
 async function ensureProjectPromoted({
   machineId,
   projectName,
+  scopeKey,
   deps,
 }: {
   machineId: string;
   projectName: string;
-  deps: Pick<AgentTerminalsDeps, 'projectStore' | 'projectPromotion'>;
-}): Promise<{ ok: true } | { ok: false; reason: 'promotion_failed'; detail?: string }> {
+  scopeKey: AgentTerminalScopeKey;
+  deps: Pick<AgentTerminalsDeps, 'projectStore' | 'projectPromotion' | 'store'>;
+}): Promise<
+  | { ok: true }
+  | { ok: false; reason: 'promotion_failed' | 'live_sessions_block_promotion'; detail?: string }
+> {
   if (!deps.projectPromotion || !deps.projectStore) return { ok: true };
 
   const project = await deps.projectStore.findByName(machineId, projectName);
@@ -319,6 +353,21 @@ async function ensureProjectPromoted({
   if (!project) return { ok: true };
   if (isPromotedProject({ sandboxId: project.sandboxId ?? null, spriteTornDownAt: project.spriteTornDownAt ?? null })) {
     return { ok: true };
+  }
+
+  // Inspect existing rows BEFORE promoting — promotion deletes the root
+  // checkout these sessions are running in, and their processes cannot follow.
+  // (Issue #2204 follow-up, F10.)
+  const stranded = findStrandedLiveSessions(await deps.store.list(scopeKey));
+  if (stranded.length > 0) {
+    return {
+      ok: false,
+      reason: 'live_sessions_block_promotion',
+      detail:
+        `Project "${projectName}" still has live terminal session(s) — ${stranded.join(', ')} — running on the ` +
+        `machine's own sandbox. Giving this project its own sandbox would leave them running somewhere ` +
+        `nothing can reach. Close them (or let them finish) and retry.`,
+    };
   }
 
   const promoted = await deps.projectPromotion.promote({ machineId, projectName });
@@ -362,6 +411,7 @@ export async function spawnAgentTerminal({
     const promoted = await ensureProjectPromoted({
       machineId: scope.scopeKey.machineId,
       projectName: scope.scopeKey.projectName,
+      scopeKey: scope.scopeKey,
       deps,
     });
     if (!promoted.ok) return promoted;

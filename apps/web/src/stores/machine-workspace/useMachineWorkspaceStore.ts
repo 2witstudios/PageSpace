@@ -47,6 +47,7 @@ import {
   nodeScopeNames,
   machineNodeScope,
   paneScopeOf,
+  paneScopeForWire,
   paneTerminalScope,
   panesOf,
   workspacesOf,
@@ -80,6 +81,7 @@ export type {
 export {
   autoSessionName,
   paneTerminalScope,
+  paneScopeForWire,
   nodeScopeNames,
   machineNodeScope,
   panesOf,
