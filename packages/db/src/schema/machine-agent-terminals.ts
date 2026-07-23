@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, index, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, boolean, index, uniqueIndex } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
@@ -52,6 +52,16 @@ import { machineBranches } from './machine-branches';
  * under — set lazily by the realtime PTY bridge on first connect (mirrors how
  * `machine_sessions` never eagerly opens a shell either), so a row can exist
  * with `streamSessionId: null` before anyone has connected to it yet.
+ *
+ * `coldTail`/`coldTailAt`/`coldTailHasOutput` (issue #2205) are the tail of the
+ * LAST DEAD incarnation's scrollback — overwritten IN PLACE by
+ * `recordColdTail` on every teardown, never appended to. `coldTail` is null
+ * until the first teardown, and capped at
+ * `MAX_SCROLLBACK_TAIL_BYTES` (`services/machines/session-scrollback.ts`).
+ * `coldTailHasOutput` is carried separately from `coldTail` being non-empty
+ * for the same reason `TerminalSession.hasOutput` is: a burst larger than the
+ * ring leaves an EMPTY tail on a session that was screaming output, and empty
+ * must never be misread as silence.
  */
 export const machineAgentTerminals = pgTable('machine_agent_terminals', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
@@ -72,6 +82,10 @@ export const machineAgentTerminals = pgTable('machine_agent_terminals', {
   agentType: text('agentType').notNull(),
   command: text('command'),
   streamSessionId: text('streamSessionId'),
+
+  coldTail: text('coldTail'),
+  coldTailAt: timestamp('coldTailAt', { mode: 'date' }),
+  coldTailHasOutput: boolean('coldTailHasOutput').notNull().default(false),
 
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),

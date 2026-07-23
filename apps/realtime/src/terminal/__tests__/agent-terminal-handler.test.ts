@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { buildAgentTerminalHandlers, MAX_INPUT_BYTES, SETTLE_HEARTBEAT_MS, resolveAgentTerminalCommand, planConnect, ensureAgentTerminalSession, connectFailureMessage, armIdleReap } from '../agent-terminal-handler';
+import { buildAgentTerminalHandlers, MAX_INPUT_BYTES, SETTLE_HEARTBEAT_MS, resolveAgentTerminalCommand, planConnect, ensureAgentTerminalSession, connectFailureMessage, armIdleReap, planColdTailPersist } from '../agent-terminal-handler';
 import { createTerminalSessionMap, DETACHED_IDLE_MS } from '../terminal-session-map';
 import type { AgentTerminalCheckAuthFn, OpenShellFn, SocketLike } from '../agent-terminal-handler';
 import type { TerminalSession } from '../terminal-session-map';
@@ -210,6 +210,37 @@ describe('planConnect', () => {
       should: 'create a fresh session (cold path)',
       actual: planConnect({ accessResult: granted, existingSession: undefined }),
       expected: { kind: 'create', access: granted },
+    });
+  });
+});
+
+describe('planColdTailPersist', () => {
+  const ENDED_AT = new Date('2026-01-01T00:00:00Z');
+
+  it('given a session with no agentTerminalId, should return undefined — nothing to persist onto', () => {
+    assert({
+      given: 'a session that never carried an agentTerminalId',
+      should: 'return undefined rather than persisting to a nonexistent row',
+      actual: planColdTailPersist({ agentTerminalId: undefined, scrollback: ['hi\r\n'], hasOutput: true }, ENDED_AT),
+      expected: undefined,
+    });
+  });
+
+  it('given a session with output, should cap and byte-normalize the WHOLE ring (no line limit) and carry hasOutput/endedAt', () => {
+    assert({
+      given: 'a session with CRLF-joined scrollback chunks',
+      should: 'produce the args recordColdTail needs, tail normalized to LF',
+      actual: planColdTailPersist({ agentTerminalId: 'agent-terminal-1', scrollback: ['one\r\n', 'two\r\n'], hasOutput: true }, ENDED_AT),
+      expected: { agentTerminalId: 'agent-terminal-1', tail: 'one\ntwo', hasOutput: true, endedAt: ENDED_AT },
+    });
+  });
+
+  it('given a session whose one oversized chunk was trimmed straight back off the ring, should still say hasOutput:true with an empty tail — silence must never look like it', () => {
+    assert({
+      given: 'hasOutput true but an empty scrollback ring',
+      should: 'carry hasOutput separately from the (empty) tail',
+      actual: planColdTailPersist({ agentTerminalId: 'agent-terminal-1', scrollback: [], hasOutput: true }, ENDED_AT),
+      expected: { agentTerminalId: 'agent-terminal-1', tail: '', hasOutput: true, endedAt: ENDED_AT },
     });
   });
 });
@@ -1239,6 +1270,80 @@ describe('buildAgentTerminalHandlers', () => {
       onDisconnect();
       await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS);
 
+      expect(shell.kill).toHaveBeenCalledWith('idle-reap');
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
+    });
+  });
+
+  describe('cold-tail persist on teardown (issue #2205)', () => {
+    let persistColdTail: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      persistColdTail = vi.fn().mockResolvedValue(undefined);
+    });
+
+    it('given the idle reap fires, should persist the byte-capped tail and hasOutput once, keyed by the row\'s agentTerminalId', async () => {
+      const { onConnect, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, persistColdTail });
+      await onConnect(validPayload);
+      const onOutput = openShell.mock.calls[0][0].onOutput as (data: string) => void;
+      onOutput('last words\r\n');
+      onDisconnect();
+
+      await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS);
+
+      expect(persistColdTail).toHaveBeenCalledTimes(1);
+      expect(persistColdTail).toHaveBeenCalledWith({
+        agentTerminalId: 'agent-terminal-1',
+        tail: 'last words',
+        hasOutput: true,
+        endedAt: expect.any(Date),
+      });
+    });
+
+    it('given the PTY exits naturally (onExit), should persist the cold tail', async () => {
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, persistColdTail });
+      await onConnect(validPayload);
+      const args = openShell.mock.calls[0][0] as OpenPtyShellArgs;
+      (args.onOutput as (data: string) => void)('bye\r\n');
+
+      (args.onExit as (exitCode: number) => void)(0);
+
+      expect(persistColdTail).toHaveBeenCalledTimes(1);
+      expect(persistColdTail).toHaveBeenCalledWith(
+        expect.objectContaining({ agentTerminalId: 'agent-terminal-1', tail: 'bye', hasOutput: true }),
+      );
+    });
+
+    it('given a forced teardown (access revoked, sole viewer), should persist the cold tail', async () => {
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, persistColdTail });
+      await onConnect(validPayload);
+
+      checkAuth.mockResolvedValue({ ok: false, reason: 'permission_revoked' });
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(shell.kill).toHaveBeenCalledWith('forced-teardown');
+      expect(persistColdTail).toHaveBeenCalledTimes(1);
+      expect(persistColdTail).toHaveBeenCalledWith(
+        expect.objectContaining({ agentTerminalId: 'agent-terminal-1' }),
+      );
+    });
+
+    it('given no persistColdTail dep is wired, should tear the session down without throwing', async () => {
+      const { onConnect, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+      onDisconnect();
+
+      await expect(vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS)).resolves.not.toThrow();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
+    });
+
+    it('given persistColdTail REJECTS, should not break teardown — the session is still removed and its timers still cleared', async () => {
+      persistColdTail = vi.fn().mockRejectedValue(new Error('db unreachable'));
+      const { onConnect, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, persistColdTail });
+      await onConnect(validPayload);
+      onDisconnect();
+
+      await expect(vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS)).resolves.not.toThrow();
       expect(shell.kill).toHaveBeenCalledWith('idle-reap');
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
     });
@@ -2534,7 +2639,7 @@ describe('ensureAgentTerminalSession — headless start', () => {
     const session = sessionMap.getByKey('branch1:agent:cli')!;
 
     await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS - 1000);
-    armIdleReap(undefined, sessionMap, session);
+    armIdleReap({}, sessionMap, session);
     await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS - 1000);
 
     assert({

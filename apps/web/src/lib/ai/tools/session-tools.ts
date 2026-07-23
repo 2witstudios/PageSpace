@@ -80,6 +80,12 @@ export interface SessionRow {
   agentType: string;
   /** The Sprite exec session its PTY runs under — null until the realtime bridge opens one. */
   streamSessionId: string | null;
+  /** The tail of the LAST DEAD incarnation's scrollback (issue #2205) — null until the first teardown. */
+  coldTail: string | null;
+  /** When the PTY that produced `coldTail` ended. */
+  coldTailAt: Date | null;
+  /** Whether that dead PTY ever emitted a byte — see `session-scrollback.ts`'s module doc for why this is carried separately from `coldTail` being non-empty. */
+  coldTailHasOutput: boolean;
   updatedAt: Date;
   /**
    * True while a generation is IN FLIGHT on this session's conversation — a
@@ -339,6 +345,13 @@ export interface SessionIoInput {
 export interface SessionReadInput extends SessionIoInput {
   /** How much of the tail to return. The module decides what its unit is. */
   limit?: number;
+  /**
+   * The row's cold-tail columns (issue #2205), when the row has one — populated
+   * at the dispatch site from `opened.row`, since that is where the row was
+   * already fetched. The agent module ignores it; only the PTY module answers
+   * `read_session` with a dead session's final scrollback.
+   */
+  cold?: { tail: string; at: Date; hasOutput: boolean };
 }
 
 export interface SessionSendInput extends SessionIoInput {
@@ -689,7 +702,11 @@ export function createSessionTools(deps: SessionToolsDeps): {
         const opened = await openSession(context, { target, name });
         if (!opened.ok) return opened.error;
 
-        return moduleFor(deps.io, opened.row).read({ identity: opened.identity, actor, limit });
+        const { row } = opened;
+        const cold = row.coldTail !== null || row.coldTailHasOutput
+          ? { tail: row.coldTail ?? '', at: row.coldTailAt ?? new Date(0), hasOutput: row.coldTailHasOutput }
+          : undefined;
+        return moduleFor(deps.io, row).read({ identity: opened.identity, actor, limit, cold });
       },
     }),
 
@@ -731,7 +748,10 @@ function moduleFor(io: SessionIoDeps, row: SessionRow): SessionIoModule {
 
 /** The state a just-reserved session is in when its row can't be re-read — the honest default. */
 function reservedStateFor(agentType: AgentRuntimeType): SessionState {
-  return readSessionState({ name: '', agentType, streamSessionId: null, updatedAt: new Date(0) }, new Date(0));
+  return readSessionState(
+    { name: '', agentType, streamSessionId: null, coldTail: null, coldTailAt: null, coldTailHasOutput: false, updatedAt: new Date(0) },
+    new Date(0),
+  );
 }
 
 /** The tool-facing denial for a placement the machine's views can't satisfy. */

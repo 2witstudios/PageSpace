@@ -5,6 +5,7 @@ import { eq, and, ne, sql, inArray, asc } from '@pagespace/db/operators'
 import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
 import { getActorAccessiblePagesInDrive, canActorAccessDrive } from './actor-permissions';
 import type { ToolExecutionContext } from '../core/types';
+import { PageType } from '@pagespace/lib/utils/enums';
 
 export const searchTools = {
   /**
@@ -355,7 +356,10 @@ export const searchTools = {
     inputSchema: z.object({
       driveId: z.string().describe('The unique ID of the drive to search in'),
       pattern: z.string().describe('Glob pattern to match page titles/paths (e.g., "**/README*", "docs/**/*.md", "meeting-*")'),
-      includeTypes: z.array(z.enum(['FOLDER', 'DOCUMENT', 'AI_CHAT', 'CHANNEL', 'CANVAS', 'SHEET', 'CODE', 'TASK_LIST'])).optional().describe('Filter by page types'),
+      // Derived from the canonical PageType enum: a hand-written list here
+      // omitted FILE and MACHINE, so agents filtering for those page types
+      // were rejected by zod before execute() ever ran (#2150).
+      includeTypes: z.array(z.enum(PageType)).optional().describe('Filter by page types'),
       maxResults: z.number().optional().default(100).describe('Maximum number of results to return'),
     }),
     execute: async ({ driveId, pattern, includeTypes, maxResults = 100 }, { experimental_context: context }) => {

@@ -1,11 +1,12 @@
 import { db } from '@pagespace/db/db';
 import { sql } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
+import type { PageTypeValue } from '@pagespace/lib/utils/enums';
 
 export interface BreadcrumbPage {
   id: string;
   title: string;
-  type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'FILE' | 'SHEET' | 'TASK_LIST' | 'CODE';
+  type: PageTypeValue;
   parentId: string | null;
   driveId: string;
   drive: { id: string; slug: string; name: string } | null;
@@ -14,7 +15,7 @@ export interface BreadcrumbPage {
 type QueryResultRow = {
   id: string;
   title: string;
-  type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'FILE' | 'SHEET' | 'TASK_LIST' | 'CODE';
+  type: PageTypeValue;
   driveId: string;
   parentId: string | null;
   drive_id: string | null;

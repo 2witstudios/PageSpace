@@ -5,6 +5,7 @@ import {
   createSessionTools,
   readSessionState,
   type SessionIoInput,
+  type SessionReadInput,
   type SessionRow,
   type SessionToolsDeps,
 } from '../session-tools';
@@ -88,10 +89,28 @@ function exec(tool: { execute?: unknown }, args: unknown, ctx: ToolExecutionCont
 }
 
 function agentRow(name: string, overrides: Partial<SessionRow> = {}): SessionRow {
-  return { name, agentType: 'pagespace', streamSessionId: null, updatedAt: NOW, ...overrides };
+  return {
+    name,
+    agentType: 'pagespace',
+    streamSessionId: null,
+    coldTail: null,
+    coldTailAt: null,
+    coldTailHasOutput: false,
+    updatedAt: NOW,
+    ...overrides,
+  };
 }
 function shellRow(name: string, overrides: Partial<SessionRow> = {}): SessionRow {
-  return { name, agentType: 'shell', streamSessionId: null, updatedAt: NOW, ...overrides };
+  return {
+    name,
+    agentType: 'shell',
+    streamSessionId: null,
+    coldTail: null,
+    coldTailAt: null,
+    coldTailHasOutput: false,
+    updatedAt: NOW,
+    ...overrides,
+  };
 }
 
 describe('readSessionState', () => {
@@ -771,6 +790,90 @@ describe('session IO shells', () => {
       should: 'dispatch to the pty stdin module only',
       actual: dispatched,
       expected: { agent: [], pty: [{ verb: 'send', name: 'sh1', node: 'machine' }] },
+    });
+  });
+
+  it('given a shell session with a cold tail on its row, should carry {tail, at, hasOutput} into the pty read module (issue #2205)', async () => {
+    const at = new Date('2026-01-01T00:00:00Z');
+    const row = shellRow('sh1', { coldTail: 'goodbye', coldTailAt: at, coldTailHasOutput: true });
+    let seenCold: SessionReadInput['cold'];
+    const { deps: d } = deps({
+      findSession: async () => row,
+      io: {
+        agent: { read: notDispatched, send: notDispatched },
+        pty: {
+          read: async (input: SessionReadInput) => {
+            seenCold = input.cold;
+            return { success: true };
+          },
+          send: notDispatched,
+        },
+      },
+    });
+    const tools = createSessionTools(d);
+    await exec(tools.read_session, { name: 'sh1' }, context(rootBinding()));
+
+    assert({
+      given: 'a row carrying cold-tail columns',
+      should: 'pass them through to the pty read module as {tail, at, hasOutput}',
+      actual: seenCold,
+      expected: { tail: 'goodbye', at, hasOutput: true },
+    });
+  });
+
+  it('given a shell session with no cold tail ever recorded, should pass cold: undefined rather than a fabricated empty one', async () => {
+    const row = shellRow('sh1'); // coldTail: null, coldTailAt: null, coldTailHasOutput: false
+    let seenCold: SessionReadInput['cold'] = { tail: 'sentinel', at: new Date(), hasOutput: true };
+    const { deps: d } = deps({
+      findSession: async () => row,
+      io: {
+        agent: { read: notDispatched, send: notDispatched },
+        pty: {
+          read: async (input: SessionReadInput) => {
+            seenCold = input.cold;
+            return { success: true };
+          },
+          send: notDispatched,
+        },
+      },
+    });
+    const tools = createSessionTools(d);
+    await exec(tools.read_session, { name: 'sh1' }, context(rootBinding()));
+
+    assert({
+      given: 'a row with no cold-tail columns set',
+      should: 'pass cold: undefined',
+      actual: seenCold,
+      expected: undefined,
+    });
+  });
+
+  it('given a shell session whose cold tail is EMPTY but produced output, should still carry cold — an empty tail is not "no cold tail"', async () => {
+    const at = new Date('2026-01-01T00:00:00Z');
+    // A burst larger than the ring left an empty tail on a session that was screaming output.
+    const row = shellRow('sh1', { coldTail: '', coldTailAt: at, coldTailHasOutput: true });
+    let seenCold: SessionReadInput['cold'];
+    const { deps: d } = deps({
+      findSession: async () => row,
+      io: {
+        agent: { read: notDispatched, send: notDispatched },
+        pty: {
+          read: async (input: SessionReadInput) => {
+            seenCold = input.cold;
+            return { success: true };
+          },
+          send: notDispatched,
+        },
+      },
+    });
+    const tools = createSessionTools(d);
+    await exec(tools.read_session, { name: 'sh1' }, context(rootBinding()));
+
+    assert({
+      given: 'hasOutput true with an empty stored tail',
+      should: 'still populate cold, carrying hasOutput separately from the empty tail',
+      actual: seenCold,
+      expected: { tail: '', at, hasOutput: true },
     });
   });
 

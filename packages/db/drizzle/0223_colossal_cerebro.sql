@@ -1,0 +1,1 @@
+ALTER TABLE "task_items" DROP COLUMN IF EXISTS "position";

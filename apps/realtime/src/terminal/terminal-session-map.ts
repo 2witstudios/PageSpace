@@ -111,6 +111,14 @@ export type TerminalSession = {
   connectedAt?: number;
   /** The Terminal page this session is for — the usage-breakdown's per-machine attribution key. */
   pageId?: string;
+  /**
+   * The `machine_agent_terminals` row this PTY belongs to (issue #2205's
+   * cold-tail persist). Known ONLY on the create path
+   * (`AgentTerminalSandboxResult.agentTerminalId`) — the only path that
+   * constructs a session — so a session with no row to persist onto (should
+   * that ever happen) simply persists nothing on teardown.
+   */
+  agentTerminalId?: string;
 };
 
 export function appendScrollback(

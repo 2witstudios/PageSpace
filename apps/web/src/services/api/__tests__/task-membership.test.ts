@@ -3,7 +3,6 @@ import {
   TASK_LIST_TYPE,
   shouldHaveTaskItem,
   resolveTaskItemSyncAction,
-  nextTaskItemPosition,
   buildTaskItemInsert,
   selectMissingTaskItemPageIds,
 } from '../task-membership';
@@ -78,34 +77,20 @@ describe('resolveTaskItemSyncAction', () => {
   });
 });
 
-describe('nextTaskItemPosition', () => {
-  it('places a new item after the last child', () => {
-    expect(nextTaskItemPosition(4)).toBe(5);
-  });
-
-  it('defaults to slot 1 when there is no last child', () => {
-    expect(nextTaskItemPosition(null)).toBe(1);
-    expect(nextTaskItemPosition(undefined)).toBe(1);
-  });
-});
-
 describe('buildTaskItemInsert', () => {
-  it('builds a pending/medium row positioned after the last child', () => {
+  it('builds a pending/medium row', () => {
     expect(
-      buildTaskItemInsert({ pageId: 'p1', userId: 'u1', lastChildPosition: 2 }),
+      buildTaskItemInsert({ pageId: 'p1', userId: 'u1' }),
     ).toEqual({
       userId: 'u1',
       pageId: 'p1',
       status: 'pending',
       priority: 'medium',
-      position: 3,
     });
   });
 
-  it('positions at slot 1 for an empty parent', () => {
-    expect(
-      buildTaskItemInsert({ pageId: 'p1', userId: 'u1', lastChildPosition: null }),
-    ).toMatchObject({ position: 1 });
+  it('carries no position — ordering lives on the linked page (#2143)', () => {
+    expect(buildTaskItemInsert({ pageId: 'p1', userId: 'u1' })).not.toHaveProperty('position');
   });
 });
 

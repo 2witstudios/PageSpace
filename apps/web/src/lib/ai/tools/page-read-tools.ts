@@ -386,14 +386,15 @@ export const pageReadTools = {
             },
           });
 
-          // Get all non-trashed tasks ordered by position. Title lives on the linked page.
+          // Get all non-trashed tasks ordered by pages.position — the single ordering
+          // rail users reorder against (#2143). Title lives on the linked page too.
           const tasks = await db
             .select({
               id: taskItems.id,
               title: pages.title,
               status: taskItems.status,
               priority: taskItems.priority,
-              position: taskItems.position,
+              position: pages.position,
               assigneeId: taskItems.assigneeId,
               dueDate: taskItems.dueDate,
               completedAt: taskItems.completedAt,
@@ -405,7 +406,7 @@ export const pageReadTools = {
               eq(pages.parentId, taskList.pageId!),
               eq(pages.isTrashed, false),
             ))
-            .orderBy(asc(taskItems.position));
+            .orderBy(asc(pages.position), asc(taskItems.id));
 
           // Resolve available statuses for this task list. Falls back to
           // documented defaults when no custom configs are present so the

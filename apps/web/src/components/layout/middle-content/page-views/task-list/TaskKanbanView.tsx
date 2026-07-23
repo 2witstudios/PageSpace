@@ -44,6 +44,7 @@ import {
   Bell,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { compareByPagePosition } from '@/services/api/task-ordering';
 import {
   TaskItem,
   TaskStatusConfig,
@@ -427,13 +428,9 @@ export function TaskKanbanView({
       }
     }
 
-    // Sort each column by position
+    // Sort each column by the single ordering rail, pages.position (#2143)
     for (const status of statusOrder) {
-      grouped[status]?.sort((a, b) => {
-        const posA = a.page?.position ?? a.position;
-        const posB = b.page?.position ?? b.position;
-        return posA - posB;
-      });
+      grouped[status]?.sort((a, b) => compareByPagePosition(a, b));
     }
 
     return grouped;

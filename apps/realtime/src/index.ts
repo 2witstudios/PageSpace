@@ -440,6 +440,15 @@ const agentTerminalSessionDeps: AgentTerminalSessionDeps = {
     const store = await dbMachineAgentTerminalStorePromise;
     await store.updateStreamSessionId({ id: agentTerminalId, streamSessionId: sessionId, now: new Date() });
   },
+  // Issue #2205: bounded scrollback tail persisted once per teardown, so a
+  // `read_session` after the PTY has died can still answer with its final
+  // output instead of `live:false` and nothing. Shared by both callers — a
+  // headless session's idle reap or exit deserves the same cold-read recovery
+  // a viewer-created one gets.
+  persistColdTail: async ({ agentTerminalId, tail, hasOutput, endedAt }) => {
+    const store = await dbMachineAgentTerminalStorePromise;
+    await store.recordColdTail({ id: agentTerminalId, tail, hasOutput, endedAt });
+  },
   // Terminal Epic 3: meters this PTY session's active-runtime cost against the
   // machine's payer, whoever started it. Sprite wall-clock is equally billable
   // whether a human, a pluggable agent, or an agent's `send_session` woke it.
@@ -551,8 +560,11 @@ const sessionIoDeps = {
   sessionMap: agentTerminalSessionMap,
   sessionKeyFor: buildAgentTerminalSessionKey,
   startSession: startHeadlessAgentTerminal,
+  // `agentTerminalSessionDeps` already carries `billing` and `persistColdTail`
+  // — the same two teardown-time effects a socket-created session's reap
+  // uses, so a headless session's reap persists its cold tail too.
   rearmIdleReap: (session: TerminalSession) =>
-    armIdleReap(defaultSandboxBillingDeps, agentTerminalSessionMap, session),
+    armIdleReap(agentTerminalSessionDeps, agentTerminalSessionMap, session),
 };
 
 /**

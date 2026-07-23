@@ -179,8 +179,9 @@ describe('ensureTaskItemForPage', () => {
   it('creates a task_items row for a TASK_LIST nested under a TASK_LIST', async () => {
     const { tx, taskItemInserts } = makeTx({ pageTypes: { parent: 'TASK_LIST' }, lastPosition: 2 });
     await ensureTaskItemForPage(tx as never, { pageId: 'list', pageType: 'TASK_LIST', parentId: 'parent', userId: 'u' });
+    // No position: task order lives on the linked page's pages.position (#2143).
     expect(taskItemInserts).toEqual([
-      { userId: 'u', pageId: 'list', status: 'pending', priority: 'medium', position: 3 },
+      { userId: 'u', pageId: 'list', status: 'pending', priority: 'medium' },
     ]);
   });
 
@@ -211,7 +212,8 @@ describe('syncTaskItemOnMove', () => {
     await syncTaskItemOnMove(tx as never, { movedPageId: 'list', movedPageType: 'TASK_LIST', oldParentId: 'old', newParentId: 'new', userId: 'u' });
     expect(deletedPageIds).toEqual(['list']);
     expect(taskItemInserts).toHaveLength(1);
-    expect(taskItemInserts[0]).toMatchObject({ pageId: 'list', position: 1 });
+    expect(taskItemInserts[0]).toMatchObject({ pageId: 'list' });
+    expect(taskItemInserts[0]).not.toHaveProperty('position');
   });
 
   it('only removes when moving out of a TASK_LIST into a non-TASK_LIST', async () => {
