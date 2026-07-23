@@ -60,6 +60,14 @@ describe('analyzeDropMigration', () => {
     expect(analysis.droppedTypes).toEqual(['PermissionAction']);
   });
 
+  it('given schema-qualified drops, should resolve to the bare name', () => {
+    const analysis = analyzeDropMigration(
+      'DROP TABLE IF EXISTS "public"."permissions";\nDROP TYPE IF EXISTS "public"."SubjectType";',
+    );
+    expect(analysis.droppedTables).toEqual(['permissions']);
+    expect(analysis.droppedTypes).toEqual(['SubjectType']);
+  });
+
   it('given a guarded single DO block, should report every guard satisfied', () => {
     const analysis = analyzeDropMigration(
       [

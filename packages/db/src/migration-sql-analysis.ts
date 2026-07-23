@@ -23,8 +23,11 @@ export interface DropMigrationAnalysis {
   allDropsInsideDoBlock: boolean;
 }
 
-const DROP_TABLE_RE = /DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?"([^"]+)"/gi;
-const DROP_TYPE_RE = /DROP\s+TYPE\s+(?:IF\s+EXISTS\s+)?"([^"]+)"/gi;
+// The optional `"schema".` prefix lets a schema-qualified drop (e.g.
+// `DROP TABLE "public"."permissions"`) still resolve to the bare table/type
+// name callers assert against.
+const DROP_TABLE_RE = /DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:"[^"]+"\.)?"([^"]+)"/gi;
+const DROP_TYPE_RE = /DROP\s+TYPE\s+(?:IF\s+EXISTS\s+)?(?:"[^"]+"\.)?"([^"]+)"/gi;
 const ANY_DROP_RE = /DROP\s+(?:TABLE|TYPE)\s/gi;
 
 /**

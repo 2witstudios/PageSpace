@@ -45,7 +45,6 @@ export async function truncateAll(db: TestDb): Promise<void> {
       user_mentions,
       mentions,
       page_permissions,
-      permissions,
       file_pages,
       files,
       messages,
@@ -147,13 +146,6 @@ export const FIXTURES = {
       storagePath: 'test_file_blob_001/data.txt',
     },
   },
-  permissions: {
-    perm1: {
-      id: 'test_perm_001',
-      action: 'VIEW' as const,
-      subjectType: 'USER' as const,
-    },
-  },
   pagePermissions: {
     pp1: {
       id: 'test_pageperm_001',
@@ -177,7 +169,7 @@ export const FIXTURES = {
  * Call after truncateAll() in beforeEach.
  */
 export async function seedFixtures(db: TestDb): Promise<void> {
-  const { users, drives, pages, chatMessages, files, permissions, pagePermissions, tags } = FIXTURES;
+  const { users, drives, pages, chatMessages, files, pagePermissions, tags } = FIXTURES;
   const now = new Date();
 
   // Users
@@ -238,12 +230,6 @@ export async function seedFixtures(db: TestDb): Promise<void> {
   await db.execute(sql`
     INSERT INTO file_pages ("fileId", "pageId", "linkedBy", "linkedAt")
     VALUES (${files.blob.id}, ${pages.root.id}, ${users.owner.id}, ${now})
-  `);
-
-  // Legacy permissions
-  await db.execute(sql`
-    INSERT INTO permissions (id, action, "subjectType", "subjectId", "pageId", "createdAt")
-    VALUES (${permissions.perm1.id}, ${permissions.perm1.action}, ${permissions.perm1.subjectType}, ${users.member.id}, ${pages.root.id}, ${now})
   `);
 
   // Page permissions
