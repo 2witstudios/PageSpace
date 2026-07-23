@@ -4,6 +4,7 @@ import { assert } from '@/lib/ai/tools/__tests__/riteway';
 import {
   dispatchHeadlessSessionTurn,
   isClaimContested,
+  buildHeadlessToolContext,
   MAX_AGENT_DEPTH,
   type HeadlessSessionRunDeps,
   type HeadlessSessionTarget,
@@ -464,6 +465,74 @@ describe('dispatchHeadlessSessionTurn', () => {
       should: 'report the failure and free the claim',
       actual: { ok: result.ok, released: recorded.released },
       expected: { ok: false, released: [{ aborted: true }] },
+    });
+  });
+});
+
+/**
+ * Issue #2204 follow-up, F8. A dispatched turn built a context with neither a
+ * drive nor a `chatSource`, so `resolveSandboxActorContext` failed closed and
+ * every bash/file/git tool in the run returned "Code execution requires an
+ * active drive" — the machine binding was valid and the tools were unusable.
+ */
+describe('buildHeadlessToolContext', () => {
+  const machinePage = { id: 'machine-page-1', title: 'Dev Machine', type: 'AI_CHAT' };
+
+  it('given a machine page, should identify the run as that page\'s agent so the sandbox resolver can find its drive', () => {
+    const context = buildHeadlessToolContext({ target: target(), machinePage, userId: 'u1', depth: 0 });
+
+    assert({
+      given: 'a dispatched turn on a machine page',
+      should: 'carry a page chatSource naming that page',
+      actual: context.chatSource,
+      expected: { type: 'page', agentPageId: 'machine-page-1', agentTitle: 'Dev Machine' },
+    });
+  });
+
+  it('given a machine page, should still carry the page location context', () => {
+    const context = buildHeadlessToolContext({ target: target(), machinePage, userId: 'u1', depth: 0 });
+
+    assert({
+      given: 'a dispatched turn on a machine page',
+      should: 'describe the current page as the interactive route does',
+      actual: context.locationContext,
+      expected: {
+        currentPage: { id: 'machine-page-1', title: 'Dev Machine', type: 'AI_CHAT', path: '/Dev Machine' },
+      },
+    });
+  });
+
+  it('given the target, should bind tools to the TARGET\'s node, not the dispatcher\'s', () => {
+    const context = buildHeadlessToolContext({ target: target(), machinePage, userId: 'u1', depth: 1 });
+
+    assert({
+      given: 'a dispatched turn at depth 1',
+      should: 'carry the target binding, the agent origin, and its own depth',
+      actual: {
+        machineBinding: context.machineBinding,
+        requestOrigin: context.requestOrigin,
+        agentCallDepth: context.agentCallDepth,
+        conversationId: context.conversationId,
+        userId: context.userId,
+      },
+      expected: {
+        machineBinding: branchBinding(),
+        requestOrigin: 'agent',
+        agentCallDepth: 1,
+        conversationId: 'terminal-row-1',
+        userId: 'u1',
+      },
+    });
+  });
+
+  it('given no machine page row, should omit the page fields rather than invent them', () => {
+    const context = buildHeadlessToolContext({ target: target(), machinePage: undefined, userId: 'u1', depth: 0 });
+
+    assert({
+      given: 'a dispatched turn whose machine page row is missing',
+      should: 'carry neither a chatSource nor a location context',
+      actual: { chatSource: context.chatSource, locationContext: context.locationContext },
+      expected: { chatSource: undefined, locationContext: undefined },
     });
   });
 });

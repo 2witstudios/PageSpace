@@ -65,6 +65,27 @@ export function bindingCwdFor(
 }
 
 /**
+ * The FILE tools' counterpart to {@link bindingCwdFor}.
+ *
+ * `writeFile`/`readFile`/`editFile` take a path, not a cwd, and the runner
+ * resolves it against SANDBOX_ROOT (`resolveSandboxPath`). Without this, a
+ * relative path is rooted at `/workspace` no matter which node the call
+ * resolved to — so `target: { project: 'foo' }` would read and write
+ * `/workspace/a.txt` while `bash` in the same target ran in
+ * `/workspace/projects/foo`. Two tools, one addressed node, different files.
+ *
+ * Relative paths are therefore anchored to the RESOLVED NODE's cwd, which is
+ * exactly the default `bash` already applies. An ABSOLUTE path is left alone —
+ * it is the file-tool analogue of `bash`'s explicit `cwd` argument, and the
+ * runner still confines it to the sandbox root, so this can widen no reach.
+ */
+export function nodeScopedPath(path: string, node: { cwd: string } | undefined): string {
+  const cwd = node?.cwd;
+  if (!cwd || path.startsWith('/')) return path;
+  return `${cwd.replace(/\/+$/, '')}/${path}`;
+}
+
+/**
  * Direct child addressing (node epic): every code-execution tool may aim at a
  * node BENEATH the conversation's own — a project, or a branch — instead of
  * the node it is bound to. Resolution runs against the derived handle set
@@ -474,7 +495,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
       execute: async ({ path, content, target }, options) => {
         const opened = await open(options, target);
         if (!opened.ok) return opened.error;
-        return writeSandboxFile({ path, content, ctx: opened.ctx, deps: runDeps });
+        return writeSandboxFile({ path: nodeScopedPath(path, opened.node), content, ctx: opened.ctx, deps: runDeps });
       },
     }),
 
@@ -485,7 +506,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
       execute: async ({ path, target }, options) => {
         const opened = await open(options, target);
         if (!opened.ok) return opened.error;
-        return readSandboxFile({ path, ctx: opened.ctx, deps: runDeps });
+        return readSandboxFile({ path: nodeScopedPath(path, opened.node), ctx: opened.ctx, deps: runDeps });
       },
     }),
 
@@ -496,7 +517,14 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
       execute: async ({ path, oldString, newString, replaceAll, target }, options) => {
         const opened = await open(options, target);
         if (!opened.ok) return opened.error;
-        return editSandboxFile({ path, oldString, newString, replaceAll, ctx: opened.ctx, deps: runDeps });
+        return editSandboxFile({
+          path: nodeScopedPath(path, opened.node),
+          oldString,
+          newString,
+          replaceAll,
+          ctx: opened.ctx,
+          deps: runDeps,
+        });
       },
     }),
 

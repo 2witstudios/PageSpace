@@ -71,7 +71,7 @@ import { broadcastChatUserMessage, broadcastAiStreamStart, broadcastAiStreamComp
 import { STREAM_HEARTBEAT_STALE_MS } from '@/lib/ai/core/stream-liveness';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import { buildMachineBindingPrompt } from './machine-binding-prompt';
-import { isClaimContested } from './headless-session-run';
+import { isClaimContested, buildHeadlessToolContext } from './headless-session-run';
 import type {
   HeadlessClaimResult,
   HeadlessSessionRunDeps,
@@ -379,25 +379,12 @@ async function generate(input: {
     (machinePage?.enabledTools as string[] | null) ?? null,
   ) as ToolSet;
 
-  const context: ToolExecutionContext = {
+  const context = buildHeadlessToolContext({
+    target,
+    machinePage: machinePage ? { id: machinePage.id, title: machinePage.title, type: machinePage.type } : undefined,
     userId,
-    conversationId: target.conversationId,
-    machineBinding: target.binding,
-    // Its own dispatches are one level deeper than this run — the cap in
-    // `headless-session-run.ts` reads this counter back off the context.
-    agentCallDepth: depth,
-    requestOrigin: 'agent',
-    locationContext: machinePage
-      ? {
-          currentPage: {
-            id: machinePage.id,
-            title: machinePage.title,
-            type: machinePage.type,
-            path: `/${machinePage.title}`,
-          },
-        }
-      : undefined,
-  } as ToolExecutionContext;
+    depth,
+  }) as ToolExecutionContext;
 
   const messages = [
     ...input.history.map((entry) => ({ role: entry.role, content: entry.content })),

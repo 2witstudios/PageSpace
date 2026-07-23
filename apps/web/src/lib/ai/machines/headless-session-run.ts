@@ -141,6 +141,75 @@ export function isClaimContested(
   );
 }
 
+/** The machine page a dispatched run executes as — the slice the tool context needs. */
+export interface HeadlessMachinePage {
+  id: string;
+  title: string;
+  type: string;
+}
+
+/**
+ * The tool-execution context a dispatched turn runs under (issue #2204
+ * follow-up, F8).
+ *
+ * THE PART THAT IS EASY TO GET WRONG, and was: `chatSource`.
+ * `resolveSandboxActorContext` fails CLOSED — "Code execution requires an
+ * active drive" — for any context whose `chatSource.type` is not `'global'`
+ * and that carries no drive. It reaches a page agent's drive through
+ * `chatSource.agentPageId`, so a context with `locationContext.currentPage`
+ * alone looks driveless and every bash/file/git tool in the run is refused.
+ * A dispatched session is a page agent on the machine page, exactly as the
+ * interactive route describes it, so it must say so the same way.
+ *
+ * Pure, and separated from the runtime's `generate` for that reason: this is
+ * the whole difference between a dispatched session that can execute code and
+ * one that cannot, and it should never again be provable only by dispatching.
+ */
+export interface HeadlessToolContext {
+  userId: string;
+  conversationId: string;
+  machineBinding: MachineNodeHandleSet;
+  agentCallDepth: number;
+  requestOrigin: 'agent';
+  chatSource?: { type: 'page'; agentPageId: string; agentTitle: string };
+  locationContext?: { currentPage: { id: string; title: string; type: string; path: string } };
+}
+
+export function buildHeadlessToolContext(input: {
+  target: HeadlessSessionTarget;
+  machinePage: HeadlessMachinePage | undefined;
+  userId: string;
+  depth: number;
+}): HeadlessToolContext {
+  const { target, machinePage, userId, depth } = input;
+  return {
+    userId,
+    conversationId: target.conversationId,
+    machineBinding: target.binding,
+    // Its own dispatches are one level deeper than this run — the cap in
+    // `dispatchHeadlessSessionTurn` reads this counter back off the context.
+    agentCallDepth: depth,
+    requestOrigin: 'agent',
+    ...(machinePage
+      ? {
+          chatSource: {
+            type: 'page' as const,
+            agentPageId: machinePage.id,
+            agentTitle: machinePage.title,
+          },
+          locationContext: {
+            currentPage: {
+              id: machinePage.id,
+              title: machinePage.title,
+              type: machinePage.type,
+              path: `/${machinePage.title}`,
+            },
+          },
+        }
+      : {}),
+  };
+}
+
 export interface HeadlessSessionRunDeps {
   /** Resolve the addressed session into a runnable target, or null if it is not an agent session. */
   resolveTarget: (identity: SessionTerminalIdentity) => Promise<HeadlessSessionTarget | null>;
