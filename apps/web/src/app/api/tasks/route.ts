@@ -402,7 +402,7 @@ export async function GET(request: Request) {
           columns: { id: true, name: true, image: true },
         },
         page: {
-          columns: { id: true, title: true, isTrashed: true, parentId: true },
+          columns: { id: true, title: true, isTrashed: true, parentId: true, position: true },
         },
       },
       orderBy: [desc(taskItems.updatedAt)],
@@ -436,6 +436,8 @@ export async function GET(request: Request) {
 
         return {
           ...task,
+          // Sourced from the linked page — the single ordering rail (#2143).
+          position: task.page?.position ?? 0,
           title: task.page?.title ?? '',
           driveId: pageInfo.driveId,
           taskListPageId: listPageId,

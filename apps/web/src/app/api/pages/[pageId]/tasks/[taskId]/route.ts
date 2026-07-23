@@ -403,7 +403,7 @@ export async function PATCH(
         columns: { id: true, name: true, image: true },
       },
       page: {
-        columns: { id: true, title: true },
+        columns: { id: true, title: true, position: true },
       },
       assignees: {
         with: {
@@ -459,6 +459,8 @@ export async function PATCH(
   const responseBody = {
     ...taskWithRelations,
     title: responseTitle,
+    // Sourced from the linked page — the single ordering rail (#2143).
+    position: taskWithRelations.page?.position ?? 0,
     ...(agentTriggerResult ? { agentTrigger: agentTriggerResult } : {}),
   };
 

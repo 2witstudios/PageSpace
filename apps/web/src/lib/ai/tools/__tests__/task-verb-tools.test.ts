@@ -328,7 +328,7 @@ describe('task verb tools', () => {
       expect(schema.parse({ taskId: 'task-1', position: 2 })).toMatchObject({ taskId: 'task-1', position: 2 });
     });
 
-    it('moves the task and re-densifies peers', async () => {
+    it('moves the task to a midpoint pages.position between its new neighbours (#2143)', async () => {
       mockDb.query.taskItems.findFirst = vi.fn().mockResolvedValue({
         id: 'task-2',
         pageId: 'doc-2',
@@ -388,11 +388,14 @@ describe('task verb tools', () => {
       expect(mockBroadcastTaskEvent).toHaveBeenCalledWith(
         expect.objectContaining({ type: 'task_updated', taskId: 'task-2' }),
       );
+      // Slot 3 sits between task-3 (position 2) and task-4 (position 3) once
+      // task-2 is excluded from its own peer list — the midpoint is 2.5, not a
+      // re-densified integer.
       expect(result).toEqual(
         expect.objectContaining({
           success: true,
           action: 'updated',
-          task: expect.objectContaining({ id: 'task-2', position: 3 }),
+          task: expect.objectContaining({ id: 'task-2', position: 2.5 }),
         }),
       );
     });

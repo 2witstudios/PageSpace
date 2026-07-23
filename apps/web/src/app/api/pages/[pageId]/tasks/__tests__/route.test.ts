@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET, POST } from '../route';
 import { computeHasContent } from '../task-utils';
-import { reorderTaskPeers } from '@/lib/ai/tools/task-helpers';
 import { NextResponse } from 'next/server';
 
 // Mock dependencies
@@ -55,12 +54,6 @@ vi.mock('@pagespace/lib/logging/logger-config', () => {
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   getActorInfo: vi.fn().mockResolvedValue({ name: 'Test User', email: 'test@test.com' }),
   logPageActivity: vi.fn(),
-}));
-
-// The route delegates an explicit `position` to the shared task move, which reads and
-// writes pages.position — the single ordering rail (#2143).
-vi.mock('@/lib/ai/tools/task-helpers', () => ({
-  reorderTaskPeers: vi.fn().mockResolvedValue({ index: 0, position: 0 }),
 }));
 
 // Track mock values for transaction
@@ -1136,15 +1129,18 @@ describe('Task API Routes', () => {
       expect(capturedTaskInsert).toMatchObject({ metadata: { note: 'remember this' } });
     });
 
-    it('applies an explicit position by moving the created page, not by writing a task-row position (#2143)', async () => {
+    it('applies an explicit position by writing the resolved pages.position in the creation transaction, not a task-row position (#2143)', async () => {
+      // Resolving and writing the position inline (rather than creating, then moving
+      // in a second transaction) keeps creation atomic: a failure can no longer leave
+      // a committed task that a client retry would then duplicate.
       const mockTaskList = { id: mockTaskListId };
       const mockNewTask = { id: 'new-task', title: 'Task', status: 'pending', priority: 'medium' };
-      const mockNewPage = { id: 'new-page', title: 'Task', type: 'DOCUMENT', position: 1 };
-      vi.mocked(reorderTaskPeers).mockResolvedValueOnce({ index: 7, position: 7.5 });
+      const mockNewPage = { id: 'new-page', title: 'Task', type: 'DOCUMENT', position: 7.5 };
 
       transactionPageResult = [mockNewPage];
       transactionTaskResult = [mockNewTask];
 
+      let capturedPageInsert: Record<string, unknown> | null = null;
       let capturedTaskInsert: Record<string, unknown> | null = null;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (vi.mocked(db.transaction) as any).mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => {
@@ -1153,6 +1149,7 @@ describe('Task API Routes', () => {
           insert: vi.fn(() => ({
             values: vi.fn((vals: Record<string, unknown>) => {
               insertCallCount++;
+              if (insertCallCount === 1) capturedPageInsert = vals;
               if (insertCallCount === 2) capturedTaskInsert = vals;
               return {
                 returning: vi.fn().mockResolvedValue(insertCallCount === 1 ? transactionPageResult : transactionTaskResult),
@@ -1173,15 +1170,21 @@ describe('Task API Routes', () => {
       vi.mocked(db.query.taskItems.findFirst)
         .mockResolvedValueOnce(null as never)
         .mockResolvedValueOnce({ ...mockNewTask, assignee: null, user: null, assignees: [] } as never);
+      // The peer lookup that resolves the requested slot into a pages.position —
+      // index 1 falls between these two peers, so the midpoint is 7.5.
+      vi.mocked(db.select).mockImplementationOnce(() => makeSelectChain([
+        { id: 'peer-a', position: 7 },
+        { id: 'peer-b', position: 8 },
+      ]) as never);
 
-      const response = await POST(createRequest({ title: 'Task', position: 7 }), { params: mockParams });
+      const response = await POST(createRequest({ title: 'Task', position: 1 }), { params: mockParams });
       const body = await response.json();
 
       expect(response.status).toBe(201);
       // The task row carries no position at all — order lives on the linked page.
       expect(capturedTaskInsert).not.toHaveProperty('position');
-      expect(reorderTaskPeers).toHaveBeenCalledWith(mockPageId, 'new-task', 7, { userId: mockUserId });
-      // ...and the response reports the position actually written to that rail.
+      // The page insert itself carries the resolved position — no second write.
+      expect(capturedPageInsert).toMatchObject({ position: 7.5 });
       expect(body.position).toBe(7.5);
     });
 
@@ -1192,6 +1195,24 @@ describe('Task API Routes', () => {
 
       transactionPageResult = [mockNewPage];
       transactionTaskResult = [mockNewTask];
+
+      let capturedPageInsert: Record<string, unknown> | null = null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (vi.mocked(db.transaction) as any).mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => {
+        let insertCallCount = 0;
+        const tx = {
+          insert: vi.fn(() => ({
+            values: vi.fn((vals: Record<string, unknown>) => {
+              insertCallCount++;
+              if (insertCallCount === 1) capturedPageInsert = vals;
+              return {
+                returning: vi.fn().mockResolvedValue(insertCallCount === 1 ? transactionPageResult : transactionTaskResult),
+              };
+            }),
+          })),
+        };
+        return callback(tx);
+      });
 
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
       vi.mocked(canUserEditPage).mockResolvedValue(true);
@@ -1208,7 +1229,8 @@ describe('Task API Routes', () => {
       const body = await response.json();
 
       expect(response.status).toBe(201);
-      expect(reorderTaskPeers).not.toHaveBeenCalled();
+      // No explicit position means no peer lookup — the page is appended directly.
+      expect(capturedPageInsert).toMatchObject({ position: 4 });
       expect(body.position).toBe(4);
     });
 

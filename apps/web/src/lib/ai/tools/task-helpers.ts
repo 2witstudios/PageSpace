@@ -1,3 +1,4 @@
+import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db'
 import { eq, and, desc, asc, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
@@ -408,13 +409,32 @@ export async function createTask(
   }
 
   // Get next page position for the child document — the single ordering rail (#2143).
-  // A caller-supplied `position` is applied after creation via reorderTaskPeers, so
-  // creation and reordering share one placement path.
   const lastChildPage = await db.query.pages.findFirst({
     where: and(eq(pages.parentId, pageId), eq(pages.isTrashed, false)),
     orderBy: [desc(pages.position)],
   });
   const nextPagePosition = (lastChildPage?.position ?? 0) + 1;
+
+  // A caller-supplied `position` is resolved against the current siblings up front
+  // and applied to the insert directly, in the same transaction — not as a second
+  // move afterward. A split commit (insert, then a separate move transaction) would
+  // let a mid-flight failure leave a task the client sees as failed but that a retry
+  // would then duplicate.
+  const newTaskPageId = createId();
+  let initialPagePosition = nextPagePosition;
+  let densifyPlan: Extract<ReturnType<typeof computeTaskMovePosition>, { kind: 'densify' }> | undefined;
+  if (typeof position === 'number') {
+    const taskListPeers = await db
+      .select({ id: pages.id, position: pages.position })
+      .from(pages)
+      .where(and(eq(pages.parentId, pageId), eq(pages.type, 'TASK_LIST'), eq(pages.isTrashed, false)));
+    const plan = computeTaskMovePosition({ peers: taskListPeers, movedId: newTaskPageId, targetIndex: position });
+    if (plan.kind === 'single') {
+      initialPagePosition = plan.position;
+    } else {
+      densifyPlan = plan;
+    }
+  }
 
   // Validate assigneeAgentId if provided
   if (assigneeAgentId) {
@@ -454,12 +474,13 @@ export async function createTask(
   const result = await db.transaction(async (tx) => {
     // Create task list page (description + sub-tasks live here)
     const [taskPage] = await tx.insert(pages).values({
+      id: newTaskPageId,
       title: trimmedTitle,
       type: 'TASK_LIST',
       parentId: pageId,
       driveId: taskListPage.driveId,
       content: '',
-      position: nextPagePosition,
+      position: initialPagePosition,
       updatedAt: new Date(),
     }).returning();
 
@@ -513,25 +534,24 @@ export async function createTask(
       });
     }
 
+    // A densify plan (the float4 gap between the target slot's neighbours could no
+    // longer be split) re-derives every sibling's position in the same transaction
+    // as the insert, so the whole placement — new row included — commits atomically.
+    if (densifyPlan) {
+      await reorderTaskListChildPages(tx, pageId, computeReorderPlan([...densifyPlan.positions]));
+    }
+
     return { task: newTask, page: taskPage };
   });
 
   const createdPage = result.page;
   const resultTitle = createdPage.title;
 
-  // An explicit slot is applied by moving the created page, so an AI-supplied
-  // `position` lands on the same rail a user drag writes to.
-  let resultPosition = createdPage.position;
-  if (typeof position === 'number') {
-    const moved = await reorderTaskPeers(pageId, result.task.id, position, {
-      userId,
-      isAiGenerated: true,
-      aiProvider: context.aiProvider,
-      aiModel: context.aiModel,
-      aiConversationId: context.conversationId,
-    });
-    resultPosition = moved.position;
-  }
+  // Densify overwrote the insert's position for every sibling including the new
+  // page; everything else already landed on `initialPagePosition` at insert time.
+  const resultPosition = densifyPlan
+    ? densifyPlan.positions.find(p => p.id === newTaskPageId)?.position ?? createdPage.position
+    : createdPage.position;
 
   const resultTask = { ...result.task, position: resultPosition };
 
