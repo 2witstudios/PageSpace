@@ -10,6 +10,10 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { reapOrphanedFiles } from '@/lib/storage/reap-orphaned-files';
+import {
+  collectMachinePageIdsInSubtree,
+  sweepDanglingMachineRefs,
+} from '@/lib/machines/machine-ref-sweep-runtime';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -75,6 +79,13 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
     // cascaded file_pages links are gone and the set can't be recovered.
     const candidateFileIds = await collectSubtreeFileIds(pageId);
 
+    // Same snapshot-before-delete rule for Machines (issue #2156): the
+    // `machines` MachineRef blobs on agent pages and on the global assistant
+    // config are denormalized copies with no FK, so nothing cascades them away
+    // — and once these rows are gone there is no way to learn which ids the
+    // subtree held.
+    const machinePageIds = await collectMachinePageIdsInSubtree(pageId);
+
     await db.transaction(async (tx) => {
       await recursivelyDelete(pageId, tx);
     });
@@ -93,6 +104,24 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
         }
       } catch (error) {
         loggers.api.warn('Inline orphan reap after permanent delete failed; weekly cron will retry', { pageId, error: error as Error });
+      }
+    }
+
+    // Drop the now-dangling MachineRefs, scoped to just the machines this
+    // delete destroyed. Best-effort: the daily purge cron sweeps unscoped, so a
+    // failure here only delays the repair — it must never fail the delete.
+    if (machinePageIds.length > 0) {
+      try {
+        const swept = await sweepDanglingMachineRefs(machinePageIds);
+        if (swept.agentsUpdated + swept.globalConfigsUpdated > 0) {
+          loggers.api.info('Permanent delete scrubbed dangling machine refs', {
+            pageId,
+            agentsUpdated: swept.agentsUpdated,
+            globalConfigsUpdated: swept.globalConfigsUpdated,
+          });
+        }
+      } catch (error) {
+        loggers.api.warn('Machine-ref sweep after permanent delete failed; daily cron will retry', { pageId, error: error as Error });
       }
     }
 

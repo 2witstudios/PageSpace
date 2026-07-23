@@ -677,6 +677,11 @@
       "import": "./dist/services/machines/machine-settings.js",
       "require": "./dist/services/machines/machine-settings.js"
     },
+    "./services/machines/machine-ref-sweep": {
+      "types": "./dist/services/machines/machine-ref-sweep.d.ts",
+      "import": "./dist/services/machines/machine-ref-sweep.js",
+      "require": "./dist/services/machines/machine-ref-sweep.js"
+    },
     "./services/machines/agent-terminal-types": {
       "types": "./dist/services/machines/agent-terminal-types.d.ts",
       "import": "./dist/services/machines/agent-terminal-types.js",
@@ -1942,6 +1947,9 @@
       ],
       "services/machines/machine-settings": [
         "./dist/services/machines/machine-settings.d.ts"
+      ],
+      "services/machines/machine-ref-sweep": [
+        "./dist/services/machines/machine-ref-sweep.d.ts"
       ],
       "services/machines/agent-terminal-types": [
         "./dist/services/machines/agent-terminal-types.d.ts"

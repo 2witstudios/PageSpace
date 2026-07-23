@@ -8,6 +8,10 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import {
+  collectMachinePageIdsInDrive,
+  sweepDanglingMachineRefs,
+} from '@/lib/machines/machine-ref-sweep-runtime';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -49,10 +53,29 @@ export async function DELETE(
     // Get recipients BEFORE deleting (ensures we have valid member list)
     const recipientUserIds = await getDriveRecipientUserIds(drive.id);
 
+    // Likewise the drive's MACHINE page ids (issue #2156): the cascade below
+    // destroys the pages, but the denormalized MachineRefs copied into agent
+    // pages / the global assistant config have no FK to cascade them — and
+    // afterwards there is nothing left to learn the ids from.
+    const machinePageIds = await collectMachinePageIdsInDrive(drive.id);
+
     // Permanently delete the drive (cascade will delete all pages)
     await db
       .delete(drives)
       .where(eq(drives.id, drive.id));
+
+    // Drop the refs the cascade just orphaned. Best-effort — the daily purge
+    // cron sweeps unscoped, so a failure here only delays the repair.
+    if (machinePageIds.length > 0) {
+      try {
+        await sweepDanglingMachineRefs(machinePageIds);
+      } catch (error) {
+        loggers.api.warn('Machine-ref sweep after permanent drive delete failed; daily cron will retry', {
+          driveId,
+          error: error as Error,
+        });
+      }
+    }
 
     // Broadcast drive deletion event (permanent delete)
     await broadcastDriveEvent(
