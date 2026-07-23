@@ -440,7 +440,7 @@
     },
     "packages/cli": {
       "name": "@pagespace/cli",
-      "version": "1.6.1",
+      "version": "1.7.0",
       "bin": {
         "pagespace": "./dist/bin.js",
         "pagespace-mcp": "./dist/bin-pagespace-mcp.js",

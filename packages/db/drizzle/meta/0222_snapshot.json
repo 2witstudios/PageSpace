@@ -1,6 +1,6 @@
 {
-  "id": "e48c64f5-d194-4c71-8e22-fcce5b59c18c",
-  "prevId": "67b2f17d-4e82-47e3-b335-ecfd6c2c3403",
+  "id": "1b81944a-36f2-43c1-b46c-5a3a7f9b7c52",
+  "prevId": "e48c64f5-d194-4c71-8e22-fcce5b59c18c",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -10478,13 +10478,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'medium'"
-        },
-        "position": {
-          "name": "position",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
         },
         "dueDate": {
           "name": "dueDate",

@@ -117,10 +117,6 @@ const FILE_COLUMNS = [
 
 const FILE_PAGE_COLUMNS = ['fileId', 'pageId', 'linkedBy', 'linkedAt', 'linkSource'];
 
-const PERMISSION_COLUMNS = [
-  'id', 'action', 'subjectType', 'subjectId', 'pageId', 'createdAt',
-];
-
 const PAGE_PERMISSION_COLUMNS = [
   'id', 'pageId', 'userId', 'canView', 'canEdit', 'canShare',
   'canDelete', 'grantedBy', 'grantedAt', 'expiresAt', 'note',
@@ -343,10 +339,6 @@ export async function exportData(
     : [];
   nullifyOrphanedUserRefs(filePagesData, allExportedUserIdSet, 'linkedBy');
 
-  const permissionsData = await queryRows(db, sql.raw(
-    `SELECT * FROM permissions WHERE "pageId" IN (${pageIn})`,
-  ));
-
   // Filter page permissions to only include exported users (userId is NOT NULL)
   const pagePermissionsData = await queryRows(db, sql.raw(
     `SELECT * FROM page_permissions WHERE "pageId" IN (${pageIn}) AND "userId" IN (${allUserIn})`,
@@ -403,7 +395,6 @@ export async function exportData(
     buildInsert('messages', MESSAGE_COLUMNS, messagesData),
     buildInsert('files', FILE_COLUMNS, filesData),
     buildInsert('file_pages', FILE_PAGE_COLUMNS, filePagesData),
-    buildInsert('permissions', PERMISSION_COLUMNS, permissionsData),
     buildInsert('page_permissions', PAGE_PERMISSION_COLUMNS, pagePermissionsData),
     buildInsert('mentions', MENTION_COLUMNS, mentionsData),
     buildInsert('user_mentions', USER_MENTION_COLUMNS, userMentionsData),
@@ -431,7 +422,6 @@ export async function exportData(
     messages: messagesData.length,
     files: filesData.length,
     filePages: filePagesData.length,
-    permissions: permissionsData.length,
     pagePermissions: pagePermissionsData.length,
     tags: tagsData.length,
     pageTags: pageTagsData.length,

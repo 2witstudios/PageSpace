@@ -163,7 +163,6 @@ export async function validateData(
     conversations: sql.raw(`SELECT id FROM conversations WHERE "userId" IN (${userIn})`),
     messages: sql.raw(`SELECT id FROM messages WHERE "conversationId" IN (${convoIn})`),
     files: sql.raw(`SELECT id FROM files WHERE "driveId" IN (${driveIn})`),
-    permissions: sql.raw(`SELECT id FROM permissions WHERE "pageId" IN (${pageIn})`),
     page_permissions: sql.raw(`SELECT id FROM page_permissions WHERE "pageId" IN (${pageIn})`),
     mentions: sql.raw(`SELECT id FROM mentions WHERE "sourcePageId" IN (${pageIn})`),
     user_mentions: sql.raw(`SELECT id FROM user_mentions WHERE "sourcePageId" IN (${pageIn})`),
