@@ -403,6 +403,7 @@ async function generate(input: {
   depth: number;
   abortSignal?: AbortSignal;
   balanceSnapshotCents?: number | null;
+  onStepUsage?: (usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number }) => void;
 }): Promise<{ text: string; usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number }; toolCallCount?: number; provider: string; model: string }> {
   const { target, userId, depth } = input;
 
@@ -481,11 +482,19 @@ async function generate(input: {
   // a single reservation, so without this a low-balance user keeps spending
   // well past what was reserved for them.
   const creditAbortController = new AbortController();
-  const onStepFinish =
+  const guardBalance =
     input.balanceSnapshotCents != null
       ? makeOnStepFinishHandler(creditAbortController, input.balanceSnapshotCents, providerResult.modelName)
       : null;
   const abortSignal = mergeAbortSignals(input.abortSignal, creditAbortController.signal);
+
+  // ALWAYS registered, not only when a balance guard exists: this is also how
+  // the engine learns what the provider already charged for, so an aborted run
+  // still bills its completed steps (see HeadlessGenerateInput.onStepUsage).
+  const onStepFinish = ({ usage }: { usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number } }) => {
+    input.onStepUsage?.(usage);
+    guardBalance?.(usage);
+  };
 
   const result = await generateText({
     model: providerResult.model,
@@ -496,7 +505,7 @@ async function generate(input: {
     maxRetries: 3,
     experimental_context: context,
     abortSignal,
-    ...(onStepFinish ? { onStepFinish: ({ usage }: { usage: { inputTokens?: number; outputTokens?: number } }) => onStepFinish(usage) } : {}),
+    onStepFinish,
     stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(MAX_STEPS)],
   });
 

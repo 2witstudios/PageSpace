@@ -247,6 +247,7 @@ export function buildPromoteProjectDeps({ actorUserId }: { actorUserId: string }
     },
     isEnabled: projects.isEnabled,
     now: projects.now,
+    wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     host: branches.host,
     substrate: branches.substrate,
     options: branches.options,

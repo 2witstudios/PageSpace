@@ -202,6 +202,8 @@ function makeDeps(
     store,
     isEnabled: () => true,
     now: () => NOW,
+    // No real clock in tests: the promotion-race poll resolves immediately.
+    wait: async () => {},
     host,
     substrate: { kind: 'sprite' },
     options: {},
@@ -652,10 +654,24 @@ describe('promoteProject — unpushed-commit refusal (F1)', () => {
 });
 
 describe('promoteProject — shared-Sprite protection on clone failure (F2)', () => {
-  it('given a clone blocked by an existing checkout, should NOT kill the Sprite a racer may be promoting on', async () => {
-    const { deps, killCalls } = makeDeps({}, {});
+  it('given a clone blocked by a checkout a racer is promoting into, should adopt the winner and NOT kill the shared Sprite', async () => {
+    const { deps, killCalls, rows } = makeDeps({}, {});
+    let polls = 0;
     const blocked: PromoteProjectDeps = {
       ...deps,
+      store: {
+        ...deps.store,
+        // The winner's CAS lands while we are waiting, exactly as a real racer's would.
+        findById: async (id) => {
+          polls += 1;
+          if (polls > 1) {
+            const row = rows.get(id)!;
+            row.sandboxId = 'sbx-winner';
+            row.sessionKey = 'winner-key';
+          }
+          return rows.get(id) ?? null;
+        },
+      },
       host: {
         ...deps.host,
         provision: async (args) => {
@@ -674,8 +690,38 @@ describe('promoteProject — shared-Sprite protection on clone failure (F2)', ()
 
     const result = await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, deps: blocked });
 
-    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-winner', promoted: false, resumed: true });
     expect(killCalls).toEqual([]);
+  });
+
+  it('given a populated destination but NO winner ever appearing, should reclaim the derelict Sprite rather than leak it', async () => {
+    // A previous promotion whose persist failed and whose best-effort kill also
+    // failed leaves the same populated Sprite behind with the row unpromoted.
+    // Trusting git's message alone would make every retry resume it, fail the
+    // same clone, and leave it billing forever.
+    const { deps, killCalls } = makeDeps({}, {});
+    const derelict: PromoteProjectDeps = {
+      ...deps,
+      host: {
+        ...deps.host,
+        provision: async (args) => {
+          const handle = await deps.host.provision(args);
+          return {
+            ...handle,
+            exec: async () => ({
+              exitCode: 128,
+              stdout: '',
+              stderr: "fatal: destination path '/workspace/repo' already exists and is not an empty directory.",
+            }),
+          };
+        },
+      },
+    };
+
+    const result = await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, deps: derelict });
+
+    expect(result).toMatchObject({ ok: false, reason: 'clone_failed' });
+    expect(killCalls.length).toBe(1);
   });
 
   it('given a clone that failed for our OWN reason, should still tear the unrecorded Sprite down', async () => {

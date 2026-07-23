@@ -58,6 +58,10 @@ export type { MachineActorContext };
 import { PROJECT_REPO_PATH } from '../sandbox/sandbox-paths';
 export { PROJECT_REPO_PATH };
 
+/** How many extra reads `awaitPromotionWinner` makes after its first, and how long it pauses between them. */
+const PROMOTION_RACE_POLLS = 3;
+const PROMOTION_RACE_POLL_MS = 250;
+
 export type PromoteProjectDenialReason =
   | 'kill_switch_off'
   | 'project_not_found'
@@ -102,6 +106,11 @@ export interface PromoteProjectDeps {
   store: MachineProjectPromotionStore;
   isEnabled: () => boolean;
   now: () => Date;
+  /**
+   * Pause, injected so the promotion-race reconciliation is testable without a
+   * real clock (see `awaitPromotionWinner`).
+   */
+  wait: (ms: number) => Promise<void>;
   /** The provider-neutral Sprite lifecycle seam — the promoted project's own Sprite is provisioned through it. */
   host: MachineHost;
   substrate: MachineSubstrateSpec;
@@ -381,6 +390,30 @@ export function isCloneBlockedByExistingCheckout(output: string): boolean {
   );
 }
 
+/**
+ * Wait, briefly, for a concurrent promotion of this project to persist.
+ *
+ * Called only when our clone failed on an already-populated destination — the
+ * one failure a racer sharing our name-keyed Sprite actually produces. If a
+ * winner exists it is milliseconds from its CAS, so a short bounded poll
+ * separates "someone is winning right now" from "this Sprite is a derelict from
+ * an earlier failed attempt". Returns the winning row, or null if none appears.
+ *
+ * Bounded on purpose: waiting longer would hold a user-facing spawn open for a
+ * winner that, by then, almost certainly does not exist.
+ */
+async function awaitPromotionWinner(
+  projectId: string,
+  deps: PromoteProjectDeps,
+): Promise<MachineProjectRecord | null> {
+  for (let attempt = 0; attempt <= PROMOTION_RACE_POLLS; attempt += 1) {
+    const row = await deps.store.findById(projectId).catch(() => null);
+    if (row?.sandboxId && row.sessionKey) return row;
+    if (attempt < PROMOTION_RACE_POLLS) await deps.wait(PROMOTION_RACE_POLL_MS);
+  }
+  return null;
+}
+
 async function safeKillSprite(host: MachineHost, handle: MachineHandle): Promise<void> {
   try {
     await host.kill({ machineId: handle.machineId, expectedInstanceId: handle.spriteInstanceId });
@@ -575,9 +608,21 @@ export async function promoteProject({
     // does NOT save us: a SHARED Sprite has exactly the instance id we would
     // pass as `expectedInstanceId`, so the kill succeeds. Only a genuinely
     // different Sprite is protected by it. (Issue #2204 follow-up, F2.)
-    if (!isCloneBlockedByExistingCheckout(detail ?? '')) {
-      await safeKillSprite(deps.host, handle);
+    //
+    // But "the destination already exists" does NOT prove a live racer: a
+    // previous promotion whose persist failed and whose best-effort kill also
+    // failed leaves the same populated Sprite behind, with the row still
+    // unpromoted. Trusting the message alone would make every retry resume that
+    // unreferenced Sprite, fail the same clone, and leave it billing forever.
+    // So the message only buys a BOUNDED WAIT for the supposed winner to
+    // persist; if the row never claims a Sprite, ours is unreferenced and dies.
+    const winner = isCloneBlockedByExistingCheckout(detail ?? '')
+      ? await awaitPromotionWinner(project.id, deps)
+      : null;
+    if (winner?.sandboxId && winner.sessionKey) {
+      return { ok: true, sandboxId: winner.sandboxId, sessionKey: winner.sessionKey, promoted: false, resumed: true };
     }
+    await safeKillSprite(deps.host, handle);
     return { ok: false, reason: 'clone_failed', detail };
   }
 

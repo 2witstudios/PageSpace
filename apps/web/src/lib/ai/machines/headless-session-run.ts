@@ -119,6 +119,19 @@ export interface HeadlessGenerateInput {
   abortSignal?: AbortSignal;
   /** Net spendable cents behind this run's reservation, or null when unmetered. */
   balanceSnapshotCents?: number | null;
+  /**
+   * Cumulative usage after each completed model step (issue #2204 follow-up
+   * review, Codex P1).
+   *
+   * The final `HeadlessGenerateResult` is the only usage report a SUCCESSFUL
+   * run needs — but an aborted or failed one never produces it. A run stopped
+   * by takeover, by the credit guard, or by the lifetime backstop rejects out
+   * of `generateText` after the provider has already charged for the steps it
+   * completed, and `trackAIUsage` skips an unsuccessful zero-token call
+   * entirely (`success || totalTokens > 0`), so those tokens went unbilled.
+   * Reporting per step makes the charge survive any exit.
+   */
+  onStepUsage?: (usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number }) => void;
 }
 
 export interface HeadlessGenerateResult {
@@ -443,6 +456,12 @@ async function runClaimedTurn({
   let result: HeadlessGenerateResult | undefined;
   let failure: string | undefined;
 
+  // What the provider has ALREADY charged for, accumulated as the run goes, so
+  // an abort or a mid-loop failure still bills what it spent. See
+  // `HeadlessGenerateInput.onStepUsage`.
+  const spent = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  let spentAnything = false;
+
   try {
     const history = await deps.loadHistory(target, { excludeMessageId: userMessageId });
     result = await deps.generate({
@@ -455,6 +474,12 @@ async function runClaimedTurn({
       depth: input.depth + 1,
       ...(claim.abortSignal ? { abortSignal: claim.abortSignal } : {}),
       balanceSnapshotCents,
+      onStepUsage: (usage) => {
+        spentAnything = true;
+        spent.inputTokens += usage.inputTokens ?? 0;
+        spent.outputTokens += usage.outputTokens ?? 0;
+        spent.totalTokens += usage.totalTokens ?? (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
+      },
     });
     await deps.persistReply({
       target,
@@ -486,7 +511,10 @@ async function runClaimedTurn({
       userId: input.actor.userId,
       pageId: target.machineId,
       conversationId: target.conversationId,
-      usage: result?.usage,
+      // The completed run's own total when there is one; otherwise what the
+      // steps reported before the abort/failure — never nothing, or the
+      // provider's charge for those steps is silently absorbed.
+      usage: result?.usage ?? (spentAnything ? spent : undefined),
       success: failure === undefined,
       provider: result?.provider,
       model: result?.model,

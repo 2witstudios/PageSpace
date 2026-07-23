@@ -46,6 +46,7 @@ import type {
   KillAgentTerminalDeps,
   AgentTerminalProjectLookup,
   AgentTerminalMachineSandbox,
+  AgentTerminalLiveSessions,
 } from '@pagespace/lib/services/machines/agent-terminals';
 import { promoteProject } from '@pagespace/lib/services/machines/machine-project-promotion';
 import { canAccessMachine, canViewMachine, getMachineHostForBranches } from './machine-branches-runtime';
@@ -195,10 +196,39 @@ function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
  * inside the seam — a machine- or branch-scope spawn never promotes and must
  * not pay for the lookup.
  */
+/**
+ * The machine Sprite's currently-running PTY session ids, or `null` when we
+ * could not find out (issue #2204 follow-up review, Codex P2).
+ *
+ * ATTACH-ONLY, deliberately: this asks whether a promotion would strand a live
+ * process, and waking a hibernating Sprite to answer that would both cost money
+ * and make the answer trivially "nothing is running" anyway. A machine with no
+ * live Sprite has no live PTY, which is the empty list — not an unknown.
+ */
+function buildLiveSessions(actorUserId: string): AgentTerminalLiveSessions {
+  return {
+    list: async (machineId) => {
+      try {
+        const acquired = await buildMachineSandbox(actorUserId).acquire(machineId);
+        if (!acquired.ok) return null;
+        const host = await getMachineHostForBranches();
+        const handle = await host.attach({ machineId: acquired.sandboxId });
+        // No Sprite to attach to means nothing is running on it.
+        if (!handle) return [];
+        return (await handle.listStreams()).map((session) => session.id);
+      } catch {
+        // Control plane unreachable — we learned nothing. The caller fails closed.
+        return null;
+      }
+    },
+  };
+}
+
 export function buildSpawnAgentTerminalDeps(actorUserId: string): SpawnAgentTerminalDeps {
   return {
     ...buildBaseDeps(),
     projectStore: buildProjectStoreLookup(),
+    liveSessions: buildLiveSessions(actorUserId),
     now: () => new Date(),
     projectPromotion: {
       promote: async ({ machineId, projectName }) => {

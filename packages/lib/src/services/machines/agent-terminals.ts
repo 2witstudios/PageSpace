@@ -109,6 +109,17 @@ export interface AgentTerminalMachineSandbox {
   acquire(machineId: string): Promise<AgentTerminalMachineSandboxResult>;
 }
 
+/**
+ * The machine Sprite's CURRENTLY RUNNING PTY session ids.
+ *
+ * `null` means "could not tell" — the Sprite was unreachable or the listing
+ * failed. Callers must not read that as "nothing is running": see
+ * `findStrandedLiveSessions` for why an unverifiable answer fails closed.
+ */
+export interface AgentTerminalLiveSessions {
+  list(machineId: string): Promise<string[] | null>;
+}
+
 export interface AgentTerminalsDeps {
   branchStore: AgentTerminalBranchLookup;
   /** Required only for project/machine-scope targets — a branch-only caller (today's only wired consumer) never needs it. */
@@ -117,6 +128,8 @@ export interface AgentTerminalsDeps {
   machineSandbox?: AgentTerminalMachineSandbox;
   /** Lazy project-Sprite promotion, fired by a project-scoped spawn — see `AgentTerminalProjectPromotion`. */
   projectPromotion?: AgentTerminalProjectPromotion;
+  /** Live-PTY probe consulted before a promotion — required wherever `projectPromotion` is wired. */
+  liveSessions?: AgentTerminalLiveSessions;
   store: MachineAgentTerminalStore;
   host: MachineHost;
   now: () => Date;
@@ -125,7 +138,7 @@ export interface AgentTerminalsDeps {
 /** Each function below asks for exactly the slice of `AgentTerminalsDeps` it touches — e.g. a read-only resolver never needs `host`, so a caller (like the realtime PTY bridge) doesn't have to fabricate one just to satisfy the type. */
 export type SpawnAgentTerminalDeps = Pick<
   AgentTerminalsDeps,
-  'branchStore' | 'projectStore' | 'store' | 'now' | 'projectPromotion'
+  'branchStore' | 'projectStore' | 'store' | 'now' | 'projectPromotion' | 'liveSessions'
 >;
 export type ResolveAgentTerminalDeps = Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'machineSandbox' | 'store'>;
 export type ListAgentTerminalsDeps = Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'store'>;
@@ -285,23 +298,31 @@ export type SpawnAgentTerminalDenialReason =
  * Which existing project-scoped rows would a promotion STRAND? (Pure.)
  *
  * A promotion moves the project's home to a new Sprite and deletes the old
- * checkout. A row whose PTY was launched before that (`streamSessionId` set)
- * names a process living in the OLD Sprite: promotion cannot carry it across —
- * the process is not data — and the row is redirected to the new Sprite, so
- * every reconnect then asks a Sprite where that session has never existed. The
- * process is left running, unreachable, and billing.
+ * checkout. A row whose PTY is running names a process living in the OLD
+ * Sprite: promotion cannot carry it across — the process is not data — and the
+ * row is redirected to the new Sprite, so every reconnect then asks a Sprite
+ * where that session has never existed. The process is left running,
+ * unreachable, and billing. Migration is impossible, so promotion is REFUSED
+ * while any such row is live.
  *
- * Migration is impossible, so promotion is REFUSED while any such row is live,
- * naming them so the user can kill or let them finish. Same shape as the
- * dirty-tree refusal, and for the same reason: the alternative is silent loss
- * of something the user did not ask us to destroy.
+ * MEMBERSHIP IS THE TEST, not `streamSessionId !== null`. That column records a
+ * session that existed at SOME point and is never cleared (nothing writes null
+ * back — see `MachineAgentTerminalStore.updateStreamSessionId`, whose parameter
+ * is not nullable), so treating every non-null id as live would block every
+ * later project-scoped spawn — including an idempotent re-spawn of the same
+ * name — permanently, with no user action able to clear it. `liveSessionIds` is
+ * the Sprite's ACTUAL session listing, so a row whose PTY has exited stops
+ * blocking as soon as it exits.
  *
  * Chat-surface rows never hold a `streamSessionId` and so never block.
  */
 export function findStrandedLiveSessions(
   rows: ReadonlyArray<{ name: string; streamSessionId: string | null }>,
+  liveSessionIds: ReadonlySet<string>,
 ): string[] {
-  return rows.filter((row) => row.streamSessionId !== null).map((row) => row.name);
+  return rows
+    .filter((row) => row.streamSessionId !== null && liveSessionIds.has(row.streamSessionId))
+    .map((row) => row.name);
 }
 
 /** Pure decision: is this (name, agentType, command?) safe to reserve as an agent terminal? */
@@ -340,7 +361,7 @@ async function ensureProjectPromoted({
   machineId: string;
   projectName: string;
   scopeKey: AgentTerminalScopeKey;
-  deps: Pick<AgentTerminalsDeps, 'projectStore' | 'projectPromotion' | 'store'>;
+  deps: Pick<AgentTerminalsDeps, 'projectStore' | 'projectPromotion' | 'store' | 'liveSessions'>;
 }): Promise<
   | { ok: true }
   | { ok: false; reason: 'promotion_failed' | 'live_sessions_block_promotion'; detail?: string }
@@ -358,16 +379,38 @@ async function ensureProjectPromoted({
   // Inspect existing rows BEFORE promoting — promotion deletes the root
   // checkout these sessions are running in, and their processes cannot follow.
   // (Issue #2204 follow-up, F10.)
-  const stranded = findStrandedLiveSessions(await deps.store.list(scopeKey));
-  if (stranded.length > 0) {
-    return {
-      ok: false,
-      reason: 'live_sessions_block_promotion',
-      detail:
-        `Project "${projectName}" still has live terminal session(s) — ${stranded.join(', ')} — running on the ` +
-        `machine's own sandbox. Giving this project its own sandbox would leave them running somewhere ` +
-        `nothing can reach. Close them (or let them finish) and retry.`,
-    };
+  //
+  // The probe is paid for ONLY when some row has ever launched a PTY. The
+  // common case — a fresh project, or one whose rows are all chat surfaces —
+  // reaches promotion without touching the Sprite at all.
+  const everLaunched = (await deps.store.list(scopeKey)).filter((row) => row.streamSessionId !== null);
+  if (everLaunched.length > 0) {
+    const listed = await deps.liveSessions?.list(machineId);
+    if (!listed) {
+      // Could not tell. Fail closed, exactly as the dirty-tree check does: the
+      // two mistakes are not symmetric — a refused promotion is retried, a
+      // stranded process cannot be recovered. Unlike a never-cleared DB column,
+      // this clears itself the moment the Sprite answers again.
+      return {
+        ok: false,
+        reason: 'live_sessions_block_promotion',
+        detail:
+          `Could not verify whether project "${projectName}"'s existing terminal session(s) are still running, ` +
+          `so promotion was refused rather than risk leaving a live process somewhere nothing can reach. ` +
+          `Retry once the machine's sandbox is reachable.`,
+      };
+    }
+    const stranded = findStrandedLiveSessions(everLaunched, new Set(listed));
+    if (stranded.length > 0) {
+      return {
+        ok: false,
+        reason: 'live_sessions_block_promotion',
+        detail:
+          `Project "${projectName}" still has live terminal session(s) — ${stranded.join(', ')} — running on the ` +
+          `machine's own sandbox. Giving this project its own sandbox would leave them running somewhere ` +
+          `nothing can reach. Close them (or let them finish) and retry.`,
+      };
+    }
   }
 
   const promoted = await deps.projectPromotion.promote({ machineId, projectName });
