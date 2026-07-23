@@ -68,6 +68,11 @@ export const taskStatusConfigs = pgTable('task_status_configs', {
  *
  * Status: References a taskStatusConfigs.slug for this task's task list.
  * Default value 'pending' works with auto-created default status configs.
+ *
+ * Ordering is NOT stored here. Task order lives solely on the linked page's
+ * `pages.position`, the same rail users reorder by drag. This table used to carry
+ * its own `position` that only AI tools read and wrote, so the two orders silently
+ * diverged (#2143).
  */
 export const taskItems = pgTable('task_items', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
@@ -77,7 +82,6 @@ export const taskItems = pgTable('task_items', {
   pageId: text('pageId').notNull().references(() => pages.id, { onDelete: 'cascade' }).unique(),
   status: text('status').notNull().default('pending'),
   priority: text('priority', { enum: ['low', 'medium', 'high'] }).notNull().default('medium'),
-  position: integer('position').notNull().default(0),
   dueDate: timestamp('dueDate', { mode: 'date' }),
   metadata: jsonb('metadata'),
   completedAt: timestamp('completedAt', { mode: 'date' }),

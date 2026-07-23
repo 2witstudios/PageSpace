@@ -52,6 +52,9 @@ vi.mock('@pagespace/lib/utils/enums', () => ({
 vi.mock('@pagespace/lib/content/page-types.config', () => ({
     getDefaultContent: vi.fn(() => ''),
     getCreatablePageTypes: vi.fn(() => ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST', 'CODE']),
+    // create_page's description interpolates each type's gloss from this config
+    // so the prose can't drift from the schema (#2150).
+    getPageTypeConfig: vi.fn((type: string) => ({ description: `${type} pages` })),
     isAIChatPage: vi.fn((type) => type === 'AI_CHAT'),
     isDocumentPage: vi.fn((type) => type === 'DOCUMENT'),
     isCodePage: vi.fn((type) => type === 'CODE'),
@@ -375,6 +378,17 @@ describe('page-write-tools', () => {
     it('has correct tool definition', () => {
       expect(pageWriteTools.create_page).toBeDefined();
       expect(pageWriteTools.create_page.description).toContain('Create');
+    });
+
+    // Regression test for #2150: the description used to hardcode 8 page
+    // type names and glosses, so it could (and did) drift from the schema
+    // built from getCreatablePageTypes(). It now interpolates each creatable
+    // type's own gloss from page-types.config, so the two can't diverge.
+    it('interpolates every creatable type and its gloss from page-types.config', () => {
+      const description = pageWriteTools.create_page.description;
+      for (const type of ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST', 'CODE']) {
+        expect(description).toContain(`${type} (${type} pages)`);
+      }
     });
 
     it('requires user authentication', async () => {

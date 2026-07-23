@@ -3,8 +3,9 @@
  *
  * Membership of a page in a task list is determined by the page tree: a TASK_LIST
  * page whose `parentId` points to another TASK_LIST page is a task in that parent.
- * The `task_items` row is a metadata sidecar (status, priority, position, assignee)
- * that must mirror that relationship.
+ * The `task_items` row is a metadata sidecar (status, priority, assignee)
+ * that must mirror that relationship. Ordering is NOT part of it — that lives on
+ * `pages.position` alone (#2143).
  *
  * These functions decide WHAT must change. The imperative shells in
  * `task-sync-service.ts` look up types and perform the database I/O.
@@ -50,33 +51,27 @@ export const resolveTaskItemSyncAction = (input: {
   };
 };
 
-/**
- * Next position for a new task item: after the last child, defaulting to slot 1.
- */
-export const nextTaskItemPosition = (lastChildPosition: number | null | undefined): number =>
-  (lastChildPosition ?? 0) + 1;
-
 export interface TaskItemInsert {
   readonly userId: string;
   readonly pageId: string;
   readonly status: 'pending';
   readonly priority: 'medium';
-  readonly position: number;
 }
 
 /**
  * Build the row for a new task item linked to a page.
+ *
+ * Carries no position: order lives solely on the linked page's `pages.position`
+ * (#2143), which the page itself already has by the time this row is created.
  */
 export const buildTaskItemInsert = (input: {
   pageId: string;
   userId: string;
-  lastChildPosition: number | null | undefined;
 }): TaskItemInsert => ({
   userId: input.userId,
   pageId: input.pageId,
   status: 'pending',
   priority: 'medium',
-  position: nextTaskItemPosition(input.lastChildPosition),
 });
 
 /**

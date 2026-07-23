@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { canActorEditPage, canActorDeletePage, canActorManageDrive, driveDeniedByAppToken } from './actor-permissions';
 import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { PageType } from '@pagespace/lib/utils/enums';
-import { isAIChatPage, isDocumentPage, isCodePage, getDefaultContent, getCreatablePageTypes } from '@pagespace/lib/content/page-types.config';
+import { isAIChatPage, isDocumentPage, isCodePage, getDefaultContent, getCreatablePageTypes, getPageTypeConfig } from '@pagespace/lib/content/page-types.config';
 import { parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress, isSheetType } from '@pagespace/lib/sheets/sheet';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { logPageActivity, logDriveActivity, getActorInfo, type ActivityOperation } from '@pagespace/lib/monitoring/activity-logger';
@@ -546,7 +546,12 @@ export const pageWriteTools = {
    * Create new documents, folders, or other content
    */
   create_page: tool({
-    description: 'Create new pages in the workspace. Supports all page types: FOLDER (hierarchical organization), DOCUMENT (text content), AI_CHAT (AI conversation spaces), CHANNEL (team discussions), CANVAS (custom HTML/CSS pages), SHEET (spreadsheets with formulas), TASK_LIST (table-based task management), CODE (code editor with syntax highlighting). Any page type can contain any other page type as children with infinite nesting. For AI_CHAT pages, use update_agent_config after creation to configure agent behavior.',
+    // Both the type list and its glosses come from the same config the schema
+    // below is built from, so the prose can never drift from what the tool
+    // actually accepts — the hardcoded list here had gone stale (#2150).
+    description: `Create new pages in the workspace. Supported page types: ${getCreatablePageTypes()
+      .map((type) => `${type} (${getPageTypeConfig(type).description})`)
+      .join(', ')}. Any page type can contain any other page type as children with infinite nesting. For AI_CHAT pages, use update_agent_config after creation to configure agent behavior.`,
     inputSchema: z.object({
       driveId: z.string().describe('The unique ID of the drive to create the page in'),
       parentId: z.string().optional().describe('The unique ID of the parent page from list_pages - REQUIRED when creating inside any page (folder, document, channel, etc). Only omit for root-level pages in the drive.'),

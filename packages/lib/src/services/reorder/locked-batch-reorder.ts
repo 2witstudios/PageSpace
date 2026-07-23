@@ -42,6 +42,16 @@ export interface LockedBatchReorderOptions {
    * this codebase already has.
    */
   touchColumns?: AnyPgColumn[];
+  /**
+   * SQL type the submitted positions are cast to inside the batched
+   * `UPDATE ... FROM (VALUES ...)`. Defaults to `'int'` for the integer position
+   * columns (`drive_roles`, `favorites`) this primitive was written for.
+   *
+   * Pass `'real'` for float position columns — notably `pages.position`, where task
+   * and page reorders write fractional midpoints between neighbours. An `::int` cast
+   * there truncates every midpoint, collapsing distinct slots onto one position.
+   */
+  positionType?: 'int' | 'real';
 }
 
 /**
@@ -68,7 +78,7 @@ export async function lockedBatchReorder(
   tx: Tx,
   opts: LockedBatchReorderOptions
 ): Promise<string[]> {
-  const { table, idColumn, positionColumn, scopeWhere, plan, touchColumns = [] } = opts;
+  const { table, idColumn, positionColumn, scopeWhere, plan, touchColumns = [], positionType = 'int' } = opts;
 
   if (plan.orderedIds.length === 0) {
     return [];
@@ -84,7 +94,9 @@ export async function lockedBatchReorder(
 
   const values = sql.join(
     plan.orderedIds.map(
-      (id) => sql`(${id}::text, ${plan.positionById.get(id)}::int)`
+      (id) => positionType === 'real'
+        ? sql`(${id}::text, ${plan.positionById.get(id)}::real)`
+        : sql`(${id}::text, ${plan.positionById.get(id)}::int)`
     ),
     sql`, `
   );

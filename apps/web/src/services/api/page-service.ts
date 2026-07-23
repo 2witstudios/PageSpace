@@ -8,6 +8,7 @@ import { canUserViewPage, canUserEditPage, canUserDeletePage } from '@pagespace/
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger'
 import { detectPageContentFormat } from '@pagespace/lib/content/page-content-format'
 import { hashWithPrefix } from '@pagespace/lib/utils/hash-utils'
+import type { PageTypeValue } from '@pagespace/lib/utils/enums'
 import { computePageStateHash, createPageVersion, type PageVersionSource } from '@pagespace/lib/services/page-version-service';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
 import { validatePageCreation, validateAIChatTools } from '@pagespace/lib/content/page-type-validators'
@@ -108,9 +109,12 @@ function sanitizeEmptyContent(content: string): string {
 }
 
 /**
- * Page types
+ * Page types. Derived from the canonical enum — the hand-written union this
+ * replaced had drifted and omitted FILE, so FILE pages did not fit the type
+ * used for API page data (#2150). Guarded by
+ * `__tests__/page-type-drift-guard.test.ts`.
  */
-export type PageType = 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'SHEET' | 'TASK_LIST' | 'CODE' | 'MACHINE';
+export type PageType = PageTypeValue;
 
 /**
  * Message with user info for page details

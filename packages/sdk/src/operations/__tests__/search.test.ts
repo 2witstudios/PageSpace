@@ -76,8 +76,13 @@ describe('search.glob — input validation', () => {
     expect(result.success).toBe(false);
   });
 
-  it('accepts includeTypes drawn from the route\'s current type set — FOLDER, DOCUMENT, AI_CHAT, CHANNEL, CANVAS, SHEET, CODE, TASK_LIST (route.ts:14, post #1773/74 fix)', () => {
+  it('accepts includeTypes drawn from the route\'s type set — the full canonical PageType enum (#2150; the route now derives its filter from the enum)', () => {
     const result = globSearch.inputSchema.safeParse({ driveId: 'd1abc', pattern: '*', includeTypes: 'CODE,TASK_LIST' });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts FILE and MACHINE, which the inlined list used to omit (#2150)', () => {
+    const result = globSearch.inputSchema.safeParse({ driveId: 'd1abc', pattern: '*', includeTypes: 'FILE,MACHINE' });
     expect(result.success).toBe(true);
   });
 
