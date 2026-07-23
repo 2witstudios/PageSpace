@@ -1562,6 +1562,13 @@
       "when": 1784828172134,
       "tag": "0222_wooden_puck",
       "breakpoints": true
+    },
+    {
+      "idx": 223,
+      "version": "7",
+      "when": 1784830919427,
+      "tag": "0223_useful_secret_warriors",
+      "breakpoints": true
     }
   ]
 }

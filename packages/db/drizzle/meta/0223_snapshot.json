@@ -1,6 +1,6 @@
 {
-  "id": "51aff78e-4e8b-489a-a4b3-bc9cb055f078",
-  "prevId": "e48c64f5-d194-4c71-8e22-fcce5b59c18c",
+  "id": "3f0683e3-5b51-4d5d-8d78-161755d3e9a9",
+  "prevId": "51aff78e-4e8b-489a-a4b3-bc9cb055f078",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -248,7 +248,10 @@
             "tokenHash"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.email_unsubscribe_tokens": {
       "name": "email_unsubscribe_tokens",
@@ -375,7 +378,10 @@
             "token_hash"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.mcp_tokens": {
       "name": "mcp_tokens",
@@ -494,7 +500,10 @@
             "tokenHash"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.passkeys": {
       "name": "passkeys",
@@ -626,7 +635,10 @@
             "credential_id"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.socket_tokens": {
       "name": "socket_tokens",
@@ -735,7 +747,10 @@
             "tokenHash"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.users": {
       "name": "users",
@@ -972,7 +987,10 @@
             "stripeCustomerId"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.verification_tokens": {
       "name": "verification_tokens",
@@ -1105,7 +1123,10 @@
             "tokenHash"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.sessions": {
       "name": "sessions",
@@ -1339,7 +1360,10 @@
             "token_hash"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.chat_messages": {
       "name": "chat_messages",
@@ -1571,7 +1595,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.drives": {
       "name": "drives",
@@ -1776,7 +1803,10 @@
             "publishSubdomain"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.favorites": {
       "name": "favorites",
@@ -1937,12 +1967,14 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
+      "policies": {},
       "checkConstraints": {
         "favorites_item_type_consistency_chk": {
           "name": "favorites_item_type_consistency_chk",
           "value": "((\"itemType\" = 'page' AND \"pageId\" IS NOT NULL AND \"driveId\" IS NULL) OR (\"itemType\" = 'drive' AND \"driveId\" IS NOT NULL AND \"pageId\" IS NULL))"
         }
-      }
+      },
+      "isRLSEnabled": false
     },
     "public.mentions": {
       "name": "mentions",
@@ -2056,7 +2088,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.page_tags": {
       "name": "page_tags",
@@ -2113,7 +2148,10 @@
           ]
         }
       },
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.pages": {
       "name": "pages",
@@ -2517,7 +2555,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.storage_events": {
       "name": "storage_events",
@@ -2634,7 +2675,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.tags": {
       "name": "tags",
@@ -2670,7 +2714,10 @@
             "name"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.user_mentions": {
       "name": "user_mentions",
@@ -2803,7 +2850,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.drive_agent_members": {
       "name": "drive_agent_members",
@@ -2958,7 +3008,10 @@
             "agentPageId"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.drive_members": {
       "name": "drive_members",
@@ -3148,7 +3201,10 @@
             "userId"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.drive_roles": {
       "name": "drive_roles",
@@ -3282,7 +3338,10 @@
             "name"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.mcp_token_drives": {
       "name": "mcp_token_drives",
@@ -3441,7 +3500,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.page_permissions": {
       "name": "page_permissions",
@@ -3617,7 +3679,10 @@
             "userId"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.user_profiles": {
       "name": "user_profiles",
@@ -3707,7 +3772,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.channel_message_reactions": {
       "name": "channel_message_reactions",
@@ -3818,7 +3886,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.channel_messages": {
       "name": "channel_messages",
@@ -4067,7 +4138,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.channel_read_status": {
       "name": "channel_read_status",
@@ -4162,7 +4236,10 @@
           ]
         }
       },
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.channel_thread_followers": {
       "name": "channel_thread_followers",
@@ -4242,7 +4319,10 @@
           ]
         }
       },
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.pulse_summaries": {
       "name": "pulse_summaries",
@@ -4408,7 +4488,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.user_dashboards": {
       "name": "user_dashboards",
@@ -4472,7 +4555,10 @@
             "userId"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.conversations": {
       "name": "conversations",
@@ -4632,7 +4718,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.messages": {
       "name": "messages",
@@ -4797,7 +4886,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.notifications": {
       "name": "notifications",
@@ -5029,7 +5121,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.email_notification_log": {
       "name": "email_notification_log",
@@ -5149,7 +5244,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.email_notification_preferences": {
       "name": "email_notification_preferences",
@@ -5228,7 +5326,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.user_toast_notification_preferences": {
       "name": "user_toast_notification_preferences",
@@ -5295,7 +5396,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.display_preferences": {
       "name": "display_preferences",
@@ -5374,7 +5478,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.activity_logs": {
       "name": "activity_logs",
@@ -5862,6 +5969,7 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
+      "policies": {},
       "checkConstraints": {
         "activity_logs_content_size_limit": {
           "name": "activity_logs_content_size_limit",
@@ -5875,7 +5983,8 @@
           "name": "activity_logs_change_group_pair",
           "value": "(\"activity_logs\".\"changeGroupId\" IS NULL) = (\"activity_logs\".\"changeGroupType\" IS NULL)"
         }
-      }
+      },
+      "isRLSEnabled": false
     },
     "public.ai_usage_logs": {
       "name": "ai_usage_logs",
@@ -6282,7 +6391,10 @@
       },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.api_metrics": {
       "name": "api_metrics",
@@ -6485,7 +6597,10 @@
       },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.error_logs": {
       "name": "error_logs",
@@ -6700,7 +6815,10 @@
       },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.error_resolutions": {
       "name": "error_resolutions",
@@ -6742,7 +6860,10 @@
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.siem_delivery_cursors": {
       "name": "siem_delivery_cursors",
@@ -6796,7 +6917,15 @@
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "siem_delivery_cursors_delivered_cursor_pair": {
+          "name": "siem_delivery_cursors_delivered_cursor_pair",
+          "value": "(\"siem_delivery_cursors\".\"lastDeliveredId\" IS NULL) = (\"siem_delivery_cursors\".\"lastDeliveredAt\" IS NULL)"
+        }
+      },
+      "isRLSEnabled": false
     },
     "public.siem_delivery_receipts": {
       "name": "siem_delivery_receipts",
@@ -6994,7 +7123,10 @@
       },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.system_logs": {
       "name": "system_logs",
@@ -7248,7 +7380,10 @@
       },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.user_activities": {
       "name": "user_activities",
@@ -7410,7 +7545,10 @@
       },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.drive_backup_files": {
       "name": "drive_backup_files",
@@ -7494,7 +7632,10 @@
           ]
         }
       },
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.drive_backup_members": {
       "name": "drive_backup_members",
@@ -7584,7 +7725,10 @@
           ]
         }
       },
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.drive_backup_pages": {
       "name": "drive_backup_pages",
@@ -7706,7 +7850,10 @@
           ]
         }
       },
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.drive_backup_permissions": {
       "name": "drive_backup_permissions",
@@ -7819,7 +7966,10 @@
           ]
         }
       },
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.drive_backup_roles": {
       "name": "drive_backup_roles",
@@ -7923,7 +8073,10 @@
           ]
         }
       },
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.drive_backup_schedules": {
       "name": "drive_backup_schedules",
@@ -8037,7 +8190,10 @@
             "driveId"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.drive_backups": {
       "name": "drive_backups",
@@ -8215,12 +8371,14 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
+      "policies": {},
       "checkConstraints": {
         "drive_backups_change_group_pair": {
           "name": "drive_backups_change_group_pair",
           "value": "(\"drive_backups\".\"changeGroupId\" IS NULL) = (\"drive_backups\".\"changeGroupType\" IS NULL)"
         }
-      }
+      },
+      "isRLSEnabled": false
     },
     "public.page_versions": {
       "name": "page_versions",
@@ -8471,12 +8629,14 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
+      "policies": {},
       "checkConstraints": {
         "page_versions_change_group_pair": {
           "name": "page_versions_change_group_pair",
           "value": "(\"page_versions\".\"changeGroupId\" IS NULL) = (\"page_versions\".\"changeGroupType\" IS NULL)"
         }
-      }
+      },
+      "isRLSEnabled": false
     },
     "public.connections": {
       "name": "connections",
@@ -8699,7 +8859,10 @@
             "user2Id"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.direct_messages": {
       "name": "direct_messages",
@@ -9115,7 +9278,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.dm_conversations": {
       "name": "dm_conversations",
@@ -9304,7 +9470,10 @@
             "participant2Id"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.dm_message_reactions": {
       "name": "dm_message_reactions",
@@ -9415,7 +9584,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.dm_thread_followers": {
       "name": "dm_thread_followers",
@@ -9495,7 +9667,10 @@
           ]
         }
       },
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.stripe_events": {
       "name": "stripe_events",
@@ -9567,7 +9742,10 @@
       },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.subscriptions": {
       "name": "subscriptions",
@@ -9733,7 +9911,10 @@
             "stripeSubscriptionId"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.contact_submissions": {
       "name": "contact_submissions",
@@ -9817,7 +9998,10 @@
       },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.feedback_submissions": {
       "name": "feedback_submissions",
@@ -9961,7 +10145,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.file_conversations": {
       "name": "file_conversations",
@@ -10081,7 +10268,10 @@
           ]
         }
       },
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.file_pages": {
       "name": "file_pages",
@@ -10201,7 +10391,10 @@
           ]
         }
       },
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.files": {
       "name": "files",
@@ -10317,7 +10510,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.task_assignees": {
       "name": "task_assignees",
@@ -10462,12 +10658,14 @@
           ]
         }
       },
+      "policies": {},
       "checkConstraints": {
         "task_assignees_has_assignee": {
           "name": "task_assignees_has_assignee",
           "value": "(\"userId\" IS NOT NULL OR \"agentPageId\" IS NOT NULL)"
         }
-      }
+      },
+      "isRLSEnabled": false
     },
     "public.task_items": {
       "name": "task_items",
@@ -10682,7 +10880,10 @@
             "pageId"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.task_lists": {
       "name": "task_lists",
@@ -10828,7 +11029,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.task_status_configs": {
       "name": "task_status_configs",
@@ -10934,7 +11138,10 @@
             "slug"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.security_audit_log": {
       "name": "security_audit_log",
@@ -11260,7 +11467,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.user_page_views": {
       "name": "user_page_views",
@@ -11376,7 +11586,10 @@
           ]
         }
       },
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.user_hotkey_preferences": {
       "name": "user_hotkey_preferences",
@@ -11468,7 +11681,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.push_notification_tokens": {
       "name": "push_notification_tokens",
@@ -11642,7 +11858,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.global_assistant_config": {
       "name": "global_assistant_config",
@@ -11751,7 +11970,10 @@
             "user_id"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.integration_audit_log": {
       "name": "integration_audit_log",
@@ -11960,7 +12182,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.integration_connections": {
       "name": "integration_connections",
@@ -12207,12 +12432,14 @@
           ]
         }
       },
+      "policies": {},
       "checkConstraints": {
         "integration_connections_scope_chk": {
           "name": "integration_connections_scope_chk",
           "value": "(\"integration_connections\".\"user_id\" IS NOT NULL AND \"integration_connections\".\"drive_id\" IS NULL) OR (\"integration_connections\".\"user_id\" IS NULL AND \"integration_connections\".\"drive_id\" IS NOT NULL)"
         }
-      }
+      },
+      "isRLSEnabled": false
     },
     "public.integration_providers": {
       "name": "integration_providers",
@@ -12383,7 +12610,10 @@
             "slug"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.integration_tool_grants": {
       "name": "integration_tool_grants",
@@ -12510,7 +12740,10 @@
             "connection_id"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.user_personalization": {
       "name": "user_personalization",
@@ -12601,7 +12834,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.user_automation_preferences": {
       "name": "user_automation_preferences",
@@ -12667,7 +12903,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.calendar_event_drives": {
       "name": "calendar_event_drives",
@@ -12788,7 +13027,10 @@
             "driveId"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.calendar_events": {
       "name": "calendar_events",
@@ -13177,7 +13419,10 @@
             "googleEventId"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.event_attendees": {
       "name": "event_attendees",
@@ -13349,7 +13594,10 @@
             "userId"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.google_calendar_connections": {
       "name": "google_calendar_connections",
@@ -13560,7 +13808,10 @@
             "userId"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.calendar_triggers": {
       "name": "calendar_triggers",
@@ -13749,7 +14000,10 @@
             "occurrenceDate"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.workflows": {
       "name": "workflows",
@@ -14015,7 +14269,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.workflow_runs": {
       "name": "workflow_runs",
@@ -14195,7 +14452,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.task_triggers": {
       "name": "task_triggers",
@@ -14356,7 +14616,10 @@
             "triggerType"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.rate_limit_buckets": {
       "name": "rate_limit_buckets",
@@ -14415,7 +14678,10 @@
           ]
         }
       },
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.revoked_service_tokens": {
       "name": "revoked_service_tokens",
@@ -14459,7 +14725,10 @@
       },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.auth_handoff_tokens": {
       "name": "auth_handoff_tokens",
@@ -14545,7 +14814,10 @@
           ]
         }
       },
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.pending_invites": {
       "name": "pending_invites",
@@ -14748,7 +15020,10 @@
             "token_hash"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.pending_page_invites": {
       "name": "pending_page_invites",
@@ -14916,7 +15191,10 @@
             "token_hash"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.pending_connection_invites": {
       "name": "pending_connection_invites",
@@ -15065,7 +15343,10 @@
             "token_hash"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.ai_pending_abort_intents": {
       "name": "ai_pending_abort_intents",
@@ -15102,7 +15383,10 @@
           ]
         }
       },
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.ai_stream_sessions": {
       "name": "ai_stream_sessions",
@@ -15282,7 +15566,10 @@
       },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.drive_share_links": {
       "name": "drive_share_links",
@@ -15466,7 +15753,10 @@
             "token"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.page_share_links": {
       "name": "page_share_links",
@@ -15614,7 +15904,10 @@
             "token"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.zoom_connections": {
       "name": "zoom_connections",
@@ -15828,7 +16121,10 @@
             "userId"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.webhook_triggers": {
       "name": "webhook_triggers",
@@ -16052,12 +16348,14 @@
           ]
         }
       },
+      "policies": {},
       "checkConstraints": {
         "webhook_triggers_anchor_chk": {
           "name": "webhook_triggers_anchor_chk",
           "value": "(\"webhook_triggers\".\"connectionId\" IS NOT NULL AND \"webhook_triggers\".\"pageWebhookId\" IS NULL) OR (\"webhook_triggers\".\"connectionId\" IS NULL AND \"webhook_triggers\".\"pageWebhookId\" IS NOT NULL)"
         }
-      }
+      },
+      "isRLSEnabled": false
     },
     "public.message_drafts": {
       "name": "message_drafts",
@@ -16155,7 +16453,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.machine_sessions": {
       "name": "machine_sessions",
@@ -16318,7 +16619,10 @@
             "sessionKey"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.published_pages": {
       "name": "published_pages",
@@ -16489,7 +16793,10 @@
             "path"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.credit_balances": {
       "name": "credit_balances",
@@ -16574,6 +16881,7 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
+      "policies": {},
       "checkConstraints": {
         "credit_balances_monthly_remaining_nonneg": {
           "name": "credit_balances_monthly_remaining_nonneg",
@@ -16599,7 +16907,8 @@
           "name": "credit_balances_period_order",
           "value": "\"credit_balances\".\"monthlyPeriodStart\" IS NULL OR \"credit_balances\".\"monthlyPeriodEnd\" IS NULL OR \"credit_balances\".\"monthlyPeriodStart\" <= \"credit_balances\".\"monthlyPeriodEnd\""
         }
-      }
+      },
+      "isRLSEnabled": false
     },
     "public.credit_holds": {
       "name": "credit_holds",
@@ -16691,7 +17000,15 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "credit_holds_est_cents_nonneg": {
+          "name": "credit_holds_est_cents_nonneg",
+          "value": "\"credit_holds\".\"estCents\" >= 0"
+        }
+      },
+      "isRLSEnabled": false
     },
     "public.credit_ledger": {
       "name": "credit_ledger",
@@ -16899,7 +17216,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.commands": {
       "name": "commands",
@@ -17096,6 +17416,7 @@
           ]
         }
       },
+      "policies": {},
       "checkConstraints": {
         "commands_scope_chk": {
           "name": "commands_scope_chk",
@@ -17105,7 +17426,8 @@
           "name": "commands_type_chk",
           "value": "\"commands\".\"type\" IN ('document', 'prompt_template', 'builtin')"
         }
-      }
+      },
+      "isRLSEnabled": false
     },
     "public.conversation_compactions": {
       "name": "conversation_compactions",
@@ -17216,7 +17538,15 @@
           ]
         }
       },
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "conversation_compactions_source_chk": {
+          "name": "conversation_compactions_source_chk",
+          "value": "\"conversation_compactions\".\"source\" IN ('page', 'global')"
+        }
+      },
+      "isRLSEnabled": false
     },
     "public.custom_domains": {
       "name": "custom_domains",
@@ -17372,7 +17702,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.incidents": {
       "name": "incidents",
@@ -17566,7 +17899,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.data_subject_requests": {
       "name": "data_subject_requests",
@@ -17780,7 +18116,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.oauth_access_tokens": {
       "name": "oauth_access_tokens",
@@ -17974,7 +18313,10 @@
             "tokenHash"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.oauth_authorization_codes": {
       "name": "oauth_authorization_codes",
@@ -18159,7 +18501,10 @@
             "codeHash"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.oauth_clients": {
       "name": "oauth_clients",
@@ -18244,7 +18589,10 @@
             "clientId"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.oauth_device_codes": {
       "name": "oauth_device_codes",
@@ -18464,7 +18812,10 @@
             "userCodeHash"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.oauth_refresh_tokens": {
       "name": "oauth_refresh_tokens",
@@ -18670,7 +19021,10 @@
             "tokenHash"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.form_targets": {
       "name": "form_targets",
@@ -18926,7 +19280,10 @@
             "token_hash"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.machine_projects": {
       "name": "machine_projects",
@@ -19106,7 +19463,10 @@
             "sessionKey"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.machine_branches": {
       "name": "machine_branches",
@@ -19286,7 +19646,10 @@
             "sessionKey"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.machine_sprite_reclaims": {
       "name": "machine_sprite_reclaims",
@@ -19350,7 +19713,10 @@
       },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.machine_agent_terminals": {
       "name": "machine_agent_terminals",
@@ -19556,7 +19922,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.machine_workspaces": {
       "name": "machine_workspaces",
@@ -19678,7 +20047,10 @@
           ]
         }
       },
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.machine_workspace_bootstraps": {
       "name": "machine_workspace_bootstraps",
@@ -19734,7 +20106,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.broadcast_recipients": {
       "name": "broadcast_recipients",
@@ -19897,7 +20272,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.broadcast_templates": {
       "name": "broadcast_templates",
@@ -19988,7 +20366,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.email_broadcasts": {
       "name": "email_broadcasts",
@@ -20245,7 +20626,10 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
     "public.page_webhooks": {
       "name": "page_webhooks",
@@ -20383,7 +20767,10 @@
             "webhookToken"
           ]
         }
-      }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     }
   },
   "enums": {
@@ -20840,6 +21227,9 @@
   },
   "schemas": {},
   "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
   "_meta": {
     "columns": {},
     "schemas": {},

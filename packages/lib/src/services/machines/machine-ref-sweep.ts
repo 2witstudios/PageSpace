@@ -34,14 +34,6 @@
  * database. Runtime wiring: `apps/web/src/lib/machines/machine-ref-sweep-runtime.ts`.
  */
 
-/**
- * Structural mirror of the canonical `MachineRef`
- * (apps/web/src/lib/repositories/page-agent-repository.ts) — same trick, and the
- * same reason, as `machine-session.ts`: @pagespace/lib must not import from the
- * web app.
- */
-export type MachineRefLike = { kind: 'own' } | { kind: 'existing'; machineId: string };
-
 /** The two blob homes, reduced to what a rewrite decision actually needs. */
 export interface MachineRefHolder {
   /** The raw JSONB value. Deliberately `unknown` — a blob written by an older shape must not crash the sweep. */
