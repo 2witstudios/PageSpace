@@ -588,6 +588,14 @@ describe('classifyCheckoutStatus', () => {
     expect(classifyCheckoutStatus('## main...origin/main [behind 3]\n')).toEqual({ kind: 'clean' });
   });
 
+  it('given a DELETED upstream ([gone]), should refuse — nothing on the remote can reproduce this branch', () => {
+    // Git reports no ahead/behind counts for a gone upstream, so the `...` in
+    // the header would otherwise read as tracked-and-in-sync.
+    const result = classifyCheckoutStatus('## main...origin/main [gone]\n');
+    expect(result.kind).toBe('unpushed');
+    expect(result.kind === 'unpushed' && result.detail).toContain('no longer exists');
+  });
+
   it('given a branch with NO upstream, should refuse — there is no remote ref to reproduce it from', () => {
     const result = classifyCheckoutStatus('## scratch\n');
     expect(result.kind).toBe('unpushed');

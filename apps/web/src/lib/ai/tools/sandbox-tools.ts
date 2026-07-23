@@ -490,7 +490,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
 
     writeFile: tool({
       description:
-        'Write a file inside this conversation\'s sandbox. The path is relative to the sandbox root and cannot escape it. In a machine-bound conversation you may add target: { project?, branch? } to run against a project or branch beneath your node instead of your own; omit it to use your own node.',
+        'Write a file inside this conversation\'s sandbox. A relative path resolves from your node\'s working directory, and cannot escape the sandbox root. In a machine-bound conversation you may add target: { project?, branch? } to act on a project or branch beneath your node instead of your own — a relative path then resolves from THAT node\'s working directory; omit it to use your own node. Pass an absolute path to override this.',
       inputSchema: writeFileInputSchema,
       execute: async ({ path, content, target }, options) => {
         const opened = await open(options, target);
@@ -501,7 +501,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
 
     readFile: tool({
       description:
-        'Read a file from this conversation\'s sandbox. The path is relative to the sandbox root and cannot escape it. In a machine-bound conversation you may add target: { project?, branch? } to run against a project or branch beneath your node instead of your own; omit it to use your own node.',
+        'Read a file from this conversation\'s sandbox. A relative path resolves from your node\'s working directory, and cannot escape the sandbox root. In a machine-bound conversation you may add target: { project?, branch? } to act on a project or branch beneath your node instead of your own — a relative path then resolves from THAT node\'s working directory; omit it to use your own node. Pass an absolute path to override this.',
       inputSchema: readFileInputSchema,
       execute: async ({ path, target }, options) => {
         const opened = await open(options, target);
@@ -512,7 +512,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
 
     editFile: tool({
       description:
-        'Edit a file in this conversation\'s sandbox by replacing oldString with newString. oldString must be unique in the file unless replaceAll is set. Prefer this over writeFile for targeted changes — it does not rewrite the whole file. The path is relative to the sandbox root and cannot escape it. In a machine-bound conversation you may add target: { project?, branch? } to run against a project or branch beneath your node instead of your own; omit it to use your own node.',
+        'Edit a file in this conversation\'s sandbox by replacing oldString with newString. oldString must be unique in the file unless replaceAll is set. Prefer this over writeFile for targeted changes — it does not rewrite the whole file. A relative path resolves from your node\'s working directory, and cannot escape the sandbox root. In a machine-bound conversation you may add target: { project?, branch? } to act on a project or branch beneath your node instead of your own — a relative path then resolves from THAT node\'s working directory; omit it to use your own node. Pass an absolute path to override this.',
       inputSchema: editFileInputSchema,
       execute: async ({ path, oldString, newString, replaceAll, target }, options) => {
         const opened = await open(options, target);
