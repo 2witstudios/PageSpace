@@ -90,6 +90,7 @@ export class QueueManager {
       await this.boss.createQueue('account-erasure');
       await this.boss.createQueue('audit-chainer');
       await this.boss.createQueue('email-broadcast');
+      await this.boss.createQueue('stuck-page-reconciler');
       console.log('PgBoss queues created/verified');
     } catch (err) {
       console.warn('Queue creation warning:', err instanceof Error ? err.message : err);
@@ -284,6 +285,34 @@ export class QueueManager {
         return { success: true };
       }
     );
+
+    // Stuck-page reconciler (#2159) — closes the pages.processingStatus vs
+    // pg-boss gap: pages stuck 'pending'/'processing' past the staleness
+    // threshold with no live job get re-enqueued through pull-verify (tagged
+    // with reconcileAttempt) or, once attempts are exhausted, marked 'failed'
+    // with an alert. Poll-based like siem-delivery (ignores job data);
+    // retryLimit 0 + run-level advisory lock keep overlapping runs from
+    // double-enqueueing.
+    const { runStuckPageReconciler, defaultReconcilerAlert } = await import('./stuck-page-reconciler-worker');
+    const { getPoolForWorker, setPageFailed: markPageFailed } = await import('../db');
+    await this.boss.work('stuck-page-reconciler',
+      async () => {
+        await runStuckPageReconciler({
+          connect: () => getPoolForWorker().connect(),
+          // singletonKey collapses racing re-enqueues for the same page into
+          // one queued job; a duplicate rejection surfaces as an enqueue
+          // error the worker logs and skips.
+          enqueuePullVerify: (data) =>
+            this.addJob('pull-verify', data, { singletonKey: `reconcile:${data.pageId}` }),
+          markPageFailed,
+          alert: defaultReconcilerAlert,
+        });
+      }
+    );
+
+    // Every 5 minutes — minutes-scale detection is plenty for a gap that
+    // previously went unnoticed for weeks, and each run is a few indexed reads.
+    await this.boss.schedule('stuck-page-reconciler', '*/5 * * * *', {}, { retryLimit: 0 });
   }
 
   async addJob<Q extends QueueName>(
@@ -364,7 +393,7 @@ export class QueueManager {
   }
 
   getQueueStatus(): Record<QueueName, QueueStats> {
-    const queues: QueueName[] = ['ingest-file', 'pull-verify', 'image-optimize', 'text-extract', 'ocr-process', 'video-process', 'siem-delivery', 'account-erasure', 'audit-chainer', 'email-broadcast'];
+    const queues: QueueName[] = ['ingest-file', 'pull-verify', 'image-optimize', 'text-extract', 'ocr-process', 'video-process', 'siem-delivery', 'account-erasure', 'audit-chainer', 'email-broadcast', 'stuck-page-reconciler'];
     const perQueue = this.cachedStates?.queues ?? {};
 
     const status = {} as Record<QueueName, QueueStats>;

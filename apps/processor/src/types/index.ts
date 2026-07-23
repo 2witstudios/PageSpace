@@ -73,6 +73,12 @@ export interface VideoProcessJobData {
 export interface PullVerifyJobData {
   pageId: string;
   contentHash: string;
+  /**
+   * Set only by the stuck-page reconciler (#2159): 1-based count of automatic
+   * re-enqueues for this page. The next reconciler run reads the max tag back
+   * out of pgboss.job/archive to know when attempts are exhausted.
+   */
+  reconcileAttempt?: number;
 }
 
 export interface VideoProcessResult {
@@ -114,6 +120,7 @@ export type JobDataMap = {
   'account-erasure': AccountErasureJobData;
   'audit-chainer': Record<string, never>;
   'email-broadcast': EmailBroadcastJobData;
+  'stuck-page-reconciler': Record<string, never>;
 };
 
 export type QueueName = keyof JobDataMap;
