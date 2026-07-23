@@ -30,6 +30,11 @@ vi.mock('@/lib/repositories/oauth-repository', () => ({
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 
+const consumeStepUpGrant = vi.fn();
+vi.mock('@pagespace/lib/auth/step-up-service', () => ({
+  consumeStepUpGrant: (...args: unknown[]) => consumeStepUpGrant(...args),
+}));
+
 const getDriveAccess = vi.fn();
 vi.mock('@pagespace/lib/services/drive-service', () => ({
   getDriveAccess: (...args: unknown[]) => getDriveAccess(...args),
@@ -73,6 +78,7 @@ beforeEach(() => {
   // never need it, and recordDeviceApproval independently re-validates.
   verifyDeviceUserCode.mockResolvedValue({ outcome: 'not_found' });
   getDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' });
+  consumeStepUpGrant.mockResolvedValue({ ok: true });
   getMemberCustomRoleId.mockResolvedValue(null);
   customRoleBelongsToDrive.mockResolvedValue(true);
 });
@@ -230,6 +236,7 @@ describe('POST /api/oauth/device_authorization/decision — P1b: grant-authority
   it('allows approving a scope the user has authority to grant', async () => {
     verifyDeviceUserCode.mockResolvedValue({ outcome: 'ok', clientId: 'pagespace-cli', scopes: ['drive:abc12345:member'] });
     getDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' });
+  consumeStepUpGrant.mockResolvedValue({ ok: true });
     recordDeviceApproval.mockResolvedValue({ outcome: 'approved' });
 
     const res = await POST(decisionRequest({ userCode: 'ABCD-EFGH', action: 'approve' }) as never);
@@ -249,5 +256,95 @@ describe('POST /api/oauth/device_authorization/decision — P1b: grant-authority
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, action: 'denied' });
     expect(recordDeviceApproval).toHaveBeenCalled();
+  });
+});
+
+
+/**
+ * The device flow can now redeem key-shaped grants, so the escalating subset
+ * must carry the same second factor the browser consent screen demands for
+ * every consent — otherwise `--device` would be a way to mint a key with
+ * strictly less proof of presence. Plain logins keep their no-step-up path so
+ * `login --device` is unchanged.
+ *
+ * `isCredentialEscalatingGrant` (packages/lib/.../scopes.ts) is the single
+ * predicate behind both this gate and the /activate screen's decision to RUN
+ * the ceremony; these cases pin this half of it.
+ */
+describe('POST /api/oauth/device_authorization/decision — step-up gate on credential-escalating grants', () => {
+  const ESCALATING: ReadonlyArray<readonly [string, string[]]> = [
+    ['a mint grant', ['drive:drv1:member', 'name:remote-key', 'offline_access']],
+    ['a re-scope grant', ['update_key:tok1', 'drive:drv1:member']],
+    ['an activation grant', ['activate_key:tok1']],
+  ];
+
+  for (const [label, scopes] of ESCALATING) {
+    it(`refuses ${label} approved without a step-up token`, async () => {
+      verifyDeviceUserCode.mockResolvedValue({ outcome: 'ok', clientId: 'pagespace-cli', scopes });
+
+      const res = await POST(decisionRequest({ userCode: 'ABCD-EFGH', action: 'approve' }) as never);
+
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: 'step_up_required' });
+      expect(recordDeviceApproval).not.toHaveBeenCalled();
+    });
+
+    it(`refuses ${label} when the step-up grant does not verify`, async () => {
+      verifyDeviceUserCode.mockResolvedValue({ outcome: 'ok', clientId: 'pagespace-cli', scopes });
+      consumeStepUpGrant.mockResolvedValue({ ok: false, error: { code: 'STEP_UP_REQUIRED' } });
+
+      const res = await POST(
+        decisionRequest({ userCode: 'ABCD-EFGH', action: 'approve', stepUpToken: 'stale-grant' }) as never,
+      );
+
+      expect(res.status).toBe(401);
+      expect(recordDeviceApproval).not.toHaveBeenCalled();
+    });
+
+    it(`binds the step-up grant to this exact code and scope for ${label}`, async () => {
+      verifyDeviceUserCode.mockResolvedValue({ outcome: 'ok', clientId: 'pagespace-cli', scopes });
+      recordDeviceApproval.mockResolvedValue({ outcome: 'approved' });
+
+      await POST(decisionRequest({ userCode: 'ABCD-EFGH', action: 'approve', stepUpToken: 'grant' }) as never);
+
+      // Bound to the user code AND the scope string, so a grant obtained for
+      // one device approval cannot be replayed against another.
+      expect(consumeStepUpGrant).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-1',
+          token: 'grant',
+          actionBinding: { userCode: 'ABCDEFGH', scope: scopes.join(' ') },
+        }),
+      );
+    });
+  }
+
+  it('does NOT require step-up for a plain login grant, leaving `login --device` unchanged', async () => {
+    verifyDeviceUserCode.mockResolvedValue({
+      outcome: 'ok',
+      clientId: 'pagespace-cli',
+      scopes: ['manage_keys', 'offline_access'],
+    });
+    recordDeviceApproval.mockResolvedValue({ outcome: 'approved' });
+
+    const res = await POST(decisionRequest({ userCode: 'ABCD-EFGH', action: 'approve' }) as never);
+
+    expect(res.status).toBe(200);
+    expect(consumeStepUpGrant).not.toHaveBeenCalled();
+    expect(recordDeviceApproval).toHaveBeenCalled();
+  });
+
+  it('never requires step-up to DENY, however escalating the grant', async () => {
+    verifyDeviceUserCode.mockResolvedValue({
+      outcome: 'ok',
+      clientId: 'pagespace-cli',
+      scopes: ['drive:drv1:member', 'name:k', 'offline_access'],
+    });
+    recordDeviceApproval.mockResolvedValue({ outcome: 'denied' });
+
+    const res = await POST(decisionRequest({ userCode: 'ABCD-EFGH', action: 'deny' }) as never);
+
+    expect(res.status).toBe(200);
+    expect(consumeStepUpGrant).not.toHaveBeenCalled();
   });
 });

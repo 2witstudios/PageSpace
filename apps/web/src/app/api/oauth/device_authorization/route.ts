@@ -10,7 +10,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { randomBytes } from 'crypto';
 import { getClientIP } from '@/lib/auth';
 import { getRegisteredClient } from '@pagespace/lib/auth/oauth/clients';
-import { parseScopeList, formatScopeSet } from '@pagespace/lib/auth/oauth/scopes';
+import { parseScopeList, formatScopeSet, hasNewKeyName, isAllDrivesGrant, isPureDriveGrant } from '@pagespace/lib/auth/oauth/scopes';
 import { generateUserCode, normalizeUserCode } from '@pagespace/lib/auth/oauth/user-code';
 import { generateToken, hashToken } from '@pagespace/lib/auth/token-utils';
 import { DEVICE_CODE_TTL_SECONDS, DEVICE_CODE_POLL_INTERVAL_SECONDS } from '@pagespace/lib/auth/oauth/code-lifecycle';
@@ -56,16 +56,9 @@ export async function POST(req: NextRequest) {
     if (!parsed.ok) {
       return noStoreJson({ error: 'invalid_scope' }, 400);
     }
-    // update_key/activate_key are loopback-consent-only: their ownership/
-    // narration checks live on the consent screen + authorize POST, and
-    // pollDeviceToken has no ok_mcp_update/ok_mcp_activate branch — reject at
-    // the door rather than mint a device code that could only dead-end (fail
-    // closed).
-    //
-    // all_drives is rejected for the same reason: pollDeviceToken has no
-    // isAllDrivesGrant branch either — it mints a plain OAuth access/refresh
-    // pair via issueInitialTokenPair, persisting `all_drives` verbatim into
-    // `oauth_access_tokens.scopes`. `scopeSetToDriveScopes` returns zero rows
+    // `all_drives` is the one grant shape this door still refuses. Redeeming
+    // it over the device flow would have to persist `all_drives` verbatim into
+    // `oauth_access_tokens.scopes`; `scopeSetToDriveScopes` returns zero rows
     // for all_drives (by design — "all drives" has no drive list to
     // enumerate), so such a token would carry `allowedDriveIds: []` — a shape
     // this codebase's two authorization helper families disagree on: the
@@ -79,19 +72,27 @@ export async function POST(req: NextRequest) {
     // OAuth token and is out of scope to resolve here. all_drives only
     // resolves unambiguously when minted as a real, unscoped
     // (`isScoped: false`) `mcp_tokens` row, which only the authorization_code
-    // exchange's `isAllDrivesGrant` branch produces (`oauth-repository.ts`).
-    // Rejecting at the device door means a bearer token in this ambiguous
-    // shape can never be minted in the first place, sidestepping the
-    // ambiguity rather than resolving it.
-    // newKeyName is rejected for the identical reason: a name can never be
-    // honored on a flow with no mint branch, so it must fail closed rather
-    // than be silently ignored.
-    if (
-      parsed.scopes.updateKeyId !== null ||
-      parsed.scopes.activateKeyId !== null ||
-      parsed.scopes.allDrives ||
-      parsed.scopes.newKeyName !== null
-    ) {
+    // exchange produces. Rejecting at the device door means a bearer token in
+    // this ambiguous shape can never be minted in the first place, sidestepping
+    // the ambiguity rather than resolving it. `pollDeviceToken` re-checks at
+    // redemption as defense in depth.
+    //
+    // update_key/activate_key/newKeyName are NO LONGER rejected here: the
+    // device flow now redeems all three through the same `applyKeyGrant` the
+    // loopback exchange uses, and the /activate consent screen narrates and
+    // authority-checks them exactly as the loopback consent screen does. A
+    // remote machine with no local browser could otherwise log in but never
+    // mint, re-scope, or activate the scoped key that content access requires.
+    if (isAllDrivesGrant(parsed.scopes)) {
+      return noStoreJson({ error: 'invalid_scope' }, 400);
+    }
+
+    // Mint-shaped grants must carry a name, matching the loopback flow's
+    // `validateAuthorizeRequest` (packages/lib/src/auth/oauth/authorize-request.ts).
+    // Enforced at the door so a nameless mint can never reach redemption,
+    // where `applyKeyGrant` would fall back to a generic placeholder name and
+    // silently produce an unidentifiable key in the user's key list.
+    if (isPureDriveGrant(parsed.scopes) && !hasNewKeyName(parsed.scopes)) {
       return noStoreJson({ error: 'invalid_scope' }, 400);
     }
     scopes = formatScopeSet(parsed.scopes).split(' ').filter(Boolean);

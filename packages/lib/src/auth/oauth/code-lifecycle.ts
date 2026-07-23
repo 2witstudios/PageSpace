@@ -117,7 +117,9 @@ interface DeviceCodeCommon {
 export type DeviceCodeRecord =
   | ({ status: 'pending' } & DeviceCodeCommon)
   | ({ status: 'approved'; approvedUserId: string } & DeviceCodeCommon)
-  | ({ status: 'denied' } & DeviceCodeCommon);
+  | ({ status: 'denied' } & DeviceCodeCommon)
+  /** Already exchanged for credentials — RFC 8628 §3.5 requires it be invalidated. */
+  | ({ status: 'redeemed' } & DeviceCodeCommon);
 
 export interface DeviceGrant {
   clientId: string;
@@ -130,21 +132,33 @@ export type DevicePollDecision =
   | { status: 'slow_down' }
   | { status: 'expired_token' }
   | { status: 'access_denied' }
+  /** The device_code was already exchanged; the route collapses this to invalid_grant. */
+  | { status: 'already_redeemed' }
   | { status: 'ok'; grant: DeviceGrant };
 
 /**
  * Decide the response to a device-code poll (RFC 8628 §3.5).
  *
  * Precedence:
- *  1. expired_token — absolute boundary, checked before anything else,
- *     including an already-approved-but-unexchanged code.
- *  2. A settled record (approved/denied) reports its outcome immediately —
+ *  1. already_redeemed — a code that has been exchanged is dead for good, and
+ *     stays dead regardless of the clock; reported before expiry so the answer
+ *     doesn't change to `expired_token` once the TTL passes. RFC 8628 §3.5.
+ *     Without this, an approved code keeps issuing credentials on every poll
+ *     until it expires — harmless-looking for a login grant, but a mint-shaped
+ *     grant (`keys create --device`) would mint a fresh key each time.
+ *  2. expired_token — absolute boundary, checked before anything else
+ *     remaining, including an already-approved-but-unexchanged code.
+ *  3. A settled record (approved/denied) reports its outcome immediately —
  *     the poll-interval throttle only governs *continued waiting*, not
  *     delivery of an already-decided result.
- *  3. pending — throttle repeated polling faster than pollIntervalSeconds;
+ *  4. pending — throttle repeated polling faster than pollIntervalSeconds;
  *     exactly-at-interval is allowed (only strictly-less-than throttles).
  */
 export function decideDevicePoll(record: DeviceCodeRecord, now: Date): DevicePollDecision {
+  if (record.status === 'redeemed') {
+    return { status: 'already_redeemed' };
+  }
+
   if (now.getTime() >= record.expiresAt.getTime()) {
     return { status: 'expired_token' };
   }
@@ -179,16 +193,17 @@ export type DeviceApprovalAction = 'approve' | 'deny';
 export type DeviceApprovalDecision =
   | { status: 'approved'; grant: DeviceGrant }
   | { status: 'denied' }
-  | { status: 'already_settled'; existingStatus: 'approved' | 'denied' }
+  | { status: 'already_settled'; existingStatus: 'approved' | 'denied' | 'redeemed' }
   | { status: 'expired' };
 
 /**
  * Decide the outcome of a user's approve/deny action at the /activate screen.
  *
- * A settled record (already approved or denied) always rejects further
- * decisions — that check runs before expiry, since a terminal outcome stays
- * terminal regardless of whether the code has since expired. A still-pending
- * record fails closed exactly at (and after) its expiry boundary.
+ * A settled record (already approved, denied, or redeemed) always rejects
+ * further decisions — that check runs before expiry, since a terminal outcome
+ * stays terminal regardless of whether the code has since expired. A
+ * still-pending record fails closed exactly at (and after) its expiry
+ * boundary.
  */
 export function decideDeviceApproval(
   record: DeviceCodeRecord,
