@@ -41,7 +41,7 @@ vi.mock('@/lib/workflows/task-trigger-helpers', () => ({
 }));
 
 vi.mock('@/lib/ai/tools/task-helpers', () => ({
-  reorderTaskPeers: vi.fn().mockResolvedValue(0),
+  reorderTaskPeers: vi.fn().mockResolvedValue({ index: 0, position: 0 }),
 }));
 
 vi.mock('@/lib/ai/core/personalization-utils', () => ({
@@ -1186,11 +1186,11 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
     setupTransaction(baseTask);
     setupRelationsLookup({ ...baseTask, position: 2, assignee: null, assigneeAgent: null, user: null, assignees: [] });
-    vi.mocked(reorderTaskPeers).mockResolvedValue(2);
+    vi.mocked(reorderTaskPeers).mockResolvedValue({ index: 2, position: 2 });
 
     const response = await PATCH(createPatchRequest({ position: 99 }), context);
     expect(response.status).toBe(200);
-    expect(reorderTaskPeers).toHaveBeenCalledWith(mockPageId, mockTaskId, 99);
+    expect(reorderTaskPeers).toHaveBeenCalledWith(mockPageId, mockTaskId, 99, { userId: mockUserId });
   });
 
   it('creates an agent trigger workflow when agentTrigger is provided', async () => {

@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db'
-import { eq, and, desc, inArray } from '@pagespace/db/operators'
+import { eq, and, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks'
 import {
@@ -103,16 +103,11 @@ async function addTaskItemUnderParent(
   })
   if (existing) return
 
-  const lastChild = await tx.query.pages.findFirst({
-    where: and(eq(pages.parentId, parentId), eq(pages.isTrashed, false)),
-    orderBy: [desc(pages.position)],
-  })
-
   // ON CONFLICT DO NOTHING guards the self-heal race: concurrent GETs on a legacy list
   // can both pass the findFirst check above, and task_items.pageId is unique — without
   // this a second insert would 500 the read. The findFirst stays as a cheap fast path.
   await tx.insert(taskItems).values(
-    buildTaskItemInsert({ pageId, userId, lastChildPosition: lastChild?.position ?? null }),
+    buildTaskItemInsert({ pageId, userId }),
   ).onConflictDoNothing({ target: taskItems.pageId })
 }
 

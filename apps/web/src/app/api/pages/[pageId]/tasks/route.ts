@@ -14,6 +14,8 @@ import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activit
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
 import { computeHasContent } from './task-utils';
 import { backfillMissingTaskItems } from '@/services/api/task-sync-service';
+import { compareByPagePosition } from '@/services/api/task-ordering';
+import { reorderTaskPeers } from '@/lib/ai/tools/task-helpers';
 import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
 import { decryptTaskUserRelations, decryptTaskUserRelationsOne } from '@/lib/tasks/decrypt-task-relations';
 import { escapeLikePattern } from '@pagespace/lib/db/like-pattern';
@@ -148,13 +150,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   // path that skipped the sync) gets backfilled here so it always shows up as a task.
   await backfillMissingTaskItems(db, { parentId: pageId, childPageIds, userId });
 
-  // Phase 1: a lightweight join resolves the ordered (by page.position, source of
-  // truth, falling back to task.position), filtered, bounded set of task ids —
-  // this is what keeps the query from pulling every task into memory (the OOM
-  // crash this route caused). Phase 2 hydrates only those ids' relations.
+  // Phase 1: a lightweight join resolves the ordered (by pages.position, the single
+  // ordering rail — #2143), filtered, bounded set of task ids — this is what keeps
+  // the query from pulling every task into memory (the OOM crash this route caused).
+  // Phase 2 hydrates only those ids' relations.
   // Requesting limit+1 rows and slicing lets the response report `hasMore` (for the
   // frontend's Load More) without a separate COUNT(*) query.
-  const positionExpr = sql`coalesce(${pages.position}, ${taskItems.position})`;
+  const positionExpr = pages.position;
   const orderedIdRows = await db
     .select({ id: taskItems.id })
     .from(taskItems)
@@ -167,7 +169,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     ))
     // taskItems.id is a tiebreaker, not a sort key the user chose: without it, two tasks
     // sharing a position (e.g. a read-then-write race in POST's nextPosition, or backfilled
-    // rows that never got a distinct one) have no guaranteed stable order across repeated
+    // pages that never got a distinct one) have no guaranteed stable order across repeated
     // LIMIT/OFFSET calls, so paging (offset=0, then offset=100) can skip or duplicate rows.
     .orderBy(sortOrder === 'desc' ? desc(positionExpr) : asc(positionExpr), asc(taskItems.id))
     .limit(limit + 1)
@@ -194,7 +196,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       pageId: true,
       status: true,
       priority: true,
-      position: true,
       dueDate: true,
       metadata: true,
       completedAt: true,
@@ -256,12 +257,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
   const tasks = await decryptTaskUserRelations(await query);
 
-  // Sort by page.position (source of truth), fallback to task.position
-  tasks.sort((a, b) => {
-    const posA = a.page?.position ?? a.position;
-    const posB = b.page?.position ?? b.position;
-    return sortOrder === 'desc' ? posB - posA : posA - posB;
-  });
+  // Phase 2's `inArray` hydration does not preserve phase 1's order, so re-apply it
+  // here against the same rail and the same id tiebreaker.
+  tasks.sort((a, b) => compareByPagePosition(a, b, sortOrder));
 
   // Ground-truth active trigger count from task_triggers so badges don't go
   // stale when an agent page is trashed: the workflows row cascade-deletes,
@@ -312,6 +310,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
   const enrichedTasks = tasks.map(({ page, ...t }) => ({
     ...t,
+    // Sourced from the linked page — the single ordering rail (#2143).
+    position: page?.position ?? 0,
     title: page?.title ?? '',
     activeTriggerCount: triggerCountByTaskId.get(t.id) ?? 0,
     hasContent: computeHasContent(page?.content),
@@ -456,14 +456,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     }
   }
 
-  // Get highest position for new page (task position mirrors page position)
+  // Get highest position for the new page. `pages.position` is the single ordering
+  // rail (#2143): a caller-supplied `position` is applied after creation via
+  // reorderTaskPeers, so creation and reordering share one placement path.
   const lastChildPage = await db.query.pages.findFirst({
     where: and(eq(pages.parentId, pageId), eq(pages.isTrashed, false)),
     orderBy: [desc(pages.position)],
   });
 
   const nextPosition = (lastChildPage?.position ?? 0) + 1;
-  const taskPosition = typeof position === 'number' ? position : nextPosition;
 
   // Determine primary assignee for backward compat fields (derive from assigneeIds if present)
   const primaryAssigneeId = assigneeId || assigneeIds?.find((a: { type: string }) => a.type === 'user')?.id || null;
@@ -497,7 +498,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       assigneeId: primaryAssigneeId,
       assigneeAgentId: primaryAgentId,
       dueDate: dueDate ? new Date(dueDate) : null,
-      position: taskPosition,
       completedAt: initialCompletedAt,
       metadata: {
         createdAt: new Date().toISOString(),
@@ -548,6 +548,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
     return { task: newTask, page: taskPage, agentTriggerResult };
   });
+
+  // An explicit slot moves the created page onto that slot, so a REST-supplied
+  // `position` writes the same rail a user drag does.
+  let createdPosition = result.page.position;
+  if (typeof position === 'number') {
+    const moved = await reorderTaskPeers(pageId, result.task.id, position, { userId });
+    createdPosition = moved.position;
+  }
 
   // Fetch task with relations (including assignees)
   const fetchedTask = await db.query.taskItems.findFirst({
@@ -637,6 +645,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
   return NextResponse.json({
     ...taskWithRelations,
+    position: createdPosition,
     title: createdTitle,
     pageId: result.page.id,
     ...(result.agentTriggerResult ? { agentTrigger: result.agentTriggerResult } : {}),
