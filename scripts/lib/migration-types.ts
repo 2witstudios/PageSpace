@@ -19,7 +19,6 @@ export interface ManifestTableCounts {
   messages: number;
   files: number;
   filePages: number;
-  permissions: number;
   pagePermissions: number;
   tags: number;
   pageTags: number;
@@ -116,7 +115,6 @@ export const TABLE_IMPORT_ORDER = [
   'messages',
   'files',
   'file_pages',
-  'permissions',
   'page_permissions',
   'mentions',
   'user_mentions',

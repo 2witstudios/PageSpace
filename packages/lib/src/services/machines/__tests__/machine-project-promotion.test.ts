@@ -5,6 +5,13 @@ import {
   PROJECT_REPO_PATH,
   classifyCheckoutStatus,
   isCloneBlockedByExistingCheckout,
+  parseCheckoutBranchName,
+  isCarryableState,
+  buildCarryPlan,
+  parseFileSizeBytes,
+  isReclaimableAfterCarry,
+  isMissingParentCommitError,
+  MAX_CARRY_BUNDLE_BYTES,
   type PromoteProjectDeps,
   type ProjectStorageMeasurement,
 } from '../machine-project-promotion';
@@ -109,7 +116,12 @@ function makeFakeHost() {
         return { exitCode: 0, stdout: '', stderr: '' };
       },
       writeFiles: async (files) => {
-        for (const f of files) state.files.set(f.path, String(f.content));
+        // Binary-faithful: the carry transfers a bundle as bytes, and a
+        // `String(Uint8Array)` here would quietly turn it into "66,85,78,…"
+        // and hide a real corruption bug behind a passing test.
+        for (const f of files) {
+          state.files.set(f.path, typeof f.content === 'string' ? f.content : Buffer.from(f.content).toString('utf8'));
+        }
       },
       readFile: async ({ path }) => {
         const content = state.files.get(path);
@@ -156,18 +168,50 @@ function makeFakeHost() {
 const CLEAN_STATUS = '## main...origin/main\n';
 
 /**
+ * The git SUBCOMMAND of an invocation, skipping any leading `-c key=value`
+ * pairs — `['-c','user.name=x','commit','-m','…']` is a `commit`.
+ */
+function gitSubcommand(args: string[] | undefined): string | null {
+  if (!args) return null;
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === '-c') {
+      i += 1;
+      continue;
+    }
+    if (!args[i].startsWith('-')) return args[i];
+  }
+  return null;
+}
+
+const CARRY_SHA = 'c0ffee1234567890';
+
+/**
  * The OWNING Machine's Sprite: `test -e` reports the checkout present, and
  * `git status --porcelain -b` reports it clean and pushed, unless a test says
  * otherwise. The branch header is part of the fixture because it is part of the
  * command — a clean tree alone no longer licenses promotion (F1).
+ *
+ * The carry path (#2207) drives more than `status` here — `add`, `commit`,
+ * `rev-parse`, `bundle`, a `stat` size probe and a binary read of the bundle —
+ * so every one of those is routable per test.
  */
 function makeMachineSandbox({
   checkoutExists = true,
   status = { exitCode: 0, stdout: CLEAN_STATUS, stderr: '' },
+  git = {},
+  bundleBytes = 4096,
+  bundleContent = 'BUNDLE-BYTES' as string | null,
+  statResult,
 }: {
   checkoutExists?: boolean;
   /** One result for every `git status`, or a sequence consumed per call (last one repeats). */
   status?: SandboxRunResult | SandboxRunResult[];
+  /** Per-subcommand overrides for every git call that is NOT `status`. */
+  git?: Record<string, SandboxRunResult>;
+  bundleBytes?: number;
+  /** `null` makes the bundle unreadable — the transfer-failure case. */
+  bundleContent?: string | null;
+  statResult?: SandboxRunResult;
 } = {}) {
   const calls: RunCommandArgs[] = [];
   const statusQueue = Array.isArray(status) ? [...status] : [status];
@@ -177,13 +221,18 @@ function makeMachineSandbox({
     runCommand: async (opts) => {
       calls.push(opts);
       if (opts.cmd === 'test') return { exitCode: checkoutExists ? 0 : 1, stdout: '', stderr: '' };
-      if (opts.cmd === 'git' || opts.args?.includes('status')) {
-        return statusQueue.length > 1 ? statusQueue.shift()! : statusQueue[0];
+      if (opts.cmd === 'stat') return statResult ?? { exitCode: 0, stdout: `${bundleBytes}\n`, stderr: '' };
+      if (opts.cmd === 'git') {
+        const sub = gitSubcommand(opts.args);
+        if (sub === 'status') return statusQueue.length > 1 ? statusQueue.shift()! : statusQueue[0];
+        if (sub && git[sub]) return git[sub];
+        if (sub === 'rev-parse') return { exitCode: 0, stdout: `${CARRY_SHA}\n`, stderr: '' };
+        return { exitCode: 0, stdout: '', stderr: '' };
       }
       return { exitCode: 0, stdout: '', stderr: '' };
     },
     writeFiles: async () => {},
-    readFileToBuffer: async () => null,
+    readFileToBuffer: async () => (bundleContent === null ? null : Buffer.from(bundleContent)),
     createCheckpoint: async () => {},
   };
   return { sandbox, calls };
@@ -260,7 +309,7 @@ describe('promoteProject — first promotion', () => {
 
     const result = await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, deps });
 
-    expect(result).toEqual({ ok: true, sandboxId: 'sbx-project-1', sessionKey: SESSION_KEY, promoted: true, resumed: false });
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-project-1', sessionKey: SESSION_KEY, promoted: true, resumed: false, carried: false });
     expect(provisionCalls).toEqual([SESSION_KEY]);
     expect(promoteCalls).toEqual([{ id: PROJECT_ID, previousSandboxId: null, sandboxId: 'sbx-project-1' }]);
 
@@ -316,6 +365,7 @@ describe('promoteProject — first promotion', () => {
       sessionKey: SESSION_KEY,
       promoted: false,
       resumed: true,
+      carried: false,
     });
     expect(seeded.promoteCalls).toEqual([]);
     // Only the manual pre-promotion above ever provisioned — the reattach did not.
@@ -425,6 +475,7 @@ describe('promoteProject — races and half-promotions', () => {
       sessionKey: SESSION_KEY,
       promoted: false,
       resumed: true,
+      carried: false,
     });
     expect(killCalls).toEqual([]);
   });
@@ -459,7 +510,7 @@ describe('promoteProject — races and half-promotions', () => {
 
     const result = await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, deps });
 
-    expect(result).toEqual({ ok: true, sandboxId: 'sbx-winner', sessionKey: SESSION_KEY, promoted: false, resumed: true });
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-winner', sessionKey: SESSION_KEY, promoted: false, resumed: true, carried: false });
     expect(killCalls).toEqual(['sbx-project-1']);
   });
 
@@ -822,5 +873,631 @@ describe('checkout classifiers — linear on hostile input', () => {
 
   it('given mixed-case git output, should still recognise the shared-Sprite signal', () => {
     expect(isCloneBlockedByExistingCheckout("fatal: destination path 'X' ALREADY EXISTS.")).toBe(true);
+  });
+});
+
+/**
+ * Issue #2207 — the DIRTY-CHECKOUT MIGRATION PATH.
+ *
+ * The refusal that makes promotion safe used to be a dead end: the only way past
+ * it was to go and commit/push by hand on the machine Sprite. `carryDirty` is
+ * the opt-in that carries the work across instead — as a git BUNDLE, moved as
+ * bytes, so nothing about the transfer can silently corrupt it.
+ */
+describe('parseCheckoutBranchName', () => {
+  it('given a tracked branch, should take the local name only', () => {
+    expect(parseCheckoutBranchName('## main...origin/main [ahead 2]\n')).toBe('main');
+  });
+
+  it('given a branch with NO upstream, should still name it', () => {
+    expect(parseCheckoutBranchName('## scratch\n')).toBe('scratch');
+  });
+
+  it('given a detached HEAD, should report no branch', () => {
+    expect(parseCheckoutBranchName('## HEAD (no branch)\n')).toBeNull();
+  });
+
+  it('given an unborn branch on a fresh repo, should name it', () => {
+    expect(parseCheckoutBranchName('## No commits yet on main\n')).toBe('main');
+  });
+
+  it('given no branch header at all, should report no branch', () => {
+    expect(parseCheckoutBranchName(' M a.ts\n')).toBeNull();
+  });
+
+  it('given an empty header, should report no branch rather than an empty name', () => {
+    expect(parseCheckoutBranchName('## \n')).toBeNull();
+  });
+});
+
+describe('isCarryableState', () => {
+  it('given work a clone cannot reproduce, should be carryable', () => {
+    expect(isCarryableState({ kind: 'dirty', detail: ' M a.ts' })).toBe(true);
+    expect(isCarryableState({ kind: 'unpushed', detail: '2 commit(s)' })).toBe(true);
+  });
+
+  it('given nothing at risk, should not be — there is nothing to carry', () => {
+    expect(isCarryableState({ kind: 'clean' })).toBe(false);
+    expect(isCarryableState({ kind: 'absent' })).toBe(false);
+  });
+
+  it('given an UNVERIFIABLE checkout, should NOT be carryable — we cannot bundle what we cannot read', () => {
+    expect(isCarryableState({ kind: 'unknown', detail: 'git status did not complete' })).toBe(false);
+  });
+});
+
+describe('buildCarryPlan', () => {
+  it('given a DIRTY checkout on a named branch, should commit, bundle, and reset the carry commit away', () => {
+    const plan = buildCarryPlan({ state: { kind: 'dirty', detail: ' M a.ts' }, branchName: 'main', projectId: PROJECT_ID });
+    expect(plan).toEqual({
+      needsCommit: true,
+      needsBranchCreate: false,
+      needsReset: true,
+      branch: 'main',
+      bundlePath: '/home/sprite/pagespace-carry-p1.bundle',
+      fetchRefspec: '+refs/heads/*:refs/remotes/pagespace-carry/*',
+      checkoutTarget: 'pagespace-carry/main',
+    });
+  });
+
+  it('given an UNPUSHED-only checkout, should bundle WITHOUT committing — and therefore without resetting', () => {
+    // A clean tree has nothing to commit, and an empty carry commit would make
+    // the `reset --mixed HEAD~1` on the far side throw away a real commit.
+    const plan = buildCarryPlan({ state: { kind: 'unpushed', detail: '2 commit(s)' }, branchName: 'feature', projectId: PROJECT_ID });
+    expect(plan.needsCommit).toBe(false);
+    expect(plan.needsReset).toBe(false);
+    expect(plan.checkoutTarget).toBe('pagespace-carry/feature');
+  });
+
+  it('given a DETACHED HEAD, should create a named ref first — `bundle --all` can only carry refs', () => {
+    const plan = buildCarryPlan({ state: { kind: 'dirty', detail: ' M a.ts' }, branchName: null, projectId: PROJECT_ID });
+    expect(plan.needsBranchCreate).toBe(true);
+    expect(plan.branch).toBe('pagespace-carry');
+    expect(plan.checkoutTarget).toBe('pagespace-carry/pagespace-carry');
+  });
+
+  it('given a project id with path-hostile characters, should keep the bundle path a single tame filename', () => {
+    const plan = buildCarryPlan({ state: { kind: 'clean' }, branchName: 'main', projectId: '../../etc/pas swd' });
+    expect(plan.bundlePath).toBe('/home/sprite/pagespace-carry-etcpasswd.bundle');
+  });
+});
+
+describe('parseFileSizeBytes', () => {
+  it('given stat output, should read the byte count', () => {
+    expect(parseFileSizeBytes('4096\n')).toBe(4096);
+  });
+
+  it('given zero, should read zero rather than falsy-collapse to null', () => {
+    expect(parseFileSizeBytes('0')).toBe(0);
+  });
+
+  it('given anything that is not a plain integer, should report unknown so the caller fails closed', () => {
+    expect(parseFileSizeBytes('')).toBeNull();
+    expect(parseFileSizeBytes('stat: cannot stat')).toBeNull();
+    expect(parseFileSizeBytes('12x')).toBeNull();
+  });
+});
+
+describe('isReclaimableAfterCarry', () => {
+  const carrySha = 'abc123';
+
+  it('given a tree that is exactly the carry commit we made, should reclaim', () => {
+    // The carry left the machine tree clean but one commit ahead, so the
+    // ordinary `clean` recheck would refuse and leak the old checkout forever.
+    expect(isReclaimableAfterCarry({ recheckKind: 'unpushed', headSha: carrySha, carrySha })).toBe(true);
+    expect(isReclaimableAfterCarry({ recheckKind: 'clean', headSha: carrySha, carrySha })).toBe(true);
+  });
+
+  it('given NEW work written during the promotion, should refuse — deleting it is the unrecoverable mistake', () => {
+    expect(isReclaimableAfterCarry({ recheckKind: 'dirty', headSha: carrySha, carrySha })).toBe(false);
+    expect(isReclaimableAfterCarry({ recheckKind: 'unknown', headSha: carrySha, carrySha })).toBe(false);
+    expect(isReclaimableAfterCarry({ recheckKind: 'absent', headSha: carrySha, carrySha })).toBe(false);
+  });
+
+  it('given a HEAD that moved past the carry commit, should refuse', () => {
+    expect(isReclaimableAfterCarry({ recheckKind: 'unpushed', headSha: 'def456', carrySha })).toBe(false);
+  });
+
+  it('given an unreadable sha on either side, should refuse', () => {
+    expect(isReclaimableAfterCarry({ recheckKind: 'clean', headSha: null, carrySha })).toBe(false);
+    expect(isReclaimableAfterCarry({ recheckKind: 'clean', headSha: carrySha, carrySha: null })).toBe(false);
+  });
+});
+
+describe('isMissingParentCommitError', () => {
+  it('given the exact message git raises for a parentless HEAD~1, should recognize it', () => {
+    expect(isMissingParentCommitError("fatal: ambiguous argument 'HEAD~1': unknown revision or path not in the working tree.")).toBe(true);
+  });
+
+  it('given an unrelated reset failure, should not misclassify it as the root-commit case', () => {
+    expect(isMissingParentCommitError('fatal: Could not reset index file to revision \'HEAD~1\'.')).toBe(false);
+    expect(isMissingParentCommitError('')).toBe(false);
+  });
+});
+
+describe('promoteProject — carryDirty opt-in (#2207)', () => {
+  const DIRTY_STATUS = `${CLEAN_STATUS} M src/index.ts\n?? notes.md\n`;
+  /** What the machine checkout looks like AFTER the carry commit: clean, one ahead. */
+  const CARRIED_STATUS = '## main...origin/main [ahead 1]\n';
+
+  it('given carryDirty NOT set, should still refuse a dirty checkout and point at the way out', async () => {
+    const machine = makeMachineSandbox({ status: { exitCode: 0, stdout: DIRTY_STATUS, stderr: '' } });
+    const { deps, provisionCalls } = makeDeps({}, { machine });
+
+    const result = await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, deps });
+
+    expect(result).toMatchObject({ ok: false, reason: 'dirty_checkout' });
+    expect(result.ok === false && result.detail).toContain('carryDirty');
+    expect(provisionCalls).toEqual([]);
+  });
+
+  it('given carryDirty and a DIRTY checkout, should commit + bundle on the machine, transfer the bytes, and restore the work on the new Sprite', async () => {
+    const machine = makeMachineSandbox({
+      status: [
+        { exitCode: 0, stdout: DIRTY_STATUS, stderr: '' }, // the gate
+        { exitCode: 0, stdout: CARRIED_STATUS, stderr: '' }, // the pre-reclaim recheck
+      ],
+    });
+    const { deps, byId, rows, machineSandbox } = makeDeps({}, { machine });
+
+    const result = await promoteProject({
+      machineId: MACHINE_ID,
+      projectName: PROJECT_NAME,
+      actor,
+      carryDirty: true,
+      deps,
+    });
+
+    expect(result).toMatchObject({ ok: true, promoted: true, carried: true });
+    expect(rows.get(PROJECT_ID)?.sandboxId).toBe('sbx-project-1');
+
+    // MACHINE side: everything in the tree became one commit, then a bundle.
+    const machineGit = machineSandbox.calls.filter((c) => c.cmd === 'git').map((c) => gitSubcommand(c.args));
+    expect(machineGit).toEqual(expect.arrayContaining(['add', 'commit', 'rev-parse', 'bundle']));
+
+    // TRANSFER: the bundle landed on the project Sprite as bytes.
+    const projectState = byId.get('sbx-project-1');
+    expect(projectState?.files.get('/home/sprite/pagespace-carry-p1.bundle')).toBe('BUNDLE-BYTES');
+
+    // PROJECT side: fetched from the bundle, checked the branch out, then put
+    // the carried work back in the working tree as uncommitted changes.
+    const projectGit = projectState?.execLog.filter((e) => e.cmd === 'git').map((e) => gitSubcommand(e.args));
+    expect(projectGit).toEqual(['clone', 'fetch', 'checkout', 'reset']);
+    const reset = projectState?.execLog.find((e) => gitSubcommand(e.args) === 'reset');
+    expect(reset?.args).toEqual(['reset', '--mixed', 'HEAD~1']);
+  });
+
+  it('given carryDirty and an UNPUSHED-only checkout, should carry the commits without inventing one', async () => {
+    const machine = makeMachineSandbox({ status: { exitCode: 0, stdout: '## main...origin/main [ahead 2]\n', stderr: '' } });
+    const { deps, byId, machineSandbox } = makeDeps({}, { machine });
+
+    const result = await promoteProject({
+      machineId: MACHINE_ID,
+      projectName: PROJECT_NAME,
+      actor,
+      carryDirty: true,
+      deps,
+    });
+
+    expect(result).toMatchObject({ ok: true, carried: true });
+    const machineGit = machineSandbox.calls.filter((c) => c.cmd === 'git').map((c) => gitSubcommand(c.args));
+    expect(machineGit).not.toContain('commit');
+    expect(machineGit).toContain('bundle');
+    const projectGit = byId.get('sbx-project-1')?.execLog.filter((e) => e.cmd === 'git').map((e) => gitSubcommand(e.args));
+    expect(projectGit).toEqual(['clone', 'fetch', 'checkout']);
+  });
+
+  it('given carryDirty on a CLEAN checkout, should carry nothing and behave exactly as before', async () => {
+    const { deps, machineSandbox } = makeDeps();
+
+    const result = await promoteProject({
+      machineId: MACHINE_ID,
+      projectName: PROJECT_NAME,
+      actor,
+      carryDirty: true,
+      deps,
+    });
+
+    expect(result).toMatchObject({ ok: true, carried: false });
+    expect(machineSandbox.calls.filter((c) => c.cmd === 'git').map((c) => gitSubcommand(c.args))).toEqual(['status', 'status']);
+  });
+
+  it('given an UNVERIFIABLE checkout, should refuse even WITH carryDirty', async () => {
+    const machine = makeMachineSandbox({ status: { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository' } });
+    const { deps, provisionCalls } = makeDeps({}, { machine });
+
+    const result = await promoteProject({
+      machineId: MACHINE_ID,
+      projectName: PROJECT_NAME,
+      actor,
+      carryDirty: true,
+      deps,
+    });
+
+    expect(result).toMatchObject({ ok: false, reason: 'dirty_check_failed' });
+    expect(provisionCalls).toEqual([]);
+  });
+});
+
+describe('promoteProject — carry failures leave nothing behind (#2207)', () => {
+  const DIRTY = { exitCode: 0, stdout: `${CLEAN_STATUS} M src/index.ts\n`, stderr: '' };
+
+  async function promoteWithCarry(deps: PromoteProjectDeps) {
+    return promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, carryDirty: true, deps });
+  }
+
+  it('given the bundle failing to build, should kill the provisioned Sprite and leave the row unpromoted', async () => {
+    const machine = makeMachineSandbox({ status: DIRTY, git: { bundle: { exitCode: 128, stdout: '', stderr: 'fatal: refusing to create empty bundle' } } });
+    const { deps, killCalls, rows } = makeDeps({}, { machine });
+
+    const result = await promoteWithCarry(deps);
+
+    expect(result).toMatchObject({ ok: false, reason: 'carry_failed' });
+    expect(result.ok === false && result.detail).toContain('empty bundle');
+    expect(killCalls).toEqual(['sbx-project-1']);
+    expect(rows.get(PROJECT_ID)?.sandboxId).toBeNull();
+  });
+
+  it('given a bundle that cannot be read back, should fail the carry rather than promote without the work', async () => {
+    const machine = makeMachineSandbox({ status: DIRTY, bundleContent: null });
+    const { deps, killCalls, rows } = makeDeps({}, { machine });
+
+    expect(await promoteWithCarry(deps)).toMatchObject({ ok: false, reason: 'carry_failed' });
+    expect(killCalls).toEqual(['sbx-project-1']);
+    expect(rows.get(PROJECT_ID)?.sandboxId).toBeNull();
+  });
+
+  it('given an unreadable bundle SIZE, should fail closed — an unbounded read is an OOM', async () => {
+    const machine = makeMachineSandbox({ status: DIRTY, statResult: { exitCode: 1, stdout: '', stderr: 'stat: cannot stat' } });
+    const { deps } = makeDeps({}, { machine });
+
+    expect(await promoteWithCarry(deps)).toMatchObject({ ok: false, reason: 'carry_failed' });
+  });
+
+  it('given a bundle larger than the cap, should refuse with its own actionable reason', async () => {
+    const machine = makeMachineSandbox({ status: DIRTY, bundleBytes: MAX_CARRY_BUNDLE_BYTES + 1 });
+    const { deps, killCalls } = makeDeps({}, { machine });
+
+    const result = await promoteWithCarry(deps);
+
+    expect(result).toMatchObject({ ok: false, reason: 'carry_too_large' });
+    expect(killCalls).toEqual(['sbx-project-1']);
+  });
+
+  it('given the far-side fetch failing, should fail the carry — a promoted project missing the work is the loss we refuse', async () => {
+    const machine = makeMachineSandbox({ status: DIRTY });
+    const { deps, killCalls, rows } = makeDeps({}, { machine });
+    const host = deps.host;
+    deps.host = {
+      ...host,
+      provision: async (args) => {
+        const handle = await host.provision(args);
+        return {
+          ...handle,
+          exec: async (e) =>
+            gitSubcommand(e.args) === 'fetch'
+              ? { exitCode: 128, stdout: '', stderr: 'fatal: bundle is corrupt' }
+              : handle.exec(e),
+        };
+      },
+    };
+
+    const result = await promoteWithCarry(deps);
+
+    expect(result).toMatchObject({ ok: false, reason: 'carry_failed' });
+    expect(killCalls).toEqual(['sbx-project-1']);
+    expect(rows.get(PROJECT_ID)?.sandboxId).toBeNull();
+  });
+});
+
+describe('promoteProject — reclaim after a carry (#2207)', () => {
+  const DIRTY = { exitCode: 0, stdout: `${CLEAN_STATUS} M src/index.ts\n`, stderr: '' };
+
+  it('given the machine tree left exactly at our carry commit, should reclaim the old checkout', async () => {
+    const machine = makeMachineSandbox({
+      status: [DIRTY, { exitCode: 0, stdout: '## main...origin/main [ahead 1]\n', stderr: '' }],
+    });
+    const { deps, machineSandbox } = makeDeps({}, { machine });
+
+    await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, carryDirty: true, deps });
+
+    // The CHECKOUT reclaim is the `-rf`; the carry's own `rm -f` of the staged
+    // bundle is housekeeping, not the reclaim under test.
+    expect(machineSandbox.calls.filter((c) => c.args?.[0] === '-rf').map((c) => c.args)).toEqual([['-rf', PROJECT_PATH]]);
+  });
+
+  it('given someone committing on the machine DURING the promotion, should not reclaim', async () => {
+    let revParseCalls = 0;
+    const machine = makeMachineSandbox({
+      status: [DIRTY, { exitCode: 0, stdout: '## main...origin/main [ahead 2]\n', stderr: '' }],
+    });
+    const inner = machine.sandbox.runCommand;
+    machine.sandbox.runCommand = async (opts) => {
+      if (opts.cmd === 'git' && gitSubcommand(opts.args) === 'rev-parse') {
+        revParseCalls += 1;
+        // The carry's own read, then a DIFFERENT head at reclaim time.
+        return { exitCode: 0, stdout: revParseCalls === 1 ? 'carry-sha\n' : 'someone-elses-sha\n', stderr: '' };
+      }
+      return inner(opts);
+    };
+    const { deps, machineSandbox } = makeDeps({}, { machine });
+
+    await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, carryDirty: true, deps });
+
+    expect(machineSandbox.calls.filter((c) => c.args?.[0] === '-rf')).toEqual([]);
+  });
+});
+
+describe('promoteProject — every step of the carry fails closed (#2207)', () => {
+  const DIRTY = { exitCode: 0, stdout: `${CLEAN_STATUS} M src/index.ts\n`, stderr: '' };
+
+  async function carry(deps: PromoteProjectDeps) {
+    return promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, carryDirty: true, deps });
+  }
+
+  /** Fails ONE git subcommand on the project Sprite, leaving the rest working. */
+  function failProjectGit(deps: PromoteProjectDeps, sub: string): void {
+    const host = deps.host;
+    deps.host = {
+      ...host,
+      provision: async (args) => {
+        const handle = await host.provision(args);
+        return {
+          ...handle,
+          exec: async (e) =>
+            gitSubcommand(e.args) === sub
+              ? { exitCode: 1, stdout: '', stderr: `fatal: ${sub} refused` }
+              : handle.exec(e),
+        };
+      },
+    };
+  }
+
+  it('given the branch read failing, should not guess at a branch name', async () => {
+    const machine = makeMachineSandbox({ status: [DIRTY, { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository' }] });
+    const { deps, killCalls } = makeDeps({}, { machine });
+
+    expect(await carry(deps)).toMatchObject({ ok: false, reason: 'carry_failed' });
+    expect(killCalls).toEqual(['sbx-project-1']);
+  });
+
+  it('given staging failing, should stop before committing anything', async () => {
+    const machine = makeMachineSandbox({ status: DIRTY, git: { add: { exitCode: 1, stdout: '', stderr: 'fatal: pathspec' } } });
+    const { deps, machineSandbox } = makeDeps({}, { machine });
+
+    const result = await carry(deps);
+
+    expect(result).toMatchObject({ ok: false, reason: 'carry_failed' });
+    expect(result.ok === false && result.detail).toContain('staging');
+    expect(machineSandbox.calls.map((c) => gitSubcommand(c.args))).not.toContain('commit');
+  });
+
+  it('given the carry commit failing, should fail the promotion', async () => {
+    const machine = makeMachineSandbox({ status: DIRTY, git: { commit: { exitCode: 1, stdout: '', stderr: 'fatal: no identity' } } });
+    const { deps } = makeDeps({}, { machine });
+
+    const result = await carry(deps);
+    expect(result).toMatchObject({ ok: false, reason: 'carry_failed' });
+    expect(result.ok === false && result.detail).toContain('committing');
+  });
+
+  it('given a DETACHED HEAD, should mint a ref so the bundle has something to carry', async () => {
+    const machine = makeMachineSandbox({ status: { exitCode: 0, stdout: '## HEAD (no branch)\n M src/index.ts\n', stderr: '' } });
+    const { deps, byId, machineSandbox } = makeDeps({}, { machine });
+
+    expect(await carry(deps)).toMatchObject({ ok: true, carried: true });
+
+    const branched = machineSandbox.calls.find((c) => gitSubcommand(c.args) === 'branch');
+    expect(branched?.args).toEqual(['branch', '-f', 'pagespace-carry', 'HEAD']);
+    const checkout = byId.get('sbx-project-1')?.execLog.find((e) => gitSubcommand(e.args) === 'checkout');
+    expect(checkout?.args).toEqual(['checkout', '-B', 'pagespace-carry', 'pagespace-carry/pagespace-carry']);
+  });
+
+  it('given the detached-HEAD ref failing to mint, should fail the carry', async () => {
+    const machine = makeMachineSandbox({
+      status: { exitCode: 0, stdout: '## HEAD (no branch)\n M src/index.ts\n', stderr: '' },
+      git: { branch: { exitCode: 1, stdout: '', stderr: 'fatal: bad ref' } },
+    });
+    const { deps } = makeDeps({}, { machine });
+
+    expect(await carry(deps)).toMatchObject({ ok: false, reason: 'carry_failed' });
+  });
+
+  it('given the far-side checkout failing, should fail the carry', async () => {
+    const machine = makeMachineSandbox({ status: DIRTY });
+    const { deps } = makeDeps({}, { machine });
+    failProjectGit(deps, 'checkout');
+
+    const result = await carry(deps);
+    expect(result).toMatchObject({ ok: false, reason: 'carry_failed' });
+    expect(result.ok === false && result.detail).toContain('checking out');
+  });
+
+  it('given the far-side reset failing, should fail rather than leave the carry commit in the history', async () => {
+    // The work IS on the Sprite at that point, but as a commit the user never
+    // made. Reporting success would hand them a repo whose history is a lie.
+    const machine = makeMachineSandbox({ status: DIRTY });
+    const { deps, killCalls } = makeDeps({}, { machine });
+    failProjectGit(deps, 'reset');
+
+    expect(await carry(deps)).toMatchObject({ ok: false, reason: 'carry_failed' });
+    expect(killCalls).toEqual(['sbx-project-1']);
+  });
+
+  it('given a carry commit that is the repository ROOT (cloned from an empty remote), should restore the work instead of failing the promotion', async () => {
+    // `HEAD~1` does not exist for a parentless commit — git refuses the reset
+    // with exactly this message, not a generic failure. That refusal is the
+    // signal to fall back to the root-commit path, not a reason to give up.
+    const machine = makeMachineSandbox({ status: DIRTY });
+    const { deps, byId } = makeDeps({}, { machine });
+    const host = deps.host;
+    deps.host = {
+      ...host,
+      provision: async (args) => {
+        const handle = await host.provision(args);
+        return {
+          ...handle,
+          exec: async (e) =>
+            gitSubcommand(e.args) === 'reset' && e.args?.includes('HEAD~1')
+              ? {
+                  exitCode: 128,
+                  stdout: '',
+                  stderr: "fatal: ambiguous argument 'HEAD~1': unknown revision or path not in the working tree.",
+                }
+              : handle.exec(e),
+        };
+      },
+    };
+
+    const result = await carry(deps);
+
+    expect(result).toMatchObject({ ok: true, carried: true });
+    // The failed `HEAD~1` attempt is intercepted before it reaches the fake
+    // Sprite's own log (it never really ran against a repo), so only the
+    // fallback pair shows up after `checkout`.
+    const projectGit = byId.get('sbx-project-1')?.execLog.filter((e) => e.cmd === 'git').map((e) => gitSubcommand(e.args));
+    expect(projectGit).toEqual(['clone', 'fetch', 'checkout', 'update-ref', 'reset']);
+    const unref = byId.get('sbx-project-1')?.execLog.find((e) => gitSubcommand(e.args) === 'update-ref');
+    expect(unref?.args).toEqual(['update-ref', '-d', 'refs/heads/main']);
+  });
+
+  it('given the root-commit fallback unable to clear the ref, should fail the carry', async () => {
+    const machine = makeMachineSandbox({ status: DIRTY });
+    const { deps, killCalls } = makeDeps({}, { machine });
+    const host = deps.host;
+    deps.host = {
+      ...host,
+      provision: async (args) => {
+        const handle = await host.provision(args);
+        return {
+          ...handle,
+          exec: async (e) => {
+            if (gitSubcommand(e.args) === 'reset' && e.args?.includes('HEAD~1')) {
+              return {
+                exitCode: 128,
+                stdout: '',
+                stderr: "fatal: ambiguous argument 'HEAD~1': unknown revision or path not in the working tree.",
+              };
+            }
+            if (gitSubcommand(e.args) === 'update-ref') return { exitCode: 1, stdout: '', stderr: 'fatal: cannot lock ref' };
+            return handle.exec(e);
+          },
+        };
+      },
+    };
+
+    expect(await carry(deps)).toMatchObject({ ok: false, reason: 'carry_failed' });
+    expect(killCalls).toEqual(['sbx-project-1']);
+  });
+
+  it('given the bundle READ throwing, should fail closed', async () => {
+    const machine = makeMachineSandbox({ status: DIRTY });
+    machine.sandbox.readFileToBuffer = async () => {
+      throw new Error('sprite disk error');
+    };
+    const { deps } = makeDeps({}, { machine });
+
+    const result = await carry(deps);
+    expect(result).toMatchObject({ ok: false, reason: 'carry_failed' });
+    expect(result.ok === false && result.detail).toContain('sprite disk error');
+  });
+
+  it('given the bundle WRITE throwing, should fail closed', async () => {
+    const machine = makeMachineSandbox({ status: DIRTY });
+    const { deps } = makeDeps({}, { machine });
+    const host = deps.host;
+    deps.host = {
+      ...host,
+      provision: async (args) => {
+        const handle = await host.provision(args);
+        return {
+          ...handle,
+          writeFiles: async () => {
+            throw new Error('sprite write error');
+          },
+        };
+      },
+    };
+
+    const result = await carry(deps);
+    expect(result).toMatchObject({ ok: false, reason: 'carry_failed' });
+    expect(result.ok === false && result.detail).toContain('sprite write error');
+  });
+
+  it('given the SIZE PROBE throwing, should fail closed rather than read an unbounded file', async () => {
+    const machine = makeMachineSandbox({ status: DIRTY });
+    const inner = machine.sandbox.runCommand;
+    machine.sandbox.runCommand = async (opts) => {
+      if (opts.cmd === 'stat') throw new Error('stat blew up');
+      return inner(opts);
+    };
+    const { deps } = makeDeps({}, { machine });
+
+    expect(await carry(deps)).toMatchObject({ ok: false, reason: 'carry_failed' });
+  });
+
+  it('given the machine Sprite going unreachable mid-carry, should fail closed', async () => {
+    const machine = makeMachineSandbox({ status: DIRTY });
+    let bundled = false;
+    const inner = machine.sandbox.runCommand;
+    machine.sandbox.runCommand = async (opts) => {
+      if (opts.cmd === 'git' && gitSubcommand(opts.args) === 'bundle') bundled = true;
+      return inner(opts);
+    };
+    const { deps } = makeDeps({}, { machine });
+    // Everything up to and including the bundle works; the reconnect that the
+    // byte transfer needs does not.
+    deps.reconnect = async () => (bundled ? null : machine.sandbox);
+
+    const result = await carry(deps);
+    expect(result).toMatchObject({ ok: false, reason: 'carry_failed' });
+    expect(result.ok === false && result.detail).toContain('unreachable');
+  });
+});
+
+describe('promoteProject — an unconfirmable carry sha never licenses a delete (#2207)', () => {
+  const DIRTY = { exitCode: 0, stdout: `${CLEAN_STATUS} M src/index.ts\n`, stderr: '' };
+
+  it('given HEAD unreadable after the carry commit, should promote but leave the old checkout alone', async () => {
+    const machine = makeMachineSandbox({
+      status: [DIRTY, { exitCode: 0, stdout: '## main...origin/main [ahead 1]\n', stderr: '' }],
+      git: { 'rev-parse': { exitCode: 128, stdout: '', stderr: 'fatal: ambiguous argument' } },
+    });
+    const { deps, machineSandbox } = makeDeps({}, { machine });
+
+    const result = await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, carryDirty: true, deps });
+
+    expect(result).toMatchObject({ ok: true, carried: true });
+    expect(machineSandbox.calls.filter((c) => c.args?.[0] === '-rf')).toEqual([]);
+  });
+
+  it('given an EMPTY sha, should treat it as unreadable rather than as a match', async () => {
+    const machine = makeMachineSandbox({
+      status: [DIRTY, { exitCode: 0, stdout: '## main...origin/main [ahead 1]\n', stderr: '' }],
+      git: { 'rev-parse': { exitCode: 0, stdout: '\n', stderr: '' } },
+    });
+    const { deps, machineSandbox } = makeDeps({}, { machine });
+
+    await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, carryDirty: true, deps });
+
+    expect(machineSandbox.calls.filter((c) => c.args?.[0] === '-rf')).toEqual([]);
+  });
+
+  it('given the machine Sprite unacquirable for the byte transfer, should fail the carry', async () => {
+    const machine = makeMachineSandbox({ status: DIRTY });
+    let bundled = false;
+    const inner = machine.sandbox.runCommand;
+    machine.sandbox.runCommand = async (opts) => {
+      if (opts.cmd === 'git' && gitSubcommand(opts.args) === 'bundle') bundled = true;
+      return inner(opts);
+    };
+    const { deps } = makeDeps({}, { machine });
+    deps.acquireMachineSandbox = async () =>
+      bundled ? { ok: false, reason: 'machine_unavailable' } : { ok: true, sandboxId: MACHINE_SANDBOX_ID, resumed: false };
+
+    expect(await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, carryDirty: true, deps })).toMatchObject({
+      ok: false,
+      reason: 'carry_failed',
+    });
   });
 });
