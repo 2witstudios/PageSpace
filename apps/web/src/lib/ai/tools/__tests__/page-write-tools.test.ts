@@ -380,6 +380,17 @@ describe('page-write-tools', () => {
       expect(pageWriteTools.create_page.description).toContain('Create');
     });
 
+    // Regression test for #2150: the description used to hardcode 8 page
+    // type names and glosses, so it could (and did) drift from the schema
+    // built from getCreatablePageTypes(). It now interpolates each creatable
+    // type's own gloss from page-types.config, so the two can't diverge.
+    it('interpolates every creatable type and its gloss from page-types.config', () => {
+      const description = pageWriteTools.create_page.description;
+      for (const type of ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST', 'CODE']) {
+        expect(description).toContain(`${type} (${type} pages)`);
+      }
+    });
+
     it('requires user authentication', async () => {
       const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
