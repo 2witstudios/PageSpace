@@ -113,6 +113,15 @@ export const WRITE_TOOLS = new Set([
   'gh_issue_reopen',
   'gh_repo_fork',
   'gh_repo_create',
+  // Session-family MUTATIONS (issue #2204 follow-up, F3). list_sessions and
+  // read_session are reads and stay available; these four create, move, kill
+  // and drive sessions — and send_session runs a full agent loop in the target,
+  // which can execute arbitrary shell commands. A read-only conversation that
+  // could still call them would be read-only in name only.
+  'add_session',
+  'move_session',
+  'kill_session',
+  'send_session',
 ]);
 
 // Web search tools (excluded when web search is disabled)

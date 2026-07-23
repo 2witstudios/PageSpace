@@ -81,6 +81,16 @@ export interface HeadlessSessionTarget {
 export interface HeadlessRunClaim {
   /** The assistant message id this run will write into. */
   messageId: string;
+  /**
+   * The claim's cancellation channel (issue #2204 follow-up, F7/F14).
+   *
+   * The claim is what watches the conversation, so the claim is what learns
+   * that the run must stop — a human taking the pane over (a durable
+   * `abortRequestedAt` mark), or the run outliving its lifetime backstop. The
+   * generation is handed this signal so those facts actually end the loop
+   * rather than merely being recorded next to a loop that keeps billing.
+   */
+  abortSignal?: AbortSignal;
   /** Release the claim, exactly once, whatever the outcome. */
   release: (outcome: { aborted: boolean; error?: string }) => Promise<void>;
 }
@@ -105,6 +115,23 @@ export interface HeadlessGenerateInput {
   userId: string;
   /** The depth THIS run executes at — what its own tools see as `agentCallDepth`. */
   depth: number;
+  /** The claim's cancellation channel — see {@link HeadlessRunClaim.abortSignal}. */
+  abortSignal?: AbortSignal;
+  /** Net spendable cents behind this run's reservation, or null when unmetered. */
+  balanceSnapshotCents?: number | null;
+  /**
+   * Cumulative usage after each completed model step (issue #2204 follow-up
+   * review, Codex P1).
+   *
+   * The final `HeadlessGenerateResult` is the only usage report a SUCCESSFUL
+   * run needs — but an aborted or failed one never produces it. A run stopped
+   * by takeover, by the credit guard, or by the lifetime backstop rejects out
+   * of `generateText` after the provider has already charged for the steps it
+   * completed, and `trackAIUsage` skips an unsuccessful zero-token call
+   * entirely (`success || totalTokens > 0`), so those tokens went unbilled.
+   * Reporting per step makes the charge survive any exit.
+   */
+  onStepUsage?: (usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number }) => void;
 }
 
 export interface HeadlessGenerateResult {
@@ -141,6 +168,75 @@ export function isClaimContested(
   );
 }
 
+/** The machine page a dispatched run executes as — the slice the tool context needs. */
+export interface HeadlessMachinePage {
+  id: string;
+  title: string;
+  type: string;
+}
+
+/**
+ * The tool-execution context a dispatched turn runs under (issue #2204
+ * follow-up, F8).
+ *
+ * THE PART THAT IS EASY TO GET WRONG, and was: `chatSource`.
+ * `resolveSandboxActorContext` fails CLOSED — "Code execution requires an
+ * active drive" — for any context whose `chatSource.type` is not `'global'`
+ * and that carries no drive. It reaches a page agent's drive through
+ * `chatSource.agentPageId`, so a context with `locationContext.currentPage`
+ * alone looks driveless and every bash/file/git tool in the run is refused.
+ * A dispatched session is a page agent on the machine page, exactly as the
+ * interactive route describes it, so it must say so the same way.
+ *
+ * Pure, and separated from the runtime's `generate` for that reason: this is
+ * the whole difference between a dispatched session that can execute code and
+ * one that cannot, and it should never again be provable only by dispatching.
+ */
+export interface HeadlessToolContext {
+  userId: string;
+  conversationId: string;
+  machineBinding: MachineNodeHandleSet;
+  agentCallDepth: number;
+  requestOrigin: 'agent';
+  chatSource?: { type: 'page'; agentPageId: string; agentTitle: string };
+  locationContext?: { currentPage: { id: string; title: string; type: string; path: string } };
+}
+
+export function buildHeadlessToolContext(input: {
+  target: HeadlessSessionTarget;
+  machinePage: HeadlessMachinePage | undefined;
+  userId: string;
+  depth: number;
+}): HeadlessToolContext {
+  const { target, machinePage, userId, depth } = input;
+  return {
+    userId,
+    conversationId: target.conversationId,
+    machineBinding: target.binding,
+    // Its own dispatches are one level deeper than this run — the cap in
+    // `dispatchHeadlessSessionTurn` reads this counter back off the context.
+    agentCallDepth: depth,
+    requestOrigin: 'agent',
+    ...(machinePage
+      ? {
+          chatSource: {
+            type: 'page' as const,
+            agentPageId: machinePage.id,
+            agentTitle: machinePage.title,
+          },
+          locationContext: {
+            currentPage: {
+              id: machinePage.id,
+              title: machinePage.title,
+              type: machinePage.type,
+              path: `/${machinePage.title}`,
+            },
+          },
+        }
+      : {}),
+  };
+}
+
 export interface HeadlessSessionRunDeps {
   /** Resolve the addressed session into a runnable target, or null if it is not an agent session. */
   resolveTarget: (identity: SessionTerminalIdentity) => Promise<HeadlessSessionTarget | null>;
@@ -152,7 +248,20 @@ export interface HeadlessSessionRunDeps {
    */
   checkCredit: (input: {
     userId: string;
-  }) => Promise<{ allowed: true; holdId: string | null } | { allowed: false; reason: string }>;
+  }) => Promise<
+    | {
+        allowed: true;
+        holdId: string | null;
+        /**
+         * Net spendable cents behind this reservation, when the gate computed
+         * one. Threaded to `generate` so the run's per-step accumulator guards
+         * against ITS OWN slice of the balance rather than the gross figure —
+         * the same discipline the interactive route applies. (F5.)
+         */
+        balanceSnapshotCents?: number | null;
+      }
+    | { allowed: false; reason: string }
+  >;
   /** Release the gate's hold once the run settles — actual consumption flows through `trackUsage`. */
   releaseHold: (holdId: string) => Promise<void>;
   /** Atomic claim on the conversation — the workflow_runs discipline, contended by live streams too. */
@@ -272,13 +381,26 @@ export async function dispatchHeadlessSessionTurn(
     return { ok: false, reason: 'credit_denied', detail: credit.reason };
   }
   const holdId = credit.holdId;
+  const balanceSnapshotCents = credit.balanceSnapshotCents ?? null;
 
   const releaseHold = async () => {
     if (holdId) await deps.releaseHold(holdId).catch(() => {});
   };
 
   const messageId = deps.newId();
-  const claimed = await deps.claimRun({ target, userId: input.actor.userId, messageId });
+  // THROWS release the hold too (issue #2204 follow-up, F15). A `busy` result
+  // and an append failure both released it; a claimRun that rejected on a
+  // database or network blip exited before any cleanup, stranding spendable
+  // balance until the hold's TTL expired. Every exit after the hold exists is
+  // now a releasing exit.
+  let claimed: HeadlessClaimResult;
+  try {
+    claimed = await deps.claimRun({ target, userId: input.actor.userId, messageId });
+  } catch (error) {
+    deps.onError?.('headless-session-run: claim failed', error);
+    await releaseHold();
+    return { ok: false, reason: 'failed', detail: errorText(error) };
+  }
   if (!claimed.ok) {
     // No run will happen — a hold left behind would strand spendable balance
     // until it expires.
@@ -304,7 +426,7 @@ export async function dispatchHeadlessSessionTurn(
     return { ok: false, reason: 'failed', detail: errorText(error) };
   }
 
-  deps.defer(() => runClaimedTurn({ input, target, claim, holdId, userMessageId, deps }));
+  deps.defer(() => runClaimedTurn({ input, target, claim, holdId, balanceSnapshotCents, userMessageId, deps }));
 
   return { ok: true, accepted: true, messageId: claim.messageId };
 }
@@ -319,6 +441,7 @@ async function runClaimedTurn({
   target,
   claim,
   holdId,
+  balanceSnapshotCents,
   userMessageId,
   deps,
 }: {
@@ -326,11 +449,18 @@ async function runClaimedTurn({
   target: HeadlessSessionTarget;
   claim: HeadlessRunClaim;
   holdId: string | null;
+  balanceSnapshotCents: number | null;
   userMessageId: string;
   deps: HeadlessSessionRunDeps;
 }): Promise<void> {
   let result: HeadlessGenerateResult | undefined;
   let failure: string | undefined;
+
+  // What the provider has ALREADY charged for, accumulated as the run goes, so
+  // an abort or a mid-loop failure still bills what it spent. See
+  // `HeadlessGenerateInput.onStepUsage`.
+  const spent = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  let spentAnything = false;
 
   try {
     const history = await deps.loadHistory(target, { excludeMessageId: userMessageId });
@@ -342,6 +472,21 @@ async function runClaimedTurn({
       // The run executes one level deeper than the dispatcher, so a session it
       // dispatches to in turn sees the chain it is actually part of.
       depth: input.depth + 1,
+      ...(claim.abortSignal ? { abortSignal: claim.abortSignal } : {}),
+      balanceSnapshotCents,
+      onStepUsage: (usage) => {
+        const input = usage?.inputTokens ?? 0;
+        const output = usage?.outputTokens ?? 0;
+        const total = usage?.totalTokens ?? input + output;
+        // A step that reports nothing measurable must not flip this: it would
+        // turn `undefined` usage into an all-zero row, which reads as "measured
+        // and free" rather than "never measured".
+        if (input === 0 && output === 0 && total === 0) return;
+        spentAnything = true;
+        spent.inputTokens += input;
+        spent.outputTokens += output;
+        spent.totalTokens += total;
+      },
     });
     await deps.persistReply({
       target,
@@ -373,7 +518,10 @@ async function runClaimedTurn({
       userId: input.actor.userId,
       pageId: target.machineId,
       conversationId: target.conversationId,
-      usage: result?.usage,
+      // The completed run's own total when there is one; otherwise what the
+      // steps reported before the abort/failure — never nothing, or the
+      // provider's charge for those steps is silently absorbed.
+      usage: result?.usage ?? (spentAnything ? spent : undefined),
       success: failure === undefined,
       provider: result?.provider,
       model: result?.model,

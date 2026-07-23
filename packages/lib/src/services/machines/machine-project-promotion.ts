@@ -58,11 +58,21 @@ export type { MachineActorContext };
 import { PROJECT_REPO_PATH } from '../sandbox/sandbox-paths';
 export { PROJECT_REPO_PATH };
 
+/** How many extra reads `awaitPromotionWinner` makes after its first, and how long it pauses between them. */
+const PROMOTION_RACE_POLLS = 3;
+const PROMOTION_RACE_POLL_MS = 250;
+
 export type PromoteProjectDenialReason =
   | 'kill_switch_off'
   | 'project_not_found'
   /** The machine-side checkout has uncommitted work — promoting would destroy it. */
   | 'dirty_checkout'
+  /**
+   * The machine-side checkout is CLEAN but holds commits that exist nowhere
+   * else. A fresh clone from `repoUrl` cannot reproduce them. (Issue #2204
+   * follow-up, F1.)
+   */
+  | 'unpushed_commits'
   /** We could not determine whether the machine-side checkout is clean. Fail-closed. */
   | 'dirty_check_failed'
   | 'provision_failed'
@@ -96,6 +106,11 @@ export interface PromoteProjectDeps {
   store: MachineProjectPromotionStore;
   isEnabled: () => boolean;
   now: () => Date;
+  /**
+   * Pause, injected so the promotion-race reconciliation is testable without a
+   * real clock (see `awaitPromotionWinner`).
+   */
+  wait: (ms: number) => Promise<void>;
   /** The provider-neutral Sprite lifecycle seam — the promoted project's own Sprite is provisioned through it. */
   host: MachineHost;
   substrate: MachineSubstrateSpec;
@@ -127,6 +142,16 @@ export interface PromoteProjectDeps {
    * affect the promotion.
    */
   measureProjectStorage?: (input: ProjectStorageMeasurement) => Promise<void>;
+  /**
+   * Re-measure the OWNING Machine's own Sprite after its copy of the project
+   * checkout is reclaimed (issue #2204 follow-up, F12). The root's last
+   * persisted measurement still counts the bytes we removed, so without this
+   * the reconcile bills them on the machine AND on the new project Sprite until
+   * some unrelated root operation happens to refresh it. Best-effort, and
+   * FORCED past the ordinary measurement throttle — the caller is reporting a
+   * known shrink, not an opportunistic wake.
+   */
+  remeasureMachineStorage?: (input: { machinePageId: string }) => Promise<void>;
 }
 
 export type PromoteProjectResult =
@@ -158,6 +183,14 @@ function noteProjectStorage(
   if (!measure) return;
   void measure(input).catch(() => {
     /* Best-effort: the seam already logs; a promotion must never fail on it. */
+  });
+}
+
+/** See `noteProjectStorage`: a billing refresh must never be awaited by, or fail, the promotion. */
+function noteRootStorageAfterReclaim(machineId: string, deps: PromoteProjectDeps): void {
+  if (!deps.remeasureMachineStorage) return;
+  void deps.remeasureMachineStorage({ machinePageId: machineId }).catch(() => {
+    /* Best-effort: the seam already logs. */
   });
 }
 
@@ -201,8 +234,73 @@ type CheckoutState =
   | { kind: 'absent' }
   | { kind: 'clean' }
   | { kind: 'dirty'; detail: string }
+  /** Clean tree, but commits a fresh clone could not reproduce. */
+  | { kind: 'unpushed'; detail: string }
   /** We could not tell. Treated exactly like dirty (fail-closed), with its own reason. */
   | { kind: 'unknown'; detail: string };
+
+/**
+ * Classify `git status --porcelain -b` output (pure).
+ *
+ * A CLEAN WORKING TREE IS NOT THE SAME AS "NOTHING TO LOSE" — the gap this
+ * closes (issue #2204 follow-up, F1). Promotion replaces the old checkout with
+ * a fresh clone from `repoUrl`, so the question is not "are there uncommitted
+ * edits" but "can a clone reproduce this checkout". A branch sitting two
+ * commits ahead of its upstream answers no, and `--porcelain` alone reports it
+ * as pristine — so promotion deleted the only copy of that work.
+ *
+ * The branch header (`-b`) answers it. Both fail-closed cases are deliberate:
+ *
+ *  • `[ahead N]` — commits exist here and nowhere else.
+ *  • NO upstream at all (a locally-created branch, or a detached HEAD) — there
+ *    is no remote ref this checkout is reproducible from, which is the same
+ *    loss with less information.
+ *
+ * A missing header is `unknown`, not `clean`: `-b` always emits one, so its
+ * absence means we are not reading what we think we are.
+ */
+/**
+ * The `[ahead 1, behind 2]` payload of a porcelain branch header, or `''`.
+ *
+ * Index arithmetic rather than a pattern, so no amount of `[` in a branch name
+ * can make this superlinear — see the call site.
+ */
+function trackingDivergence(branchLine: string): string {
+  const open = branchLine.lastIndexOf('[');
+  if (open === -1) return '';
+  const close = branchLine.indexOf(']', open + 1);
+  return close === -1 ? '' : branchLine.slice(open + 1, close);
+}
+
+export function classifyCheckoutStatus(stdout: string): CheckoutState {
+  const lines = stdout.split('\n').filter((line) => line.trim().length > 0);
+  const branchLine = lines.find((line) => line.startsWith('## '));
+  // Porcelain output covers untracked files too, and that is intended: an
+  // untracked file in the old checkout is exactly the kind of work a fresh
+  // clone on a new Sprite would silently drop.
+  const changes = lines.filter((line) => !line.startsWith('## '));
+
+  if (changes.length > 0) return { kind: 'dirty', detail: changes.join('\n') };
+  if (!branchLine) return { kind: 'unknown', detail: 'git status reported no branch header' };
+
+  const branch = branchLine.slice(3).trim();
+  // Sliced, not matched with a `.*`-wrapped pattern: `git status` output is
+  // attacker-influencable (a branch name is user input), and a regex that scans
+  // the whole line for a bracketed group backtracks polynomially on a line full
+  // of `[`. Taking the divergence hint by index bounds the regex to the short
+  // `ahead N, behind M` payload, where the pattern is linear.
+  const divergence = trackingDivergence(branch);
+  const ahead = /\bahead (\d+)/.exec(divergence);
+  if (ahead) {
+    return { kind: 'unpushed', detail: `${ahead[1]} commit(s) not on the remote (${branch})` };
+  }
+  // `## name...upstream` is the only shape that names a remote ref. Anything
+  // else — `## name`, `## HEAD (no branch)` — has nothing to be reproduced from.
+  if (!branch.includes('...')) {
+    return { kind: 'unpushed', detail: `no upstream branch to reproduce this checkout from (${branch})` };
+  }
+  return { kind: 'clean' };
+}
 
 /**
  * Inspect the project's OLD home on the machine Sprite. Promotion is only safe
@@ -244,9 +342,11 @@ async function inspectMachineCheckout({
   }
   if (!exists) return { kind: 'absent' };
 
+  // `-b` for the branch header: a clean tree still loses work if its commits
+  // are not on a remote (see classifyCheckoutStatus).
   const status = await runGitInSandbox({
     cmd: 'git',
-    args: ['status', '--porcelain'],
+    args: ['status', '--porcelain', '-b'],
     cwd: project.path,
     ctx: buildActorCtx(`${machineId}:${project.name}`, actor),
     deps: buildGitDepsForMachine(machineId, deps),
@@ -254,11 +354,7 @@ async function inspectMachineCheckout({
   if (!status.success) return { kind: 'unknown', detail: status.error ?? 'git status did not complete' };
   if (status.exitCode !== 0) return { kind: 'unknown', detail: status.stderr || status.stdout };
 
-  // Porcelain output covers untracked files too, and that is intended: an
-  // untracked file in the old checkout is exactly the kind of work a fresh
-  // clone on a new Sprite would silently drop.
-  const dirty = status.stdout.trim();
-  return dirty.length === 0 ? { kind: 'clean' } : { kind: 'dirty', detail: dirty };
+  return classifyCheckoutStatus(status.stdout);
 }
 
 /**
@@ -266,6 +362,58 @@ async function inspectMachineCheckout({
  * a name-keyed kill can never destroy a replacement a concurrent promotion put
  * under the same name. See the identical helper in `machine-branches.ts`.
  */
+/**
+ * Did this clone fail because SOMETHING ELSE had already cloned into the
+ * destination? (Pure.)
+ *
+ * `MachineHost.provision` is name-keyed and auto-resumes, and both racers of a
+ * concurrent promotion derive the SAME deterministic `sessionKey` — so the two
+ * calls can be holding handles to ONE physical Sprite, and the loser's clone
+ * fails precisely because the winner already populated `PROJECT_REPO_PATH`.
+ * That git message is the direct evidence of a shared Sprite; anything else
+ * (auth failure, network, bad repo url) is our own clone failing on a Sprite
+ * only we are using.
+ *
+ * It matters because the two mistakes are not symmetric. Killing a Sprite the
+ * winner is mid-promotion on interrupts them, or leaves their row pointing at a
+ * dead instance. Leaving a genuinely orphaned Sprite alive costs money until
+ * `machine-orphan-reconcile` sweeps it. So this errs toward leaving it.
+ */
+export function isCloneBlockedByExistingCheckout(output: string): boolean {
+  // Substring tests, not a `.*`-bridged alternation: git's stderr carries a
+  // repo URL and path, both attacker-influencable, and `destination path .*
+  // already exists` backtracks polynomially on repeated `destination path `.
+  const text = output.toLowerCase();
+  return (
+    text.includes('already exists and is not an empty directory') ||
+    (text.includes('destination path') && text.includes('already exists'))
+  );
+}
+
+/**
+ * Wait, briefly, for a concurrent promotion of this project to persist.
+ *
+ * Called only when our clone failed on an already-populated destination — the
+ * one failure a racer sharing our name-keyed Sprite actually produces. If a
+ * winner exists it is milliseconds from its CAS, so a short bounded poll
+ * separates "someone is winning right now" from "this Sprite is a derelict from
+ * an earlier failed attempt". Returns the winning row, or null if none appears.
+ *
+ * Bounded on purpose: waiting longer would hold a user-facing spawn open for a
+ * winner that, by then, almost certainly does not exist.
+ */
+async function awaitPromotionWinner(
+  projectId: string,
+  deps: PromoteProjectDeps,
+): Promise<MachineProjectRecord | null> {
+  for (let attempt = 0; attempt <= PROMOTION_RACE_POLLS; attempt += 1) {
+    const row = await deps.store.findById(projectId).catch(() => null);
+    if (row?.sandboxId && row.sessionKey) return row;
+    if (attempt < PROMOTION_RACE_POLLS) await deps.wait(PROMOTION_RACE_POLL_MS);
+  }
+  return null;
+}
+
 async function safeKillSprite(host: MachineHost, handle: MachineHandle): Promise<void> {
   try {
     await host.kill({ machineId: handle.machineId, expectedInstanceId: handle.spriteInstanceId });
@@ -298,9 +446,13 @@ async function reconcilePromotionCollision({
     // The INSTANCE, not just the name: a name is reused across re-creates, so
     // two concurrent provisions can hold two DIFFERENT VMs answering to the
     // same sandboxId. If ours is not the exact instance the winner persisted,
-    // it is unrecorded and must die — and the kill is identity-guarded, so if
-    // the two handles turn out to be one physical VM the attempt is a no-op
-    // rather than a friendly-fire kill of the winner's Sprite.
+    // it is unrecorded and must die.
+    //
+    // This comparison is what makes that safe — NOT the kill's identity guard,
+    // which only rejects a REPLACEMENT under the same name. A shared physical
+    // VM carries the very instance id the guard checks for, so a kill of a
+    // shared Sprite would succeed. The winner's Sprite survives here because
+    // `isPersistedInstance` is true for it and we never call the kill.
     const isPersistedInstance =
       row.sandboxId === handle.machineId &&
       (row.spriteInstanceId ?? null) === (handle.spriteInstanceId ?? null);
@@ -326,20 +478,22 @@ async function reconcilePromotionCollision({
  * from the already-promoted early return, whose checkout state was never
  * inspected.
  */
-async function reclaimMachineCheckout(machineId: string, path: string, deps: PromoteProjectDeps): Promise<void> {
+async function reclaimMachineCheckout(machineId: string, path: string, deps: PromoteProjectDeps): Promise<boolean> {
   try {
     const acquired = await deps.acquireMachineSandbox(machineId);
-    if (!acquired.ok) return;
+    if (!acquired.ok) return false;
     const sandbox = await deps.reconnect(acquired.sandboxId);
-    if (!sandbox) return;
-    await sandbox.runCommand({
+    if (!sandbox) return false;
+    const removed = await sandbox.runCommand({
       cmd: 'rm',
       args: ['-rf', path],
       timeoutMs: SANDBOX_TIMEOUT_MS,
       maxBytes: SANDBOX_MAX_OUTPUT_BYTES,
     });
+    return removed.exitCode === 0;
   } catch {
     // best-effort — see above.
+    return false;
   }
 }
 
@@ -398,6 +552,16 @@ export async function promoteProject({
         `changes (git -C ${project.path} status) and retry.\n${checkout.detail}`,
     };
   }
+  if (checkout.kind === 'unpushed') {
+    return {
+      ok: false,
+      reason: 'unpushed_commits',
+      detail:
+        `The checkout at ${project.path} holds commits that are not on the remote, and promoting this ` +
+        `project would replace it with a fresh clone of ${project.repoUrl} — losing them. Push the ` +
+        `branch (git -C ${project.path} push) and retry.\n${checkout.detail}`,
+    };
+  }
   if (checkout.kind === 'unknown') {
     return {
       ok: false,
@@ -436,8 +600,43 @@ export async function promoteProject({
     if (row?.sandboxId === handle.machineId && row.sessionKey) {
       return { ok: true, sandboxId: row.sandboxId, sessionKey: row.sessionKey, promoted: false, resumed: true };
     }
+    const detail = clone.success ? clone.stderr || clone.stdout : clone.error;
+    // The winner may not have PERSISTED yet — provision is name-keyed, so the
+    // Sprite we hold can be the very one their in-flight promotion is cloning
+    // into while the row still reads unpromoted. Killing it here interrupts
+    // them, or leaves their row pointing at a dead instance. The identity guard
+    // does NOT save us: a SHARED Sprite has exactly the instance id we would
+    // pass as `expectedInstanceId`, so the kill succeeds. Only a genuinely
+    // different Sprite is protected by it. (Issue #2204 follow-up, F2.)
+    //
+    // But "the destination already exists" does NOT prove a live racer: a
+    // previous promotion whose persist failed and whose best-effort kill also
+    // failed leaves the same populated Sprite behind, with the row still
+    // unpromoted. Trusting the message alone would make every retry resume that
+    // unreferenced Sprite, fail the same clone, and leave it billing forever.
+    // So the message only buys a BOUNDED WAIT for the supposed winner to
+    // persist; if the row never claims a Sprite, ours is unreferenced and dies.
+    //
+    // WHY KILLING IS THE SAFE SIDE OF THIS BET. The two mistakes are not
+    // symmetric, and not in the direction one might assume:
+    //
+    //  • Killing a Sprite a slow winner then CASes onto is RECOVERABLE. Their
+    //    row points at a dead instance, and the next promotion attempt attaches,
+    //    gets null, and re-provisions under the same deterministic session key
+    //    (the `Vanished — fall through` path above). The system self-heals.
+    //  • Leaving an unreferenced Sprite alive is PERMANENT. Nothing reclaims it:
+    //    `machine-orphan-reconcile` works from the delete outbox (which needs a
+    //    row to have existed and been deleted) and from rows stamped
+    //    `teardownRequestedAt` — a Sprite that was provisioned but never
+    //    persisted has neither, so no sweep will ever find it. It bills forever.
+    const winner = isCloneBlockedByExistingCheckout(detail ?? '')
+      ? await awaitPromotionWinner(project.id, deps)
+      : null;
+    if (winner?.sandboxId && winner.sessionKey) {
+      return { ok: true, sandboxId: winner.sandboxId, sessionKey: winner.sessionKey, promoted: false, resumed: true };
+    }
     await safeKillSprite(deps.host, handle);
-    return { ok: false, reason: 'clone_failed', detail: clone.success ? clone.stderr || clone.stdout : clone.error };
+    return { ok: false, reason: 'clone_failed', detail };
   }
 
   let persisted: boolean;
@@ -478,7 +677,17 @@ export async function promoteProject({
     // just wrote is a loss. (The window between this recheck and the rm is
     // milliseconds; the one it closes was the whole clone.)
     const recheck = await inspectMachineCheckout({ machineId, project, actor, deps });
-    if (recheck.kind === 'clean') await reclaimMachineCheckout(machineId, project.path, deps);
+    if (recheck.kind === 'clean') {
+      const reclaimed = await reclaimMachineCheckout(machineId, project.path, deps);
+      // The ROOT just got smaller, and its last persisted measurement still
+      // includes the bytes we removed. Until some unrelated root operation
+      // refreshes it, storage reconciliation bills those bytes on the machine
+      // AND on the new project Sprite — indefinitely, if nothing else touches
+      // the root. Re-measure it here, on the one path that knows it shrank.
+      // (Issue #2204 follow-up, F12.) Best-effort, like every other follow-up
+      // step below the CAS.
+      if (reclaimed) noteRootStorageAfterReclaim(machineId, deps);
+    }
   }
   // Measured right after the clone that wrote the bulk of this Sprite's
   // footprint — the one moment its bytes are guaranteed non-trivial.

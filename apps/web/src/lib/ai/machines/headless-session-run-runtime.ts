@@ -48,6 +48,7 @@ import { and, eq, desc, ne, or } from '@pagespace/db/operators';
 import { chatMessages, pages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
@@ -57,7 +58,11 @@ import { deriveMachinePaneBinding } from '@pagespace/lib/services/machines/machi
 import { agentSurfaceOf, isAgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
 import { buildMachinePaneBindingDeps } from '@/lib/ai/machine-pane/machine-pane-binding-runtime';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
-import { DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
+import { DEFAULT_PROVIDER, DEFAULT_MODEL, resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
+import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
+import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
+import { makeOnStepFinishHandler } from '@/app/api/ai/chat/step-finish-handler';
+import { STREAM_MAX_LIFETIME_MS } from '@/lib/ai/core/stream-horizons';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import {
   filterToolsForMachineBinding,
@@ -71,7 +76,7 @@ import { broadcastChatUserMessage, broadcastAiStreamStart, broadcastAiStreamComp
 import { STREAM_HEARTBEAT_STALE_MS } from '@/lib/ai/core/stream-liveness';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import { buildMachineBindingPrompt } from './machine-binding-prompt';
-import { isClaimContested } from './headless-session-run';
+import { isClaimContested, buildHeadlessToolContext } from './headless-session-run';
 import type {
   HeadlessClaimResult,
   HeadlessSessionRunDeps,
@@ -87,6 +92,15 @@ const MAX_STEPS = 60;
 
 /** Heartbeat cadence for a held claim, matching `stream-lifecycle.ts`'s. */
 const HEARTBEAT_INTERVAL_MS = 20 * 1000;
+
+/**
+ * The two independent reasons a dispatched run must stop — the CLAIM's (a human
+ * took the pane over, or the lifetime backstop fired) and the CREDIT
+ * accumulator's — as one signal. Either alone ends the generation.
+ */
+function mergeAbortSignals(claimSignal: AbortSignal | undefined, creditSignal: AbortSignal): AbortSignal {
+  return claimSignal ? AbortSignal.any([claimSignal, creditSignal]) : creditSignal;
+}
 
 /** The claim key for one session's conversation — unique per conversation, by construction. */
 export function sessionRunClaimId(conversationId: string): string {
@@ -123,6 +137,23 @@ async function releaseStaleClaim(claimId: string): Promise<void> {
     .update(aiStreamSessions)
     .set({ status: 'aborted', completedAt: new Date(), streamId: null })
     .where(and(eq(aiStreamSessions.streamId, claimId), eq(aiStreamSessions.status, 'streaming')));
+}
+
+/**
+ * Has a human asked this conversation's generation to stop?
+ *
+ * `stream-abort-mark.ts` records takeover and Stop DURABLY, as
+ * `abortRequestedAt` on the streaming row — a mark, not a message, precisely so
+ * a run in another process can see it. The interactive path consumes it through
+ * the abort registry; a dispatched run has no registry entry, so it reads its
+ * own row on the heartbeat it is already running.
+ */
+async function isAbortRequested(messageId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ abortRequestedAt: aiStreamSessions.abortRequestedAt })
+    .from(aiStreamSessions)
+    .where(eq(aiStreamSessions.messageId, messageId));
+  return row?.abortRequestedAt != null;
 }
 
 async function claimRun({
@@ -182,15 +213,36 @@ async function claimRun({
     return { ok: false, reason: 'busy' };
   }
 
+  // The claim's cancellation channel. Tripped by a human taking the pane over,
+  // and by the lifetime backstop below; handed to the generation so either fact
+  // actually ends the loop instead of being recorded beside a run that keeps
+  // spending. (Issue #2204 follow-up, F7/F14.)
+  const abortController = new AbortController();
+  const startedAtMs = now.getTime();
+
   // A dispatched run can sit inside a single long tool call for minutes, so the
   // beat is a real timer — the same reason `stream-lifecycle.ts` refuses to ride
   // its parts checkpoint. `unref` so a held claim never keeps the process alive.
   const heartbeat = setInterval(() => {
-    void db
-      .update(aiStreamSessions)
-      .set({ lastHeartbeatAt: new Date() })
-      .where(eq(aiStreamSessions.messageId, messageId))
-      .catch(() => {});
+    void (async () => {
+      // The SAME horizon the normal stream lifecycle enforces. Without it a
+      // provider request or tool call that never settles keeps this claim — and
+      // its unique key — alive forever, which reads to every future dispatch as
+      // "that session is permanently busy".
+      if (Date.now() - startedAtMs >= STREAM_MAX_LIFETIME_MS) {
+        abortController.abort();
+        return;
+      }
+      if (await isAbortRequested(messageId).catch(() => false)) {
+        abortController.abort();
+        return;
+      }
+      await db
+        .update(aiStreamSessions)
+        .set({ lastHeartbeatAt: new Date() })
+        .where(eq(aiStreamSessions.messageId, messageId))
+        .catch(() => {});
+    })();
   }, HEARTBEAT_INTERVAL_MS);
   heartbeat.unref?.();
 
@@ -206,6 +258,7 @@ async function claimRun({
     ok: true,
     claim: {
       messageId,
+      abortSignal: abortController.signal,
       release: async ({ aborted }) => {
         clearInterval(heartbeat);
         // `streamId: null` is what actually frees the claim — NULLs are distinct
@@ -348,6 +401,9 @@ async function generate(input: {
   history: HeadlessTranscriptMessage[];
   userId: string;
   depth: number;
+  abortSignal?: AbortSignal;
+  balanceSnapshotCents?: number | null;
+  onStepUsage?: (usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number }) => void;
 }): Promise<{ text: string; usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number }; toolCallCount?: number; provider: string; model: string }> {
   const { target, userId, depth } = input;
 
@@ -355,6 +411,36 @@ async function generate(input: {
     .select({ id: pages.id, title: pages.title, type: pages.type, systemPrompt: pages.systemPrompt, aiProvider: pages.aiProvider, aiModel: pages.aiModel, enabledTools: pages.enabledTools })
     .from(pages)
     .where(eq(pages.id, target.machineId));
+
+  // ENTITLEMENT, before a token is spent (issue #2204 follow-up, F4). The
+  // machine page's configured provider/model is not the dispatcher's own
+  // selection, so a free or non-admin collaborator could otherwise reach a
+  // paid or admin-only provider through send_session that the chat route would
+  // have refused them. Same shared decision, same answer, different transport.
+  const [actor] = await db
+    .select({ role: users.role, subscriptionTier: users.subscriptionTier })
+    .from(users)
+    .where(eq(users.id, userId));
+  const requested = resolveProviderModel(
+    machinePage?.aiProvider || DEFAULT_PROVIDER,
+    machinePage?.aiModel || DEFAULT_MODEL,
+    undefined,
+    undefined,
+  );
+  const admission = resolveGenerationAdmission({
+    provider: requested.provider,
+    model: requested.model,
+    subscriptionTier: actor?.subscriptionTier ?? undefined,
+    isAdmin: actor?.role === 'admin',
+    requiresProSubscription,
+  });
+  if (!admission.allowed) {
+    throw new Error(
+      admission.reason === 'provider_admin_only'
+        ? 'This machine is configured with an administrator-only AI provider.'
+        : 'This machine is configured with a model that requires a paid plan.',
+    );
+  }
 
   const providerResult = await createAIProvider(userId, {
     selectedProvider: machinePage?.aiProvider || DEFAULT_PROVIDER,
@@ -379,30 +465,39 @@ async function generate(input: {
     (machinePage?.enabledTools as string[] | null) ?? null,
   ) as ToolSet;
 
-  const context: ToolExecutionContext = {
+  const context = buildHeadlessToolContext({
+    target,
+    machinePage: machinePage ? { id: machinePage.id, title: machinePage.title, type: machinePage.type } : undefined,
     userId,
-    conversationId: target.conversationId,
-    machineBinding: target.binding,
-    // Its own dispatches are one level deeper than this run — the cap in
-    // `headless-session-run.ts` reads this counter back off the context.
-    agentCallDepth: depth,
-    requestOrigin: 'agent',
-    locationContext: machinePage
-      ? {
-          currentPage: {
-            id: machinePage.id,
-            title: machinePage.title,
-            type: machinePage.type,
-            path: `/${machinePage.title}`,
-          },
-        }
-      : undefined,
-  } as ToolExecutionContext;
+    depth,
+  }) as ToolExecutionContext;
 
   const messages = [
     ...input.history.map((entry) => ({ role: entry.role, content: entry.content })),
     { role: 'user' as const, content: input.message },
   ];
+
+  // The interactive route's balance-aware step accumulator, on the dispatched
+  // path (issue #2204 follow-up, F5). Up to MAX_STEPS of model work can follow
+  // a single reservation, so without this a low-balance user keeps spending
+  // well past what was reserved for them.
+  const creditAbortController = new AbortController();
+  const guardBalance =
+    input.balanceSnapshotCents != null
+      ? makeOnStepFinishHandler(creditAbortController, input.balanceSnapshotCents, providerResult.modelName)
+      : null;
+  const abortSignal = mergeAbortSignals(input.abortSignal, creditAbortController.signal);
+
+  // ALWAYS registered, not only when a balance guard exists: this is also how
+  // the engine learns what the provider already charged for, so an aborted run
+  // still bills its completed steps (see HeadlessGenerateInput.onStepUsage).
+  const onStepFinish = ({ usage }: { usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number } }) => {
+    // Defensive default: a provider that reports no usage for a step must not
+    // throw inside the step callback and take the whole generation down.
+    const step = usage ?? {};
+    input.onStepUsage?.(step);
+    guardBalance?.(step);
+  };
 
   const result = await generateText({
     model: providerResult.model,
@@ -412,6 +507,8 @@ async function generate(input: {
     toolChoice: 'auto',
     maxRetries: 3,
     experimental_context: context,
+    abortSignal,
+    onStepFinish,
     stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(MAX_STEPS)],
   });
 
@@ -451,9 +548,23 @@ export function buildHeadlessSessionRunDeps(): HeadlessSessionRunDeps {
         .select({ subscriptionTier: users.subscriptionTier })
         .from(users)
         .where(eq(users.id, userId));
-      const gate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier);
+      const gate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier, {
+        // The interactive route's CONFIGURED cap, not the gate's default
+        // (issue #2204 follow-up, F6). Each session's claim is independent, so
+        // without this a paid user dispatching to many different sessions at
+        // once faced no concurrency ceiling at all — an unbounded headless
+        // fan-out of reservations the chat composer could never produce.
+        maxInFlight: MAX_CHAT_INFLIGHT,
+      });
       if (!gate.allowed) return { allowed: false, reason: gate.reason ?? 'denied' };
-      return { allowed: true, holdId: gate.holdId ?? null };
+      return {
+        allowed: true,
+        holdId: gate.holdId ?? null,
+        // The run's OWN slice of the balance — what its per-step accumulator
+        // guards against, so concurrent runs cannot collectively overshoot.
+        balanceSnapshotCents:
+          gate.holdId && gate.balanceSnapshot ? gate.balanceSnapshot.netSpendableCents : null,
+      };
     },
     releaseHold: async (holdId) => {
       await releaseHold(holdId);

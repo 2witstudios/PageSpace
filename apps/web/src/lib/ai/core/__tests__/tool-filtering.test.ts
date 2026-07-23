@@ -459,3 +459,46 @@ describe('filterToolsForAgentAllowlist', () => {
     });
   });
 });
+
+/**
+ * Issue #2204 follow-up, F3. The session family is registered by ADDITION
+ * after the read-only filter ran, and its mutating members were not in
+ * WRITE_TOOLS at all — so a read-only machine-bound conversation kept
+ * add/move/kill/send_session, and send_session runs a full agent loop in the
+ * target that can execute arbitrary shell commands.
+ */
+describe('read-only mode vs the session family', () => {
+  const sessionFamily = {
+    list_sessions: 'list_sessions',
+    read_session: 'read_session',
+    add_session: 'add_session',
+    move_session: 'move_session',
+    kill_session: 'kill_session',
+    send_session: 'send_session',
+  };
+
+  it('given the COMPOSED bound tool set, read-only should drop every mutating session tool', () => {
+    const composed = withSessionFamilyTools({}, sessionFamily, true);
+    expect(Object.keys(filterToolsForReadOnly(composed, true)).sort()).toEqual([
+      'list_sessions',
+      'read_session',
+    ]);
+  });
+
+  it('given read-only OFF, should keep the whole family', () => {
+    const composed = withSessionFamilyTools({}, sessionFamily, true);
+    expect(Object.keys(filterToolsForReadOnly(composed, false)).sort()).toEqual(
+      Object.keys(sessionFamily).sort(),
+    );
+  });
+
+  it('given the allowlist exemption runs after read-only, it should not resurrect a dropped write tool', () => {
+    const readOnly = filterToolsForReadOnly(withSessionFamilyTools({}, sessionFamily, true), true);
+    // The family is exempt from the allowlist by name, but exemption only KEEPS
+    // keys that are present — it cannot add back what read-only removed.
+    expect(Object.keys(filterToolsForAgentAllowlist(readOnly, [])).sort()).toEqual([
+      'list_sessions',
+      'read_session',
+    ]);
+  });
+});

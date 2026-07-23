@@ -46,9 +46,10 @@ import type {
   KillAgentTerminalDeps,
   AgentTerminalProjectLookup,
   AgentTerminalMachineSandbox,
+  AgentTerminalLiveSessions,
 } from '@pagespace/lib/services/machines/agent-terminals';
 import { promoteProject } from '@pagespace/lib/services/machines/machine-project-promotion';
-import { canAccessMachine, canViewMachine, getMachineHostForBranches } from './machine-branches-runtime';
+import { canAccessMachine, canViewMachine, getMachineHostForBranches, resolveRootMachineHandle } from './machine-branches-runtime';
 import { buildPromoteProjectDeps, resolveMachineActorContext } from './machine-projects-runtime';
 
 export { canAccessMachine, canViewMachine, isCodeExecutionEnabled };
@@ -195,10 +196,43 @@ function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
  * inside the seam — a machine- or branch-scope spawn never promotes and must
  * not pay for the lookup.
  */
+/**
+ * The machine Sprite's currently-running PTY session ids, or `null` when we
+ * could not find out (issue #2204 follow-up review, Codex P2).
+ *
+ * ATTACH-ONLY, deliberately: this asks whether a promotion would strand a live
+ * process, and waking a hibernating Sprite to answer that would both cost money
+ * and make the answer trivially "nothing is running" anyway. A machine with no
+ * live Sprite has no live PTY, which is the empty list — not an unknown.
+ */
+function buildLiveSessions(): AgentTerminalLiveSessions {
+  return {
+    list: async (machineId) => {
+      try {
+        // `resolveRootMachineHandle`, NOT `acquire`: the acquire path goes
+        // through `getOrCreate`, which wakes a hibernating VM and re-provisions
+        // a destroyed one. Paying that to ask "is anything running?" would be
+        // absurd — and the answer for a machine we had to create is trivially
+        // "no". This resolver looks up a LIVE session id and attaches, or
+        // returns null when there is none.
+        const handle = await resolveRootMachineHandle(machineId);
+        // No live Sprite means no live PTY. That is an empty list, not an
+        // unknown — the caller must not fail closed on it.
+        if (!handle) return [];
+        return (await handle.listStreams()).map((session) => session.id);
+      } catch {
+        // Control plane unreachable — we learned nothing. The caller fails closed.
+        return null;
+      }
+    },
+  };
+}
+
 export function buildSpawnAgentTerminalDeps(actorUserId: string): SpawnAgentTerminalDeps {
   return {
     ...buildBaseDeps(),
     projectStore: buildProjectStoreLookup(),
+    liveSessions: buildLiveSessions(),
     now: () => new Date(),
     projectPromotion: {
       promote: async ({ machineId, projectName }) => {

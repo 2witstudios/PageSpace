@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 // The factory is provider-agnostic and imports no DB or backing-provider SDK, so
 // it is exercised directly with injected fakes (the production wiring + the Fly
 // Sprites driver live in sandbox-tools-runtime.ts).
-import { createSandboxTools, type MachineDirectoryDeps, type ResolveSandboxContext, type SandboxGate } from '../sandbox-tools';
+import { createSandboxTools, nodeScopedPath, type MachineDirectoryDeps, type ResolveSandboxContext, type SandboxGate } from '../sandbox-tools';
 import type { SandboxRunDeps, SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';
 import type { ToolExecutionContext } from '../../core/types';
 import type { MachineNodeHandle, MachineNodeHandleSet } from '@pagespace/lib/services/machines/machine-pane-binding';
@@ -75,6 +75,38 @@ function exec(tool: { execute?: unknown }, args: unknown, context: unknown) {
   const fn = tool.execute as (a: unknown, o: unknown) => Promise<unknown>;
   return fn(args, { experimental_context: context });
 }
+
+/**
+ * The file tools' cwd policy (issue #2204 follow-up, F9). `bash` has always
+ * defaulted to the resolved node's cwd; the file tools rooted every relative
+ * path at SANDBOX_ROOT instead, so a targeted read/write hit a different file
+ * than a targeted `bash` in the same node.
+ */
+describe('nodeScopedPath', () => {
+  it('given a relative path and a node cwd, should anchor the path to that cwd', () => {
+    expect(nodeScopedPath('a.txt', { cwd: '/workspace/projects/foo' })).toBe('/workspace/projects/foo/a.txt');
+  });
+
+  it('given a nested relative path, should preserve the remainder under the node cwd', () => {
+    expect(nodeScopedPath('src/index.ts', { cwd: '/workspace/repo' })).toBe('/workspace/repo/src/index.ts');
+  });
+
+  it('given no node, should return the path untouched — an unbound call keeps the runner\'s SANDBOX_ROOT default', () => {
+    expect(nodeScopedPath('a.txt', undefined)).toBe('a.txt');
+  });
+
+  it('given an ABSOLUTE path, should leave it alone — the file-tool analogue of bash\'s explicit cwd', () => {
+    expect(nodeScopedPath('/workspace/other/a.txt', { cwd: '/workspace/repo' })).toBe('/workspace/other/a.txt');
+  });
+
+  it('given a node cwd with a trailing slash, should not emit a doubled separator', () => {
+    expect(nodeScopedPath('a.txt', { cwd: '/workspace/repo/' })).toBe('/workspace/repo/a.txt');
+  });
+
+  it('given a machine-root node, should be a no-op in effect — /workspace is the runner default anyway', () => {
+    expect(nodeScopedPath('a.txt', { cwd: '/workspace' })).toBe('/workspace/a.txt');
+  });
+});
 
 describe('createSandboxTools', () => {
   it('bash: given a resolvable context, should delegate to the runner and return its result', async () => {
@@ -798,6 +830,10 @@ describe('createSandboxTools', () => {
     function capturingRunDeps() {
       const seenCwds: Array<string | undefined> = [];
       const seenAcquisitions: Array<{ branchSandbox?: unknown }> = [];
+      // Where the file tools actually landed — the runner resolves the path it
+      // is handed against SANDBOX_ROOT, so this is the end of the path story.
+      const seenWritePaths: string[] = [];
+      const seenReadPaths: string[] = [];
       const runDeps = fakeRunDeps();
       runDeps.acquireSandbox = async (input) => {
         seenAcquisitions.push(input);
@@ -810,11 +846,16 @@ describe('createSandboxTools', () => {
           seenCwds.push(args.cwd);
           return { exitCode: 0, stdout: 'hi', stderr: '' };
         },
-        writeFiles: async () => {},
-        readFileToBuffer: async () => Buffer.from('data'),
+        writeFiles: async (files: Array<{ path: string }>) => {
+          for (const file of files) seenWritePaths.push(file.path);
+        },
+        readFileToBuffer: async (args: { path: string }) => {
+          seenReadPaths.push(args.path);
+          return Buffer.from('data');
+        },
         createCheckpoint: async () => {},
       });
-      return { runDeps, seenCwds, seenAcquisitions };
+      return { runDeps, seenCwds, seenAcquisitions, seenWritePaths, seenReadPaths };
     }
 
     it('bash: given target { project }, should run at the project\'s cwd on the MACHINE\'s own Sprite', async () => {
@@ -890,6 +931,40 @@ describe('createSandboxTools', () => {
         expect.objectContaining({ branchSandbox: { machineId: 'm1', machineBranchId: 'branch-1' } }),
         expect.objectContaining({ branchSandbox: { machineId: 'm1', machineBranchId: 'branch-1' } }),
       ]);
+    });
+
+    it('writeFile: given target { project }, should write UNDER the project cwd, not at the sandbox root', async () => {
+      const { runDeps, seenWritePaths } = capturingRunDeps();
+      const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
+      await exec(
+        tools.writeFile,
+        { path: 'a.txt', content: 'x', target: { project: 'repo' } },
+        { userId: 'u1', machineBinding: machineRootBinding },
+      );
+      expect(seenWritePaths).toEqual(['/workspace/projects/repo/a.txt']);
+    });
+
+    it('readFile: given target { branch }, should read UNDER the branch cwd — the same file bash would see', async () => {
+      const { runDeps, seenReadPaths } = capturingRunDeps();
+      const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
+      await exec(
+        tools.readFile,
+        { path: 'a.txt', target: { project: 'repo', branch: 'feature' } },
+        { userId: 'u1', machineBinding: machineRootBinding },
+      );
+      expect(seenReadPaths).toEqual(['/workspace/repo/a.txt']);
+    });
+
+    it('editFile: given target { project }, should edit the file under the project cwd', async () => {
+      const { runDeps, seenReadPaths, seenWritePaths } = capturingRunDeps();
+      const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
+      await exec(
+        tools.editFile,
+        { path: 'a.txt', oldString: 'data', newString: 'X', target: { project: 'repo' } },
+        { userId: 'u1', machineBinding: machineRootBinding },
+      );
+      expect(seenReadPaths).toEqual(['/workspace/projects/repo/a.txt']);
+      expect(seenWritePaths).toEqual(['/workspace/projects/repo/a.txt']);
     });
 
     it('bash: given a branch-targeted run, the billing/guardrail key should stay the owning machine page id', async () => {

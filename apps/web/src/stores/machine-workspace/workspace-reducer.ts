@@ -173,6 +173,36 @@ export function paneScopeOf(scope: OpenTerminalScope): PaneSessionScope {
 }
 
 /**
+ * The pane scope as it goes ON THE WIRE — the narrowed shape PLUS the
+ * workspace's checkout names (issue #2204 follow-up, F13).
+ *
+ * Narrowing the pane deleted a real class of bug in THIS client, but a pane
+ * scope is also persisted and broadcast, and the wire has older readers on it:
+ * mid rolling-deploy, or a browser tab left open across one. A pre-narrowing
+ * client reads a name-only pane as a MACHINE-ROOT session — so a project pane
+ * named `worker` resolves to the ROOT's `worker`, and that client will connect
+ * to, or KILL, the wrong session.
+ *
+ * So the wire keeps the full address while local state keeps the narrow one.
+ * The duplication cannot rot here because it exists only in transit: nothing in
+ * this version reads these fields back ({@link projectStoredPaneScope} drops
+ * them on the way in, and {@link paneTerminalScope} is the single join point
+ * for a pane's checkout). Delete once no pre-narrowing client can still run.
+ */
+export function paneScopeForWire(
+  node: MachineNodeScope,
+  pane: PaneSessionScope | null,
+): (PaneSessionScope & { projectName?: string; branchName?: string }) | null {
+  if (!pane) return null;
+  const names = nodeScopeNames(node);
+  return {
+    ...pane,
+    ...(names.projectName ? { projectName: names.projectName } : {}),
+    ...(names.branchName ? { branchName: names.branchName } : {}),
+  };
+}
+
+/**
  * Read-time projection of a STORED node scope, from either shape: the union
  * this version writes, or the bare `{projectName, branchName}` an older client
  * (or a not-yet-redeployed server) sends. The discriminant is re-derived from

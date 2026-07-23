@@ -385,6 +385,18 @@ async function measureStorageOpportunistically(input: {
   subject: StorageSubject;
   handle?: Pick<MachineHandle, 'exec'>;
   resolveHandle?: () => Promise<Pick<MachineHandle, 'exec'> | null>;
+  /**
+   * Bypass BOTH throttles for a caller that KNOWS the filesystem just changed
+   * size — today, a project promotion reclaiming its checkout off the root
+   * (issue #2204 follow-up, F12). The throttles exist to stop opportunistic
+   * wakes re-measuring an unchanged Sprite; a caller reporting a known shrink
+   * is the opposite case, and leaving it throttled means billing the removed
+   * bytes until something unrelated happens to touch the root.
+   *
+   * Does NOT bypass the in-flight dedup: two concurrent measurements of one
+   * subject are still one measurement.
+   */
+  force?: boolean;
 }): Promise<void> {
   const key = storageSubjectKey(input.subject);
   const nowMs = Date.now();
@@ -392,7 +404,7 @@ async function measureStorageOpportunistically(input: {
   // instance reached a DEFINITIVE outcome for this subject within the window. NOT
   // stamped yet — a transient failure below must leave the subject retryable.
   const lastAttempt = lastMeasureAttemptAtMs.get(key);
-  if (lastAttempt !== undefined && nowMs - lastAttempt < STORAGE_MEASUREMENT_THROTTLE_MS) {
+  if (!input.force && lastAttempt !== undefined && nowMs - lastAttempt < STORAGE_MEASUREMENT_THROTTLE_MS) {
     return;
   }
   // Synchronous concurrent-dedup: a burst of parallel ops for the same subject in
@@ -416,6 +428,7 @@ async function measureStorageOpportunistically(input: {
     // node) never pays a wasted network attach. refreshStorageMeasurement
     // re-checks this too — this is purely to gate the attach. Definitive: cache.
     if (
+      !input.force &&
       !shouldRefreshMeasurement({
         lastMeasuredAt: state.lastMeasuredAt,
         now: new Date(nowMs),
@@ -436,7 +449,8 @@ async function measureStorageOpportunistically(input: {
     const result = await refreshStorageMeasurement({
       handle,
       subject: input.subject,
-      lastMeasuredAt: state.lastMeasuredAt,
+      // A forced measurement must not be re-throttled one layer down.
+      lastMeasuredAt: input.force ? null : state.lastMeasuredAt,
       now: new Date(nowMs),
       persist: persistStorageMeasurement,
     });
@@ -470,11 +484,14 @@ export async function measureMachineStorageOpportunistically(input: {
   pageId: string;
   handle?: Pick<MachineHandle, 'exec'>;
   resolveHandle?: () => Promise<Pick<MachineHandle, 'exec'> | null>;
+  /** See the `force` note on the shared implementation — for callers that know the filesystem just shrank. */
+  force?: boolean;
 }): Promise<void> {
   await measureStorageOpportunistically({
     subject: { kind: 'machine', pageId: input.pageId },
     handle: input.handle,
     resolveHandle: input.resolveHandle,
+    ...(input.force ? { force: true } : {}),
   });
 }
 

@@ -4,6 +4,7 @@ import { assert } from '@/lib/ai/tools/__tests__/riteway';
 import {
   dispatchHeadlessSessionTurn,
   isClaimContested,
+  buildHeadlessToolContext,
   MAX_AGENT_DEPTH,
   type HeadlessSessionRunDeps,
   type HeadlessSessionTarget,
@@ -56,7 +57,7 @@ interface Recorded {
   appended: { content: string; conversationId: string }[];
   generated: { depth: number; cwd: string; sandboxId?: string; message: string }[];
   replies: { content: string; aborted: boolean }[];
-  billed: { pageId: string; userId: string; success: boolean; provider?: string; model?: string }[];
+  billed: { pageId: string; userId: string; success: boolean; provider?: string; model?: string; usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number } }[];
   historyLoads: { excludeMessageId: string }[];
   released: { aborted: boolean }[];
   /** Set at ACK time, so "did the loop run before the ACK?" is directly assertable. */
@@ -128,8 +129,8 @@ function deps(
     persistReply: async ({ content, aborted }) => {
       recorded.replies.push({ content, aborted });
     },
-    trackUsage: async ({ pageId, userId, success, provider, model }) => {
-      recorded.billed.push({ pageId, userId, success, provider, model });
+    trackUsage: async ({ pageId, userId, success, provider, model, usage }) => {
+      recorded.billed.push({ pageId, userId, success, provider, model, usage });
     },
     newId: () => `id${++ids}`,
     defer: (run) => {
@@ -211,6 +212,7 @@ describe('dispatchHeadlessSessionTurn — billing identity', () => {
         success: true,
         provider: 'openrouter',
         model: 'anthropic/claude-sonnet-5',
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
       },
     ]);
   });
@@ -400,6 +402,7 @@ describe('dispatchHeadlessSessionTurn', () => {
           success: true,
           provider: 'openrouter',
           model: 'anthropic/claude-sonnet-5',
+          usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
         },
       ],
     });
@@ -464,6 +467,338 @@ describe('dispatchHeadlessSessionTurn', () => {
       should: 'report the failure and free the claim',
       actual: { ok: result.ok, released: recorded.released },
       expected: { ok: false, released: [{ aborted: true }] },
+    });
+  });
+});
+
+/**
+ * Issue #2204 follow-up, F8. A dispatched turn built a context with neither a
+ * drive nor a `chatSource`, so `resolveSandboxActorContext` failed closed and
+ * every bash/file/git tool in the run returned "Code execution requires an
+ * active drive" — the machine binding was valid and the tools were unusable.
+ */
+describe('buildHeadlessToolContext', () => {
+  const machinePage = { id: 'machine-page-1', title: 'Dev Machine', type: 'AI_CHAT' };
+
+  it('given a machine page, should identify the run as that page\'s agent so the sandbox resolver can find its drive', () => {
+    const context = buildHeadlessToolContext({ target: target(), machinePage, userId: 'u1', depth: 0 });
+
+    assert({
+      given: 'a dispatched turn on a machine page',
+      should: 'carry a page chatSource naming that page',
+      actual: context.chatSource,
+      expected: { type: 'page', agentPageId: 'machine-page-1', agentTitle: 'Dev Machine' },
+    });
+  });
+
+  it('given a machine page, should still carry the page location context', () => {
+    const context = buildHeadlessToolContext({ target: target(), machinePage, userId: 'u1', depth: 0 });
+
+    assert({
+      given: 'a dispatched turn on a machine page',
+      should: 'describe the current page as the interactive route does',
+      actual: context.locationContext,
+      expected: {
+        currentPage: { id: 'machine-page-1', title: 'Dev Machine', type: 'AI_CHAT', path: '/Dev Machine' },
+      },
+    });
+  });
+
+  it('given the target, should bind tools to the TARGET\'s node, not the dispatcher\'s', () => {
+    const context = buildHeadlessToolContext({ target: target(), machinePage, userId: 'u1', depth: 1 });
+
+    assert({
+      given: 'a dispatched turn at depth 1',
+      should: 'carry the target binding, the agent origin, and its own depth',
+      actual: {
+        machineBinding: context.machineBinding,
+        requestOrigin: context.requestOrigin,
+        agentCallDepth: context.agentCallDepth,
+        conversationId: context.conversationId,
+        userId: context.userId,
+      },
+      expected: {
+        machineBinding: branchBinding(),
+        requestOrigin: 'agent',
+        agentCallDepth: 1,
+        conversationId: 'terminal-row-1',
+        userId: 'u1',
+      },
+    });
+  });
+
+  it('given no machine page row, should omit the page fields rather than invent them', () => {
+    const context = buildHeadlessToolContext({ target: target(), machinePage: undefined, userId: 'u1', depth: 0 });
+
+    assert({
+      given: 'a dispatched turn whose machine page row is missing',
+      should: 'carry neither a chatSource nor a location context',
+      actual: { chatSource: context.chatSource, locationContext: context.locationContext },
+      expected: { chatSource: undefined, locationContext: undefined },
+    });
+  });
+});
+
+/**
+ * Issue #2204 follow-up, F15 and F5/F7/F14 threading. The hold is created
+ * before the claim, so every exit after that point must release it — and the
+ * claim's cancellation channel must actually reach the generation.
+ */
+describe('dispatchHeadlessSessionTurn — hold release and abort threading', () => {
+  it('given a claim acquisition that THROWS, should release the hold rather than strand the reservation', async () => {
+    const { deps: d, recorded } = deps({
+      claimRun: async () => {
+        throw new Error('connection reset');
+      },
+    });
+
+    const result = await dispatchHeadlessSessionTurn(
+      { identity: identity(), actor: { userId: 'u1' }, message: 'hi', depth: 0 },
+      d,
+    );
+
+    assert({
+      given: 'a dispatch whose claim insert rejects on a database blip',
+      should: 'report the failure and free the credit hold',
+      actual: { ok: result.ok, holdsReleased: recorded.holdsReleased },
+      expected: { ok: false, holdsReleased: ['hold-1'] },
+    });
+  });
+
+  it('given a claim carrying an abort signal, should hand that signal to the generation', async () => {
+    const controller = new AbortController();
+    let seen: AbortSignal | undefined;
+    const { deps: d, drain } = deps({
+      claimRun: async () => ({
+        ok: true,
+        claim: {
+          messageId: 'assistant-1',
+          abortSignal: controller.signal,
+          release: async () => {},
+        },
+      }),
+      generate: async ({ abortSignal }) => {
+        seen = abortSignal;
+        return { text: 'done', provider: 'openrouter', model: 'm' };
+      },
+    });
+
+    await dispatchHeadlessSessionTurn(
+      { identity: identity(), actor: { userId: 'u1' }, message: 'hi', depth: 0 },
+      d,
+    );
+    await drain();
+
+    assert({
+      given: 'a claim that can be cancelled',
+      should: 'give the generation the same signal, so a takeover actually ends the loop',
+      actual: seen === controller.signal,
+      expected: true,
+    });
+  });
+
+  it('given a credit gate that reported a balance snapshot, should thread it to the generation', async () => {
+    let seen: number | null | undefined;
+    const { deps: d, drain } = deps({
+      checkCredit: async () => ({ allowed: true, holdId: 'hold-1', balanceSnapshotCents: 250 }),
+      generate: async ({ balanceSnapshotCents }) => {
+        seen = balanceSnapshotCents;
+        return { text: 'done', provider: 'openrouter', model: 'm' };
+      },
+    });
+
+    await dispatchHeadlessSessionTurn(
+      { identity: identity(), actor: { userId: 'u1' }, message: 'hi', depth: 0 },
+      d,
+    );
+    await drain();
+
+    assert({
+      given: 'a reservation with a known spendable balance',
+      should: 'give the run its own slice to guard against',
+      actual: seen,
+      expected: 250,
+    });
+  });
+
+  it('given a gate with no balance snapshot, should pass null rather than leave it undefined', async () => {
+    let seen: number | null | undefined = 1;
+    const { deps: d, drain } = deps({
+      generate: async ({ balanceSnapshotCents }) => {
+        seen = balanceSnapshotCents;
+        return { text: 'done', provider: 'openrouter', model: 'm' };
+      },
+    });
+
+    await dispatchHeadlessSessionTurn(
+      { identity: identity(), actor: { userId: 'u1' }, message: 'hi', depth: 0 },
+      d,
+    );
+    await drain();
+
+    assert({
+      given: 'an unmetered deployment where the gate reports no snapshot',
+      should: 'pass an explicit null',
+      actual: seen,
+      expected: null,
+    });
+  });
+});
+
+/**
+ * Codex P1 on PR #2209. A run stopped by takeover, by the credit guard, or by
+ * the lifetime backstop rejects out of `generateText` AFTER the provider has
+ * charged for completed steps — and `trackAIUsage` skips an unsuccessful
+ * zero-token call (`success || totalTokens > 0`), so those tokens went unbilled.
+ */
+describe('dispatchHeadlessSessionTurn — usage survives an aborted run', () => {
+  it('given a generation that aborts after completing steps, should still bill what those steps spent', async () => {
+    const { deps: d, recorded, drain } = deps({
+      generate: async ({ onStepUsage }) => {
+        onStepUsage?.({ inputTokens: 100, outputTokens: 40, totalTokens: 140 });
+        onStepUsage?.({ inputTokens: 60, outputTokens: 20, totalTokens: 80 });
+        throw new Error('AbortError: takeover');
+      },
+    });
+
+    await dispatchHeadlessSessionTurn(
+      { identity: identity(), actor: { userId: 'u1' }, message: 'hi', depth: 0 },
+      d,
+    );
+    await drain();
+
+    assert({
+      given: 'an aborted run that completed two charged steps',
+      should: 'report the accumulated tokens so the charge is not absorbed',
+      actual: recorded.billed[0],
+      expected: {
+        pageId: 'machine-page-1',
+        userId: 'u1',
+        success: false,
+        usage: { inputTokens: 160, outputTokens: 60, totalTokens: 220 },
+        provider: undefined,
+        model: undefined,
+      },
+    });
+  });
+
+  it('given a run that aborts before ANY step completes, should report no usage rather than a zero row', async () => {
+    const { deps: d, recorded, drain } = deps({
+      generate: async () => {
+        throw new Error('AbortError: immediate');
+      },
+    });
+
+    await dispatchHeadlessSessionTurn(
+      { identity: identity(), actor: { userId: 'u1' }, message: 'hi', depth: 0 },
+      d,
+    );
+    await drain();
+
+    assert({
+      given: 'an abort with nothing charged',
+      should: 'leave usage undefined',
+      actual: recorded.billed[0]?.usage,
+      expected: undefined,
+    });
+  });
+
+  it('given a SUCCESSFUL run, should bill the generation\'s own total, not the step sum', async () => {
+    const { deps: d, recorded, drain } = deps({
+      generate: async ({ onStepUsage }) => {
+        onStepUsage?.({ inputTokens: 10, outputTokens: 5, totalTokens: 15 });
+        return {
+          text: 'done',
+          usage: { inputTokens: 999, outputTokens: 888, totalTokens: 1887 },
+          provider: 'openrouter',
+          model: 'm',
+        };
+      },
+    });
+
+    await dispatchHeadlessSessionTurn(
+      { identity: identity(), actor: { userId: 'u1' }, message: 'hi', depth: 0 },
+      d,
+    );
+    await drain();
+
+    assert({
+      given: 'a completed run that also reported step usage',
+      should: 'prefer the run total — the step sum is only a fallback',
+      actual: recorded.billed[0]?.usage,
+      expected: { inputTokens: 999, outputTokens: 888, totalTokens: 1887 },
+    });
+  });
+
+  it('given steps reporting no totalTokens, should derive the total from input+output', async () => {
+    const { deps: d, recorded, drain } = deps({
+      generate: async ({ onStepUsage }) => {
+        onStepUsage?.({ inputTokens: 7, outputTokens: 3 });
+        throw new Error('AbortError');
+      },
+    });
+
+    await dispatchHeadlessSessionTurn(
+      { identity: identity(), actor: { userId: 'u1' }, message: 'hi', depth: 0 },
+      d,
+    );
+    await drain();
+
+    assert({
+      given: 'a provider that omits totalTokens per step',
+      should: 'still produce a non-zero total so the charge is billed',
+      actual: recorded.billed[0]?.usage,
+      expected: { inputTokens: 7, outputTokens: 3, totalTokens: 10 },
+    });
+  });
+});
+
+describe('dispatchHeadlessSessionTurn — usage accumulator edge cases', () => {
+  it('given steps that report nothing measurable, should leave usage undefined rather than a zero row', async () => {
+    // An all-zero total reads as "measured and free"; undefined reads as
+    // "never measured". Only the second is true here.
+    const { deps: d, recorded, drain } = deps({
+      generate: async ({ onStepUsage }) => {
+        onStepUsage?.({});
+        onStepUsage?.({ inputTokens: 0, outputTokens: 0 });
+        throw new Error('AbortError');
+      },
+    });
+
+    await dispatchHeadlessSessionTurn(
+      { identity: identity(), actor: { userId: 'u1' }, message: 'hi', depth: 0 },
+      d,
+    );
+    await drain();
+
+    assert({
+      given: 'an aborted run whose steps reported no measurable tokens',
+      should: 'report no usage at all',
+      actual: recorded.billed[0]?.usage,
+      expected: undefined,
+    });
+  });
+
+  it('given a mix of empty and charged steps, should bill only what was actually charged', async () => {
+    const { deps: d, recorded, drain } = deps({
+      generate: async ({ onStepUsage }) => {
+        onStepUsage?.({});
+        onStepUsage?.({ inputTokens: 12, outputTokens: 4, totalTokens: 16 });
+        throw new Error('AbortError');
+      },
+    });
+
+    await dispatchHeadlessSessionTurn(
+      { identity: identity(), actor: { userId: 'u1' }, message: 'hi', depth: 0 },
+      d,
+    );
+    await drain();
+
+    assert({
+      given: 'one empty step and one charged step',
+      should: 'bill the charged step only',
+      actual: recorded.billed[0]?.usage,
+      expected: { inputTokens: 12, outputTokens: 4, totalTokens: 16 },
     });
   });
 });
