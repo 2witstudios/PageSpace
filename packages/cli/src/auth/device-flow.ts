@@ -280,14 +280,19 @@ export async function runDeviceLogin(deps: DeviceLoginDeps): Promise<DeviceLogin
           }
         }
 
-        let identity: Identity | null;
-        try {
-          identity = await deps.confirmIdentity({
-            host: deps.host,
-            accessToken: tokens.kind === 'oauth' ? tokens.accessToken : tokens.token,
-          });
-        } catch {
-          identity = null;
+        // Only an oauth grant has an identity to confirm. `/api/auth/me`
+        // deliberately refuses `mcp_*` tokens (a scoped key is its own
+        // principal — see `auth/probe-drives.ts`), so asking on behalf of a
+        // freshly minted key could only 401: a guaranteed-doomed round trip,
+        // billed at the confirm-identity timeout, on every `keys create
+        // --device`. `whoami` gates the same call the same way.
+        let identity: Identity | null = null;
+        if (tokens.kind === 'oauth') {
+          try {
+            identity = await deps.confirmIdentity({ host: deps.host, accessToken: tokens.accessToken });
+          } catch {
+            identity = null;
+          }
         }
 
         return { outcome: 'success', identity, scope: tokens.scope };

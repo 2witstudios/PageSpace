@@ -281,6 +281,48 @@ describe('runDeviceLogin — happy path', () => {
     expect(surfaced).toEqual(['mcp_minted']);
   });
 
+  // `/api/auth/me` refuses `mcp_*` tokens by design, so asking on behalf of a
+  // freshly minted key could only 401 — a guaranteed-doomed round trip, billed
+  // at the confirm-identity timeout, on every `keys create --device`.
+  it('never asks /api/auth/me to identify a freshly minted mcp_* key', async () => {
+    let confirmCalls = 0;
+    const { deps } = baseDeps({
+      scope: 'drive:d1:member name:k offline_access',
+      pollDeviceToken: async () => ({
+        kind: 'success',
+        tokens: { kind: 'mcp', token: 'mcp_minted', scope: 'drive:d1:member name:k' },
+      }),
+      confirmIdentity: async () => {
+        confirmCalls += 1;
+        return IDENTITY;
+      },
+    });
+
+    const result = await runDeviceLogin(deps);
+
+    expect(result.outcome).toBe('success');
+    if (result.outcome !== 'success') throw new Error('unreachable');
+    expect(result.identity).toBeNull();
+    expect(confirmCalls).toBe(0);
+  });
+
+  it('still confirms identity for an oauth grant, which /api/auth/me does answer for', async () => {
+    let confirmCalls = 0;
+    const { deps } = baseDeps({
+      confirmIdentity: async () => {
+        confirmCalls += 1;
+        return IDENTITY;
+      },
+    });
+
+    const result = await runDeviceLogin(deps);
+
+    expect(result.outcome).toBe('success');
+    if (result.outcome !== 'success') throw new Error('unreachable');
+    expect(result.identity).toEqual(IDENTITY);
+    expect(confirmCalls).toBe(1);
+  });
+
   it('persists NOTHING and reports the re-scoped key id for an mcp_update redemption', async () => {
     let setCalls = 0;
     const { deps } = baseDeps({

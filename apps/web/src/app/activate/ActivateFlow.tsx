@@ -104,6 +104,15 @@ export function ActivateFlow({ initialUserCode }: ActivateFlowProps) {
       });
       setStep({ name: 'done', action });
     } catch {
+      // A step-up grant is single-use and time-limited, so the most likely
+      // reason an approval request fails is that the one we hold was expired
+      // or bound to a different action. Keeping it would make every retry
+      // resubmit the same dead token and skip the ceremony that could mint a
+      // fresh one (the `!token` guard above) — a permanent, silent dead end,
+      // most easily hit by following a magic link that has since expired.
+      // Dropping it means the next attempt runs a genuinely fresh ceremony.
+      setStepUpToken(null);
+      setStepUpStatus('idle');
       setError('Something went wrong. Please try again.');
     } finally {
       setIsSubmitting(false);

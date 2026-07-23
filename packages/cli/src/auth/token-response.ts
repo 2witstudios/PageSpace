@@ -62,39 +62,37 @@ const mcpActivateResponseSchema = z.object({
  * `null` when it matches no known shape (the caller decides whether that is a
  * thrown `TokenExchangeError` or a `request_failed` poll result). Pure.
  */
-export function parseTokenResponse(json: unknown): ExchangedTokens | null {
-  // Dispatch on the discriminant the server always sends, rather than trying
-  // each schema in turn — otherwise the overwhelmingly common `Bearer`
-  // response pays three failed parses first, and a validation failure on the
-  // RIGHT shape would be silently indistinguishable from the wrong shape.
-  const tokenType = (json as { token_type?: unknown } | null)?.token_type;
+/**
+ * One schema, discriminated on the `token_type` the server always sends.
+ * Zod dispatches to the single matching member rather than trying each in
+ * turn, so a body of the RIGHT shape that fails validation can never be
+ * silently mistaken for a body of a different shape.
+ */
+const tokenResponseSchema = z.discriminatedUnion('token_type', [
+  oauthTokenResponseSchema,
+  mcpTokenResponseSchema,
+  mcpUpdateResponseSchema,
+  mcpActivateResponseSchema,
+]);
 
-  switch (tokenType) {
-    case 'mcp': {
-      const parsed = mcpTokenResponseSchema.safeParse(json);
-      return parsed.success ? { kind: 'mcp', token: parsed.data.access_token, scope: parsed.data.scope } : null;
-    }
-    case 'mcp_update': {
-      const parsed = mcpUpdateResponseSchema.safeParse(json);
-      return parsed.success ? { kind: 'mcp_update', tokenId: parsed.data.token_id, scope: parsed.data.scope } : null;
-    }
-    case 'mcp_activate': {
-      const parsed = mcpActivateResponseSchema.safeParse(json);
-      return parsed.success ? { kind: 'mcp_activate', tokenId: parsed.data.token_id, scope: parsed.data.scope } : null;
-    }
-    case 'Bearer': {
-      const parsed = oauthTokenResponseSchema.safeParse(json);
-      return parsed.success
-        ? {
-            kind: 'oauth',
-            accessToken: parsed.data.access_token,
-            refreshToken: parsed.data.refresh_token,
-            expiresIn: parsed.data.expires_in,
-            scope: parsed.data.scope,
-          }
-        : null;
-    }
-    default:
-      return null;
+export function parseTokenResponse(json: unknown): ExchangedTokens | null {
+  const parsed = tokenResponseSchema.safeParse(json);
+  if (!parsed.success) return null;
+
+  switch (parsed.data.token_type) {
+    case 'mcp':
+      return { kind: 'mcp', token: parsed.data.access_token, scope: parsed.data.scope };
+    case 'mcp_update':
+      return { kind: 'mcp_update', tokenId: parsed.data.token_id, scope: parsed.data.scope };
+    case 'mcp_activate':
+      return { kind: 'mcp_activate', tokenId: parsed.data.token_id, scope: parsed.data.scope };
+    case 'Bearer':
+      return {
+        kind: 'oauth',
+        accessToken: parsed.data.access_token,
+        refreshToken: parsed.data.refresh_token,
+        expiresIn: parsed.data.expires_in,
+        scope: parsed.data.scope,
+      };
   }
 }
