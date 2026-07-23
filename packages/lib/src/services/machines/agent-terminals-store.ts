@@ -87,8 +87,21 @@ export interface MachineAgentTerminalStore {
    * that JUST ended, replacing whatever an earlier incarnation left. All three
    * columns are always written together, so a fresh short-lived incarnation
    * never leaves a stale tail paired with a new `hasOutput`/`endedAt`.
+   *
+   * ORDERED BY `endedAt`, not by write-arrival order: `endAgentTerminalSession`
+   * calls this fire-and-forget, so a reopen-and-teardown that races a still-
+   * in-flight earlier write must not let a delayed OLD write clobber a NEWER
+   * incarnation's tail — a no-op when `endedAt` is not strictly after whatever
+   * `coldTailAt` already holds.
+   *
+   * Deliberately does NOT touch `updatedAt`: that column feeds
+   * `readSessionState`'s liveness fallback (`session-tools.ts`) when the
+   * realtime sweep is unreachable, and this write is recording that the PTY
+   * has ENDED — bumping it would make a just-died session read as `active`
+   * for up to `SESSION_ACTIVE_WINDOW_MS` at exactly the moment the sweep can't
+   * correct it.
    */
-  recordColdTail(input: { id: string; tail: string; hasOutput: boolean; endedAt: Date; now: Date }): Promise<void>;
+  recordColdTail(input: { id: string; tail: string; hasOutput: boolean; endedAt: Date }): Promise<void>;
   remove(scope: AgentTerminalScopeKey, name: string): Promise<void>;
 }
 
@@ -101,7 +114,7 @@ export { isUniqueViolation };
  * the DB module graph.
  */
 export async function createDbMachineAgentTerminalStore(): Promise<MachineAgentTerminalStore> {
-  const [{ db }, { eq, and, isNull }, { machineAgentTerminals }] = await Promise.all([
+  const [{ db }, { eq, and, or, lt, isNull }, { machineAgentTerminals }] = await Promise.all([
     import('@pagespace/db/db'),
     import('@pagespace/db/operators'),
     import('@pagespace/db/schema/machine-agent-terminals'),
@@ -171,11 +184,16 @@ export async function createDbMachineAgentTerminalStore(): Promise<MachineAgentT
         .where(eq(machineAgentTerminals.id, id));
     },
 
-    async recordColdTail({ id, tail, hasOutput, endedAt, now }) {
+    async recordColdTail({ id, tail, hasOutput, endedAt }) {
       await db
         .update(machineAgentTerminals)
-        .set({ coldTail: tail, coldTailAt: endedAt, coldTailHasOutput: hasOutput, updatedAt: now })
-        .where(eq(machineAgentTerminals.id, id));
+        .set({ coldTail: tail, coldTailAt: endedAt, coldTailHasOutput: hasOutput })
+        .where(
+          and(
+            eq(machineAgentTerminals.id, id),
+            or(isNull(machineAgentTerminals.coldTailAt), lt(machineAgentTerminals.coldTailAt, endedAt)),
+          ),
+        );
     },
 
     async remove(scope, name) {

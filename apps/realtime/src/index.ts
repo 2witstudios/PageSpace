@@ -1422,7 +1422,7 @@ io.on('connection', (socket: AuthSocket) => {
     // output instead of `live:false` and nothing.
     persistColdTail: async ({ agentTerminalId, tail, hasOutput, endedAt }) => {
       const store = await dbMachineAgentTerminalStorePromise;
-      await store.recordColdTail({ id: agentTerminalId, tail, hasOutput, endedAt, now: new Date() });
+      await store.recordColdTail({ id: agentTerminalId, tail, hasOutput, endedAt });
     },
     billing: defaultSandboxBillingDeps,
     // Sprites Tasks API hold (leaf 5-1): while an agent is running or a
