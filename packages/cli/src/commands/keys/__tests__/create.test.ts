@@ -388,15 +388,34 @@ function baseHandlerDeps(store: CredentialStore) {
     discoverMetadata: async () => ({
       authorizationEndpoint: 'https://pagespace.ai/api/oauth/authorize',
       tokenEndpoint: 'https://pagespace.ai/api/oauth/token',
+      deviceAuthorizationEndpoint: 'https://pagespace.ai/api/oauth/device_authorization',
     }),
     startServer: async () => fakeServer().server,
     openBrowser: async () => true,
     waitMs: () => new Promise<void>(() => {}),
     exchangeCode: async () => FIXED_TOKENS,
     confirmIdentity: async () => ({ name: 'Ada Lovelace', email: 'ada@example.com' }),
+    requestDeviceAuthorization: async () => DEVICE_AUTHORIZATION,
+    pollDeviceToken: async () => ({ kind: 'success' as const, tokens: FIXED_MCP_TOKENS }),
+    isInterrupted: () => false,
     now: () => Date.parse('2026-07-03T00:00:00.000Z'),
   };
 }
+
+const DEVICE_AUTHORIZATION = {
+  deviceCode: 'ps_dc_test',
+  userCode: 'ABCD-EFGH',
+  verificationUri: 'https://pagespace.ai/activate',
+  verificationUriComplete: 'https://pagespace.ai/activate?user_code=ABCD-EFGH',
+  expiresInSeconds: 900,
+  intervalSeconds: 5,
+};
+
+const FIXED_MCP_TOKENS = {
+  kind: 'mcp' as const,
+  token: 'mcp_device_minted',
+  scope: 'drive:drv1:member name:remote-key offline_access',
+};
 
 function autoApprove(fake: ReturnType<typeof fakeServer>) {
   return async (url: string) => {
@@ -710,7 +729,7 @@ describe('createTokensCreateHandler', () => {
     const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
-    expect(stderr.lines.join('')).toMatch(/consent was denied/i);
+    expect(stderr.lines.join('')).toMatch(/access was denied/i);
     expect(await store.get('https://pagespace.ai', 'drv1')).toBeNull();
     const allOutput = [...stdout.lines, ...stderr.lines].join('');
     expect(allOutput).not.toContain(FIXED_TOKENS.accessToken);
@@ -732,7 +751,7 @@ describe('createTokensCreateHandler', () => {
     const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
-    expect(stderr.lines.join('')).toMatch(/consent timed out/i);
+    expect(stderr.lines.join('')).toMatch(/timed out waiting for approval/i);
     expect(await store.get('https://pagespace.ai', 'drv1')).toBeNull();
   });
 
@@ -974,5 +993,98 @@ describe('createTokensCreateHandler', () => {
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toMatch(/could not bind a local loopback port/i);
     expect(await store.get('https://pagespace.ai', 'drv1')).toBeNull();
+  });
+});
+
+// The shared fixture's `waitMs` never resolves — the loopback tests use it to
+// hold the flow open at the redirect wait. The device flow genuinely sleeps
+// between polls, so these tests need a real (instant) one.
+function deviceHandlerDeps(store: CredentialStore) {
+  return { ...baseHandlerDeps(store), waitMs: async () => {} };
+}
+
+describe('createTokensCreateHandler — --device', () => {
+  it('mints through the device flow without opening a browser, printing the verification code', async () => {
+    const store = fakeStore();
+    let browserOpened = false;
+    let deviceScope: string | undefined;
+    const handler = createTokensCreateHandler({
+      ...deviceHandlerDeps(store),
+      openBrowser: async () => {
+        browserOpened = true;
+        return true;
+      },
+      requestDeviceAuthorization: async ({ scope }) => {
+        deviceScope = scope;
+        return DEVICE_AUTHORIZATION;
+      },
+    });
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, env: {} });
+
+    const code = await handler(
+      ctx,
+      commandIntent(['keys', 'create', '--device', '--drive', 'drv1', '--role', 'member', '--name', 'remote-key']),
+    );
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(browserOpened).toBe(false);
+    const output = stdout.lines.join('');
+    expect(output).toContain('ABCD-EFGH');
+    expect(output).toContain('https://pagespace.ai/activate');
+    expect(output).not.toContain('Opening your browser');
+    // The mint request must carry the name the server now requires.
+    expect(deviceScope).toContain('name:remote-key');
+    // Persisted under the key's own name, as a static credential.
+    const stored = await store.get('https://pagespace.ai', 'remote-key');
+    expect(stored?.kind).toBe('static');
+    expect(credentialSecret(stored!)).toBe('mcp_device_minted');
+  });
+
+  it('rejects --device with --all-drives as a usage error, naming the browser workaround', async () => {
+    const store = fakeStore();
+    let deviceRequested = false;
+    const handler = createTokensCreateHandler({
+      ...deviceHandlerDeps(store),
+      requestDeviceAuthorization: async () => {
+        deviceRequested = true;
+        return DEVICE_AUTHORIZATION;
+      },
+    });
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stderr, env: {} });
+
+    const code = await handler(
+      ctx,
+      commandIntent(['keys', 'create', '--device', '--all-drives', '--name', 'everything', '--yes']),
+    );
+
+    expect(code).toBe(EXIT_USAGE_ERROR);
+    expect(deviceRequested).toBe(false);
+    const err = stderr.lines.join('');
+    expect(err).toContain('--all-drives cannot be combined with --device');
+    expect(err).toContain('browser');
+  });
+
+  it('keeps the --show-token stdout contract (exactly one line) in device mode', async () => {
+    const store = fakeStore();
+    const handler = createTokensCreateHandler(deviceHandlerDeps(store));
+    const stdout = createRecordingSink();
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stdout, stderr, env: {} });
+
+    const code = await handler(
+      ctx,
+      commandIntent([
+        'keys', 'create', '--device', '--drive', 'drv1', '--role', 'member', '--name', 'remote-key', '--show-token',
+      ]),
+    );
+
+    expect(code).toBe(EXIT_SUCCESS);
+    // The verification code goes to stderr in --show-token mode, keeping
+    // stdout to the single machine-readable assignment.
+    expect(stdout.lines.join('').trim().split('\n')).toHaveLength(1);
+    expect(stdout.lines.join('')).toContain('mcp_device_minted');
+    expect(stderr.lines.join('')).toContain('ABCD-EFGH');
   });
 });

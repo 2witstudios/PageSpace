@@ -65,8 +65,58 @@ export async function POST(req: NextRequest) {
 
   const scopeDescriptions: string[] = [];
   const parsed = result.scopes.length > 0 ? parseScopeList(result.scopes.join(' ')) : null;
+  // Whether approving this code is a credential-escalation act (minting a new
+  // key, re-scoping an existing one, or making one a device's ambient
+  // default) rather than an ordinary login. The decision route requires a
+  // step-up grant for exactly these; surfaced here so the screen can run the
+  // ceremony before the user clicks Allow rather than failing them afterward.
+  let requiresStepUp = false;
 
   if (parsed?.ok) {
+    // An update_key grant re-scopes one of the VERIFYING user's existing keys
+    // in place; an activate_key grant approves making one of them a device's
+    // ambient default. Ownership (and un-revoked) is checked here so this
+    // screen can only ever narrate the user's own key — a foreign, revoked, or
+    // nonexistent token id all collapse to the same invalid_code response (no
+    // oracle), killing the "point a victim's approval at the attacker's token"
+    // direction. Mirrors the loopback consent screen (app/oauth/consent/page.tsx);
+    // the decision POST re-checks server-side, this is the human-facing half.
+    let updateKeyName: string | null = null;
+    let activateKeyName: string | null = null;
+    const targetKeyId = parsed.scopes.updateKeyId ?? parsed.scopes.activateKeyId;
+    if (targetKeyId !== null) {
+      const target = await sessionRepository.findActiveMcpTokenByIdAndUser(targetKeyId, auth.userId);
+      if (!target) {
+        return NextResponse.json({ error: 'invalid_code' }, { status: 400 });
+      }
+      if (parsed.scopes.updateKeyId !== null) updateKeyName = target.name;
+      else activateKeyName = target.name;
+    }
+
+    // Named first so the user reads "this creates a key named X" before the
+    // capability list that follows — same ordering as the consent screen.
+    if (parsed.scopes.newKeyName !== null) {
+      requiresStepUp = true;
+      scopeDescriptions.push(describeScopeForConsent({ kind: 'name', name: parsed.scopes.newKeyName }, {}));
+    }
+    if (parsed.scopes.updateKeyId !== null) {
+      requiresStepUp = true;
+      scopeDescriptions.push(
+        describeScopeForConsent(
+          { kind: 'update_key', tokenId: parsed.scopes.updateKeyId },
+          { keyName: updateKeyName ?? undefined },
+        ),
+      );
+    }
+    if (parsed.scopes.activateKeyId !== null) {
+      requiresStepUp = true;
+      scopeDescriptions.push(
+        describeScopeForConsent(
+          { kind: 'activate_key', tokenId: parsed.scopes.activateKeyId },
+          { keyName: activateKeyName ?? undefined },
+        ),
+      );
+    }
     if (parsed.scopes.account) {
       scopeDescriptions.push(describeScopeForConsent({ kind: 'account' }, {}));
     }
@@ -108,5 +158,12 @@ export async function POST(req: NextRequest) {
     clientName: client.name,
     firstParty: client.firstParty,
     scopeDescriptions,
+    requiresStepUp,
+    // The exact binding the decision route will recompute from its own
+    // lookup, handed to the client so the grant it mints can't be bound to a
+    // different tuple by accident. Not a trust boundary: a client that lied
+    // here would mint a grant whose hash simply fails to match the server's
+    // recomputed one at decision time, and the approval is refused.
+    stepUpActionBinding: requiresStepUp ? { userCode: normalized, scope: result.scopes.join(' ') } : null,
   });
 }

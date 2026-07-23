@@ -34,6 +34,9 @@ import { createExchangeCode } from '../../auth/exchange-code.js';
 import { createLoopbackServer } from '../../auth/create-loopback-server.js';
 import { openBrowser } from '../../auth/open-browser.js';
 import { unrefWaitMs } from '../../auth/wait.js';
+import { createPollDeviceToken } from '../../auth/poll-device-token.js';
+import { createRequestDeviceAuthorization } from '../../auth/request-device-authorization.js';
+import { createSigintFlag } from '../../auth/sigint.js';
 import { runLoopbackLogin } from '../../auth/loopback-flow.js';
 import type { LoopbackLoginResult } from '../../auth/loopback-flow.js';
 import { resolveConfig } from '../../config/resolve.js';
@@ -651,5 +654,8 @@ export const keysHandler: CommandHandler = createKeysHandler({
   waitMs: unrefWaitMs,
   exchangeCode: createExchangeCode(),
   confirmIdentity,
+  requestDeviceAuthorization: createRequestDeviceAuthorization(),
+  pollDeviceToken: createPollDeviceToken(),
+  isInterrupted: createSigintFlag(),
   now: Date.now,
 });

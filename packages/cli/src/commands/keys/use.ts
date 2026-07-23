@@ -25,7 +25,10 @@ import { createExchangeCode } from '../../auth/exchange-code.js';
 import { createLoopbackServer } from '../../auth/create-loopback-server.js';
 import { openBrowser } from '../../auth/open-browser.js';
 import { unrefWaitMs } from '../../auth/wait.js';
-import { runLoopbackLogin } from '../../auth/loopback-flow.js';
+import { createPollDeviceToken } from '../../auth/poll-device-token.js';
+import { createRequestDeviceAuthorization } from '../../auth/request-device-authorization.js';
+import { createSigintFlag } from '../../auth/sigint.js';
+import { renderDeviceCodePrompt, runConsent } from '../../auth/run-consent.js';
 import type { LoopbackLoginResult } from '../../auth/loopback-flow.js';
 import { resolveConfig } from '../../config/resolve.js';
 import { createCredentialStore } from '../../credentials/store.js';
@@ -122,6 +125,10 @@ export interface ActivateCeremonyParams {
    */
   readonly store: CredentialStore;
   readonly onBrowserOpenFailed: (url: string) => void;
+  /** True when `--device` was passed: print a verification code instead of opening a browser. */
+  readonly device?: boolean;
+  /** Where to print the device verification lines (the wizard routes these around its spinner). */
+  readonly onDeviceCode?: (lines: string[]) => void;
 }
 
 export type ActivateCeremonyResult = { readonly ok: true } | { readonly ok: false; readonly message: string };
@@ -143,30 +150,45 @@ export async function runActivateCeremony(
     return { ok: false, message: scopeResult.message };
   }
 
-  const result = await runLoopbackLogin({
-    host: params.host,
-    clientId: PAGESPACE_CLI_CLIENT_ID,
-    scope: scopeResult.scope,
-    randomBytes: deps.randomBytes,
-    discoverMetadata: deps.discoverMetadata,
-    startServer: deps.startServer,
-    maxPortAttempts: deps.maxPortAttempts ?? DEFAULT_MAX_PORT_ATTEMPTS,
-    openBrowser: deps.openBrowser,
-    onBrowserOpenFailed: params.onBrowserOpenFailed,
-    waitMs: deps.waitMs,
-    timeoutMs: deps.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS,
-    exchangeCode: deps.exchangeCode,
-    confirmIdentity: deps.confirmIdentity,
-    credentialStore: params.store,
-    now: deps.now,
-    // Defense-in-depth sentinel only: the flow persists nothing for an
-    // activate_key grant and fails closed on a surprise mint, so this name
-    // is never written — but if it ever were, it must not be a real slot.
-    profile: `activate-${params.tokenId}`,
-  });
+  const device = params.device ?? false;
+  const result = await runConsent(
+    {
+      device,
+      host: params.host,
+      clientId: PAGESPACE_CLI_CLIENT_ID,
+      scope: scopeResult.scope,
+      discoverMetadata: deps.discoverMetadata,
+      exchangeCode: deps.exchangeCode,
+      confirmIdentity: deps.confirmIdentity,
+      credentialStore: params.store,
+      waitMs: deps.waitMs,
+      now: deps.now,
+      timeoutMs: deps.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS,
+      // Defense-in-depth sentinel only: both flows persist nothing for an
+      // activate_key grant and fail closed on a surprise mint, so this name is
+      // never written — but if it ever were, it must not be a real slot.
+      profile: `activate-${params.tokenId}`,
+      loopback: {
+        randomBytes: deps.randomBytes,
+        startServer: deps.startServer,
+        openBrowser: deps.openBrowser,
+        maxPortAttempts: deps.maxPortAttempts ?? DEFAULT_MAX_PORT_ATTEMPTS,
+        onBrowserOpenFailed: params.onBrowserOpenFailed,
+      },
+      deviceDeps: {
+        requestDeviceAuthorization: deps.requestDeviceAuthorization,
+        pollDeviceToken: deps.pollDeviceToken,
+        isInterrupted: deps.isInterrupted,
+        onDeviceCode: (authorization) => {
+          params.onDeviceCode?.(renderDeviceCodePrompt(authorization));
+        },
+      },
+    },
+    `pagespace keys use${device ? ' --device' : ''}`,
+  );
 
-  if (result.outcome !== 'success') {
-    return { ok: false, message: describeActivateFailure(result) };
+  if (result.outcome === 'failed') {
+    return { ok: false, message: result.message };
   }
 
   // Fail closed unless the server approved EXACTLY the key this ceremony
@@ -249,7 +271,9 @@ export function createKeysUseHandler(deps: TokensCreateHandlerDeps): CommandHand
       return EXIT_RUNTIME_ERROR;
     }
 
-    ctx.stdout.write(`Opening your browser to approve activating "${name}" on ${host}...\n`);
+    if (!intent.flags.device) {
+      ctx.stdout.write(`Opening your browser to approve activating "${name}" on ${host}...\n`);
+    }
 
     const result = await runActivateCeremony(ctx, deps, {
       host,
@@ -258,6 +282,10 @@ export function createKeysUseHandler(deps: TokensCreateHandlerDeps): CommandHand
       store,
       onBrowserOpenFailed: (url) => {
         ctx.stderr.write(`Could not open a browser automatically. Open this URL to continue:\n${url}\n`);
+      },
+      device: intent.flags.device,
+      onDeviceCode: (lines) => {
+        ctx.stdout.write(`${lines.join('\n')}\n`);
       },
     });
 
@@ -284,5 +312,8 @@ export const keysUseHandler: CommandHandler = createKeysUseHandler({
   waitMs: unrefWaitMs,
   exchangeCode: createExchangeCode(),
   confirmIdentity,
+  requestDeviceAuthorization: createRequestDeviceAuthorization(),
+  pollDeviceToken: createPollDeviceToken(),
+  isInterrupted: createSigintFlag(),
   now: Date.now,
 });

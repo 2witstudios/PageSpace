@@ -35,7 +35,11 @@ import { createExchangeCode } from '../../auth/exchange-code.js';
 import { createLoopbackServer } from '../../auth/create-loopback-server.js';
 import { openBrowser } from '../../auth/open-browser.js';
 import { unrefWaitMs } from '../../auth/wait.js';
-import { runLoopbackLogin } from '../../auth/loopback-flow.js';
+import { renderDeviceCodePrompt, runConsent } from '../../auth/run-consent.js';
+import { createPollDeviceToken } from '../../auth/poll-device-token.js';
+import { createRequestDeviceAuthorization } from '../../auth/request-device-authorization.js';
+import { createSigintFlag } from '../../auth/sigint.js';
+import type { PollDeviceToken, RequestDeviceAuthorization } from '../../auth/device-flow.js';
 import { DEFAULT_LOGIN_TIMEOUT_MS, DEFAULT_MAX_PORT_ATTEMPTS } from '../login.js';
 import type {
   ConfirmIdentity,
@@ -246,6 +250,9 @@ export interface TokensCreateHandlerDeps {
   readonly waitMs: WaitMs;
   readonly exchangeCode: ExchangeCode;
   readonly confirmIdentity: ConfirmIdentity;
+  readonly requestDeviceAuthorization: RequestDeviceAuthorization;
+  readonly pollDeviceToken: PollDeviceToken;
+  readonly isInterrupted: () => boolean;
   readonly now: () => number;
   readonly timeoutMs?: number;
   readonly maxPortAttempts?: number;
@@ -269,6 +276,20 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
     const structuralCheck = buildTokenScope(parsedArgs.args.drives, { allDrives: parsedArgs.args.allDrives });
     if (!structuralCheck.ok) {
       ctx.stderr.write(`${structuralCheck.message}\n`);
+      return EXIT_USAGE_ERROR;
+    }
+
+    // The server refuses an all_drives grant at the device door — such a key
+    // can only be minted unambiguously through the authorization-code
+    // exchange (see apps/web/src/app/api/oauth/device_authorization/route.ts).
+    // Caught locally so the user gets the reason and the workaround up front,
+    // instead of an opaque invalid_scope after typing a code into a browser.
+    if (parsedArgs.args.allDrives && intent.flags.device) {
+      ctx.stderr.write(
+        '--all-drives cannot be combined with --device: an all-drives key must be approved through the browser flow. ' +
+          'Run "pagespace keys create --all-drives --name <name>" on a machine with a browser, or scope the key to ' +
+          'specific drives with --drive to use --device.\n',
+      );
       return EXIT_USAGE_ERROR;
     }
 
@@ -326,79 +347,71 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
     // ordinary informational role.
     const info: OutputSink = parsedArgs.args.showToken ? ctx.stderr : ctx.stdout;
 
-    info.write(`Opening your browser to approve access for key "${keyName}" on ${host}...\n`);
+    if (!intent.flags.device) {
+      info.write(`Opening your browser to approve access for key "${keyName}" on ${host}...\n`);
+    }
 
     // Captured, never printed inline: the callback fires mid-flow, and the
     // token must only ever surface behind the explicit --show-token opt-in.
     let mintedToken: string | null = null;
 
-    const result = await runLoopbackLogin({
-      host,
-      clientId: PAGESPACE_CLI_CLIENT_ID,
-      scope: scopeResult.scope,
-      randomBytes: deps.randomBytes,
-      discoverMetadata: deps.discoverMetadata,
-      startServer: deps.startServer,
-      maxPortAttempts: deps.maxPortAttempts ?? DEFAULT_MAX_PORT_ATTEMPTS,
-      openBrowser: deps.openBrowser,
-      onBrowserOpenFailed: (url) => {
-        ctx.stderr.write(`Could not open a browser automatically. Open this URL to continue:\n${url}\n`);
+    const result = await runConsent(
+      {
+        device: intent.flags.device,
+        host,
+        clientId: PAGESPACE_CLI_CLIENT_ID,
+        scope: scopeResult.scope,
+        discoverMetadata: deps.discoverMetadata,
+        exchangeCode: deps.exchangeCode,
+        confirmIdentity: deps.confirmIdentity,
+        credentialStore: store,
+        waitMs: deps.waitMs,
+        now: deps.now,
+        timeoutMs: deps.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS,
+        profile: keyName,
+        onMintedStaticToken: (token) => {
+          mintedToken = token;
+        },
+        loopback: {
+          randomBytes: deps.randomBytes,
+          startServer: deps.startServer,
+          openBrowser: deps.openBrowser,
+          maxPortAttempts: deps.maxPortAttempts ?? DEFAULT_MAX_PORT_ATTEMPTS,
+          onBrowserOpenFailed: (url) => {
+            ctx.stderr.write(`Could not open a browser automatically. Open this URL to continue:\n${url}\n`);
+          },
+        },
+        deviceDeps: {
+          requestDeviceAuthorization: deps.requestDeviceAuthorization,
+          pollDeviceToken: deps.pollDeviceToken,
+          isInterrupted: deps.isInterrupted,
+          onDeviceCode: (authorization) => {
+            // Routed through `info` so --show-token's one-line stdout contract
+            // holds for the device flow too.
+            info.write(`${renderDeviceCodePrompt(authorization).join('\n')}\n`);
+          },
+        },
       },
-      waitMs: deps.waitMs,
-      timeoutMs: deps.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS,
-      exchangeCode: deps.exchangeCode,
-      confirmIdentity: deps.confirmIdentity,
-      credentialStore: store,
-      now: deps.now,
-      profile: keyName,
-      onMintedStaticToken: (token) => {
-        mintedToken = token;
-      },
-    });
+      `pagespace keys create${intent.flags.device ? ' --device' : ''}`,
+    );
 
-    switch (result.outcome) {
-      case 'success': {
-        info.write(`Created key "${keyName}" on ${host}, scoped to: ${scopeResult.driveScope}.\n`);
-        if (parsedArgs.args.showToken) {
-          if (mintedToken !== null) {
-            // The ONLY stdout line in --show-token mode (see `info` above).
-            ctx.stdout.write(`${TOKEN_ENV_VAR_NAME}=${mintedToken}\n`);
-            ctx.stderr.write("This token is shown once and never again. Anyone holding it gets this key's access.\n");
-          } else {
-            ctx.stderr.write('--show-token: no raw token to show — the server returned a refresh credential instead of a static token.\n');
-          }
-        }
-        info.write(`${renderAgentWiringGuidance({ keyName, host }).join('\n')}\n`);
-        return EXIT_SUCCESS;
-      }
-      case 'timeout':
-        ctx.stderr.write('Consent timed out waiting for the browser redirect. Run "pagespace keys create" again.\n');
-        return EXIT_RUNTIME_ERROR;
-      case 'state_mismatch':
-        ctx.stderr.write(
-          'Consent failed: the authorization response did not match this request. Run "pagespace keys create" again.\n',
-        );
-        return EXIT_RUNTIME_ERROR;
-      case 'access_denied':
-        ctx.stderr.write('Consent was denied.\n');
-        return EXIT_RUNTIME_ERROR;
-      case 'authorize_error':
-        ctx.stderr.write(`Consent failed: ${result.error}\n`);
-        return EXIT_RUNTIME_ERROR;
-      case 'token_exchange_failed':
-        ctx.stderr.write(`Consent failed while exchanging the authorization code: ${result.message}\n`);
-        return EXIT_RUNTIME_ERROR;
-      case 'port_bind_failed':
-        ctx.stderr.write('Could not bind a local loopback port to receive the consent redirect.\n');
-        return EXIT_RUNTIME_ERROR;
-      case 'discovery_failed':
-        ctx.stderr.write(`Could not discover the OAuth server configuration for ${host}: ${result.message}\n`);
-        return EXIT_RUNTIME_ERROR;
-      default: {
-        const unreachable: never = result;
-        throw new Error(`Unhandled consent outcome: ${JSON.stringify(unreachable)}`);
+    if (result.outcome === 'failed') {
+      ctx.stderr.write(`${result.message}\n`);
+      return EXIT_RUNTIME_ERROR;
+    }
+
+    info.write(`Created key "${keyName}" on ${host}, scoped to: ${scopeResult.driveScope}.\n`);
+    if (parsedArgs.args.showToken) {
+      if (mintedToken !== null) {
+        // The ONLY stdout line in --show-token mode (see `info` above).
+        ctx.stdout.write(`${TOKEN_ENV_VAR_NAME}=${mintedToken}\n`);
+        ctx.stderr.write("This token is shown once and never again. Anyone holding it gets this key's access.\n");
+      } else {
+        ctx.stderr.write('--show-token: no raw token to show — the server returned a refresh credential instead of a static token.\n');
       }
     }
+    info.write(`${renderAgentWiringGuidance({ keyName, host }).join('\n')}\n`);
+    return EXIT_SUCCESS;
   };
 }
 
@@ -415,5 +428,8 @@ export const tokensCreateHandler: CommandHandler = createTokensCreateHandler({
   waitMs: unrefWaitMs,
   exchangeCode: createExchangeCode(),
   confirmIdentity,
+  requestDeviceAuthorization: createRequestDeviceAuthorization(),
+  pollDeviceToken: createPollDeviceToken(),
+  isInterrupted: createSigintFlag(),
   now: Date.now,
 });

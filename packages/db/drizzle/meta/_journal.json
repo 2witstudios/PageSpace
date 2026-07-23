@@ -1541,6 +1541,13 @@
       "when": 1784751730586,
       "tag": "0219_project_sprite_reclaim_trigger",
       "breakpoints": true
+    },
+    {
+      "idx": 220,
+      "version": "7",
+      "when": 1784779520759,
+      "tag": "0220_stiff_selene",
+      "breakpoints": true
     }
   ]
 }

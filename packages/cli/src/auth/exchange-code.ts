@@ -9,23 +9,12 @@
  * pre-authentication step no `AuthProvider` can exist for yet. The response
  * shape is still validated with zod rather than trusted blind.
  *
- * The response is one of three shapes, discriminated by `token_type`
- * (`oauth-repository.ts`'s `exchangeAuthorizationCode`): `'Bearer'` is the
- * classic OAuth refresh/access-token pair `pagespace login` uses, feeding
- * `PageSpaceClient`/`OAuthTokenProvider`. `'mcp'` is a pure drive:* grant
- * (`pagespace keys create`) — the server minted a real `mcp_*` token instead
- * of an OAuth grant (see that file's `ok_mcp_token` outcome), so there is no
- * `refresh_token`/`expires_in` to report: an `mcp_*` token doesn't expire
- * and has no refresh cycle. `'mcp_update'` is an `update_key:<id>` grant
- * (the wizard's Edit) — the server re-scoped an EXISTING `mcp_*` token in
- * place (`ok_mcp_update`) and deliberately returns no secret at all, only
- * the PKCE-verified success signal + granted scope + which token changed.
- * `loopback-flow.ts` persists the first two shapes differently (an
- * `OAuthHostCredential` vs a `StaticHostCredential`) and persists NOTHING
- * for the third (the stored credential's secret is unchanged).
+ * The four possible response shapes are discriminated by `parseTokenResponse`
+ * (`token-response.ts`), shared with the device-grant poller so both grants
+ * read the same wire contract.
  */
-import { z } from 'zod';
 import type { ExchangeCode, ExchangeCodeParams, ExchangedTokens } from './loopback-flow.js';
+import { parseTokenResponse } from './token-response.js';
 
 export class TokenExchangeError extends Error {
   constructor(public readonly code: string) {
@@ -33,32 +22,6 @@ export class TokenExchangeError extends Error {
     this.name = 'TokenExchangeError';
   }
 }
-
-const oauthTokenResponseSchema = z.object({
-  token_type: z.literal('Bearer'),
-  access_token: z.string(),
-  expires_in: z.number(),
-  refresh_token: z.string(),
-  scope: z.string(),
-});
-
-const mcpTokenResponseSchema = z.object({
-  token_type: z.literal('mcp'),
-  access_token: z.string(),
-  scope: z.string(),
-});
-
-const mcpUpdateResponseSchema = z.object({
-  token_type: z.literal('mcp_update'),
-  token_id: z.string(),
-  scope: z.string(),
-});
-
-const mcpActivateResponseSchema = z.object({
-  token_type: z.literal('mcp_activate'),
-  token_id: z.string(),
-  scope: z.string(),
-});
 
 function extractErrorCode(json: unknown, status: number): string {
   if (json !== null && typeof json === 'object' && 'error' in json && typeof (json as Record<string, unknown>).error === 'string') {
@@ -94,32 +57,10 @@ export function createExchangeCode(fetchImpl: typeof fetch = fetch): ExchangeCod
       throw new TokenExchangeError(extractErrorCode(json, response.status));
     }
 
-    const mcpParsed = mcpTokenResponseSchema.safeParse(json);
-    if (mcpParsed.success) {
-      return { kind: 'mcp', token: mcpParsed.data.access_token, scope: mcpParsed.data.scope };
-    }
-
-    const mcpUpdateParsed = mcpUpdateResponseSchema.safeParse(json);
-    if (mcpUpdateParsed.success) {
-      return { kind: 'mcp_update', tokenId: mcpUpdateParsed.data.token_id, scope: mcpUpdateParsed.data.scope };
-    }
-
-    const mcpActivateParsed = mcpActivateResponseSchema.safeParse(json);
-    if (mcpActivateParsed.success) {
-      return { kind: 'mcp_activate', tokenId: mcpActivateParsed.data.token_id, scope: mcpActivateParsed.data.scope };
-    }
-
-    const oauthParsed = oauthTokenResponseSchema.safeParse(json);
-    if (!oauthParsed.success) {
+    const tokens = parseTokenResponse(json);
+    if (tokens === null) {
       throw new TokenExchangeError('invalid_response');
     }
-
-    return {
-      kind: 'oauth',
-      accessToken: oauthParsed.data.access_token,
-      refreshToken: oauthParsed.data.refresh_token,
-      expiresIn: oauthParsed.data.expires_in,
-      scope: oauthParsed.data.scope,
-    };
+    return tokens;
   };
 }
