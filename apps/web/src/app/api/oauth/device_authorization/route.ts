@@ -10,7 +10,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { randomBytes } from 'crypto';
 import { getClientIP } from '@/lib/auth';
 import { getRegisteredClient } from '@pagespace/lib/auth/oauth/clients';
-import { parseScopeList, formatScopeSet, hasNewKeyName, isPureDriveGrant } from '@pagespace/lib/auth/oauth/scopes';
+import { parseScopeList, formatScopeSet, hasNewKeyName, isAllDrivesGrant, isPureDriveGrant } from '@pagespace/lib/auth/oauth/scopes';
 import { generateUserCode, normalizeUserCode } from '@pagespace/lib/auth/oauth/user-code';
 import { generateToken, hashToken } from '@pagespace/lib/auth/token-utils';
 import { DEVICE_CODE_TTL_SECONDS, DEVICE_CODE_POLL_INTERVAL_SECONDS } from '@pagespace/lib/auth/oauth/code-lifecycle';
@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
     // authority-checks them exactly as the loopback consent screen does. A
     // remote machine with no local browser could otherwise log in but never
     // mint, re-scope, or activate the scoped key that content access requires.
-    if (parsed.scopes.allDrives) {
+    if (isAllDrivesGrant(parsed.scopes)) {
       return noStoreJson({ error: 'invalid_scope' }, 400);
     }
 

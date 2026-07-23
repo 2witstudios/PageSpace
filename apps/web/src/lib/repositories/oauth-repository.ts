@@ -164,6 +164,40 @@ export type KeyGrantResult =
  * between consent and redemption fails closed rather than being silently
  * re-scoped or re-approved.
  */
+/**
+ * Widens a `KeyGrantResult` into the shape both flows' result unions share,
+ * attaching the grant context the helper deliberately doesn't know about.
+ *
+ * Both callers previously re-implemented this as an identical five-case
+ * switch, so adding a sixth `KeyGrantResult` outcome meant the same edit in
+ * two places — the drift `applyKeyGrant` was extracted to prevent, reappearing
+ * one level up. Callers still own their own single-use bookkeeping, which is
+ * the part that genuinely differs (consuming an authorization code vs. setting
+ * `redeemedAt`).
+ */
+function withGrantContext(
+  keyGrant: Exclude<KeyGrantResult, { outcome: 'not_a_key_grant' }>,
+  userId: string,
+  scopes: string[],
+):
+  | { outcome: 'ok_mcp_token'; userId: string; scopes: string[]; mcpToken: string }
+  | { outcome: 'ok_mcp_update'; userId: string; scopes: string[]; tokenId: string }
+  | { outcome: 'ok_mcp_activate'; userId: string; scopes: string[]; tokenId: string }
+  | { outcome: 'update_target_gone' }
+  | { outcome: 'activate_target_gone' } {
+  switch (keyGrant.outcome) {
+    case 'ok_mcp_token':
+      return { outcome: 'ok_mcp_token', userId, scopes, mcpToken: keyGrant.mcpToken };
+    case 'ok_mcp_update':
+      return { outcome: 'ok_mcp_update', userId, scopes, tokenId: keyGrant.tokenId };
+    case 'ok_mcp_activate':
+      return { outcome: 'ok_mcp_activate', userId, scopes, tokenId: keyGrant.tokenId };
+    case 'update_target_gone':
+    case 'activate_target_gone':
+      return { outcome: keyGrant.outcome };
+  }
+}
+
 async function applyKeyGrant(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
   input: { userId: string; scopes: string[] },
@@ -363,19 +397,7 @@ export async function exchangeAuthorizationCode(
         .update(oauthAuthorizationCodes)
         .set({ consumedAt: input.now })
         .where(eq(oauthAuthorizationCodes.id, row.id));
-
-      switch (keyGrant.outcome) {
-        case 'ok_mcp_token':
-          return { outcome: 'ok_mcp_token', userId: row.userId, scopes: row.scopes, mcpToken: keyGrant.mcpToken };
-        case 'ok_mcp_update':
-          return { outcome: 'ok_mcp_update', userId: row.userId, scopes: row.scopes, tokenId: keyGrant.tokenId };
-        case 'ok_mcp_activate':
-          return { outcome: 'ok_mcp_activate', userId: row.userId, scopes: row.scopes, tokenId: keyGrant.tokenId };
-        case 'update_target_gone':
-          return { outcome: 'update_target_gone' };
-        case 'activate_target_gone':
-          return { outcome: 'activate_target_gone' };
-      }
+      return withGrantContext(keyGrant, row.userId, row.scopes);
     }
 
     // NOTE: every mint/update/activate branch is gated on a successful
@@ -820,34 +842,7 @@ export async function pollDeviceToken(input: PollDeviceTokenInput): Promise<Poll
     const keyGrant = await applyKeyGrant(tx, { userId: decision.grant.userId, scopes: decision.grant.scopes });
     if (keyGrant.outcome !== 'not_a_key_grant') {
       await tx.update(oauthDeviceCodes).set({ redeemedAt: input.now }).where(eq(oauthDeviceCodes.id, row.id));
-
-      switch (keyGrant.outcome) {
-        case 'ok_mcp_token':
-          return {
-            outcome: 'ok_mcp_token',
-            userId: decision.grant.userId,
-            scopes: decision.grant.scopes,
-            mcpToken: keyGrant.mcpToken,
-          };
-        case 'ok_mcp_update':
-          return {
-            outcome: 'ok_mcp_update',
-            userId: decision.grant.userId,
-            scopes: decision.grant.scopes,
-            tokenId: keyGrant.tokenId,
-          };
-        case 'ok_mcp_activate':
-          return {
-            outcome: 'ok_mcp_activate',
-            userId: decision.grant.userId,
-            scopes: decision.grant.scopes,
-            tokenId: keyGrant.tokenId,
-          };
-        case 'update_target_gone':
-          return { outcome: 'update_target_gone' };
-        case 'activate_target_gone':
-          return { outcome: 'activate_target_gone' };
-      }
+      return withGrantContext(keyGrant, decision.grant.userId, decision.grant.scopes);
     }
 
     // RFC 8628 §3.5: the device_code is invalidated on redemption, in the same

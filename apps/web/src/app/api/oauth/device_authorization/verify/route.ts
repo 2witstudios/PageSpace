@@ -13,7 +13,7 @@ import { authenticateRequestWithOptions, isAuthError, getClientIP } from '@/lib/
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { normalizeUserCode } from '@pagespace/lib/auth/oauth/user-code';
 import { getRegisteredClient } from '@pagespace/lib/auth/oauth/clients';
-import { parseScopeList } from '@pagespace/lib/auth/oauth/scopes';
+import { isCredentialEscalatingGrant, parseScopeList } from '@pagespace/lib/auth/oauth/scopes';
 import { describeScopeForConsent } from '@pagespace/lib/auth/oauth/consent';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
@@ -65,12 +65,11 @@ export async function POST(req: NextRequest) {
 
   const scopeDescriptions: string[] = [];
   const parsed = result.scopes.length > 0 ? parseScopeList(result.scopes.join(' ')) : null;
-  // Whether approving this code is a credential-escalation act (minting a new
-  // key, re-scoping an existing one, or making one a device's ambient
-  // default) rather than an ordinary login. The decision route requires a
-  // step-up grant for exactly these; surfaced here so the screen can run the
-  // ceremony before the user clicks Allow rather than failing them afterward.
-  let requiresStepUp = false;
+  // Derived from the SAME predicate the decision route enforces with, so the
+  // screen can never advertise a ceremony the server doesn't demand (or skip
+  // one it does). Surfaced so the ceremony runs before the user clicks Allow
+  // rather than failing them afterward.
+  const requiresStepUp = parsed?.ok === true && isCredentialEscalatingGrant(parsed.scopes);
 
   if (parsed?.ok) {
     // An update_key grant re-scopes one of the VERIFYING user's existing keys
@@ -81,39 +80,34 @@ export async function POST(req: NextRequest) {
     // oracle), killing the "point a victim's approval at the attacker's token"
     // direction. Mirrors the loopback consent screen (app/oauth/consent/page.tsx);
     // the decision POST re-checks server-side, this is the human-facing half.
-    let updateKeyName: string | null = null;
-    let activateKeyName: string | null = null;
     const targetKeyId = parsed.scopes.updateKeyId ?? parsed.scopes.activateKeyId;
+    let targetKeyName: string | null = null;
     if (targetKeyId !== null) {
       const target = await sessionRepository.findActiveMcpTokenByIdAndUser(targetKeyId, auth.userId);
       if (!target) {
         return NextResponse.json({ error: 'invalid_code' }, { status: 400 });
       }
-      if (parsed.scopes.updateKeyId !== null) updateKeyName = target.name;
-      else activateKeyName = target.name;
+      targetKeyName = target.name;
     }
 
     // Named first so the user reads "this creates a key named X" before the
     // capability list that follows — same ordering as the consent screen.
     if (parsed.scopes.newKeyName !== null) {
-      requiresStepUp = true;
       scopeDescriptions.push(describeScopeForConsent({ kind: 'name', name: parsed.scopes.newKeyName }, {}));
     }
     if (parsed.scopes.updateKeyId !== null) {
-      requiresStepUp = true;
       scopeDescriptions.push(
         describeScopeForConsent(
           { kind: 'update_key', tokenId: parsed.scopes.updateKeyId },
-          { keyName: updateKeyName ?? undefined },
+          { keyName: targetKeyName ?? undefined },
         ),
       );
     }
     if (parsed.scopes.activateKeyId !== null) {
-      requiresStepUp = true;
       scopeDescriptions.push(
         describeScopeForConsent(
           { kind: 'activate_key', tokenId: parsed.scopes.activateKeyId },
-          { keyName: activateKeyName ?? undefined },
+          { keyName: targetKeyName ?? undefined },
         ),
       );
     }

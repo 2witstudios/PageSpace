@@ -18,7 +18,7 @@ import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError, getClientIP } from '@/lib/auth';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
 import { normalizeUserCode } from '@pagespace/lib/auth/oauth/user-code';
-import { parseScopeList, checkGrantAuthority } from '@pagespace/lib/auth/oauth/scopes';
+import { parseScopeList, checkGrantAuthority, isCredentialEscalatingGrant } from '@pagespace/lib/auth/oauth/scopes';
 import { resolveGrantAuthority } from '@/lib/auth/oauth-grant-authority';
 import { recordDeviceApproval, verifyDeviceUserCode } from '@/lib/repositories/oauth-repository';
 import { requireStepUpGrant } from '@/app/api/auth/mcp-tokens/step-up-gate';
@@ -27,29 +27,18 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 const bodySchema = z.object({
   userCode: z.string().min(1).max(32),
   action: z.enum(['approve', 'deny']),
-  /** Required only for key-shaped grants — see `requiresStepUp` below. */
+  /**
+   * Required only for credential-escalating grants (mint / re-scope /
+   * activate), per `isCredentialEscalatingGrant`. The loopback consent screen
+   * requires step-up for every consent; the device flow historically needed
+   * none because it could only produce a login grant. Now that it can produce
+   * key material, the escalating subset carries the same second factor — or
+   * `--device` would be a way to mint a key with strictly less proof of
+   * presence than the browser flow demands. Plain logins keep their existing
+   * no-step-up path, so `login --device` is unchanged.
+   */
   stepUpToken: z.string().min(1).optional(),
 });
-
-/**
- * Does approving this scope set escalate credentials rather than just log a
- * device in? Minting a key (`name:`), re-scoping one (`update_key`), or
- * making one a device's ambient default (`activate_key`) all do; a plain
- * `manage_keys offline_access` login does not.
- *
- * The loopback consent screen requires a step-up grant for EVERY consent
- * (`/api/oauth/authorize`). The device flow historically needed no step-up
- * because it could only ever produce a login grant — the door rejected
- * everything else. Now that it can produce key material, the escalating
- * subset must carry the same second factor, or `--device` would be a way to
- * mint a key with strictly less proof of presence than the browser flow
- * demands. Logins keep their existing no-step-up path so `login --device` is
- * unchanged.
- */
-function requiresStepUp(scopes: ReturnType<typeof parseScopeList>): boolean {
-  if (!scopes.ok) return false;
-  return scopes.scopes.newKeyName !== null || scopes.scopes.updateKeyId !== null || scopes.scopes.activateKeyId !== null;
-}
 
 export async function POST(req: NextRequest) {
   const auth = await authenticateRequestWithOptions(req, { allow: ['session'], requireCSRF: true });
@@ -106,7 +95,7 @@ export async function POST(req: NextRequest) {
       // obtained for one device approval can't be replayed against another —
       // the device analogue of the loopback binding's
       // clientId/redirectUri/scope/state tuple.
-      if (requiresStepUp(parsed)) {
+      if (parsed.ok && isCredentialEscalatingGrant(parsed.scopes)) {
         const gate = await requireStepUpGrant({
           req,
           userId: auth.userId,

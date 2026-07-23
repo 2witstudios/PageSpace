@@ -237,48 +237,50 @@ function keyGrantSuccessResponse(
   result: KeyGrantSuccess,
   oauthEventPrefix: 'code_exchange' | 'device_poll',
 ): NextResponse {
-  if (result.outcome === 'ok_mcp_token') {
-    auditRequest(req, {
-      eventType: 'auth.token.created',
-      userId: result.userId,
-      details: { clientId, oauthEvent: `${oauthEventPrefix}_mcp_token` },
-    });
-    return noStoreJson(mcpTokenSuccessBody(result.mcpToken, result.scopes), 200);
-  }
-
-  if (result.outcome === 'ok_mcp_update') {
-    // Mirror the web Settings PATCH's audit + activity trail
-    // (mcp-tokens/[tokenId]/route.ts) — same logical operation, different
-    // door. Fire-and-forget end to end: getActorInfo does a user lookup +
-    // PII decrypts, and it feeds only logTokenActivity (itself explicitly
-    // never awaited), so none of it belongs on the response path.
-    const { userId, tokenId } = result;
-    void getActorInfo(userId)
-      .then((actorInfo) => {
-        logTokenActivity(userId, 'token_update', { tokenId, tokenType: 'mcp' }, actorInfo);
-      })
-      .catch(() => {
-        // Activity logging is best-effort; the audit event below is the durable record.
+  // A switch, not an if-chain ending in a bare block: totality over
+  // `KeyGrantOutcome` is then checked by the compiler rather than asserted in
+  // prose, so a fourth key-shaped outcome fails to build here.
+  switch (result.outcome) {
+    case 'ok_mcp_token':
+      auditRequest(req, {
+        eventType: 'auth.token.created',
+        userId: result.userId,
+        details: { clientId, oauthEvent: `${oauthEventPrefix}_mcp_token` },
       });
-    auditRequest(req, {
-      eventType: 'auth.token.updated',
-      userId,
-      details: { clientId, oauthEvent: `${oauthEventPrefix}_mcp_update` },
-    });
-    return noStoreJson(mcpUpdateSuccessBody(tokenId, result.scopes), 200);
-  }
+      return noStoreJson(mcpTokenSuccessBody(result.mcpToken, result.scopes), 200);
 
-  // The remaining outcome, by exhaustion over `KEY_GRANT_OUTCOMES`: an
-  // approval ceremony only — nothing was minted or changed, so this is an
-  // access-granted audit event (not token.created/updated), and there is no
-  // activity-trail write since the key row is untouched.
-  {
-    auditRequest(req, {
-      eventType: 'authz.access.granted',
-      userId: result.userId,
-      details: { clientId, oauthEvent: `${oauthEventPrefix}_mcp_activate` },
-    });
-    return noStoreJson(mcpActivateSuccessBody(result.tokenId, result.scopes), 200);
+    case 'ok_mcp_update': {
+      // Mirror the web Settings PATCH's audit + activity trail
+      // (mcp-tokens/[tokenId]/route.ts) — same logical operation, different
+      // door. Fire-and-forget end to end: getActorInfo does a user lookup +
+      // PII decrypts, and it feeds only logTokenActivity (itself explicitly
+      // never awaited), so none of it belongs on the response path.
+      const { userId, tokenId } = result;
+      void getActorInfo(userId)
+        .then((actorInfo) => {
+          logTokenActivity(userId, 'token_update', { tokenId, tokenType: 'mcp' }, actorInfo);
+        })
+        .catch(() => {
+          // Activity logging is best-effort; the audit event below is the durable record.
+        });
+      auditRequest(req, {
+        eventType: 'auth.token.updated',
+        userId,
+        details: { clientId, oauthEvent: `${oauthEventPrefix}_mcp_update` },
+      });
+      return noStoreJson(mcpUpdateSuccessBody(tokenId, result.scopes), 200);
+    }
+
+    case 'ok_mcp_activate':
+      // Approval ceremony only — nothing was minted or changed, so this is an
+      // access-granted audit event (not token.created/updated), and there is
+      // no activity-trail write: the key row is untouched.
+      auditRequest(req, {
+        eventType: 'authz.access.granted',
+        userId: result.userId,
+        details: { clientId, oauthEvent: `${oauthEventPrefix}_mcp_activate` },
+      });
+      return noStoreJson(mcpActivateSuccessBody(result.tokenId, result.scopes), 200);
   }
 }
 
@@ -384,8 +386,12 @@ async function handleRefreshTokenGrant(req: NextRequest, form: URLSearchParams):
  * treatment as an unknown authorization code or refresh token.
  */
 type DevicePollOutcome = Awaited<ReturnType<typeof pollDeviceToken>>['outcome'];
-/** Every outcome that is a SUCCESS and therefore never appears in the error map below. */
-type DevicePollSuccessOutcome = 'ok' | 'ok_mcp_token' | 'ok_mcp_update' | 'ok_mcp_activate';
+/**
+ * Every outcome that is a SUCCESS and therefore never appears in the error map
+ * below. Derived from `KEY_GRANT_OUTCOMES` rather than re-listed, so adding a
+ * key-grant outcome can't leave the error map demanding an entry for it.
+ */
+type DevicePollSuccessOutcome = 'ok' | KeyGrantOutcome;
 
 const DEVICE_POLL_ERROR_BODY: Record<Exclude<DevicePollOutcome, DevicePollSuccessOutcome>, Record<string, unknown>> = {
   not_found: INVALID_GRANT,
