@@ -487,6 +487,45 @@ describe('session IO — headless start', () => {
       });
     });
 
+    it('given delivered input from a DIFFERENT user than the session was created for, should become the tracked identity', async () => {
+      // The detached re-auth tick checks ONLY `lastViewerUserId` while nobody
+      // is attached — leaving it pinned to the creator while a different
+      // authorized user goes on sending would let revoking the creator kill
+      // work this user is still authorized to run, and revoking THIS user do
+      // nothing at all.
+      const { session } = writableSession();
+      session.viewers.clear();
+      session.lastViewerUserId = 'user-1';
+      await handleSessionSendRequest(
+        { ...deps({ 'm1|-|-|sh': session }) },
+        sendBody({ userId: 'user-2' }),
+      );
+
+      assert({
+        given: 'a viewer-less session created for one user, sent to by another',
+        should: 'track the sender as the identity the re-auth tick checks',
+        actual: session.lastViewerUserId,
+        expected: 'user-2',
+      });
+    });
+
+    it('given delivered input with no userId at all, should leave the tracked identity alone', async () => {
+      const { session } = writableSession();
+      session.viewers.clear();
+      session.lastViewerUserId = 'user-1';
+      await handleSessionSendRequest(
+        { ...deps({ 'm1|-|-|sh': session }) },
+        sendBody(),
+      );
+
+      assert({
+        given: 'a send with no userId in the payload',
+        should: 'leave the existing tracked identity untouched rather than clearing it',
+        actual: session.lastViewerUserId,
+        expected: 'user-1',
+      });
+    });
+
     it('given delivered input to a session someone IS watching, should leave the reap alone', async () => {
       const { session } = writableSession();
       const rearmed: TerminalSession[] = [];
@@ -678,6 +717,23 @@ describe('session IO — headless start', () => {
         should: 're-arm the reap on every read, not only the one that boots it',
         actual: rearmed.length === 1 && rearmed[0] === session,
         expected: true,
+      });
+    });
+
+    it('given a deliberate read from a DIFFERENT user than the session was created for, should become the tracked identity', async () => {
+      const { session } = writableSession();
+      session.viewers.clear();
+      session.lastViewerUserId = 'user-1';
+      await handleSessionReadRequest(
+        { ...deps({ 'm1|-|-|sh': session }) },
+        readBody({ names: ['sh'], start: true, userId: 'user-2' }),
+      );
+
+      assert({
+        given: 'a viewer-less session created for one user, read by another',
+        should: 'track the reader as the identity the detached re-auth tick checks',
+        actual: session.lastViewerUserId,
+        expected: 'user-2',
       });
     });
 

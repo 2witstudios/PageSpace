@@ -81,13 +81,14 @@ export interface SessionIoDeps {
    * `abandoned` is threaded straight through to `ensureAgentTerminalSession`'s
    * own check, the same one the socket path uses at the last await before the
    * PTY exists. It matters here for a reason the socket path does not have: the
-   * web tier's `fetch` to this endpoint gives up after a FIXED timeout
-   * (`REALTIME_TIMEOUT_MS`), shorter than a cold Sprite wake can take, and a
-   * caller that saw that timeout as "nothing happened" may retry the same
-   * input. Without this, the original request would keep starting the PTY and
-   * writing the input after the caller had already moved on — a retry would
-   * then run that input twice. Checking it costs nothing when the caller is
-   * still there (`abandoned()` stays false the whole time).
+   * web tier's `fetch` to this endpoint still gives up eventually — a generous
+   * but FIXED timeout for a `start: true` call, which a cold Sprite wake plus a
+   * liveness check can still outrun — and a caller that saw that timeout as
+   * "nothing happened" may retry the same input. Without this, the original
+   * request would keep starting the PTY and writing the input after the caller
+   * had already moved on — a retry would then run that input twice. Checking
+   * it costs nothing when the caller is still there (`abandoned()` stays false
+   * the whole time).
    *
    * Optional, and absent in every existing test: a realtime deployment without
    * this seam degrades to the pre-#2206 behavior (a reserved shell stays
@@ -275,7 +276,20 @@ export async function handleSessionSendRequest(
   // into it is USE, and a command killed at the thirty-minute mark because the
   // clock started when the shell did would be exactly the surprise this whole
   // family exists to remove. Attached sessions have no armed reap to move.
-  if (session.viewers.size === 0) deps.rearmIdleReap?.(session);
+  if (session.viewers.size === 0) {
+    // The detached re-auth tick (`agent-terminal-handler.ts`) checks ONLY
+    // `lastViewerUserId` while nobody is attached — it is the tick's whole
+    // notion of "who is this session's access decided against" for a
+    // viewer-less session. Leaving it pinned to whoever last held that
+    // identity (the creator, or an earlier sender) while a DIFFERENT
+    // authorized user goes on using the session is wrong two ways at once:
+    // revoking the stale identity kills work the current user is still
+    // authorized to run, and revoking the current user does nothing at all.
+    // A send is real, authenticated use — updating this is exactly as safe
+    // as it was for that identity to be recorded at create time.
+    if (payload.userId !== undefined) session.lastViewerUserId = payload.userId;
+    deps.rearmIdleReap?.(session);
+  }
 
   return {
     status: 200,
@@ -422,7 +436,18 @@ export async function handleSessionReadRequest(
     // intent to treat this as a real interactive read; the `list_sessions`
     // liveness sweep never sets it, so a sweep over many viewer-less sessions
     // can never touch any of their reaps.
-    if (payload.start === true && session.viewers.size === 0) deps.rearmIdleReap?.(session);
+    if (payload.start === true && session.viewers.size === 0) {
+      // Same reasoning as `handleSessionSendRequest`'s identical block: the
+      // detached re-auth tick checks ONLY `lastViewerUserId` while nobody is
+      // attached, so a DIFFERENT authorized user reading an already-live
+      // session must become that identity — otherwise revoking the stale one
+      // kills work the current reader is still authorized to run, and
+      // revoking the current reader does nothing. `payload.userId` is
+      // guaranteed present here: `planSessionStart` requires it whenever
+      // `payload.start === true`.
+      if (payload.userId !== undefined) session.lastViewerUserId = payload.userId;
+      deps.rearmIdleReap?.(session);
+    }
     return {
       name,
       live: true,

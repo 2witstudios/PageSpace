@@ -44,6 +44,18 @@ const DEFAULT_TAIL_LINES = 100;
 /** How long the realtime service gets to answer — a map lookup, not a Sprite call. */
 const REALTIME_TIMEOUT_MS = 5000;
 
+/**
+ * How long a `start: true` call gets instead. Issue #2206's cold-start path
+ * can wake a paused Sprite and run a liveness check before it can even begin
+ * opening a shell — meaningfully longer than a map lookup, and the whole
+ * reason `ensureAgentTerminalSession` carries its own `abandoned()` check
+ * rather than relying on this timeout to double as a hard deadline. Giving
+ * `REALTIME_TIMEOUT_MS` to a genuine cold wake would make the very case this
+ * feature exists for ("first agent IO starts the shell") the one case that
+ * reliably times out and reports nothing delivered, with no retry.
+ */
+const COLD_START_TIMEOUT_MS = 25_000;
+
 /** One session's liveness (+ optional scrollback), as `/api/session-read` answers it. */
 export interface RealtimeSessionReadEntry {
   name: string;
@@ -352,8 +364,13 @@ export function createPtySessionIo(transport: RealtimeSessionIoTransport): {
   };
 }
 
-/** POST one signed payload to a realtime session-IO endpoint; `null` on any non-answer. */
-async function postSigned<T>(path: string, payload: unknown): Promise<T | null> {
+/**
+ * POST one signed payload to a realtime session-IO endpoint; `null` on any
+ * non-answer. `payload.start` picks the deadline: a `start: true` call gets
+ * `COLD_START_TIMEOUT_MS` (a cold Sprite wake) rather than the ordinary
+ * `REALTIME_TIMEOUT_MS` (a map lookup) — see `COLD_START_TIMEOUT_MS`.
+ */
+async function postSigned<T>(path: string, payload: { start?: true }): Promise<T | null> {
   const realtimeUrl = process.env.INTERNAL_REALTIME_URL;
   if (!realtimeUrl) return null;
 
@@ -363,7 +380,7 @@ async function postSigned<T>(path: string, payload: unknown): Promise<T | null> 
       method: 'POST',
       headers: createSignedBroadcastHeaders(body),
       body,
-      signal: AbortSignal.timeout(REALTIME_TIMEOUT_MS),
+      signal: AbortSignal.timeout(payload.start === true ? COLD_START_TIMEOUT_MS : REALTIME_TIMEOUT_MS),
     });
     if (!response.ok) {
       loggers.ai.warn('session-io-pty: realtime rejected the request', { path, status: response.status });

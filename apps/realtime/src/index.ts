@@ -513,11 +513,13 @@ const HEADLESS_ROWS = 24;
  *
  * `abandoned` DOES have a real signal here, unlike a socket connect (which has
  * no equivalent — see the old comment this replaced): the web tier's `fetch`
- * to this endpoint gives up after `REALTIME_TIMEOUT_MS` (5s, `session-io-pty.ts`),
- * and a cold start — `resolveSandbox` waking a Sprite, then a liveness check —
- * can run past that. Forwarded straight to `ensureAgentTerminalSession`'s own
- * check at the last await before the PTY exists, keyed off the SAME request's
- * connection rather than a viewer's `connectionId`.
+ * to this endpoint still gives up eventually (`COLD_START_TIMEOUT_MS`,
+ * `session-io-pty.ts` — generous for a `start: true` call, but a cold Sprite
+ * wake plus a liveness check can still outrun it), and a caller that saw that
+ * timeout as "nothing happened" may retry the same input. Forwarded straight
+ * to `ensureAgentTerminalSession`'s own check at the last await before the
+ * PTY exists, keyed off the SAME request's connection rather than a viewer's
+ * `connectionId`.
  */
 const startHeadlessAgentTerminal = async (
   {
@@ -843,11 +845,12 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
      * Has the CLIENT gone away before this request got an answer?
      *
      * Only meaningful for the two headless session-IO endpoints: their
-     * `start: true` path can run a cold Sprite wake past the web tier's own
-     * `fetch` timeout (`REALTIME_TIMEOUT_MS`, `session-io-pty.ts`), and this is
-     * how `ensureAgentTerminalSession`'s `abandoned()` check — the same one a
-     * viewer's socket connect uses — learns to bail rather than start a PTY
-     * (and write input into it) for a caller who already gave up and may retry.
+     * `start: true` path can run a cold Sprite wake past even the web tier's
+     * own generous `fetch` timeout for that shape (`COLD_START_TIMEOUT_MS`,
+     * `session-io-pty.ts`), and this is how `ensureAgentTerminalSession`'s
+     * `abandoned()` check — the same one a viewer's socket connect uses —
+     * learns to bail rather than start a PTY (and write input into it) for a
+     * caller who already gave up and may retry.
      *
      * Listens on `res`, NOT `req`. `req` (`IncomingMessage`) fires `'close'`
      * once its own body finishes being READ — for an ordinary POST that is
