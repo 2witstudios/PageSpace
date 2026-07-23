@@ -127,6 +127,13 @@ function baseDeps(store: CredentialStore, fake = fakeLoopbackServer()) {
       waitMs: () => new Promise<void>(() => {}),
       exchangeCode: async () => ({ kind: 'mcp_activate' as const, tokenId: 'tok1', scope: 'activate_key:tok1' }),
       confirmIdentity: async () => ({ name: 'Ada Lovelace', email: 'ada@example.com' }),
+      requestDeviceAuthorization: async () => {
+        throw new Error('device flow not exercised by this test — loopback transport expected');
+      },
+      pollDeviceToken: async () => {
+        throw new Error('device flow not exercised by this test — loopback transport expected');
+      },
+      isInterrupted: () => false,
       now: () => Date.parse('2026-07-07T00:00:00.000Z'),
     },
   };

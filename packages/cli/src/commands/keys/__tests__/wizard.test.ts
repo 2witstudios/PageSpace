@@ -113,6 +113,13 @@ function baseMintDeps(store: CredentialStore) {
     waitMs: () => new Promise<void>(() => {}),
     exchangeCode: async () => FIXED_TOKENS,
     confirmIdentity: async () => ({ name: 'Ada Lovelace', email: 'ada@example.com' }),
+    requestDeviceAuthorization: async () => {
+      throw new Error('device flow not exercised by this test — loopback transport expected');
+    },
+    pollDeviceToken: async () => {
+      throw new Error('device flow not exercised by this test — loopback transport expected');
+    },
+    isInterrupted: () => false,
     now: () => Date.parse('2026-07-06T00:00:00.000Z'),
   };
 }
