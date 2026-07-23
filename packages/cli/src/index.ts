@@ -267,6 +267,27 @@ export type {
   ResolveKeyNameFlags,
 } from './auth/resolve.js';
 export { createRefreshAccessToken } from './auth/silent-refresh.js';
+
+// The async shell around that pure resolver: the single implementation of the
+// full precedence chain INCLUDING its two store reads (the machine's active
+// key, then the credential itself). `run.ts` and `pagespace whoami` both go
+// through it — a second implementation of this chain is precisely what made
+// `whoami` report "Not logged in" on a machine driven by an active key.
+export { describeCredentialSource, resolveCredentialSource } from './auth/resolve-credential-source.js';
+export type { ResolveCredentialSourceInput, ResolvedCredentialSource } from './auth/resolve-credential-source.js';
+
+// Liveness probe for `mcp_*` keys, which `/api/auth/me` deliberately refuses.
+export { PROBE_DRIVES_TIMEOUT_MS, probeDriveCount } from './auth/probe-drives.js';
+export type { ProbeDriveCount } from './auth/probe-drives.js';
+
+// The transport switch every consent-driven command goes through — loopback
+// browser flow or RFC 8628 device flow — with each transport carrying its own
+// delay adapter (they need opposite ref/unref semantics; see wait.ts).
+export { describeConsentFailure, renderDeviceCodePrompt, runConsent } from './auth/run-consent.js';
+export type { ConsentResult, DeviceConsentDeps, LoopbackConsentDeps, RunConsentParams } from './auth/run-consent.js';
+export { createSigintFlag } from './auth/sigint.js';
+export { parseTokenResponse } from './auth/token-response.js';
+
 export { buildAuthProvider, enforceAuth, FailingAuthProvider } from './auth/auth-context.js';
 export type { BuildAuthProviderDeps, DiscoverTokenEndpoint, EnforceAuthDeps } from './auth/auth-context.js';
 
@@ -301,7 +322,6 @@ export {
   activationSuccessMessage,
   createKeysUseHandler,
   deactivationMessage,
-  describeActivateFailure,
   findServerTokenId,
   keysUseHandler,
   loginCredentialNotActivatableMessage,

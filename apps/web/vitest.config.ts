@@ -101,6 +101,10 @@ export default defineConfig({
         // branch. Per-file (not a dir glob) — useSigninRecovery.ts alongside it is the effectful
         // shell.
         'src/app/auth/signin/signin-recovery.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        // Persisted-store cleanup decision core (#2142): pure, no storage access,
+        // so its full branch matrix is gated at 100%. clear-user-stores.ts beside
+        // it is the effectful shell.
+        'src/lib/auth/clear-user-stores-core.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/stores/useConversationMessagesStore.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/stores/usePendingStreamsStore.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/stores/conversationMessages/*.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },

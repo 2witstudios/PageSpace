@@ -138,16 +138,44 @@ describe('POST /api/oauth/device_authorization — scope validation', () => {
     );
   });
 
-  it('rejects an update_key scope outright — key re-scoping is loopback-consent-only, the device grant has no path for it', async () => {
+  it('accepts an update_key scope — key re-scoping now redeems over the device grant, so a remote machine can edit a key without a local browser', async () => {
     const res = await POST(
       deviceAuthRequest({ client_id: CLIENT_ID, scope: 'update_key:tok123 drive:drv1:member' }) as never,
+    );
+    expect(res.status).toBe(200);
+    expect(createDeviceAuthorization).toHaveBeenCalledWith(
+      expect.objectContaining({ scopes: expect.arrayContaining(['update_key:tok123']) }),
+    );
+  });
+
+  it('accepts an activate_key scope — the `keys use` approval ceremony also works headlessly', async () => {
+    const res = await POST(deviceAuthRequest({ client_id: CLIENT_ID, scope: 'activate_key:tok123' }) as never);
+    expect(res.status).toBe(200);
+    expect(createDeviceAuthorization).toHaveBeenCalledWith(
+      expect.objectContaining({ scopes: expect.arrayContaining(['activate_key:tok123']) }),
+    );
+  });
+
+  it('accepts a named mint scope — `keys create --device`', async () => {
+    const res = await POST(
+      deviceAuthRequest({ client_id: CLIENT_ID, scope: 'drive:drv1:member name:remote-key offline_access' }) as never,
+    );
+    expect(res.status).toBe(200);
+    expect(createDeviceAuthorization).toHaveBeenCalledWith(
+      expect.objectContaining({ scopes: expect.arrayContaining(['name:remote-key']) }),
+    );
+  });
+
+  it('rejects a mint scope with no name — an unnamed key would redeem to a generic placeholder the user cannot identify', async () => {
+    const res = await POST(
+      deviceAuthRequest({ client_id: CLIENT_ID, scope: 'drive:drv1:member offline_access' }) as never,
     );
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'invalid_scope' });
     expect(createDeviceAuthorization).not.toHaveBeenCalled();
   });
 
-  it('rejects an all_drives scope outright — pollDeviceToken has no isAllDrivesGrant branch and would mint a token that resolves to zero access', async () => {
+  it('still rejects an all_drives scope outright — a device-minted all_drives token lands in the ambiguous allowedDriveIds: [] shape', async () => {
     const res = await POST(deviceAuthRequest({ client_id: CLIENT_ID, scope: 'all_drives offline_access' }) as never);
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'invalid_scope' });

@@ -82,7 +82,7 @@ export interface RouteEntry extends Route {
 }
 
 const OTHER_ROUTES: readonly RouteEntry[] = [
-  { path: ['login'], handler: loginHandler, summary: 'Log in via the browser (loopback + PKCE)' },
+  { path: ['login'], handler: loginHandler, summary: 'Log in via the browser, or --device for a headless machine' },
   { path: ['logout'], handler: logoutHandler, summary: 'Revoke and remove a stored credential' },
   { path: ['whoami'], handler: whoamiHandler, summary: 'Show the currently authenticated identity' },
   // `keys` (Phase 9 task 5, consolidated Phase 9 follow-up) is the sole
@@ -94,10 +94,10 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   // `keys edit`/`update` flag subcommand — per this phase's plan,
   // scope-editing is wizard-only.
   { path: ['keys'], handler: keysHandler, summary: 'Guided wizard to create/list/edit/revoke access keys' },
-  { path: ['keys', 'create'], handler: tokensCreateHandler, summary: 'Mint a new access key' },
+  { path: ['keys', 'create'], handler: tokensCreateHandler, summary: 'Mint a new access key (--device for a headless machine)' },
   { path: ['keys', 'list'], handler: tokensListHandler, summary: 'List access keys' },
   { path: ['keys', 'revoke'], handler: tokensRevokeHandler, summary: 'Revoke an access key' },
-  { path: ['keys', 'use'], handler: keysUseHandler, summary: "Set this machine's active key (browser approval)" },
+  { path: ['keys', 'use'], handler: keysUseHandler, summary: "Set this machine's active key (--device for a headless machine)" },
   { path: ['mcp'], handler: mcpHandler, longRunning: true, summary: 'Serve the full operation registry as an MCP stdio server' },
   { path: ['drives', 'list'], handler: drivesListHandler, summary: 'List drives' },
   { path: ['drives', 'create'], handler: drivesCreateHandler, summary: 'Create a drive' },
