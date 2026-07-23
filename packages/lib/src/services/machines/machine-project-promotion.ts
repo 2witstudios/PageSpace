@@ -453,6 +453,19 @@ export function isReclaimableAfterCarry({
 }
 
 /**
+ * Is this the specific failure `git reset --mixed HEAD~1` produces when
+ * `HEAD` has NO parent — a carry commit born on an empty remote, which makes
+ * it the repository's root commit? (Pure.)
+ *
+ * Distinguishing this from a genuine reset failure matters: treating it as
+ * `carry_failed` would destroy the freshly-provisioned Sprite and refuse a
+ * promotion that the carry actually could have completed.
+ */
+export function isMissingParentCommitError(gitOutput: string): boolean {
+  return /ambiguous argument|unknown revision/i.test(gitOutput);
+}
+
+/**
  * Inspect the project's OLD home on the machine Sprite. Promotion is only safe
  * when this returns `absent` or `clean`.
  *
@@ -692,7 +705,22 @@ async function carryCheckoutToProjectSprite({
     // untracked return untracked. The staged/unstaged split is the one thing
     // not preserved — everything comes back unstaged.
     const reset = await runOnProject(['reset', '--mixed', 'HEAD~1']);
-    if (!reset.success || reset.exitCode !== 0) return failed('restoring the carried working tree', reset);
+    if (!reset.success || reset.exitCode !== 0) {
+      // A checkout carried from an EMPTY remote makes the carry commit the
+      // repo's ROOT commit — it has no parent, so `HEAD~1` does not resolve
+      // and git refuses with "ambiguous argument … unknown revision" rather
+      // than resetting. That is not a real failure, just a parent that
+      // cannot exist; un-name the branch (HEAD becomes unborn) and `reset`
+      // with no target, which unstages against the implicit empty tree —
+      // the same "everything comes back uncommitted" outcome, for a commit
+      // that has nothing to point "back" to.
+      const resetOutput = reset.success ? reset.stderr || reset.stdout : '';
+      if (!isMissingParentCommitError(resetOutput)) return failed('restoring the carried working tree', reset);
+      const unref = await runOnProject(['update-ref', '-d', `refs/heads/${plan.branch}`]);
+      if (!unref.success || unref.exitCode !== 0) return failed('clearing the root carry commit', unref);
+      const rootReset = await runOnProject(['reset']);
+      if (!rootReset.success || rootReset.exitCode !== 0) return failed('restoring the carried working tree', rootReset);
+    }
   }
 
   // Best-effort cleanup of the staged bundle on both sides: it is a duplicate of

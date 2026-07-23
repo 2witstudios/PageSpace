@@ -10,6 +10,7 @@ import {
   buildCarryPlan,
   parseFileSizeBytes,
   isReclaimableAfterCarry,
+  isMissingParentCommitError,
   MAX_CARRY_BUNDLE_BYTES,
   type PromoteProjectDeps,
   type ProjectStorageMeasurement,
@@ -1003,6 +1004,17 @@ describe('isReclaimableAfterCarry', () => {
   });
 });
 
+describe('isMissingParentCommitError', () => {
+  it('given the exact message git raises for a parentless HEAD~1, should recognize it', () => {
+    expect(isMissingParentCommitError("fatal: ambiguous argument 'HEAD~1': unknown revision or path not in the working tree.")).toBe(true);
+  });
+
+  it('given an unrelated reset failure, should not misclassify it as the root-commit case', () => {
+    expect(isMissingParentCommitError('fatal: Could not reset index file to revision \'HEAD~1\'.')).toBe(false);
+    expect(isMissingParentCommitError('')).toBe(false);
+  });
+});
+
 describe('promoteProject — carryDirty opt-in (#2207)', () => {
   const DIRTY_STATUS = `${CLEAN_STATUS} M src/index.ts\n?? notes.md\n`;
   /** What the machine checkout looks like AFTER the carry commit: clean, one ahead. */
@@ -1307,6 +1319,72 @@ describe('promoteProject — every step of the carry fails closed (#2207)', () =
     const machine = makeMachineSandbox({ status: DIRTY });
     const { deps, killCalls } = makeDeps({}, { machine });
     failProjectGit(deps, 'reset');
+
+    expect(await carry(deps)).toMatchObject({ ok: false, reason: 'carry_failed' });
+    expect(killCalls).toEqual(['sbx-project-1']);
+  });
+
+  it('given a carry commit that is the repository ROOT (cloned from an empty remote), should restore the work instead of failing the promotion', async () => {
+    // `HEAD~1` does not exist for a parentless commit — git refuses the reset
+    // with exactly this message, not a generic failure. That refusal is the
+    // signal to fall back to the root-commit path, not a reason to give up.
+    const machine = makeMachineSandbox({ status: DIRTY });
+    const { deps, byId } = makeDeps({}, { machine });
+    const host = deps.host;
+    deps.host = {
+      ...host,
+      provision: async (args) => {
+        const handle = await host.provision(args);
+        return {
+          ...handle,
+          exec: async (e) =>
+            gitSubcommand(e.args) === 'reset' && e.args?.includes('HEAD~1')
+              ? {
+                  exitCode: 128,
+                  stdout: '',
+                  stderr: "fatal: ambiguous argument 'HEAD~1': unknown revision or path not in the working tree.",
+                }
+              : handle.exec(e),
+        };
+      },
+    };
+
+    const result = await carry(deps);
+
+    expect(result).toMatchObject({ ok: true, carried: true });
+    // The failed `HEAD~1` attempt is intercepted before it reaches the fake
+    // Sprite's own log (it never really ran against a repo), so only the
+    // fallback pair shows up after `checkout`.
+    const projectGit = byId.get('sbx-project-1')?.execLog.filter((e) => e.cmd === 'git').map((e) => gitSubcommand(e.args));
+    expect(projectGit).toEqual(['clone', 'fetch', 'checkout', 'update-ref', 'reset']);
+    const unref = byId.get('sbx-project-1')?.execLog.find((e) => gitSubcommand(e.args) === 'update-ref');
+    expect(unref?.args).toEqual(['update-ref', '-d', 'refs/heads/main']);
+  });
+
+  it('given the root-commit fallback unable to clear the ref, should fail the carry', async () => {
+    const machine = makeMachineSandbox({ status: DIRTY });
+    const { deps, killCalls } = makeDeps({}, { machine });
+    const host = deps.host;
+    deps.host = {
+      ...host,
+      provision: async (args) => {
+        const handle = await host.provision(args);
+        return {
+          ...handle,
+          exec: async (e) => {
+            if (gitSubcommand(e.args) === 'reset' && e.args?.includes('HEAD~1')) {
+              return {
+                exitCode: 128,
+                stdout: '',
+                stderr: "fatal: ambiguous argument 'HEAD~1': unknown revision or path not in the working tree.",
+              };
+            }
+            if (gitSubcommand(e.args) === 'update-ref') return { exitCode: 1, stdout: '', stderr: 'fatal: cannot lock ref' };
+            return handle.exec(e);
+          },
+        };
+      },
+    };
 
     expect(await carry(deps)).toMatchObject({ ok: false, reason: 'carry_failed' });
     expect(killCalls).toEqual(['sbx-project-1']);
