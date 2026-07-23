@@ -687,6 +687,11 @@
       "import": "./dist/services/machines/agent-terminals-store.js",
       "require": "./dist/services/machines/agent-terminals-store.js"
     },
+    "./services/machines/session-scrollback": {
+      "types": "./dist/services/machines/session-scrollback.d.ts",
+      "import": "./dist/services/machines/session-scrollback.js",
+      "require": "./dist/services/machines/session-scrollback.js"
+    },
     "./services/machines/agent-terminals": {
       "types": "./dist/services/machines/agent-terminals.d.ts",
       "import": "./dist/services/machines/agent-terminals.js",
@@ -1948,6 +1953,9 @@
       ],
       "services/machines/agent-terminals-store": [
         "./dist/services/machines/agent-terminals-store.d.ts"
+      ],
+      "services/machines/session-scrollback": [
+        "./dist/services/machines/session-scrollback.d.ts"
       ],
       "services/machines/agent-terminals": [
         "./dist/services/machines/agent-terminals.d.ts"

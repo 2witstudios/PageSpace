@@ -100,6 +100,9 @@ function makeStore(seed: MachineAgentTerminalRecord[] = []) {
         agentType: input.agentType,
         command: input.command,
         streamSessionId: null,
+        coldTail: null,
+        coldTailAt: null,
+        coldTailHasOutput: false,
         createdAt: input.now,
         updatedAt: input.now,
       };
@@ -110,6 +113,16 @@ function makeStore(seed: MachineAgentTerminalRecord[] = []) {
       for (const [k, row] of rows) {
         if (row.id === id) {
           rows.set(k, { ...row, streamSessionId, updatedAt: now });
+          return;
+        }
+      }
+    },
+    recordColdTail: async ({ id, tail, hasOutput, endedAt }) => {
+      for (const [k, row] of rows) {
+        if (row.id === id) {
+          // Ordered by endedAt, not write-arrival order — see the store interface doc.
+          if (row.coldTailAt !== null && row.coldTailAt >= endedAt) return;
+          rows.set(k, { ...row, coldTail: tail, coldTailAt: endedAt, coldTailHasOutput: hasOutput });
           return;
         }
       }
@@ -181,6 +194,9 @@ function makeLegacyRow(overrides: Partial<MachineAgentTerminalRecord> = {}): Mac
     agentType: 'pagespace-cli',
     command: null,
     streamSessionId: null,
+    coldTail: null,
+    coldTailAt: null,
+    coldTailHasOutput: false,
     createdAt: NOW,
     updatedAt: NOW,
     ...overrides,
@@ -1324,6 +1340,9 @@ describe('killAgentTerminal', () => {
         agentType: 'shell',
         command: null,
         streamSessionId: 'sess-abc',
+        coldTail: null,
+        coldTailAt: null,
+        coldTailHasOutput: false,
         createdAt: NOW,
         updatedAt: NOW,
       },
@@ -1363,6 +1382,9 @@ describe('killAgentTerminal', () => {
         agentType: 'shell',
         command: null,
         streamSessionId: 'sess-proj',
+        coldTail: null,
+        coldTailAt: null,
+        coldTailHasOutput: false,
         createdAt: NOW,
         updatedAt: NOW,
       },
@@ -1400,6 +1422,9 @@ describe('killAgentTerminal', () => {
         agentType: 'shell',
         command: null,
         streamSessionId: 'sess-machine',
+        coldTail: null,
+        coldTailAt: null,
+        coldTailHasOutput: false,
         createdAt: NOW,
         updatedAt: NOW,
       },
@@ -1438,6 +1463,9 @@ describe('killAgentTerminal', () => {
         agentType: 'shell',
         command: null,
         streamSessionId: 'sess-abc',
+        coldTail: null,
+        coldTailAt: null,
+        coldTailHasOutput: false,
         createdAt: NOW,
         updatedAt: NOW,
       },
@@ -1468,6 +1496,9 @@ describe('killAgentTerminal', () => {
         agentType: 'shell',
         command: null,
         streamSessionId: 'sess-dangling',
+        coldTail: null,
+        coldTailAt: null,
+        coldTailHasOutput: false,
         createdAt: NOW,
         updatedAt: NOW,
       },
@@ -1498,6 +1529,9 @@ describe('killAgentTerminal', () => {
         agentType: 'shell',
         command: null,
         streamSessionId: 'sess-abc',
+        coldTail: null,
+        coldTailAt: null,
+        coldTailHasOutput: false,
         createdAt: NOW,
         updatedAt: NOW,
       },
@@ -1535,6 +1569,9 @@ describe('killAgentTerminal', () => {
         agentType: 'shell',
         command: null,
         streamSessionId: 'sess-abc',
+        coldTail: null,
+        coldTailAt: null,
+        coldTailHasOutput: false,
         createdAt: NOW,
         updatedAt: NOW,
       },
@@ -1552,6 +1589,63 @@ describe('killAgentTerminal', () => {
 
     expect(result).toEqual({ ok: false, reason: 'error' });
     expect(rows.size).toBe(1);
+  });
+});
+
+describe('store.recordColdTail (issue #2205)', () => {
+  it('given a row with no prior cold tail, should write the tail, endedAt, and hasOutput', async () => {
+    const { store, rows } = makeStore();
+    const spawned = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps: makeDeps({ store }) });
+    const id = spawned.ok ? spawned.id : '';
+    const endedAt = new Date('2026-01-02T00:00:00Z');
+
+    await store.recordColdTail({ id, tail: 'last output', hasOutput: true, endedAt });
+
+    const row = [...rows.values()].find((r) => r.id === id);
+    expect(row).toMatchObject({ coldTail: 'last output', coldTailAt: endedAt, coldTailHasOutput: true });
+  });
+
+  it('given a row that already has an OLDER cold tail, should overwrite it in place rather than appending — the tail belongs to the LAST dead incarnation only', async () => {
+    const { store, rows } = makeStore();
+    const spawned = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps: makeDeps({ store }) });
+    const id = spawned.ok ? spawned.id : '';
+    await store.recordColdTail({ id, tail: 'old incarnation', hasOutput: true, endedAt: new Date('2026-01-01') });
+
+    const endedAt = new Date('2026-01-03T00:00:00Z');
+    await store.recordColdTail({ id, tail: 'new incarnation', hasOutput: false, endedAt });
+
+    const row = [...rows.values()].find((r) => r.id === id);
+    expect(row).toMatchObject({ coldTail: 'new incarnation', coldTailAt: endedAt, coldTailHasOutput: false });
+  });
+
+  it('given a write with an OLDER (or equal) endedAt than what is already stored, should be a no-op — Codex P2: a fire-and-forget persist must not let write-arrival order (rather than endedAt) decide which incarnation survives', async () => {
+    const { store, rows } = makeStore();
+    const spawned = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps: makeDeps({ store }) });
+    const id = spawned.ok ? spawned.id : '';
+    const newerEndedAt = new Date('2026-01-05T00:00:00Z');
+    await store.recordColdTail({ id, tail: 'the newer incarnation', hasOutput: true, endedAt: newerEndedAt });
+
+    // A delayed write for an EARLIER teardown lands after the newer one already landed.
+    await store.recordColdTail({ id, tail: 'a stale, delayed write', hasOutput: false, endedAt: new Date('2026-01-03T00:00:00Z') });
+    // Equal endedAt (a duplicate delivery of the same teardown) is also a no-op.
+    await store.recordColdTail({ id, tail: 'duplicate delivery', hasOutput: false, endedAt: newerEndedAt });
+
+    const row = [...rows.values()].find((r) => r.id === id);
+    expect(row).toMatchObject({ coldTail: 'the newer incarnation', coldTailAt: newerEndedAt, coldTailHasOutput: true });
+  });
+
+  it('should NOT bump updatedAt — Codex P2: that column feeds readSessionState\'s liveness fallback, and a just-ended PTY must not read as active for up to SESSION_ACTIVE_WINDOW_MS when the realtime sweep is unreachable', async () => {
+    const { store, rows } = makeStore();
+    const spawned = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps: makeDeps({ store }) });
+    const id = spawned.ok ? spawned.id : '';
+    const rowBefore = [...rows.values()].find((r) => r.id === id);
+    const updatedAtBefore = rowBefore?.updatedAt;
+
+    // A teardown recorded long after the row was created/touched.
+    await store.recordColdTail({ id, tail: 'bye', hasOutput: true, endedAt: new Date('2026-06-01T00:00:00Z') });
+
+    const rowAfter = [...rows.values()].find((r) => r.id === id);
+    expect(rowAfter?.updatedAt).toEqual(updatedAtBefore);
   });
 });
 

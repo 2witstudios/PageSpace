@@ -28,6 +28,7 @@ import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth
 import { annotateToolOutput } from '@pagespace/lib/services/sandbox/injection-seam';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import type { MachineNodeHandle } from '@pagespace/lib/services/machines/machine-pane-binding';
+import { scrollbackLines, tailOfLines } from '@pagespace/lib/services/machines/session-scrollback';
 import type { SessionIoResult, SessionReadInput, SessionSendInput } from './session-tools';
 
 /** Default scrollback tail when the model does not ask for a size. */
@@ -91,6 +92,77 @@ function nodeNames(node: { project?: string; branch?: string }): { projectName?:
   };
 }
 
+/** Apply a reader's `limit` (in lines) to an already-normalized stored cold tail — the reader-facing half of `session-scrollback.ts`'s shared core. */
+function limitColdTail(tail: string, limit: number): string {
+  return tailOfLines(scrollbackLines([tail]), limit);
+}
+
+/**
+ * Answer `read_session` for a session with no live PTY (issue #2205): the row
+ * may carry a cold tail from its LAST DEAD incarnation, persisted on teardown
+ * by the realtime bridge (`agent-terminal-handler.ts`'s
+ * `planColdTailPersist`/`persistColdTail`). Pure so it is unit-tested without
+ * a transport.
+ *
+ * No `cold` at all means this row has never been torn down (or was torn down
+ * before this persist path existed) — today's answer, byte-for-byte
+ * unchanged, since there is genuinely nothing more honest to say. A `cold`
+ * carrying an empty tail but `hasOutput: true` is a THIRD, distinct case (a
+ * burst larger than the ring left nothing retained) — never the same as
+ * silence.
+ *
+ * The live/cold distinction stays explicit no matter which branch answers:
+ * `live` is always `false` here, and the note says plainly that this is the
+ * FINAL scrollback of a PTY that has since ENDED — never presented as
+ * current output.
+ */
+export function planColdReadAnswer({
+  name,
+  limit,
+  cold,
+}: {
+  name: string;
+  limit?: number;
+  cold?: { tail: string; at: Date; hasOutput: boolean };
+}): SessionIoResult {
+  if (!cold) {
+    return {
+      success: true,
+      name,
+      live: false,
+      hasOutput: false,
+      watchers: 0,
+      output: '',
+      note: 'This shell session has no running terminal right now — either its PTY has never started (it starts when a human first opens it) or it has since ended. This is NOT the same as it having produced no output.',
+    };
+  }
+
+  const tail = limitColdTail(cold.tail, limit ?? DEFAULT_TAIL_LINES);
+  const endedNote = `This shell session's PTY has ENDED (at ${cold.at.toISOString()}) — this is its final scrollback, NOT live output, and nothing typed into it now would run.`;
+
+  if (cold.hasOutput && tail.length === 0) {
+    return {
+      success: true,
+      name,
+      live: false,
+      hasOutput: true,
+      watchers: 0,
+      output: '',
+      note: `${endedNote} It produced output before ending, but none of it is still in the retained tail (a large burst pushed it out).`,
+    };
+  }
+
+  return {
+    success: true,
+    name,
+    live: false,
+    hasOutput: cold.hasOutput,
+    watchers: 0,
+    output: annotateToolOutput({ text: tail, response: 'annotate' }),
+    note: endedNote,
+  };
+}
+
 const UNREACHABLE_SEND =
   'Could not reach the terminal service, so this input was NOT delivered. Nothing was typed into the session.';
 
@@ -108,7 +180,7 @@ export function createPtySessionIo(transport: RealtimeSessionIoTransport): {
   liveness: (node: MachineNodeHandle, names: string[]) => Promise<Set<string> | undefined>;
 } {
   return {
-    read: async ({ identity, limit }) => {
+    read: async ({ identity, limit, cold }) => {
       const { machineId, projectName, branchName, name } = identity.address;
       const answer = await transport.read({
         machineId,
@@ -121,16 +193,10 @@ export function createPtySessionIo(transport: RealtimeSessionIoTransport): {
       const entry = answer?.success ? answer.sessions.find((session) => session.name === name) : undefined;
       if (!entry) return { success: false, error: UNREACHABLE_READ };
 
+      // A cold tail is history, never consulted while the PTY is live — liveness
+      // always wins, exactly like `readSessionState`'s `'reserved'`/`'idle'` derivation.
       if (!entry.live) {
-        return {
-          success: true,
-          name,
-          live: false,
-          hasOutput: false,
-          watchers: 0,
-          output: '',
-          note: 'This shell session has no running terminal right now — either its PTY has never started (it starts when a human first opens it) or it has since ended. This is NOT the same as it having produced no output.',
-        };
+        return planColdReadAnswer({ name, limit, cold });
       }
 
       return {
