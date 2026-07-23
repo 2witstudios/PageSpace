@@ -121,6 +121,7 @@ function buildBaseDeps(): Pick<SpawnAgentTerminalDeps & KillAgentTerminalDeps, '
       findById: async (id) => (await getMachineAgentTerminalStore()).findById(id),
       create: async (input) => (await getMachineAgentTerminalStore()).create(input),
       updateStreamSessionId: async (input) => (await getMachineAgentTerminalStore()).updateStreamSessionId(input),
+      recordColdTail: async (input) => (await getMachineAgentTerminalStore()).recordColdTail(input),
       remove: async (scope, name) => (await getMachineAgentTerminalStore()).remove(scope, name),
     },
   };

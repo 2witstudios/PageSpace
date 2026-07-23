@@ -2,6 +2,7 @@ import { describe, it } from 'vitest';
 import { assert } from './riteway';
 import {
   createPtySessionIo,
+  planColdReadAnswer,
   type RealtimeSessionIoTransport,
   type RealtimeSessionReadResponse,
   type RealtimeSessionSendResponse,
@@ -85,19 +86,115 @@ describe('readPtySession', () => {
     });
   });
 
-  it('given a session with no live PTY, should say live:false rather than returning empty output', async () => {
+  it('given a session with no live PTY and no cold tail on its row, should say live:false rather than returning empty output', async () => {
     const { transport: fake } = transport();
     const result = await createPtySessionIo(fake).read({ identity: IDENTITY, actor: ACTOR });
 
     assert({
-      given: 'a cold (never-started or detached) shell session',
-      should: 'report live:false honestly instead of an empty scrollback',
+      given: 'a cold (never-started or detached) shell session with no recorded cold tail',
+      should: "report live:false honestly instead of an empty scrollback — today's exact answer, unchanged",
       actual: {
         success: result.success,
         live: (result as { live?: boolean }).live,
         output: (result as { output?: string }).output,
       },
       expected: { success: true, live: false, output: '' },
+    });
+  });
+
+  it('given a session with no live PTY but a cold tail on its row, should answer live:false WITH the dead PTY\'s final scrollback (issue #2205)', async () => {
+    const { transport: fake } = transport();
+    const at = new Date('2026-01-01T00:00:00Z');
+    const result = await createPtySessionIo(fake).read({
+      identity: IDENTITY,
+      actor: ACTOR,
+      cold: { tail: 'last words\nmore', at, hasOutput: true },
+    });
+
+    const output = (result as { output?: string }).output ?? '';
+    assert({
+      given: 'a cold row carrying a persisted tail from its last dead incarnation',
+      should: 'answer live:false but WITH the tail, plainly labeled as from an ended PTY',
+      actual: {
+        success: result.success,
+        live: (result as { live?: boolean }).live,
+        hasOutput: (result as { hasOutput?: boolean }).hasOutput,
+        carriesTail: output.includes('last words\nmore'),
+        mentionsEnded: ((result as { note?: string }).note ?? '').includes('ENDED'),
+        mentionsTime: ((result as { note?: string }).note ?? '').includes(at.toISOString()),
+      },
+      expected: {
+        success: true,
+        live: false,
+        hasOutput: true,
+        carriesTail: true,
+        mentionsEnded: true,
+        mentionsTime: true,
+      },
+    });
+  });
+
+  it('given a cold tail, should respect the caller\'s limit exactly as a live read does', async () => {
+    const { transport: fake } = transport();
+    const at = new Date('2026-01-01T00:00:00Z');
+    const result = await createPtySessionIo(fake).read({
+      identity: IDENTITY,
+      actor: ACTOR,
+      limit: 1,
+      cold: { tail: 'line1\nline2\nline3', at, hasOutput: true },
+    });
+    const output = (result as { output?: string }).output ?? '';
+
+    assert({
+      given: 'a cold tail with more lines than the requested limit',
+      should: 'keep only the tail of it, same as a live read',
+      actual: { includesOnlyLast: output.includes('line3') && !output.includes('line1') },
+      expected: { includesOnlyLast: true },
+    });
+  });
+
+  it('given a cold row whose dead PTY produced output but retained none of it, should say so distinctly from silence', async () => {
+    const { transport: fake } = transport();
+    const at = new Date('2026-01-01T00:00:00Z');
+    const result = await createPtySessionIo(fake).read({
+      identity: IDENTITY,
+      actor: ACTOR,
+      cold: { tail: '', at, hasOutput: true },
+    });
+
+    assert({
+      given: 'hasOutput true but an empty stored cold tail (a burst larger than the ring)',
+      should: 'report hasOutput:true with empty output and a note explaining the loss — never read as silence',
+      actual: {
+        success: result.success,
+        live: (result as { live?: boolean }).live,
+        hasOutput: (result as { hasOutput?: boolean }).hasOutput,
+        output: (result as { output?: string }).output,
+        noteMentionsRetention: ((result as { note?: string }).note ?? '').length > 0,
+      },
+      expected: { success: true, live: false, hasOutput: true, output: '', noteMentionsRetention: true },
+    });
+  });
+
+  it('given a LIVE session, should ignore any cold columns entirely — liveness always wins', async () => {
+    const { transport: fake } = transport({ read: liveRead({ output: 'still running' }) });
+    const at = new Date('2026-01-01T00:00:00Z');
+    const result = await createPtySessionIo(fake).read({
+      identity: IDENTITY,
+      actor: ACTOR,
+      cold: { tail: 'a stale ghost of a past incarnation', at, hasOutput: true },
+    });
+
+    const output = (result as { output?: string }).output ?? '';
+    assert({
+      given: 'a live PTY on a row that also carries a stale cold tail from a PAST incarnation',
+      should: 'answer live with the LIVE scrollback — the cold columns are history, never consulted while live',
+      actual: {
+        live: (result as { live?: boolean }).live,
+        carriesLiveOutput: output.includes('still running'),
+        carriesStaleCold: output.includes('a stale ghost'),
+      },
+      expected: { live: true, carriesLiveOutput: true, carriesStaleCold: false },
     });
   });
 
@@ -122,6 +219,92 @@ describe('readPtySession', () => {
       should: 'send exactly that address — never a caller-supplied one',
       actual: recorded.reads,
       expected: [{ machineId: 'm1', projectName: 'repo', branchName: 'feature', names: ['sh'], limit: 7 }],
+    });
+  });
+});
+
+describe('planColdReadAnswer (pure — issue #2205)', () => {
+  it('given no cold tail, should answer exactly like today\'s cold answer', () => {
+    assert({
+      given: 'a name with no cold columns',
+      should: "match today's live:false answer byte-for-byte",
+      actual: planColdReadAnswer({ name: 'sh' }),
+      expected: {
+        success: true,
+        name: 'sh',
+        live: false,
+        hasOutput: false,
+        watchers: 0,
+        output: '',
+        note: 'This shell session has no running terminal right now — either its PTY has never started (it starts when a human first opens it) or it has since ended. This is NOT the same as it having produced no output.',
+      },
+    });
+  });
+
+  it('given a cold tail, should answer live:false with the tail (framed as untrusted output) and hasOutput carried from the cold record', () => {
+    const at = new Date('2026-02-01T00:00:00Z');
+    const result = planColdReadAnswer({ name: 'sh', cold: { tail: 'goodbye', at, hasOutput: true } });
+    const output = (result as { output?: string }).output ?? '';
+    assert({
+      given: 'a cold record with a non-empty tail',
+      should: 'answer live:false, hasOutput from the record, and the tail (framed as untrusted output) as output',
+      actual: {
+        success: result.success,
+        live: (result as { live?: boolean }).live,
+        hasOutput: (result as { hasOutput?: boolean }).hasOutput,
+        carriesTail: output.includes('goodbye'),
+      },
+      expected: { success: true, live: false, hasOutput: true, carriesTail: true },
+    });
+  });
+
+  it('given a limit smaller than the stored tail, should apply it exactly as a live read would', () => {
+    const at = new Date('2026-02-01T00:00:00Z');
+    const result = planColdReadAnswer({ name: 'sh', limit: 1, cold: { tail: 'a\nb\nc', at, hasOutput: true } });
+    const output = (result as { output?: string }).output ?? '';
+    assert({
+      given: 'limit: 1 against a three-line stored tail',
+      should: 'keep only the last line',
+      actual: { keepsLast: output.includes('c'), dropsEarlier: !output.includes('a\nb') && !output.includes('\na\n') },
+      expected: { keepsLast: true, dropsEarlier: true },
+    });
+  });
+
+  it('given limit: 0, should answer liveness-shaped with no output — same contract a live read honors', () => {
+    const at = new Date('2026-02-01T00:00:00Z');
+    const result = planColdReadAnswer({ name: 'sh', limit: 0, cold: { tail: 'a\nb', at, hasOutput: true } });
+    assert({
+      given: 'a liveness-only ask against a cold row with a tail',
+      should: 'ship no output',
+      actual: (result as { output?: string }).output,
+      expected: '',
+    });
+  });
+
+  it('given the dead PTY produced output but retained none, should say so — never read as silence', () => {
+    const at = new Date('2026-02-01T00:00:00Z');
+    const result = planColdReadAnswer({ name: 'sh', cold: { tail: '', at, hasOutput: true } });
+    assert({
+      given: 'hasOutput true with an empty stored tail',
+      should: 'report hasOutput:true, empty output, and a note explaining the loss',
+      actual: {
+        hasOutput: (result as { hasOutput?: boolean }).hasOutput,
+        output: (result as { output?: string }).output,
+        hasNote: typeof (result as { note?: string }).note === 'string' && ((result as { note?: string }).note?.length ?? 0) > 0,
+      },
+      expected: { hasOutput: true, output: '', hasNote: true },
+    });
+  });
+
+  it('given the note, should state plainly that this PTY has ENDED and include when', () => {
+    const at = new Date('2026-03-04T05:06:07Z');
+    const result = planColdReadAnswer({ name: 'sh', cold: { tail: 'x', at, hasOutput: true } });
+    const note = (result as { note?: string }).note ?? '';
+    assert({
+      given: 'a cold tail answer',
+      should: 'name the PTY as ENDED and give its end time',
+      actual: { mentionsEnded: note.includes('ENDED'), mentionsTime: note.includes(at.toISOString()) },
+      expected: { mentionsEnded: true, mentionsTime: true },
     });
   });
 });
