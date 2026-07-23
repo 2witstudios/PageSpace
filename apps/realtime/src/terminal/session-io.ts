@@ -169,6 +169,33 @@ export interface SessionSendResult {
 }
 
 /**
+ * Resolve a named session to a live one, starting it if it has never run and
+ * the caller asked to (`startPlan.start`) — the one piece of logic
+ * `handleSessionSendRequest` and `handleSessionReadRequest`'s per-name loop
+ * would otherwise each carry their own copy of.
+ *
+ * `started` is reported separately from `session` because a caller (the
+ * `SessionReadEntry`/`SessionSendResult` `started` field) needs to tell "this
+ * call booted it" apart from "it was already live" — the same session object
+ * either way.
+ */
+async function resolveOrStartSession(
+  deps: SessionIoDeps,
+  address: SessionAddress,
+  startPlan: Extract<ReturnType<typeof planSessionStart>, { ok: true }>,
+  abandoned: () => boolean,
+): Promise<{ session: TerminalSession | undefined; started: boolean }> {
+  const live = deps.sessionMap.getByKey(deps.sessionKeyFor(address));
+  // A shell that has never run is not a refusal — it is a shell to START, so
+  // long as the caller asked for one. This is the whole of issue #2206: the PTY
+  // begins at the first agent IO, not at the first human to open the pane.
+  const started = live === undefined && startPlan.start
+    ? await deps.startSession?.({ ...address, userId: startPlan.userId }, abandoned)
+    : undefined;
+  return { session: live ?? started, started: started !== undefined };
+}
+
+/**
  * Type stdin into a live PTY on behalf of a machine-bound agent.
  *
  * The write goes through `session.command.write` — the SAME call a human
@@ -220,14 +247,7 @@ export async function handleSessionSendRequest(
     branchName: payload.branchName,
     name: payload.name,
   };
-  const live = deps.sessionMap.getByKey(deps.sessionKeyFor(address));
-  // A shell that has never run is not a refusal — it is a shell to START, so
-  // long as the caller asked for one. This is the whole of issue #2206: the PTY
-  // begins at the first agent IO, not at the first human to open the pane.
-  const started = live === undefined && startPlan.start
-    ? await deps.startSession?.({ ...address, userId: startPlan.userId }, abandoned)
-    : undefined;
-  const session = live ?? started;
+  const { session, started } = await resolveOrStartSession(deps, address, startPlan, abandoned);
   // Nothing running, and nothing we could start: say so. Swallowing the
   // keystrokes with a 200 would let the caller believe a command it never ran
   // is running. This also covers the caller having ABANDONED the request
@@ -400,24 +420,25 @@ export async function handleSessionReadRequest(
       branchName: payload.branchName,
       name,
     };
-    const live = deps.sessionMap.getByKey(deps.sessionKeyFor(address));
     // Reading a shell that has never run STARTS it (issue #2206). A reader has
     // no other way to get one going, and answering "never started" to a caller
     // that just asked to read it is the dead end this removes. Only ever
     // reached for a single-name read.
-    const started = live === undefined && startPlan.start
-      ? await deps.startSession?.({ ...address, userId: startPlan.userId }, abandoned)
-      : undefined;
-    const session = live ?? started;
+    const { session, started } = await resolveOrStartSession(deps, address, startPlan, abandoned);
     if (!session) return { name, live: false, hasOutput: false, viewers: 0, output: '' };
     // A deliberate single-session read is USE, exactly like a delivered send
     // (see `armIdleReap`) — an agent polling `read_session` on a long build is
     // as real a consumer of this session as one typing into it, and letting
     // its reap run unmoved would kill the build out from under the very agent
-    // reading it. Gated on `payload.start`, not `started`: this must fire on
-    // every read of an already-live session too, not only the one that boots
-    // it. The `list_sessions` liveness sweep never sets `start`, so a sweep
-    // over many viewer-less sessions can never touch any of their reaps.
+    // reading it. Gated on the RAW `payload.start` flag, not `startPlan.start`
+    // or `started`: this must fire on every read of an already-live session
+    // too (not only the one that boots it), and it must fire independently of
+    // `hasStarter` — a deployment that cannot START a new headless session can
+    // still have an existing one to rearm, so tying this to start CAPABILITY
+    // would be the wrong signal. `payload.start` is the caller's declared
+    // intent to treat this as a real interactive read; the `list_sessions`
+    // liveness sweep never sets it, so a sweep over many viewer-less sessions
+    // can never touch any of their reaps.
     if (payload.start === true && session.viewers.size === 0) deps.rearmIdleReap?.(session);
     return {
       name,

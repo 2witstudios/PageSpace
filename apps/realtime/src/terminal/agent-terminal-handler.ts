@@ -801,9 +801,13 @@ export interface EnsureSessionRequest {
   /**
    * Has the requester gone away since asking? Checked at the last `await`
    * before the PTY exists, so an abandoned create declines instead of starting
-   * an agent nobody will ever see. Always `false` for a headless start: an HTTP
-   * request that has hung up leaves no equivalent signal, and the session it
-   * asked for is addressed by KEY — the next `send_session` finds it.
+   * an agent nobody will ever see. For a headless start (`index.ts`'s
+   * `startHeadlessAgentTerminal`), this is the HTTP request's own connection —
+   * the web tier's `fetch` to this endpoint times out sooner than a cold
+   * Sprite wake can finish, and without tracking that, a client who gave up
+   * could see its retried input executed twice on a create that finished
+   * after the fact. Addressed by KEY regardless: the next `send_session`
+   * finds whatever this create did or didn't leave behind.
    */
   abandoned: () => boolean;
   /**
