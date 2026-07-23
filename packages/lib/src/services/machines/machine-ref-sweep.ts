@@ -154,6 +154,42 @@ export interface SweepMachineRefsResult {
   failures: number;
 }
 
+/**
+ * Plans and applies one holder's rewrite, isolated from every other holder's
+ * outcome: a throw is caught and counted as a failure rather than propagated,
+ * so one blocked write (e.g. a concurrent config save bumped its revision)
+ * never stops the rest of the batch. Shared by the agent and global-config
+ * loops below — the two differ only in which `write` callback they pass.
+ */
+async function applyRewrite<T extends MachineRefHolder>(
+  config: T,
+  dead: ReadonlySet<string>,
+  write: (input: MachineRefWrite<T>) => Promise<boolean>,
+): Promise<'updated' | 'skipped' | 'failed'> {
+  const plan = planMachineRefRewrite({ ...config, deadMachineIds: dead });
+  if (!plan.changed) return 'skipped';
+  try {
+    const wrote = await write({ config, machines: plan.machines, machineAccess: plan.machineAccess, deadMachineIds: dead });
+    return wrote ? 'updated' : 'skipped';
+  } catch {
+    return 'failed';
+  }
+}
+
+async function applyRewrites<T extends MachineRefHolder>(
+  configs: readonly T[],
+  dead: ReadonlySet<string>,
+  write: (input: MachineRefWrite<T>) => Promise<boolean>,
+): Promise<{ updated: number; failures: number }> {
+  // Every holder's write is independent (its own CAS or its own row lock), so
+  // they run concurrently rather than one at a time.
+  const outcomes = await Promise.all(configs.map((config) => applyRewrite(config, dead, write)));
+  return {
+    updated: outcomes.filter((o) => o === 'updated').length,
+    failures: outcomes.filter((o) => o === 'failed').length,
+  };
+}
+
 export async function sweepMachineRefs<A extends MachineRefHolder, G extends MachineRefHolder>(
   deps: SweepMachineRefsDeps<A, G>,
 ): Promise<SweepMachineRefsResult> {
@@ -186,43 +222,15 @@ export async function sweepMachineRefs<A extends MachineRefHolder, G extends Mac
   if (deadMachineIds.length === 0) return empty;
 
   const dead = new Set(deadMachineIds);
-  let agentsUpdated = 0;
-  let globalConfigsUpdated = 0;
-  let failures = 0;
+  const [agentResult, globalResult] = await Promise.all([
+    applyRewrites(agents, dead, deps.writeAgentConfig),
+    applyRewrites(globals, dead, deps.writeGlobalConfig),
+  ]);
 
-  for (const config of agents) {
-    const plan = planMachineRefRewrite({ ...config, deadMachineIds: dead });
-    if (!plan.changed) continue;
-    try {
-      const wrote = await deps.writeAgentConfig({
-        config,
-        machines: plan.machines,
-        machineAccess: plan.machineAccess,
-        deadMachineIds: dead,
-      });
-      if (wrote) agentsUpdated += 1;
-    } catch {
-      // Keep sweeping: one blocked agent (a concurrent config save bumped its
-      // revision) must not leave every other blob dangling.
-      failures += 1;
-    }
-  }
-
-  for (const config of globals) {
-    const plan = planMachineRefRewrite({ ...config, deadMachineIds: dead });
-    if (!plan.changed) continue;
-    try {
-      const wrote = await deps.writeGlobalConfig({
-        config,
-        machines: plan.machines,
-        machineAccess: plan.machineAccess,
-        deadMachineIds: dead,
-      });
-      if (wrote) globalConfigsUpdated += 1;
-    } catch {
-      failures += 1;
-    }
-  }
-
-  return { deadMachineIds, agentsUpdated, globalConfigsUpdated, failures };
+  return {
+    deadMachineIds,
+    agentsUpdated: agentResult.updated,
+    globalConfigsUpdated: globalResult.updated,
+    failures: agentResult.failures + globalResult.failures,
+  };
 }

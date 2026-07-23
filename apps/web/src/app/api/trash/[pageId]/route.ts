@@ -76,15 +76,17 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
     const driveId = page.driveId;
 
     // Snapshot the files this subtree references BEFORE deleting — afterwards the
-    // cascaded file_pages links are gone and the set can't be recovered.
-    const candidateFileIds = await collectSubtreeFileIds(pageId);
-
-    // Same snapshot-before-delete rule for Machines (issue #2156): the
-    // `machines` MachineRef blobs on agent pages and on the global assistant
-    // config are denormalized copies with no FK, so nothing cascades them away
-    // — and once these rows are gone there is no way to learn which ids the
-    // subtree held.
-    const machinePageIds = await collectMachinePageIdsInSubtree(pageId);
+    // cascaded file_pages links are gone and the set can't be recovered. Same
+    // snapshot-before-delete rule for Machines (issue #2156): the `machines`
+    // MachineRef blobs on agent pages and on the global assistant config are
+    // denormalized copies with no FK, so nothing cascades them away — and once
+    // these rows are gone there is no way to learn which ids the subtree held.
+    // Both are independent read-only traversals of the same subtree, so they run
+    // concurrently.
+    const [candidateFileIds, machinePageIds] = await Promise.all([
+      collectSubtreeFileIds(pageId),
+      collectMachinePageIdsInSubtree(pageId),
+    ]);
 
     await db.transaction(async (tx) => {
       await recursivelyDelete(pageId, tx);
