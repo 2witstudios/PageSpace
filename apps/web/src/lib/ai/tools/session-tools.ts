@@ -94,11 +94,13 @@ export interface SessionRow {
 /**
  * THE state-read function. A `'pty'`-surface row with no stream session has
  * never actually started: `add_session` only RESERVES the row and materializes
- * the pane, and the PTY is created lazily by the realtime bridge on first
- * viewer connect. Reporting that honestly as `'reserved'` — rather than as an
+ * the pane, and the PTY is created lazily by the realtime bridge — on first
+ * viewer connect, or on the first `read_session`/`send_session` that addresses
+ * it (issue #2206). Reporting that honestly as `'reserved'` — rather than as an
  * idle session that simply happens to be quiet — is what keeps a never-started
- * shell from reading as a live one (epic risk register #2). A `'chat'`-surface
- * row never has a stream session at all, so it is never `'reserved'`.
+ * shell from reading as a live one (epic risk register #2). It says "no PTY
+ * yet", NOT "unusable": using it is what starts it. A `'chat'`-surface row
+ * never has a stream session at all, so it is never `'reserved'`.
  *
  * `'streaming'` outranks every other state: a session generating right now is
  * the one fact that changes what a caller should DO (send_session to it is
@@ -457,7 +459,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
         'List the machine nodes you can reach (this node and everything beneath it), what is RUNNING in each, and each node\'s views. ' +
         'Every node is listed even when it holds nothing, so this is also how you discover which project/branch names a target may name. ' +
         'A view is a pane grid a human sees; its id is what add_session/move_session\'s placement.splitInto addresses. ' +
-        'Session state: reserved (a shell whose PTY starts when a viewer first connects), active, or idle.',
+        'Session state: reserved (a shell whose terminal has not started yet — reading from it or sending to it starts it), active, or idle.',
       inputSchema: listSessionsInputSchema,
       execute: async ({ target }, options) => {
         const context = readContext(options);
@@ -484,7 +486,9 @@ export function createSessionTools(deps: SessionToolsDeps): {
             const rows = await deps.listSessions(handle);
             // One liveness sweep per node, over the rows that could HAVE a live
             // PTY — a reserved row has never started one, and an agent session
-            // has no PTY at all, so neither is worth asking about.
+            // has no PTY at all, so neither is worth asking about. The sweep
+            // never STARTS anything either (issue #2206): listing what is
+            // running must not boot a sandbox per row.
             const startedShells = rows.filter(hasPtyStream).map((row) => row.name);
             const live =
               deps.ptyLiveness && startedShells.length > 0
@@ -512,7 +516,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
     add_session: tool({
       description:
         'Start a new session at a node you can reach: type "agent" (a PageSpace Agent, which you can later send work to) or "shell" (a plain terminal). ' +
-        'A shell session is RESERVED until a human viewer first connects — its PTY starts then, not now — so it reports state "reserved" and produces no output until someone opens it. ' +
+        'A shell session\'s terminal does not start here: it reports state "reserved" and produces no output until it is first used. Sending to it or reading it starts it (so does a human opening its pane) — you do not have to wait for anyone. ' +
         'placement defaults to "new-view" (the session gets its own view); pass { splitInto: <view id from list_sessions>, direction: "right" | "down" } to put it beside what is already there. ' +
         'A view only ever holds sessions from its own node. Omit name to have one minted for you. ' +
         'For an agent session you may pass prompt to give it its first instruction — it starts working immediately and answers in its OWN transcript (read_session), not here.',

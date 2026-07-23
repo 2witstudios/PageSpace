@@ -39,13 +39,16 @@ import { createExecClientFromMachineHost } from '@pagespace/lib/services/sandbox
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import {
   buildAgentTerminalHandlers,
+  ensureAgentTerminalSession,
+  armIdleReap,
+  type AgentTerminalSessionDeps,
   type SocketLike,
 } from './terminal/agent-terminal-handler';
 import { handleTerminalActivityRequest } from './terminal/terminal-activity';
 import { handleSessionReadRequest, handleSessionSendRequest } from './terminal/session-io';
 import { deriveAgentTerminalSessionKey, agentTerminalScopeFromNames } from './terminal/agent-terminal-session-key';
 import { buildAgentTerminalCheckAuth, resolveMachineSandbox } from './terminal/agent-terminal-access';
-import { createTerminalSessionMap } from './terminal/terminal-session-map';
+import { createTerminalSessionMap, type TerminalSession } from './terminal/terminal-session-map';
 import { openPtyShell } from './terminal/sprites-shell';
 import { getRealtimeSpritesSdk } from './terminal/realtime-sprites-client';
 import { createDbMachineBranchStore } from '@pagespace/lib/services/machines/machine-branches-store';
@@ -421,6 +424,128 @@ const makeAgentTerminalCheckAuth = buildAgentTerminalCheckAuth({
   logDenied: (reason, context) => loggers.realtime.warn('Agent terminal auth denied', { reason, ...context }),
   logSandboxLookupFailed: (context) => loggers.realtime.warn('Agent terminal sandbox lookup failed', { reason: 'provision_failed', ...context }),
 });
+
+/**
+ * Everything it takes to START a PTY, wired once for BOTH callers: a viewer's
+ * `agent-terminal:connect` (below) and a headless start driven by agent IO over
+ * signed HTTP (`startHeadlessAgentTerminal`). Shared deliberately — a second
+ * copy of the billing seam or the task-hold factory is a second place for
+ * slot accounting and metering to drift.
+ */
+const agentTerminalSessionDeps: AgentTerminalSessionDeps = {
+  sessionMap: agentTerminalSessionMap,
+  openShell: openPtyShell,
+  checkAuth: makeAgentTerminalCheckAuth,
+  persistStreamSessionId: async ({ agentTerminalId, sessionId }) => {
+    const store = await dbMachineAgentTerminalStorePromise;
+    await store.updateStreamSessionId({ id: agentTerminalId, streamSessionId: sessionId, now: new Date() });
+  },
+  // Terminal Epic 3: meters this PTY session's active-runtime cost against the
+  // machine's payer, whoever started it. Sprite wall-clock is equally billable
+  // whether a human, a pluggable agent, or an agent's `send_session` woke it.
+  billing: defaultSandboxBillingDeps,
+  // Sprites Tasks API hold (leaf 5-1): while an agent is running or a
+  // viewer attached, a short-expiry platform task (refreshed on a
+  // heartbeat, deleted on exit) keeps the sprite from cold-pausing mid-run;
+  // released when idle so the sprite CAN pause. 5m expiry / 60s refresh
+  // defaults, overridable via SPRITE_TASK_HOLD_EXPIRE_SECONDS /
+  // SPRITE_TASK_HOLD_REFRESH_MS.
+  createTaskHold: ({ sprite, sessionKey }) =>
+    createTaskHoldController({
+      client: createSpriteTasksClient({ sprite }),
+      // Per-INCARNATION name (session key + creation time), not per key: a
+      // torn-down session's queued final DELETE runs on its own serialized
+      // queue, so under a shared name it could land AFTER a quickly
+      // reopened session's CREATE and destroy the live hold. Distinct names
+      // make that race unrepresentable; an orphaned old task self-expires.
+      taskName: taskHoldName(`${sessionKey}:${Date.now()}`),
+      ...resolveTaskHoldConfig(process.env),
+      onError: (stage, result) => {
+        // Degrade gracefully: a lost hold means a possible pause, which the
+        // checkpoint work (5-2) already survives — log and carry on.
+        // exitCode 127 = curl missing from the sprite image (feature inert
+        // for this sprite); an HTTP status = the tasks API answered.
+        loggers.realtime.warn(`Sprite task hold ${stage} failed`, {
+          sessionKey,
+          status: result.status,
+          exitCode: result.exitCode,
+        });
+      },
+    }),
+};
+
+/**
+ * The geometry a shell nobody is looking at is born with.
+ *
+ * A PTY must have one — programs read `$COLUMNS`/`$LINES` and wrap their output
+ * to it — and 80x24 is the conventional default a terminal with no window to
+ * measure gets. The first human to open the pane resizes it to their real
+ * window (`agent-terminal:resize`), so this only ever governs the wrapping of
+ * output produced before anyone looked.
+ */
+const HEADLESS_COLS = 80;
+const HEADLESS_ROWS = 24;
+
+/**
+ * Start a PTY for an agent that is reading or typing into a shell whose session
+ * has never run (issue #2206) — the `startSession` seam of `session-io.ts`.
+ *
+ * Authorization is decided HERE, against the userId the (signed) request names,
+ * and not inherited from the web tier's own check. The web tier authorized a
+ * conversation's access to a session ADDRESS; this starts a sandbox process —
+ * reserving that user's concurrency slot, billing their machine's payer, and
+ * writing a code-execution audit row. Those are the socket path's reasons for
+ * running `checkAuth` before `resolveSandbox`, and they do not become someone
+ * else's job because the request arrived over HTTP.
+ *
+ * `undefined` for every failure: the caller's answer ("no PTY, nothing typed")
+ * is the same whichever way a start failed, and the specific reason is already
+ * logged by `checkAuth`/`resolveSandbox` at the point it was decided.
+ */
+const startHeadlessAgentTerminal = async ({
+  machineId,
+  projectName,
+  branchName,
+  name,
+  userId,
+}: {
+  machineId: string;
+  projectName?: string;
+  branchName?: string;
+  name: string;
+  userId: string;
+}) => {
+  const access = await makeAgentTerminalCheckAuth({ userId, machineId, projectName, branchName, name });
+  if (!access.ok) return undefined;
+
+  const outcome = await ensureAgentTerminalSession(agentTerminalSessionDeps, {
+    access,
+    target: { machineId, projectName, branchName, name },
+    userId,
+    cols: HEADLESS_COLS,
+    rows: HEADLESS_ROWS,
+    // No viewer, and nothing that can go away mid-create: an HTTP request that
+    // hung up leaves no signal, and the session it asked for is addressed by
+    // key — the next read or send finds it either way.
+    abandoned: () => false,
+  });
+  if (outcome.kind === 'failed') return undefined;
+  loggers.realtime.info('Agent terminal session started headlessly', {
+    sessionKey: access.sessionKey,
+    sandboxId: outcome.session.sandboxId,
+    reused: outcome.kind === 'existing',
+  });
+  return outcome.session;
+};
+
+/** The session-IO deps both HTTP verbs share — the map, the key derivation, and the two effects. */
+const sessionIoDeps = {
+  sessionMap: agentTerminalSessionMap,
+  sessionKeyFor: buildAgentTerminalSessionKey,
+  startSession: startHeadlessAgentTerminal,
+  rearmIdleReap: (session: TerminalSession) =>
+    armIdleReap(defaultSandboxBillingDeps, agentTerminalSessionMap, session),
+};
 
 /**
  * Origin Validation for WebSocket Connections (Defense-in-Depth with Blocking)
@@ -805,10 +930,7 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                 return;
             }
 
-            handleSessionReadRequest(
-                { sessionMap: agentTerminalSessionMap, sessionKeyFor: buildAgentTerminalSessionKey },
-                body,
-            ).then((result) => {
+            handleSessionReadRequest(sessionIoDeps, body).then((result) => {
                 res.writeHead(result.status, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify(result.body));
             }).catch((error: unknown) => {
@@ -830,10 +952,7 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                 return;
             }
 
-            handleSessionSendRequest(
-                { sessionMap: agentTerminalSessionMap, sessionKeyFor: buildAgentTerminalSessionKey },
-                body,
-            ).then((result) => {
+            handleSessionSendRequest(sessionIoDeps, body).then((result) => {
                 res.writeHead(result.status, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify(result.body));
             }).catch((error: unknown) => {
@@ -1409,43 +1528,8 @@ io.on('connection', (socket: AuthSocket) => {
   // every agent-terminal connection's active-runtime cost against the
   // machine's payer uniformly, not only the human-shell case.
   const agentTerminalHandlers = buildAgentTerminalHandlers({
-    sessionMap: agentTerminalSessionMap,
-    openShell: openPtyShell,
-    checkAuth: makeAgentTerminalCheckAuth,
+    ...agentTerminalSessionDeps,
     socket: socket as unknown as SocketLike,
-    persistStreamSessionId: async ({ agentTerminalId, sessionId }) => {
-      const store = await dbMachineAgentTerminalStorePromise;
-      await store.updateStreamSessionId({ id: agentTerminalId, streamSessionId: sessionId, now: new Date() });
-    },
-    billing: defaultSandboxBillingDeps,
-    // Sprites Tasks API hold (leaf 5-1): while an agent is running or a
-    // viewer attached, a short-expiry platform task (refreshed on a
-    // heartbeat, deleted on exit) keeps the sprite from cold-pausing mid-run;
-    // released when idle so the sprite CAN pause. 5m expiry / 60s refresh
-    // defaults, overridable via SPRITE_TASK_HOLD_EXPIRE_SECONDS /
-    // SPRITE_TASK_HOLD_REFRESH_MS.
-    createTaskHold: ({ sprite, sessionKey }) =>
-      createTaskHoldController({
-        client: createSpriteTasksClient({ sprite }),
-        // Per-INCARNATION name (session key + creation time), not per key: a
-        // torn-down session's queued final DELETE runs on its own serialized
-        // queue, so under a shared name it could land AFTER a quickly
-        // reopened session's CREATE and destroy the live hold. Distinct names
-        // make that race unrepresentable; an orphaned old task self-expires.
-        taskName: taskHoldName(`${sessionKey}:${Date.now()}`),
-        ...resolveTaskHoldConfig(process.env),
-        onError: (stage, result) => {
-          // Degrade gracefully: a lost hold means a possible pause, which the
-          // checkpoint work (5-2) already survives — log and carry on.
-          // exitCode 127 = curl missing from the sprite image (feature inert
-          // for this sprite); an HTTP status = the tasks API answered.
-          loggers.realtime.warn(`Sprite task hold ${stage} failed`, {
-            sessionKey,
-            status: result.status,
-            exitCode: result.exitCode,
-          });
-        },
-      }),
   });
 
   socket.on('agent-terminal:connect', (payload) => {
