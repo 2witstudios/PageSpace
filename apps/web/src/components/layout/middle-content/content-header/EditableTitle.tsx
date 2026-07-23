@@ -9,7 +9,6 @@ import { toast } from 'sonner';
 import { usePageTree } from '@/hooks/usePageTree';
 import { useParams } from 'next/navigation';
 import { patch } from '@/lib/auth/auth-fetch';
-import { useOpenTabsStore } from '@/stores/useOpenTabsStore';
 import { useTabsStore } from '@/stores/useTabsStore';
 
 export function EditableTitle({ pageId: propPageId }: { pageId?: string | null } = {}) {
@@ -59,8 +58,7 @@ export function EditableTitle({ pageId: propPageId }: { pageId?: string | null }
       updateNode(updatedPage.id, { title: updatedPage.title });
       mutate(`/api/pages/${page.id}/breadcrumbs`);
 
-      // Update tab titles in both tab stores (single batched update each)
-      useOpenTabsStore.getState().updateTabTitle(updatedPage.id, updatedPage.title);
+      // Update tab titles (single batched update)
       useTabsStore.getState().updateTabMetaByPageId(updatedPage.id, { title: updatedPage.title });
     } catch (error) {
       console.error(error);
