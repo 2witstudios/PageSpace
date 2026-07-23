@@ -643,7 +643,17 @@ export async function createDbMachineSessionStore(): Promise<MachineSessionStore
           // re-provision). Recording it also voids any teardown INTENT: that
           // request was against the previous VM, which is provably gone, and
           // leaving it set would let the reconciler destroy this live one.
-          ...(spriteInstanceId === undefined ? {} : { spriteInstanceId, teardownRequestedAt: null }),
+          //
+          // A changed instance id is a NEW VM with a FRESH disk, so the stored
+          // measurement — which describes the previous generation's filesystem
+          // — is dropped rather than inherited. Keeping it would bill the old
+          // size until some unrelated wake happened to re-measure. Unlike the
+          // branch/project tiers there is no watermark to reset: `machine_sessions`
+          // rows carry no `spriteTornDownAt` and are never excluded from the
+          // reconcile, so no billing window is ever skipped for them.
+          ...(spriteInstanceId === undefined
+            ? {}
+            : { spriteInstanceId, teardownRequestedAt: null, storageMeasuredBytes: null, storageMeasuredAt: null }),
         })
         .where(eq(machineSessions.sessionKey, sessionKey));
     },
