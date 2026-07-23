@@ -173,16 +173,6 @@ export function paneScopeOf(scope: OpenTerminalScope): PaneSessionScope {
 }
 
 /**
- * Read-time projection of a STORED pane scope — the whole Phase-1 migration.
- *
- * A layout written by an older client (localStorage, or another browser's
- * server payload) still carries `{projectName, branchName}` on the pane. There
- * is nothing to reconcile: a wide pane was representable but never written
- * disagreeing with its workspace, so the duplicated checkout is simply dropped
- * on the way in. No backfill, no migration step, no version bump — both merge
- * paths (`mergeColumns` and `sanitizeMachines`) funnel through here.
- */
-/**
  * Read-time projection of a STORED node scope, from either shape: the union
  * this version writes, or the bare `{projectName, branchName}` an older client
  * (or a not-yet-redeployed server) sends. The discriminant is re-derived from
@@ -201,6 +191,16 @@ export function projectStoredNodeScope(value: unknown): MachineNodeScope | null 
   });
 }
 
+/**
+ * Read-time projection of a STORED pane scope — the whole Phase-1 migration.
+ *
+ * A layout written by an older client (localStorage, or another browser's
+ * server payload) still carries `{projectName, branchName}` on the pane. There
+ * is nothing to reconcile: a wide pane was representable but never written
+ * disagreeing with its workspace, so the duplicated checkout is simply dropped
+ * on the way in. No backfill, no migration step, no version bump — both merge
+ * paths (`mergeColumns` and `sanitizeMachines`) funnel through here.
+ */
 export function projectStoredPaneScope(value: unknown): PaneSessionScope | null {
   if (typeof value !== 'object' || value === null) return null;
   const candidate = value as { name?: unknown; kind?: unknown };
