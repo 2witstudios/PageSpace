@@ -148,6 +148,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Security
 
+- **`drizzle-orm` bumped past a SQL-identifier-escaping vulnerability (CVE-2026-39356 /
+  GHSA-gpj5-g38j-94v9, CVSS 7.5)** — versions through 0.45.1 quoted SQL identifiers produced by
+  `sql.identifier()`/`.as()` without doubling embedded double-quotes, so a hostile identifier
+  reaching one of those call sites could break out of the quoted identifier and inject SQL. An
+  audit of every `sql.identifier()` call site in the codebase found none reachable with
+  attacker-controlled input today, but `drizzle-orm` is now pinned to `^0.45.2` (and
+  `drizzle-kit` to `^0.31.10`) everywhere it's declared, with a regression test guarding both the
+  escaping behavior and the version floor against a future re-pin.
 - **Settings > Account now lists and revokes connected apps** — every OAuth-authorized client
   currently holding a grant on your account (including the `pagespace` CLI), with its scope in
   plain language and when it was connected, is now visible from a "Connected Apps" section.
