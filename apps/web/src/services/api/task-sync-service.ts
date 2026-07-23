@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db'
-import { eq, and, inArray } from '@pagespace/db/operators'
+import { eq, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks'
 import {
