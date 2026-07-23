@@ -99,8 +99,16 @@ describe('meetsFloor', () => {
 
 const repoRoot = path.resolve(__dirname, '../../../..');
 
-const readManifest = (relPath: string): Record<string, Record<string, string> | undefined> =>
-  JSON.parse(readFileSync(path.join(repoRoot, relPath), 'utf8'));
+const manifestCache = new Map<string, Record<string, Record<string, string> | undefined>>();
+
+const readManifest = (relPath: string): Record<string, Record<string, string> | undefined> => {
+  const cached = manifestCache.get(relPath);
+  if (cached) return cached;
+
+  const manifest = JSON.parse(readFileSync(path.join(repoRoot, relPath), 'utf8'));
+  manifestCache.set(relPath, manifest);
+  return manifest;
+};
 
 /** Every place a drizzle-orm range is declared: [manifest, key holding the dependency map]. */
 const DRIZZLE_RANGE_SITES: ReadonlyArray<[string, string]> = [
