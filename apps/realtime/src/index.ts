@@ -501,20 +501,31 @@ const HEADLESS_ROWS = 24;
  * `undefined` for every failure: the caller's answer ("no PTY, nothing typed")
  * is the same whichever way a start failed, and the specific reason is already
  * logged by `checkAuth`/`resolveSandbox` at the point it was decided.
+ *
+ * `abandoned` DOES have a real signal here, unlike a socket connect (which has
+ * no equivalent — see the old comment this replaced): the web tier's `fetch`
+ * to this endpoint gives up after `REALTIME_TIMEOUT_MS` (5s, `session-io-pty.ts`),
+ * and a cold start — `resolveSandbox` waking a Sprite, then a liveness check —
+ * can run past that. Forwarded straight to `ensureAgentTerminalSession`'s own
+ * check at the last await before the PTY exists, keyed off the SAME request's
+ * connection rather than a viewer's `connectionId`.
  */
-const startHeadlessAgentTerminal = async ({
-  machineId,
-  projectName,
-  branchName,
-  name,
-  userId,
-}: {
-  machineId: string;
-  projectName?: string;
-  branchName?: string;
-  name: string;
-  userId: string;
-}) => {
+const startHeadlessAgentTerminal = async (
+  {
+    machineId,
+    projectName,
+    branchName,
+    name,
+    userId,
+  }: {
+    machineId: string;
+    projectName?: string;
+    branchName?: string;
+    name: string;
+    userId: string;
+  },
+  abandoned: () => boolean,
+) => {
   const access = await makeAgentTerminalCheckAuth({ userId, machineId, projectName, branchName, name });
   if (!access.ok) return undefined;
 
@@ -524,10 +535,7 @@ const startHeadlessAgentTerminal = async ({
     userId,
     cols: HEADLESS_COLS,
     rows: HEADLESS_ROWS,
-    // No viewer, and nothing that can go away mid-create: an HTTP request that
-    // hung up leaves no signal, and the session it asked for is addressed by
-    // key — the next read or send finds it either way.
-    abandoned: () => false,
+    abandoned,
   });
   if (outcome.kind === 'failed') return undefined;
   loggers.realtime.info('Agent terminal session started headlessly', {
@@ -819,6 +827,30 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
         });
     };
 
+    /**
+     * Has the CLIENT gone away before this request got an answer?
+     *
+     * Only meaningful for the two headless session-IO endpoints: their
+     * `start: true` path can run a cold Sprite wake past the web tier's own
+     * `fetch` timeout (`REALTIME_TIMEOUT_MS`, `session-io-pty.ts`), and this is
+     * how `ensureAgentTerminalSession`'s `abandoned()` check — the same one a
+     * viewer's socket connect uses — learns to bail rather than start a PTY
+     * (and write input into it) for a caller who already gave up and may retry.
+     *
+     * `req`'s `'close'` fires whenever the underlying connection tears down,
+     * including a normal end-of-response — so it is only evidence of
+     * abandonment when the response was NOT already sent
+     * (`!res.writableEnded`); a request that finished cleanly must not be
+     * mistaken for one the caller walked away from.
+     */
+    const trackRequestAbandonment = (): (() => boolean) => {
+        let requestAbandoned = false;
+        req.on('close', () => {
+            if (!res.writableEnded) requestAbandoned = true;
+        });
+        return () => requestAbandoned;
+    };
+
     if (req.method === 'POST' && req.url === '/api/broadcast') {
         readCappedBody(body => {
             try {
@@ -930,7 +962,7 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                 return;
             }
 
-            handleSessionReadRequest(sessionIoDeps, body).then((result) => {
+            handleSessionReadRequest(sessionIoDeps, body, trackRequestAbandonment()).then((result) => {
                 res.writeHead(result.status, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify(result.body));
             }).catch((error: unknown) => {
@@ -952,7 +984,7 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                 return;
             }
 
-            handleSessionSendRequest(sessionIoDeps, body).then((result) => {
+            handleSessionSendRequest(sessionIoDeps, body, undefined, trackRequestAbandonment()).then((result) => {
                 res.writeHead(result.status, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify(result.body));
             }).catch((error: unknown) => {

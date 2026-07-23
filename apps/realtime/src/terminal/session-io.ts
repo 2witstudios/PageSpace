@@ -71,11 +71,25 @@ export interface SessionIoDeps {
    * — and the caller answers exactly as it always did for a session with no
    * PTY.
    *
+   * `abandoned` is threaded straight through to `ensureAgentTerminalSession`'s
+   * own check, the same one the socket path uses at the last await before the
+   * PTY exists. It matters here for a reason the socket path does not have: the
+   * web tier's `fetch` to this endpoint gives up after a FIXED timeout
+   * (`REALTIME_TIMEOUT_MS`), shorter than a cold Sprite wake can take, and a
+   * caller that saw that timeout as "nothing happened" may retry the same
+   * input. Without this, the original request would keep starting the PTY and
+   * writing the input after the caller had already moved on — a retry would
+   * then run that input twice. Checking it costs nothing when the caller is
+   * still there (`abandoned()` stays false the whole time).
+   *
    * Optional, and absent in every existing test: a realtime deployment without
    * this seam degrades to the pre-#2206 behavior (a reserved shell stays
    * reserved until a human opens it) rather than failing.
    */
-  startSession?: (address: SessionAddress & { userId: string }) => Promise<TerminalSession | undefined>;
+  startSession?: (
+    address: SessionAddress & { userId: string },
+    abandoned: () => boolean,
+  ) => Promise<TerminalSession | undefined>;
   /**
    * Push a viewer-less session's idle reap back, because an agent just used it.
    *
@@ -175,6 +189,8 @@ export async function handleSessionSendRequest(
   deps: SessionIoDeps,
   body: string,
   now: () => number = Date.now,
+  /** Has the caller given up on this request? See `SessionIoDeps.startSession`. */
+  abandoned: () => boolean = () => false,
 ): Promise<{ status: number; body: SessionSendResult }> {
   const payload = parseBody<SessionSendPayload>(body);
   if (!payload || typeof payload !== 'object') {
@@ -209,12 +225,15 @@ export async function handleSessionSendRequest(
   // long as the caller asked for one. This is the whole of issue #2206: the PTY
   // begins at the first agent IO, not at the first human to open the pane.
   const started = live === undefined && startPlan.start
-    ? await deps.startSession?.({ ...address, userId: startPlan.userId })
+    ? await deps.startSession?.({ ...address, userId: startPlan.userId }, abandoned)
     : undefined;
   const session = live ?? started;
   // Nothing running, and nothing we could start: say so. Swallowing the
   // keystrokes with a 200 would let the caller believe a command it never ran
-  // is running.
+  // is running. This also covers the caller having ABANDONED the request
+  // mid-start (see `startSession`'s doc) — `started` comes back `undefined`
+  // exactly as it would for a denied or insolvent start, and nothing is
+  // written on their behalf.
   if (!session) return { status: 200, body: { success: true, live: false, delivered: false } };
 
   session.lastInputAt = now();
@@ -341,6 +360,8 @@ export function scrollbackTail(
 export async function handleSessionReadRequest(
   deps: SessionIoDeps,
   body: string,
+  /** Has the caller given up on this request? See `SessionIoDeps.startSession`. */
+  abandoned: () => boolean = () => false,
 ): Promise<{ status: number; body: SessionReadResult }> {
   const payload = parseBody<SessionReadPayload>(body);
   if (!payload || typeof payload !== 'object') {
@@ -385,10 +406,19 @@ export async function handleSessionReadRequest(
     // that just asked to read it is the dead end this removes. Only ever
     // reached for a single-name read.
     const started = live === undefined && startPlan.start
-      ? await deps.startSession?.({ ...address, userId: startPlan.userId })
+      ? await deps.startSession?.({ ...address, userId: startPlan.userId }, abandoned)
       : undefined;
     const session = live ?? started;
     if (!session) return { name, live: false, hasOutput: false, viewers: 0, output: '' };
+    // A deliberate single-session read is USE, exactly like a delivered send
+    // (see `armIdleReap`) — an agent polling `read_session` on a long build is
+    // as real a consumer of this session as one typing into it, and letting
+    // its reap run unmoved would kill the build out from under the very agent
+    // reading it. Gated on `payload.start`, not `started`: this must fire on
+    // every read of an already-live session too, not only the one that boots
+    // it. The `list_sessions` liveness sweep never sets `start`, so a sweep
+    // over many viewer-less sessions can never touch any of their reaps.
+    if (payload.start === true && session.viewers.size === 0) deps.rearmIdleReap?.(session);
     return {
       name,
       live: true,
