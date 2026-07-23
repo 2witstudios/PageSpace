@@ -7,6 +7,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Permanently deleting a Terminal machine, its drive, or letting it age out of Trash no longer
+  leaves "Unknown machine" behind** — an agent or the global assistant's machine list kept a
+  reference to a Terminal after the machine page was gone for good, so it showed as "Unknown
+  machine" and any subsequent save of that config failed. Permanent delete, permanent drive
+  delete, and the daily trash-purge now clean up the stale reference; a machine that's merely in
+  Trash (not yet purged) is left alone since it can still be restored.
 - **Toast notifications now actually appear** — member management, role editing, drive AI
   settings, drive deletion, invites, and version-history/activity rollback actions had been
   silently logging success and error feedback to the browser console instead of showing a

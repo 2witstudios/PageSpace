@@ -1,9 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockPageRepo, mockAudit, mockReapOrphanedFiles } = vi.hoisted(() => ({
+const { mockPageRepo, mockAudit, mockReapOrphanedFiles, mockSweepMachineRefs } = vi.hoisted(() => ({
   mockPageRepo: { purgeExpiredTrashedPages: vi.fn() },
   mockAudit: vi.fn(),
   mockReapOrphanedFiles: vi.fn(),
+  mockSweepMachineRefs: vi.fn(),
+}));
+
+vi.mock('@/lib/machines/machine-ref-sweep-runtime', () => ({
+  sweepDanglingMachineRefs: mockSweepMachineRefs,
 }));
 
 vi.mock('@/lib/auth/cron-auth', () => ({
@@ -53,6 +58,12 @@ describe('/api/cron/purge-trashed-pages', () => {
       physicalFilesDeleted: 0,
       dbRecordsDeleted: 0,
       failedPhysicalDeletes: [],
+    });
+    mockSweepMachineRefs.mockResolvedValue({
+      deadMachineIds: [],
+      agentsUpdated: 0,
+      globalConfigsUpdated: 0,
+      failures: 0,
     });
   });
 
@@ -126,7 +137,7 @@ describe('/api/cron/purge-trashed-pages', () => {
         eventType: 'data.delete',
         resourceType: 'cron_job',
         resourceId: 'purge_trashed_pages',
-        details: { pagesPurged: 3, filesReaped: 0 },
+        details: { pagesPurged: 3, filesReaped: 0, machineRefsScrubbed: 0 },
       })
     );
   });
@@ -147,7 +158,7 @@ describe('/api/cron/purge-trashed-pages', () => {
     expect(body.filesReaped).toBe(2);
     expect(mockAudit).toHaveBeenCalledWith(
       expect.objectContaining({
-        details: { pagesPurged: 4, filesReaped: 2 },
+        details: { pagesPurged: 4, filesReaped: 2, machineRefsScrubbed: 0 },
       })
     );
   });
@@ -163,6 +174,44 @@ describe('/api/cron/purge-trashed-pages', () => {
     expect(body.success).toBe(true);
     expect(body.pagesPurged).toBe(5);
     expect(body.filesReaped).toBe(0);
+  });
+
+  it('sweeps dangling machine refs after the purge and surfaces the repair count', async () => {
+    // The purge is the moment a trashed Machine page stops existing, so it is
+    // the moment its denormalized MachineRefs become permanently dangling.
+    mockPageRepo.purgeExpiredTrashedPages.mockResolvedValue(1);
+    mockSweepMachineRefs.mockResolvedValue({
+      deadMachineIds: ['machine-gone'],
+      agentsUpdated: 2,
+      globalConfigsUpdated: 1,
+      failures: 0,
+    });
+
+    const response = await GET(makeRequest());
+    const body = await response.json();
+
+    // Unscoped: this run must also catch refs orphaned by paths no call site
+    // covers (account erasure, drive cascades).
+    expect(mockSweepMachineRefs).toHaveBeenCalledWith();
+    expect(body.machineRefsScrubbed).toBe(3);
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        details: { pagesPurged: 1, filesReaped: 0, machineRefsScrubbed: 3 },
+      })
+    );
+  });
+
+  it('still purges successfully when the machine-ref sweep fails', async () => {
+    mockPageRepo.purgeExpiredTrashedPages.mockResolvedValue(6);
+    mockSweepMachineRefs.mockRejectedValue(new Error('deadlock detected'));
+
+    const response = await GET(makeRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(body.pagesPurged).toBe(6);
+    expect(body.machineRefsScrubbed).toBe(0);
   });
 
   it('given invalid HMAC, should not log audit event', async () => {
