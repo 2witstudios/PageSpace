@@ -218,7 +218,39 @@ describe('readPtySession', () => {
       given: 'an identity already resolved and authorized against the handle set',
       should: 'send exactly that address — never a caller-supplied one',
       actual: recorded.reads,
+      expected: [{ machineId: 'm1', projectName: 'repo', branchName: 'feature', names: ['sh'], limit: 7, start: true, userId: 'u1' }],
+    });
+  });
+
+  // Issue #2205 + #2206 interaction: a row with a persisted cold tail already
+  // has a better answer than a fresh, empty PTY — starting one would bury it
+  // and bill a session nobody asked for.
+  it('given a row with a cold tail, should NOT ask the realtime tier to start a fresh PTY', async () => {
+    const { transport: fake, recorded } = transport({ read: liveRead() });
+    await createPtySessionIo(fake).read({
+      identity: IDENTITY,
+      actor: ACTOR,
+      limit: 7,
+      cold: { tail: 'final output\n', at: new Date('2026-01-01T00:00:00Z'), hasOutput: true },
+    });
+
+    assert({
+      given: 'a read of a row that already has a persisted cold tail',
+      should: 'omit start/userId entirely — restarting would strand the cold-tail answer',
+      actual: recorded.reads,
       expected: [{ machineId: 'm1', projectName: 'repo', branchName: 'feature', names: ['sh'], limit: 7 }],
+    });
+  });
+
+  it('given a row with NO cold tail, should still ask to start — the genuinely never-run case', async () => {
+    const { transport: fake, recorded } = transport({ read: liveRead() });
+    await createPtySessionIo(fake).read({ identity: IDENTITY, actor: ACTOR, limit: 7, cold: undefined });
+
+    assert({
+      given: 'a read of a row with no cold-tail history at all',
+      should: 'still ask the realtime tier to start it — issue #2206 unchanged for this case',
+      actual: recorded.reads,
+      expected: [{ machineId: 'm1', projectName: 'repo', branchName: 'feature', names: ['sh'], limit: 7, start: true, userId: 'u1' }],
     });
   });
 });
@@ -236,7 +268,9 @@ describe('planColdReadAnswer (pure — issue #2205)', () => {
         hasOutput: false,
         watchers: 0,
         output: '',
-        note: 'This shell session has no running terminal right now — either its PTY has never started (it starts when a human first opens it) or it has since ended. This is NOT the same as it having produced no output.',
+        // Since issue #2206 this read attempted to start the PTY itself — no
+        // cold tail and not live means either it ended, or that start failed.
+        note: 'This shell session has no running terminal right now — either it has ended, or one could not be started for this read (the machine may be out of credits or at its terminal limit). This is NOT the same as it having produced no output.',
       },
     });
   });
@@ -369,7 +403,7 @@ describe('sendPtySession', () => {
       actual: { success: result.success, sent: recorded.sends },
       expected: {
         success: true,
-        sent: [{ machineId: 'm1', projectName: 'repo', branchName: 'feature', name: 'sh', input: 'ls\n' }],
+        sent: [{ machineId: 'm1', projectName: 'repo', branchName: 'feature', name: 'sh', input: 'ls\n', start: true, userId: 'u1' }],
       },
     });
   });
@@ -407,6 +441,131 @@ describe('sendPtySession', () => {
       should: 'fail — an unanswered write is not a delivered one',
       actual: result.success,
       expected: false,
+    });
+  });
+});
+
+/**
+ * Headless PTY start (issue #2206). A shell session's PTY used to begin only
+ * when a human opened its pane, so an agent that added a shell and typed into
+ * it was told nothing was delivered until someone came along. The realtime tier
+ * now starts it on first agent IO — which this module has to ASK for, and has
+ * to keep asking for on exactly the calls where a start is wanted.
+ */
+describe('PTY session IO — asking for a start', () => {
+  it('given a read, should ask the realtime tier to start the session, as the acting user', async () => {
+    const { transport: fake, recorded } = transport({ read: liveRead() });
+    await createPtySessionIo(fake).read({ identity: IDENTITY, actor: ACTOR, limit: 40 });
+
+    assert({
+      given: 'an explicit read of one named session',
+      should: 'carry the start request and the user it is started for',
+      actual: recorded.reads,
+      expected: [{
+        machineId: 'm1',
+        projectName: 'repo',
+        branchName: 'feature',
+        names: ['sh'],
+        limit: 40,
+        start: true,
+        userId: 'u1',
+      }],
+    });
+  });
+
+  it('given a send, should ask the realtime tier to start the session, as the acting user', async () => {
+    const { transport: fake, recorded } = transport();
+    await createPtySessionIo(fake).send({ identity: IDENTITY, actor: ACTOR, input: 'ls\n' });
+
+    assert({
+      given: 'input for a session that may never have run',
+      should: 'carry the start request rather than require a human to have opened it first',
+      actual: recorded.sends,
+      expected: [{
+        machineId: 'm1',
+        projectName: 'repo',
+        branchName: 'feature',
+        name: 'sh',
+        input: 'ls\n',
+        start: true,
+        userId: 'u1',
+      }],
+    });
+  });
+
+  it('given the liveness sweep, should NOT ask for a start', async () => {
+    // The sweep asks about every shell at a node at once, to render
+    // `list_sessions`. Starting on it would boot a sandbox per row for a listing
+    // — the user would be billed for merely looking.
+    const { transport: fake, recorded } = transport({
+      read: { success: true, sessions: [{ name: 'sh', live: false, hasOutput: false, viewers: 0, output: '' }] },
+    });
+    await createPtySessionIo(fake).liveness(IDENTITY.node, ['sh', 'build']);
+
+    assert({
+      given: 'a listing sweep over several sessions',
+      should: 'ask only whether they are live, with no start and no user attached',
+      actual: recorded.reads,
+      expected: [{
+        machineId: 'm1',
+        projectName: 'repo',
+        branchName: 'feature',
+        names: ['sh', 'build'],
+        limit: 0,
+      }],
+    });
+  });
+
+  it('given a send that started the shell, should say so — its first command is also its boot', async () => {
+    const { transport: fake } = transport({ send: { success: true, live: true, delivered: true, started: true } });
+    const result = await createPtySessionIo(fake).send({ identity: IDENTITY, actor: ACTOR, input: 'ls\n' });
+
+    assert({
+      given: 'input that booted the shell it was typed into',
+      should: 'tell the caller the shell started here, so a shell prompt in the output is not a surprise',
+      actual: {
+        success: result.success,
+        started: (result as { started?: boolean }).started,
+      },
+      expected: { success: true, started: true },
+    });
+  });
+
+  it('given a read that started the shell, should report it live and explain the empty output', async () => {
+    const { transport: fake } = transport({
+      read: { success: true, sessions: [{ name: 'sh', live: true, hasOutput: false, viewers: 0, output: '', started: true }] },
+    });
+    const result = await createPtySessionIo(fake).read({ identity: IDENTITY, actor: ACTOR });
+
+    assert({
+      given: 'a read of a shell that had never run',
+      should: 'report it live and empty BECAUSE it just booted — not empty because a command printed nothing',
+      actual: {
+        live: (result as { live?: boolean }).live,
+        started: (result as { started?: boolean }).started,
+        note: (result as { note?: string }).note,
+      },
+      expected: {
+        live: true,
+        started: true,
+        note: 'This shell session had no running terminal, so one was started for this read. It has produced nothing yet — give it a moment, or use send_session to type a command into it.',
+      },
+    });
+  });
+
+  it('given a send the realtime tier could not start, should refuse without blaming a missing human', async () => {
+    const { transport: fake } = transport({ send: { success: true, live: false, delivered: false } });
+    const result = await createPtySessionIo(fake).send({ identity: IDENTITY, actor: ACTOR, input: 'ls\n' });
+
+    assert({
+      given: 'a session with no PTY that could not be started either',
+      should: 'say nothing was typed and why, without telling the model to wait for a human that will not help',
+      actual: result,
+      expected: {
+        success: false,
+        error:
+          'Nothing was typed: session "sh" has no running terminal, and one could not be started (the machine may be out of credits or at its terminal limit). Nothing was delivered.',
+      },
     });
   });
 });

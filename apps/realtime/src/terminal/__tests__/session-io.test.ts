@@ -5,6 +5,7 @@ import {
   handleSessionSendRequest,
   MAX_SESSION_INPUT_BYTES,
   scrollbackTail,
+  planSessionStart,
   MAX_SCROLLBACK_TAIL_BYTES,
   type SessionIoDeps,
 } from '../session-io';
@@ -339,6 +340,452 @@ describe('handleSessionSendRequest', () => {
       should: 'refuse with 400',
       actual: { status: result.status, error: result.body.error },
       expected: { status: 400, error: 'Missing or invalid name' },
+    });
+  });
+});
+
+/**
+ * Headless PTY start (issue #2206). A shell session is RESERVED until something
+ * starts its PTY; before this, only a human opening the pane could. Now the
+ * first agent read/send starts it — which makes the interesting questions
+ * "when is a start attempted at all" and "what does the caller learn".
+ */
+describe('session IO — headless start', () => {
+  /** A start seam that succeeds, recording what it was asked to start. */
+  function starter(session: TerminalSession) {
+    const calls: Array<Record<string, unknown>> = [];
+    return {
+      calls,
+      startSession: async (address: Record<string, unknown>) => {
+        calls.push(address);
+        return session;
+      },
+    };
+  }
+
+  describe('handleSessionSendRequest', () => {
+    it('given input for a reserved session and a start seam, should start the PTY and deliver into it', async () => {
+      const { session, written } = writableSession();
+      const start = starter(session);
+      const result = await handleSessionSendRequest(
+        { ...deps(), startSession: start.startSession },
+        sendBody({ start: true, userId: 'user-1' }),
+      );
+
+      assert({
+        given: 'a shell whose PTY has never run',
+        should: 'boot it, type the input into it, and say so — rather than swallow a command that never ran',
+        actual: { body: result.body, written, startedFor: start.calls },
+        expected: {
+          body: { success: true, live: true, delivered: true, started: true },
+          written: ['ls\n'],
+          startedFor: [{ machineId: 'm1', name: 'sh', userId: 'user-1' }],
+        },
+      });
+    });
+
+    it('given a session already live, should NOT ask the starter — there is nothing to start', async () => {
+      const { session, written } = writableSession();
+      const start = starter(session);
+      const result = await handleSessionSendRequest(
+        { ...deps({ 'm1|-|-|sh': session }), startSession: start.startSession },
+        sendBody({ start: true, userId: 'user-1' }),
+      );
+
+      assert({
+        given: 'input for a PTY that is already running',
+        should: 'write straight to it, with no start attempted and no `started` claimed',
+        actual: { body: result.body, written, starts: start.calls.length },
+        expected: { body: { success: true, live: true, delivered: true }, written: ['ls\n'], starts: 0 },
+      });
+    });
+
+    it('given a start that fails, should report nothing delivered rather than claim a live session', async () => {
+      const result = await handleSessionSendRequest(
+        { ...deps(), startSession: async () => undefined },
+        sendBody({ start: true, userId: 'user-1' }),
+      );
+
+      assert({
+        given: 'a PTY that could not be started (no credits, no slot, sprite gone)',
+        should: 'answer exactly as an unstartable session always has — nothing was typed',
+        actual: result.body,
+        expected: { success: true, live: false, delivered: false },
+      });
+    });
+
+    it('given no start seam wired, should behave exactly as before', async () => {
+      const result = await handleSessionSendRequest(deps(), sendBody({ start: true, userId: 'user-1' }));
+
+      assert({
+        given: 'a deployment whose realtime service cannot start sessions',
+        should: 'degrade to the honest not-live answer rather than throw',
+        actual: result.body,
+        expected: { success: true, live: false, delivered: false },
+      });
+    });
+
+    it('given start requested without a userId, should refuse — a PTY is started FOR someone', async () => {
+      const { session } = writableSession();
+      const start = starter(session);
+      const result = await handleSessionSendRequest(
+        { ...deps(), startSession: start.startSession },
+        sendBody({ start: true }),
+      );
+
+      assert({
+        given: 'a start with nobody to authorize, meter or attribute it to',
+        should: 'refuse with 400 and start nothing',
+        actual: { status: result.status, error: result.body.error, starts: start.calls.length },
+        expected: { status: 400, error: 'Missing or invalid userId', starts: 0 },
+      });
+    });
+
+    it('given no start requested, should not start even with the seam wired', async () => {
+      const { session } = writableSession();
+      const start = starter(session);
+      const result = await handleSessionSendRequest(
+        { ...deps(), startSession: start.startSession },
+        sendBody({ userId: 'user-1' }),
+      );
+
+      assert({
+        given: 'a caller that did not ask for a start',
+        should: 'leave the session reserved — starting one is opt-in, never inferred',
+        actual: { body: result.body, starts: start.calls.length },
+        expected: { body: { success: true, live: false, delivered: false }, starts: 0 },
+      });
+    });
+
+    it('given a non-boolean start flag, should refuse with 400', async () => {
+      const result = await handleSessionSendRequest(deps(), sendBody({ start: 'yes', userId: 'user-1' }));
+
+      assert({
+        given: 'a start flag that is not a boolean',
+        should: 'refuse rather than coerce a truthy string into starting a sandbox',
+        actual: { status: result.status, error: result.body.error },
+        expected: { status: 400, error: 'Invalid start' },
+      });
+    });
+
+    it('given delivered input to a session nobody is watching, should push the reap back', async () => {
+      // A headless session is created with its 30-minute reap already ticking. An
+      // agent driving it at minute 29 must not have its command killed at minute 30.
+      const { session } = writableSession();
+      session.viewers.clear();
+      const rearmed: TerminalSession[] = [];
+      await handleSessionSendRequest(
+        { ...deps({ 'm1|-|-|sh': session }), rearmIdleReap: (s: TerminalSession) => rearmed.push(s) },
+        sendBody(),
+      );
+
+      assert({
+        given: 'agent input into a viewer-less session',
+        should: 're-arm the reap — this session is in use',
+        actual: rearmed.length === 1 && rearmed[0] === session,
+        expected: true,
+      });
+    });
+
+    it('given delivered input from a DIFFERENT user than the session was created for, should become the tracked identity', async () => {
+      // The detached re-auth tick checks ONLY `lastViewerUserId` while nobody
+      // is attached — leaving it pinned to the creator while a different
+      // authorized user goes on sending would let revoking the creator kill
+      // work this user is still authorized to run, and revoking THIS user do
+      // nothing at all.
+      const { session } = writableSession();
+      session.viewers.clear();
+      session.lastViewerUserId = 'user-1';
+      await handleSessionSendRequest(
+        { ...deps({ 'm1|-|-|sh': session }) },
+        sendBody({ userId: 'user-2' }),
+      );
+
+      assert({
+        given: 'a viewer-less session created for one user, sent to by another',
+        should: 'track the sender as the identity the re-auth tick checks',
+        actual: session.lastViewerUserId,
+        expected: 'user-2',
+      });
+    });
+
+    it('given delivered input with no userId at all, should leave the tracked identity alone', async () => {
+      const { session } = writableSession();
+      session.viewers.clear();
+      session.lastViewerUserId = 'user-1';
+      await handleSessionSendRequest(
+        { ...deps({ 'm1|-|-|sh': session }) },
+        sendBody(),
+      );
+
+      assert({
+        given: 'a send with no userId in the payload',
+        should: 'leave the existing tracked identity untouched rather than clearing it',
+        actual: session.lastViewerUserId,
+        expected: 'user-1',
+      });
+    });
+
+    it('given delivered input to a session someone IS watching, should leave the reap alone', async () => {
+      const { session } = writableSession();
+      const rearmed: TerminalSession[] = [];
+      await handleSessionSendRequest(
+        { ...deps({ 'm1|-|-|sh': session }), rearmIdleReap: (s: TerminalSession) => rearmed.push(s) },
+        sendBody(),
+      );
+
+      assert({
+        given: 'a session with a viewer attached',
+        should: 'not touch a reap that is not armed — the viewer leaving is what arms it',
+        actual: rearmed.length,
+        expected: 0,
+      });
+    });
+
+    it('given the caller is still there, should pass the starter an abandoned() that reads false', async () => {
+      const { session } = writableSession();
+      const seenAbandoned: Array<() => boolean> = [];
+      await handleSessionSendRequest(
+        {
+          ...deps(),
+          startSession: async (_address, abandoned) => {
+            seenAbandoned.push(abandoned);
+            return session;
+          },
+        },
+        sendBody({ start: true, userId: 'user-1' }),
+        undefined,
+        () => false,
+      );
+
+      assert({
+        given: 'a request whose caller is still connected',
+        should: 'thread that liveness through to the starter, not swallow it',
+        actual: seenAbandoned.length === 1 && seenAbandoned[0]() === false,
+        expected: true,
+      });
+    });
+
+    it('given the caller gave up mid-start, should not deliver — a retry must not run the input twice', async () => {
+      // The web tier's own fetch times out before a cold Sprite wake can
+      // finish; without this, the PTY would still get created and the input
+      // still written after the caller had already been told nothing happened
+      // — and a caller that retries on that timeout would run the command twice.
+      // The starter itself is `ensureAgentTerminalSession`, whose OWN
+      // `abandoned()` check is what actually bails on a real start — here it
+      // is stubbed to return `undefined` the way that check would, and the
+      // point of the test is that this module hands it the real liveness.
+      const { written } = writableSession();
+      let receivedAbandoned: (() => boolean) | undefined;
+      const result = await handleSessionSendRequest(
+        {
+          ...deps(),
+          startSession: async (_address, abandoned) => {
+            receivedAbandoned = abandoned;
+            return undefined;
+          },
+        },
+        sendBody({ start: true, userId: 'user-1' }),
+        undefined,
+        () => true,
+      );
+
+      assert({
+        given: 'a caller who abandoned the request before the cold start finished',
+        should: 'hand the starter that same liveness, and report nothing delivered when it bails',
+        actual: { body: result.body, written, sawAbandoned: receivedAbandoned?.() },
+        expected: { body: { success: true, live: false, delivered: false }, written: [], sawAbandoned: true },
+      });
+    });
+  });
+
+  describe('handleSessionReadRequest', () => {
+    it('given a read of a reserved session, should start it and answer as the live, silent session it now is', async () => {
+      const { session } = writableSession();
+      const start = starter(session);
+      const result = await handleSessionReadRequest(
+        { ...deps(), startSession: start.startSession },
+        readBody({ start: true, userId: 'user-1' }),
+      );
+
+      assert({
+        given: 'a read of a shell whose PTY has never run',
+        should: 'boot it and report a live session that has produced nothing yet',
+        actual: { body: result.body, starts: start.calls.length },
+        expected: {
+          body: {
+            success: true,
+            sessions: [{ name: 'sh', live: true, hasOutput: false, viewers: 1, output: '', started: true }],
+          },
+          starts: 1,
+        },
+      });
+    });
+
+    it('given a start requested for MANY names, should refuse — that shape is the liveness sweep', async () => {
+      // `list_sessions` asks about every shell at a node at once. Starting on that
+      // shape would boot a sandbox per row for a listing nobody asked to run.
+      const { session } = writableSession();
+      const start = starter(session);
+      const result = await handleSessionReadRequest(
+        { ...deps(), startSession: start.startSession },
+        readBody({ names: ['sh', 'build'], start: true, userId: 'user-1' }),
+      );
+
+      assert({
+        given: 'a multi-session read asking to start',
+        should: 'refuse with 400 and start nothing',
+        actual: { status: result.status, error: result.body.error, starts: start.calls.length },
+        expected: { status: 400, error: 'Invalid start', starts: 0 },
+      });
+    });
+
+    it('given the liveness sweep shape, should never start anything', async () => {
+      const { session } = writableSession();
+      const start = starter(session);
+      const result = await handleSessionReadRequest(
+        { ...deps(), startSession: start.startSession },
+        readBody({ names: ['sh', 'build'], limit: 0 }),
+      );
+
+      assert({
+        given: 'the sweep asking only whether sessions are live',
+        should: 'answer not-live for both and start neither',
+        actual: {
+          live: (result.body.sessions ?? []).map((entry) => entry.live),
+          starts: start.calls.length,
+        },
+        expected: { live: [false, false], starts: 0 },
+      });
+    });
+
+    it('given a read whose start fails, should keep the never-started answer', async () => {
+      const result = await handleSessionReadRequest(
+        { ...deps(), startSession: async () => undefined },
+        readBody({ start: true, userId: 'user-1' }),
+      );
+
+      assert({
+        given: 'a read of a session that could not be started',
+        should: 'report it not live rather than an empty scrollback that reads as silence',
+        actual: result.body,
+        expected: { success: true, sessions: [{ name: 'sh', live: false, hasOutput: false, viewers: 0, output: '' }] },
+      });
+    });
+
+    it('given the caller gave up mid-start, should keep the never-started answer and start nothing', async () => {
+      let receivedAbandoned: (() => boolean) | undefined;
+      const result = await handleSessionReadRequest(
+        {
+          ...deps(),
+          startSession: async (_address, abandoned) => {
+            receivedAbandoned = abandoned;
+            return undefined;
+          },
+        },
+        readBody({ start: true, userId: 'user-1' }),
+        () => true,
+      );
+
+      assert({
+        given: 'a caller who abandoned the request before a cold start could finish',
+        should: 'hand the starter that same liveness, and answer as an unstartable session always has',
+        actual: { body: result.body, sawAbandoned: receivedAbandoned?.() },
+        expected: {
+          body: { success: true, sessions: [{ name: 'sh', live: false, hasOutput: false, viewers: 0, output: '' }] },
+          sawAbandoned: true,
+        },
+      });
+    });
+
+    // Reading a build's output every so often is as real a use of a headless
+    // session as typing into it — see `armIdleReap`'s doc. Without this, an
+    // agent that starts a long build once and only ever polls `read_session`
+    // (never `send_session` again) would have its build killed at the
+    // 30-minute mark regardless of how often it was checked on.
+    it('given a deliberate read of an already-live session nobody is watching, should push the reap back', async () => {
+      const { session } = writableSession();
+      session.viewers.clear();
+      const rearmed: TerminalSession[] = [];
+      await handleSessionReadRequest(
+        { ...deps({ 'm1|-|-|sh': session }), rearmIdleReap: (s: TerminalSession) => rearmed.push(s) },
+        readBody({ names: ['sh'], start: true, userId: 'user-1' }),
+      );
+
+      assert({
+        given: 'an agent polling a headless session nobody is watching',
+        should: 're-arm the reap on every read, not only the one that boots it',
+        actual: rearmed.length === 1 && rearmed[0] === session,
+        expected: true,
+      });
+    });
+
+    it('given a deliberate read from a DIFFERENT user than the session was created for, should become the tracked identity', async () => {
+      const { session } = writableSession();
+      session.viewers.clear();
+      session.lastViewerUserId = 'user-1';
+      await handleSessionReadRequest(
+        { ...deps({ 'm1|-|-|sh': session }) },
+        readBody({ names: ['sh'], start: true, userId: 'user-2' }),
+      );
+
+      assert({
+        given: 'a viewer-less session created for one user, read by another',
+        should: 'track the reader as the identity the detached re-auth tick checks',
+        actual: session.lastViewerUserId,
+        expected: 'user-2',
+      });
+    });
+
+    it('given a deliberate read of a session someone IS watching, should leave the reap alone', async () => {
+      const { session } = writableSession();
+      const rearmed: TerminalSession[] = [];
+      await handleSessionReadRequest(
+        { ...deps({ 'm1|-|-|sh': session }), rearmIdleReap: (s: TerminalSession) => rearmed.push(s) },
+        readBody({ names: ['sh'], start: true, userId: 'user-1' }),
+      );
+
+      assert({
+        given: 'a session with a viewer attached',
+        should: 'not touch a reap that is not armed',
+        actual: rearmed.length,
+        expected: 0,
+      });
+    });
+
+    it('given the liveness sweep shape, should never rearm even when a named session has no viewers', async () => {
+      // The sweep never sets `start` — that is the ENTIRE signal this rearm
+      // decision is gated on. Without it, `list_sessions` housekeeping would
+      // perpetually push back the reap of every headless shell at a node,
+      // defeating idle reaping outright.
+      const { session } = writableSession();
+      session.viewers.clear();
+      const rearmed: TerminalSession[] = [];
+      await handleSessionReadRequest(
+        { ...deps({ 'm1|-|-|sh': session }), rearmIdleReap: (s: TerminalSession) => rearmed.push(s) },
+        readBody({ names: ['sh'], limit: 0 }),
+      );
+
+      assert({
+        given: 'the liveness sweep reading a viewer-less session',
+        should: 'start nothing and rearm nothing — this is housekeeping, not use',
+        actual: rearmed.length,
+        expected: 0,
+      });
+    });
+  });
+});
+
+describe('planSessionStart', () => {
+  it('given a malformed userId, should refuse even when no start was asked for', () => {
+    // Validated on its own terms rather than only inside the start branch: a
+    // field this endpoint uses to decide WHO a sandbox is billed to must never
+    // reach the seam as an empty string.
+    assert({
+      given: 'a payload carrying a userId that is not a usable identity',
+      should: 'refuse the request',
+      actual: planSessionStart({ userId: '' }, { addressable: true, hasStarter: true }),
+      expected: { ok: false, error: 'Missing or invalid userId' },
     });
   });
 });

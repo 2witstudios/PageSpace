@@ -17,11 +17,18 @@
  * access here would be the second policy site this epic exists to prevent.
  *
  * Refusing beats answering emptily here more than anywhere else in the family:
- * a shell session is RESERVED until a viewer first connects (its PTY has never
- * run), so an empty scrollback is a genuinely possible, genuinely different
- * answer from "no live PTY" and from "the realtime service did not answer".
- * Each of the three gets its own answer, and a transport failure NEVER
- * degrades into "cold".
+ * a shell session is RESERVED until something starts its PTY, so an empty
+ * scrollback is a genuinely possible, genuinely different answer from "no live
+ * PTY" and from "the realtime service did not answer". Each of the three gets
+ * its own answer, and a transport failure NEVER degrades into "cold".
+ *
+ * Since issue #2206 both verbs also ASK for the start (`start: true` plus the
+ * acting user). A reserved shell is no longer something to wait out — reading
+ * it or typing into it boots it, on the same path a viewer's connect takes —
+ * which is why the not-live wording here talks about a start that failed rather
+ * than a human who has not arrived. The `list_sessions` liveness sweep
+ * deliberately does NOT ask: it names every shell at a node at once, and the
+ * realtime endpoint refuses a start on that shape.
  */
 
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
@@ -37,6 +44,18 @@ const DEFAULT_TAIL_LINES = 100;
 /** How long the realtime service gets to answer — a map lookup, not a Sprite call. */
 const REALTIME_TIMEOUT_MS = 5000;
 
+/**
+ * How long a `start: true` call gets instead. Issue #2206's cold-start path
+ * can wake a paused Sprite and run a liveness check before it can even begin
+ * opening a shell — meaningfully longer than a map lookup, and the whole
+ * reason `ensureAgentTerminalSession` carries its own `abandoned()` check
+ * rather than relying on this timeout to double as a hard deadline. Giving
+ * `REALTIME_TIMEOUT_MS` to a genuine cold wake would make the very case this
+ * feature exists for ("first agent IO starts the shell") the one case that
+ * reliably times out and reports nothing delivered, with no retry.
+ */
+const COLD_START_TIMEOUT_MS = 25_000;
+
 /** One session's liveness (+ optional scrollback), as `/api/session-read` answers it. */
 export interface RealtimeSessionReadEntry {
   name: string;
@@ -44,6 +63,8 @@ export interface RealtimeSessionReadEntry {
   hasOutput: boolean;
   viewers: number;
   output: string;
+  /** Present only when THIS call started the PTY (issue #2206). */
+  started?: true;
 }
 
 export interface RealtimeSessionReadResponse {
@@ -55,9 +76,31 @@ export interface RealtimeSessionSendResponse {
   success: boolean;
   live?: boolean;
   delivered?: boolean;
+  /** Present only when THIS call started the PTY (issue #2206). */
+  started?: true;
 }
 
-export interface RealtimeSessionSendPayload {
+/**
+ * "Start this session's PTY if it has never run, for this user" — the headless
+ * start (issue #2206).
+ *
+ * Sent on the two calls a model makes ABOUT ONE named session, and deliberately
+ * not on the `list_sessions` liveness sweep: the sweep asks about every shell at
+ * a node at once, and starting on it would boot a sandbox per row for a listing.
+ * (The realtime endpoint refuses a start on a multi-name read outright, so this
+ * is a rule enforced at both ends rather than a convention here.)
+ *
+ * `userId` travels because the start is authorized, metered and audited against
+ * a real person on the realtime side, exactly as a socket connect is — this
+ * module's own resolution authorized an ADDRESS, not the spending of a
+ * concurrency slot and a payer's credits.
+ */
+interface RealtimeSessionStartRequest {
+  start: true;
+  userId: string;
+}
+
+export interface RealtimeSessionSendPayload extends RealtimeSessionStartRequest {
   machineId: string;
   projectName?: string;
   branchName?: string;
@@ -71,6 +114,9 @@ export interface RealtimeSessionReadPayload {
   branchName?: string;
   names: string[];
   limit: number;
+  /** Absent on the liveness sweep — see `RealtimeSessionStartRequest`. */
+  start?: true;
+  userId?: string;
 }
 
 /**
@@ -133,7 +179,11 @@ export function planColdReadAnswer({
       hasOutput: false,
       watchers: 0,
       output: '',
-      note: 'This shell session has no running terminal right now — either its PTY has never started (it starts when a human first opens it) or it has since ended. This is NOT the same as it having produced no output.',
+      // Since issue #2206 THIS read attempts to start a never-run PTY itself —
+      // no cold tail AND not live means either it has ended, or a start was
+      // just attempted for this read and failed (the machine may be out of
+      // credits or at its terminal limit). Never "waiting for a human".
+      note: 'This shell session has no running terminal right now — either it has ended, or one could not be started for this read (the machine may be out of credits or at its terminal limit). This is NOT the same as it having produced no output.',
     };
   }
 
@@ -166,6 +216,18 @@ export function planColdReadAnswer({
 const UNREACHABLE_SEND =
   'Could not reach the terminal service, so this input was NOT delivered. Nothing was typed into the session.';
 
+/**
+ * A send that reached the service and still found no PTY. Since #2206 the
+ * service will START one, so this is no longer "wait for a human to open it" —
+ * the start itself failed, and the reasons are the ones that stop any session
+ * opening: the payer is out of credits, or the user is at their concurrent
+ * terminal limit. Naming those is what makes the message actionable; the old
+ * wording sent the model to `bash` for a shell that would never open either.
+ */
+const UNSTARTABLE_SEND = (name: string) =>
+  `Nothing was typed: session "${name}" has no running terminal, and one could not be started ` +
+  '(the machine may be out of credits or at its terminal limit). Nothing was delivered.';
+
 const UNREACHABLE_READ =
   'Could not reach the terminal service to read this session, so its output is unknown — this does NOT mean the session produced nothing or has stopped. Try again.';
 
@@ -180,7 +242,7 @@ export function createPtySessionIo(transport: RealtimeSessionIoTransport): {
   liveness: (node: MachineNodeHandle, names: string[]) => Promise<Set<string> | undefined>;
 } {
   return {
-    read: async ({ identity, limit, cold }) => {
+    read: async ({ identity, actor, limit, cold }) => {
       const { machineId, projectName, branchName, name } = identity.address;
       const answer = await transport.read({
         machineId,
@@ -188,6 +250,16 @@ export function createPtySessionIo(transport: RealtimeSessionIoTransport): {
         ...(branchName ? { branchName } : {}),
         names: [name],
         limit: limit ?? DEFAULT_TAIL_LINES,
+        // Reading a shell that has never run STARTS it (issue #2206): a reader
+        // has no other way to get one going, and "it starts when a human opens
+        // it" is not an answer an agent can act on. BUT only when there is no
+        // COLD tail to fall back on (issue #2205): a `cold` record means this
+        // row already ran and ended, so a start here would boot a fresh, EMPTY
+        // PTY (billing a new session) and bury the very answer — the final
+        // scrollback — `planColdReadAnswer` exists to serve. A row with no
+        // cold record at all is the genuinely reserved/never-run case #2206
+        // targets, so that one still starts.
+        ...(cold === undefined ? { start: true as const, userId: actor.userId } : {}),
       });
 
       const entry = answer?.success ? answer.sessions.find((session) => session.name === name) : undefined;
@@ -205,20 +277,29 @@ export function createPtySessionIo(transport: RealtimeSessionIoTransport): {
         live: true,
         hasOutput: entry.hasOutput,
         watchers: entry.viewers,
+        ...(entry.started ? { started: true } : {}),
         // Terminal output is written by whatever is running in that shell — a
         // build log, a remote file, another agent. It is data about the world,
         // never instruction, and the frame says so INSIDE the payload where a
         // later truncation cannot strip it.
         output: annotateToolOutput({ text: entry.output, response: 'annotate' }),
-        ...(entry.hasOutput && entry.output.length === 0
+        // Three different empties, three different notes. A session that just
+        // BOOTED for this read has produced nothing yet and will; one that has
+        // produced output the ring dropped will not reproduce it; and an
+        // ordinary quiet session needs no explanation at all.
+        ...(entry.started
           ? {
-              note: 'This session has produced output, but none of it is still in the scrollback ring (a large burst pushed it out).',
+              note: 'This shell session had no running terminal, so one was started for this read. It has produced nothing yet — give it a moment, or use send_session to type a command into it.',
             }
-          : {}),
+          : entry.hasOutput && entry.output.length === 0
+            ? {
+                note: 'This session has produced output, but none of it is still in the scrollback ring (a large burst pushed it out).',
+              }
+            : {}),
       };
     },
 
-    send: async ({ identity, input }) => {
+    send: async ({ identity, actor, input }) => {
       const { machineId, projectName, branchName, name } = identity.address;
       const answer = await transport.send({
         machineId,
@@ -233,6 +314,11 @@ export function createPtySessionIo(transport: RealtimeSessionIoTransport): {
         // sequence could forge output; here they are delivered to a program's
         // stdin, which is exactly what a keyboard does.
         input,
+        // Typing into a shell that has never run STARTS it (issue #2206) —
+        // otherwise the very first thing an agent does with a session it just
+        // added would be refused.
+        start: true,
+        userId: actor.userId,
       });
 
       if (!answer?.success) return { success: false, error: UNREACHABLE_SEND };
@@ -241,17 +327,20 @@ export function createPtySessionIo(transport: RealtimeSessionIoTransport): {
       // reporting success would leave the model waiting on a command that was
       // never run.
       if (!answer.live || !answer.delivered) {
-        return {
-          success: false,
-          error: `Nothing was typed: session "${name}" has no running terminal right now. A shell session's PTY starts when a human first opens it; use bash (with target) to run a command at that node instead.`,
-        };
+        return { success: false, error: UNSTARTABLE_SEND(name) };
       }
 
       return {
         success: true,
         name,
         delivered: true,
-        note: 'Input was typed into the session exactly as given — anyone watching that terminal saw it, and what it produces appears in the session\'s output. Use read_session to see the result.',
+        ...(answer.started ? { started: true } : {}),
+        note: answer.started
+          // Worth saying: the shell's own boot output (a prompt, a login banner)
+          // will be interleaved with this command's, and a model that did not
+          // know it started the shell could read that as its command misbehaving.
+          ? 'This session had no running terminal, so one was started and the input was typed into it exactly as given. Its output will include the shell\'s own startup. Use read_session to see the result.'
+          : 'Input was typed into the session exactly as given — anyone watching that terminal saw it, and what it produces appears in the session\'s output. Use read_session to see the result.',
       };
     },
 
@@ -275,8 +364,13 @@ export function createPtySessionIo(transport: RealtimeSessionIoTransport): {
   };
 }
 
-/** POST one signed payload to a realtime session-IO endpoint; `null` on any non-answer. */
-async function postSigned<T>(path: string, payload: unknown): Promise<T | null> {
+/**
+ * POST one signed payload to a realtime session-IO endpoint; `null` on any
+ * non-answer. `payload.start` picks the deadline: a `start: true` call gets
+ * `COLD_START_TIMEOUT_MS` (a cold Sprite wake) rather than the ordinary
+ * `REALTIME_TIMEOUT_MS` (a map lookup) — see `COLD_START_TIMEOUT_MS`.
+ */
+async function postSigned<T>(path: string, payload: { start?: true }): Promise<T | null> {
   const realtimeUrl = process.env.INTERNAL_REALTIME_URL;
   if (!realtimeUrl) return null;
 
@@ -286,7 +380,7 @@ async function postSigned<T>(path: string, payload: unknown): Promise<T | null> 
       method: 'POST',
       headers: createSignedBroadcastHeaders(body),
       body,
-      signal: AbortSignal.timeout(REALTIME_TIMEOUT_MS),
+      signal: AbortSignal.timeout(payload.start === true ? COLD_START_TIMEOUT_MS : REALTIME_TIMEOUT_MS),
     });
     if (!response.ok) {
       loggers.ai.warn('session-io-pty: realtime rejected the request', { path, status: response.status });

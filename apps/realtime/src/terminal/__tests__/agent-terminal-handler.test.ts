@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { buildAgentTerminalHandlers, MAX_INPUT_BYTES, SETTLE_HEARTBEAT_MS, resolveAgentTerminalCommand, planConnect, planColdTailPersist } from '../agent-terminal-handler';
+import { buildAgentTerminalHandlers, MAX_INPUT_BYTES, SETTLE_HEARTBEAT_MS, resolveAgentTerminalCommand, planConnect, ensureAgentTerminalSession, connectFailureMessage, armIdleReap, planColdTailPersist } from '../agent-terminal-handler';
 import { createTerminalSessionMap, DETACHED_IDLE_MS } from '../terminal-session-map';
 import type { AgentTerminalCheckAuthFn, OpenShellFn, SocketLike } from '../agent-terminal-handler';
 import type { TerminalSession } from '../terminal-session-map';
@@ -2518,6 +2518,498 @@ describe('buildAgentTerminalHandlers', () => {
         },
         expected: { opened: 0, firstStillOwned: true, firstOrphaned: false, errored: true },
       });
+    });
+  });
+});
+
+/**
+ * A HEADLESS start (issue #2206): the same create the socket path runs, asked
+ * for by agent IO over signed HTTP instead of by a pane. No viewer, nothing to
+ * emit to, and nobody who can go away mid-create — so the interesting questions
+ * are all about what nobody-is-watching means for the machinery a viewer
+ * normally drives: the reap, the hold, the billing window, the slot.
+ */
+describe('ensureAgentTerminalSession — headless start', () => {
+  let sessionMap: ReturnType<typeof createTerminalSessionMap>;
+  let shell: ReturnType<typeof makeShell>;
+  let openShell: ReturnType<typeof vi.fn> & OpenShellFn;
+  let checkAuth: ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+  let persistStreamSessionId: ReturnType<typeof vi.fn>;
+
+  const target = { machineId: 't1', projectName: 'repo', branchName: 'feature-x', name: 'cli' };
+
+  /** The headless shape: no viewer, no pane to abandon it, nothing to emit. */
+  function headlessRequest(access: ReturnType<typeof makeAuthSuccess>) {
+    return { access, target, userId: 'user1', cols: 80, rows: 24, abandoned: () => false };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    sessionMap = createTerminalSessionMap();
+    shell = makeShell();
+    openShell = vi.fn().mockReturnValue(shell) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
+    checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess()) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+    persistStreamSessionId = vi.fn().mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('given no viewer, should still open the PTY and install the session under its key', async () => {
+    const access = makeAuthSuccess();
+    const result = await ensureAgentTerminalSession(
+      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      headlessRequest(access),
+    );
+
+    assert({
+      given: 'a start with no viewer at all',
+      should: 'open the shell and file the session by key, reachable to every later caller',
+      actual: {
+        kind: result.kind,
+        opened: openShell.mock.calls.length,
+        installed: sessionMap.getByKey('branch1:agent:cli') !== undefined,
+        viewers: sessionMap.getByKey('branch1:agent:cli')?.viewers.size,
+      },
+      expected: { kind: 'created', opened: 1, installed: true, viewers: 0 },
+    });
+  });
+
+  it('given a headless start, should bind NO socket — there is no connection to route input from', async () => {
+    await ensureAgentTerminalSession(
+      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      headlessRequest(makeAuthSuccess()),
+    );
+
+    assert({
+      given: 'a session started with no socket',
+      should: 'leave `bySocket` empty rather than inventing a binding nothing can remove',
+      actual: sessionMap.getBySocket(viewer('sock1')),
+      expected: undefined,
+    });
+  });
+
+  it('given a headless start, should arm the idle reap immediately — no viewer will ever leave to arm it', async () => {
+    // The whole hazard this closes: the reap is normally armed by the LAST
+    // VIEWER LEAVING, a transition a session that never had one cannot reach. Left
+    // unarmed, a shell an agent started and forgot holds its concurrency slot and
+    // bills its payer for the life of the process.
+    const access = makeAuthSuccess();
+    const billing = makeBilling();
+    await ensureAgentTerminalSession(
+      { sessionMap, openShell, checkAuth, persistStreamSessionId, billing },
+      headlessRequest(access),
+    );
+    const session = sessionMap.getByKey('branch1:agent:cli');
+
+    assert({
+      given: 'a viewer-less session the moment it is created',
+      should: 'have a reap pending',
+      actual: session?.idleTimer !== undefined,
+      expected: true,
+    });
+
+    await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS);
+
+    assert({
+      given: 'that reap firing with nobody having ever attached',
+      // Three settles, not one: the ten-minute heartbeat bills two windows on
+      // the way to the thirty-minute deadline, and the reap settles the tail.
+      should: 'kill the PTY, release the slot, settle every accrued window and drop the session',
+      actual: {
+        killed: shell.kill.mock.calls.map(([reason]) => reason),
+        slotReleased: access.releaseSlot.mock.calls.length,
+        settled: billing.trackUsage.mock.calls.length,
+        stillMapped: sessionMap.getByKey('branch1:agent:cli') !== undefined,
+      },
+      expected: { killed: ['idle-reap'], slotReleased: 1, settled: 3, stillMapped: false },
+    });
+  });
+
+  it('given the reap re-armed by later use, should push the deadline back rather than stack a second reap', async () => {
+    // An agent driving a headless session at minute 29 must not have its command
+    // killed at minute 30 — `session-io` re-arms on delivered input. Re-arming has
+    // to MOVE the deadline, not add another timer beside it.
+    const access = makeAuthSuccess();
+    await ensureAgentTerminalSession(
+      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      headlessRequest(access),
+    );
+    const session = sessionMap.getByKey('branch1:agent:cli')!;
+
+    await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS - 1000);
+    armIdleReap({}, sessionMap, session);
+    await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS - 1000);
+
+    assert({
+      given: 'a session used again a second before its reap was due',
+      should: 'still be alive most of an idle window later — the original deadline was cancelled, not doubled up',
+      actual: { killed: shell.kill.mock.calls.length, stillMapped: sessionMap.getByKey('branch1:agent:cli') !== undefined },
+      expected: { killed: 0, stillMapped: true },
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    assert({
+      given: 'a full idle window after that last use',
+      should: 'reap it exactly once',
+      actual: shell.kill.mock.calls.map(([reason]) => reason),
+      expected: ['idle-reap'],
+    });
+  });
+
+  it('given a headless start, should NOT detach the shell — an agent reading its bytes is a real consumer', async () => {
+    // `setViewerAttached(false)` stops the watchdog reconnecting, which is right
+    // when a HUMAN closed the last pane. Doing it here would cost an agent the
+    // output it started the shell to read. The shell quiets itself through
+    // `attach-quiet` if the session actually goes idle.
+    await ensureAgentTerminalSession(
+      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      headlessRequest(makeAuthSuccess()),
+    );
+
+    assert({
+      given: 'a session with zero viewers but a live agent driving it',
+      should: 'leave the shell attached',
+      actual: shell.setViewerAttached.mock.calls,
+      expected: [],
+    });
+  });
+
+  it('given a headless start, should start the billing window at PTY start', async () => {
+    const billing = makeBilling();
+    await ensureAgentTerminalSession(
+      { sessionMap, openShell, checkAuth, persistStreamSessionId, billing },
+      headlessRequest(makeAuthSuccess()),
+    );
+    const session = sessionMap.getByKey('branch1:agent:cli');
+
+    assert({
+      given: 'a metered headless start',
+      should: 'gate the payer and run the clock from now — a sprite an agent woke is as billable as one a human woke',
+      actual: {
+        gated: billing.gate.mock.calls.map(([args]) => args),
+        clockRunning: session?.connectedAt !== undefined,
+        payerId: session?.payerId,
+      },
+      expected: { gated: [{ payerId: 'owner-1' }], clockRunning: true, payerId: 'owner-1' },
+    });
+  });
+
+  it('given a headless start, should take the platform task hold — the agent is working with nobody watching', async () => {
+    const taskHold = { tick: vi.fn(), end: vi.fn(), tickIntervalMs: 60_000, agentIdleMs: 300_000 };
+    await ensureAgentTerminalSession(
+      { sessionMap, openShell, checkAuth, persistStreamSessionId, createTaskHold: () => taskHold },
+      headlessRequest(makeAuthSuccess()),
+    );
+
+    assert({
+      given: 'the hold\'s first tick on a viewer-less session',
+      should: 'report no viewer but FRESH activity — the launch itself — so the sprite is held for the run',
+      actual: taskHold.tick.mock.calls.map(([args]) => ({
+        attached: (args as { attached: boolean }).attached,
+        activityObservable: (args as { activityObservable: boolean }).activityObservable,
+        hasActivity: (args as { lastActivityAt?: number }).lastActivityAt !== undefined,
+      })),
+      expected: [{ attached: false, activityObservable: false, hasActivity: true }],
+    });
+  });
+
+  it('given a viewer connecting after a headless start, should join THAT PTY and cancel its reap', async () => {
+    const access = makeAuthSuccess();
+    checkAuth = vi.fn().mockResolvedValue(access) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+    await ensureAgentTerminalSession(
+      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      headlessRequest(access),
+    );
+    const session = sessionMap.getByKey('branch1:agent:cli');
+    session!.scrollback.push('hello from the agent');
+
+    const socket = makeSocket();
+    const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+    await onConnect(validPayload);
+
+    assert({
+      given: 'a human opening the pane on a shell an agent already started',
+      should: 'reattach to the SAME PTY with its scrollback, and stop the reap that was collecting it',
+      actual: {
+        opened: openShell.mock.calls.length,
+        reapPending: session?.idleTimer !== undefined,
+        viewers: session?.viewers.size,
+        ready: socket.emit.mock.calls.find(([event]) => event === 'agent-terminal:ready')?.[1],
+      },
+      expected: {
+        opened: 1,
+        reapPending: false,
+        viewers: 1,
+        ready: { scrollback: 'hello from the agent', resumed: false, connectionId: 'sock1' },
+      },
+    });
+  });
+
+  it('given a session already live under this key, should join it rather than open a second PTY', async () => {
+    const access = makeAuthSuccess();
+    await ensureAgentTerminalSession(
+      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      headlessRequest(access),
+    );
+    const first = sessionMap.getByKey('branch1:agent:cli');
+
+    const second = await ensureAgentTerminalSession(
+      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      headlessRequest(makeAuthSuccess()),
+    );
+
+    assert({
+      given: 'a second start for a key that already has a running PTY',
+      should: 'hand back the live session, opening nothing and reserving nothing',
+      actual: {
+        kind: second.kind,
+        same: second.kind === 'existing' && second.session === first,
+        opened: openShell.mock.calls.length,
+      },
+      expected: { kind: 'existing', same: true, opened: 1 },
+    });
+  });
+
+  it('given a session already live under this key but the caller has ABANDONED, should refuse rather than hand it back', async () => {
+    // A timed-out `send_session` retried by its caller must not be told "here
+    // is your session" for one it will go on to WRITE into — that is exactly
+    // the double-execution race the abandonment plumbing exists to close, and
+    // this is the ONE path `alreadyLive` skips straight past without ever
+    // reaching the create's own `abandoned()` check.
+    const access = makeAuthSuccess();
+    await ensureAgentTerminalSession(
+      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      headlessRequest(access),
+    );
+
+    const result = await ensureAgentTerminalSession(
+      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      { ...headlessRequest(makeAuthSuccess()), abandoned: () => true },
+    );
+
+    assert({
+      given: 'a caller who abandoned the request before an already-live session was found',
+      should: 'refuse rather than hand back a session it will go on to use',
+      actual: result,
+      expected: { kind: 'failed', reason: 'abandoned' },
+    });
+  });
+
+  it('given two headless starts racing the same key, should open exactly one PTY', async () => {
+    // Two `send_session` calls landing together on a reserved shell. Without the
+    // per-key create claim both would open a PTY against the SAME persisted Sprite
+    // session, and discarding the loser would SIGKILL the winner's process.
+    const gate = deferred<void>();
+    const access = makeAuthSuccess();
+    access.resolveSandbox = vi.fn(async () => {
+      await gate.promise;
+      return (await makeAuthSuccess().resolveSandbox()) as unknown as Awaited<ReturnType<typeof access.resolveSandbox>>;
+    }) as unknown as typeof access.resolveSandbox;
+
+    const deps = { sessionMap, openShell, checkAuth, persistStreamSessionId };
+    const first = ensureAgentTerminalSession(deps, headlessRequest(access));
+    const second = ensureAgentTerminalSession(deps, headlessRequest(makeAuthSuccess()));
+    gate.resolve();
+    const results = await Promise.all([first, second]);
+
+    assert({
+      given: 'two concurrent headless starts for one key',
+      should: 'create once and hand the second caller the same session',
+      actual: {
+        kinds: results.map((result) => result.kind).sort(),
+        opened: openShell.mock.calls.length,
+      },
+      expected: { kinds: ['created', 'existing'], opened: 1 },
+    });
+  });
+
+  it('given a racing start joins a winner but the caller has ABANDONED by then, should refuse rather than hand it back', async () => {
+    // Same hazard as the alreadyLive case, on the OTHER path that can return
+    // 'existing': joining a create already in flight. The `await inFlight` is
+    // exactly the kind of real suspension point abandonment can newly become
+    // true across.
+    const gate = deferred<void>();
+    const access = makeAuthSuccess();
+    access.resolveSandbox = vi.fn(async () => {
+      await gate.promise;
+      return (await makeAuthSuccess().resolveSandbox()) as unknown as Awaited<ReturnType<typeof access.resolveSandbox>>;
+    }) as unknown as typeof access.resolveSandbox;
+
+    const deps = { sessionMap, openShell, checkAuth, persistStreamSessionId };
+    let loserAbandoned = false;
+    const winner = ensureAgentTerminalSession(deps, headlessRequest(access));
+    const loser = ensureAgentTerminalSession(deps, {
+      ...headlessRequest(makeAuthSuccess()),
+      abandoned: () => loserAbandoned,
+    });
+    loserAbandoned = true;
+    gate.resolve();
+    const results = await Promise.all([winner, loser]);
+
+    assert({
+      given: 'a racing start that joined the winner only after its own caller had abandoned',
+      should: 'refuse the join rather than hand back a session it will go on to use',
+      actual: results[1],
+      expected: { kind: 'failed', reason: 'abandoned' },
+    });
+  });
+
+  it('given a denied sandbox resolution, should report the reason and install nothing', async () => {
+    const access = makeAuthSuccess();
+    access.resolveSandbox = vi.fn(async () => ({ ok: false as const, reason: 'concurrency_limit' })) as unknown as typeof access.resolveSandbox;
+
+    const result = await ensureAgentTerminalSession(
+      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      headlessRequest(access),
+    );
+    // The key claim must not survive its own failed create — asserted by
+    // RETRYING rather than by reading the claim, because a caller only ever
+    // experiences the claim as "can I create?".
+    const retry = await ensureAgentTerminalSession(
+      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      headlessRequest(makeAuthSuccess()),
+    );
+
+    assert({
+      given: 'a start whose sandbox resolution denied',
+      should: 'fail with the reason, open nothing, and leave the key free for a retry',
+      actual: {
+        result,
+        openedOnDenial: openShell.mock.calls.length === 1 ? 'retry only' : 'unexpected',
+        retried: retry.kind,
+        installed: sessionMap.getByKey('branch1:agent:cli') !== undefined,
+      },
+      expected: {
+        result: { kind: 'failed', reason: 'denied', message: 'concurrency_limit' },
+        openedOnDenial: 'retry only',
+        retried: 'created',
+        installed: true,
+      },
+    });
+  });
+
+  it('given an insolvent payer, should refuse the start and hand the slot straight back', async () => {
+    const access = makeAuthSuccess();
+    const billing = makeBilling({ gate: vi.fn().mockResolvedValue({ allowed: false }) });
+
+    const result = await ensureAgentTerminalSession(
+      { sessionMap, openShell, checkAuth, persistStreamSessionId, billing },
+      headlessRequest(access),
+    );
+
+    assert({
+      given: 'a payer who cannot cover a new session',
+      should: 'refuse before opening a shell and release the reserved slot exactly once',
+      actual: {
+        result,
+        opened: openShell.mock.calls.length,
+        slotReleased: access.releaseSlot.mock.calls.length,
+      },
+      expected: { result: { kind: 'failed', reason: 'insolvent' }, opened: 0, slotReleased: 1 },
+    });
+  });
+
+  it('given openShell throwing, should release the slot and the hold exactly once', async () => {
+    const access = makeAuthSuccess();
+    const billing = makeBilling();
+    openShell = vi.fn(() => { throw new Error('sprite exec refused'); }) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
+
+    const result = await ensureAgentTerminalSession(
+      { sessionMap, openShell, checkAuth, persistStreamSessionId, billing },
+      headlessRequest(access),
+    );
+
+    assert({
+      given: 'a shell that could not be opened',
+      should: 'report the failure and give back everything the attempt reserved',
+      actual: {
+        result,
+        slotReleased: access.releaseSlot.mock.calls.length,
+        holdsReleased: billing.releaseHold.mock.calls.map(([id]) => id),
+        installed: sessionMap.getByKey('branch1:agent:cli') !== undefined,
+      },
+      expected: {
+        result: { kind: 'failed', reason: 'open_failed' },
+        slotReleased: 1,
+        holdsReleased: ['hold-1'],
+        installed: false,
+      },
+    });
+  });
+
+  it('given a headless start whose user loses access, should tear the session down at the re-auth tick', async () => {
+    // Nobody is attached, so the tick has only the identity the start was made
+    // for. A revoked agent's shell must not keep running unsupervised until the
+    // 30-minute reap.
+    const access = makeAuthSuccess();
+    // The start's own verdict is passed in (already granted); `checkAuth` here is
+    // only ever the RE-AUTH tick's, so it can revoke from the first call.
+    checkAuth = vi.fn().mockResolvedValue({ ok: false, reason: 'no_edit_access' }) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+
+    await ensureAgentTerminalSession(
+      { sessionMap, openShell, checkAuth, persistStreamSessionId },
+      headlessRequest(access),
+    );
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    assert({
+      given: 'the acting user losing machine access while their headless shell runs',
+      should: 'kill the PTY and drop the session',
+      actual: {
+        killed: shell.kill.mock.calls.map(([reason]) => reason),
+        stillMapped: sessionMap.getByKey('branch1:agent:cli') !== undefined,
+      },
+      expected: { killed: ['forced-teardown'], stillMapped: false },
+    });
+  });
+});
+
+describe('connectFailureMessage', () => {
+  it('given an abandoned create, should say nothing — nobody is left to read it', () => {
+    assert({
+      given: 'a create whose pane went away',
+      should: 'produce no message',
+      actual: connectFailureMessage({ kind: 'failed', reason: 'abandoned' }),
+      expected: undefined,
+    });
+  });
+
+  it('given a denial, should quote the reason on the same wire string as before', () => {
+    assert({
+      given: 'a denied create',
+      should: 'render the deny reason the pane has always rendered',
+      actual: connectFailureMessage({ kind: 'failed', reason: 'denied', message: 'no_edit_access' }),
+      expected: 'Agent terminal access denied: no_edit_access',
+    });
+  });
+
+  it('given a denial with no reason, should still name the shape rather than emit "undefined"', () => {
+    assert({
+      given: 'a denial that arrived without a reason',
+      should: 'fall back to a word, not the string "undefined"',
+      actual: connectFailureMessage({ kind: 'failed', reason: 'denied' }),
+      expected: 'Agent terminal access denied: unknown',
+    });
+  });
+
+  it('given an insolvent payer, should name credits', () => {
+    assert({
+      given: 'a create refused by the billing gate',
+      should: 'tell the user what to do about it',
+      actual: connectFailureMessage({ kind: 'failed', reason: 'insolvent' }),
+      expected: 'Insufficient credits to open an agent terminal session.',
+    });
+  });
+
+  it('given a shell that would not open, should report the open failure', () => {
+    assert({
+      given: 'openShell throwing',
+      should: 'report a failed open',
+      actual: connectFailureMessage({ kind: 'failed', reason: 'open_failed' }),
+      expected: 'Failed to open agent terminal session',
     });
   });
 });

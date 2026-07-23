@@ -212,11 +212,22 @@ export function planColdTailPersist(
   };
 }
 
-export type AgentTerminalHandlerDeps = {
+/**
+ * Everything STARTING a PTY needs — and nothing about who asked for it.
+ *
+ * Socket-free on purpose: the same cold-create sequence (reserve a slot, gate
+ * billing, verify liveness, open the shell, arm the hold/settle/re-auth
+ * heartbeats) serves a viewer's `agent-terminal:connect` and a HEADLESS start
+ * driven by agent IO over signed HTTP (`session-io.ts`, issue #2206). The two
+ * differ only in who watches the result, which is `EnsureSessionRequest`'s
+ * business — everything deciding what a session COSTS and how it is collected
+ * lives here, in one place, so the callers cannot drift apart on slot
+ * accounting, metering or reaping.
+ */
+export type AgentTerminalSessionDeps = {
   sessionMap: TerminalSessionMap;
   openShell: OpenShellFn;
   checkAuth: AgentTerminalCheckAuthFn;
-  socket: SocketLike;
   /** Best-effort: persists the Sprite session id this agent terminal is now known to run under, so a later reconnect (even after a realtime-process restart) reattaches to THIS session rather than creating a duplicate. */
   persistStreamSessionId: (args: { agentTerminalId: string; sessionId: string }) => Promise<void>;
   /** Terminal Epic 3 metering seam — see module doc. Omitted -> unmetered. */
@@ -240,6 +251,11 @@ export type AgentTerminalHandlerDeps = {
    * pauses on the platform's own idle clock, mid-run or not).
    */
   createTaskHold?: (args: { sprite: SpriteInstanceLike; sessionKey: string }) => TaskHoldController;
+};
+
+/** The session deps plus the ONE socket this handler set serves. */
+export type AgentTerminalHandlerDeps = AgentTerminalSessionDeps & {
+  socket: SocketLike;
 };
 
 export type AgentTerminalHandlers = {
@@ -425,7 +441,6 @@ function removeViewer(
   session.viewers.delete(viewerKey);
   sessionMap.detach(viewerKey);
   if (session.viewers.size > 0) return;
-  const { sessionKey } = session;
   // The last viewer out is who the detached re-auth tick keeps checking.
   if (viewer) session.lastViewerUserId = viewer.userId;
   // No viewer is left watching this PTY: stop the shell's watchdog reconnect
@@ -449,6 +464,35 @@ function removeViewer(
     lastActivityAt: latestActivityAt(session),
     activityObservable: session.hasOutput || !session.resumedAtCreate,
   });
+  armIdleReap(deps, sessionMap, session);
+}
+
+/**
+ * Arm (or re-arm) the reap that collects a session nobody is watching after
+ * `DETACHED_IDLE_MS` of quiet — the one thing that eventually releases a
+ * viewer-less PTY's concurrency slot and settles its billing.
+ *
+ * Three callers, all meaning "this session has no viewer right now":
+ *
+ *   - the last viewer leaving (`removeViewer`, above) — the original;
+ *   - a HEADLESS create (`ensureAgentTerminalSession`), which installs a session
+ *     with zero viewers and so never reaches that transition at all. Without an
+ *     arm here its PTY, slot and billing heartbeat would run for the life of the
+ *     process;
+ *   - agent input into a viewer-less session (`session-io.ts`), which RE-arms:
+ *     an agent driving a headless shell is activity, and reaping mid-command
+ *     thirty minutes after it started would kill work in progress.
+ *
+ * Idempotent by construction — any pending timer is cleared first, so a re-arm
+ * moves the deadline rather than stacking a second reap onto the same session.
+ */
+export function armIdleReap(
+  deps: SessionEndDeps,
+  sessionMap: TerminalSessionMap,
+  session: TerminalSession,
+): void {
+  const { sessionKey } = session;
+  if (session.idleTimer !== undefined) clearTimeout(session.idleTimer);
   session.idleTimer = setTimeout(() => {
     session.releaseSlot();
     // 'idle-reap': ending the session server-side is this timer's whole
@@ -790,6 +834,568 @@ function resumedFor(liveness: SessionLiveness): boolean {
   return liveness !== 'gone';
 }
 
+/** The (scope, name) address a session is created for — the same tuple `checkAuth` takes. */
+export interface AgentTerminalTargetNames {
+  machineId: string;
+  projectName?: string;
+  branchName?: string;
+  name: string;
+}
+
+export interface EnsureSessionRequest {
+  /** The ALREADY-GRANTED access verdict for this target — `sessionKey`, `payerId`, and the uncalled `resolveSandbox` thunk. */
+  access: AgentTerminalAccessGranted;
+  target: AgentTerminalTargetNames;
+  /** Who this session is being started FOR — the re-auth tick's identity while nobody is attached. */
+  userId: string;
+  /** Already clamped by the caller (`clampTerminalDimensions`). */
+  cols: number;
+  rows: number;
+  /**
+   * The creating viewer, registered in the session literal BEFORE `openShell`
+   * so output arriving between the shell opening and `setNew` still reaches
+   * their pane.
+   *
+   * Absent = a HEADLESS start: the session begins with zero viewers, because
+   * the thing that wanted it is an agent reading over HTTP, not a pane. That is
+   * a supported state, not a degenerate one — a session whose humans have all
+   * closed their tabs is already exactly this — but it does mean the
+   * last-viewer-leaves transition that normally arms the reap never fires, so
+   * this function arms it itself (see `armIdleReap` below).
+   */
+  viewer?: { key: string; viewer: TerminalViewer };
+  /**
+   * Has the requester gone away since asking? Checked at the last `await`
+   * before the PTY exists, so an abandoned create declines instead of starting
+   * an agent nobody will ever see. For a headless start (`index.ts`'s
+   * `startHeadlessAgentTerminal`), this is the HTTP request's own connection —
+   * the web tier's `fetch` to this endpoint times out sooner than a cold
+   * Sprite wake can finish, and without tracking that, a client who gave up
+   * could see its retried input executed twice on a create that finished
+   * after the fact. Addressed by KEY regardless: the next `send_session`
+   * finds whatever this create did or didn't leave behind.
+   */
+  abandoned: () => boolean;
+  /**
+   * Called SYNCHRONOUSLY once the session is installed — no await between it
+   * and `openShell`.
+   *
+   * That is the whole reason this is a callback rather than the returned
+   * `resumed`: awaiting this function's result is a microtask, and an attach
+   * REPLAYS the session's scrollback immediately, so a caller that emitted
+   * `ready` on the returned value would let that replay overtake it. A client
+   * that types its starting prompt on first output would then type it into an
+   * agent it has not yet been told was already running — precisely the hazard
+   * `resumed` exists to prevent. The returned `resumed` is for callers with no
+   * such race (a headless start has no client to overtake).
+   */
+  onStarted?: (resumed: boolean) => void;
+}
+
+export type EnsureSessionResult =
+  /** A live session already held this key — the caller attaches to it rather than creating a second PTY. */
+  | { kind: 'existing'; session: TerminalSession }
+  | { kind: 'created'; session: TerminalSession; resumed: boolean }
+  | {
+      kind: 'failed';
+      reason: 'abandoned' | 'denied' | 'insolvent' | 'open_failed';
+      /** The deny reason, for the arms that have one — the caller decides how (and whether) to word it. */
+      message?: string;
+    };
+
+/**
+ * Get a live PTY session for this key, creating one if there is none.
+ *
+ * THE one place a PTY is started. Both callers — a viewer's socket connect and
+ * a headless agent-IO start — come through here, so the slot reservation, the
+ * billing gate and window, the platform task hold, the settle and re-auth
+ * heartbeats, and the per-key create serialization are written once and behave
+ * identically no matter who asked.
+ *
+ * Emits nothing and knows no socket: every outcome is a returned value. The
+ * socket caller turns those into `agent-terminal:error`/`ready`; the headless
+ * caller turns them into an HTTP answer.
+ */
+export async function ensureAgentTerminalSession(
+  deps: AgentTerminalSessionDeps,
+  request: EnsureSessionRequest,
+): Promise<EnsureSessionResult> {
+  const { sessionMap, openShell, checkAuth, persistStreamSessionId, billing, createTaskHold, persistColdTail } = deps;
+  const { access, target, userId, cols, rows, viewer } = request;
+  const { machineId, projectName, branchName, name } = target;
+  const { sessionKey } = access;
+  /** Bundled once — see `SessionEndDeps`. Every teardown-path call below threads this through instead of `billing` alone. */
+  const sessionEndDeps: SessionEndDeps = { billing, persistColdTail };
+
+  // A session discovered here was found or created by SOMEONE ELSE — never
+  // awaited into existence by this call — but handing it back is still only
+  // safe if this caller is still there to receive it. A headless caller whose
+  // request already timed out (`abandoned()` true) must not be told "here is
+  // your session": `session-io.ts` would go on to WRITE into it, and a retry
+  // after that timeout would then run the same input twice — precisely the
+  // race `abandoned` exists to close. `'abandoned'` costs nothing extra for
+  // the socket path either: `connectFailureMessage` answers it with no
+  // message, the same silent no-op `establishConnection`'s own (now
+  // redundant, still harmless) abandonment check already produced.
+  const alreadyLive = sessionMap.getByKey(sessionKey);
+  if (alreadyLive !== undefined) {
+    if (request.abandoned()) return { kind: 'failed', reason: 'abandoned' };
+    return { kind: 'existing', session: alreadyLive };
+  }
+
+  // The cold path — slow (it resolves, and may wake, a Sprite), which makes it
+  // exactly the window a double-mount's second connect lands in. Join a create
+  // already in flight for this key rather than starting a second one: opening
+  // a second PTY here is not merely wasteful, it is destructive. Both connects
+  // would attach to the SAME persisted Sprite exec session, so discarding the
+  // duplicate afterwards would SIGKILL the process the survivor is attached to.
+  //
+  // Loop rather than check once: if the create we waited on FAILED, another
+  // connect may already have claimed the key behind it.
+  for (;;) {
+    const inFlight = sessionMap.pendingCreate(sessionKey);
+    if (inFlight === undefined) break;
+    await inFlight.catch(() => {});
+    const created = sessionMap.getByKey(sessionKey);
+    if (created !== undefined) {
+      // Same reasoning as the `alreadyLive` check above — this join crossed a
+      // real await (`inFlight`), the one place abandonment could have newly
+      // become true since the caller last checked.
+      if (request.abandoned()) return { kind: 'failed', reason: 'abandoned' };
+      return { kind: 'existing', session: created };
+    }
+    // That create failed and installed nothing — see if another is in flight,
+    // otherwise fall through and create it ourselves.
+  }
+
+  // Claim the key BEFORE the first await, so a connect that arrives while we
+  // are resolving joins us instead of racing us. There is no await between the
+  // loop's exit and this claim, so the claim is atomic w.r.t. the event loop.
+  // The claim is released by the `finally` below, on every exit from the cold
+  // path — success, denial, or throw.
+  let finishCreate!: () => void;
+  sessionMap.trackCreate(sessionKey, new Promise<void>((resolve) => { finishCreate = resolve; }));
+  try {
+    // ONLY now is a concurrency slot reserved and the Sprite resolved: a
+    // reattach above returned without ever calling this.
+    const sandbox = await access.resolveSandbox();
+    if (!sandbox.ok) {
+      // resolveSandbox released the slot (if it had reserved one) and logged.
+      return { kind: 'failed', reason: 'denied', message: sandbox.reason };
+    }
+    // Every teardown path below can race another (a PTY exit landing while the
+    // idle reap is pending, a lost double-mount whose onExit fires later), and
+    // the slot is a bare counter — releasing it twice silently hands back
+    // capacity this connect never held, letting the user exceed their tier.
+    // Collapse them: the slot goes back exactly once, whoever gets there first.
+    let slotReleased = false;
+    const releaseSlot = () => {
+      if (slotReleased) return;
+      slotReleased = true;
+      sandbox.releaseSlot();
+    };
+
+    // Terminal Epic 3 metering: place a flat-estimate hold for this NEW
+    // machine-active window BEFORE opening the shell (hibernated/idle time
+    // between sessions is free). Settled at session end — see
+    // endAgentTerminalSession. Deliberately NOT in checkAuth: that also runs
+    // on every periodic re-auth tick below, which must never place a second
+    // hold for the same still-open session.
+    let holdId: string | undefined;
+    if (billing) {
+      // The slot is already reserved, and nothing owns it yet — no session
+      // exists to release it on teardown. A gate that THROWS (a billing/DB blip)
+      // would otherwise propagate straight out of onConnect with the slot still
+      // held, and `activeByUser` is a process-lifetime counter: one transient
+      // failure would lock a free-tier user (limit 1) out of agent terminals on
+      // this replica until the process restarts.
+      let gateResult: Awaited<ReturnType<SandboxBillingDeps['gate']>>;
+      try {
+        gateResult = await billing.gate({ payerId: access.payerId });
+      } catch (error) {
+        releaseSlot();
+        throw error;
+      }
+      if (!gateResult.allowed) {
+        releaseSlot();
+        return { kind: 'failed', reason: 'insolvent' };
+      }
+      holdId = gateResult.holdId;
+    }
+    const connectedAt = Date.now();
+
+    const { sandboxId, sprite } = sandbox;
+
+    // Resolved BEFORE the shell opens, deliberately. It is the answer to
+    // "was this agent already running", and it must be in hand by the time
+    // `ready` is emitted — which has to leave with NO await between it and
+    // `openShell`, or the shell's first output can reach the client before
+    // `ready` does. A client that types a starting prompt on first output
+    // would then type it without yet knowing the agent was resumed, which is
+    // precisely the hazard `resumed` exists to prevent.
+    const liveness = await sessionLiveness(sprite, sandbox.streamSessionId);
+    const resumed = resumedFor(liveness);
+
+    // The verdict has to CONSTRAIN the attach, not merely predict it.
+    //
+    // `openPtyShell` attaches to a `sessionId` optimistically — it does not
+    // consult this verdict — so handing it the stored id while telling the
+    // client `resumed: false` would be a bet that the listing was right. Lose
+    // that bet (the listing omits a session `attachSession` then binds to) and
+    // the bridge is attached to a LIVE agent having just told the client it was
+    // safe to type into. `resumed` is the only defence on this path.
+    //
+    // So a `gone` verdict makes ITSELF true: no id, a genuinely fresh session,
+    // and the prompt is correct by construction. Anything else (`live`, or an
+    // `unknown` we could not settle) keeps the id — abandoning a running agent
+    // to start a second one is the worse error, and it is the same policy
+    // `planReconnect` already applies on every reconnect.
+    const attachSessionId = liveness === 'gone' ? undefined : (sandbox.streamSessionId ?? undefined);
+
+    // The pane is already gone. Do not START the agent just to reap it.
+    //
+    // Tearing an abandoned create down AFTER the fact is safe (nobody else is
+    // watching a PTY that did not exist a moment ago) — but safe is not free. The
+    // reap is armed for DETACHED_IDLE_MS, so a pane closed during a cold boot would
+    // hold a concurrency slot and bill the MACHINE's payer for thirty minutes of
+    // Sprite runtime for an agent nobody ever saw. On the free tier (one terminal)
+    // that is a thirty-minute lockout from the user's own machine — a smaller
+    // version of the very harm this machinery exists to prevent.
+    //
+    // This is the last `await` before the PTY exists, and everything from here to
+    // `setNew` is synchronous, so no abandonment can slip past this check. Nothing
+    // is stranded by leaving: the key claim is released in the `finally` below, so
+    // a racer parked on it wakes, finds no session, and creates one itself.
+    if (request.abandoned()) {
+      releaseSlot();
+      if (holdId) void billing?.releaseHold(holdId).catch(() => {});
+      return { kind: 'failed', reason: 'abandoned' };
+    }
+
+    const session: TerminalSession = {
+      command: null as unknown as PtyShell,
+      sandboxId,
+      sessionKey,
+      lastViewerUserId: userId,
+      sessionId: attachSessionId,
+      releaseSlot,
+      payerId: access.payerId,
+      holdId,
+      connectedAt,
+      pageId: machineId,
+      agentTerminalId: sandbox.agentTerminalId,
+      // The creator is viewer #1, registered in the literal — BEFORE
+      // `openShell` — so output arriving between the shell opening and
+      // `setNew` still reaches their pane (`onOutput` reads `viewers` live).
+      // A headless start has no such pane and begins empty.
+      viewers: new Map(viewer ? [[viewer.key, viewer.viewer]] : []),
+      scrollback: [],
+      hasOutput: false,
+      // The launch itself is the session's first activity: an agent booted
+      // with a command that works silently must hold its sprite up through
+      // that silence, not wait for its first byte of output.
+      lastInputAt: Date.now(),
+      // Fails safe, EXACTLY as the wire does. The reattach path has no way to
+      // say "unknown" — it re-derives `resumed` from this field — so recording
+      // `false` for an unknown liveness would put a live agent straight back
+      // into the window this field exists to close: `hasOutput` is still false
+      // in the moment before its first byte, and a pane re-mounting there (a
+      // torn-down mount carries its unspent prompt into the next connect) would
+      // be told "fresh boot, safe to type".
+      //
+      // Recording `true` for an unknown costs a prompt the user retypes, and it
+      // stops costing anything the instant the agent speaks and `hasOutput`
+      // takes over. Recording `false` costs a line typed into a live agent
+      // sitting at a confirmation. The asymmetry decides it.
+      resumedAtCreate: resumed,
+      scrollbackBytes: 0,
+      reAuthInterval: undefined,
+      idleTimer: undefined,
+    };
+
+    // Serializes this terminal's streamSessionId writes — see `onSessionId`.
+    let persistQueue: Promise<void> = Promise.resolve();
+
+    const launch = resolveAgentTerminalCommand({
+      command: sandbox.command,
+      args: sandbox.args,
+      commandOverride: sandbox.commandOverride,
+    });
+
+    let shell: PtyShell;
+    try {
+      shell = openShell({
+        sprite,
+        cols,
+        rows,
+        sessionId: attachSessionId,
+        command: launch.command,
+        args: launch.args,
+        cwd: sandbox.cwd,
+        // The watchdog's idle signal, read off the SAME clock the Tasks API
+        // hold ticks on (`startTaskHoldHeartbeat` below): once this session
+        // has been idle long enough for the platform hold to be dropped, the
+        // watchdog stops reattaching for it too, instead of reconnecting to
+        // the Sprite every ~45s for a viewer who is only watching an idle
+        // prompt. The next keystroke reattaches transparently. See
+        // `planWatchdogResponse`'s `attach-quiet`.
+        //
+        // `undefined` — "no trustworthy idleness signal, keep the socket up" —
+        // for the ONE session whose silence proves nothing: a RESUMED agent
+        // that has not yet emitted a byte to us. It was verified live at
+        // connect, so it may be mid-run and merely thinking; our clock holds
+        // nothing but the connect stamp, and letting that age into a quiet
+        // verdict would drop the hold (see the tick below) and pause the
+        // sprite under a working agent. This is the SAME trust rule
+        // `disconnectConnection` already applies to its own hold tick
+        // (`hasOutput || !resumedAtCreate`) — silence is only evidence of
+        // idleness once we have heard this session speak at least once. The
+        // moment it does, `hasOutput` flips and the normal idle window governs.
+        getLastActivityAt: () =>
+          (session.hasOutput || !session.resumedAtCreate ? latestActivityAt(session) : undefined),
+        // The window the hold is ACTUALLY judging idleness on — configurable
+        // (`SPRITE_TASK_HOLD_REFRESH_MS`), so it is read from the controller
+        // rather than assumed to be the default. Both signals must answer "may
+        // this sprite pause?" on the same window or they contradict each other.
+        // A getter because the controller is built after this shell is opened;
+        // `undefined` (no hold wired) falls back to `TASK_HOLD_AGENT_IDLE_MS`.
+        getIdleMs: () => session.taskHold?.agentIdleMs,
+        onOutput: (data) => {
+          // The hold's "agent output is flowing" signal — kept fresh here so
+          // a DETACHED session with an agent mid-run keeps its sprite up.
+          session.lastOutputAt = Date.now();
+          appendScrollback(session, data);
+          broadcastOutput(session, data);
+        },
+        onExit: (exitCode) => {
+          session.releaseSlot();
+          loggers.realtime.info('Agent terminal session closed', { exitCode, sandboxId, sessionKey });
+          broadcastClosed(session, exitCode);
+          // Clears all of the session's timers (re-auth, settle heartbeat, idle).
+          endAgentTerminalSession(sessionEndDeps, sessionMap, session, sessionKey);
+        },
+        // A fresh Sprite session was created and announced its own id (on its
+        // own socket — see `readSessionInfoId`): this terminal's first shell,
+        // or a replacement for a streamSessionId left dangling by a pause.
+        // Persist it so the next cold connect reattaches to THIS session. The
+        // id is authoritative, so it can never name a sibling terminal's shell
+        // — which is precisely what the retired listSessions before/after diff
+        // could not guarantee on a Sprite with concurrent terminals.
+        //
+        // Writes are CHAINED, not fired in parallel. A flapping Sprite can
+        // create session A, drop, and create session B in quick succession;
+        // two independent un-awaited UPDATEs race, and if A's lands last the
+        // DB ends up naming the session that is already dead, sending the next
+        // cold connect at a corpse. Serializing keeps the last write the last
+        // session. A failed write is logged and does NOT break the chain — the
+        // next session's id still gets its turn.
+        onSessionId: (sessionId) => {
+          session.sessionId = sessionId;
+          persistQueue = persistQueue
+            .then(() => persistStreamSessionId({ agentTerminalId: sandbox.agentTerminalId, sessionId }))
+            .catch((error) => {
+              loggers.realtime.error('Failed to persist agent terminal session id', error instanceof Error ? error : new Error(String(error)), {
+                sessionKey,
+              });
+            });
+        },
+      });
+    } catch {
+      releaseSlot();
+      if (holdId) void billing?.releaseHold(holdId).catch(() => {});
+      return { kind: 'failed', reason: 'open_failed' };
+    }
+
+    session.command = shell;
+    sessionMap.setNew(sessionKey, viewer?.key, session);
+
+    // Nobody is watching this PTY — a HEADLESS start. The reap that collects a
+    // viewer-less session (releasing its slot and settling its billing) is
+    // normally armed by the last viewer LEAVING, a transition a session that
+    // never had one cannot reach. Arm it here instead, so a shell an agent
+    // started and then forgot about is collected on the same clock as one a
+    // human opened and closed — rather than running, billing and holding a
+    // slot for the life of the process.
+    //
+    // Deliberately NOT paired with `setViewerAttached(false)`: the shell opens
+    // attached, and an agent reading this session's bytes over `read_session`
+    // is as real a consumer of them as a pane is. An idle headless session
+    // still quiets its own socket through the watchdog's `attach-quiet`
+    // verdict, and the next `send_session` resumes it — so keeping it attached
+    // costs no sprite residency, and losing output an agent asked for would.
+    if (session.viewers.size === 0) armIdleReap(sessionEndDeps, sessionMap, session);
+
+    // Sprites Tasks API hold (leaf 5-1): tell the platform work is in
+    // progress so the sprite can't cold-pause an agent mid-run — and stop
+    // telling it the moment nothing is (see startTaskHoldHeartbeat). Armed
+    // only on the cold path: a reattach joins a session whose controller
+    // and heartbeat already live for exactly as long as the session does
+    // (cleared in endAgentTerminalSession).
+    if (createTaskHold) {
+      session.taskHold = createTaskHold({ sprite, sessionKey });
+      session.holdInterval = startTaskHoldHeartbeat(session.taskHold, sessionMap, session, sessionKey);
+    }
+
+    // Heartbeat settle (see SETTLE_HEARTBEAT_MS): bill the accrued window and
+    // re-hold on an interval so a realtime restart loses at most one interval
+    // of runtime, not the whole session. A gate DENIAL (payer out of credits)
+    // tears the session down exactly like a failed re-auth below.
+    if (billing) {
+      session.settleInterval = startSettleHeartbeat(billing, sessionMap, session, sessionKey, persistColdTail);
+    }
+
+    // Periodically re-check authorization while the session is alive.
+    //
+    // This re-check reserves NOTHING: it never calls `resolveSandbox`, so it
+    // takes no concurrency slot and has none to hand back. That is load-bearing,
+    // not incidental — while the slot lived in the access check, this tick
+    // competed with the very session it was checking. A free-tier user (limit 1)
+    // whose one live session already held the only slot failed to acquire a
+    // second, the tick read that `concurrency_limit` as a REVOKED authorization,
+    // and tore the session down ~60s after it opened.
+    //
+    // Re-auth is PER-VIEWER (issue #2093): with N viewers attached, checking any
+    // single identity would turn fan-out into a hole — a viewer whose access was
+    // revoked would keep receiving output because someone else, still
+    // authorized, was the one being checked. So every attached viewer is
+    // checked (once per DISTINCT userId — two panes of one user are one DB
+    // check) and a failing viewer is evicted INDIVIDUALLY (`evictViewer`):
+    // their pane learns why, their registry entry and socket binding go, and
+    // everyone else streams on uninterrupted. Their socket's own
+    // `activeConnectionIds` entry goes stale, which is harmless — see
+    // `removeViewer`. While DETACHED the tick keeps running DB-only checks
+    // against the LAST attacher — whoever was watching when the session went
+    // dark, or, for a headless start, whoever the agent was acting as —
+    // because the PTY/agent process a viewer-less session leaves running
+    // is not idle just because nobody is looking at it, and a revoked user's
+    // still-running process must not get to keep executing, unsupervised,
+    // until the 30-min idle reap. (Skipping the check while detached would
+    // also buy nothing toward Sprite pause/billing — an open exec session
+    // already counts as Sprite activity on its own, per
+    // docs.sprites.dev/concepts/lifecycle.) And when the eviction loop
+    // empties the viewer set and the last attacher is among the revoked, the
+    // session is torn down IMMEDIATELY — same latency as the pre-#2093
+    // whole-session teardown, no one-tick grace for an unsupervised revoked
+    // process.
+    //
+    // A `checkAuth` that THROWS (a transient DB blip) revokes nobody this
+    // tick — deliberately fail-open, in BOTH the attached and detached
+    // shapes: revocation is a verdict, not an error, and a blip must not
+    // kick live viewers or kill a detached session. (An uncaught throw here
+    // would be worse than a wrong verdict: an async interval callback's
+    // rejection is unhandled, and this process installs no unhandledRejection
+    // hook, so one DB blip would take down every session on the replica.)
+    //
+    // `reauthing` mirrors `startSettleHeartbeat`'s `settling` guard: an
+    // async interval body can outlive its own cadence when the DB is slow,
+    // and overlapping ticks would stack redundant per-user auth queries onto
+    // the very DB that is already struggling.
+    let reauthing = false;
+    const reAuthInterval = setInterval(async () => {
+      const liveSession = sessionMap.getByKey(sessionKey);
+      if (!liveSession) { clearInterval(reAuthInterval); return; }
+      if (reauthing) return;
+      reauthing = true;
+      try {
+        const attachedViewers = [...liveSession.viewers.entries()];
+        const userIds = attachedViewers.length > 0
+          ? [...new Set(attachedViewers.map(([, v]) => v.userId))]
+          : [liveSession.lastViewerUserId];
+
+        const revoked = new Set<string>();
+        await Promise.all(
+          userIds.map(async (uid) => {
+            try {
+              const result = await checkAuth({ userId: uid, machineId, projectName, branchName, name });
+              if (!result.ok) revoked.add(uid);
+            } catch (error) {
+              // Fail-open — see above. Absent from `revoked` can only ever
+              // mean "not revoked", so an error needs no sentinel encoding.
+              loggers.realtime.warn('Agent terminal re-auth check failed; keeping viewer this tick', {
+                sessionKey,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          }),
+        );
+
+        // Re-check liveness after the await: another actor (heartbeat
+        // insolvency, PTY exit, idle reap) may have torn the session down
+        // while checkAuth ran — acting on the stale reference would double
+        // kill/broadcast.
+        if (sessionMap.getByKey(sessionKey) !== liveSession) {
+          clearInterval(reAuthInterval);
+          return;
+        }
+
+        for (const [viewerKey, attached] of attachedViewers) {
+          if (!revoked.has(attached.userId)) continue;
+          // Still the SAME viewer entry? It may have detached during the await —
+          // and a same-key rejoin is a fresh object, checked next tick.
+          if (liveSession.viewers.get(viewerKey) !== attached) continue;
+          evictViewer(sessionEndDeps, sessionMap, liveSession, viewerKey, attached, 'Machine access revoked');
+        }
+
+        // Whole-session teardown ONLY with nobody watching: re-derived from
+        // the live registry, not the pre-await snapshot, because an
+        // authorized viewer can join DURING the checkAuth round-trip
+        // (attachToLiveSession runs synchronously off another socket's
+        // event) — the session object is unchanged so the identity guard
+        // above cannot see them, and killing the PTY under a fully
+        // authorized, just-joined pane would be exactly the takeover-era
+        // harm this PR removes. If viewers exist now, they were either
+        // checked this tick (and the revoked ones evicted) or they joined
+        // mid-check and are checked next tick.
+        if (liveSession.viewers.size === 0 && revoked.has(liveSession.lastViewerUserId)) {
+          teardownAgentTerminalSession(sessionEndDeps, sessionMap, liveSession, sessionKey, -2);
+        }
+      } finally {
+        reauthing = false;
+      }
+    }, 60_000);
+
+    session.reAuthInterval = reAuthInterval;
+
+    // Still inside the synchronous span that began at `openShell` — see
+    // `onStarted`. Nothing above has awaited, so a socket caller's `ready` emit
+    // leaves ahead of any output this shell has already produced.
+    request.onStarted?.(resumed);
+
+    return { kind: 'created', session, resumed };
+  } finally {
+    // Release the key claim on EVERY exit from the cold path — success, denial
+    // or throw — so a failed create never wedges the key against future connects.
+    finishCreate();
+  }
+}
+
+/**
+ * Pure: what a client is TOLD when a create failed, or `undefined` when it is
+ * told nothing.
+ *
+ * A separate function from the create itself because the create must not know
+ * about sockets, and because these strings are a wire contract the pane renders
+ * verbatim — each maps byte-for-byte to what this surface emitted before the
+ * headless split, so a client matching on them still matches.
+ *
+ * `'abandoned'` is the `undefined` arm rather than a message nobody reads: the
+ * pane that asked has gone, and the create already released the slot and hold
+ * it had taken. Total over the failure type, so a new arm cannot be added
+ * without deciding what it says.
+ */
+export function connectFailureMessage(failure: Extract<EnsureSessionResult, { kind: 'failed' }>): string | undefined {
+  switch (failure.reason) {
+    case 'abandoned':
+      return undefined;
+    case 'denied':
+      return `Agent terminal access denied: ${failure.message ?? 'unknown'}`;
+    case 'insolvent':
+      return 'Insufficient credits to open an agent terminal session.';
+    case 'open_failed':
+      return 'Failed to open agent terminal session';
+  }
+}
+
 export function buildAgentTerminalHandlers({
   sessionMap,
   openShell,
@@ -1009,8 +1615,6 @@ export function buildAgentTerminalHandlers({
       return;
     }
 
-    const { sessionKey } = plan.access;
-
     if (plan.kind === 'reattach') {
       // No slot to release: reattaching starts no PTY, so the access check
       // reserved none. The live session still holds the one it was created
@@ -1023,427 +1627,67 @@ export function buildAgentTerminalHandlers({
       return;
     }
 
-    // The cold path — slow (it resolves, and may wake, a Sprite), which makes it
-    // exactly the window a double-mount's second connect lands in. Join a create
-    // already in flight for this key rather than starting a second one: opening
-    // a second PTY here is not merely wasteful, it is destructive. Both connects
-    // would attach to the SAME persisted Sprite exec session, so discarding the
-    // duplicate afterwards would SIGKILL the process the survivor is attached to.
-    //
-    // Loop rather than check once: if the create we waited on FAILED, another
-    // connect may already have claimed the key behind it.
-    for (;;) {
-      const inFlight = sessionMap.pendingCreate(sessionKey);
-      if (inFlight === undefined) break;
-      await inFlight.catch(() => {});
-      const created = sessionMap.getByKey(sessionKey);
-      if (created !== undefined) {
-        // Same as the reattach path: a pane that has left must not take the session
-        // the creator is watching. The creator settles its own abandonment.
-        if (abandoned(connectionId)) return;
-        attachToLiveSession(created, connectionId, userId);
-        return;
-      }
-      // That create failed and installed nothing — see if another is in flight,
-      // otherwise fall through and create it ourselves.
+    // Everything from here STARTS a PTY, and that sequence is not this
+    // socket's — it is shared verbatim with a headless agent start
+    // (`ensureAgentTerminalSession`). What this connect contributes is the two
+    // things only a socket has: the pane that will watch the result, and
+    // whether that pane is still there by the time there is one.
+    const outcome = await ensureAgentTerminalSession(
+      { sessionMap, openShell, checkAuth, persistStreamSessionId, billing, createTaskHold, persistColdTail },
+      {
+        access: plan.access,
+        target: { machineId, projectName, branchName, name },
+        userId,
+        cols: clampedCols,
+        rows: clampedRows,
+        viewer: { key: socketKey(connectionId), viewer: makeViewer(connectionId, userId) },
+        abandoned: () => abandoned(connectionId),
+        // Synchronous with the install, so `ready` cannot be overtaken by the
+        // shell's own first output — see `onStarted`. This is also where the
+        // creator's connection joins `activeConnectionIds`: its viewer entry and
+        // socket binding went in inside the create (before `openShell`, so no
+        // output could be missed), and the three tracking structures must be
+        // installed in one uninterrupted, throw-free block.
+        onStarted: (resumed) => {
+          activeConnectionIds.add(connectionId);
+          // `resumed` says whether this connect picked up an agent that was
+          // ALREADY RUNNING, or started a fresh one. The client cannot infer it:
+          // after a restart of THIS process the session map is empty, so a
+          // connect to an agent that has been running for hours takes the create
+          // path and looks exactly like a cold boot. A caller that types a
+          // starting prompt into the terminal has to know the difference — a
+          // line plus a carriage return delivered to a live agent sitting at a
+          // confirmation is destructive.
+          //
+          // It is a VERIFIED fact, not the row's word for it. `streamSessionId`
+          // is a memory of a session that was alive once: exec sessions do not
+          // survive a Sprite pause, nothing ever clears the column, and
+          // `openPtyShell` attaches to the id optimistically and only discovers
+          // it is dangling when the socket fails — at which point it quietly
+          // launches a FRESH agent (`planReconnect`). Trusting the row would tell
+          // that fresh agent's pane its prompt had already been taken, and the
+          // agent would sit there having never been given its task. So we ask the
+          // Sprite which sessions it actually has.
+          socket.emit('agent-terminal:ready', { connectionId, resumed });
+        },
+      },
+    );
+
+    if (outcome.kind === 'existing') {
+      // Someone else's create installed this session while we waited on it (a
+      // double-mount's loser, or a racer that got there first). Same rule as the
+      // reattach path above: a pane that has left must not take the session the
+      // creator is watching. The creator settles its own abandonment.
+      if (abandoned(connectionId)) return;
+      attachToLiveSession(outcome.session, connectionId, userId);
+      return;
     }
 
-    // Claim the key BEFORE the first await, so a connect that arrives while we
-    // are resolving joins us instead of racing us. There is no await between the
-    // loop's exit and this claim, so the claim is atomic w.r.t. the event loop.
-    // The claim is released by the `finally` below, on every exit from the cold
-    // path — success, denial, or throw.
-    let finishCreate!: () => void;
-    sessionMap.trackCreate(sessionKey, new Promise<void>((resolve) => { finishCreate = resolve; }));
-    try {
-      // ONLY now is a concurrency slot reserved and the Sprite resolved: a
-      // reattach above returned without ever calling this.
-      const sandbox = await plan.access.resolveSandbox();
-      if (!sandbox.ok) {
-        // resolveSandbox released the slot (if it had reserved one) and logged.
-        socket.emit('agent-terminal:error', { message: `Agent terminal access denied: ${sandbox.reason}`, connectionId });
-        return;
-      }
-      // Every teardown path below can race another (a PTY exit landing while the
-      // idle reap is pending, a lost double-mount whose onExit fires later), and
-      // the slot is a bare counter — releasing it twice silently hands back
-      // capacity this connect never held, letting the user exceed their tier.
-      // Collapse them: the slot goes back exactly once, whoever gets there first.
-      let slotReleased = false;
-      const releaseSlot = () => {
-        if (slotReleased) return;
-        slotReleased = true;
-        sandbox.releaseSlot();
-      };
-
-      // Terminal Epic 3 metering: place a flat-estimate hold for this NEW
-      // machine-active window BEFORE opening the shell (hibernated/idle time
-      // between sessions is free). Settled at session end — see
-      // endAgentTerminalSession. Deliberately NOT in checkAuth: that also runs
-      // on every periodic re-auth tick below, which must never place a second
-      // hold for the same still-open session.
-      let holdId: string | undefined;
-      if (billing) {
-        // The slot is already reserved, and nothing owns it yet — no session
-        // exists to release it on teardown. A gate that THROWS (a billing/DB blip)
-        // would otherwise propagate straight out of onConnect with the slot still
-        // held, and `activeByUser` is a process-lifetime counter: one transient
-        // failure would lock a free-tier user (limit 1) out of agent terminals on
-        // this replica until the process restarts.
-        let gateResult: Awaited<ReturnType<SandboxBillingDeps['gate']>>;
-        try {
-          gateResult = await billing.gate({ payerId: plan.access.payerId });
-        } catch (error) {
-          releaseSlot();
-          throw error;
-        }
-        if (!gateResult.allowed) {
-          releaseSlot();
-          socket.emit('agent-terminal:error', { message: 'Insufficient credits to open an agent terminal session.', connectionId });
-          return;
-        }
-        holdId = gateResult.holdId;
-      }
-      const connectedAt = Date.now();
-
-      const { sandboxId, sprite } = sandbox;
-
-      // Resolved BEFORE the shell opens, deliberately. It is the answer to
-      // "was this agent already running", and it must be in hand by the time
-      // `ready` is emitted — which has to leave with NO await between it and
-      // `openShell`, or the shell's first output can reach the client before
-      // `ready` does. A client that types a starting prompt on first output
-      // would then type it without yet knowing the agent was resumed, which is
-      // precisely the hazard `resumed` exists to prevent.
-      const liveness = await sessionLiveness(sprite, sandbox.streamSessionId);
-      const resumed = resumedFor(liveness);
-
-      // The verdict has to CONSTRAIN the attach, not merely predict it.
-      //
-      // `openPtyShell` attaches to a `sessionId` optimistically — it does not
-      // consult this verdict — so handing it the stored id while telling the
-      // client `resumed: false` would be a bet that the listing was right. Lose
-      // that bet (the listing omits a session `attachSession` then binds to) and
-      // the bridge is attached to a LIVE agent having just told the client it was
-      // safe to type into. `resumed` is the only defence on this path.
-      //
-      // So a `gone` verdict makes ITSELF true: no id, a genuinely fresh session,
-      // and the prompt is correct by construction. Anything else (`live`, or an
-      // `unknown` we could not settle) keeps the id — abandoning a running agent
-      // to start a second one is the worse error, and it is the same policy
-      // `planReconnect` already applies on every reconnect.
-      const attachSessionId = liveness === 'gone' ? undefined : (sandbox.streamSessionId ?? undefined);
-
-      // The pane is already gone. Do not START the agent just to reap it.
-      //
-      // Tearing an abandoned create down AFTER the fact is safe (nobody else is
-      // watching a PTY that did not exist a moment ago) — but safe is not free. The
-      // reap is armed for DETACHED_IDLE_MS, so a pane closed during a cold boot would
-      // hold a concurrency slot and bill the MACHINE's payer for thirty minutes of
-      // Sprite runtime for an agent nobody ever saw. On the free tier (one terminal)
-      // that is a thirty-minute lockout from the user's own machine — a smaller
-      // version of the very harm this machinery exists to prevent.
-      //
-      // This is the last `await` before the PTY exists, and everything from here to
-      // `setNew` is synchronous, so no abandonment can slip past this check. Nothing
-      // is stranded by leaving: the key claim is released in the `finally` below, so
-      // a racer parked on it wakes, finds no session, and creates one itself.
-      if (abandoned(connectionId)) {
-        releaseSlot();
-        if (holdId) void billing?.releaseHold(holdId).catch(() => {});
-        return;
-      }
-
-      const session: TerminalSession = {
-        command: null as unknown as PtyShell,
-        sandboxId,
-        sessionKey,
-        lastViewerUserId: userId,
-        sessionId: attachSessionId,
-        releaseSlot,
-        payerId: plan.access.payerId,
-        holdId,
-        connectedAt,
-        pageId: machineId,
-        agentTerminalId: sandbox.agentTerminalId,
-        // The creator is viewer #1, registered in the literal — BEFORE
-        // `openShell` — so output arriving between the shell opening and
-        // `setNew` still reaches their pane (`onOutput` reads `viewers` live).
-        viewers: new Map([[socketKey(connectionId), makeViewer(connectionId, userId)]]),
-        scrollback: [],
-        hasOutput: false,
-        // The launch itself is the session's first activity: an agent booted
-        // with a command that works silently must hold its sprite up through
-        // that silence, not wait for its first byte of output.
-        lastInputAt: Date.now(),
-        // Fails safe, EXACTLY as the wire does. The reattach path has no way to
-        // say "unknown" — it re-derives `resumed` from this field — so recording
-        // `false` for an unknown liveness would put a live agent straight back
-        // into the window this field exists to close: `hasOutput` is still false
-        // in the moment before its first byte, and a pane re-mounting there (a
-        // torn-down mount carries its unspent prompt into the next connect) would
-        // be told "fresh boot, safe to type".
-        //
-        // Recording `true` for an unknown costs a prompt the user retypes, and it
-        // stops costing anything the instant the agent speaks and `hasOutput`
-        // takes over. Recording `false` costs a line typed into a live agent
-        // sitting at a confirmation. The asymmetry decides it.
-        resumedAtCreate: resumed,
-        scrollbackBytes: 0,
-        reAuthInterval: undefined,
-        idleTimer: undefined,
-      };
-
-      // Serializes this terminal's streamSessionId writes — see `onSessionId`.
-      let persistQueue: Promise<void> = Promise.resolve();
-
-      const launch = resolveAgentTerminalCommand({
-        command: sandbox.command,
-        args: sandbox.args,
-        commandOverride: sandbox.commandOverride,
-      });
-
-      let shell: PtyShell;
-      try {
-        shell = openShell({
-          sprite,
-          cols: clampedCols,
-          rows: clampedRows,
-          sessionId: attachSessionId,
-          command: launch.command,
-          args: launch.args,
-          cwd: sandbox.cwd,
-          // The watchdog's idle signal, read off the SAME clock the Tasks API
-          // hold ticks on (`startTaskHoldHeartbeat` below): once this session
-          // has been idle long enough for the platform hold to be dropped, the
-          // watchdog stops reattaching for it too, instead of reconnecting to
-          // the Sprite every ~45s for a viewer who is only watching an idle
-          // prompt. The next keystroke reattaches transparently. See
-          // `planWatchdogResponse`'s `attach-quiet`.
-          //
-          // `undefined` — "no trustworthy idleness signal, keep the socket up" —
-          // for the ONE session whose silence proves nothing: a RESUMED agent
-          // that has not yet emitted a byte to us. It was verified live at
-          // connect, so it may be mid-run and merely thinking; our clock holds
-          // nothing but the connect stamp, and letting that age into a quiet
-          // verdict would drop the hold (see the tick below) and pause the
-          // sprite under a working agent. This is the SAME trust rule
-          // `disconnectConnection` already applies to its own hold tick
-          // (`hasOutput || !resumedAtCreate`) — silence is only evidence of
-          // idleness once we have heard this session speak at least once. The
-          // moment it does, `hasOutput` flips and the normal idle window governs.
-          getLastActivityAt: () =>
-            (session.hasOutput || !session.resumedAtCreate ? latestActivityAt(session) : undefined),
-          // The window the hold is ACTUALLY judging idleness on — configurable
-          // (`SPRITE_TASK_HOLD_REFRESH_MS`), so it is read from the controller
-          // rather than assumed to be the default. Both signals must answer "may
-          // this sprite pause?" on the same window or they contradict each other.
-          // A getter because the controller is built after this shell is opened;
-          // `undefined` (no hold wired) falls back to `TASK_HOLD_AGENT_IDLE_MS`.
-          getIdleMs: () => session.taskHold?.agentIdleMs,
-          onOutput: (data) => {
-            // The hold's "agent output is flowing" signal — kept fresh here so
-            // a DETACHED session with an agent mid-run keeps its sprite up.
-            session.lastOutputAt = Date.now();
-            appendScrollback(session, data);
-            broadcastOutput(session, data);
-          },
-          onExit: (exitCode) => {
-            session.releaseSlot();
-            loggers.realtime.info('Agent terminal session closed', { exitCode, sandboxId, sessionKey });
-            broadcastClosed(session, exitCode);
-            // Clears all of the session's timers (re-auth, settle heartbeat, idle).
-            endAgentTerminalSession(sessionEndDeps, sessionMap, session, sessionKey);
-          },
-          // A fresh Sprite session was created and announced its own id (on its
-          // own socket — see `readSessionInfoId`): this terminal's first shell,
-          // or a replacement for a streamSessionId left dangling by a pause.
-          // Persist it so the next cold connect reattaches to THIS session. The
-          // id is authoritative, so it can never name a sibling terminal's shell
-          // — which is precisely what the retired listSessions before/after diff
-          // could not guarantee on a Sprite with concurrent terminals.
-          //
-          // Writes are CHAINED, not fired in parallel. A flapping Sprite can
-          // create session A, drop, and create session B in quick succession;
-          // two independent un-awaited UPDATEs race, and if A's lands last the
-          // DB ends up naming the session that is already dead, sending the next
-          // cold connect at a corpse. Serializing keeps the last write the last
-          // session. A failed write is logged and does NOT break the chain — the
-          // next session's id still gets its turn.
-          onSessionId: (sessionId) => {
-            session.sessionId = sessionId;
-            persistQueue = persistQueue
-              .then(() => persistStreamSessionId({ agentTerminalId: sandbox.agentTerminalId, sessionId }))
-              .catch((error) => {
-                loggers.realtime.error('Failed to persist agent terminal session id', error instanceof Error ? error : new Error(String(error)), {
-                  sessionKey,
-                });
-              });
-          },
-        });
-      } catch {
-        releaseSlot();
-        if (holdId) void billing?.releaseHold(holdId).catch(() => {});
-        socket.emit('agent-terminal:error', { message: 'Failed to open agent terminal session', connectionId });
-        return;
-      }
-
-      session.command = shell;
-      sessionMap.setNew(sessionKey, socketKey(connectionId), session);
-      activeConnectionIds.add(connectionId);
-
-      // Sprites Tasks API hold (leaf 5-1): tell the platform work is in
-      // progress so the sprite can't cold-pause an agent mid-run — and stop
-      // telling it the moment nothing is (see startTaskHoldHeartbeat). Armed
-      // only on the cold path: a reattach joins a session whose controller
-      // and heartbeat already live for exactly as long as the session does
-      // (cleared in endAgentTerminalSession).
-      if (createTaskHold) {
-        session.taskHold = createTaskHold({ sprite, sessionKey });
-        session.holdInterval = startTaskHoldHeartbeat(session.taskHold, sessionMap, session, sessionKey);
-      }
-
-      // Heartbeat settle (see SETTLE_HEARTBEAT_MS): bill the accrued window and
-      // re-hold on an interval so a realtime restart loses at most one interval
-      // of runtime, not the whole session. A gate DENIAL (payer out of credits)
-      // tears the session down exactly like a failed re-auth below.
-      if (billing) {
-        session.settleInterval = startSettleHeartbeat(billing, sessionMap, session, sessionKey, persistColdTail);
-      }
-
-      // Periodically re-check authorization while the session is alive.
-      //
-      // This re-check reserves NOTHING: it never calls `resolveSandbox`, so it
-      // takes no concurrency slot and has none to hand back. That is load-bearing,
-      // not incidental — while the slot lived in the access check, this tick
-      // competed with the very session it was checking. A free-tier user (limit 1)
-      // whose one live session already held the only slot failed to acquire a
-      // second, the tick read that `concurrency_limit` as a REVOKED authorization,
-      // and tore the session down ~60s after it opened.
-      //
-      // Re-auth is PER-VIEWER (issue #2093): with N viewers attached, checking any
-      // single identity would turn fan-out into a hole — a viewer whose access was
-      // revoked would keep receiving output because someone else, still
-      // authorized, was the one being checked. So every attached viewer is
-      // checked (once per DISTINCT userId — two panes of one user are one DB
-      // check) and a failing viewer is evicted INDIVIDUALLY (`evictViewer`):
-      // their pane learns why, their registry entry and socket binding go, and
-      // everyone else streams on uninterrupted. Their socket's own
-      // `activeConnectionIds` entry goes stale, which is harmless — see
-      // `removeViewer`. While DETACHED the tick keeps running DB-only checks
-      // against the LAST attacher — whoever was watching when the session went
-      // dark — because the PTY/agent process a detached session leaves running
-      // is not idle just because its viewers left, and a revoked user's
-      // still-running process must not get to keep executing, unsupervised,
-      // until the 30-min idle reap. (Skipping the check while detached would
-      // also buy nothing toward Sprite pause/billing — an open exec session
-      // already counts as Sprite activity on its own, per
-      // docs.sprites.dev/concepts/lifecycle.) And when the eviction loop
-      // empties the viewer set and the last attacher is among the revoked, the
-      // session is torn down IMMEDIATELY — same latency as the pre-#2093
-      // whole-session teardown, no one-tick grace for an unsupervised revoked
-      // process.
-      //
-      // A `checkAuth` that THROWS (a transient DB blip) revokes nobody this
-      // tick — deliberately fail-open, in BOTH the attached and detached
-      // shapes: revocation is a verdict, not an error, and a blip must not
-      // kick live viewers or kill a detached session. (An uncaught throw here
-      // would be worse than a wrong verdict: an async interval callback's
-      // rejection is unhandled, and this process installs no unhandledRejection
-      // hook, so one DB blip would take down every session on the replica.)
-      //
-      // `reauthing` mirrors `startSettleHeartbeat`'s `settling` guard: an
-      // async interval body can outlive its own cadence when the DB is slow,
-      // and overlapping ticks would stack redundant per-user auth queries onto
-      // the very DB that is already struggling.
-      let reauthing = false;
-      const reAuthInterval = setInterval(async () => {
-        const liveSession = sessionMap.getByKey(sessionKey);
-        if (!liveSession) { clearInterval(reAuthInterval); return; }
-        if (reauthing) return;
-        reauthing = true;
-        try {
-          const attachedViewers = [...liveSession.viewers.entries()];
-          const userIds = attachedViewers.length > 0
-            ? [...new Set(attachedViewers.map(([, viewer]) => viewer.userId))]
-            : [liveSession.lastViewerUserId];
-
-          const revoked = new Set<string>();
-          await Promise.all(
-            userIds.map(async (uid) => {
-              try {
-                const result = await checkAuth({ userId: uid, machineId, projectName, branchName, name });
-                if (!result.ok) revoked.add(uid);
-              } catch (error) {
-                // Fail-open — see above. Absent from `revoked` can only ever
-                // mean "not revoked", so an error needs no sentinel encoding.
-                loggers.realtime.warn('Agent terminal re-auth check failed; keeping viewer this tick', {
-                  sessionKey,
-                  error: error instanceof Error ? error.message : String(error),
-                });
-              }
-            }),
-          );
-
-          // Re-check liveness after the await: another actor (heartbeat
-          // insolvency, PTY exit, idle reap) may have torn the session down
-          // while checkAuth ran — acting on the stale reference would double
-          // kill/broadcast.
-          if (sessionMap.getByKey(sessionKey) !== liveSession) {
-            clearInterval(reAuthInterval);
-            return;
-          }
-
-          for (const [viewerKey, viewer] of attachedViewers) {
-            if (!revoked.has(viewer.userId)) continue;
-            // Still the SAME viewer entry? It may have detached during the await —
-            // and a same-key rejoin is a fresh object, checked next tick.
-            if (liveSession.viewers.get(viewerKey) !== viewer) continue;
-            evictViewer(sessionEndDeps, sessionMap, liveSession, viewerKey, viewer, 'Machine access revoked');
-          }
-
-          // Whole-session teardown ONLY with nobody watching: re-derived from
-          // the live registry, not the pre-await snapshot, because an
-          // authorized viewer can join DURING the checkAuth round-trip
-          // (attachToLiveSession runs synchronously off another socket's
-          // event) — the session object is unchanged so the identity guard
-          // above cannot see them, and killing the PTY under a fully
-          // authorized, just-joined pane would be exactly the takeover-era
-          // harm this PR removes. If viewers exist now, they were either
-          // checked this tick (and the revoked ones evicted) or they joined
-          // mid-check and are checked next tick.
-          if (liveSession.viewers.size === 0 && revoked.has(liveSession.lastViewerUserId)) {
-            teardownAgentTerminalSession(sessionEndDeps, sessionMap, liveSession, sessionKey, -2);
-          }
-        } finally {
-          reauthing = false;
-        }
-      }, 60_000);
-
-      session.reAuthInterval = reAuthInterval;
-
-      // `resumed` says whether this connect picked up an agent that was ALREADY
-      // RUNNING, or started a fresh one. The client cannot infer it: after a
-      // restart of THIS process the session map is empty, so a connect to an
-      // agent that has been running for hours takes this create path and looks
-      // exactly like a cold boot. A caller that types a starting prompt into the
-      // terminal has to know the difference — a line plus a carriage return
-      // delivered to a live agent sitting at a confirmation is destructive.
-      //
-      // It is a VERIFIED fact, not the row's word for it. `streamSessionId` is a
-      // memory of a session that was alive once: exec sessions do not survive a
-      // Sprite pause, nothing ever clears the column, and `openPtyShell` attaches
-      // to the id optimistically and only discovers it is dangling when the
-      // socket fails — at which point it quietly launches a FRESH agent
-      // (`planReconnect`). Trusting the row would tell that fresh agent's pane
-      // its prompt had already been taken, and the agent would sit there having
-      // never been given its task. So we ask the Sprite which sessions it
-      // actually has.
-      socket.emit('agent-terminal:ready', { connectionId, resumed });
-    } finally {
-      // Release the key claim on EVERY exit from the cold path — success, denial
-      // or throw — so a failed create never wedges the key against future connects.
-      finishCreate();
+    if (outcome.kind === 'failed') {
+      // `undefined` is the abandoned arm — nobody is left to tell.
+      const message = connectFailureMessage(outcome);
+      if (message !== undefined) socket.emit('agent-terminal:error', { message, connectionId });
+      return;
     }
   }
 

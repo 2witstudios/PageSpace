@@ -152,7 +152,18 @@ export function broadcastClosed(session: Pick<TerminalSession, 'viewers'>, exitC
 export type TerminalSessionMap = {
   getBySocket(socketId: string): TerminalSession | undefined;
   getByKey(sessionKey: string): TerminalSession | undefined;
-  setNew(sessionKey: string, socketId: string, session: TerminalSession): void;
+  /**
+   * Install a freshly created session under its key, and bind `socketId` to it.
+   *
+   * `socketId` is `undefined` for a HEADLESS create — a session started by agent
+   * IO (`session-io.ts`) rather than by a viewer's socket. There is no socket to
+   * bind, and inventing a placeholder binding would be worse than none: every
+   * `bySocket` entry is a route by which input/resize/disconnect reach a PTY, so
+   * a binding no real connection owns is a binding nothing can ever remove.
+   * The session is still fully reachable by KEY, which is how every non-socket
+   * caller (session IO, the reap, re-auth) addresses it anyway.
+   */
+  setNew(sessionKey: string, socketId: string | undefined, session: TerminalSession): void;
   /**
    * Bind one more socket to a live session's key. `bySocket` is many-to-one
    * (issue #2093): every attached viewer holds its own binding, and joining
@@ -214,7 +225,7 @@ export function createTerminalSessionMap(): TerminalSessionMap {
     },
     setNew(sessionKey, socketId, session) {
       byKey.set(sessionKey, session);
-      bySocket.set(socketId, sessionKey);
+      if (socketId !== undefined) bySocket.set(socketId, sessionKey);
     },
     addBinding(sessionKey, socketId) {
       bySocket.set(socketId, sessionKey);

@@ -359,9 +359,25 @@ function createMockReq(overrides: Partial<{
 }
 
 function createMockRes() {
+  const listeners: Record<string, ((chunk?: unknown) => void)[]> = {};
   const res = {
     writeHead: vi.fn(),
-    end: vi.fn(),
+    // Real `http.ServerResponse#writableEnded` flips true the instant `end()`
+    // is called — `trackRequestAbandonment` (index.ts) reads it to tell a
+    // late `res` 'close' (ordinary connection teardown after a completed
+    // response) apart from an early one (the client walked away first).
+    writableEnded: false,
+    end: vi.fn(function (this: { writableEnded: boolean }) {
+      this.writableEnded = true;
+    }),
+    on: vi.fn((event: string, cb: (chunk?: unknown) => void) => {
+      listeners[event] = listeners[event] || [];
+      listeners[event].push(cb);
+    }),
+    _listeners: listeners,
+    _emit: (event: string, data?: unknown) => {
+      (listeners[event] || []).forEach(cb => cb(data));
+    },
   };
   return res;
 }
@@ -804,6 +820,63 @@ describe('requestListener - /api/session-read', () => {
 
     expect(res.writeHead).toHaveBeenCalledWith(400, { 'Content-Type': 'application/json' });
   });
+
+  // The web tier's own fetch to this endpoint times out (`REALTIME_TIMEOUT_MS`,
+  // `session-io-pty.ts`) sooner than a cold Sprite wake can finish — without
+  // tracking the client giving up, a `start: true` read would keep starting
+  // the PTY after the caller had already been told nothing happened. This is
+  // the registration half of that; `session-io.test.ts` covers what the
+  // resulting `abandoned()` actually does once it reaches the starter.
+  it('given the body finished reading, should be listening for the client disconnecting', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+
+    const req = createMockReq({ method: 'POST', url: '/api/session-read', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(body));
+    req._emit('end');
+
+    expect(res._listeners['close']).toBeDefined();
+    expect(res._listeners['close']!.length).toBeGreaterThan(0);
+  });
+
+  it('given the client disconnects only AFTER the response was already sent, should not be flagged abandoned', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+
+    const req = createMockReq({ method: 'POST', url: '/api/session-read', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(body));
+    req._emit('end');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Ordinary connection teardown once the answer is already on the wire —
+    // must not be mistaken for the caller having walked away mid-request.
+    expect(res.writableEnded).toBe(true);
+    expect(() => res._emit('close')).not.toThrow();
+  });
+
+  it('given the client disconnects BEFORE the response was sent, should still answer safely once processing finishes', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+
+    const req = createMockReq({ method: 'POST', url: '/api/session-read', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(body));
+    req._emit('end');
+
+    // Fires while the handler's promise chain is still in flight — nothing
+    // has been written yet, which is what makes this the abandoned case
+    // rather than ordinary post-response teardown.
+    expect(res.writableEnded).toBe(false);
+    res._emit('close');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
+  });
 });
 
 describe('requestListener - /api/session-input', () => {
@@ -841,6 +914,52 @@ describe('requestListener - /api/session-input', () => {
 
     expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
     expect(res.end).toHaveBeenCalledWith(JSON.stringify({ success: true, live: false, delivered: false }));
+  });
+
+  it('given the body finished reading, should be listening for the client disconnecting', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+
+    const req = createMockReq({ method: 'POST', url: '/api/session-input', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(body));
+    req._emit('end');
+
+    expect(res._listeners['close']).toBeDefined();
+    expect(res._listeners['close']!.length).toBeGreaterThan(0);
+  });
+
+  it('given the client disconnects only AFTER the response was already sent, should not be flagged abandoned', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+
+    const req = createMockReq({ method: 'POST', url: '/api/session-input', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(body));
+    req._emit('end');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(res.writableEnded).toBe(true);
+    expect(() => res._emit('close')).not.toThrow();
+  });
+
+  it('given the client disconnects BEFORE the response was sent, should still answer safely once processing finishes', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+
+    const req = createMockReq({ method: 'POST', url: '/api/session-input', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(body));
+    req._emit('end');
+
+    expect(res.writableEnded).toBe(false);
+    res._emit('close');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
   });
 });
 

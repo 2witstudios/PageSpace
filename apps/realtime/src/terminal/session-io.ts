@@ -16,11 +16,20 @@
  * want is whether they are live.
  *
  * LIVE IS NOT ATTACHED. A session with zero viewers is still a running PTY (a
- * human closed the tab; the process kept going), so liveness is map membership
- * and nothing else. And a session that is NOT in the map answers `live: false`
- * rather than an empty scrollback: to a reader, "" means "the command printed
- * nothing", which is a different — and actionable — fact from "this PTY has
- * never started" (a shell session is reserved until a viewer first connects).
+ * human closed the tab; the process kept going — or nobody ever opened it, see
+ * below), so liveness is map membership and nothing else. And a session that is
+ * NOT in the map answers `live: false` rather than an empty scrollback: to a
+ * reader, "" means "the command printed nothing", which is a different — and
+ * actionable — fact from "this PTY has never started".
+ *
+ * A shell that has never started is no longer a dead end, though (issue #2206).
+ * `add_session` reserves a row; the PTY used to begin only when a human opened
+ * the pane, so an agent that added a shell and typed into it was told nothing
+ * was delivered until someone came along. Now the first read/send STARTS it,
+ * through the same create the socket path runs (`startSession` -> the handler's
+ * `ensureAgentTerminalSession`): zero viewers, billing from PTY start, and the
+ * idle reap armed at creation because no viewer will ever leave to arm it.
+ * `live: false` now means what it says — no PTY, and none could be started.
  */
 
 import type { TerminalSession, TerminalSessionMap } from './terminal-session-map';
@@ -58,9 +67,63 @@ export interface SessionIoDeps {
   sessionMap: Pick<TerminalSessionMap, 'getByKey'>;
   /** The pure `deriveAgentTerminalSessionKey` composition the socket handler uses. */
   sessionKeyFor: (address: SessionAddress) => string;
+  /**
+   * Start a PTY that has never run — the headless half of issue #2206.
+   *
+   * The SAME create the socket path runs (`ensureAgentTerminalSession`), with
+   * no viewer: it re-decides authorization for `userId`, reserves the
+   * concurrency slot, gates and starts the billing window, and arms the reap
+   * that will collect a session nobody attaches to. `undefined` back means it
+   * did not start — denied, insolvent, or the sprite would not give us a shell
+   * — and the caller answers exactly as it always did for a session with no
+   * PTY.
+   *
+   * `abandoned` is threaded straight through to `ensureAgentTerminalSession`'s
+   * own check, the same one the socket path uses at the last await before the
+   * PTY exists. It matters here for a reason the socket path does not have: the
+   * web tier's `fetch` to this endpoint still gives up eventually — a generous
+   * but FIXED timeout for a `start: true` call, which a cold Sprite wake plus a
+   * liveness check can still outrun — and a caller that saw that timeout as
+   * "nothing happened" may retry the same input. Without this, the original
+   * request would keep starting the PTY and writing the input after the caller
+   * had already moved on — a retry would then run that input twice. Checking
+   * it costs nothing when the caller is still there (`abandoned()` stays false
+   * the whole time).
+   *
+   * Optional, and absent in every existing test: a realtime deployment without
+   * this seam degrades to the pre-#2206 behavior (a reserved shell stays
+   * reserved until a human opens it) rather than failing.
+   */
+  startSession?: (
+    address: SessionAddress & { userId: string },
+    abandoned: () => boolean,
+  ) => Promise<TerminalSession | undefined>;
+  /**
+   * Push a viewer-less session's idle reap back, because an agent just used it.
+   *
+   * Injected rather than called directly: the reap belongs to the handler
+   * module (it owns the billing settle and slot release behind it), and this
+   * module deliberately knows about neither. Absent -> no re-arm, which is the
+   * pre-#2206 behavior.
+   */
+  rearmIdleReap?: (session: TerminalSession) => void;
 }
 
-export interface SessionReadPayload {
+/**
+ * The two fields a caller adds when it wants a never-started shell STARTED.
+ *
+ * Both are required together and neither is inferred. `start` is opt-in because
+ * starting a PTY reserves a concurrency slot and begins billing a payer — an
+ * effect no caller should get by accident — and `userId` because that start is
+ * authorized, metered and audited against a real person, exactly as a socket
+ * connect is. A caller that omits them gets the pre-#2206 answer.
+ */
+interface SessionStartRequest {
+  start?: boolean;
+  userId?: string;
+}
+
+export interface SessionReadPayload extends SessionStartRequest {
   machineId: string;
   projectName?: string;
   branchName?: string;
@@ -82,6 +145,12 @@ export interface SessionReadEntry {
   /** How many humans are watching right now. Zero does not mean not running. */
   viewers: number;
   output: string;
+  /**
+   * Did THIS read start the PTY? Present only when it did. The reader needs it:
+   * an empty tail from a shell that booted a moment ago is the boot, not the
+   * silence of a command that produced nothing.
+   */
+  started?: true;
 }
 
 export interface SessionReadResult {
@@ -90,7 +159,7 @@ export interface SessionReadResult {
   error?: string;
 }
 
-export interface SessionSendPayload {
+export interface SessionSendPayload extends SessionStartRequest {
   machineId: string;
   projectName?: string;
   branchName?: string;
@@ -102,7 +171,36 @@ export interface SessionSendResult {
   success: boolean;
   live?: boolean;
   delivered?: boolean;
+  /** Did THIS send start the PTY? Present only when it did. */
+  started?: true;
   error?: string;
+}
+
+/**
+ * Resolve a named session to a live one, starting it if it has never run and
+ * the caller asked to (`startPlan.start`) — the one piece of logic
+ * `handleSessionSendRequest` and `handleSessionReadRequest`'s per-name loop
+ * would otherwise each carry their own copy of.
+ *
+ * `started` is reported separately from `session` because a caller (the
+ * `SessionReadEntry`/`SessionSendResult` `started` field) needs to tell "this
+ * call booted it" apart from "it was already live" — the same session object
+ * either way.
+ */
+async function resolveOrStartSession(
+  deps: SessionIoDeps,
+  address: SessionAddress,
+  startPlan: Extract<ReturnType<typeof planSessionStart>, { ok: true }>,
+  abandoned: () => boolean,
+): Promise<{ session: TerminalSession | undefined; started: boolean }> {
+  const live = deps.sessionMap.getByKey(deps.sessionKeyFor(address));
+  // A shell that has never run is not a refusal — it is a shell to START, so
+  // long as the caller asked for one. This is the whole of issue #2206: the PTY
+  // begins at the first agent IO, not at the first human to open the pane.
+  const started = live === undefined && startPlan.start
+    ? await deps.startSession?.({ ...address, userId: startPlan.userId }, abandoned)
+    : undefined;
+  return { session: live ?? started, started: started !== undefined };
 }
 
 /**
@@ -126,6 +224,8 @@ export async function handleSessionSendRequest(
   deps: SessionIoDeps,
   body: string,
   now: () => number = Date.now,
+  /** Has the caller given up on this request? See `SessionIoDeps.startSession`. */
+  abandoned: () => boolean = () => false,
 ): Promise<{ status: number; body: SessionSendResult }> {
   const payload = parseBody<SessionSendPayload>(body);
   if (!payload || typeof payload !== 'object') {
@@ -146,16 +246,22 @@ export async function handleSessionSendRequest(
     return { status: 400, body: { success: false, error: 'Missing or invalid input' } };
   }
 
-  const session = deps.sessionMap.getByKey(
-    deps.sessionKeyFor({
-      machineId: payload.machineId,
-      projectName: payload.projectName,
-      branchName: payload.branchName,
-      name: payload.name,
-    }),
-  );
-  // Nothing running: say so. Swallowing the keystrokes with a 200 would let the
-  // caller believe a command it never ran is running.
+  const startPlan = planSessionStart(payload, { addressable: true, hasStarter: deps.startSession !== undefined });
+  if (!startPlan.ok) return { status: 400, body: { success: false, error: startPlan.error } };
+
+  const address: SessionAddress = {
+    machineId: payload.machineId,
+    projectName: payload.projectName,
+    branchName: payload.branchName,
+    name: payload.name,
+  };
+  const { session, started } = await resolveOrStartSession(deps, address, startPlan, abandoned);
+  // Nothing running, and nothing we could start: say so. Swallowing the
+  // keystrokes with a 200 would let the caller believe a command it never ran
+  // is running. This also covers the caller having ABANDONED the request
+  // mid-start (see `startSession`'s doc) — `started` comes back `undefined`
+  // exactly as it would for a denied or insolvent start, and nothing is
+  // written on their behalf.
   if (!session) return { status: 200, body: { success: true, live: false, delivered: false } };
 
   session.lastInputAt = now();
@@ -165,7 +271,30 @@ export async function handleSessionSendRequest(
   resumeBillingClock(session);
   session.command.write(payload.input);
 
-  return { status: 200, body: { success: true, live: true, delivered: true } };
+  // Nobody is watching this session, so its reap is already ticking — armed
+  // either by the last viewer leaving or by a headless start. An agent typing
+  // into it is USE, and a command killed at the thirty-minute mark because the
+  // clock started when the shell did would be exactly the surprise this whole
+  // family exists to remove. Attached sessions have no armed reap to move.
+  if (session.viewers.size === 0) {
+    // The detached re-auth tick (`agent-terminal-handler.ts`) checks ONLY
+    // `lastViewerUserId` while nobody is attached — it is the tick's whole
+    // notion of "who is this session's access decided against" for a
+    // viewer-less session. Leaving it pinned to whoever last held that
+    // identity (the creator, or an earlier sender) while a DIFFERENT
+    // authorized user goes on using the session is wrong two ways at once:
+    // revoking the stale identity kills work the current user is still
+    // authorized to run, and revoking the current user does nothing at all.
+    // A send is real, authenticated use — updating this is exactly as safe
+    // as it was for that identity to be recorded at create time.
+    if (payload.userId !== undefined) session.lastViewerUserId = payload.userId;
+    deps.rearmIdleReap?.(session);
+  }
+
+  return {
+    status: 200,
+    body: { success: true, live: true, delivered: true, ...(started ? { started: true as const } : {}) },
+  };
 }
 
 /** How many sessions one read may ask about — a node's listing, not a crawl. */
@@ -189,6 +318,36 @@ function invalidNode(payload: { machineId?: unknown; projectName?: unknown; bran
   if (payload.projectName !== undefined && !isNonEmptyString(payload.projectName)) return 'Invalid projectName';
   if (payload.branchName !== undefined && !isNonEmptyString(payload.branchName)) return 'Invalid branchName';
   return undefined;
+}
+
+/**
+ * Pure: validate the start half of a payload, and say whether a start is
+ * actually to be attempted.
+ *
+ * `addressable` is what makes the liveness sweep structurally incapable of
+ * starting anything: a read naming SEVERAL sessions is the sweep's shape, and a
+ * start on it would boot one sandbox per row for a listing nobody asked to run.
+ * That is REFUSED rather than quietly ignored — a caller asking for something
+ * this endpoint will not do should learn it, not be told "not live" and left to
+ * conclude the shell is broken.
+ *
+ * `hasStarter` folds in "this deployment can start sessions at all", so the
+ * no-seam case answers exactly as it did before #2206 instead of erroring.
+ */
+export function planSessionStart(
+  payload: { start?: unknown; userId?: unknown },
+  { addressable, hasStarter }: { addressable: boolean; hasStarter: boolean },
+): { ok: true; start: false } | { ok: true; start: true; userId: string } | { ok: false; error: string } {
+  if (payload.start !== undefined && typeof payload.start !== 'boolean') return { ok: false, error: 'Invalid start' };
+  if (payload.userId !== undefined && !isNonEmptyString(payload.userId)) return { ok: false, error: 'Missing or invalid userId' };
+  if (payload.start !== true) return { ok: true, start: false };
+  if (!addressable) return { ok: false, error: 'Invalid start' };
+  // A PTY is started FOR someone: the start re-decides authorization, reserves
+  // that user's concurrency slot, bills their machine's payer and writes an
+  // audit row. There is no anonymous shape of any of that.
+  if (!isNonEmptyString(payload.userId)) return { ok: false, error: 'Missing or invalid userId' };
+  if (!hasStarter) return { ok: true, start: false };
+  return { ok: true, start: true, userId: payload.userId };
 }
 
 /**
@@ -218,6 +377,8 @@ export function scrollbackTail(
 export async function handleSessionReadRequest(
   deps: SessionIoDeps,
   body: string,
+  /** Has the caller given up on this request? See `SessionIoDeps.startSession`. */
+  abandoned: () => boolean = () => false,
 ): Promise<{ status: number; body: SessionReadResult }> {
   const payload = parseBody<SessionReadPayload>(body);
   if (!payload || typeof payload !== 'object') {
@@ -240,24 +401,62 @@ export async function handleSessionReadRequest(
         : undefined;
   if (limit === undefined) return { status: 400, body: { success: false, error: 'Invalid limit' } };
 
-  const sessions = names.map((name): SessionReadEntry => {
-    const session = deps.sessionMap.getByKey(
-      deps.sessionKeyFor({
-        machineId: payload.machineId,
-        projectName: payload.projectName,
-        branchName: payload.branchName,
-        name,
-      }),
-    );
+  // A start is only ever addressable when the read names ONE session — see
+  // `planSessionStart`. The `list_sessions` sweep names many, so it cannot
+  // start anything no matter what it sends.
+  const startPlan = planSessionStart(payload, {
+    addressable: names.length === 1,
+    hasStarter: deps.startSession !== undefined,
+  });
+  if (!startPlan.ok) return { status: 400, body: { success: false, error: startPlan.error } };
+
+  const sessions = await Promise.all(names.map(async (name): Promise<SessionReadEntry> => {
+    const address: SessionAddress = {
+      machineId: payload.machineId,
+      projectName: payload.projectName,
+      branchName: payload.branchName,
+      name,
+    };
+    // Reading a shell that has never run STARTS it (issue #2206). A reader has
+    // no other way to get one going, and answering "never started" to a caller
+    // that just asked to read it is the dead end this removes. Only ever
+    // reached for a single-name read.
+    const { session, started } = await resolveOrStartSession(deps, address, startPlan, abandoned);
     if (!session) return { name, live: false, hasOutput: false, viewers: 0, output: '' };
+    // A deliberate single-session read is USE, exactly like a delivered send
+    // (see `armIdleReap`) — an agent polling `read_session` on a long build is
+    // as real a consumer of this session as one typing into it, and letting
+    // its reap run unmoved would kill the build out from under the very agent
+    // reading it. Gated on the RAW `payload.start` flag, not `startPlan.start`
+    // or `started`: this must fire on every read of an already-live session
+    // too (not only the one that boots it), and it must fire independently of
+    // `hasStarter` — a deployment that cannot START a new headless session can
+    // still have an existing one to rearm, so tying this to start CAPABILITY
+    // would be the wrong signal. `payload.start` is the caller's declared
+    // intent to treat this as a real interactive read; the `list_sessions`
+    // liveness sweep never sets it, so a sweep over many viewer-less sessions
+    // can never touch any of their reaps.
+    if (payload.start === true && session.viewers.size === 0) {
+      // Same reasoning as `handleSessionSendRequest`'s identical block: the
+      // detached re-auth tick checks ONLY `lastViewerUserId` while nobody is
+      // attached, so a DIFFERENT authorized user reading an already-live
+      // session must become that identity — otherwise revoking the stale one
+      // kills work the current reader is still authorized to run, and
+      // revoking the current reader does nothing. `payload.userId` is
+      // guaranteed present here: `planSessionStart` requires it whenever
+      // `payload.start === true`.
+      if (payload.userId !== undefined) session.lastViewerUserId = payload.userId;
+      deps.rearmIdleReap?.(session);
+    }
     return {
       name,
       live: true,
       hasOutput: session.hasOutput === true,
       viewers: session.viewers.size,
       output: scrollbackTail(session, limit),
+      ...(started ? { started: true as const } : {}),
     };
-  });
+  }));
 
   return { status: 200, body: { success: true, sessions } };
 }
