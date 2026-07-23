@@ -40,8 +40,12 @@ describe('schema.ts exports', () => {
     expect(schemaModule.schema.userMentions).toBeDefined();
   });
 
-  it('schema object contains permissions tables', () => {
-    expect(schemaModule.schema.permissions).toBeDefined();
+  it('no longer exposes the dropped legacy permissions table (#2160)', () => {
+    // The action-enum `permissions` table had zero readers/writers; every live
+    // permission check goes through pagePermissions. Keeping it in the schema
+    // object invited a future query against the wrong source.
+    expect('permissions' in schemaModule.schema).toBe(false);
+    expect(schemaModule.schema.pagePermissions).toBeDefined();
   });
 
   it('schema object contains members tables', () => {
