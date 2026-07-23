@@ -250,6 +250,19 @@ type CheckoutState =
  * A missing header is `unknown`, not `clean`: `-b` always emits one, so its
  * absence means we are not reading what we think we are.
  */
+/**
+ * The `[ahead 1, behind 2]` payload of a porcelain branch header, or `''`.
+ *
+ * Index arithmetic rather than a pattern, so no amount of `[` in a branch name
+ * can make this superlinear — see the call site.
+ */
+function trackingDivergence(branchLine: string): string {
+  const open = branchLine.lastIndexOf('[');
+  if (open === -1) return '';
+  const close = branchLine.indexOf(']', open + 1);
+  return close === -1 ? '' : branchLine.slice(open + 1, close);
+}
+
 export function classifyCheckoutStatus(stdout: string): CheckoutState {
   const lines = stdout.split('\n').filter((line) => line.trim().length > 0);
   const branchLine = lines.find((line) => line.startsWith('## '));
@@ -262,7 +275,13 @@ export function classifyCheckoutStatus(stdout: string): CheckoutState {
   if (!branchLine) return { kind: 'unknown', detail: 'git status reported no branch header' };
 
   const branch = branchLine.slice(3).trim();
-  const ahead = /\[.*\bahead (\d+)\b.*\]/.exec(branch);
+  // Sliced, not matched with a `.*`-wrapped pattern: `git status` output is
+  // attacker-influencable (a branch name is user input), and a regex that scans
+  // the whole line for a bracketed group backtracks polynomially on a line full
+  // of `[`. Taking the divergence hint by index bounds the regex to the short
+  // `ahead N, behind M` payload, where the pattern is linear.
+  const divergence = trackingDivergence(branch);
+  const ahead = /\bahead (\d+)/.exec(divergence);
   if (ahead) {
     return { kind: 'unpushed', detail: `${ahead[1]} commit(s) not on the remote (${branch})` };
   }
@@ -352,7 +371,14 @@ async function inspectMachineCheckout({
  * `machine-orphan-reconcile` sweeps it. So this errs toward leaving it.
  */
 export function isCloneBlockedByExistingCheckout(output: string): boolean {
-  return /already exists and is not an empty directory|destination path .* already exists/i.test(output);
+  // Substring tests, not a `.*`-bridged alternation: git's stderr carries a
+  // repo URL and path, both attacker-influencable, and `destination path .*
+  // already exists` backtracks polynomially on repeated `destination path `.
+  const text = output.toLowerCase();
+  return (
+    text.includes('already exists and is not an empty directory') ||
+    (text.includes('destination path') && text.includes('already exists'))
+  );
 }
 
 async function safeKillSprite(host: MachineHost, handle: MachineHandle): Promise<void> {

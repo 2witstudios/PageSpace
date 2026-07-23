@@ -735,3 +735,38 @@ describe('promoteProject — root re-measurement after reclaim (F12)', () => {
     expect(remeasured).toEqual([]);
   });
 });
+
+/**
+ * ReDoS regressions (CodeQL alerts 267/268 on PR #2209). Both inputs are
+ * attacker-influencable — a branch NAME reaches the porcelain header, and a
+ * repo URL/path reaches git's stderr — so neither classifier may scan with a
+ * backtracking `.*`.
+ */
+describe('checkout classifiers — linear on hostile input', () => {
+  it('given a branch name full of [, should classify without superlinear scanning', () => {
+    const hostile = `## ${'['.repeat(20000)}...origin/main\n`;
+    const startedAt = Date.now();
+    const result = classifyCheckoutStatus(hostile);
+    expect(Date.now() - startedAt).toBeLessThan(1000);
+    // No `]`, so no divergence payload and no upstream marker it can trust.
+    expect(result.kind).toBe('clean');
+  });
+
+  it('given a bracket-heavy branch name that IS ahead, should still find the divergence', () => {
+    const result = classifyCheckoutStatus('## we[i]rd[[[...origin/weird [ahead 3]\n');
+    expect(result.kind).toBe('unpushed');
+    expect(result.kind === 'unpushed' && result.detail).toContain('3 commit(s)');
+  });
+
+  it('given clone output repeating "destination path", should test without superlinear scanning', () => {
+    const hostile = `${'destination path '.repeat(20000)}fatal: nope`;
+    const startedAt = Date.now();
+    const result = isCloneBlockedByExistingCheckout(hostile);
+    expect(Date.now() - startedAt).toBeLessThan(1000);
+    expect(result).toBe(false);
+  });
+
+  it('given mixed-case git output, should still recognise the shared-Sprite signal', () => {
+    expect(isCloneBlockedByExistingCheckout("fatal: destination path 'X' ALREADY EXISTS.")).toBe(true);
+  });
+});
