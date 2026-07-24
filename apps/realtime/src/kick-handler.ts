@@ -18,27 +18,10 @@
 import { Server, Socket } from 'socket.io';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { roomsForDriveKick, roomsForPageKick } from '@pagespace/lib/realtime/rooms';
+import { KICK_REASONS, type KickPayload, type KickResult } from '@pagespace/lib/realtime/kick-client';
 import { socketRegistry } from './socket-registry';
 
-export interface KickPayload {
-  userId: string;
-  roomPattern: string; // e.g., 'drive:abc123' or 'drive:*' for all drives
-  reason: 'member_removed' | 'role_changed' | 'permission_revoked' | 'session_revoked' | 'page_private';
-  metadata?: {
-    driveId?: string;
-    pageId?: string;
-    driveName?: string;
-  };
-}
-
-export interface KickResult {
-  success: boolean;
-  kickedCount: number;
-  rooms: string[];
-  error?: string;
-}
-
-const VALID_REASONS = ['member_removed', 'role_changed', 'permission_revoked', 'session_revoked', 'page_private'] as const;
+export type { KickPayload, KickResult };
 
 interface ParseResult {
   success: boolean;
@@ -75,7 +58,7 @@ export function validateKickPayload(payload: KickPayload): ValidationResult {
     return { valid: false, error: 'Missing or invalid roomPattern' };
   }
 
-  if (!payload.reason || !VALID_REASONS.includes(payload.reason)) {
+  if (!payload.reason || !KICK_REASONS.includes(payload.reason)) {
     return { valid: false, error: 'Missing or invalid reason' };
   }
 

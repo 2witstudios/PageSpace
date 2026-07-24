@@ -20,12 +20,16 @@
 import { createSignedBroadcastHeaders } from '../auth/broadcast-auth';
 import { loggers } from '../logging/logger-config';
 
-export type KickReason =
-  | 'member_removed'
-  | 'role_changed'
-  | 'permission_revoked'
-  | 'session_revoked'
-  | 'page_private';
+/** Every valid kick reason — the single source both the web caller and the realtime handler's payload validation derive from. */
+export const KICK_REASONS = [
+  'member_removed',
+  'role_changed',
+  'permission_revoked',
+  'session_revoked',
+  'page_private',
+] as const;
+
+export type KickReason = (typeof KICK_REASONS)[number];
 
 export interface KickPayload {
   userId: string;
