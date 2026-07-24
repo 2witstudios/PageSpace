@@ -1169,6 +1169,70 @@ describe('POST /api/stripe/webhook', () => {
       );
     });
 
+    it('remaps a founder checkout to control-plane business instead of failing tenant-validation (#2148)', async () => {
+      const session = mockCheckoutSession({
+        mode: 'subscription',
+        customer: 'cus_new123',
+        customerEmail: 'admin@acme.com',
+        metadata: { slug: 'acme', tier: 'founder' },
+      });
+      const event = mockStripeEvent('checkout.session.completed', session);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(global.fetch).toHaveBeenCalledWith(
+        'http://control-plane:4000/api/tenants',
+        expect.objectContaining({
+          body: JSON.stringify({
+            slug: 'acme',
+            name: 'acme',
+            ownerEmail: 'admin@acme.com',
+            tier: 'business',
+          }),
+        }),
+      );
+    });
+
+    it('forwards a control-plane-only tier (enterprise) UNCHANGED — it is not part of the SaaS vocabulary and must not be coerced to pro', async () => {
+      const session = mockCheckoutSession({
+        mode: 'subscription',
+        customer: 'cus_new123',
+        customerEmail: 'admin@acme.com',
+        metadata: { slug: 'acme', tier: 'enterprise' },
+      });
+      const event = mockStripeEvent('checkout.session.completed', session);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(global.fetch).toHaveBeenCalledWith(
+        'http://control-plane:4000/api/tenants',
+        expect.objectContaining({
+          body: JSON.stringify({
+            slug: 'acme',
+            name: 'acme',
+            ownerEmail: 'admin@acme.com',
+            tier: 'enterprise',
+          }),
+        }),
+      );
+    });
+
     it('should not call control-plane when metadata.slug is absent', async () => {
       const session = mockCheckoutSession({
         mode: 'subscription',

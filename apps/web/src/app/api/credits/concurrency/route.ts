@@ -6,11 +6,8 @@ import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 import { getLiveInFlightHolds } from '@pagespace/lib/billing/live-concurrency-query';
 import { MACHINE_MAX_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { getCodeExecutionConcurrencyLimit } from '@pagespace/lib/services/sandbox/quota';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { toSubscriptionTier, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-
-const isSubscriptionTier = (value: string): value is SubscriptionTier =>
-  value === 'free' || value === 'pro' || value === 'founder' || value === 'business';
 
 /**
  * GET /api/credits/concurrency — the authenticated user's live in-flight
@@ -45,7 +42,7 @@ export async function GET(request: NextRequest) {
       .where(eq(users.id, userId))
       .limit(1);
     const rawTier = rows[0]?.subscriptionTier;
-    const tier: SubscriptionTier = rawTier && isSubscriptionTier(rawTier) ? rawTier : 'free';
+    const tier: SubscriptionTier = toSubscriptionTier(rawTier);
 
     const count = await getLiveInFlightHolds(userId);
 
