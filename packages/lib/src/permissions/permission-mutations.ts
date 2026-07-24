@@ -17,6 +17,7 @@ import { EnforcedAuthContext } from './enforced-context';
 import { GrantInputSchema, RevokeInputSchema, type PermissionFlags } from './schemas';
 import { logPermissionActivity, getActorInfo } from '../monitoring/activity-logger';
 import { isHomeDrive, homeDriveActionError } from '../services/drive-guards';
+import { kickForPagePermissionRevocation } from './revocation-kick';
 
 // ============================================================================
 // Error Types
@@ -415,6 +416,23 @@ export async function revokePagePermission(
   await db
     .delete(pagePermissions)
     .where(eq(pagePermissions.id, previousPermission.id));
+
+  // 5.5. Revocation→kick hook (#2158): evict the target's sockets from the
+  // page rooms here — at the mutation, not in each calling route — so no
+  // revocation path can forget it. Awaited (not fire-and-forget): the prior
+  // per-route callers awaited their kicks before responding, and firing this
+  // without awaiting would let the HTTP response return, and a subsequent
+  // broadcast go out, before the kick request even starts — reopening the
+  // stale-delivery window this centralization is meant to close. Safe to
+  // await unconditionally: kickForPagePermissionRevocation is best-effort
+  // internally (room membership is a delivery optimization; the per-event
+  // recheck stays authoritative) and never throws, so this cannot fail the
+  // mutation — it only waits for the kick attempt to finish.
+  await kickForPagePermissionRevocation({
+    userId: targetUserId,
+    pageId,
+    reason: 'permission_revoked',
+  });
 
   // 6. Audit log with previousValues (fire-and-forget)
   getActorInfo(ctx.userId).then((actorInfo) => {

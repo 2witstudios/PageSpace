@@ -17,8 +17,11 @@ export type DriveOperation = 'created' | 'updated' | 'deleted';
 export type DriveMemberOperation = 'member_added' | 'member_role_changed' | 'member_removed';
 export type TaskOperation = 'task_list_created' | 'task_added' | 'task_updated' | 'task_completed' | 'task_deleted' | 'tasks_reordered';
 export type CreditsOperation = 'updated';
-export type KickReason = 'member_removed' | 'role_changed' | 'permission_revoked' | 'session_revoked' | 'page_private';
 export type InboxOperation = 'dm_updated' | 'channel_updated' | 'read_status_changed' | 'thread_updated';
+
+// Kick/revocation types - re-export from shared lib (#2158) so the web client
+// and the realtime server's kick transport can never drift on shape.
+export type { KickReason, KickPayload, KickResult, AccessRevokedPayload } from '@pagespace/lib/realtime/kick-client';
 
 export interface ActivityEventPayload {
   activityId: string;
@@ -99,35 +102,6 @@ export interface CreditsEventPayload {
   reserved: number;
   conversationId?: string;
   pageId?: string;
-}
-
-export interface KickPayload {
-  userId: string;
-  roomPattern: string;
-  reason: KickReason;
-  metadata?: {
-    driveId?: string;
-    pageId?: string;
-    driveName?: string;
-  };
-}
-
-export interface KickResult {
-  success: boolean;
-  kickedCount: number;
-  rooms: string[];
-  error?: string;
-}
-
-/** Client-received shape of the `access_revoked` socket event (see apps/realtime/src/kick-handler.ts's executeKick). */
-export interface AccessRevokedPayload {
-  room: string;
-  reason: KickReason;
-  metadata?: {
-    driveId?: string;
-    pageId?: string;
-    driveName?: string;
-  };
 }
 
 export interface InboxEventPayload {
@@ -1362,155 +1336,13 @@ export async function notifyTerminalAgentActivity(payload: TerminalActivityEvent
 // ============================================================================
 // Permission Revocation (Kick API)
 // ============================================================================
-
-/**
- * Kicks a user from Socket.IO rooms on permission revocation.
- * This is called when permissions are changed to immediately revoke real-time access.
- *
- * @param payload - The kick payload specifying user and rooms to remove from
- * @returns The result of the kick operation
- */
-export async function kickUserFromRooms(payload: KickPayload): Promise<KickResult> {
-  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
-  if (!realtimeUrl) {
-    realtimeLogger.warn('Realtime URL not configured, skipping kick', {
-      userId: maskIdentifier(payload.userId),
-      roomPattern: payload.roomPattern,
-    });
-    return { success: false, kickedCount: 0, rooms: [], error: 'Realtime URL not configured' };
-  }
-
-  try {
-    const requestBody = JSON.stringify(payload);
-
-    const response = await fetch(`${realtimeUrl}/api/kick`, {
-      method: 'POST',
-      headers: createSignedBroadcastHeaders(requestBody),
-      body: requestBody,
-      signal: AbortSignal.timeout(30000),
-    });
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-      realtimeLogger.error(
-        'Kick request rejected by realtime server',
-        undefined,
-        {
-          userId: maskIdentifier(payload.userId),
-          roomPattern: payload.roomPattern,
-          reason: payload.reason,
-          status: response.status,
-          errorBody,
-        }
-      );
-      return { success: false, kickedCount: 0, rooms: [], error: `Kick request failed with status ${response.status}` };
-    }
-
-    const result = await response.json() as KickResult;
-
-    if (result.success) {
-      realtimeLogger.info('User kicked from rooms', {
-        userId: maskIdentifier(payload.userId),
-        roomPattern: payload.roomPattern,
-        reason: payload.reason,
-        kickedCount: result.kickedCount,
-      });
-    }
-
-    return result;
-  } catch (error) {
-    realtimeLogger.error(
-      'Failed to kick user from rooms',
-      error instanceof Error ? error : undefined,
-      {
-        userId: maskIdentifier(payload.userId),
-        roomPattern: payload.roomPattern,
-      }
-    );
-    return { success: false, kickedCount: 0, rooms: [], error: 'Network error' };
-  }
-}
-
-/**
- * Kicks a user from all rooms related to a specific drive.
- * Called when a user is removed from a drive or loses drive access.
- *
- * @param driveId - The drive ID to remove user from
- * @param userId - The user to kick
- * @param reason - The reason for the kick
- * @param driveName - Optional drive name for client notification
- */
-export async function kickUserFromDrive(
-  driveId: string,
-  userId: string,
-  reason: KickReason,
-  driveName?: string
-): Promise<KickResult> {
-  return kickUserFromRooms({
-    userId,
-    roomPattern: `drive:${driveId}`,
-    reason,
-    metadata: { driveId, driveName },
-  });
-}
-
-/**
- * Kicks a user from all activity rooms related to a specific drive.
- *
- * @param driveId - The drive ID
- * @param userId - The user to kick
- * @param reason - The reason for the kick
- */
-export async function kickUserFromDriveActivity(
-  driveId: string,
-  userId: string,
-  reason: KickReason
-): Promise<KickResult> {
-  return kickUserFromRooms({
-    userId,
-    roomPattern: `activity:drive:${driveId}`,
-    reason,
-    metadata: { driveId },
-  });
-}
-
-/**
- * Kicks a user from a specific page room.
- * Called when page-level permissions are revoked.
- *
- * @param pageId - The page ID to remove user from
- * @param userId - The user to kick
- * @param reason - The reason for the kick
- */
-export async function kickUserFromPage(
-  pageId: string,
-  userId: string,
-  reason: KickReason
-): Promise<KickResult> {
-  return kickUserFromRooms({
-    userId,
-    roomPattern: pageId,
-    reason,
-    metadata: { pageId },
-  });
-}
-
-/**
- * Kicks a user from a page's activity room.
- *
- * @param pageId - The page ID
- * @param userId - The user to kick
- * @param reason - The reason for the kick
- */
-export async function kickUserFromPageActivity(
-  pageId: string,
-  userId: string,
-  reason: KickReason
-): Promise<KickResult> {
-  return kickUserFromRooms({
-    userId,
-    roomPattern: `activity:page:${pageId}`,
-    reason,
-    metadata: { pageId },
-  });
-}
+//
+// The kick transport itself (kickUserFromRooms) and the revocation→kick hooks
+// that call it (kickForPagePermissionRevocation, kickForDriveMembershipRevocation)
+// now live in @pagespace/lib (#2158) — permission mutations trigger kicks
+// directly at the mutation layer, and the remaining call sites that revoke
+// access outside that layer (drive member removal, activity rollback,
+// page-goes-private) import the hooks from '@pagespace/lib/permissions/revocation-kick'
+// instead of hand-picking rooms here. See that module's doc comment for the
+// full rationale (this used to be four per-route kick calls, easy to forget
+// on a new revocation path).
