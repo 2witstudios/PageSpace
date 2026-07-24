@@ -107,3 +107,18 @@
 # Scheduled drive backups - Hourly
 # Fires automated drive backups for pro+ users whose nextRunAt is due
 0 * * * * cron-curl POST __WEB_URL__/api/cron/scheduled-backups >> /var/log/cron/scheduled-backups.log 2>&1
+
+# Storage reconcile - Every 15 minutes, offset 5 minutes off the hour
+# Rewrites users.storageUsedBytes from SUM(files.sizeBytes) wherever the cache
+# has drifted from the charge basis (#2155). Idempotent — a run that finds no
+# drift for a user makes no writes. The route itself holds a Postgres advisory
+# lock across ALL callers (any container, any manual trigger); flock -n here
+# is just this container's own defense-in-depth against overlapping ticks.
+# Deliberately offset from `*/15` (would tick at :00) so it never fires in the
+# same instant as the weekly orphan cleanup below (0 6 * * 0) — a files-row
+# delete observed as drift here, before the reaper's separate credit call
+# lands, would otherwise double-credit the same bytes every single week
+# (#2225 review — Codex round 6). The narrower, purely race-timed version of
+# this window (an orphan reaped mid-tick on any OTHER minute) remains an
+# accepted residual risk — see findStorageDriftCandidates's doc.
+5,20,35,50 * * * * flock -n /run/reconcile-storage.lock cron-curl GET __WEB_URL__/api/cron/reconcile-storage >> /var/log/cron/reconcile-storage.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-storage.log

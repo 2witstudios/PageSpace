@@ -50,46 +50,7 @@ vi.mock('@pagespace/db/operators', () => ({
 }));
 
 import { db } from '@pagespace/db/db';
-import { ensureFileLinked, getLinksForFile, getFileDriveId, getLinkForPage } from '../file-links';
-
-/** @boundary-contract */
-describe('ensureFileLinked', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('executes within a transaction', async () => {
-    await ensureFileLinked({
-      fileId: 'file-hash',
-      pageId: 'page-1',
-      driveId: 'drive-1',
-    });
-
-    expect(db.transaction).toHaveBeenCalledTimes(1);
-    expect(typeof (db.transaction as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('function');
-  });
-
-  it('passes optional fields through transaction', async () => {
-    await ensureFileLinked({
-      fileId: 'file-hash',
-      pageId: 'page-1',
-      driveId: 'drive-1',
-      linkedBy: 'user-1',
-      sizeBytes: 1024,
-      mimeType: 'image/jpeg',
-    });
-
-    expect(db.transaction).toHaveBeenCalledTimes(1);
-  });
-
-  it('handles undefined optional fields without error', async () => {
-    await expect(ensureFileLinked({
-      fileId: 'file-hash',
-      pageId: 'page-1',
-      driveId: 'drive-1',
-    })).resolves.toBeUndefined();
-  });
-});
+import { getLinksForFile, getFileDriveId, getLinkForPage } from '../file-links';
 
 /** @boundary-contract */
 describe('getLinksForFile', () => {

@@ -3,18 +3,48 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../storage-repository', () => ({
   storageRepository: {
     findUserForStorage: vi.fn(),
-    findUserForUploads: vi.fn(),
+    findStorageDriftCandidates: vi.fn(),
+    findLastFileCreatedAtForUser: vi.fn().mockResolvedValue(null),
     findUserDriveIds: vi.fn(),
     findFilesByCreator: vi.fn(),
     userReferencesContentHash: vi.fn(),
     countFiles: vi.fn(),
-    updateActiveUploads: vi.fn(),
     updateStorageInTx: vi.fn(),
     insertStorageEvent: vi.fn(),
-    setUserStorageInTx: vi.fn(),
     runTransaction: vi.fn(),
   },
 }));
+
+vi.mock('../pending-uploads', () => ({
+  reserveUploadSlot: vi.fn(),
+  releasePendingUpload: vi.fn(),
+  sweepExpiredPendingUploads: vi.fn(),
+}));
+
+// Simulates real Postgres session-advisory-lock semantics with a single
+// shared in-memory flag: exactly one connection can hold it at a time.
+// Mirrors the fake pool in storage-drift.test.ts's reconcileAllStorageUsageSerialized suite.
+function makeFakeLockPool() {
+  let locked = false;
+  const pool = {
+    connect: vi.fn(async () => ({
+      query: vi.fn(async (text: string) => {
+        if (text.includes('pg_try_advisory_lock')) {
+          if (locked) return { rows: [{ acquired: false }] };
+          locked = true;
+          return { rows: [{ acquired: true }] };
+        }
+        if (text.includes('pg_advisory_unlock')) {
+          locked = false;
+          return { rows: [] };
+        }
+        return { rows: [] };
+      }),
+      release: vi.fn(),
+    })),
+  };
+  return { pool, isLocked: () => locked };
+}
 
 vi.mock('../subscription-utils', async (importOriginal) => {
   // Spread the real module so the canonical STORAGE_TIERS table (now the single
@@ -33,9 +63,8 @@ vi.mock('../subscription-utils', async (importOriginal) => {
 import {
   getUserStorageQuota,
   checkStorageQuota,
-  checkConcurrentUploads,
+  reserveConcurrentUploadSlot,
   updateStorageUsage,
-  updateActiveUploads,
   calculateActualStorageUsage,
   getUserFileCount,
   reconcileStorageUsage,
@@ -49,6 +78,7 @@ import {
   STORAGE_TIERS,
 } from '../storage-limits';
 import { storageRepository } from '../storage-repository';
+import { reserveUploadSlot } from '../pending-uploads';
 
 describe('storage-limits', () => {
   beforeEach(() => {
@@ -196,27 +226,32 @@ describe('storage-limits', () => {
     });
   });
 
-  describe('checkConcurrentUploads', () => {
-    it('checkConcurrentUploads_withNonexistentUser_returnsFalse', async () => {
-      vi.mocked(storageRepository.findUserForUploads).mockResolvedValue(undefined);
+  describe('reserveConcurrentUploadSlot (#2154/#2225 — atomic check-and-reserve)', () => {
+    it('reserveConcurrentUploadSlot_withNonexistentUser_returnsFalse', async () => {
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue(undefined);
 
-      expect(await checkConcurrentUploads('nonexistent')).toBe(false);
+      expect(await reserveConcurrentUploadSlot('job-1', 'nonexistent', 1024)).toBe(false);
+      expect(reserveUploadSlot).not.toHaveBeenCalled();
     });
 
-    it('checkConcurrentUploads_withUploadsUnderLimit_returnsTrue', async () => {
-      vi.mocked(storageRepository.findUserForUploads).mockResolvedValue({
-        activeUploads: 0, subscriptionTier: 'free',
+    it('reserveConcurrentUploadSlot_delegatesToPendingUploadsWithTheResolvedTierLimit', async () => {
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
+        id: 'user-1', storageUsedBytes: 0, subscriptionTier: 'free',
       });
+      vi.mocked(reserveUploadSlot).mockResolvedValue(true);
 
-      expect(await checkConcurrentUploads('user-1')).toBe(true);
+      expect(await reserveConcurrentUploadSlot('job-1', 'user-1', 1024)).toBe(true);
+      // free tier maxConcurrentUploads is 3 per the mocked subscription config above.
+      expect(reserveUploadSlot).toHaveBeenCalledWith('job-1', 'user-1', 1024, 3);
     });
 
-    it('checkConcurrentUploads_withUploadsAtLimit_returnsFalse', async () => {
-      vi.mocked(storageRepository.findUserForUploads).mockResolvedValue({
-        activeUploads: 3, subscriptionTier: 'free',
+    it('reserveConcurrentUploadSlot_withAtomicReserveDenied_returnsFalse', async () => {
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
+        id: 'user-1', storageUsedBytes: 0, subscriptionTier: 'free',
       });
+      vi.mocked(reserveUploadSlot).mockResolvedValue(false);
 
-      expect(await checkConcurrentUploads('user-1')).toBe(false);
+      expect(await reserveConcurrentUploadSlot('job-1', 'user-1', 1024)).toBe(false);
     });
   });
 
@@ -270,16 +305,6 @@ describe('storage-limits', () => {
       await updateStorageUsage('user-1', -500);
 
       expect(storageRepository.insertStorageEvent).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('updateActiveUploads', () => {
-    it('updateActiveUploads_withDelta_delegatesToRepository', async () => {
-      vi.mocked(storageRepository.updateActiveUploads).mockResolvedValue(undefined);
-
-      await updateActiveUploads('user-1', 1);
-
-      expect(storageRepository.updateActiveUploads).toHaveBeenCalledWith('user-1', 1);
     });
   });
 
@@ -345,7 +370,144 @@ describe('storage-limits', () => {
     it('reconcileStorageUsage_withNonexistentUser_throwsUserNotFound', async () => {
       vi.mocked(storageRepository.findUserForStorage).mockResolvedValue(undefined);
 
-      await expect(reconcileStorageUsage('nonexistent')).rejects.toThrow('User not found');
+      await expect(reconcileStorageUsage('nonexistent', makeFakeLockPool().pool)).rejects.toThrow('User not found');
+    });
+
+    it('reconcileStorageUsage_withDriftBeyondTolerance_appliesTheDifferenceAsADelta', async () => {
+      // #2225 review: same delta-based correction as the cron path — must not
+      // overwrite with an absolute value that could clobber a concurrent write.
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
+        id: 'user-1', storageUsedBytes: 1000, subscriptionTier: 'free',
+      });
+      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([{ sizeBytes: 1500 }]);
+      vi.mocked(storageRepository.runTransaction).mockImplementation(async (fn) => fn({} as never));
+      vi.mocked(storageRepository.updateStorageInTx).mockResolvedValue({ newUsage: 1500 });
+
+      const result = await reconcileStorageUsage('user-1', makeFakeLockPool().pool);
+
+      expect(storageRepository.updateStorageInTx).toHaveBeenCalledWith(expect.anything(), 'user-1', 500);
+      expect(result).toEqual({ outcome: 'reconciled', previousUsage: 1000, actualUsage: 1500, difference: 500 });
+    });
+
+    it('reconcileStorageUsage_withDriftBeyondTolerance_writesReconcileAuditEvent', async () => {
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
+        id: 'user-1', storageUsedBytes: 1000, subscriptionTier: 'free',
+      });
+      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([{ sizeBytes: 1500 }]);
+      vi.mocked(storageRepository.runTransaction).mockImplementation(async (fn) => fn({} as never));
+      vi.mocked(storageRepository.updateStorageInTx).mockResolvedValue({ newUsage: 1500 });
+
+      await reconcileStorageUsage('user-1', makeFakeLockPool().pool);
+
+      expect(storageRepository.insertStorageEvent).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          userId: 'user-1',
+          eventType: 'reconcile',
+          sizeDelta: 500,
+          totalSizeAfter: 1500,
+        }),
+      );
+    });
+
+    it('reconcileStorageUsage_withConcurrentWriteBetweenReadAndCorrection_reportsThePostCorrectionCounter', async () => {
+      // The scan reads usedBytes=1000, derived=1500 (difference=500). A
+      // concurrent charge lands +50 before the correction transaction runs, so
+      // the counter is actually 1050 by then; the delta (+500) applies on top
+      // of that, landing on 1550 — not the stale scan-time derived value 1500.
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
+        id: 'user-1', storageUsedBytes: 1000, subscriptionTier: 'free',
+      });
+      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([{ sizeBytes: 1500 }]);
+      vi.mocked(storageRepository.runTransaction).mockImplementation(async (fn) => fn({} as never));
+      vi.mocked(storageRepository.updateStorageInTx).mockResolvedValue({ newUsage: 1550 });
+
+      const result = await reconcileStorageUsage('user-1', makeFakeLockPool().pool);
+
+      expect(storageRepository.updateStorageInTx).toHaveBeenCalledWith(expect.anything(), 'user-1', 500);
+      expect(result).toEqual({ outcome: 'reconciled', previousUsage: 1000, actualUsage: 1550, difference: 500 });
+    });
+
+    it('reconcileStorageUsage_withDriftWithinTolerance_writesNothing', async () => {
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
+        id: 'user-1', storageUsedBytes: 1000, subscriptionTier: 'free',
+      });
+      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([{ sizeBytes: 1000 }]);
+
+      const result = await reconcileStorageUsage('user-1', makeFakeLockPool().pool);
+
+      expect(storageRepository.updateStorageInTx).not.toHaveBeenCalled();
+      expect(storageRepository.runTransaction).not.toHaveBeenCalled();
+      expect(result).toEqual({ outcome: 'reconciled', previousUsage: 1000, actualUsage: 1000, difference: 0 });
+    });
+
+    it('reconcileStorageUsage_withARecentFilesRow_skipsTheCorrectionEvenThoughDriftExceedsTolerance (#2225 review — Codex round 5, upload/complete race)', async () => {
+      // upload/complete's files-insert and its separate storageUsedBytes update
+      // are non-atomic; if the insert already landed but the update hasn't,
+      // derivedUsage looks drifted from quota.usedBytes even though nothing is
+      // actually wrong yet. Applying that as a correction now would double-count
+      // once the upload's own pending update lands.
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
+        id: 'user-1', storageUsedBytes: 1000, subscriptionTier: 'free',
+      });
+      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([{ sizeBytes: 1500 }]);
+      vi.mocked(storageRepository.findLastFileCreatedAtForUser).mockResolvedValue(new Date());
+
+      const result = await reconcileStorageUsage('user-1', makeFakeLockPool().pool);
+
+      expect(storageRepository.updateStorageInTx).not.toHaveBeenCalled();
+      expect(result).toEqual({ outcome: 'reconciled', previousUsage: 1000, actualUsage: 1000, difference: 500 });
+    });
+
+    it('reconcileStorageUsage_withAnOldFilesRow_appliesTheCorrectionNormally', async () => {
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
+        id: 'user-1', storageUsedBytes: 1000, subscriptionTier: 'free',
+      });
+      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([{ sizeBytes: 1500 }]);
+      vi.mocked(storageRepository.findLastFileCreatedAtForUser).mockResolvedValue(new Date(Date.now() - 3600_000));
+      vi.mocked(storageRepository.runTransaction).mockImplementation(async (fn) => fn({} as never));
+      vi.mocked(storageRepository.updateStorageInTx).mockResolvedValue({ newUsage: 1500 });
+
+      const result = await reconcileStorageUsage('user-1', makeFakeLockPool().pool);
+
+      expect(storageRepository.updateStorageInTx).toHaveBeenCalledWith(expect.anything(), 'user-1', 500);
+      expect(result).toEqual({ outcome: 'reconciled', previousUsage: 1000, actualUsage: 1500, difference: 500 });
+    });
+
+    it('reconcileStorageUsage_withLockAlreadyHeld_isACleanNoOpAndNeverReadsTheUser (#2225 review — concurrent admin triggers must not double-apply)', async () => {
+      const { pool } = makeFakeLockPool();
+      await pool.connect().then((c) => c.query('SELECT pg_try_advisory_lock(hashtext($1)) AS acquired'));
+
+      const result = await reconcileStorageUsage('user-1', pool);
+
+      expect(result).toEqual({ outcome: 'lock_busy' });
+      expect(storageRepository.findUserForStorage).not.toHaveBeenCalled();
+    });
+
+    it('reconcileStorageUsage_withTwoConcurrentCallsForTheSameUser_appliesTheCorrectionOnlyOnce', async () => {
+      // The exact race the P2 review flagged: two overlapping admin
+      // `?reconcile=true` requests (or one overlapping the cron) both reading
+      // materialized=0/derived=100 would, unserialized, each apply +100 and
+      // land the counter at 200. Serializing on the shared lock key ensures
+      // only one actually runs the correction.
+      const { pool, isLocked } = makeFakeLockPool();
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
+        id: 'user-1', storageUsedBytes: 0, subscriptionTier: 'free',
+      });
+      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([{ sizeBytes: 100 }]);
+      vi.mocked(storageRepository.runTransaction).mockImplementation(async (fn) => fn({} as never));
+      vi.mocked(storageRepository.updateStorageInTx).mockResolvedValue({ newUsage: 100 });
+
+      const [first, second] = await Promise.all([
+        reconcileStorageUsage('user-1', pool),
+        reconcileStorageUsage('user-1', pool),
+      ]);
+
+      const outcomes = [first.outcome, second.outcome].sort();
+      expect(outcomes).toEqual(['lock_busy', 'reconciled']);
+      expect(storageRepository.updateStorageInTx).toHaveBeenCalledTimes(1);
+      expect(storageRepository.updateStorageInTx).toHaveBeenCalledWith(expect.anything(), 'user-1', 100);
+      expect(isLocked()).toBe(false);
     });
   });
 

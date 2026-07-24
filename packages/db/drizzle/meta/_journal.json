@@ -1583,6 +1583,13 @@
       "when": 1784853212571,
       "tag": "0225_blushing_tattoo",
       "breakpoints": true
+    },
+    {
+      "idx": 226,
+      "version": "7",
+      "when": 1784867409737,
+      "tag": "0226_tearful_mandroid",
+      "breakpoints": true
     }
   ]
 }

@@ -66,7 +66,11 @@ export const pages = pgTable('pages', {
   machines: jsonb('machines'), // MachineRef[]; configured machines for this agent, machines[0] is the default active machine
   description: text('description'), // Machine (MACHINE) pages only: freeform description surfaced on the Machine page's Settings tab
   allowPageAgents: boolean('allowPageAgents').default(true).notNull(), // Machine (MACHINE) pages only: whether page-scoped agents may run their terminal tools on this machine
-  // File-specific fields
+  // File-specific fields.
+  // fileSize/mimeType/contentHash are DERIVED DISPLAY METADATA copied from the
+  // content-addressed `files` row at upload time (#2155). The authoritative
+  // storage-accounting value is files.sizeBytes (reached via file_pages); these
+  // per-page copies are never re-synced and must not feed quota/usage math.
   fileSize: real('fileSize'),
   mimeType: text('mimeType'),
   originalFileName: text('originalFileName'),

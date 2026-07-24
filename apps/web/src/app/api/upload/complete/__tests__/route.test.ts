@@ -57,10 +57,13 @@ vi.mock('@pagespace/lib/utils/enums', () => ({
 }));
 
 vi.mock('@pagespace/lib/services/storage-limits', () => ({
-  updateActiveUploads: vi.fn(),
   updateStorageUsage: vi.fn(),
   // Real (pure) impl: charge iff the files row was newly inserted.
   shouldChargeForStore: (inserted: boolean) => inserted,
+}));
+
+vi.mock('@pagespace/lib/services/pending-uploads', () => ({
+  releasePendingUpload: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/services/upload-semaphore', () => ({
@@ -101,7 +104,8 @@ import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
-import { updateActiveUploads, updateStorageUsage } from '@pagespace/lib/services/storage-limits';
+import { updateStorageUsage } from '@pagespace/lib/services/storage-limits';
+import { releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { enqueueProcessorJob } from '@/lib/upload/processor-effects';
 
 // Captures the values passed to tx.insert(pages).values(...) for assertion
@@ -175,7 +179,7 @@ beforeEach(() => {
   vi.mocked(getUserDrivePermissions).mockResolvedValue({ hasAccess: true, isOwner: true, isAdmin: false, isMember: false, canEdit: true });
   vi.mocked(uploadSemaphore.getSlotMetadata).mockReturnValue(SLOT_META);
   vi.mocked(enqueueProcessorJob).mockResolvedValue(undefined);
-  vi.mocked(updateActiveUploads).mockResolvedValue(undefined);
+  vi.mocked(releasePendingUpload).mockResolvedValue(undefined);
 
   // Default sibling lookups: empty list (new page lands at position 0).
   mockFindFirst.mockResolvedValue(undefined);
@@ -301,9 +305,9 @@ describe('POST /api/upload/complete', () => {
       expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
     });
 
-    it('decrements activeUploads after successful insert', async () => {
+    it('releases the pending-upload reservation after successful insert', async () => {
       await POST(makeRequest(VALID_BODY));
-      expect(updateActiveUploads).toHaveBeenCalledWith('user-1', -1);
+      expect(releasePendingUpload).toHaveBeenCalledWith(MOCK_JOB_ID);
     });
 
     it('enqueues the processor job after the DB transaction commits', async () => {
@@ -396,7 +400,7 @@ describe('POST /api/upload/complete', () => {
       const res = await POST(makeRequest(VALID_BODY));
       expect(res.status).toBe(409);
       expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_JOB_ID);
-      expect(updateActiveUploads).toHaveBeenCalledWith('user-1', -1);
+      expect(releasePendingUpload).toHaveBeenCalledWith(MOCK_JOB_ID);
       // No storage charge for a rejected claim.
       expect(updateStorageUsage).not.toHaveBeenCalled();
     });
