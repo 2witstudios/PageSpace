@@ -274,11 +274,27 @@ async function resolveProjectOrMachineLocation({
   return { ok: true, sandboxId: acquired.sandboxId, cwd, ownSprite: false };
 }
 
+/** The checkout directory a session's OWN Sprite runs at, by scope: a project/branch Sprite holds a clone; a machine-scope Sprite runs at its home. */
+function repoPathForScope(scope: AgentTerminalScope): string {
+  return scope === 'branch' ? BRANCH_REPO_PATH : scope === 'project' ? PROJECT_REPO_PATH : SANDBOX_ROOT;
+}
+
 /** Resolve WHERE an already-known ROW's Sprite + working directory live, by its OWN scope columns — the level-agnostic path (no name lookup at all). */
 async function resolveLocationForRow(
-  row: Pick<MachineAgentTerminalRecord, 'machineId' | 'projectName' | 'machineBranchId'>,
+  row: Pick<MachineAgentTerminalRecord, 'machineId' | 'scope' | 'projectName' | 'machineBranchId' | 'sandboxId' | 'spriteTornDownAt'>,
   deps: Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'machineSandbox'>,
 ): Promise<LocationResolution> {
+  // This session's OWN Sprite (sessions-per-location). Once provisioned at
+  // spawn (`maybeProvisionSprite`), the row carries its own `sandboxId` and
+  // EVERY scope resolves straight to it — the same isolated "own Sprite" a
+  // branch terminal has always had, now for machine- and project-scope
+  // sessions too. A NULL or torn-down `sandboxId` falls through to the
+  // pre-per-session path (a legacy row, or one whose best-effort provision
+  // has not landed yet), keeping the session usable until a later spawn
+  // re-provisions.
+  if (row.sandboxId && !row.spriteTornDownAt) {
+    return { ok: true, sandboxId: row.sandboxId, cwd: repoPathForScope(row.scope), ownSprite: true };
+  }
   if (row.machineBranchId) {
     const branch = await deps.branchStore.findById(row.machineBranchId);
     if (!branch) return { ok: false, reason: 'branch_not_found' };

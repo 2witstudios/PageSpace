@@ -2209,3 +2209,76 @@ describe('spawnAgentTerminal — per-session Sprite provisioning', () => {
     expect([...rows.values()][0].sandboxId).toBeNull();
   });
 });
+
+describe('resolveAgentTerminal — per-session Sprite resolution (sessions-per-location)', () => {
+  it('given a machine-scope row with its OWN sandboxId, should resolve to that Sprite at SANDBOX_ROOT with ownSprite:true (never the shared machine Sprite)', async () => {
+    const acquireCalls: string[] = [];
+    const { store } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-own-m',
+        name: 'cli',
+        agentType: 'shell',
+        scope: 'machine',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+      }),
+    ]);
+    const deps = makeDeps({
+      store,
+      machineSandbox: makeMachineSandbox({
+        acquire: async (id) => {
+          acquireCalls.push(id);
+          return { ok: true, sandboxId: MACHINE_SANDBOX_ID };
+        },
+      }),
+    });
+
+    const result = await resolveAgentTerminalById({ agentTerminalId: 'agent-terminal-own-m', deps });
+    expect(result).toMatchObject({ ok: true, sandboxId: SESSION_SANDBOX_ID, cwd: SANDBOX_ROOT, ownSprite: true });
+    expect(acquireCalls).toEqual([]); // the shared machine Sprite was never acquired
+  });
+
+  it('given a project-scope row with its OWN sandboxId, should resolve to that Sprite at PROJECT_REPO_PATH', async () => {
+    const { store } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-own-p',
+        name: 'cli',
+        agentType: 'shell',
+        scope: 'project',
+        projectName: PROJECT_NAME,
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+      }),
+    ]);
+    const deps = makeDeps({ store });
+    const result = await resolveAgentTerminalById({ agentTerminalId: 'agent-terminal-own-p', deps });
+    expect(result).toMatchObject({ ok: true, sandboxId: SESSION_SANDBOX_ID, cwd: PROJECT_REPO_PATH, ownSprite: true });
+  });
+
+  it('given a torn-down row, should FALL BACK to the pre-per-session shared resolution', async () => {
+    const acquireCalls: string[] = [];
+    const { store } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-torn',
+        name: 'cli',
+        agentType: 'shell',
+        scope: 'machine',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+        spriteTornDownAt: NOW,
+      }),
+    ]);
+    const deps = makeDeps({
+      store,
+      machineSandbox: makeMachineSandbox({
+        acquire: async (id) => {
+          acquireCalls.push(id);
+          return { ok: true, sandboxId: MACHINE_SANDBOX_ID };
+        },
+      }),
+    });
+    const result = await resolveAgentTerminalById({ agentTerminalId: 'agent-terminal-torn', deps });
+    expect(result).toMatchObject({ ok: true, sandboxId: MACHINE_SANDBOX_ID, ownSprite: false });
+    expect(acquireCalls).toEqual([TERMINAL_ID]); // fell back to the shared machine Sprite
+  });
+});
