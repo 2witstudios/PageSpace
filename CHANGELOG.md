@@ -7,6 +7,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **A machine-bound agent addressing its own project's default checkout as `branch: "main"`/`"master"` is no longer silently denied** —
+  a bound conversation's `target` only ever resolved against explicitly created branch worktrees, so a model reasoning in ordinary
+  git terms (where "main" means "my own checkout") got refused with a generic scope error even when addressing itself. The system
+  prompt now explains that "branch" here names a separately created worktree, not "whatever branch a project happens to be on," and
+  the denial message points at `list_sessions` to check real state instead of prescribing a specific retry.
 - **Permanently deleting a Terminal machine, its drive, or letting it age out of Trash no longer
   leaves "Unknown machine" behind** — an agent or the global assistant's machine list kept a
   reference to a Terminal after the machine page was gone for good, so it showed as "Unknown
