@@ -55,6 +55,8 @@ export const pageReadTools = {
         throw new Error('User authentication required');
       }
 
+      const normalizedParentId = parentId ? parentId : undefined;
+
       try {
         if (!await canActorAccessDrive(context as ToolExecutionContext, driveId)) {
           return { success: false, error: `You don't have access to the "${driveSlug}" workspace` };
@@ -66,8 +68,8 @@ export const pageReadTools = {
 
         const pageMap = new Map(visiblePages.map(p => [p.id, p]));
 
-        if (parentId && !pageMap.has(parentId)) {
-          return { success: false, error: `Page "${parentId}" not found or not accessible in this workspace` };
+        if (normalizedParentId && !pageMap.has(normalizedParentId)) {
+          return { success: false, error: `Page "${normalizedParentId}" not found or not accessible in this workspace` };
         }
 
         // Get task-linked page IDs to mark them
@@ -113,7 +115,7 @@ export const pageReadTools = {
         let resultPages: PageEntry[];
 
         if (!recursive) {
-          const target = parentId ?? null;
+          const target = normalizedParentId ?? null;
           const children = visiblePages.filter(p => p.parentId === target);
           resultPages = children.map(p => ({
             id: p.id,
@@ -142,7 +144,7 @@ export const pageReadTools = {
             }
             return result;
           };
-          resultPages = collectSubtree(parentId ?? null);
+          resultPages = collectSubtree(normalizedParentId ?? null);
         }
 
         // Batch content onto the result set in one additional query, rather than
@@ -195,8 +197,8 @@ export const pageReadTools = {
         }
 
         const driveLabel = driveSlug || driveId;
-        const breadcrumb = buildBreadcrumb(parentId);
-        const location = parentId ? buildPath(parentId) : `/${driveLabel}`;
+        const breadcrumb = buildBreadcrumb(normalizedParentId);
+        const location = normalizedParentId ? buildPath(normalizedParentId) : `/${driveLabel}`;
         const locationLabel = breadcrumb.length > 0 ? breadcrumb.map(c => c.title).join(' / ') : driveLabel;
 
         return {
