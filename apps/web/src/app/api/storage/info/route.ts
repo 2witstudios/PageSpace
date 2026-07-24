@@ -80,8 +80,15 @@ export async function GET(request: NextRequest) {
     // created in ANY drive the user has upload access to, not just owned
     // ones (#2225 review) — without the union, a shared-drive upload's bytes
     // would count toward the total but be invisible in this breakdown.
+    // Union both driveId (the blob's creation drive, for byte attribution) and
+    // pageDriveId (the representative page's own drive, for the title/id
+    // access check below — these can differ under cross-drive dedup).
     const referencedDriveIds = Array.from(
-      new Set(userFiles.map(f => f.driveId).filter((id): id is string => id !== null)),
+      new Set(
+        userFiles
+          .flatMap(f => [f.driveId, f.pageDriveId])
+          .filter((id): id is string => id !== null),
+      ),
     );
     const driveWhere = referencedDriveIds.length > 0
       ? or(eq(drives.ownerId, user.id), inArray(drives.id, referencedDriveIds))
@@ -104,19 +111,26 @@ export async function GET(request: NextRequest) {
 
     const fileTypeBreakdown = buildFileTypeBreakdown(userFiles);
 
-    // id/title keep the response shape the frontend (StorageUsageCard) already
-    // consumes; a file with no linked page (e.g. a DM-only attachment) falls
-    // back to the content-addressed file id and a generic title.
+    // #2225 review: files.createdBy survives drive-membership removal, so the
+    // representative page's title/id must not be shown once the user has lost
+    // access to THAT page's drive (pageDriveId, not files.driveId — they can
+    // differ under cross-drive dedup). Reuses the same access-checked drive
+    // set as storageByDrive; a page in an inaccessible drive falls back to the
+    // same fileId/"Untitled file" placeholder already used for DM attachments.
+    const accessibleDriveIds = new Set(userDrives.map(d => d.id));
+    const canShowPage = (f: { pageDriveId: string | null }) =>
+      f.pageDriveId !== null && accessibleDriveIds.has(f.pageDriveId);
+
     const largestFiles = pickLargestFiles(userFiles, 10).map(f => ({
-      id: f.pageId ?? f.fileId,
-      title: f.title ?? 'Untitled file',
+      id: canShowPage(f) ? f.pageId! : f.fileId,
+      title: canShowPage(f) ? f.title! : 'Untitled file',
       mimeType: f.mimeType,
       formattedSize: formatBytes(f.sizeBytes)
     }));
 
     const recentFiles = pickRecentFiles(userFiles, 10).map(f => ({
-      id: f.pageId ?? f.fileId,
-      title: f.title ?? 'Untitled file',
+      id: canShowPage(f) ? f.pageId! : f.fileId,
+      title: canShowPage(f) ? f.title! : 'Untitled file',
       mimeType: f.mimeType,
       createdAt: f.createdAt,
       formattedSize: formatBytes(f.sizeBytes)

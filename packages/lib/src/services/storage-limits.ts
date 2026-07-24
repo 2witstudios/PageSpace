@@ -381,6 +381,17 @@ export function computeStorageDrift(input: StorageDriftInput, toleranceBytes: nu
 /** Matches reconcileStorageUsage's historical 1-byte float tolerance. */
 const STORAGE_DRIFT_TOLERANCE_BYTES = 1;
 
+/**
+ * #2225 review — skip a user whose most recent `files` row is younger than
+ * this, so upload/complete's separate (deliberately non-atomic) files-row
+ * insert + storageUsedBytes update has time to fully land before this cron
+ * ever looks at that user. See findStorageDriftCandidates's doc for the race
+ * this closes. Generous relative to the actual window (a page-enqueue network
+ * call plus a DB write, normally milliseconds) and tiny relative to the
+ * 15-minute cron cadence, so it doesn't meaningfully delay real drift fixes.
+ */
+const STORAGE_DRIFT_COOLDOWN_SECONDS = 300;
+
 export interface StorageReconcileCorrection {
   userId: string;
   previousUsage: number;
@@ -409,7 +420,7 @@ export async function reconcileAllStorageUsage(): Promise<{
   corrected: StorageReconcileCorrection[];
   failed: string[];
 }> {
-  const candidates = await storageRepository.findStorageDriftCandidates(STORAGE_DRIFT_TOLERANCE_BYTES);
+  const candidates = await storageRepository.findStorageDriftCandidates(STORAGE_DRIFT_TOLERANCE_BYTES, STORAGE_DRIFT_COOLDOWN_SECONDS);
 
   const corrected: StorageReconcileCorrection[] = [];
   const failed: string[] = [];

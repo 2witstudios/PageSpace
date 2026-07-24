@@ -18,9 +18,15 @@ interface RawUserFileRow extends Record<string, unknown> {
   driveId: string | null;
   pageId: string | null;
   title: string | null;
+  pageDriveId: string | null;
 }
 
 export async function findUserFileRows(userId: string): Promise<UserFileRow[]> {
+  // pageDriveId is the REPRESENTATIVE PAGE's own drive (pages.driveId), which
+  // can differ from files.driveId (the blob's original creation drive) once a
+  // file is dedup-linked into a second drive and that second drive's page
+  // happens to be more recent — the caller must gate title/id display on THIS
+  // field's current access, not files.driveId (#2225 review).
   const result = await db.execute<RawUserFileRow>(sql`
     SELECT f.id AS "fileId",
            f."sizeBytes" AS "sizeBytes",
@@ -28,10 +34,11 @@ export async function findUserFileRows(userId: string): Promise<UserFileRow[]> {
            f."createdAt" AS "createdAt",
            f."driveId" AS "driveId",
            p.id AS "pageId",
-           p.title AS "title"
+           p.title AS "title",
+           p."driveId" AS "pageDriveId"
     FROM files f
     LEFT JOIN LATERAL (
-      SELECT pg.id, pg.title
+      SELECT pg.id, pg.title, pg."driveId"
       FROM file_pages fp
       JOIN pages pg ON pg.id = fp."pageId" AND pg.type = 'FILE' AND pg."isTrashed" = false
       WHERE fp."fileId" = f.id
@@ -49,5 +56,6 @@ export async function findUserFileRows(userId: string): Promise<UserFileRow[]> {
     driveId: row.driveId,
     pageId: row.pageId,
     title: row.title,
+    pageDriveId: row.pageDriveId,
   }));
 }

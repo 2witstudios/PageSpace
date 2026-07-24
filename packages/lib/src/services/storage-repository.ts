@@ -39,20 +39,37 @@ export const storageRepository = {
    * rows by more than the tolerance. One aggregate over `files` (grouped by
    * creator) joined to `users`, so the cron pays a single pass regardless of
    * user count.
+   *
+   * #2225 review — excludes users with a `files` row created within the last
+   * `cooldownSeconds`: upload/complete inserts the `files` row and calls
+   * `updateStorageUsage` as two SEPARATE steps (deliberately non-atomic — a
+   * failure in the second must not roll back the successful page creation),
+   * so there's a real window where `derivedBytes` already reflects a new
+   * upload but `materializedBytes` doesn't yet. Scanning during that window
+   * looks like drift; correcting it via delta lands the counter on the
+   * CORRECT value in the instant, but then the upload's own pending
+   * `updateStorageUsage` call still lands afterward and double-applies the
+   * same bytes. The cooldown gives that pending call time to land before this
+   * user is ever treated as a candidate, closing the window without touching
+   * the upload route's intentionally-non-atomic bookkeeping split. (The
+   * analogous window exists on the orphan-reaper's credit path too, but that
+   * path deletes the `files` row so there's no timestamp left to key a
+   * cooldown on — accepted as a narrower, self-healing residual risk.)
    */
-  findStorageDriftCandidates: async (toleranceBytes: number): Promise<StorageDriftCandidate[]> => {
+  findStorageDriftCandidates: async (toleranceBytes: number, cooldownSeconds: number): Promise<StorageDriftCandidate[]> => {
     const result = await db.execute(sql`
       SELECT u.id AS "userId",
              u."storageUsedBytes" AS "materializedBytes",
              COALESCE(f.total, 0) AS "derivedBytes"
       FROM users u
       LEFT JOIN (
-        SELECT "createdBy", SUM("sizeBytes") AS total
+        SELECT "createdBy", SUM("sizeBytes") AS total, MAX("createdAt") AS "lastCreatedAt"
         FROM files
         WHERE "createdBy" IS NOT NULL
         GROUP BY "createdBy"
       ) f ON f."createdBy" = u.id
       WHERE ABS(ROUND(u."storageUsedBytes") - COALESCE(f.total, 0)) > ${Math.max(0, Math.round(toleranceBytes))}
+        AND (f."lastCreatedAt" IS NULL OR f."lastCreatedAt" < now() - make_interval(secs => ${Math.max(0, cooldownSeconds)}))
     `);
     return result.rows.map((row) => {
       const r = row as { userId: string; materializedBytes: number | string; derivedBytes: number | string };

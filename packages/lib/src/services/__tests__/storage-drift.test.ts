@@ -89,6 +89,23 @@ describe('reconcileAllStorageUsage', () => {
     expect(storageRepository.updateStorageInTx).not.toHaveBeenCalled();
   });
 
+  it('reconcileAllStorageUsage_passesAPositiveCooldownToExcludeVeryRecentUploads', async () => {
+    // #2225 review: without a cooldown, the scan can catch a user between
+    // upload/complete's files-row insert and its separate (non-atomic)
+    // storageUsedBytes update, treat that transient gap as drift, and
+    // double-count the upload once the pending update lands.
+    vi.mocked(storageRepository.findStorageDriftCandidates).mockResolvedValue([]);
+
+    await reconcileAllStorageUsage();
+
+    expect(storageRepository.findStorageDriftCandidates).toHaveBeenCalledWith(
+      expect.any(Number),
+      expect.any(Number),
+    );
+    const [, cooldownSeconds] = vi.mocked(storageRepository.findStorageDriftCandidates).mock.calls[0];
+    expect(cooldownSeconds).toBeGreaterThan(0);
+  });
+
   it('reconcileAllStorageUsage_withDriftedUsers_appliesTheDriftAsADelta', async () => {
     // #2225 review: correction is a DELTA (-driftBytes) via updateStorageInTx,
     // not an absolute overwrite — so a concurrent charge/credit write landing

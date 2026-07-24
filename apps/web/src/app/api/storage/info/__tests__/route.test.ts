@@ -129,7 +129,7 @@ describe('GET /api/storage/info', () => {
   describe('#2225 review — by-drive breakdown includes shared (non-owned) drives', () => {
     it('queries only owned drives when no file references a drive the user does not own', async () => {
       vi.mocked(findUserFileRows).mockResolvedValue([
-        { fileId: 'f1', sizeBytes: 10, mimeType: 'text/plain', createdAt: new Date(), driveId: null, pageId: null, title: null },
+        { fileId: 'f1', sizeBytes: 10, mimeType: 'text/plain', createdAt: new Date(), driveId: null, pageId: null, title: null, pageDriveId: null },
       ]);
 
       const request = new Request('https://example.com/api/storage/info');
@@ -142,9 +142,9 @@ describe('GET /api/storage/info', () => {
 
     it('unions owned drives with every drive a referenced file lives in', async () => {
       vi.mocked(findUserFileRows).mockResolvedValue([
-        { fileId: 'f1', sizeBytes: 10, mimeType: 'text/plain', createdAt: new Date(), driveId: 'shared-drive-1', pageId: 'p1', title: 't1' },
-        { fileId: 'f2', sizeBytes: 20, mimeType: 'text/plain', createdAt: new Date(), driveId: 'shared-drive-1', pageId: 'p2', title: 't2' },
-        { fileId: 'f3', sizeBytes: 30, mimeType: 'text/plain', createdAt: new Date(), driveId: null, pageId: null, title: null },
+        { fileId: 'f1', sizeBytes: 10, mimeType: 'text/plain', createdAt: new Date(), driveId: 'shared-drive-1', pageId: 'p1', title: 't1', pageDriveId: 'shared-drive-1' },
+        { fileId: 'f2', sizeBytes: 20, mimeType: 'text/plain', createdAt: new Date(), driveId: 'shared-drive-1', pageId: 'p2', title: 't2', pageDriveId: 'shared-drive-1' },
+        { fileId: 'f3', sizeBytes: 30, mimeType: 'text/plain', createdAt: new Date(), driveId: null, pageId: null, title: null, pageDriveId: null },
       ]);
 
       const request = new Request('https://example.com/api/storage/info');
@@ -157,8 +157,8 @@ describe('GET /api/storage/info', () => {
 
     it('re-checks current access for non-owned candidate drives and excludes ones the user has lost access to', async () => {
       vi.mocked(findUserFileRows).mockResolvedValue([
-        { fileId: 'f1', sizeBytes: 100, mimeType: 'text/plain', createdAt: new Date(), driveId: 'still-shared', pageId: 'p1', title: 't1' },
-        { fileId: 'f2', sizeBytes: 200, mimeType: 'text/plain', createdAt: new Date(), driveId: 'access-revoked', pageId: 'p2', title: 't2' },
+        { fileId: 'f1', sizeBytes: 100, mimeType: 'text/plain', createdAt: new Date(), driveId: 'still-shared', pageId: 'p1', title: 't1', pageDriveId: 'still-shared' },
+        { fileId: 'f2', sizeBytes: 200, mimeType: 'text/plain', createdAt: new Date(), driveId: 'access-revoked', pageId: 'p2', title: 't2', pageDriveId: 'access-revoked' },
       ]);
       vi.mocked(db.query.drives.findMany).mockResolvedValue([
         { id: 'still-shared', name: 'Still Shared', ownerId: 'other-owner' },
@@ -181,7 +181,7 @@ describe('GET /api/storage/info', () => {
 
     it('never re-checks access for drives the user owns', async () => {
       vi.mocked(findUserFileRows).mockResolvedValue([
-        { fileId: 'f1', sizeBytes: 100, mimeType: 'text/plain', createdAt: new Date(), driveId: 'owned-drive', pageId: 'p1', title: 't1' },
+        { fileId: 'f1', sizeBytes: 100, mimeType: 'text/plain', createdAt: new Date(), driveId: 'owned-drive', pageId: 'p1', title: 't1', pageDriveId: 'owned-drive' },
       ]);
       vi.mocked(db.query.drives.findMany).mockResolvedValue([
         { id: 'owned-drive', name: 'My Drive', ownerId: 'user_1' },
@@ -193,6 +193,61 @@ describe('GET /api/storage/info', () => {
 
       expect(getUserDriveAccess).not.toHaveBeenCalled();
       expect(body.storageByDrive.map((d: { driveId: string }) => d.driveId)).toContain('owned-drive');
+    });
+  });
+
+  describe('#2225 review (3rd pass) — largestFiles/recentFiles hide page metadata from inaccessible drives', () => {
+    it('shows the real title/id when the representative page\'s drive is still accessible', async () => {
+      vi.mocked(findUserFileRows).mockResolvedValue([
+        { fileId: 'f1', sizeBytes: 100, mimeType: 'text/plain', createdAt: new Date(), driveId: 'shared', pageId: 'page-1', title: 'Real Title', pageDriveId: 'shared' },
+      ]);
+      vi.mocked(db.query.drives.findMany).mockResolvedValue([
+        { id: 'shared', name: 'Shared Drive', ownerId: 'other-owner' },
+      ] as never);
+      vi.mocked(getUserDriveAccess).mockResolvedValue(true);
+
+      const request = new Request('https://example.com/api/storage/info');
+      const res = await GET(request as never);
+      const body = await res.json();
+
+      expect(body.recentFiles[0]).toMatchObject({ id: 'page-1', title: 'Real Title' });
+      expect(body.largestFiles[0]).toMatchObject({ id: 'page-1', title: 'Real Title' });
+    });
+
+    it('falls back to fileId/"Untitled file" when the representative page\'s drive access is revoked, even though its byte-attribution drive is still owned', async () => {
+      // The file's OWN driveId (creation drive) is owned and thus accessible,
+      // but the representative page — picked as the most-recently-created
+      // live page — lives in a DIFFERENT (now-inaccessible) drive under
+      // cross-drive dedup. The gate must key off pageDriveId, not driveId.
+      vi.mocked(findUserFileRows).mockResolvedValue([
+        { fileId: 'f1', sizeBytes: 100, mimeType: 'text/plain', createdAt: new Date(), driveId: 'owned-drive', pageId: 'page-1', title: 'Should Not Leak', pageDriveId: 'revoked-drive' },
+      ]);
+      vi.mocked(db.query.drives.findMany).mockResolvedValue([
+        { id: 'owned-drive', name: 'Owned', ownerId: 'user_1' },
+        { id: 'revoked-drive', name: 'Revoked', ownerId: 'other-owner' },
+      ] as never);
+      vi.mocked(getUserDriveAccess).mockImplementation(async (_userId, driveId) => driveId !== 'revoked-drive');
+
+      const request = new Request('https://example.com/api/storage/info');
+      const res = await GET(request as never);
+      const body = await res.json();
+
+      expect(body.recentFiles[0]).toMatchObject({ id: 'f1', title: 'Untitled file' });
+      expect(body.largestFiles[0]).toMatchObject({ id: 'f1', title: 'Untitled file' });
+      // The byte total is unaffected — only the display metadata is hidden.
+      expect(body.fileTypeBreakdown.Text.totalSize).toBe(100);
+    });
+
+    it('unions pageDriveId into the drives access-check query, not just driveId', async () => {
+      vi.mocked(findUserFileRows).mockResolvedValue([
+        { fileId: 'f1', sizeBytes: 100, mimeType: 'text/plain', createdAt: new Date(), driveId: 'owned-drive', pageId: 'page-1', title: 't1', pageDriveId: 'dedup-drive' },
+      ]);
+      vi.mocked(db.query.drives.findMany).mockResolvedValue([]);
+
+      const request = new Request('https://example.com/api/storage/info');
+      await GET(request as never);
+
+      expect(inArray).toHaveBeenCalledWith('id', expect.arrayContaining(['dedup-drive']));
     });
   });
 });

@@ -21,6 +21,15 @@ export interface UserFileRow {
   /** The page this row is displayed as (first/primary link), if any. */
   pageId: string | null;
   title: string | null;
+  /**
+   * The REPRESENTATIVE PAGE's own drive (not necessarily the same as
+   * `driveId`, which is the blob's original creation drive — they can differ
+   * under cross-drive dedup). Callers MUST gate showing `pageId`/`title` on
+   * current access to THIS drive, not `driveId`: `files.createdBy` survives
+   * drive-membership removal, so the page metadata can otherwise leak after
+   * access is revoked (#2225 review).
+   */
+  pageDriveId: string | null;
 }
 
 export function getFileTypeCategory(mimeType: string | null): string {
