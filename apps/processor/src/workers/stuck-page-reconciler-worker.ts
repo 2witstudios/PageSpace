@@ -19,6 +19,17 @@
  * pull-verify job data with `reconcileAttempt: n`, and the next run reads the
  * max tag back out of pgboss.job + pgboss.archive. Archive retention (7 days)
  * comfortably outlasts the minutes-scale reconcile cadence.
+ *
+ * Live-job exclusion happens INSIDE the candidate query (NOT EXISTS against
+ * pgboss.job), not as a separate post-filter: filtering after LIMIT would let
+ * a persistent front batch of live-job pages crowd out genuinely orphaned
+ * pages ordered behind them, starving them indefinitely (#2159 review).
+ *
+ * The 'fail' transition is a conditional UPDATE ... WHERE "processingStatus"
+ * IN ('pending','processing'), not an unconditional one: the owning worker
+ * can complete a page between the candidate scan and this update landing, and
+ * an unconditional write would stomp that success back to 'failed' (#2159
+ * review). A zero-row update means the page resolved itself — nothing to do.
  */
 
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -47,7 +58,6 @@ export interface StuckPageReconcilerDeps {
     contentHash: string;
     reconcileAttempt: number;
   }): Promise<string>;
-  markPageFailed(pageId: string, message: string): Promise<void>;
   alert(message: string, context: Record<string, unknown>): void;
   policy?: ReconcilerPolicy;
 }
@@ -59,6 +69,7 @@ export interface ReconcilerRunSummary {
   failed: number;
   skipped: number;
   enqueueErrors: number;
+  failUpdateErrors: number;
 }
 
 // Same try-lock idiom as the audit chainer: hashtext keys the lock slot, so
@@ -90,6 +101,7 @@ export async function runStuckPageReconciler(
     failed: 0,
     skipped: 0,
     enqueueErrors: 0,
+    failUpdateErrors: 0,
   };
 
   const client = await deps.connect();
@@ -107,21 +119,29 @@ export async function runStuckPageReconciler(
     try {
       // 'failed' is deliberately excluded: it means the processor ran and
       // rejected the file, and rejectAndFail deletes the object — re-enqueueing
-      // can never succeed (same reasoning as the manual repair script).
+      // can never succeed (same reasoning as the manual repair script). A
+      // missing/invalid "filePath" is NOT excluded here — those pages must
+      // reach classifyStalePage so its missing-content-hash branch can mark
+      // them failed instead of leaving them stuck forever.
       const candidates = await client.query(
-        `SELECT id,
-                "processingStatus",
-                "filePath" AS "contentHash",
-                EXTRACT(EPOCH FROM (NOW() - GREATEST("createdAt", "updatedAt"))) * 1000 AS "ageMs"
-           FROM pages
-          WHERE type = 'FILE'
-            AND "isTrashed" = false
-            AND "processingStatus" IN ('pending', 'processing')
-            AND "filePath" IS NOT NULL
-            AND GREATEST("createdAt", "updatedAt") < NOW() - ($1::bigint * interval '1 millisecond')
-          ORDER BY GREATEST("createdAt", "updatedAt") ASC
-          LIMIT $2`,
-        [policy.staleThresholdMs, policy.batchLimit],
+        `SELECT p.id,
+                p."processingStatus",
+                p."filePath" AS "contentHash",
+                EXTRACT(EPOCH FROM (NOW() - GREATEST(p."createdAt", p."updatedAt"))) * 1000 AS "ageMs"
+           FROM pages p
+          WHERE p.type = 'FILE'
+            AND p."isTrashed" = false
+            AND p."processingStatus" IN ('pending', 'processing')
+            AND GREATEST(p."createdAt", p."updatedAt") < NOW() - ($1::bigint * interval '1 millisecond')
+            AND NOT EXISTS (
+              SELECT 1 FROM pgboss.job j
+               WHERE j.name = ANY($2::text[])
+                 AND j.state IN ('created', 'retry', 'active')
+                 AND COALESCE(j.data->>'pageId', j.data->>'fileId') = p.id
+            )
+          ORDER BY GREATEST(p."createdAt", p."updatedAt") ASC
+          LIMIT $3`,
+        [policy.staleThresholdMs, OWNING_QUEUES, policy.batchLimit],
       );
       summary.scanned = candidates.rows.length;
       if (candidates.rows.length === 0) {
@@ -134,16 +154,6 @@ export async function runStuckPageReconciler(
       }
 
       const pageIds = candidates.rows.map((row) => String(row.id));
-
-      const liveJobs = await client.query(
-        `SELECT DISTINCT COALESCE(data->>'pageId', data->>'fileId') AS "pageId"
-           FROM pgboss.job
-          WHERE name = ANY($1::text[])
-            AND state IN ('created', 'retry', 'active')
-            AND COALESCE(data->>'pageId', data->>'fileId') = ANY($2::text[])`,
-        [OWNING_QUEUES, pageIds],
-      );
-      const livePageIds = new Set(liveJobs.rows.map((row) => String(row.pageId)));
 
       const attempts = await client.query(
         `SELECT data->>'pageId' AS "pageId",
@@ -170,7 +180,11 @@ export async function runStuckPageReconciler(
           pageId,
           processingStatus: row.processingStatus as StuckPageStatus,
           statusAgeMs: Number(row.ageMs),
-          hasLiveJob: livePageIds.has(pageId),
+          // The candidate query's NOT EXISTS already excludes pages with a
+          // live owning job — this is always false for rows reaching here.
+          // classifyStalePage still branches on it (tested in isolation) as
+          // a defensive check should evidence ever be sourced differently.
+          hasLiveJob: false,
           priorReconcileAttempts: priorAttempts.get(pageId) ?? 0,
           hasValidContentHash: isValidContentHash(contentHash),
         };
@@ -199,9 +213,28 @@ export async function runStuckPageReconciler(
             }
             break;
           case 'fail':
-            await deps.markPageFailed(pageId, decision.message);
-            summary.failed += 1;
-            failedPages.push({ pageId, reason: decision.reason });
+            try {
+              const result = await client.query(
+                `UPDATE pages
+                    SET "processingStatus" = 'failed', "processingError" = $1, "processedAt" = NOW()
+                  WHERE id = $2
+                    AND "processingStatus" IN ('pending', 'processing')`,
+                [decision.message, pageId],
+              );
+              if (result.rowCount && result.rowCount > 0) {
+                summary.failed += 1;
+                failedPages.push({ pageId, reason: decision.reason });
+              } else {
+                // The owning worker completed the page between the candidate
+                // scan and this update — nothing to overwrite.
+                summary.skipped += 1;
+              }
+            } catch (err) {
+              summary.failUpdateErrors += 1;
+              loggers.processor.warn(
+                `stuck-page reconciler: mark-failed update failed for page ${pageId}: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
             break;
         }
       }
@@ -212,9 +245,18 @@ export async function runStuckPageReconciler(
           { failedPages, summary: { ...summary } },
         );
       }
+      // Persistent re-enqueue/update failures are their own signal (DB or
+      // queue trouble), independent of whether any page was actually marked
+      // failed this run.
+      if (summary.enqueueErrors > 0 || summary.failUpdateErrors > 0) {
+        deps.alert(
+          `stuck-page reconciler hit ${summary.enqueueErrors} re-enqueue error(s) and ${summary.failUpdateErrors} mark-failed error(s) this run`,
+          { summary: { ...summary } },
+        );
+      }
 
       loggers.processor.info(
-        `stuck-page reconciler: scanned=${summary.scanned} reenqueued=${summary.reenqueued} failed=${summary.failed} skipped=${summary.skipped} enqueueErrors=${summary.enqueueErrors}`,
+        `stuck-page reconciler: scanned=${summary.scanned} reenqueued=${summary.reenqueued} failed=${summary.failed} skipped=${summary.skipped} enqueueErrors=${summary.enqueueErrors} failUpdateErrors=${summary.failUpdateErrors}`,
       );
       return summary;
     } finally {

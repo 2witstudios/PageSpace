@@ -294,7 +294,7 @@ export class QueueManager {
     // retryLimit 0 + run-level advisory lock keep overlapping runs from
     // double-enqueueing.
     const { runStuckPageReconciler, defaultReconcilerAlert } = await import('./stuck-page-reconciler-worker');
-    const { getPoolForWorker, setPageFailed: markPageFailed } = await import('../db');
+    const { getPoolForWorker } = await import('../db');
     await this.boss.work('stuck-page-reconciler',
       async () => {
         await runStuckPageReconciler({
@@ -304,7 +304,6 @@ export class QueueManager {
           // error the worker logs and skips.
           enqueuePullVerify: (data) =>
             this.addJob('pull-verify', data, { singletonKey: `reconcile:${data.pageId}` }),
-          markPageFailed,
           alert: defaultReconcilerAlert,
         });
       }
