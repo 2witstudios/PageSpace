@@ -74,4 +74,37 @@ describe('buildMachineBindingPrompt', () => {
     const prompt = buildMachineBindingPrompt(binding);
     expect(prompt).not.toContain('"branch" here is NOT "whatever git branch a project happens to be on"');
   });
+
+  // Codex review (PR #2232, second pass): a conversation bound DIRECTLY to a
+  // branch has `handles: [self]` — nothing beneath it at all. The live-branch
+  // check must still recognize `self` itself as a live default-named branch,
+  // or it wrongly concludes "no such branch exists" about the very branch
+  // the conversation IS, and recommends target: { project } — which a
+  // branch-scoped conversation can't even address (its handle set has no
+  // project handle in it).
+  it('given self IS a live branch named "main" (branch-bound conversation, nothing beneath it), should NOT warn', () => {
+    const branchSelf: MachineNodeHandleSet['self'] = {
+      kind: 'branch',
+      machineId: 'm1',
+      project: 'my-repo',
+      branch: 'main',
+      cwd: '/workspace/branches/main',
+    };
+    const binding: MachineNodeHandleSet = { self: branchSelf, handles: [branchSelf] };
+    const prompt = buildMachineBindingPrompt(binding);
+    expect(prompt).not.toContain('"branch" here is NOT "whatever git branch a project happens to be on"');
+  });
+
+  it('given self is a branch NOT named main/master (branch-bound, nothing beneath it), should still warn (it is genuinely not a default-checkout name)', () => {
+    const branchSelf: MachineNodeHandleSet['self'] = {
+      kind: 'branch',
+      machineId: 'm1',
+      project: 'my-repo',
+      branch: 'feature-x',
+      cwd: '/workspace/branches/feature-x',
+    };
+    const binding: MachineNodeHandleSet = { self: branchSelf, handles: [branchSelf] };
+    const prompt = buildMachineBindingPrompt(binding);
+    expect(prompt).toContain('"branch" here is NOT "whatever git branch a project happens to be on"');
+  });
 });

@@ -50,7 +50,13 @@ export function buildMachineBindingPrompt(binding: MachineNodeHandleSet): string
   // below would be actively wrong advice for that case. Only warn when no
   // such live branch is listed (Codex review, PR #2232): the reachable list
   // itself is always the source of truth, this is just interpreting it.
-  const hasLiveDefaultBranch = beneath.some((h) => h.kind === 'branch' && h.branch !== undefined && isMainBranchName(h.branch));
+  //
+  // Checked against the FULL `handles` (self included), not just `beneath`:
+  // a conversation bound DIRECTLY to a branch named "main"/"master" has
+  // `handles: [self]` with nothing beneath it at all (Codex review, second
+  // pass) — self itself is that live branch, so the warning must not fire
+  // just because there's nothing else in scope to list.
+  const hasLiveDefaultBranch = handles.some((h) => h.kind === 'branch' && h.branch !== undefined && isMainBranchName(h.branch));
   const branchWarning = hasLiveDefaultBranch
     ? ''
     : '\n• "branch" here is NOT "whatever git branch a project happens to be on" — it only names a separately created branch worktree (none is currently listed above). A project\'s own default checkout has no branch of its own to address: to run at a project, pass target: { project } alone, not target: { project, branch: "main" } — there is no such branch here.';
