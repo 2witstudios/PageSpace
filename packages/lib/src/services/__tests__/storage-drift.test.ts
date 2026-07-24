@@ -21,7 +21,12 @@ vi.mock('../pending-uploads', () => ({
   sweepExpiredPendingUploads: vi.fn(),
 }));
 
-import { computeStorageDrift, reconcileAllStorageUsage } from '../storage-limits';
+const mockGetAdvisoryLockPool = vi.fn();
+vi.mock('@pagespace/db/db', () => ({
+  getAdvisoryLockPool: () => mockGetAdvisoryLockPool(),
+}));
+
+import { computeStorageDrift, reconcileAllStorageUsage, reconcileAllStorageUsageSerialized } from '../storage-limits';
 import { storageRepository } from '../storage-repository';
 
 describe('computeStorageDrift', () => {
@@ -175,5 +180,98 @@ describe('reconcileAllStorageUsage', () => {
       { userId: 'user-2', previousUsage: 100, actualUsage: 900, driftBytes: -800 },
     ]);
     expect(result.failed).toEqual(['user-1']);
+  });
+});
+
+describe('reconcileAllStorageUsageSerialized (#2225 review — overlapping cron ticks must not double-apply)', () => {
+  // Simulates real Postgres session-advisory-lock semantics with a single
+  // shared in-memory flag: exactly one connection can hold it at a time.
+  function makeFakeLockPool() {
+    let locked = false;
+    const pool = {
+      connect: vi.fn(async () => ({
+        query: vi.fn(async (text: string) => {
+          if (text.includes('pg_try_advisory_lock')) {
+            if (locked) return { rows: [{ acquired: false }] };
+            locked = true;
+            return { rows: [{ acquired: true }] };
+          }
+          if (text.includes('pg_advisory_unlock')) {
+            locked = false;
+            return { rows: [] };
+          }
+          return { rows: [] };
+        }),
+        release: vi.fn(),
+      })),
+    };
+    return { pool, isLocked: () => locked };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(storageRepository.runTransaction).mockImplementation(async (fn) => fn({} as never));
+  });
+
+  it('given the lock is already held elsewhere, no-ops WITHOUT reading any drift candidates', async () => {
+    const { pool } = makeFakeLockPool();
+    await pool.connect().then((c) => c.query('SELECT pg_try_advisory_lock(hashtext($1)) AS acquired'));
+
+    const result = await reconcileAllStorageUsageSerialized(pool);
+
+    expect(result).toEqual({ outcome: 'lock_busy' });
+    expect(storageRepository.findStorageDriftCandidates).not.toHaveBeenCalled();
+  });
+
+  it('given two concurrent invocations racing the same lock, lets only one apply the correction (no double-application)', async () => {
+    const { pool, isLocked } = makeFakeLockPool();
+    vi.mocked(storageRepository.findStorageDriftCandidates).mockResolvedValue([
+      { userId: 'user-1', materializedBytes: 0, derivedBytes: 100 },
+    ]);
+    vi.mocked(storageRepository.updateStorageInTx).mockResolvedValue({ newUsage: 100 });
+
+    const [first, second] = await Promise.all([
+      reconcileAllStorageUsageSerialized(pool),
+      reconcileAllStorageUsageSerialized(pool),
+    ]);
+
+    const outcomes = [first.outcome, second.outcome].sort();
+    expect(outcomes).toEqual(['lock_busy', 'reconciled']);
+    // The correction (+100) was applied exactly once — this is the concrete
+    // "materialized=0, derived=100" double-application scenario the P1 review
+    // flagged: without serialization, both runs would call updateStorageInTx
+    // with the same +100 delta, landing the counter at 200 instead of 100.
+    expect(storageRepository.updateStorageInTx).toHaveBeenCalledTimes(1);
+    expect(storageRepository.updateStorageInTx).toHaveBeenCalledWith(expect.anything(), 'user-1', 100);
+    expect(isLocked()).toBe(false);
+  });
+
+  it('given no explicit pool override, acquires the lock from the dedicated advisory-lock pool', async () => {
+    const client = {
+      query: vi.fn()
+        .mockResolvedValueOnce({ rows: [{ acquired: true }] })
+        .mockResolvedValueOnce({ rows: [] }),
+      release: vi.fn(),
+    };
+    const pool = { connect: vi.fn(async () => client) };
+    mockGetAdvisoryLockPool.mockReturnValue(pool);
+    vi.mocked(storageRepository.findStorageDriftCandidates).mockResolvedValue([]);
+
+    const result = await reconcileAllStorageUsageSerialized();
+
+    expect(result.outcome).toBe('reconciled');
+    expect(mockGetAdvisoryLockPool).toHaveBeenCalledTimes(1);
+    expect(pool.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates a lock-connection failure (never silently swallowed as a clean run)', async () => {
+    const client = {
+      query: vi.fn().mockRejectedValueOnce(new Error('connection reset')),
+      release: vi.fn(),
+    };
+    const pool = { connect: vi.fn(async () => client) };
+
+    await expect(reconcileAllStorageUsageSerialized(pool)).rejects.toThrow('connection reset');
+    expect(storageRepository.findStorageDriftCandidates).not.toHaveBeenCalled();
   });
 });

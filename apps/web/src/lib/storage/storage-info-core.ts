@@ -67,7 +67,20 @@ export interface DriveStorageSummary {
   totalSize: number;
 }
 
-/** Files with no driveId (DM attachments) count toward the overall total but no per-drive bucket. */
+/**
+ * Files with no driveId (DM attachments) count toward the overall total but
+ * no per-drive bucket.
+ *
+ * `driveId` here is `files.driveId` — the drive the blob was FIRST physically
+ * stored in — not the drive of every page that references it. If the user
+ * later dedup-links the same blob into a second drive (the H3 fast path), its
+ * bytes still attribute to the original drive only, so per-drive totals can
+ * undercount a drive that references a blob created elsewhere. This mirrors
+ * the file's own createdBy/charge attribution (single-owner, single-drive) and
+ * avoids double-counting bytes across drives — the same tradeoff #2155's
+ * H4 fix already accepts for the overall total (dedup means N pages can
+ * legitimately share one blob, so per-surface counts don't always agree).
+ */
 export function buildStorageByDrive(
   rows: ReadonlyArray<UserFileRow>,
   drives: ReadonlyArray<{ id: string; name: string }>,

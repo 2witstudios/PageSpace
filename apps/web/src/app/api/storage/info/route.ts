@@ -10,7 +10,7 @@ import {
   formatBytes
 } from '@pagespace/lib/services/storage-limits';
 import { db } from '@pagespace/db/db'
-import { eq } from '@pagespace/db/operators'
+import { eq, or, inArray } from '@pagespace/db/operators'
 import { drives } from '@pagespace/db/schema/core';
 import { findUserFileRows } from '@/lib/storage/storage-info-repository';
 import {
@@ -68,18 +68,28 @@ export async function GET(request: NextRequest) {
     // Get file count
     const fileCount = await getUserFileCount(user.id);
 
-    // Get user's drives (for the storageByDrive breakdown — DM-only files have
-    // no drive and won't appear in this list, but still count toward totals).
-    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
-    const userDrives = await db.query.drives.findMany({
-      where: eq(drives.ownerId, user.id),
-      columns: { id: true, name: true }
-    });
-
     // The charge basis: files.sizeBytes for files this user created, joined to
     // a representative page for display. Matches what quota/reconcile read, so
     // this surface never disagrees with the number that blocks an upload.
     const userFiles = await findUserFileRows(user.id);
+
+    // Drives to show in the by-drive breakdown: every drive the user OWNS
+    // (even at 0 bytes, so the table stays a complete inventory) UNION every
+    // drive a referenced file actually lives in. userFiles includes files
+    // created in ANY drive the user has upload access to, not just owned
+    // ones (#2225 review) — without the union, a shared-drive upload's bytes
+    // would count toward the total but be invisible in this breakdown.
+    const referencedDriveIds = Array.from(
+      new Set(userFiles.map(f => f.driveId).filter((id): id is string => id !== null)),
+    );
+    const driveWhere = referencedDriveIds.length > 0
+      ? or(eq(drives.ownerId, user.id), inArray(drives.id, referencedDriveIds))
+      : eq(drives.ownerId, user.id);
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
+    const userDrives = await db.query.drives.findMany({
+      where: driveWhere,
+      columns: { id: true, name: true }
+    });
 
     const fileTypeBreakdown = buildFileTypeBreakdown(userFiles);
 

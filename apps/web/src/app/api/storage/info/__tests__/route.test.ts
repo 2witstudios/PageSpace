@@ -33,6 +33,8 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
+  or: vi.fn(),
+  inArray: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   drives: { id: 'id', ownerId: 'ownerId' },
@@ -46,6 +48,9 @@ import { verifyAuth } from '@/lib/auth';
 import { validateAdminAccess } from '@/lib/auth/admin-role';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { reconcileStorageUsage } from '@pagespace/lib/services/storage-limits';
+import { db } from '@pagespace/db/db';
+import { eq, or, inArray } from '@pagespace/db/operators';
+import { findUserFileRows } from '@/lib/storage/storage-info-repository';
 
 describe('GET /api/storage/info', () => {
   beforeEach(() => {
@@ -113,6 +118,36 @@ describe('GET /api/storage/info', () => {
 
       expect(validateAdminAccess).not.toHaveBeenCalled();
       expect(reconcileStorageUsage).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('#2225 review — by-drive breakdown includes shared (non-owned) drives', () => {
+    it('queries only owned drives when no file references a drive the user does not own', async () => {
+      vi.mocked(findUserFileRows).mockResolvedValue([
+        { fileId: 'f1', sizeBytes: 10, mimeType: 'text/plain', createdAt: new Date(), driveId: null, pageId: null, title: null },
+      ]);
+
+      const request = new Request('https://example.com/api/storage/info');
+      await GET(request as never);
+
+      expect(or).not.toHaveBeenCalled();
+      expect(inArray).not.toHaveBeenCalled();
+      expect(eq).toHaveBeenCalledWith('ownerId', 'user_1');
+    });
+
+    it('unions owned drives with every drive a referenced file lives in', async () => {
+      vi.mocked(findUserFileRows).mockResolvedValue([
+        { fileId: 'f1', sizeBytes: 10, mimeType: 'text/plain', createdAt: new Date(), driveId: 'shared-drive-1', pageId: 'p1', title: 't1' },
+        { fileId: 'f2', sizeBytes: 20, mimeType: 'text/plain', createdAt: new Date(), driveId: 'shared-drive-1', pageId: 'p2', title: 't2' },
+        { fileId: 'f3', sizeBytes: 30, mimeType: 'text/plain', createdAt: new Date(), driveId: null, pageId: null, title: null },
+      ]);
+
+      const request = new Request('https://example.com/api/storage/info');
+      await GET(request as never);
+
+      // Deduplicated: 'shared-drive-1' appears once despite two files referencing it.
+      expect(inArray).toHaveBeenCalledWith('id', ['shared-drive-1']);
+      expect(or).toHaveBeenCalled();
     });
   });
 });

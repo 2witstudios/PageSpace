@@ -1,4 +1,4 @@
-import { reconcileAllStorageUsage } from '@pagespace/lib/services/storage-limits';
+import { reconcileAllStorageUsageSerialized } from '@pagespace/lib/services/storage-limits';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { NextResponse } from 'next/server';
@@ -19,6 +19,12 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
  * one bad account can't block the sweep) — logged loudly so it surfaces as an
  * alert rather than a silent skip.
  *
+ * Serialized across EVERY caller (any container, any manual/API trigger) via
+ * a Postgres advisory try-lock — two overlapping runs reading the same drift
+ * candidate would each independently apply the same correction delta,
+ * double-counting it. A run that finds the lock held no-ops cleanly; the
+ * next scheduled tick (or the tick that's already running) covers the drift.
+ *
  * Authentication: HMAC-signed request with X-Cron-Timestamp, X-Cron-Nonce,
  * X-Cron-Signature headers.
  */
@@ -29,7 +35,18 @@ export async function GET(request: Request) {
   }
 
   try {
-    const result = await reconcileAllStorageUsage();
+    const run = await reconcileAllStorageUsageSerialized();
+
+    if (run.outcome === 'lock_busy') {
+      console.log('[Cron] Storage reconcile: skipped — advisory lock held by another run');
+      return NextResponse.json({
+        success: true,
+        outcome: 'lock_busy',
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const result = run;
 
     console.log(
       `[Cron] Storage reconcile: corrected ${result.corrected.length}, failed ${result.failed.length}`,

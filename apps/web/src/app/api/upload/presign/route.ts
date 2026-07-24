@@ -9,7 +9,7 @@ import {
   canClaimExistingObject,
 } from '@pagespace/lib/services/upload-validation';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
-import { checkStorageQuota, getUserStorageQuota, userReferencesContentHash } from '@pagespace/lib/services/storage-limits';
+import { checkStorageQuota, checkConcurrentUploads, getUserStorageQuota, userReferencesContentHash } from '@pagespace/lib/services/storage-limits';
 import { registerPendingUpload, releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkObjectExists, issuePresignedPutUrl } from '@/lib/upload/s3-effects';
@@ -92,6 +92,19 @@ export async function POST(request: Request) {
   const quotaCheck = await checkStorageQuota(userId, fileSize);
   if (!quotaCheck.allowed) {
     return NextResponse.json({ error: quotaCheck.reason, storageInfo: quotaCheck.quota }, { status: 413 });
+  }
+
+  // #2154: cross-process concurrency gate, backed by live `pending_uploads`
+  // rows. The semaphore below also gates concurrency, but only within THIS
+  // process — with multiple web replicas a user's uploads can land on
+  // different processes, each enforcing the tier limit independently. This
+  // check catches that case; whichever gate is stricter wins.
+  const canUpload = await checkConcurrentUploads(userId);
+  if (!canUpload) {
+    return NextResponse.json(
+      { error: 'Too many concurrent uploads. Please wait for current uploads to complete.' },
+      { status: 429 },
+    );
   }
 
   const key = buildS3Key(canonicalHash);

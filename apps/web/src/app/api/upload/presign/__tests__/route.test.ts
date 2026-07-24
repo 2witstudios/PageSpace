@@ -18,6 +18,7 @@ vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
 vi.mock('@pagespace/lib/services/storage-limits', () => ({
   getUserStorageQuota: vi.fn(),
   checkStorageQuota: vi.fn(),
+  checkConcurrentUploads: vi.fn(),
   userReferencesContentHash: vi.fn(),
 }));
 
@@ -44,7 +45,7 @@ vi.mock('@/lib/upload/s3-effects', () => ({
 import { POST } from '../route';
 import { authenticateRequestWithOptions, checkMCPCreateScope } from '@/lib/auth';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
-import { getUserStorageQuota, checkStorageQuota, userReferencesContentHash } from '@pagespace/lib/services/storage-limits';
+import { getUserStorageQuota, checkStorageQuota, checkConcurrentUploads, userReferencesContentHash } from '@pagespace/lib/services/storage-limits';
 import { registerPendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkObjectExists, issuePresignedPutUrl } from '@/lib/upload/s3-effects';
@@ -83,6 +84,7 @@ beforeEach(() => {
   vi.mocked(getUserDrivePermissions).mockResolvedValue({ hasAccess: true, isOwner: true, isAdmin: false, isMember: false, canEdit: true });
   vi.mocked(getUserStorageQuota).mockResolvedValue(makeQuota());
   vi.mocked(checkStorageQuota).mockResolvedValue({ allowed: true });
+  vi.mocked(checkConcurrentUploads).mockResolvedValue(true);
   vi.mocked(checkObjectExists).mockResolvedValue(false);
   vi.mocked(issuePresignedPutUrl).mockResolvedValue(MOCK_URL);
   vi.mocked(uploadSemaphore.acquireUploadSlot).mockResolvedValue(MOCK_SLOT);
@@ -292,6 +294,20 @@ describe('POST /api/upload/presign', () => {
       vi.mocked(uploadSemaphore.acquireUploadSlot).mockResolvedValue(null);
       await POST(makeRequest(VALID_BODY));
       expect(registerPendingUpload).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('#2154 — cross-process concurrency gate (pending_uploads-backed)', () => {
+    it('returns 429 when the user is at their live-upload limit on another process', async () => {
+      vi.mocked(checkConcurrentUploads).mockResolvedValue(false);
+      const res = await POST(makeRequest(VALID_BODY));
+      expect(res.status).toBe(429);
+    });
+
+    it('never reserves an in-process semaphore slot when the cross-process gate rejects', async () => {
+      vi.mocked(checkConcurrentUploads).mockResolvedValue(false);
+      await POST(makeRequest(VALID_BODY));
+      expect(uploadSemaphore.acquireUploadSlot).not.toHaveBeenCalled();
     });
   });
 });

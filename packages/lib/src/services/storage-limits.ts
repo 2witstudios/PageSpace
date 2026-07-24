@@ -2,6 +2,8 @@ import { getStorageConfigFromSubscription, getStorageTierFromSubscription, STORA
 import { storageRepository, type DrizzleTx } from './storage-repository';
 import { countLiveUploadsForUser } from './pending-uploads';
 import { canStartUpload } from './pending-uploads-core';
+import { getAdvisoryLockPool } from '@pagespace/db/db';
+import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
 
 // Re-exported for existing consumers; the canonical table lives in subscription-utils.
 export { STORAGE_TIERS };
@@ -429,6 +431,46 @@ export async function reconcileAllStorageUsage(): Promise<{
   }
 
   return { corrected, failed };
+}
+
+/**
+ * Advisory-lock key serializing `reconcileAllStorageUsage` across EVERY
+ * caller — the crontab has no overlap guard (unlike reconcile-machine-storage's
+ * flock), and even a flock only protects one container's own scheduled ticks,
+ * not a second container or a manual/API trigger. Two overlapping runs can
+ * both read the same drift candidate (materialized=0, derived=100) and each
+ * independently apply the same +100 correctionDelta, landing the counter at
+ * 200 instead of 100 — the delta-based fix commutes with a DIFFERENT
+ * concurrent write (a real charge/credit), but not with ANOTHER COPY OF
+ * ITSELF applying the identical correction twice. Mirrors
+ * reconcileMachineStorageSerialized in machine-storage-billing.ts.
+ */
+const RECONCILE_STORAGE_LOCK_KEY = 'reconcile-storage';
+
+export type ReconcileAllStorageUsageRunResult =
+  | { outcome: 'lock_busy' }
+  | ({ outcome: 'reconciled' } & Awaited<ReturnType<typeof reconcileAllStorageUsage>>);
+
+/**
+ * Serializes `reconcileAllStorageUsage` with a Postgres session-level
+ * advisory try-lock: a run that cannot acquire it (another run — any
+ * process, any container — already holds it) is a clean no-op and never
+ * reads or writes any drift candidate. This is what api/cron/reconcile-storage
+ * actually calls.
+ */
+export async function reconcileAllStorageUsageSerialized(
+  pgPool: AdvisoryLockPool = getAdvisoryLockPool(),
+): Promise<ReconcileAllStorageUsageRunResult> {
+  const locked = await withAdvisoryLock(pgPool, RECONCILE_STORAGE_LOCK_KEY, () =>
+    reconcileAllStorageUsage(),
+  );
+  if (locked.outcome === 'lock_busy') {
+    return { outcome: 'lock_busy' };
+  }
+  if (locked.outcome === 'connection_error') {
+    throw locked.error;
+  }
+  return { outcome: 'reconciled', ...locked.result };
 }
 
 /**

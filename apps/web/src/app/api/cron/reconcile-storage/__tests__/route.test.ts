@@ -16,7 +16,7 @@ vi.mock('@/lib/auth/cron-auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/services/storage-limits', () => ({
-  reconcileAllStorageUsage: mockReconcile,
+  reconcileAllStorageUsageSerialized: mockReconcile,
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
@@ -48,7 +48,7 @@ describe('/api/cron/reconcile-storage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
-    mockReconcile.mockResolvedValue({ corrected: [], failed: [] });
+    mockReconcile.mockResolvedValue({ outcome: 'reconciled', corrected: [], failed: [] });
   });
 
   it('returns the auth error and never reconciles when auth fails', async () => {
@@ -64,6 +64,7 @@ describe('/api/cron/reconcile-storage', () => {
 
   it('reconciles and emits a data.write audit event with the correction counts', async () => {
     mockReconcile.mockResolvedValue({
+      outcome: 'reconciled',
       corrected: [{ userId: 'user-1', previousUsage: 2000, actualUsage: 1500, driftBytes: 500 }],
       failed: [],
     });
@@ -84,7 +85,7 @@ describe('/api/cron/reconcile-storage', () => {
   });
 
   it('given per-user failures, should report success=false and log an error', async () => {
-    mockReconcile.mockResolvedValue({ corrected: [], failed: ['user-2'] });
+    mockReconcile.mockResolvedValue({ outcome: 'reconciled', corrected: [], failed: ['user-2'] });
 
     const res = await GET(makeRequest());
     const body = await res.json();
@@ -114,5 +115,16 @@ describe('/api/cron/reconcile-storage', () => {
     const res = await POST(makeRequest());
     expect(res.status).toBe(200);
     expect(mockReconcile).toHaveBeenCalledTimes(1);
+  });
+
+  it('given the advisory lock is held by another run, should no-op WITHOUT auditing and report lock_busy', async () => {
+    mockReconcile.mockResolvedValue({ outcome: 'lock_busy' });
+
+    const res = await GET(makeRequest());
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toMatchObject({ success: true, outcome: 'lock_busy' });
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 });

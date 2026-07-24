@@ -11,6 +11,7 @@
 import {
   getUserStorageQuota,
   checkStorageQuota,
+  checkConcurrentUploads,
   updateStorageUsage,
   shouldChargeForStore,
 } from '@pagespace/lib/services/storage-limits';
@@ -68,6 +69,19 @@ export async function presignAttachment(args: PresignAttachmentArgs): Promise<Or
   const quotaCheck = await checkStorageQuota(userId, fileSize);
   if (!quotaCheck.allowed) {
     return { status: 413, body: { error: quotaCheck.reason, storageInfo: quotaCheck.quota } };
+  }
+
+  // #2154: cross-process concurrency gate, backed by live `pending_uploads`
+  // rows. The semaphore below also gates concurrency, but only within THIS
+  // process — with multiple web replicas a user's uploads can land on
+  // different processes, each enforcing the tier limit independently. This
+  // check catches that case; whichever gate is stricter wins.
+  const canUpload = await checkConcurrentUploads(userId);
+  if (!canUpload) {
+    return {
+      status: 429,
+      body: { error: 'Too many concurrent uploads. Please wait for current uploads to complete.' },
+    };
   }
 
   const key = buildS3Key(canonicalHash);
