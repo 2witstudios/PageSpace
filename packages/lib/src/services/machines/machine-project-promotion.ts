@@ -620,7 +620,18 @@ async function inspectMachineCheckout({
   // Zero additional exec: the branch header is already in `status.stdout`
   // above, read for the dirty-tree gate. Parsing it here is a pure parse of
   // output already in hand.
-  return { state: classifyCheckoutStatus(status.stdout), branchName: parseCheckoutBranchName(status.stdout) };
+  const state = classifyCheckoutStatus(status.stdout);
+  return {
+    state,
+    // `classifyCheckoutStatus` can ALSO land on `unknown` here — a
+    // successful `git status` with no `## ` branch line at all (hostile or
+    // malformed output). `parseCheckoutBranchName` reads the same absence as
+    // `null` (its "detached HEAD" answer), which would misreport an
+    // unparseable read as a definitive observation. Route it through the
+    // same `undefined` ("we don't know") the earlier failure returns above
+    // already use.
+    branchName: state.kind === 'unknown' ? undefined : parseCheckoutBranchName(status.stdout),
+  };
 }
 
 /** Acquire + reconnect the OWNING Machine's Sprite, or `null` when either step fails. */

@@ -445,6 +445,22 @@ describe('promoteProject — observed-branch capture', () => {
     expect(branchCalls).toEqual([{ machineProjectId: PROJECT_ID, branchName: null, observedAt: NOW }]);
   });
 
+  it('given a SUCCESSFUL git status with no `## ` branch header at all (classifyCheckoutStatus\'s OWN unknown case), should skip capture rather than persist a bogus null — CodeRabbit review, PR #2234', async () => {
+    // Empty stdout: git status succeeded (exitCode 0) but produced no branch
+    // line — classifyCheckoutStatus reads this as `unknown` ("we could not
+    // tell"), which is a DIFFERENT thing than detached HEAD's `## HEAD (no
+    // branch)` line (a definitive "no branch" answer). parseCheckoutBranchName
+    // alone can't tell the two apart (both parse to null); inspectMachineCheckout
+    // must defer to classifyCheckoutStatus's kind to make that distinction.
+    const machine = makeMachineSandbox({ status: { exitCode: 0, stdout: '', stderr: '' } });
+    const { deps, branchCalls } = makeDeps({}, { machine });
+
+    const result = await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, deps });
+
+    expect(result).toEqual(expect.objectContaining({ ok: false, reason: 'dirty_check_failed' }));
+    expect(branchCalls).toEqual([]);
+  });
+
   it('given a reattach, should capture the branch observed on the PROMOTED Sprite\'s OWN git status — the far more common wake, not the (irrelevant, already-gone) machine-side checkout', async () => {
     const { host } = makeFakeHost((args) => {
       if (args.cmd === 'git' && gitSubcommand(args.args) === 'status') {
