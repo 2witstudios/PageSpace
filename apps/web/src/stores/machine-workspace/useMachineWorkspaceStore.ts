@@ -20,14 +20,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import {
-  newWorkspace,
-  addWorkspace,
   updateWorkspace,
-  removeWorkspace as removeWorkspaceTransition,
-  renameWorkspace as renameWorkspaceTransition,
-  showSessionIn,
   workspaceShowing,
-  paneShowing,
   sanitizeMachines,
   mergeServerWorkspaces,
   applyServerWorkspaceUpsert,
@@ -38,10 +32,6 @@ import {
   assignPane as assignPaneTransition,
   clearPanePrompt as clearPanePromptTransition,
   dismissPicker as dismissPickerTransition,
-  splitRight as splitRightTransition,
-  splitDown as splitDownTransition,
-  closePaneIn,
-  removedWorkspaceBy,
   selectPane as selectPaneTransition,
   nodeOfTerminalScope,
   nodeScopeNames,
@@ -66,6 +56,9 @@ import {
   type TerminalPaneState,
   type WorkspaceState,
 } from './workspace-reducer';
+import { applyVerbLocal, type WorkspaceVerb } from './workspace-verbs';
+
+export type { WorkspaceVerb };
 
 export type {
   MachineNodeScope,
@@ -98,6 +91,16 @@ const PERSISTED_VERSION = 1;
 interface MachineWorkspaceStoreState {
   /** Every machine's workspaces, keyed by the Machine page's own id. */
   machines: Record<string, MachineWorkspacesState>;
+  /** The last server rev this browser has applied, per machine (#2202) — `0`
+   * for a machine never snapshotted/verb-applied yet. Gates `applyServerSnapshot`/
+   * `applyServerVerb`: a payload at or behind this rev is stale and dropped. */
+  serverRev: Record<string, number>;
+  /** Verbs this browser has applied locally (optimistically) but not yet had
+   * confirmed by the server, per machine (#2202) — re-applied on top of every
+   * incoming snapshot/verb so an in-flight local change is never visibly
+   * clobbered by another browser's echo landing first. Removed by `settleVerb`
+   * once the pushing browser's own POST resolves (or is abandoned on failure). */
+  pendingVerbs: Record<string, WorkspaceVerb[]>;
   /** Creates the machine's entry (with zero workspaces) if it has none, and
    * re-targets an `activeWorkspaceId` that doesn't resolve. Never creates a
    * workspace — zero is a legal state. Idempotent. */
@@ -119,6 +122,31 @@ interface MachineWorkspaceStoreState {
   applyServerUpsert: (machineId: string, workspace: ServerWorkspaceDTO) => void;
   /** Reconciles an incoming `machine-workspace:deleted` broadcast. */
   applyServerDelete: (machineId: string, workspaceId: string) => void;
+  /**
+   * Rev-gated full-snapshot replace (#2202) — `GET /api/machines/workspaces`'s
+   * successor to the once-per-mount `hydrateFromServer`. Safe to call on EVERY
+   * revalidation (reconnect, focus, a second mounted instance's own fetch):
+   * a `rev` at or behind what this browser already has is simply discarded,
+   * so there is no "only the first hydrate counts" ordering to protect. Any
+   * still-`pendingVerbs` are re-applied on top of the fresh server state.
+   */
+  applyServerSnapshot: (machineId: string, rev: number, workspaces: ServerWorkspaceDTO[]) => void;
+  /**
+   * Rev-gated single-workspace upsert/delete (#2202) — `machine-workspace:verb`'s
+   * handler. `workspace: null` means the verb removed it. A `rev` at or behind
+   * what this browser already has is a duplicate/stale delivery and dropped;
+   * the payload is self-contained (a full post-verb snapshot of the ONE
+   * workspace the verb touched), so out-of-order delivery between machines'
+   * verbs never corrupts state — only a genuine gap (`rev` more than one past
+   * what's applied) needs a caller-triggered `applyServerSnapshot` refetch.
+   * Any still-`pendingVerbs` are re-applied on top.
+   */
+  applyServerVerb: (machineId: string, payload: { rev: number; workspaceId: string; workspace: ServerWorkspaceDTO | null }) => void;
+  /** Removes one verb from `pendingVerbs` once its own push has settled
+   * (succeeded or been abandoned) — by reference, not content, since two
+   * structurally-identical verbs pushed back to back are still two distinct
+   * in-flight operations. */
+  settleVerb: (machineId: string, verb: WorkspaceVerb) => void;
   /** Opens an existing session: its own workspace, restored if it already has
    * one, and shown. */
   openTerminal: (machineId: string, scope: OpenTerminalScope) => void;
@@ -176,10 +204,51 @@ function applyToWorkspace(
   return applyToMachine(state, machineId, (machine) => updateWorkspace(machine, workspaceId, transition));
 }
 
+/**
+ * Applies one {@link WorkspaceVerb} through {@link applyVerbLocal} — the SAME
+ * function the server's verb engine (`workspace-verbs-runtime.ts`) and the AI
+ * planner (`session-layout.ts`) use — and, iff it actually applied, queues it
+ * onto `pendingVerbs` for the sync layer to push and for later rebase (#2202).
+ * A verb whose target doesn't resolve (unknown workspace/pane) is a pure
+ * no-op: no state change, nothing queued, matching every other transition
+ * here.
+ */
+function applyVerbAndQueue(
+  set: (fn: (state: MachineWorkspaceStoreState) => Partial<MachineWorkspaceStoreState>) => void,
+  get: () => MachineWorkspaceStoreState,
+  machineId: string,
+  verb: WorkspaceVerb
+): ReturnType<typeof applyVerbLocal> {
+  const machine = get().machines[machineId] ?? { workspaces: {}, order: [], activeWorkspaceId: '' };
+  const outcome = applyVerbLocal(machine, verb);
+  if (!outcome.applied) return outcome;
+
+  set((state) => ({
+    machines: { ...state.machines, [machineId]: outcome.state },
+    pendingVerbs: { ...state.pendingVerbs, [machineId]: [...(state.pendingVerbs[machineId] ?? []), verb] },
+  }));
+  return outcome;
+}
+
+/** Re-applies every still-pending local verb on top of freshly-arrived server
+ * truth (a snapshot or another workspace's verb echo) — shared by
+ * `applyServerSnapshot`/`applyServerVerb`. An in-flight local change (e.g. a
+ * bind whose POST hasn't resolved yet) must never be visibly undone by an
+ * unrelated update landing first. */
+function rebasePendingVerbs(state: MachineWorkspaceStoreState, machineId: string, machine: MachineWorkspacesState): MachineWorkspacesState {
+  let next = machine;
+  for (const verb of state.pendingVerbs[machineId] ?? []) {
+    next = applyVerbLocal(next, verb).state;
+  }
+  return next;
+}
+
 export const useMachineWorkspaceStore = create<MachineWorkspaceStoreState>()(
   persist(
     (set, get) => ({
       machines: {},
+      serverRev: {},
+      pendingVerbs: {},
 
       ensureMachine: (machineId) => {
         // Creates the machine's ENTRY, never a workspace. A machine with zero
@@ -213,14 +282,16 @@ export const useMachineWorkspaceStore = create<MachineWorkspaceStoreState>()(
       createWorkspace: (machineId, scope = MACHINE_NODE_SCOPE) => {
         get().ensureMachine(machineId);
         const machine = get().machines[machineId];
-        const workspace = newWorkspace({
-          id: crypto.randomUUID(),
+        const workspaceId = crypto.randomUUID();
+        applyVerbAndQueue(set, get, machineId, {
+          type: 'create-workspace',
+          workspaceId,
           name: nextWorkspaceName(machine),
-          scope,
+          scope: nodeScopeNames(scope),
           firstPaneId: crypto.randomUUID(),
+          session: null,
         });
-        set((state) => applyToMachine(state, machineId, (current) => addWorkspace(current, workspace)));
-        return workspace.id;
+        return workspaceId;
       },
 
       setActiveWorkspace: (machineId, workspaceId) => {
@@ -228,11 +299,11 @@ export const useMachineWorkspaceStore = create<MachineWorkspaceStoreState>()(
       },
 
       removeWorkspace: (machineId, workspaceId) => {
-        set((state) => applyToMachine(state, machineId, (machine) => removeWorkspaceTransition(machine, workspaceId)));
+        applyVerbAndQueue(set, get, machineId, { type: 'remove-workspace', workspaceId });
       },
 
       renameWorkspace: (machineId, workspaceId, name) => {
-        set((state) => applyToMachine(state, machineId, (machine) => renameWorkspaceTransition(machine, workspaceId, name)));
+        applyVerbAndQueue(set, get, machineId, { type: 'rename-workspace', workspaceId, name });
       },
 
       hydrateFromServer: (machineId, workspaces) => {
@@ -255,75 +326,104 @@ export const useMachineWorkspaceStore = create<MachineWorkspaceStoreState>()(
         set((state) => applyToMachine(state, machineId, (machine) => applyServerWorkspaceDeleted(machine, workspaceId)));
       },
 
+      applyServerSnapshot: (machineId, rev, workspaces) => {
+        set((state) => {
+          if ((state.serverRev[machineId] ?? 0) > rev) return state; // stale — discard
+          const merged = mergeServerWorkspaces(state.machines[machineId], workspaces);
+          return {
+            machines: { ...state.machines, [machineId]: rebasePendingVerbs(state, machineId, merged) },
+            serverRev: { ...state.serverRev, [machineId]: rev },
+          };
+        });
+      },
+
+      applyServerVerb: (machineId, payload) => {
+        set((state) => {
+          if ((state.serverRev[machineId] ?? 0) >= payload.rev) return state; // duplicate/stale echo — discard
+          const current = state.machines[machineId] ?? { workspaces: {}, order: [], activeWorkspaceId: '' };
+          const upserted = payload.workspace
+            ? applyServerWorkspaceUpsert(current, payload.workspace)
+            : applyServerWorkspaceDeleted(current, payload.workspaceId);
+          return {
+            machines: { ...state.machines, [machineId]: rebasePendingVerbs(state, machineId, upserted) },
+            serverRev: { ...state.serverRev, [machineId]: payload.rev },
+          };
+        });
+      },
+
+      settleVerb: (machineId, verb) => {
+        set((state) => {
+          const pending = state.pendingVerbs[machineId];
+          if (!pending) return state;
+          const index = pending.indexOf(verb);
+          if (index === -1) return state;
+          return {
+            pendingVerbs: { ...state.pendingVerbs, [machineId]: [...pending.slice(0, index), ...pending.slice(index + 1)] },
+          };
+        });
+      },
+
       openTerminal: (machineId, scope) => {
         get().ensureMachine(machineId);
         const machine = get().machines[machineId];
+        const session = paneScopeOf(scope);
 
-        // Is this session already a pane of some workspace? Then that workspace
-        // is where it lives, whatever its own id would name. A session spawned by
-        // split-and-pick was bound into a pane of the workspace the user was
-        // working in, so opening it "in its own workspace" would drag them out of
-        // the grid they built it in and leave the same PTY claimed by panes in two
-        // workspaces at once. Show it where it actually is.
+        // Is this session already a pane of some workspace, or does its own
+        // deterministic workspace already exist? Either way it has a HOME —
+        // `add-pane` is the server-side `showSessionIn`: focus the pane already
+        // showing it, fill an empty pane, or split a new one. A session spawned
+        // by split-and-pick was bound into a pane of the workspace the user was
+        // working in, so opening it "in its own workspace" would drag them out
+        // of the grid they built it in and leave the same PTY claimed by panes
+        // in two workspaces at once — `workspaceShowing` is checked FIRST so
+        // that home wins over the derived id.
         const home = workspaceShowing(machine, scope);
-        if (home) {
-          // The SAME predicate that found the workspace — matching on the name
-          // alone would focus the wrong pane the moment a workspace can hold panes
-          // from two different nodes.
-          const homePaneId = paneShowing(home, scope)?.id;
-          set((state) =>
-            applyToMachine(state, machineId, (current) =>
-              updateWorkspace(setActiveWorkspaceTransition(current, home.id), home.id, (workspace) =>
-                homePaneId ? selectPaneTransition(workspace, homePaneId) : workspace
-              )
-            )
-          );
+        const workspaceId = home ? home.id : sessionWorkspaceId(scope);
+
+        if (home || machine.workspaces[workspaceId]) {
+          applyVerbAndQueue(set, get, machineId, { type: 'add-pane', workspaceId, newPaneId: crypto.randomUUID(), session });
+          set((state) => applyToMachine(state, machineId, (current) => setActiveWorkspaceTransition(current, workspaceId)));
           return;
         }
 
-        const workspaceId = sessionWorkspaceId(scope);
-
-        // Its own workspace exists but the session is not in it: show it as the
-        // user last left it — the panes they split into it and the agents in them
-        // — and put the session they actually clicked back on screen. They may
-        // have closed the pane it was opened in, and without this the row would
-        // select a grid that no longer shows the session, with no way back to a
-        // PTY that is still running (and billing).
-        if (machine.workspaces[workspaceId]) {
-          const newPaneId = crypto.randomUUID();
-          set((state) =>
-            applyToMachine(state, machineId, (current) =>
-              updateWorkspace(setActiveWorkspaceTransition(current, workspaceId), workspaceId, (workspace) =>
-                showSessionIn(workspace, scope, newPaneId)
-              )
-            )
-          );
-          return;
-        }
-
-        const workspace = newWorkspace({
-          id: workspaceId,
+        // Born bound: the session's node becomes the WORKSPACE's checkout (the
+        // single copy of that fact) and the pane keeps only the name and surface kind.
+        applyVerbAndQueue(set, get, machineId, {
+          type: 'create-workspace',
+          workspaceId,
           name: scope.name,
-          // The session's node becomes the WORKSPACE's checkout — the single
-          // copy of that fact. The pane keeps only the name and surface kind.
-          scope: nodeOfTerminalScope(scope),
+          scope: nodeScopeNames(nodeOfTerminalScope(scope)),
           firstPaneId: crypto.randomUUID(),
-          firstPaneScope: paneScopeOf(scope),
+          session,
         });
-        set((state) => applyToMachine(state, machineId, (current) => addWorkspace(current, workspace)));
       },
 
       bindPaneTerminal: (machineId, workspaceId, paneId, scope, pendingPrompt) => {
-        const before = get().machines[machineId]?.workspaces[workspaceId];
-        if (!before) return false;
+        const workspace = get().machines[machineId]?.workspaces[workspaceId];
+        if (!workspace) return false;
+        // Bind-time node equality — a pane's checkout is its workspace's. A
+        // scope naming a DIFFERENT node is a caller bug (a spawn addressed at
+        // the wrong node), not the "pane is gone" race `false` reports, so it
+        // throws rather than silently binding under the workspace's checkout.
+        // Checked HERE, before the verb: `WorkspaceVerb`'s `SessionRef` carries
+        // no checkout at all (see workspace-verbs.ts's module doc), so the verb
+        // path itself can't detect a mismatch — it always binds at the
+        // workspace's own node by construction.
+        if (!isSameNodeScope(nodeOfTerminalScope(scope), workspace.scope)) {
+          throw new Error(
+            `Cannot bind session "${scope.name}" into workspace "${workspaceId}" at a different node — a pane's checkout is its workspace's`
+          );
+        }
 
-        const after = assignPaneTransition(before, paneId, scope, pendingPrompt);
-        // assignPane returns its input untouched when the pane is gone — the
-        // user closed it (or left the page) while the Sprite was booting.
-        if (after === before) return false;
-
-        set((state) => applyToWorkspace(state, machineId, workspaceId, () => after));
-        return true;
+        const outcome = applyVerbAndQueue(set, get, machineId, { type: 'bind-pane', workspaceId, paneId, session: paneScopeOf(scope) });
+        // `pendingPrompt` is LOCAL-ONLY (see assignPane's doc) — it never
+        // crosses the wire, so the verb above can't carry it. Re-applying
+        // `assignPane` directly (not queued as a second verb) sets it on the
+        // same pane the verb just bound, purely as local optimistic UI state.
+        if (outcome.applied && pendingPrompt !== undefined) {
+          set((state) => applyToWorkspace(state, machineId, workspaceId, (workspace) => assignPaneTransition(workspace, paneId, scope, pendingPrompt)));
+        }
+        return outcome.applied;
       },
 
       clearPanePrompt: (machineId, workspaceId, paneId) => {
@@ -341,34 +441,20 @@ export const useMachineWorkspaceStore = create<MachineWorkspaceStoreState>()(
       splitRight: (machineId, workspaceId, fromPaneId) => {
         const newColumnId = crypto.randomUUID();
         const newPaneId = crypto.randomUUID();
-        set((state) =>
-          applyToWorkspace(state, machineId, workspaceId, (workspace) =>
-            splitRightTransition(workspace, fromPaneId, newColumnId, newPaneId)
-          )
-        );
+        applyVerbAndQueue(set, get, machineId, { type: 'split-pane', workspaceId, fromPaneId, direction: 'right', newColumnId, newPaneId });
       },
 
       splitDown: (machineId, workspaceId, fromPaneId) => {
         const newPaneId = crypto.randomUUID();
-        set((state) =>
-          applyToWorkspace(state, machineId, workspaceId, (workspace) =>
-            splitDownTransition(workspace, fromPaneId, newPaneId)
-          )
-        );
+        applyVerbAndQueue(set, get, machineId, { type: 'split-pane', workspaceId, fromPaneId, direction: 'down', newPaneId });
       },
 
       closePane: (machineId, workspaceId, paneId) => {
-        const before = get().machines[machineId];
-        if (!before) return false;
-
-        const after = closePaneIn(before, workspaceId, paneId);
-        if (after === before) return false;
-
-        set((state) => ({ machines: { ...state.machines, [machineId]: after } }));
+        const outcome = applyVerbAndQueue(set, get, machineId, { type: 'close-pane', workspaceId, paneId });
         // Reported rather than re-derived by the caller: only the transition
         // knows whether this pane was the workspace's last, and the sync layer
         // must DELETE (not PATCH) when it was.
-        return removedWorkspaceBy(before, after, workspaceId);
+        return outcome.removedWorkspaceId !== undefined;
       },
 
       selectPane: (machineId, workspaceId, paneId) => {

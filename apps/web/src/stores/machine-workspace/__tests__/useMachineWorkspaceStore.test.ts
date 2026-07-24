@@ -40,7 +40,7 @@ const SESSION = { name: 'shell-a1b2c3' };
 describe('useMachineWorkspaceStore', () => {
   beforeEach(() => {
     window.localStorage.clear();
-    useMachineWorkspaceStore.setState({ machines: {} });
+    useMachineWorkspaceStore.setState({ machines: {}, serverRev: {}, pendingVerbs: {} });
   });
 
   it('given a machine is ensured, should give it an entry with NO workspaces', () => {
@@ -816,4 +816,173 @@ describe('useMachineWorkspaceStore', () => {
       expected: first.id,
     });
   });
+
+  describe('#2202: rev-gated reconcile (applyServerSnapshot / applyServerVerb / pendingVerbs rebase)', () => {
+    it('createWorkspace queues the verb it applied onto pendingVerbs', () => {
+      store().ensureMachine('m1');
+      const id = store().createWorkspace('m1');
+
+      assert({
+        given: 'a local createWorkspace call',
+        should: 'queue exactly the create-workspace verb it applied',
+        actual: store().pendingVerbs.m1?.map((v) => v.type),
+        expected: ['create-workspace'],
+      });
+      assert({ given: 'the queued verb', should: 'address the returned id', actual: store().pendingVerbs.m1?.[0]?.workspaceId, expected: id });
+    });
+
+    it('applyServerSnapshot at a rev at or behind what is already applied is discarded', () => {
+      seedMachine('m1');
+      useMachineWorkspaceStore.setState((state) => ({ serverRev: { ...state.serverRev, m1: 5 } }));
+
+      store().applyServerSnapshot('m1', 5, []);
+
+      assert({
+        given: 'a snapshot whose rev is not newer than the last applied one',
+        should: 'be dropped — the local workspace survives',
+        actual: workspacesOf(selectMachine('m1')(store())).length,
+        expected: 1,
+      });
+    });
+
+    it('applyServerSnapshot at a newer rev replaces the machine and advances serverRev', () => {
+      store().ensureMachine('m1');
+
+      store().applyServerSnapshot('m1', 1, [
+        { id: 'from-server', name: 'Server WS', scope: {}, columns: [{ id: 'c1', panes: [{ id: 'p1', scope: null }] }] },
+      ]);
+
+      assert({
+        given: 'a fresh snapshot at rev 1',
+        should: 'replace the machine\'s workspaces and record the new rev',
+        actual: { ids: workspacesOf(selectMachine('m1')(store())).map((w) => w.id), rev: store().serverRev.m1 },
+        expected: { ids: ['from-server'], rev: 1 },
+      });
+    });
+
+    it('a still-pending local verb survives an unrelated snapshot landing first (rebase)', () => {
+      seedMachine('m1');
+      const workspaceId = activeOf('m1')!.id;
+      const paneId = panesOf(activeOf('m1')!)[0].id;
+
+      // Optimistic local bind — its own push hasn't settled yet, so it's still in pendingVerbs.
+      store().bindPaneTerminal('m1', workspaceId, paneId, MACHINE_NODE_SCOPE_TERMINAL_SCOPE(SESSION));
+
+      // A snapshot arrives that predates the bind (e.g. this browser's own GET, in flight before the bind).
+      store().applyServerSnapshot('m1', 1, [
+        { id: workspaceId, name: activeOf('m1')!.name, scope: {}, columns: [{ id: 'c1', panes: [{ id: paneId, scope: null }] }] },
+      ]);
+
+      assert({
+        given: 'a pending local bind and a snapshot that does not yet reflect it',
+        should: 'keep the bind applied — the pending verb is re-applied on top of the snapshot',
+        actual: panesOf(selectWorkspace('m1', workspaceId)(store())!)[0]?.scope,
+        expected: SESSION,
+      });
+    });
+
+    it('applyServerVerb at a rev at or behind the current one is discarded (duplicate/stale echo)', () => {
+      store().ensureMachine('m1');
+      useMachineWorkspaceStore.setState((state) => ({ serverRev: { ...state.serverRev, m1: 3 } }));
+
+      store().applyServerVerb('m1', { rev: 3, workspaceId: 'ghost', workspace: null });
+
+      assert({
+        given: 'a verb echo whose rev is not newer than the last applied one',
+        should: 'be dropped',
+        actual: store().serverRev.m1,
+        expected: 3,
+      });
+    });
+
+    it('applyServerVerb with workspace: null removes the workspace and advances rev', () => {
+      // Seeded via a snapshot (already-confirmed server state), not a local
+      // create — a LOCAL pending create for this same id would be re-applied
+      // by the rebase step below and resurrect the workspace the verb just
+      // removed, which is a different (and separately covered) scenario.
+      const workspaceId = 'ws-1';
+      store().applyServerSnapshot('m1', 1, [
+        { id: workspaceId, name: 'W', scope: {}, columns: [{ id: 'c1', panes: [{ id: 'p1', scope: null }] }] },
+      ]);
+
+      store().applyServerVerb('m1', { rev: 2, workspaceId, workspace: null });
+
+      assert({
+        given: 'a verb echo reporting a workspace as removed',
+        should: 'remove it locally and advance serverRev',
+        actual: { exists: selectWorkspace('m1', workspaceId)(store()) !== undefined, rev: store().serverRev.m1 },
+        expected: { exists: false, rev: 2 },
+      });
+    });
+
+    it('settleVerb removes exactly the settled verb, by reference, not any structurally-identical one', () => {
+      store().ensureMachine('m1');
+      const id1 = store().createWorkspace('m1');
+      const id2 = store().createWorkspace('m1');
+      const [firstVerb, secondVerb] = store().pendingVerbs.m1!;
+
+      store().settleVerb('m1', firstVerb);
+
+      assert({
+        given: 'settling the FIRST of two queued verbs',
+        should: 'remove only that one, leaving the second still pending',
+        actual: store().pendingVerbs.m1,
+        expected: [secondVerb],
+      });
+      // Both workspaces remain locally — settling only dequeues the push
+      // bookkeeping, it never touches applied local state.
+      assert({
+        given: 'the same store',
+        should: 'still show both locally-created workspaces',
+        actual: workspacesOf(selectMachine('m1')(store())).map((w) => w.id).sort(),
+        expected: [id1, id2].sort(),
+      });
+    });
+
+    it('dual-mount convergence: two interleaved snapshot/verb applications in either order converge to the same state', () => {
+      const scenario = () => {
+        useMachineWorkspaceStore.setState({ machines: {}, serverRev: {}, pendingVerbs: {} });
+        seedMachine('dual');
+        const workspaceId = activeOf('dual')!.id;
+        return workspaceId;
+      };
+
+      // Order A: snapshot then verb.
+      const workspaceIdA = scenario();
+      store().applyServerSnapshot('dual', 1, [
+        { id: workspaceIdA, name: 'W', scope: {}, columns: [{ id: 'c1', panes: [{ id: 'p1', scope: null }] }] },
+      ]);
+      store().applyServerVerb('dual', {
+        rev: 2,
+        workspaceId: workspaceIdA,
+        workspace: { id: workspaceIdA, name: 'W', scope: {}, columns: [{ id: 'c1', panes: [{ id: 'p1', scope: { name: 'shell' } }] }] },
+      });
+      const resultA = { columns: selectWorkspace('dual', workspaceIdA)(store())!.columns, rev: store().serverRev.dual };
+
+      // Order B: verb then snapshot (a second mounted instance's own stale GET landing after the echo).
+      const workspaceIdB = scenario();
+      store().applyServerVerb('dual', {
+        rev: 2,
+        workspaceId: workspaceIdB,
+        workspace: { id: workspaceIdB, name: 'W', scope: {}, columns: [{ id: 'c1', panes: [{ id: 'p1', scope: { name: 'shell' } }] }] },
+      });
+      store().applyServerSnapshot('dual', 1, [
+        { id: workspaceIdB, name: 'W', scope: {}, columns: [{ id: 'c1', panes: [{ id: 'p1', scope: null }] }] },
+      ]);
+      const resultB = { columns: selectWorkspace('dual', workspaceIdB)(store())!.columns, rev: store().serverRev.dual };
+
+      assert({
+        given: 'the same two updates (a rev-1 snapshot and a rev-2 verb) applied in either order',
+        should: 'converge to the same bound pane and the same (highest) rev — the stale rev-1 snapshot never regresses the rev-2 truth',
+        actual: resultB,
+        expected: resultA,
+      });
+    });
+  });
 });
+
+/** Builds a full `OpenTerminalScope` for a MACHINE-scoped session — `bindPaneTerminal`
+ * takes the full address, not just the narrow pane half `SESSION` already is. */
+function MACHINE_NODE_SCOPE_TERMINAL_SCOPE(session: { name: string }) {
+  return { name: session.name };
+}

@@ -27,7 +27,6 @@ import {
   updateWorkspace,
   removeWorkspace,
   listWorkspaces,
-  isBootstrapped,
 } from '@pagespace/lib/services/machines/machine-workspaces';
 import {
   buildMachineWorkspacesDeps,
@@ -67,12 +66,15 @@ export async function GET(request: Request) {
   if (!(await canViewMachine(auth.userId, machineId.value))) return forbiddenMachineAccess(request, auth.userId, machineId.value);
 
   const deps = buildMachineWorkspacesDeps();
-  const [workspaces, bootstrapped, rev] = await Promise.all([
+  const [workspaces, rev] = await Promise.all([
     listWorkspaces({ machineId: machineId.value, store: deps.store }),
-    isBootstrapped({ machineId: machineId.value, store: deps.store }),
     getCurrentRev(machineId.value),
   ]);
-  return NextResponse.json({ workspaces: workspaces.map(toWorkspaceDTO), bootstrapped, rev });
+  // Vestigial: the server is now the sole source of truth (#2202) — no
+  // client ever needs to seed it from localStorage again. Hardcoded `true`
+  // so an old, not-yet-redeployed client never re-attempts the (deleted)
+  // bootstrap POST.
+  return NextResponse.json({ workspaces: workspaces.map(toWorkspaceDTO), bootstrapped: true, rev });
 }
 
 export async function POST(request: Request) {

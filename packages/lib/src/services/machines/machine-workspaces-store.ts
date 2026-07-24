@@ -2,10 +2,10 @@
  * Machine Workspaces store (IO, dependency-injected).
  *
  * DB-backed CRUD for `machine_workspaces` (the durable, shared record of a
- * Machine's named pane-grid workspaces) and `machine_workspace_bootstraps`
- * (the one-time seeding claim — see `machine-workspaces.ts`'s module doc).
- * Kept separate from the orchestration layer so it's testable against an
- * in-memory fake without a real database, same split as
+ * Machine's named pane-grid workspaces — `layout` is a rolling-deploy shim
+ * post-#2202, see `machine-panes-store.ts` for the relational source of
+ * truth). Kept separate from the orchestration layer so it's testable
+ * against an in-memory fake without a real database, same split as
  * `machine-projects-store.ts`.
  */
 
@@ -53,20 +53,6 @@ export interface MachineWorkspaceStore {
   ): Promise<MachineWorkspaceRecord | null>;
   /** `true` if a row was actually deleted. */
   remove(machineId: string, id: string): Promise<boolean>;
-  isBootstrapped(machineId: string): Promise<boolean>;
-  /**
-   * Atomic claim-then-seed: exactly one caller across every racing browser
-   * ever gets `claimed: true` for a given `machineId` (see
-   * `machine-workspaces.ts`'s module doc for why this is a separate claim
-   * table rather than per-row idempotency). Always returns the CURRENT
-   * canonical list, whether this call won or lost.
-   */
-  bootstrapSeed(input: {
-    machineId: string;
-    userId: string;
-    workspaces: NewMachineWorkspaceInput[];
-    now: Date;
-  }): Promise<{ claimed: boolean; workspaces: MachineWorkspaceRecord[] }>;
 }
 
 /** Re-exported so callers can classify an `insertIfAbsent` race without importing the DB layer directly. */
@@ -97,11 +83,10 @@ function toRecord(row: {
  * the DB module graph — same laziness as `createDbMachineProjectStore`.
  */
 export async function createDbMachineWorkspaceStore(): Promise<MachineWorkspaceStore> {
-  const [{ db }, { eq, and, asc }, { machineWorkspaces }, { machineWorkspaceBootstraps }] = await Promise.all([
+  const [{ db }, { eq, and, asc }, { machineWorkspaces }] = await Promise.all([
     import('@pagespace/db/db'),
     import('@pagespace/db/operators'),
     import('@pagespace/db/schema/machine-workspaces'),
-    import('@pagespace/db/schema/machine-workspace-bootstraps'),
   ]);
 
   return {
@@ -179,61 +164,6 @@ export async function createDbMachineWorkspaceStore(): Promise<MachineWorkspaceS
         .where(and(eq(machineWorkspaces.machineId, machineId), eq(machineWorkspaces.id, id)))
         .returning({ id: machineWorkspaces.id });
       return rows.length > 0;
-    },
-
-    async isBootstrapped(machineId) {
-      const [row] = await db
-        .select({ machineId: machineWorkspaceBootstraps.machineId })
-        .from(machineWorkspaceBootstraps)
-        .where(eq(machineWorkspaceBootstraps.machineId, machineId))
-        .limit(1);
-      return row !== undefined;
-    },
-
-    async bootstrapSeed({ machineId, userId, workspaces, now }) {
-      return db.transaction(async (tx) => {
-        const [claim] = await tx
-          .insert(machineWorkspaceBootstraps)
-          .values({ machineId, bootstrappedByUserId: userId, bootstrappedAt: now })
-          .onConflictDoNothing({ target: machineWorkspaceBootstraps.machineId })
-          .returning();
-
-        if (!claim) {
-          // Someone already claimed this machine — do NOT touch machine_workspaces;
-          // just hand back whatever the winner (or a later write) has published.
-          const current = await tx
-            .select()
-            .from(machineWorkspaces)
-            .where(eq(machineWorkspaces.machineId, machineId))
-            .orderBy(asc(machineWorkspaces.createdAt), asc(machineWorkspaces.id));
-          return { claimed: false, workspaces: current.map(toRecord) };
-        }
-
-        for (const workspace of workspaces) {
-          await tx
-            .insert(machineWorkspaces)
-            .values({
-              id: workspace.id,
-              ownerId: workspace.ownerId,
-              machineId: workspace.machineId,
-              scope: workspace.scope,
-              projectName: workspace.projectName,
-              branchName: workspace.branchName,
-              name: workspace.name,
-              layout: workspace.layout,
-              createdAt: workspace.now,
-              updatedAt: workspace.now,
-            })
-            .onConflictDoNothing({ target: [machineWorkspaces.machineId, machineWorkspaces.id] });
-        }
-
-        const seeded = await tx
-          .select()
-          .from(machineWorkspaces)
-          .where(eq(machineWorkspaces.machineId, machineId))
-          .orderBy(asc(machineWorkspaces.createdAt), asc(machineWorkspaces.id));
-        return { claimed: true, workspaces: seeded.map(toRecord) };
-      });
     },
   };
 }

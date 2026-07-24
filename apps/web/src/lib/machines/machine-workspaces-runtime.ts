@@ -137,8 +137,6 @@ export function buildMachineWorkspacesDeps(): MachineWorkspacesDeps {
       insertIfAbsent: async (input) => (await getStore()).insertIfAbsent(input),
       update: async (machineId, id, patch, now) => (await getStore()).update(machineId, id, patch, now),
       remove: async (machineId, id) => (await getStore()).remove(machineId, id),
-      isBootstrapped: async (machineId) => (await getStore()).isBootstrapped(machineId),
-      bootstrapSeed: async (input) => (await getStore()).bootstrapSeed(input),
     },
     now: () => new Date(),
   };

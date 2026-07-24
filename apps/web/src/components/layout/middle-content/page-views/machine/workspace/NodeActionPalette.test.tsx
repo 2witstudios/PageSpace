@@ -31,28 +31,23 @@ vi.mock('@/hooks/useIntegrations', () => ({
 import { toast } from 'sonner';
 import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
-interface WorkspacePushBody {
-  id?: string;
-  workspaceId?: string;
-  columns?: { id: string; panes: { id: string; scope: unknown }[] }[];
+interface WorkspaceVerbPushBody {
+  machineId?: string;
+  verb?: { type?: string; workspaceId?: string; session?: { name: string; kind?: string } | null };
 }
 
-/** Every workspace-shaped write this spawn issued, whichever verb carried it:
- * `pushNewWorkspace`/`pushWorkspaceUpdate`'s POST goes through `post()`, its
- * PATCH through `fetchWithAuth` (it needs the raw 404 status). The field bug was
- * a write that published a workspace with an UNBOUND pane, so the assertions
- * below have to see both. */
-const workspacePushBodies = (): WorkspacePushBody[] => {
-  const posted = vi
+/** Every workspace verb this spawn pushed (#2202: a single
+ * `POST /api/machines/workspaces/verbs` call per local action, in place of
+ * the blob era's separate create/update writes). The field bug was a write
+ * that published a workspace with an UNBOUND pane; under the verb model
+ * `openTerminal`'s born-bound path is now ONE `create-workspace` verb whose
+ * `session` is set atomically — there is no separate empty-then-bind step
+ * left to race. */
+const workspaceVerbPushes = (): WorkspaceVerbPushBody[] =>
+  vi
     .mocked(post)
-    .mock.calls.filter(([url]) => url === '/api/machines/workspaces')
-    .map(([, body]) => body as WorkspacePushBody);
-  const patched = vi
-    .mocked(fetchWithAuth)
-    .mock.calls.filter(([url, init]) => url === '/api/machines/workspaces' && init?.method === 'PATCH')
-    .map(([, init]) => JSON.parse(String(init?.body)) as WorkspacePushBody);
-  return [...posted, ...patched];
-};
+    .mock.calls.filter(([url]) => url === '/api/machines/workspaces/verbs')
+    .map(([, body]) => body as WorkspaceVerbPushBody);
 
 const MACHINE_NODE: MachineTreeNode = { level: 'machine' };
 const PROJECT_NODE: MachineTreeNode = { level: 'project', projectName: 'app' };
@@ -250,19 +245,17 @@ describe('NodeActionPalette', () => {
     });
 
     await waitFor(() => {
-      const bodies = workspacePushBodies();
+      const pushes = workspaceVerbPushes();
       assert({
-        given: 'every workspace push this spawn issued',
+        given: 'every workspace verb this spawn pushed',
         should:
-          'address the session workspace and carry ONLY bound panes — a published null-scope pane is exactly the stale echo that unbound the local pane in the field',
+          'address the session workspace with its session already bound — no create-workspace verb with session: null ever crosses the wire for it',
         actual: {
-          pushes: bodies.length > 0,
-          ids: [...new Set(bodies.map((body) => body.id ?? body.workspaceId))],
-          nullScopePanes: bodies.flatMap((body) =>
-            (body.columns ?? []).flatMap((column) => column.panes.filter((pane) => pane.scope === null))
-          ),
+          pushes: pushes.length > 0,
+          ids: [...new Set(pushes.map((p) => p.verb?.workspaceId))],
+          unboundCreates: pushes.filter((p) => p.verb?.type === 'create-workspace' && p.verb?.session == null).length,
         },
-        expected: { pushes: true, ids: [expectedId], nullScopePanes: [] },
+        expected: { pushes: true, ids: [expectedId], unboundCreates: 0 },
       });
     });
   });

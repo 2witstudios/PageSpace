@@ -151,8 +151,6 @@ function makeWorkspaceStore(seed: MachineWorkspaceRecord[] = []): MachineWorkspa
       return next;
     },
     remove: async (machineId, id) => rows.delete(`${machineId}::${id}`),
-    isBootstrapped: async () => false,
-    bootstrapSeed: async () => ({ claimed: false, workspaces: [] }),
   };
 }
 
