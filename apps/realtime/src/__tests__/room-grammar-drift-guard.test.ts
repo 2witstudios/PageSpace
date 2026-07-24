@@ -30,6 +30,50 @@ const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const CUID = 'tz4a98xxat96iws9zmbrgj3a';
 
+// Any room-prefix immediately following a quote or backtick is a hand-rolled
+// room name. Builders from @pagespace/lib/realtime/rooms are the only
+// sanctioned way to construct one.
+const ROOM_LITERAL = /[`'"](?:drive|notifications|dm|activity|user):/;
+
+/**
+ * Pure scan of one file's source for hand-rolled room-name literals, given
+ * its already-read contents. Comments are stripped first so documentation may
+ * still NAME the shapes without tripping the guard. Extracted from the
+ * directory walk below so both the "true" (offense found) and "false" (clean
+ * source) branches are exercised directly, not just incidentally by whichever
+ * shape the real source tree happens to be in.
+ */
+function findRoomLiteralOffenses(path: string, rawSource: string): string[] {
+  const source = rawSource
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '');
+
+  const offenses: string[] = [];
+  for (const [index, line] of source.split('\n').entries()) {
+    if (ROOM_LITERAL.test(line)) {
+      offenses.push(`${path}:${index + 1}: ${line.trim()}`);
+    }
+  }
+  return offenses;
+}
+
+describe('findRoomLiteralOffenses (pure scanner)', () => {
+  it('flags a hand-rolled room literal', () => {
+    const offenses = findRoomLiteralOffenses('fixture.ts', "const room = `drive:${driveId}`;");
+    expect(offenses).toEqual(['fixture.ts:1: const room = `drive:${driveId}`;']);
+  });
+
+  it('ignores a room shape named only in a comment', () => {
+    const offenses = findRoomLiteralOffenses('fixture.ts', "// e.g. `drive:${driveId}`\nconst room = driveRoom(driveId);");
+    expect(offenses).toEqual([]);
+  });
+
+  it('is clean for source built entirely from the shared builders', () => {
+    const offenses = findRoomLiteralOffenses('fixture.ts', 'const room = driveRoom(driveId);');
+    expect(offenses).toEqual([]);
+  });
+});
+
 describe('room grammar drift guard', () => {
   it('every shared room builder output is a broadcastable audience', () => {
     expect(ALL_ROOM_BUILDERS.length).toBeGreaterThan(0);
@@ -41,27 +85,13 @@ describe('room grammar drift guard', () => {
   });
 
   it('no realtime source constructs a room name outside the shared grammar module', () => {
-    // Any room-prefix immediately following a quote or backtick is a
-    // hand-rolled room name. Builders from @pagespace/lib/realtime/rooms are
-    // the only sanctioned way to construct one.
-    const roomLiteral = /[`'"](?:drive|notifications|dm|activity|user):/;
-
     const offenders: string[] = [];
     for (const entry of readdirSync(SRC_DIR, { recursive: true, withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.endsWith('.ts')) continue;
       const path = join(entry.parentPath, entry.name);
       if (path.includes('__tests__')) continue;
 
-      const source = readFileSync(path, 'utf8')
-        // Strip comments so documentation may still NAME the shapes.
-        .replace(/\/\*[\s\S]*?\*\//g, '')
-        .replace(/\/\/.*$/gm, '');
-
-      for (const [index, line] of source.split('\n').entries()) {
-        if (roomLiteral.test(line)) {
-          offenders.push(`${path}:${index + 1}: ${line.trim()}`);
-        }
-      }
+      offenders.push(...findRoomLiteralOffenses(path, readFileSync(path, 'utf8')));
     }
 
     expect(offenders, `room names must come from @pagespace/lib/realtime/rooms:\n${offenders.join('\n')}`).toEqual([]);
