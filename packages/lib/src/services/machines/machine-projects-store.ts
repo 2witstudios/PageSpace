@@ -38,6 +38,10 @@ export interface MachineProjectRecord {
   teardownRequestedAt: Date | null;
   /** When `sandboxId`'s Sprite was CONFIRMED destroyed; NULL while we believe it is live. The row outlives its Sprite on purpose — it is re-creatable config. */
   spriteTornDownAt: Date | null;
+  /** The LOCAL branch name this project's checkout was last observed on (`git status -b` snapshot). NULL until first captured. See the doc comment on the schema column for why staleness carries no misrouting risk. */
+  currentBranchName: string | null;
+  /** When `currentBranchName` was captured. NULL until first captured. */
+  currentBranchObservedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -89,6 +93,12 @@ export interface PromoteMachineProjectInput {
  *    carried the previous generation's measurement across the downtime. So the
  *    watermark restarts here, and the measurement — which described a
  *    filesystem that no longer exists — is dropped rather than inherited.
+ *
+ * A freshly (re-)promoted Sprite is also a fresh CLONE, which may not land on
+ * the same branch the old checkout was observed on — so `currentBranchName`/
+ * `currentBranchObservedAt` are nulled out here too, for the identical reason
+ * the storage measurement is: carrying either forward describes a filesystem
+ * that no longer exists.
  */
 export function promotedProjectColumns(input: {
   sessionKey: string;
@@ -104,6 +114,8 @@ export function promotedProjectColumns(input: {
   storageLastBilledAt: Date;
   storageMeasuredBytes: null;
   storageMeasuredAt: null;
+  currentBranchName: null;
+  currentBranchObservedAt: null;
   updatedAt: Date;
 } {
   return {
@@ -115,6 +127,8 @@ export function promotedProjectColumns(input: {
     storageLastBilledAt: input.now,
     storageMeasuredBytes: null,
     storageMeasuredAt: null,
+    currentBranchName: null,
+    currentBranchObservedAt: null,
     updatedAt: input.now,
   };
 }
