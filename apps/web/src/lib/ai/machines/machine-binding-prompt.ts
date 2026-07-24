@@ -61,7 +61,7 @@ export function buildMachineBindingPrompt(binding: MachineNodeHandleSet): string
   const branchWarning =
     self.kind === 'branch' || hasLiveDefaultBranch
       ? ''
-      : '\n• "branch" here is NOT "whatever git branch a project happens to be on" — it only names a separately created branch worktree (none is currently listed above). A project\'s own default checkout has no branch of its own to address: to run at a project, pass target: { project } alone, not target: { project, branch: "main" } — there is no such branch here.';
+      : '\n• "branch" here is NOT "whatever git branch a project happens to be on" — it only names a separately created branch worktree, and no branch named "main"/"master" is currently listed above (other branches may be, if any exist — that listing is authoritative). A project\'s own default checkout has no branch of its own to address: to run at a project, pass target: { project } alone, not target: { project, branch: "main" } — there is no such branch here.';
   return (
     `\n\nMACHINE BINDING (this conversation)` +
     `\n• This conversation is bound to machine "${self.machineId}" at ${where} — code-execution tools (bash, readFile, writeFile, editFile, git/gh) operate from working directory: ${self.cwd}` +

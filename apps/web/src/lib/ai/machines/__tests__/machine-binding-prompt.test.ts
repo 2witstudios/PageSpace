@@ -27,6 +27,13 @@ describe('buildMachineBindingPrompt', () => {
     const prompt = buildMachineBindingPrompt(binding);
     expect(prompt).toContain('"branch" here is NOT "whatever git branch a project happens to be on"');
     expect(prompt).toContain('there is no such branch here');
+    // Codex review (PR #2232, fourth pass): "feature-x" IS a real, listed
+    // branch here — the warning must not claim no branch at all is listed
+    // (only that no main/master one is), or it contradicts the "Currently
+    // reachable" line directly above it and could make the model ignore a
+    // genuinely valid target.
+    expect(prompt).toContain('branch: "feature-x"');
+    expect(prompt).not.toContain('(none is currently listed above)');
   });
 
   it('given a LIVE branch actually named "main", should NOT warn against using branch: "main"', () => {
