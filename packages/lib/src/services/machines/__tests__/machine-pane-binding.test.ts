@@ -444,4 +444,22 @@ describe('resolveMachineNodeTarget', () => {
       reason: 'target_not_in_set',
     });
   });
+
+  // PR #2232 history: an earlier version of this function fell back to the
+  // project handle when an unresolved branch name was a conventional
+  // default-checkout alias ("main"/"master"). Three rounds of review each
+  // found a different way that silent substitution could route a tool call
+  // to the WRONG worktree (an unrelated typo, a torn-down branch, a branch
+  // explicitly killed and hard-deleted with no trace left to distinguish it
+  // from "never existed"). The fallback was removed entirely rather than
+  // patched again — an unresolved target of ANY shape always denies. This
+  // pins that a caller cannot get a project handle back just by naming a
+  // conventional default branch that doesn't actually have a tracked handle.
+  it('given a project in the set + an unresolved default-checkout-shaped branch name ("main"), should refuse as out of set, not fall back to the project', () => {
+    const projectSet = { self: PROJECT_HANDLE, handles: [PROJECT_HANDLE] };
+    expect(resolveMachineNodeTarget(projectSet, { project: PROJECT_NAME, branch: 'main' })).toEqual({
+      ok: false,
+      reason: 'target_not_in_set',
+    });
+  });
 });

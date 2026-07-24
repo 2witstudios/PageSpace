@@ -29,6 +29,7 @@ import {
   type SandboxRunDeps,
 } from '@pagespace/lib/services/sandbox/tool-runners';
 import { MAX_COMMAND_BYTES } from '@pagespace/lib/services/sandbox/command-policy';
+import { isMainBranchName } from '@pagespace/lib/services/sandbox/machine-diff-scope';
 import type { SandboxToolGateResult } from '@pagespace/lib/services/sandbox/tool-gate';
 import type { MachineToggleDenialCode } from '@pagespace/lib/services/machines/machine-access';
 import {
@@ -123,9 +124,22 @@ export function nodeTargetDeniedError(
       error: `This conversation is not bound to a machine, so it has no node scope to address — remove the target (${described}).`,
     };
   }
+  // A model reasoning in ordinary git terms often adds `branch: "main"` (or
+  // "master") assuming it addresses a project's own default checkout. This
+  // hint stays deliberately NEUTRAL about why THIS particular target was
+  // denied — it could be a name that was never tracked, one that existed and
+  // was torn down, or a project that isn't even in scope, and only
+  // list_sessions (already pointed to below) can tell those apart. Naming a
+  // specific "just retry with the project instead" fix here would recreate
+  // the exact wrong-worktree risk this denial exists to prevent, for
+  // whichever of those cases isn't "never tracked" (Codex review, PR #2232).
+  const defaultBranchHint =
+    target.branch && isMainBranchName(target.branch)
+      ? ` Note: "${target.branch}" is never an implicit alias for a project's own default checkout — it only resolves if list_sessions lists it as an actual branch.`
+      : '';
   return {
     success: false,
-    error: `The target ${described} is not part of this conversation's machine scope. Call list_sessions to see the nodes you can address.`,
+    error: `The target ${described} is not part of this conversation's machine scope. Call list_sessions to see the nodes you can address.${defaultBranchHint}`,
   };
 }
 
