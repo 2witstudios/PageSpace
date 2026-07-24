@@ -16,6 +16,7 @@ const {
   mockDeleteReturning,
   mockUpdateReturning,
   mockTransaction,
+  mockLoggerWarn,
 } = vi.hoisted(() => ({
   mockSelectLimit: vi.fn(),
   // The conversation-row lock (`.for('update')`) recomputeLastMessageAt now
@@ -27,6 +28,7 @@ const {
   mockDeleteReturning: vi.fn(),
   mockUpdateReturning: vi.fn(),
   mockTransaction: vi.fn(),
+  mockLoggerWarn: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/db', () => {
@@ -76,6 +78,9 @@ vi.mock('@pagespace/db/schema/conversations', () => ({
 vi.mock('@/lib/ai/core/compaction/compaction-repository', () => ({
   invalidate: vi.fn(),
 }));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: { ai: { warn: mockLoggerWarn } },
+}));
 
 import { globalConversationRepository } from '../global-conversation-repository';
 
@@ -105,6 +110,7 @@ beforeEach(() => {
   });
   mockUpdateReturning.mockResolvedValue([]);
   mockDeleteReturning.mockResolvedValue([]);
+  mockLoggerWarn.mockReset();
 });
 
 describe('globalConversationRepository.recomputeLastMessageAt', () => {
@@ -199,6 +205,79 @@ describe('globalConversationRepository message deletions recompute lastMessageAt
       should: 'recompute lastMessageAt once per distinct conversation',
       actual: { purged, updates: mockUpdateSet.mock.calls.length },
       expected: { purged: 3, updates: 2 },
+    });
+  });
+});
+
+describe('globalConversationRepository recompute failures are isolated from the caller (#2153)', () => {
+  it('softDeleteMessage does not throw when the recompute fails, and logs a warning', async () => {
+    mockUpdateReturning.mockResolvedValueOnce([{ conversationId: 'conv-9' }]);
+    mockTransaction.mockImplementationOnce(() => {
+      throw new Error('lock timeout');
+    });
+
+    await expect(globalConversationRepository.softDeleteMessage('msg-1')).resolves.toBeUndefined();
+
+    assert({
+      given: 'a soft-delete whose recompute throws',
+      should: 'swallow the recompute failure and log a warning instead of failing the delete',
+      actual: {
+        warnCalls: mockLoggerWarn.mock.calls.length,
+        conversationId: mockLoggerWarn.mock.calls[0]?.[1]?.conversationId,
+      },
+      expected: { warnCalls: 1, conversationId: 'conv-9' },
+    });
+  });
+
+  it('hardDeleteMessage does not throw when the recompute fails, and logs a warning', async () => {
+    mockDeleteReturning.mockResolvedValueOnce([{ conversationId: 'conv-9' }]);
+    mockTransaction.mockImplementationOnce(() => {
+      throw new Error('lock timeout');
+    });
+
+    await expect(globalConversationRepository.hardDeleteMessage('msg-1')).resolves.toBeUndefined();
+
+    assert({
+      given: 'a hard-delete whose recompute throws',
+      should: 'swallow the recompute failure and log a warning instead of failing the delete',
+      actual: {
+        warnCalls: mockLoggerWarn.mock.calls.length,
+        conversationId: mockLoggerWarn.mock.calls[0]?.[1]?.conversationId,
+      },
+      expected: { warnCalls: 1, conversationId: 'conv-9' },
+    });
+  });
+
+  it('purgeInactiveMessages keeps recomputing later conversations after one recompute fails, and still returns the full purge count', async () => {
+    mockDeleteReturning.mockResolvedValueOnce([
+      { id: 'm1', conversationId: 'conv-a' },
+      { id: 'm2', conversationId: 'conv-b' },
+    ]);
+    mockTransaction
+      .mockImplementationOnce(() => {
+        throw new Error('lock timeout');
+      })
+      .mockImplementationOnce((cb: (tx: unknown) => unknown) =>
+        cb({
+          select: vi.fn().mockReturnValue({
+            from: vi.fn().mockReturnValue({
+              where: vi.fn().mockReturnValue({
+                for: mockSelectFor,
+                orderBy: vi.fn().mockReturnValue({ limit: mockSelectLimit }),
+              }),
+            }),
+          }),
+          update: vi.fn().mockReturnValue({ set: mockUpdateSet }),
+        })
+      );
+
+    const purged = await globalConversationRepository.purgeInactiveMessages(new Date('2026-01-01T00:00:00Z'));
+
+    assert({
+      given: 'a purge across two conversations where the first recompute throws',
+      should: 'still recompute the second conversation, still report the true purge count, and log exactly one warning',
+      actual: { purged, warnCalls: mockLoggerWarn.mock.calls.length, updates: mockUpdateSet.mock.calls.length },
+      expected: { purged: 2, warnCalls: 1, updates: 1 },
     });
   });
 });

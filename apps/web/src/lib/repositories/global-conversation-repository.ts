@@ -9,6 +9,7 @@ import { aiUsageLogs } from '@pagespace/db/schema/monitoring'
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { createId } from '@paralleldrive/cuid2';
 import { invalidate as invalidateCompaction } from '@/lib/ai/core/compaction/compaction-repository';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 // Types
 export interface ConversationSummary {
@@ -169,6 +170,40 @@ const hasMessages = exists(
       eq(messages.isActive, true),
     ))
 );
+
+/**
+ * Runs `recomputeLastMessageAt` isolated from its caller's own outcome
+ * (#2153 review follow-up). `softDeleteMessage`/`hardDeleteMessage`/
+ * `purgeInactiveMessages` all commit their primary write BEFORE calling
+ * this, in a separate statement — so an unguarded throw here would surface
+ * as a failure of an operation that already succeeded, and for
+ * `hardDeleteMessage` specifically, the deleted row is gone, so there is no
+ * "retry this call" path that would ever repair the stale timestamp. Purge
+ * additionally loops over multiple conversations per call, where a single
+ * throw would abort every conversation after it in iteration order and
+ * lose the already-correct purge count. A logged-and-swallowed failure here
+ * leaves `lastMessageAt` stale until the next mutation on that conversation
+ * recomputes it fresh — worse than immediate consistency, but strictly
+ * better than an unrelated 500 or an abandoned purge loop.
+ *
+ * Deliberately NOT used by `materialize-interrupted-stream.ts`: that
+ * caller's recompute sits inside the same try/catch as the message write
+ * itself, so a recompute failure there is meant to propagate and degrade
+ * like a failed write — the opposite of isolating it.
+ */
+async function recomputeLastMessageAtIsolated(
+  conversationId: string,
+  caller: string
+): Promise<void> {
+  try {
+    await globalConversationRepository.recomputeLastMessageAt(conversationId);
+  } catch (error) {
+    loggers.ai.warn(`${caller}: lastMessageAt recompute failed`, {
+      conversationId,
+      error: error instanceof Error ? error.message : 'unknown',
+    });
+  }
+}
 
 export const globalConversationRepository = {
   /**
@@ -480,7 +515,7 @@ export const globalConversationRepository = {
       .returning({ conversationId: messages.conversationId });
 
     if (row) {
-      await globalConversationRepository.recomputeLastMessageAt(row.conversationId);
+      await recomputeLastMessageAtIsolated(row.conversationId, 'softDeleteMessage');
     }
   },
 
@@ -524,7 +559,7 @@ export const globalConversationRepository = {
       .returning({ conversationId: messages.conversationId });
 
     if (row) {
-      await globalConversationRepository.recomputeLastMessageAt(row.conversationId);
+      await recomputeLastMessageAtIsolated(row.conversationId, 'hardDeleteMessage');
     }
   },
 
@@ -545,7 +580,7 @@ export const globalConversationRepository = {
 
     const affectedConversationIds = new Set(result.map((m) => m.conversationId));
     for (const conversationId of affectedConversationIds) {
-      await globalConversationRepository.recomputeLastMessageAt(conversationId);
+      await recomputeLastMessageAtIsolated(conversationId, 'purgeInactiveMessages');
     }
 
     return result.length;
