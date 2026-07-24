@@ -29,7 +29,7 @@ vi.mock('@/hooks/useIntegrations', () => ({
 }));
 
 import { toast } from 'sonner';
-import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { post } from '@/lib/auth/auth-fetch';
 
 interface WorkspaceVerbPushBody {
   machineId?: string;
