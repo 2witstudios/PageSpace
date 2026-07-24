@@ -11,12 +11,14 @@ const {
   mockSweepRateLimit,
   mockSweepAuthHandoff,
   mockSweepPendingAbortIntents,
+  mockSweepPendingUploads,
   mockAudit,
 } = vi.hoisted(() => ({
   mockSweepJTI: vi.fn(),
   mockSweepRateLimit: vi.fn(),
   mockSweepAuthHandoff: vi.fn(),
   mockSweepPendingAbortIntents: vi.fn(),
+  mockSweepPendingUploads: vi.fn(),
   mockAudit: vi.fn(),
 }));
 
@@ -35,6 +37,9 @@ vi.mock('@pagespace/lib/security/auth-handoff-sweep', () => ({
 }));
 vi.mock('@/lib/ai/core/pending-abort-intents', () => ({
   sweepExpiredPendingAbortIntents: mockSweepPendingAbortIntents,
+}));
+vi.mock('@pagespace/lib/services/pending-uploads', () => ({
+  sweepExpiredPendingUploads: mockSweepPendingUploads,
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
@@ -66,6 +71,7 @@ describe('/api/cron/sweep-expired', () => {
     mockSweepRateLimit.mockResolvedValue(0);
     mockSweepAuthHandoff.mockResolvedValue(0);
     mockSweepPendingAbortIntents.mockResolvedValue(0);
+    mockSweepPendingUploads.mockResolvedValue(0);
   });
 
   describe('auth', () => {
@@ -82,16 +88,18 @@ describe('/api/cron/sweep-expired', () => {
       expect(mockSweepRateLimit).not.toHaveBeenCalled();
       expect(mockSweepAuthHandoff).not.toHaveBeenCalled();
       expect(mockSweepPendingAbortIntents).not.toHaveBeenCalled();
+      expect(mockSweepPendingUploads).not.toHaveBeenCalled();
       expect(mockAudit).not.toHaveBeenCalled();
     });
   });
 
   describe('happy path', () => {
-    it('sweeps all four tables and reports counts in results', async () => {
+    it('sweeps all five tables and reports counts in results', async () => {
       mockSweepJTI.mockResolvedValue(7);
       mockSweepRateLimit.mockResolvedValue(42);
       mockSweepAuthHandoff.mockResolvedValue(13);
       mockSweepPendingAbortIntents.mockResolvedValue(2);
+      mockSweepPendingUploads.mockResolvedValue(4);
 
       const res = await GET(makeRequest());
       const body = (await res.json()) as {
@@ -106,14 +114,16 @@ describe('/api/cron/sweep-expired', () => {
       expect(body.results.rateLimitBuckets).toBe(42);
       expect(body.results.authHandoffTokens).toBe(13);
       expect(body.results.pendingAbortIntents).toBe(2);
+      expect(body.results.pendingUploads).toBe(4);
       expect(body.timestamp).toEqual(expect.any(String));
     });
 
-    it('emits exactly one audit event containing all four counts', async () => {
+    it('emits exactly one audit event containing all five counts', async () => {
       mockSweepJTI.mockResolvedValue(3);
       mockSweepRateLimit.mockResolvedValue(11);
       mockSweepAuthHandoff.mockResolvedValue(5);
       mockSweepPendingAbortIntents.mockResolvedValue(1);
+      mockSweepPendingUploads.mockResolvedValue(9);
 
       await GET(makeRequest());
 
@@ -128,6 +138,7 @@ describe('/api/cron/sweep-expired', () => {
             rateLimitBuckets: 11,
             authHandoffTokens: 5,
             pendingAbortIntents: 1,
+            pendingUploads: 9,
           },
         }),
       );
@@ -200,6 +211,26 @@ describe('/api/cron/sweep-expired', () => {
       });
       expect(mockAudit).toHaveBeenCalledTimes(1);
     });
+
+    it('returns 500 when only the pending-uploads sweep fails, still records the others and audits', async () => {
+      mockSweepJTI.mockResolvedValue(5);
+      mockSweepRateLimit.mockResolvedValue(9);
+      mockSweepAuthHandoff.mockResolvedValue(4);
+      mockSweepPendingUploads.mockRejectedValue(new Error('pending-uploads-table down'));
+
+      const res = await GET(makeRequest());
+      const body = (await res.json()) as {
+        success: boolean;
+        results: Record<string, number | { error: string }>;
+      };
+
+      expect(res.status).toBe(500);
+      expect(body.success).toBe(false);
+      expect(body.results.pendingUploads).toEqual({
+        error: 'pending-uploads-table down',
+      });
+      expect(mockAudit).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('full failure (all tables throw)', () => {
@@ -208,6 +239,7 @@ describe('/api/cron/sweep-expired', () => {
       mockSweepRateLimit.mockRejectedValue(new Error('rate-limit down'));
       mockSweepAuthHandoff.mockRejectedValue(new Error('handoff down'));
       mockSweepPendingAbortIntents.mockRejectedValue(new Error('pending-abort down'));
+      mockSweepPendingUploads.mockRejectedValue(new Error('pending-uploads down'));
 
       const res = await GET(makeRequest());
       const body = (await res.json()) as {
@@ -221,6 +253,7 @@ describe('/api/cron/sweep-expired', () => {
       expect(body.results.rateLimitBuckets).toEqual({ error: 'rate-limit down' });
       expect(body.results.authHandoffTokens).toEqual({ error: 'handoff down' });
       expect(body.results.pendingAbortIntents).toEqual({ error: 'pending-abort down' });
+      expect(body.results.pendingUploads).toEqual({ error: 'pending-uploads down' });
       expect(mockAudit).toHaveBeenCalledTimes(1);
     });
   });

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const mockUpdateActiveUploads = vi.fn();
+const mockReleasePendingUpload = vi.fn();
 
 vi.mock('../storage-limits', () => ({
   STORAGE_TIERS: {
@@ -9,7 +9,10 @@ vi.mock('../storage-limits', () => ({
     pro: { maxConcurrentUploads: 5 },
     enterprise: { maxConcurrentUploads: 10 },
   },
-  updateActiveUploads: (...args: unknown[]) => mockUpdateActiveUploads(...args),
+}));
+
+vi.mock('../pending-uploads', () => ({
+  releasePendingUpload: (...args: unknown[]) => mockReleasePendingUpload(...args),
 }));
 
 vi.mock('../../logging/logger-config', () => ({
@@ -24,8 +27,8 @@ describe('upload-semaphore', () => {
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.resetModules();
-    mockUpdateActiveUploads.mockReset();
-    mockUpdateActiveUploads.mockResolvedValue(undefined);
+    mockReleasePendingUpload.mockReset();
+    mockReleasePendingUpload.mockResolvedValue(undefined);
 
     // UPLOAD_MAX_PERMITS controls global limit; default in tests is env var or 20
     process.env.UPLOAD_MAX_PERMITS = '3';
@@ -222,63 +225,63 @@ describe('upload-semaphore', () => {
     });
   });
 
-  describe('L8 — stale-slot sweep decrements the DB activeUploads counter', () => {
-    it('decrements the DB counter for a slot abandoned past the timeout (cron sweep)', async () => {
-      await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
+  describe('L8/#2154 — stale-slot sweep releases the pending_uploads row', () => {
+    it('deletes the pending row for a slot abandoned past the timeout (cron sweep)', async () => {
+      const slot = await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
 
       // Past the 10-minute slot timeout; advancing 11 minutes also fires the
-      // once-a-minute cleanup interval. Async so the durable decrement + in-memory
+      // once-a-minute cleanup interval. Async so the durable release + in-memory
       // removal microtasks flush.
       await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
 
-      expect(mockUpdateActiveUploads).toHaveBeenCalledWith('user-1', -1);
+      expect(mockReleasePendingUpload).toHaveBeenCalledWith(slot);
       expect(uploadSemaphore.getStatus().activeSlots).toBe(0);
     });
 
-    it('decrements the DB counter when an expired slot is reclaimed via verifySlotOwner', async () => {
+    it('deletes the pending row when an expired slot is reclaimed via verifySlotOwner', async () => {
       const slot = await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
       // Do not cross a full cleanup tick; reclaim happens through verifySlotOwner.
       vi.advanceTimersByTime(10 * 60 * 1000 + 1);
 
       expect(uploadSemaphore.verifySlotOwner(slot!, 'user-1')).toBe(false);
-      // The async decrement is invoked synchronously up to its await.
-      expect(mockUpdateActiveUploads).toHaveBeenCalledWith('user-1', -1);
+      // The async release is invoked synchronously up to its await.
+      expect(mockReleasePendingUpload).toHaveBeenCalledWith(slot);
     });
 
-    it('does NOT decrement the DB counter on a normal release (the route does that)', async () => {
+    it('does NOT delete the pending row on a normal release (the route does that)', async () => {
       const slot = await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
       uploadSemaphore.releaseUploadSlot(slot!);
 
-      expect(mockUpdateActiveUploads).not.toHaveBeenCalled();
+      expect(mockReleasePendingUpload).not.toHaveBeenCalled();
     });
 
-    it('does NOT double-decrement: a claimed slot (taken by a completing route) is skipped by the sweep', async () => {
+    it('skips the redundant delete for a claimed slot (the completing route releases it)', async () => {
       const slot = await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024, {
         contentHash: 'a'.repeat(64), driveId: 'd', fileSize: 1024, mimeType: 'image/png',
       });
-      // A route claims the slot for completion (it will do its own DB decrement).
+      // A route claims the slot for completion (it will do its own release).
       uploadSemaphore.getSlotMetadata(slot!, 'user-1');
 
       // The slot then times out while the route is still in flight.
       await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
 
-      // Sweep reclaimed the in-memory permit but did NOT touch the DB counter.
+      // Sweep reclaimed the in-memory permit but left the row to the route.
       expect(uploadSemaphore.getStatus().activeSlots).toBe(0);
-      expect(mockUpdateActiveUploads).not.toHaveBeenCalled();
+      expect(mockReleasePendingUpload).not.toHaveBeenCalled();
     });
 
-    it('keeps the slot for retry when the DB decrement fails (durable)', async () => {
-      await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
-      mockUpdateActiveUploads.mockRejectedValueOnce(new Error('db down'));
+    it('keeps the slot for retry when the row delete fails (durable)', async () => {
+      const slot = await uploadSemaphore.acquireUploadSlot('user-1', 'free', 1024);
+      mockReleasePendingUpload.mockRejectedValueOnce(new Error('db down'));
 
-      // First sweep: decrement fails → slot retained.
+      // First sweep: release fails → slot retained.
       await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
       expect(uploadSemaphore.getStatus().activeSlots).toBe(1);
 
-      // Next sweep (60s later): decrement succeeds → slot reclaimed.
-      mockUpdateActiveUploads.mockResolvedValue(undefined);
+      // Next sweep (60s later): release succeeds → slot reclaimed.
+      mockReleasePendingUpload.mockResolvedValue(undefined);
       await vi.advanceTimersByTimeAsync(60 * 1000);
-      expect(mockUpdateActiveUploads).toHaveBeenCalledWith('user-1', -1);
+      expect(mockReleasePendingUpload).toHaveBeenCalledWith(slot);
       expect(uploadSemaphore.getStatus().activeSlots).toBe(0);
     });
   });

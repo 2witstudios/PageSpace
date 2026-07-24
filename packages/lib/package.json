@@ -417,6 +417,16 @@
       "import": "./dist/services/preview.js",
       "require": "./dist/services/preview.js"
     },
+    "./services/pending-uploads": {
+      "types": "./dist/services/pending-uploads.d.ts",
+      "import": "./dist/services/pending-uploads.js",
+      "require": "./dist/services/pending-uploads.js"
+    },
+    "./services/pending-uploads-core": {
+      "types": "./dist/services/pending-uploads-core.d.ts",
+      "import": "./dist/services/pending-uploads-core.js",
+      "require": "./dist/services/pending-uploads-core.js"
+    },
     "./services/quote-enrichment": {
       "types": "./dist/services/quote-enrichment.d.ts",
       "import": "./dist/services/quote-enrichment.js",
@@ -1844,6 +1854,12 @@
       ],
       "auth/broadcast-auth": [
         "./dist/auth/broadcast-auth.d.ts"
+      ],
+      "services/pending-uploads": [
+        "./dist/services/pending-uploads.d.ts"
+      ],
+      "services/pending-uploads-core": [
+        "./dist/services/pending-uploads-core.d.ts"
       ],
       "services/preview": [
         "./dist/services/preview.d.ts"

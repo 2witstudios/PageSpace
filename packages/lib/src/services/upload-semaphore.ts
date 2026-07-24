@@ -1,4 +1,5 @@
-import { STORAGE_TIERS, updateActiveUploads } from './storage-limits';
+import { STORAGE_TIERS } from './storage-limits';
+import { releasePendingUpload } from './pending-uploads';
 import { loggers } from '../logging/logger-config';
 import type { AttachmentTarget } from './attachment-upload-core';
 
@@ -161,35 +162,34 @@ class UploadSemaphore {
   }
 
   /**
-   * L8: release a slot abandoned past its timeout. Unlike the normal-completion
-   * path (where the route decrements users.activeUploads itself), an abandoned
-   * upload's presign-time +1 is never paired with a route-side -1, so this path
-   * MUST decrement the DB counter too — otherwise the counter ratchets up forever
-   * and would eventually falsely deny the user via checkConcurrentUploads.
+   * L8: release a slot abandoned past its timeout. An abandoned upload's
+   * presign-time `pending_uploads` row is never released by a route, so this
+   * path deletes it too (#2154). Unlike the old counter decrement this is
+   * merely an optimization — the row's own TTL already returns the concurrency
+   * slot even if this process dies — and the delete is idempotent, so a
+   * `claimed` slot (owned by an in-flight completion/cancel route) skips it
+   * only to avoid redundant work, not to protect a counter.
    *
-   * Two correctness rules:
-   *  - A `claimed` slot is owned by an in-flight completion/cancel route that
-   *    will perform its own single decrement; skip the DB write here to avoid
-   *    double-decrementing (which would erase another upload's count).
-   *  - Make the decrement durable: confirm the DB write succeeded BEFORE
-   *    forgetting the in-memory slot, so a transient failure leaves the slot for
-   *    the next 60s sweep to retry rather than losing the counter permanently.
+   * Keep the delete durable anyway: confirm the DB write succeeded BEFORE
+   * forgetting the in-memory slot, so a transient failure leaves the slot for
+   * the next 60s sweep to retry.
    */
   private async releaseStaleSlot(slotId: string): Promise<void> {
     const slot = this.activeSlots.get(slotId);
     if (!slot) return;
 
     if (slot.claimed) {
-      // An in-flight route owns the DB decrement; just reclaim the in-memory permit.
+      // An in-flight route owns the pending-upload release; just reclaim the
+      // in-memory permit.
       this.releaseUploadSlot(slotId);
       return;
     }
 
     try {
-      await updateActiveUploads(slot.userId, -1);
+      await releasePendingUpload(slotId);
     } catch (err) {
-      // Keep the slot so the next sweep retries the decrement; do not forget it.
-      loggers.api.warn('Stale-slot activeUploads decrement failed; will retry next sweep', {
+      // Keep the slot so the next sweep retries the release; do not forget it.
+      loggers.api.warn('Stale-slot pending-upload release failed; will retry next sweep', {
         slotId, userId: slot.userId, err: err as Error,
       });
       return;
@@ -223,7 +223,8 @@ class UploadSemaphore {
     if (!slot || slot.userId !== userId) return false;
     // Reject (and reclaim) slots past the timeout rather than waiting for the
     // once-a-minute sweep — a stale jobId must not still authorize a completion.
-    // Reclaim via releaseStaleSlot so the abandoned DB counter is decremented too.
+    // Reclaim via releaseStaleSlot so the abandoned pending_uploads row is
+    // deleted promptly too (its TTL would release it anyway).
     if (Date.now() - slot.acquiredAt.getTime() > this.slotTimeout) {
       void this.releaseStaleSlot(slotId);
       return false;

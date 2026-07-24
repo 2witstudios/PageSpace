@@ -33,9 +33,14 @@ export const users = pgTable('users', {
   // system default). Deliberately separate from currentAiModel: image generation is a
   // tool, not the chat model, and is never shown in the model selector.
   imageGenerationModel: text('imageGenerationModel'),
-  // Storage tracking fields (quota/tier now computed from subscriptionTier)
+  // Storage tracking fields (quota/tier now computed from subscriptionTier).
+  // storageUsedBytes is a CACHE, not a source of truth: the authoritative value
+  // is SUM(files.sizeBytes) over files.createdBy = this user (the charge basis).
+  // It exists so quota checks don't pay an aggregate per upload, and it is kept
+  // honest by the scheduled reconcile (api/cron/reconcile-storage →
+  // reconcileAllStorageUsage), which rewrites it from the files rows when it
+  // drifts. Never treat a read of this column as exact (#2155).
   storageUsedBytes: real('storageUsedBytes').default(0).notNull(),
-  activeUploads: integer('activeUploads').default(0).notNull(),
   lastStorageCalculated: timestamp('lastStorageCalculated', { mode: 'date' }),
   // Subscription fields
   stripeCustomerId: text('stripeCustomerId').unique(),

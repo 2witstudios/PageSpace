@@ -3,17 +3,23 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../storage-repository', () => ({
   storageRepository: {
     findUserForStorage: vi.fn(),
-    findUserForUploads: vi.fn(),
+    findStorageDriftCandidates: vi.fn(),
     findUserDriveIds: vi.fn(),
     findFilesByCreator: vi.fn(),
     userReferencesContentHash: vi.fn(),
     countFiles: vi.fn(),
-    updateActiveUploads: vi.fn(),
     updateStorageInTx: vi.fn(),
     insertStorageEvent: vi.fn(),
     setUserStorageInTx: vi.fn(),
     runTransaction: vi.fn(),
   },
+}));
+
+vi.mock('../pending-uploads', () => ({
+  countLiveUploadsForUser: vi.fn(),
+  registerPendingUpload: vi.fn(),
+  releasePendingUpload: vi.fn(),
+  sweepExpiredPendingUploads: vi.fn(),
 }));
 
 vi.mock('../subscription-utils', async (importOriginal) => {
@@ -36,7 +42,6 @@ import {
   checkStorageQuota,
   checkConcurrentUploads,
   updateStorageUsage,
-  updateActiveUploads,
   calculateActualStorageUsage,
   getUserFileCount,
   reconcileStorageUsage,
@@ -53,6 +58,7 @@ import {
   updateStorageTierFromSubscription,
 } from '../storage-limits';
 import { storageRepository } from '../storage-repository';
+import { countLiveUploadsForUser } from '../pending-uploads';
 
 describe('storage-limits', () => {
   beforeEach(() => {
@@ -214,25 +220,29 @@ describe('storage-limits', () => {
     });
   });
 
-  describe('checkConcurrentUploads', () => {
+  describe('checkConcurrentUploads (#2154 — derived from live pending_uploads rows)', () => {
     it('checkConcurrentUploads_withNonexistentUser_returnsFalse', async () => {
-      vi.mocked(storageRepository.findUserForUploads).mockResolvedValue(undefined);
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue(undefined);
 
       expect(await checkConcurrentUploads('nonexistent')).toBe(false);
+      expect(countLiveUploadsForUser).not.toHaveBeenCalled();
     });
 
-    it('checkConcurrentUploads_withUploadsUnderLimit_returnsTrue', async () => {
-      vi.mocked(storageRepository.findUserForUploads).mockResolvedValue({
-        activeUploads: 0, subscriptionTier: 'free',
+    it('checkConcurrentUploads_withLiveUploadsUnderLimit_returnsTrue', async () => {
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
+        id: 'user-1', storageUsedBytes: 0, subscriptionTier: 'free',
       });
+      vi.mocked(countLiveUploadsForUser).mockResolvedValue(0);
 
       expect(await checkConcurrentUploads('user-1')).toBe(true);
+      expect(countLiveUploadsForUser).toHaveBeenCalledWith('user-1');
     });
 
-    it('checkConcurrentUploads_withUploadsAtLimit_returnsFalse', async () => {
-      vi.mocked(storageRepository.findUserForUploads).mockResolvedValue({
-        activeUploads: 3, subscriptionTier: 'free',
+    it('checkConcurrentUploads_withLiveUploadsAtLimit_returnsFalse', async () => {
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
+        id: 'user-1', storageUsedBytes: 0, subscriptionTier: 'free',
       });
+      vi.mocked(countLiveUploadsForUser).mockResolvedValue(3);
 
       expect(await checkConcurrentUploads('user-1')).toBe(false);
     });
@@ -288,16 +298,6 @@ describe('storage-limits', () => {
       await updateStorageUsage('user-1', -500);
 
       expect(storageRepository.insertStorageEvent).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('updateActiveUploads', () => {
-    it('updateActiveUploads_withDelta_delegatesToRepository', async () => {
-      vi.mocked(storageRepository.updateActiveUploads).mockResolvedValue(undefined);
-
-      await updateActiveUploads('user-1', 1);
-
-      expect(storageRepository.updateActiveUploads).toHaveBeenCalledWith('user-1', 1);
     });
   });
 

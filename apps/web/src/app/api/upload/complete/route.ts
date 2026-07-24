@@ -8,7 +8,8 @@ import { files, filePages } from '@pagespace/db/schema/storage';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
 import { getAppDriveAccessLevel } from '@pagespace/lib/permissions/app-permissions';
-import { updateActiveUploads, updateStorageUsage, shouldChargeForStore } from '@pagespace/lib/services/storage-limits';
+import { updateStorageUsage, shouldChargeForStore } from '@pagespace/lib/services/storage-limits';
+import { releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { buildS3Key, canLinkExistingFileRow } from '@pagespace/lib/services/upload-validation';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -235,7 +236,7 @@ export async function POST(request: Request) {
   const objectExists = await checkObjectExists(buildS3Key(contentHash));
   if (!objectExists) {
     uploadSemaphore.releaseUploadSlot(jobId);
-    await updateActiveUploads(userId, -1).catch(() => undefined);
+    await releasePendingUpload(jobId).catch(() => undefined);
     return NextResponse.json({ error: 'Uploaded object not found in storage' }, { status: 409 });
   }
 
@@ -298,7 +299,7 @@ export async function POST(request: Request) {
     fileWasInserted = result.fileWasInserted;
   } catch (err) {
     uploadSemaphore.releaseUploadSlot(jobId);
-    await updateActiveUploads(userId, -1).catch(() => undefined);
+    await releasePendingUpload(jobId).catch(() => undefined);
     if (err instanceof CrossTenantClaimError) {
       return NextResponse.json(
         { error: 'This file could not be verified for upload. Please re-upload the original file.' },
@@ -314,7 +315,7 @@ export async function POST(request: Request) {
   // failure here must not turn a successful upload into a 500 (which would make
   // the client retry and duplicate the page).
   try {
-    await updateActiveUploads(userId, -1);
+    await releasePendingUpload(jobId);
 
     try {
       await enqueueProcessorJob(userId, driveId, newPage.id);

@@ -9,8 +9,8 @@
 
 import { db } from '../src/db';
 import { users } from '../src/schema/auth';
-import { pages, drives } from '../src/schema/core';
-import { eq, and, isNull, sql, inArray } from '../src/operators';
+import { files } from '../src/schema/storage';
+import { eq, sql } from '../src/operators';
 import { config } from 'dotenv';
 import path from 'path';
 
@@ -32,40 +32,18 @@ async function calculateInitialStorage() {
       try {
         console.log(`\nProcessing user: ${user.email} (${user.id})`);
 
-        // Get all drives owned by this user
-        const userDrives = await db.query.drives.findMany({
-          where: eq(drives.ownerId, user.id),
-          columns: { id: true, name: true }
-        });
-
-        if (userDrives.length === 0) {
-          console.log(`  No drives found for user ${user.email}`);
-          // Set storage to 0 for users with no drives
-          await db.update(users)
-            .set({
-              storageUsedBytes: 0,
-              lastStorageCalculated: new Date()
-            })
-            .where(eq(users.id, user.id));
-          processed++;
-          continue;
-        }
-
-        console.log(`  Found ${userDrives.length} drives`);
-        const driveIds = userDrives.map(d => d.id);
-
-        // Calculate total file size across all user's drives
+        // #2155: sum the charge basis — files.sizeBytes over rows this user
+        // uploaded (createdBy), across all drives, including trashed-but-unpurged
+        // files. This matches what upload-complete charges and what the
+        // scheduled reconcile re-derives; the old pages.fileSize basis
+        // double-counted deduped blobs and missed channel/DM attachments.
         const result = await db
           .select({
-            totalSize: sql<number>`COALESCE(SUM(CAST(${pages.fileSize} AS BIGINT)), 0)`,
+            totalSize: sql<number>`COALESCE(SUM(${files.sizeBytes}), 0)`,
             fileCount: sql<number>`COUNT(*)`
           })
-          .from(pages)
-          .where(and(
-            inArray(pages.driveId, driveIds),
-            eq(pages.type, 'FILE'),
-            eq(pages.isTrashed, false)
-          ));
+          .from(files)
+          .where(eq(files.createdBy, user.id));
 
         const totalSize = Number(result[0]?.totalSize || 0);
         const fileCount = Number(result[0]?.fileCount || 0);
@@ -88,7 +66,6 @@ async function calculateInitialStorage() {
         await db.update(users)
           .set({
             storageUsedBytes: totalSize,
-            activeUploads: 0,
             lastStorageCalculated: new Date()
           })
           .where(eq(users.id, user.id));
@@ -106,7 +83,7 @@ async function calculateInitialStorage() {
           metadata: {
             type: 'initial_calculation',
             fileCount,
-            drives: userDrives.map(d => ({ id: d.id, name: d.name }))
+            basis: 'files.sizeBytes by createdBy'
           }
         });
 

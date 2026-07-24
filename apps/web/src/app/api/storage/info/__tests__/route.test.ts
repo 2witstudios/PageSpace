@@ -29,24 +29,16 @@ vi.mock('@pagespace/db/db', () => ({
     query: {
       drives: { findMany: vi.fn().mockResolvedValue([]) },
     },
-    select: vi.fn().mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        where: vi.fn().mockReturnValue({
-          orderBy: vi.fn().mockResolvedValue([]),
-        }),
-      }),
-    }),
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
-  and: vi.fn(),
-  desc: vi.fn(),
-  inArray: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed' },
   drives: { id: 'id', ownerId: 'ownerId' },
+}));
+vi.mock('@/lib/storage/storage-info-repository', () => ({
+  findUserFileRows: vi.fn().mockResolvedValue([]),
 }));
 
 import { GET } from '../route';

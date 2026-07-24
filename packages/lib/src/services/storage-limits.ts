@@ -1,5 +1,7 @@
 import { getStorageConfigFromSubscription, getStorageTierFromSubscription, STORAGE_TIERS, type SubscriptionTier } from './subscription-utils';
 import { storageRepository, type DrizzleTx } from './storage-repository';
+import { countLiveUploadsForUser } from './pending-uploads';
+import { canStartUpload } from './pending-uploads-core';
 
 // Re-exported for existing consumers; the canonical table lives in subscription-utils.
 export { STORAGE_TIERS };
@@ -112,17 +114,22 @@ export async function checkStorageQuota(
 }
 
 /**
- * Check if user has available upload slots
+ * Check if user has available upload slots.
+ *
+ * #2154: derived from live (unexpired) `pending_uploads` rows rather than the
+ * old `users.activeUploads` counter, which leaked +1 forever when a process
+ * died between presign and complete.
  */
 export async function checkConcurrentUploads(userId: string): Promise<boolean> {
-  const user = await storageRepository.findUserForUploads(userId);
+  const user = await storageRepository.findUserForStorage(userId);
 
   if (!user) return false;
 
   const subscriptionTier = (user.subscriptionTier || 'free') as SubscriptionTier;
   const storageConfig = getStorageConfigFromSubscription(subscriptionTier);
 
-  return (user.activeUploads || 0) < storageConfig.maxConcurrentUploads;
+  const liveUploads = await countLiveUploadsForUser(userId);
+  return canStartUpload(liveUploads, storageConfig.maxConcurrentUploads);
 }
 
 /**
@@ -164,16 +171,6 @@ export async function updateStorageUsage(
       await executeUpdate(tx);
     });
   }
-}
-
-/**
- * Increment/decrement active upload count
- */
-export async function updateActiveUploads(
-  userId: string,
-  delta: number
-): Promise<void> {
-  await storageRepository.updateActiveUploads(userId, delta);
 }
 
 /**
@@ -324,6 +321,86 @@ export async function reconcileStorageUsage(userId: string): Promise<{
     actualUsage,
     difference
   };
+}
+
+export interface StorageDriftInput {
+  /** The users.storageUsedBytes cache (REAL column — may be fractional). */
+  materializedBytes: number;
+  /** SUM(files.sizeBytes) over the user's files rows — the source of truth. */
+  derivedBytes: number;
+}
+
+export interface StorageDriftResult {
+  /** materialized − derived, as integer bytes. */
+  driftBytes: number;
+  /** True when |drift| exceeds the tolerance — the cache needs a rewrite. */
+  flagged: boolean;
+}
+
+/**
+ * #2155 — compare the materialized storage counter against what the `files`
+ * rows imply (pure; modeled on computeBalanceDrift in the credit service).
+ * Between a delete and the orphan-reaper cron the two legitimately disagree,
+ * so a small tolerance keeps the reconcile from thrashing on in-flight state;
+ * a flag means "rewrite the cache from the rows", not "data corruption".
+ */
+export function computeStorageDrift(input: StorageDriftInput, toleranceBytes: number): StorageDriftResult {
+  const driftBytes = Math.round(input.materializedBytes) - Math.round(input.derivedBytes);
+  const flagged = Math.abs(driftBytes) > Math.max(0, Math.round(toleranceBytes));
+  return { driftBytes, flagged };
+}
+
+/** Matches reconcileStorageUsage's historical 1-byte float tolerance. */
+const STORAGE_DRIFT_TOLERANCE_BYTES = 1;
+
+export interface StorageReconcileCorrection {
+  userId: string;
+  previousUsage: number;
+  actualUsage: number;
+  driftBytes: number;
+}
+
+/**
+ * #2155 — the scheduled reconcile behind api/cron/reconcile-storage. Finds
+ * every user whose storageUsedBytes cache has drifted from SUM(files.sizeBytes)
+ * and rewrites the cache from the rows, logging a 'reconcile' storage event per
+ * correction. Per-user failures are isolated so one bad account can't block
+ * the sweep; callers alert on a non-empty `corrected`/`failed`.
+ */
+export async function reconcileAllStorageUsage(): Promise<{
+  corrected: StorageReconcileCorrection[];
+  failed: string[];
+}> {
+  const candidates = await storageRepository.findStorageDriftCandidates(STORAGE_DRIFT_TOLERANCE_BYTES);
+
+  const corrected: StorageReconcileCorrection[] = [];
+  const failed: string[] = [];
+
+  for (const candidate of candidates) {
+    const drift = computeStorageDrift(candidate, STORAGE_DRIFT_TOLERANCE_BYTES);
+    if (!drift.flagged) continue;
+
+    const actualUsage = Math.round(candidate.derivedBytes);
+    const previousUsage = Math.round(candidate.materializedBytes);
+
+    try {
+      await storageRepository.runTransaction(async (tx) => {
+        await storageRepository.setUserStorageInTx(tx, candidate.userId, actualUsage);
+        await storageRepository.insertStorageEvent(tx, {
+          userId: candidate.userId,
+          eventType: 'reconcile',
+          sizeDelta: actualUsage - previousUsage,
+          totalSizeAfter: actualUsage,
+          metadata: { previousUsage, actualUsage, difference: actualUsage - previousUsage, source: 'cron' },
+        });
+      });
+      corrected.push({ userId: candidate.userId, previousUsage, actualUsage, driftBytes: drift.driftBytes });
+    } catch {
+      failed.push(candidate.userId);
+    }
+  }
+
+  return { corrected, failed };
 }
 
 /**

@@ -17,9 +17,12 @@ export interface StorageUserRecord {
   subscriptionTier: string | null;
 }
 
-export interface UploadUserRecord {
-  activeUploads: number;
-  subscriptionTier: string | null;
+export interface StorageDriftCandidate {
+  userId: string;
+  /** users.storageUsedBytes — the cached counter. */
+  materializedBytes: number;
+  /** SUM(files.sizeBytes) for files.createdBy = userId — the source of truth. */
+  derivedBytes: number;
 }
 
 export const storageRepository = {
@@ -30,11 +33,35 @@ export const storageRepository = {
     }) as Promise<StorageUserRecord | undefined>;
   },
 
-  findUserForUploads: async (userId: string): Promise<UploadUserRecord | undefined> => {
-    return db.query.users.findFirst({
-      where: eq(users.id, userId),
-      columns: { activeUploads: true, subscriptionTier: true },
-    }) as Promise<UploadUserRecord | undefined>;
+  /**
+   * #2155 — set-based drift scan for the scheduled reconcile: every user whose
+   * storageUsedBytes cache differs from SUM(files.sizeBytes) over their files
+   * rows by more than the tolerance. One aggregate over `files` (grouped by
+   * creator) joined to `users`, so the cron pays a single pass regardless of
+   * user count.
+   */
+  findStorageDriftCandidates: async (toleranceBytes: number): Promise<StorageDriftCandidate[]> => {
+    const result = await db.execute(sql`
+      SELECT u.id AS "userId",
+             u."storageUsedBytes" AS "materializedBytes",
+             COALESCE(f.total, 0) AS "derivedBytes"
+      FROM users u
+      LEFT JOIN (
+        SELECT "createdBy", SUM("sizeBytes") AS total
+        FROM files
+        WHERE "createdBy" IS NOT NULL
+        GROUP BY "createdBy"
+      ) f ON f."createdBy" = u.id
+      WHERE ABS(ROUND(u."storageUsedBytes") - COALESCE(f.total, 0)) > ${Math.max(0, Math.round(toleranceBytes))}
+    `);
+    return result.rows.map((row) => {
+      const r = row as { userId: string; materializedBytes: number | string; derivedBytes: number | string };
+      return {
+        userId: r.userId,
+        materializedBytes: Number(r.materializedBytes),
+        derivedBytes: Number(r.derivedBytes),
+      };
+    });
   },
 
   findUserDriveIds: async (userId: string): Promise<string[]> => {
@@ -93,12 +120,6 @@ export const storageRepository = {
         eq(pages.isTrashed, false),
       ));
     return Number(result[0]?.count ?? 0);
-  },
-
-  updateActiveUploads: async (userId: string, delta: number): Promise<void> => {
-    await db.update(users)
-      .set({ activeUploads: sql`GREATEST(0, COALESCE("activeUploads", 0) + ${delta})` })
-      .where(eq(users.id, userId));
   },
 
   updateStorageInTx: async (

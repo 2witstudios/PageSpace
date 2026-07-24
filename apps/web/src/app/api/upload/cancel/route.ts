@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope } from '@/lib/auth';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
-import { updateActiveUploads } from '@pagespace/lib/services/storage-limits';
+import { releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -41,7 +41,7 @@ export async function POST(request: Request) {
   }
 
   uploadSemaphore.releaseUploadSlot(jobId);
-  await updateActiveUploads(userId, -1);
+  await releasePendingUpload(jobId);
 
   auditRequest(request, {
     eventType: 'data.write',

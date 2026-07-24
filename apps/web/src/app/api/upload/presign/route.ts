@@ -9,7 +9,8 @@ import {
   canClaimExistingObject,
 } from '@pagespace/lib/services/upload-validation';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
-import { checkStorageQuota, getUserStorageQuota, updateActiveUploads, userReferencesContentHash } from '@pagespace/lib/services/storage-limits';
+import { checkStorageQuota, getUserStorageQuota, userReferencesContentHash } from '@pagespace/lib/services/storage-limits';
+import { registerPendingUpload, releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkObjectExists, issuePresignedPutUrl } from '@/lib/upload/s3-effects';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -138,7 +139,10 @@ export async function POST(request: Request) {
   // Once the slot is acquired, any failure before we return must release it,
   // or the slot leaks until the semaphore's stale-slot sweep.
   try {
-    await updateActiveUploads(userId, 1);
+    // #2154: TTL'd reservation row (replaces the users.activeUploads counter).
+    // If the process dies before /complete, the row simply expires — no
+    // permanent slot leak.
+    await registerPendingUpload(jobId, userId, fileSize);
 
     if (exists && allowFastPath) {
       return NextResponse.json({ alreadyExists: true, jobId, key });
@@ -158,7 +162,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ url, jobId, key, expiresAt });
   } catch (err) {
     uploadSemaphore.releaseUploadSlot(jobId);
-    await updateActiveUploads(userId, -1).catch(() => undefined);
+    await releasePendingUpload(jobId).catch(() => undefined);
     throw err;
   }
 }

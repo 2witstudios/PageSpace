@@ -49,7 +49,6 @@ const mockUser: User = {
   currentAiModel: 'openai/gpt-5.3-chat',
   imageGenerationModel: null,
   storageUsedBytes: 0,
-  activeUploads: 0,
   lastStorageCalculated: null,
   stripeCustomerId: null,
   subscriptionTier: 'free',

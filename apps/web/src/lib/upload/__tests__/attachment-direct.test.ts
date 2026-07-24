@@ -3,15 +3,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // --- Effect seams (pure core is left real) -------------------------------------
 const mockGetUserStorageQuota = vi.fn();
 const mockCheckStorageQuota = vi.fn();
-const mockUpdateActiveUploads = vi.fn();
 const mockUpdateStorageUsage = vi.fn();
 vi.mock('@pagespace/lib/services/storage-limits', () => ({
   getUserStorageQuota: (...a: unknown[]) => mockGetUserStorageQuota(...a),
   checkStorageQuota: (...a: unknown[]) => mockCheckStorageQuota(...a),
-  updateActiveUploads: (...a: unknown[]) => mockUpdateActiveUploads(...a),
   updateStorageUsage: (...a: unknown[]) => mockUpdateStorageUsage(...a),
   // Real (pure) impl: charge iff the files row was newly inserted (M8).
   shouldChargeForStore: (inserted: boolean) => inserted,
+}));
+
+const mockRegisterPendingUpload = vi.fn();
+const mockReleasePendingUpload = vi.fn();
+vi.mock('@pagespace/lib/services/pending-uploads', () => ({
+  registerPendingUpload: (...a: unknown[]) => mockRegisterPendingUpload(...a),
+  releasePendingUpload: (...a: unknown[]) => mockReleasePendingUpload(...a),
 }));
 
 const mockAcquire = vi.fn();
@@ -84,7 +89,8 @@ describe('presignAttachment', () => {
     mockCheckObjectExists.mockResolvedValue(false);
     mockAcquire.mockResolvedValue('job-1');
     mockIssuePresignedPutUrl.mockResolvedValue('https://tigris/put');
-    mockUpdateActiveUploads.mockResolvedValue(undefined);
+    mockRegisterPendingUpload.mockResolvedValue(undefined);
+    mockReleasePendingUpload.mockResolvedValue(undefined);
   });
 
   it('issues a presigned URL and reserves a target-bound slot', async () => {
@@ -96,7 +102,7 @@ describe('presignAttachment', () => {
       driveId: 'drive-1',
       attachmentTarget: PAGE_TARGET,
     }));
-    expect(mockUpdateActiveUploads).toHaveBeenCalledWith('user-1', 1);
+    expect(mockRegisterPendingUpload).toHaveBeenCalledWith('job-1', 'user-1', 1024);
   });
 
   it('reserves driveId "" for a conversation target', async () => {
@@ -137,7 +143,7 @@ describe('presignAttachment', () => {
     mockIssuePresignedPutUrl.mockRejectedValue(new Error('s3 down'));
     await expect(presignAttachment(presignArgs())).rejects.toThrow('s3 down');
     expect(mockRelease).toHaveBeenCalledWith('job-1');
-    expect(mockUpdateActiveUploads).toHaveBeenCalledWith('user-1', -1);
+    expect(mockReleasePendingUpload).toHaveBeenCalledWith('job-1');
   });
 });
 
@@ -147,7 +153,7 @@ describe('completeAttachment', () => {
     mockGetSlotMetadata.mockReturnValue({ contentHash: HASH, fileSize: 1024, mimeType: 'image/png', driveId: 'drive-1', attachmentTarget: PAGE_TARGET });
     mockVerifyAttachmentBytes.mockResolvedValue({ ok: true, detectedMime: 'image/png', size: 1024 });
     mockSaveFileRecordAndLink.mockResolvedValue({ inserted: true });
-    mockUpdateActiveUploads.mockResolvedValue(undefined);
+    mockReleasePendingUpload.mockResolvedValue(undefined);
     mockUpdateStorageUsage.mockResolvedValue(undefined);
   });
 
@@ -194,7 +200,7 @@ describe('completeAttachment', () => {
     expect(res.status).toBe(422);
     expect(mockSaveFileRecordAndLink).not.toHaveBeenCalled();
     expect(mockRelease).toHaveBeenCalledWith('job-1');
-    expect(mockUpdateActiveUploads).toHaveBeenCalledWith('user-1', -1);
+    expect(mockReleasePendingUpload).toHaveBeenCalledWith('job-1');
   });
 
   it('charges storage with no driveId for a conversation target', async () => {
@@ -230,14 +236,14 @@ describe('completeAttachment', () => {
     expect(res.status).toBe(503);
     expect(mockSaveFileRecordAndLink).not.toHaveBeenCalled();
     expect(mockRelease).toHaveBeenCalledWith('job-1');
-    expect(mockUpdateActiveUploads).toHaveBeenCalledWith('user-1', -1);
+    expect(mockReleasePendingUpload).toHaveBeenCalledWith('job-1');
   });
 });
 
 describe('cancelAttachment', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockUpdateActiveUploads.mockResolvedValue(undefined);
+    mockReleasePendingUpload.mockResolvedValue(undefined);
   });
 
   it('releases an owned slot', async () => {

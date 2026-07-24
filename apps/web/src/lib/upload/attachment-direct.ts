@@ -11,10 +11,10 @@
 import {
   getUserStorageQuota,
   checkStorageQuota,
-  updateActiveUploads,
   updateStorageUsage,
   shouldChargeForStore,
 } from '@pagespace/lib/services/storage-limits';
+import { registerPendingUpload, releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { buildS3Key } from '@pagespace/lib/services/upload-validation';
 import { attachmentUploadRepository } from '@pagespace/lib/services/attachment-upload-repository';
@@ -90,7 +90,8 @@ export async function presignAttachment(args: PresignAttachmentArgs): Promise<Or
   // Any failure after the slot is acquired must release it, or it leaks until the
   // semaphore's stale-slot sweep.
   try {
-    await updateActiveUploads(userId, 1);
+    // #2154: TTL'd reservation row (replaces the users.activeUploads counter).
+    await registerPendingUpload(jobId, userId, fileSize);
 
     if (exists) {
       return { status: 200, body: { alreadyExists: true, jobId, key } };
@@ -110,7 +111,7 @@ export async function presignAttachment(args: PresignAttachmentArgs): Promise<Or
     return { status: 200, body: { url, jobId, key, expiresAt } };
   } catch (err) {
     uploadSemaphore.releaseUploadSlot(jobId);
-    await updateActiveUploads(userId, -1).catch(() => undefined);
+    await releasePendingUpload(jobId).catch(() => undefined);
     throw err;
   }
 }
@@ -153,13 +154,13 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
     verify = await verifyAttachmentBytes({ userId, target, contentHash });
   } catch (err) {
     uploadSemaphore.releaseUploadSlot(jobId);
-    await updateActiveUploads(userId, -1).catch(() => undefined);
+    await releasePendingUpload(jobId).catch(() => undefined);
     loggers.api.error('Attachment verify call failed', err as Error);
     return { status: 503, body: { error: 'File verification is temporarily unavailable. Please try again.' } };
   }
   if (!verify.ok) {
     uploadSemaphore.releaseUploadSlot(jobId);
-    await updateActiveUploads(userId, -1).catch(() => undefined);
+    await releasePendingUpload(jobId).catch(() => undefined);
     return { status: verify.status, body: { error: verify.error } };
   }
   const storedMime = verify.detectedMime;
@@ -186,7 +187,7 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
     fileWasInserted = saved.inserted;
   } catch (err) {
     uploadSemaphore.releaseUploadSlot(jobId);
-    await updateActiveUploads(userId, -1).catch(() => undefined);
+    await releasePendingUpload(jobId).catch(() => undefined);
     throw err;
   }
 
@@ -196,7 +197,7 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
   // here must not turn a successful upload into a 500 (which would make the client
   // retry and double-charge storage).
   try {
-    await updateActiveUploads(userId, -1);
+    await releasePendingUpload(jobId);
     if (shouldChargeForStore(fileWasInserted)) {
       await updateStorageUsage(userId, resolvedSize, {
         driveId: attachmentFileDriveId(target) ?? undefined,
@@ -251,6 +252,6 @@ export async function cancelAttachment(args: { userId: string; jobId: string }):
   }
 
   uploadSemaphore.releaseUploadSlot(jobId);
-  await updateActiveUploads(userId, -1).catch(() => undefined);
+  await releasePendingUpload(jobId).catch(() => undefined);
   return { status: 200, body: { success: true } };
 }

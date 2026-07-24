@@ -44,7 +44,7 @@ const USER_COLUMNS = [
   'id', 'name', 'email', 'emailVerified', 'image',
   'googleId', 'appleId', 'provider', 'tokenVersion', 'role',
   'adminRoleVersion', 'currentAiProvider', 'currentAiModel',
-  'storageUsedBytes', 'activeUploads', 'lastStorageCalculated',
+  'storageUsedBytes', 'lastStorageCalculated',
   'stripeCustomerId', 'subscriptionTier', 'tosAcceptedAt',
   'failedLoginAttempts', 'lockedUntil', 'suspendedAt', 'suspendedReason',
   'timezone', 'createdAt', 'updatedAt',
