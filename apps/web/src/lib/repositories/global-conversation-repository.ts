@@ -426,13 +426,42 @@ export const globalConversationRepository = {
   },
 
   /**
+   * The single "message mutated" recompute for `conversations.lastMessageAt`
+   * (#2153). Every mutation that can change which active message is newest —
+   * soft-delete, hard-delete, purge, and the interrupted-stream materializer
+   * — calls this instead of writing the field ad hoc, so a recovered or
+   * deleted message can't leave a conversation sorted on a stale timestamp.
+   */
+  async recomputeLastMessageAt(conversationId: string): Promise<void> {
+    const [newest] = await db
+      .select({ createdAt: messages.createdAt })
+      .from(messages)
+      .where(and(
+        eq(messages.conversationId, conversationId),
+        eq(messages.isActive, true)
+      ))
+      .orderBy(desc(messages.createdAt))
+      .limit(1);
+
+    await db
+      .update(conversations)
+      .set({ lastMessageAt: newest ? newest.createdAt : null })
+      .where(eq(conversations.id, conversationId));
+  },
+
+  /**
    * Soft delete a message
    */
   async softDeleteMessage(messageId: string): Promise<void> {
-    await db
+    const [row] = await db
       .update(messages)
       .set({ isActive: false })
-      .where(eq(messages.id, messageId));
+      .where(eq(messages.id, messageId))
+      .returning({ conversationId: messages.conversationId });
+
+    if (row) {
+      await globalConversationRepository.recomputeLastMessageAt(row.conversationId);
+    }
   },
 
   /**
@@ -469,9 +498,14 @@ export const globalConversationRepository = {
    * Permanently delete a message from the database
    */
   async hardDeleteMessage(messageId: string): Promise<void> {
-    await db
+    const [row] = await db
       .delete(messages)
-      .where(eq(messages.id, messageId));
+      .where(eq(messages.id, messageId))
+      .returning({ conversationId: messages.conversationId });
+
+    if (row) {
+      await globalConversationRepository.recomputeLastMessageAt(row.conversationId);
+    }
   },
 
   /**
@@ -487,7 +521,12 @@ export const globalConversationRepository = {
           lt(messages.createdAt, olderThan)
         )
       )
-      .returning({ id: messages.id });
+      .returning({ id: messages.id, conversationId: messages.conversationId });
+
+    const affectedConversationIds = new Set(result.map((m) => m.conversationId));
+    for (const conversationId of affectedConversationIds) {
+      await globalConversationRepository.recomputeLastMessageAt(conversationId);
+    }
 
     return result.length;
   },

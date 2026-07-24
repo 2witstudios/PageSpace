@@ -12,6 +12,7 @@ import { and, asc, desc, eq, gt, isNotNull, isNull, lt, or, sql, type InferSelec
 import { dmConversations, directMessages, dmMessageReactions, dmThreadFollowers } from '@pagespace/db/schema/social';
 import { fileConversations, files, type AttachmentMeta } from '@pagespace/db/schema/storage';
 import { decryptField } from '../encryption/field-crypto';
+import { deriveConversationLastMessage, deriveLatestTimestamp } from './message-derived-state';
 
 /**
  * Decrypt the joined sender/reactor `name` PII on a loaded DM row in place
@@ -217,37 +218,116 @@ async function insertDmMessageWithAttachment(
       })
       .returning();
 
+    await recomputeConversationLastMessage(tx, input.conversationId);
+
     return { kind: 'ok', message: row };
   });
 }
 
-export interface UpdateConversationLastMessageInput {
-  conversationId: string;
-  lastMessageAt: Date;
-  lastMessagePreview: string;
-}
-
-async function updateConversationLastMessage(
-  input: UpdateConversationLastMessageInput
+/**
+ * The single "message mutated" recompute for `dmConversations.lastMessageAt`
+ * / `lastMessagePreview` (#2153). Every mutation that can change which
+ * top-level message is newest — insert, edit, soft-delete, restore, purge —
+ * calls this instead of writing the derived fields ad hoc, so none of them
+ * can drift from the surviving rows. Always re-derives from a fresh query
+ * inside the caller's transaction rather than trusting the mutation's own
+ * row to still be newest, which is what makes this safe to call
+ * unconditionally instead of threading a "was this the newest row" check
+ * through every call site.
+ */
+async function recomputeConversationLastMessage(
+  tx: Tx,
+  conversationId: string
 ): Promise<void> {
-  // Guard against out-of-order writes: only apply when the stored timestamp
-  // is null or strictly older than the new row's createdAt. Two concurrent
-  // sends can otherwise let an older message overwrite the inbox preview.
-  await db
-    .update(dmConversations)
-    .set({
-      lastMessageAt: input.lastMessageAt,
-      lastMessagePreview: input.lastMessagePreview,
+  const [newest] = await tx
+    .select({
+      createdAt: directMessages.createdAt,
+      content: directMessages.content,
+      attachmentMeta: directMessages.attachmentMeta,
     })
+    .from(directMessages)
     .where(
       and(
-        eq(dmConversations.id, input.conversationId),
-        or(
-          isNull(dmConversations.lastMessageAt),
-          lt(dmConversations.lastMessageAt, input.lastMessageAt)
-        )
+        eq(directMessages.conversationId, conversationId),
+        eq(directMessages.isActive, true),
+        isNull(directMessages.parentId)
+      )
+    )
+    .orderBy(desc(directMessages.createdAt))
+    .limit(1);
+
+  const derived = deriveConversationLastMessage(newest ?? null);
+
+  await tx
+    .update(dmConversations)
+    .set({
+      lastMessageAt: derived.lastMessageAt,
+      lastMessagePreview: derived.lastMessagePreview,
+    })
+    .where(eq(dmConversations.id, conversationId));
+}
+
+/**
+ * The "message mutated" recompute for a DM thread's `lastReplyAt` (#2153).
+ * Soft-delete/restore of a reply calls this after adjusting `replyCount` so
+ * the timestamp always points at a surviving reply instead of a tombstoned
+ * one.
+ */
+async function recomputeThreadLastReply(tx: Tx, parentId: string): Promise<void> {
+  const replies = await tx
+    .select({ createdAt: directMessages.createdAt })
+    .from(directMessages)
+    .where(
+      and(
+        eq(directMessages.parentId, parentId),
+        eq(directMessages.isActive, true)
       )
     );
+
+  await tx
+    .update(directMessages)
+    .set({ lastReplyAt: deriveLatestTimestamp(replies.map((r) => r.createdAt)) })
+    .where(eq(directMessages.id, parentId));
+}
+
+interface MirrorEditPropagationInput {
+  id: string;
+  content: string;
+  isEdited: boolean;
+  editedAt: Date;
+  mirroredFromId: string | null;
+}
+
+/**
+ * Propagate an edit to the other half of a `mirroredFromId` pair (#2153) —
+ * a thread reply and its "Also send to DM" top-level mirror must never
+ * disagree after one side is edited. Whichever side was edited, this finds
+ * and updates its sibling: if the edited row itself carries
+ * `mirroredFromId`, it IS the mirror, so update the source reply; otherwise
+ * look for a mirror row pointing back at the edited row. A message with no
+ * mirror relationship in either direction makes the second branch a no-op
+ * (zero rows match).
+ */
+async function propagateMirrorEdit(
+  tx: Tx,
+  edited: MirrorEditPropagationInput
+): Promise<void> {
+  const patch = {
+    content: edited.content,
+    isEdited: edited.isEdited,
+    editedAt: edited.editedAt,
+  };
+  if (edited.mirroredFromId) {
+    await tx
+      .update(directMessages)
+      .set(patch)
+      .where(eq(directMessages.id, edited.mirroredFromId));
+    return;
+  }
+  await tx
+    .update(directMessages)
+    .set(patch)
+    .where(eq(directMessages.mirroredFromId, edited.id));
 }
 
 export interface ActiveMessageLookupInput {
@@ -306,7 +386,11 @@ async function softDeleteMessage(messageId: string): Promise<number> {
           eq(directMessages.isActive, true)
         )
       )
-      .returning({ id: directMessages.id, parentId: directMessages.parentId });
+      .returning({
+        id: directMessages.id,
+        parentId: directMessages.parentId,
+        conversationId: directMessages.conversationId,
+      });
 
     const row = result[0];
     if (row?.parentId) {
@@ -316,6 +400,16 @@ async function softDeleteMessage(messageId: string): Promise<number> {
           replyCount: sql`GREATEST(${directMessages.replyCount} - 1, 0)`,
         })
         .where(eq(directMessages.id, row.parentId));
+      // The deleted row was itself a reply — its parent's lastReplyAt may
+      // have pointed at the row we just tombstoned (#2153).
+      await recomputeThreadLastReply(tx, row.parentId);
+    }
+    if (row) {
+      // Recompute unconditionally, not just for a top-level delete — a
+      // tombstoned mirror row is also top-level (parentId === null) and
+      // must repair the inbox preview the same way a plain top-level
+      // delete does.
+      await recomputeConversationLastMessage(tx, row.conversationId);
     }
 
     return result.length;
@@ -342,7 +436,11 @@ async function restoreDmMessage(messageId: string): Promise<number> {
           eq(directMessages.isActive, false)
         )
       )
-      .returning({ id: directMessages.id, parentId: directMessages.parentId });
+      .returning({
+        id: directMessages.id,
+        parentId: directMessages.parentId,
+        conversationId: directMessages.conversationId,
+      });
 
     const row = result[0];
     if (row?.parentId) {
@@ -358,7 +456,13 @@ async function restoreDmMessage(messageId: string): Promise<number> {
             replyCount: sql`${directMessages.replyCount} + 1`,
           })
           .where(eq(directMessages.id, row.parentId));
+        // Mirrors the counter bump's own guard — only move lastReplyAt
+        // forward for a parent that's still active (#2153).
+        await recomputeThreadLastReply(tx, row.parentId);
       }
+    }
+    if (row) {
+      await recomputeConversationLastMessage(tx, row.conversationId);
     }
 
     return result.length;
@@ -430,6 +534,14 @@ async function purgeInactiveMessages(olderThan: Date): Promise<number> {
       `);
     }
 
+    // Repair any conversation whose preview drifted before this fix existed
+    // — a purge is exactly the kind of non-insert mutation path the issue
+    // calls out as able to skip the bump silently (#2153).
+    const purgedConversationIds = new Set(purgedMessages.map((m) => m.conversationId));
+    for (const conversationId of purgedConversationIds) {
+      await recomputeConversationLastMessage(tx, conversationId);
+    }
+
     return purgedMessages.length;
   });
 }
@@ -441,17 +553,42 @@ export interface EditActiveMessageInput {
 }
 
 async function editActiveMessage(input: EditActiveMessageInput): Promise<number> {
-  const result = await db
-    .update(directMessages)
-    .set({ content: input.content, isEdited: true, editedAt: input.editedAt })
-    .where(
-      and(
-        eq(directMessages.id, input.messageId),
-        eq(directMessages.isActive, true)
+  return db.transaction(async (tx) => {
+    const result = await tx
+      .update(directMessages)
+      .set({ content: input.content, isEdited: true, editedAt: input.editedAt })
+      .where(
+        and(
+          eq(directMessages.id, input.messageId),
+          eq(directMessages.isActive, true)
+        )
       )
-    )
-    .returning({ id: directMessages.id });
-  return result.length;
+      .returning({
+        id: directMessages.id,
+        conversationId: directMessages.conversationId,
+        mirroredFromId: directMessages.mirroredFromId,
+      });
+
+    const row = result[0];
+    if (!row) return 0;
+
+    // The edited row may itself be a mirror, or may have its own mirror
+    // (#2153) — propagate either way so the two copies can't disagree.
+    await propagateMirrorEdit(tx, {
+      id: row.id,
+      content: input.content,
+      isEdited: true,
+      editedAt: input.editedAt,
+      mirroredFromId: row.mirroredFromId,
+    });
+
+    // Whichever side changed content might be the top-level message the
+    // conversation preview is derived from — recompute unconditionally
+    // rather than threading a "was this row top-level" check through here.
+    await recomputeConversationLastMessage(tx, row.conversationId);
+
+    return result.length;
+  });
 }
 
 export interface ListActiveMessagesInput {
@@ -660,6 +797,11 @@ async function insertDmThreadReply(
         })
         .returning();
       mirror = mirrorRow;
+      // The mirror is a top-level row and behaves like a regular send —
+      // recompute the conversation preview from it (#2153). A thread-only
+      // reply (no mirror) intentionally does NOT reach this — it doesn't
+      // touch the top-level stream the preview is derived from.
+      await recomputeConversationLastMessage(tx, input.conversationId);
     }
 
     return {
@@ -814,7 +956,6 @@ async function removeDmReaction(input: DmReactionInput): Promise<number> {
 export const dmMessageRepository = {
   findConversationForParticipant,
   insertDmMessageWithAttachment,
-  updateConversationLastMessage,
   findActiveMessage,
   findMessageInConversation,
   softDeleteMessage,

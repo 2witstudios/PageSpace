@@ -169,6 +169,7 @@ let nextAutoId = 0;
 const autoId = () => `auto-${++nextAutoId}`;
 
 const messageDefaults = (): Row => ({
+  content: '',
   isActive: true,
   replyCount: 0,
   lastReplyAt: null,
@@ -221,8 +222,13 @@ export class DbState {
   private transactionCallCount = 0;
 
   seed(table: string, rows: Row[]): void {
+    // Route through the same applyDefaults() an insert() uses — a seeded row
+    // simulates one already in the DB, so it must carry the same NOT NULL
+    // column defaults (e.g. directMessages.content) an inserted row gets.
+    // Without this, a fixture that omits an unrelated column silently
+    // produces `undefined` where production would never allow it.
     const cur = this.tables.get(table) ?? [];
-    cur.push(...rows.map((r) => ({ ...r })));
+    cur.push(...rows.map((r) => applyDefaults(table, { ...r })));
     this.tables.set(table, cur);
   }
 

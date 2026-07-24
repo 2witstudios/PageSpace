@@ -27,7 +27,6 @@ vi.mock('@pagespace/lib/auth/verification-utils', () => ({
 // --- DM repository seam (the boundary the route must delegate to) --------------
 const mockFindConversationForParticipant = vi.fn();
 const mockInsertDmMessageWithAttachment = vi.fn();
-const mockUpdateConversationLastMessage = vi.fn();
 const mockListActiveMessages = vi.fn();
 const mockMarkActiveMessagesRead = vi.fn();
 const mockUpdateConversationLastRead = vi.fn();
@@ -41,8 +40,6 @@ vi.mock('@pagespace/lib/services/dm-message-repository', () => ({
       mockFindConversationForParticipant(...args),
     insertDmMessageWithAttachment: (...args: unknown[]) =>
       mockInsertDmMessageWithAttachment(...args),
-    updateConversationLastMessage: (...args: unknown[]) =>
-      mockUpdateConversationLastMessage(...args),
     listActiveMessages: (...args: unknown[]) => mockListActiveMessages(...args),
     markActiveMessagesRead: (...args: unknown[]) =>
       mockMarkActiveMessagesRead(...args),
@@ -182,7 +179,6 @@ function setupHappyPath() {
     kind: 'ok',
     message: mockInsertedRow(input),
   }));
-  mockUpdateConversationLastMessage.mockResolvedValue(undefined);
   mockCreateOrUpdateMessageNotification.mockResolvedValue(undefined);
   mockBroadcastInboxEvent.mockResolvedValue(undefined);
 }
@@ -343,7 +339,7 @@ describe('POST /api/messages/[conversationId]', () => {
       expect(res.status).toBe(403);
       const body = await res.json();
       expect(body.error).toMatch(/do not own this file/i);
-      expect(mockUpdateConversationLastMessage).not.toHaveBeenCalled();
+      expect(mockCreateOrUpdateMessageNotification).not.toHaveBeenCalled();
       expect(mockAuditRequest).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
@@ -363,7 +359,7 @@ describe('POST /api/messages/[conversationId]', () => {
       expect(res.status).toBe(403);
       const body = await res.json();
       expect(body.error).toMatch(/not linked to this conversation/i);
-      expect(mockUpdateConversationLastMessage).not.toHaveBeenCalled();
+      expect(mockCreateOrUpdateMessageNotification).not.toHaveBeenCalled();
       expect(mockAuditRequest).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
@@ -383,7 +379,7 @@ describe('POST /api/messages/[conversationId]', () => {
       expect(res.status).toBe(404);
       const body = await res.json();
       expect(body.error).toMatch(/file not found/i);
-      expect(mockUpdateConversationLastMessage).not.toHaveBeenCalled();
+      expect(mockCreateOrUpdateMessageNotification).not.toHaveBeenCalled();
     });
   });
 
@@ -419,12 +415,6 @@ describe('POST /api/messages/[conversationId]', () => {
     it('uses [image: name] for image attachments with empty content', async () => {
       await callRoute({ fileId: FILE_ID, attachmentMeta: imageMeta });
 
-      expect(mockUpdateConversationLastMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          conversationId: CONVERSATION_ID,
-          lastMessagePreview: `[image: ${imageMeta.originalName}]`,
-        })
-      );
       expect(mockCreateOrUpdateMessageNotification).toHaveBeenCalledWith(
         RECIPIENT_ID,
         CONVERSATION_ID,
@@ -436,10 +426,11 @@ describe('POST /api/messages/[conversationId]', () => {
     it('uses [file: name] for non-image attachments with empty content', async () => {
       await callRoute({ fileId: FILE_ID, attachmentMeta: pdfMeta });
 
-      expect(mockUpdateConversationLastMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          lastMessagePreview: `[file: ${pdfMeta.originalName}]`,
-        })
+      expect(mockCreateOrUpdateMessageNotification).toHaveBeenCalledWith(
+        RECIPIENT_ID,
+        CONVERSATION_ID,
+        `[file: ${pdfMeta.originalName}]`,
+        SENDER_ID
       );
     });
 
@@ -450,11 +441,6 @@ describe('POST /api/messages/[conversationId]', () => {
         attachmentMeta: imageMeta,
       });
 
-      expect(mockUpdateConversationLastMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          lastMessagePreview: `[image: ${imageMeta.originalName}]`,
-        })
-      );
       expect(mockCreateOrUpdateMessageNotification).toHaveBeenCalledWith(
         RECIPIENT_ID,
         CONVERSATION_ID,
@@ -490,8 +476,11 @@ describe('POST /api/messages/[conversationId]', () => {
         attachmentMeta: imageMeta,
       });
 
-      expect(mockUpdateConversationLastMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ lastMessagePreview: 'caption' })
+      expect(mockCreateOrUpdateMessageNotification).toHaveBeenCalledWith(
+        RECIPIENT_ID,
+        CONVERSATION_ID,
+        'caption',
+        SENDER_ID
       );
     });
 
@@ -500,8 +489,11 @@ describe('POST /api/messages/[conversationId]', () => {
       await callRoute({ content: long });
 
       const expected = long.substring(0, 100) + '...';
-      expect(mockUpdateConversationLastMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ lastMessagePreview: expected })
+      expect(mockCreateOrUpdateMessageNotification).toHaveBeenCalledWith(
+        RECIPIENT_ID,
+        CONVERSATION_ID,
+        expected,
+        SENDER_ID
       );
     });
   });
@@ -850,7 +842,6 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
     );
     expect(mockInsertDmMessageWithAttachment).not.toHaveBeenCalled();
     // No mirror → conversation preview should not bump for the thread-only reply.
-    expect(mockUpdateConversationLastMessage).not.toHaveBeenCalled();
     expect(mockCreateOrUpdateMessageNotification).not.toHaveBeenCalled();
     // PR 5: thread-only reply with NO followers (default mock) emits no inbox events.
     // Earlier assertion was "no inbox bumps at all"; now it remains true only because
@@ -902,11 +893,13 @@ describe('POST /api/messages/[conversationId] (thread reply)', () => {
     expect(ids).toEqual(['mirror-1', 'reply-1']);
 
     // Mirror behaves like a regular top-level send — preview + recipient inbox bump.
-    expect(mockUpdateConversationLastMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        conversationId: CONVERSATION_ID,
-        lastMessagePreview: 'echo',
-      })
+    // insertDmThreadReply itself recomputes the stored preview (#2153); the route's
+    // observable side effects here are the notification and inbox broadcast.
+    expect(mockCreateOrUpdateMessageNotification).toHaveBeenCalledWith(
+      RECIPIENT_ID,
+      CONVERSATION_ID,
+      'echo',
+      SENDER_ID
     );
     expect(mockBroadcastInboxEvent).toHaveBeenCalledWith(
       RECIPIENT_ID,

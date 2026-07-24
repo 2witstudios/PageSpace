@@ -797,6 +797,11 @@
       "import": "./dist/services/channel-message-repository.js",
       "require": "./dist/services/channel-message-repository.js"
     },
+    "./services/message-derived-state": {
+      "types": "./dist/services/message-derived-state.d.ts",
+      "import": "./dist/services/message-derived-state.js",
+      "require": "./dist/services/message-derived-state.js"
+    },
     "./services/page-webhook-service": {
       "types": "./dist/services/page-webhook-service.d.ts",
       "import": "./dist/services/page-webhook-service.js",
