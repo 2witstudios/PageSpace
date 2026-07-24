@@ -783,14 +783,52 @@ async function killAtLocation(
 }
 
 /**
- * A row with `streamSessionId === null` (a chat-surface row, which never has
- * one, or a PTY row whose stream was never opened) has nothing running to
- * kill — drop it with a DB-only write, no Sprite touch at all. Only a row
- * whose PTY IS running needs its scope's Sprite resolved (which, for
- * machine/project scope, may acquire/reconnect it) before `killAtLocation`
- * can reach in and kill that specific session.
+ * Destroy this session's OWN per-session Sprite and drop the row — the
+ * sessions-per-location kill, the exact mirror of `killBranch`. Runs whenever
+ * the row points at its own Sprite, EVEN with `streamSessionId === null`: a
+ * session provisioned at spawn but never PTY-connected still has a live billing
+ * VM, and a bare DB-delete would strand it (its AFTER-DELETE reclaim trigger
+ * would enqueue it, but killing here is the direct, immediate path). Destroying
+ * the whole Sprite terminates every process on it, so the PTY session is killed
+ * with it — no separate `killSession` needed.
+ */
+async function killOwnSprite(
+  row: MachineAgentTerminalRecord & { sandboxId: string },
+  deps: Pick<KillAgentTerminalDeps, 'store' | 'host'>,
+): Promise<KillAgentTerminalResult> {
+  try {
+    // Identity-guarded: the kill is name-keyed and names are reused across
+    // re-creates, so without this a Sprite re-provisioned under this session's
+    // key would be destroyed in place of the one we meant.
+    await deps.host.kill({ machineId: row.sandboxId, expectedInstanceId: row.spriteInstanceId ?? undefined });
+  } catch {
+    // Sprite may still be running — keep the tracking row so a retry (or the
+    // orphan reconciler, once teardown is requested) can still find and kill it.
+    return { ok: false, reason: 'error' };
+  }
+
+  // CAS on sandboxId+instance, NOT a name-keyed delete: a concurrent re-spawn can
+  // write a REPLACEMENT Sprite into this row between our kill and this delete, and
+  // a name-keyed delete would then destroy the pointer to that brand-new, LIVE VM
+  // (invisible even to the reconciler). Losing the CAS is the correct outcome —
+  // the winner's Sprite is live and tracked, and the one we killed was redundant.
+  await deps.store.removeIfSandbox({ id: row.id, sandboxId: row.sandboxId, spriteInstanceId: row.spriteInstanceId });
+  return { ok: true };
+}
+
+/**
+ * Tear a session down. A row with its OWN Sprite (sessions-per-location) has that
+ * Sprite destroyed via `killOwnSprite`. Otherwise (a legacy/pre-per-session row,
+ * or one whose provision never landed): a row with `streamSessionId === null`
+ * has nothing running — drop it with a DB-only write; a row whose PTY IS running
+ * needs its scope's shared Sprite resolved (which, for machine/project scope, may
+ * acquire/reconnect it) before `killAtLocation` kills that specific PTY session.
  */
 async function killRow(row: MachineAgentTerminalRecord, deps: KillAgentTerminalDeps): Promise<KillAgentTerminalResult> {
+  if (row.sandboxId && !row.spriteTornDownAt) {
+    return killOwnSprite({ ...row, sandboxId: row.sandboxId }, deps);
+  }
+
   if (row.streamSessionId === null) {
     await deps.store.remove({ machineId: row.machineId, projectName: row.projectName, machineBranchId: row.machineBranchId }, row.name);
     return { ok: true };

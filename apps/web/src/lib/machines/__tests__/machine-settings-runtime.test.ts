@@ -28,6 +28,7 @@ const {
   mockCreatePageEventPayload,
   mockSelectWhere,
   mockProjectSelectWhere,
+  mockAgentTerminalSelectWhere,
   mockUpdateSet,
   mockUpdateWhere,
   mockFindPage,
@@ -47,6 +48,7 @@ const {
   }),
   mockSelectWhere: vi.fn(),
   mockProjectSelectWhere: vi.fn(),
+  mockAgentTerminalSelectWhere: vi.fn(),
   mockUpdateSet: vi.fn(),
   mockUpdateWhere: vi.fn(),
   mockFindPage: vi.fn(),
@@ -61,10 +63,12 @@ vi.mock('@pagespace/db/db', () => ({
   db: {
     select: () => ({
       from: (table: unknown) => ({
-        where: (...args: unknown[]) =>
-          (table as { __table?: string } | undefined)?.__table === 'machine_projects'
-            ? mockProjectSelectWhere(...args)
-            : mockSelectWhere(...args),
+        where: (...args: unknown[]) => {
+          const marker = (table as { __table?: string } | undefined)?.__table;
+          if (marker === 'machine_projects') return mockProjectSelectWhere(...args);
+          if (marker === 'machine_agent_terminals') return mockAgentTerminalSelectWhere(...args);
+          return mockSelectWhere(...args);
+        },
       }),
     }),
     update: () => ({
@@ -109,6 +113,17 @@ vi.mock('@pagespace/db/schema/machine-branches', () => ({
 vi.mock('@pagespace/db/schema/machine-projects', () => ({
   machineProjects: {
     __table: 'machine_projects',
+    id: 'id',
+    machineId: 'machineId',
+    sandboxId: 'sandboxId',
+    spriteInstanceId: 'spriteInstanceId',
+    teardownRequestedAt: 'teardownRequestedAt',
+    spriteTornDownAt: 'spriteTornDownAt',
+  },
+}));
+vi.mock('@pagespace/db/schema/machine-agent-terminals', () => ({
+  machineAgentTerminals: {
+    __table: 'machine_agent_terminals',
     id: 'id',
     machineId: 'machineId',
     sandboxId: 'sandboxId',
@@ -167,6 +182,7 @@ beforeEach(() => {
   mockGetActorInfo.mockResolvedValue({ actorEmail: 'jono@x.test', actorDisplayName: 'Jono' });
   mockSelectWhere.mockResolvedValue([]);
   mockProjectSelectWhere.mockResolvedValue([]);
+  mockAgentTerminalSelectWhere.mockResolvedValue([]);
   mockUpdateWhere.mockResolvedValue(undefined);
   mockApplyPageMutation.mockResolvedValue({});
   mockFindPage.mockResolvedValue({ driveId: 'drive-1' });
@@ -398,6 +414,41 @@ describe('createMachineSpriteTeardown().teardown', () => {
     const setCalls = mockUpdateSet.mock.calls.map((c) => Object.keys(c[0] as object)[0]);
     expect(setCalls).toContain('teardownRequestedAt');
     expect(setCalls).toContain('spriteTornDownAt');
+  });
+
+  it('kills per-session agent-terminal Sprites too, stamping their rows — the cascade would otherwise strand them as billing orphans', async () => {
+    mockSelectWhere
+      .mockResolvedValueOnce([]) // children of the root — none
+      .mockResolvedValueOnce([]); // root's branch rows — none
+    mockAgentTerminalSelectWhere.mockResolvedValueOnce([
+      { id: 'agt-1', sandboxId: 'sb-agent', spriteInstanceId: 'inst-agent' },
+    ]);
+
+    await createMachineSpriteTeardown().teardown(MACHINE);
+
+    // The session Sprite is killed (identity-guarded), before the machine's own.
+    expect(mockHostKill.mock.calls.map((c) => (c[0] as { machineId: string }).machineId)).toEqual([
+      'sb-agent',
+      `own-key-${MACHINE}`,
+    ]);
+    expect(mockHostKill).toHaveBeenCalledWith(
+      expect.objectContaining({ machineId: 'sb-agent', expectedInstanceId: 'inst-agent' }),
+    );
+    const setCalls = mockUpdateSet.mock.calls.map((c) => Object.keys(c[0] as object)[0]);
+    expect(setCalls).toContain('teardownRequestedAt');
+    expect(setCalls).toContain('spriteTornDownAt');
+  });
+
+  it('leaves the agent-terminal row UNSTAMPED when its kill fails, so the reconciler can retry it', async () => {
+    mockSelectWhere.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    mockAgentTerminalSelectWhere.mockResolvedValueOnce([{ id: 'agt-1', sandboxId: 'sb-agent', spriteInstanceId: 'inst-agent' }]);
+    mockHostKill.mockImplementation(async ({ machineId }: { machineId: string }) => {
+      if (machineId === 'sb-agent') throw new Error('sprite unreachable');
+    });
+
+    await createMachineSpriteTeardown().teardown(MACHINE);
+
+    expect(mockUpdateSet).not.toHaveBeenCalledWith({ spriteTornDownAt: expect.any(Date) });
   });
 
   it('records teardown INTENT before any kill, so a failed kill is reclaimable by the reconciler', async () => {

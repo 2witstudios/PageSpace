@@ -2282,3 +2282,115 @@ describe('resolveAgentTerminal — per-session Sprite resolution (sessions-per-l
     expect(acquireCalls).toEqual([TERMINAL_ID]); // fell back to the shared machine Sprite
   });
 });
+
+describe('killAgentTerminal — per-session Sprite teardown (sessions-per-location)', () => {
+  it('given a row with its OWN Sprite, should DESTROY that Sprite (identity-guarded) and CAS-remove the row', async () => {
+    const killed: Array<{ machineId: string; expectedInstanceId?: string | null }> = [];
+    const { store, rows } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-own-k',
+        name: 'cli',
+        agentType: 'shell',
+        scope: 'machine',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+        streamSessionId: 'sess-1',
+      }),
+    ]);
+    const deps: AgentTerminalsDeps = makeDeps({
+      store,
+      host: makeHost({
+        kill: async (args) => {
+          killed.push(args);
+        },
+      }),
+    });
+
+    const result = await killAgentTerminalById({ agentTerminalId: 'agent-terminal-own-k', deps });
+    expect(result).toEqual({ ok: true });
+    expect(killed).toEqual([{ machineId: SESSION_SANDBOX_ID, expectedInstanceId: SESSION_INSTANCE_ID }]);
+    expect(rows.size).toBe(0);
+  });
+
+  it('given a spawned-but-never-connected session (streamSessionId null) with its OWN Sprite, should STILL destroy the Sprite (no unreferenced billing VM)', async () => {
+    const killed: string[] = [];
+    const { store, rows } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-own-nc',
+        name: 'cli',
+        agentType: 'shell',
+        scope: 'machine',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+        streamSessionId: null,
+      }),
+    ]);
+    const deps: AgentTerminalsDeps = makeDeps({
+      store,
+      host: makeHost({ kill: async (args) => { killed.push(args.machineId); } }),
+    });
+
+    const result = await killAgentTerminalById({ agentTerminalId: 'agent-terminal-own-nc', deps });
+    expect(result).toEqual({ ok: true });
+    expect(killed).toEqual([SESSION_SANDBOX_ID]);
+    expect(rows.size).toBe(0);
+  });
+
+  it('given the Sprite kill fails, should keep the row (so a retry / the reconciler can find it)', async () => {
+    const { store, rows } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-own-fail',
+        name: 'cli',
+        agentType: 'shell',
+        scope: 'machine',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+      }),
+    ]);
+    const deps: AgentTerminalsDeps = makeDeps({
+      store,
+      host: makeHost({ kill: async () => { throw new Error('control plane down'); } }),
+    });
+
+    const result = await killAgentTerminalById({ agentTerminalId: 'agent-terminal-own-fail', deps });
+    expect(result).toEqual({ ok: false, reason: 'error' });
+    expect(rows.size).toBe(1);
+  });
+
+  it('given a concurrent re-spawn wrote a REPLACEMENT Sprite, the CAS-remove should NOT delete the row (protects the live VM)', async () => {
+    const { store, rows } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-own-cas',
+        name: 'cli',
+        agentType: 'shell',
+        scope: 'machine',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+      }),
+    ]);
+    const deps: AgentTerminalsDeps = makeDeps({
+      store,
+      host: makeHost({
+        kill: async () => {
+          // Simulate a racer re-provisioning a replacement into the row between
+          // our kill and the CAS-remove.
+          await store.updateSpriteIdentity({
+            id: 'agent-terminal-own-cas',
+            previousSandboxId: SESSION_SANDBOX_ID,
+            sessionKey: 'pgs-agt-new',
+            sandboxId: 'sprite-session-2',
+            spriteInstanceId: 'inst-session-2',
+            egressPolicyToken: null,
+            now: NOW,
+          });
+        },
+      }),
+    });
+
+    const result = await killAgentTerminalById({ agentTerminalId: 'agent-terminal-own-cas', deps });
+    expect(result).toEqual({ ok: true });
+    // The replacement's pointer survives — CAS refused to delete it.
+    expect(rows.size).toBe(1);
+    expect([...rows.values()][0].sandboxId).toBe('sprite-session-2');
+  });
+});
