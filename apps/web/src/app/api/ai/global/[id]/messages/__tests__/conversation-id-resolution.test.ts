@@ -19,12 +19,30 @@ const {
   mockLifecycleFinish,
   mockBroadcastChatUserMessage,
   mockSaveGlobalAssistantMessageToDatabase,
+  mockConversation,
+  mockUserProfile,
+  mockAuthUser,
 } = vi.hoisted(() => ({
   mockCreateStreamLifecycle: vi.fn(),
   mockLifecyclePushPart: vi.fn(),
   mockLifecycleFinish: vi.fn(),
   mockBroadcastChatUserMessage: vi.fn().mockResolvedValue(undefined),
   mockSaveGlobalAssistantMessageToDatabase: vi.fn().mockResolvedValue(undefined),
+  // Hoisted (not a plain top-level const) because the `@pagespace/db/db` mock
+  // factory below references these eagerly (`.mockResolvedValue(...)` needs
+  // its argument immediately) — and #2153's new stream-takeover ->
+  // materialize-interrupted-stream -> global-conversation-repository import
+  // chain can now trigger that factory before a plain const would have run.
+  mockConversation: {
+    id: 'conv-1',
+    userId: 'user-1',
+    title: 'Test Conversation',
+    type: 'global',
+    contextId: null,
+    isActive: true,
+  },
+  mockUserProfile: { displayName: 'Display User' },
+  mockAuthUser: { name: 'Auth User', subscriptionTier: 'free' },
 }));
 
 interface MockUIStreamOptions {
@@ -73,17 +91,6 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 
-const mockConversation = {
-  id: 'conv-1',
-  userId: 'user-1',
-  title: 'Test Conversation',
-  type: 'global',
-  contextId: null,
-  isActive: true,
-};
-const mockUserProfile = { displayName: 'Display User' };
-const mockAuthUser = { name: 'Auth User', subscriptionTier: 'free' };
-
 vi.mock('@pagespace/db/db', () => {
   const select = vi.fn(() => ({
     from: vi.fn((table: unknown) => {
@@ -122,6 +129,11 @@ vi.mock('@pagespace/db/db', () => {
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(), and: vi.fn(), desc: vi.fn(), gt: vi.fn(), lt: vi.fn(),
   exists: vi.fn((sub) => ({ type: 'exists', sub })),
+  // globalConversationRepository's module-scope `hasMessages` query (and its
+  // new #2153 recomputeLastMessageAt helper, now reachable transitively via
+  // stream-takeover -> materialize-interrupted-stream) both use `sql` — this
+  // mock must cover it or the module throws on import.
+  sql: Object.assign(vi.fn(), { join: vi.fn() }),
 }));
 
 vi.mock('../resolve-or-create-conversation', () => ({

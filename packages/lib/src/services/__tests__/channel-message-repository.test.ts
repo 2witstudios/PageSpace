@@ -520,9 +520,9 @@ describe('channelMessageRepository.restoreChannelMessage', () => {
 
     assert({
       given: 'a restore of a thread reply whose parent must be re-validated under lock',
-      should: 'invoke .for("update") against channelMessages exactly once — the lock blocks a concurrent softDelete until the bump commits',
+      should: 'invoke .for("update") against channelMessages twice — once for the parent re-validation before the replyCount bump, once more inside recomputeThreadLastReply (#2153) before it re-derives lastReplyAt — both against the same parent row, so the second is a safe reentrant re-lock, not a new race window',
       actual: testDbState.selectsForUpdate('channelMessages').length,
-      expected: 1,
+      expected: 2,
     });
   });
 });
@@ -1228,6 +1228,159 @@ describe('channelMessageRepository — PII decryption at the read edge (GDPR #96
       should: 'pass the plaintext name through unchanged',
       actual: (rows[0]?.user as { name: string } | null)?.name,
       expected: 'Plain Pat',
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #2153 — derived-field maintenance on every mutation path.
+// parent.lastReplyAt is derived from the surviving active replies, and a
+// mirror row must never diverge from its source reply on edit.
+// ---------------------------------------------------------------------------
+
+describe('channel thread lastReplyAt recompute (#2153)', () => {
+  const T1 = new Date('2026-07-01T10:00:00Z');
+  const T2 = new Date('2026-07-01T11:00:00Z');
+
+  it('soft-deleting the newest reply moves parent.lastReplyAt back to the surviving reply', async () => {
+    testDbState.seed('channelMessages', [
+      { id: 'parent-1', pageId: 'page-1', userId: 'u-1', content: 'root', isActive: true, parentId: null, replyCount: 2, lastReplyAt: T2, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', pageId: 'page-1', userId: 'u-2', content: 'first', isActive: true, parentId: 'parent-1', createdAt: T1 },
+      { id: 'reply-2', pageId: 'page-1', userId: 'u-1', content: 'second', isActive: true, parentId: 'parent-1', createdAt: T2 },
+    ]);
+
+    await channelMessageRepository.softDeleteChannelMessage('reply-2');
+
+    const parent = testDbState.rows('channelMessages').find((r) => r.id === 'parent-1');
+    assert({
+      given: 'a soft-delete of the newest reply in a channel thread',
+      should: 'recompute lastReplyAt from the surviving replies instead of leaving it pointing at the deleted one',
+      actual: { replyCount: parent?.replyCount, lastReplyAt: parent?.lastReplyAt },
+      expected: { replyCount: 1, lastReplyAt: T1 },
+    });
+  });
+
+  it('soft-deleting the only reply clears parent.lastReplyAt', async () => {
+    testDbState.seed('channelMessages', [
+      { id: 'parent-1', pageId: 'page-1', userId: 'u-1', content: 'root', isActive: true, parentId: null, replyCount: 1, lastReplyAt: T1, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', pageId: 'page-1', userId: 'u-2', content: 'only', isActive: true, parentId: 'parent-1', createdAt: T1 },
+    ]);
+
+    await channelMessageRepository.softDeleteChannelMessage('reply-1');
+
+    const parent = testDbState.rows('channelMessages').find((r) => r.id === 'parent-1');
+    assert({
+      given: 'a soft-delete of the only reply in a channel thread',
+      should: 'clear lastReplyAt (no surviving replies) alongside the counter decrement',
+      actual: { replyCount: parent?.replyCount, lastReplyAt: parent?.lastReplyAt },
+      expected: { replyCount: 0, lastReplyAt: null },
+    });
+  });
+
+  it('restoring a reply recomputes parent.lastReplyAt from the now-surviving rows', async () => {
+    testDbState.seed('channelMessages', [
+      { id: 'parent-1', pageId: 'page-1', userId: 'u-1', content: 'root', isActive: true, parentId: null, replyCount: 1, lastReplyAt: T1, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', pageId: 'page-1', userId: 'u-2', content: 'first', isActive: true, parentId: 'parent-1', createdAt: T1 },
+      { id: 'reply-2', pageId: 'page-1', userId: 'u-1', content: 'second', isActive: false, parentId: 'parent-1', createdAt: T2 },
+    ]);
+
+    await channelMessageRepository.restoreChannelMessage('reply-2');
+
+    const parent = testDbState.rows('channelMessages').find((r) => r.id === 'parent-1');
+    assert({
+      given: 'a restore of the newest (previously soft-deleted) channel reply',
+      should: 'move lastReplyAt forward to the restored reply',
+      actual: { replyCount: parent?.replyCount, lastReplyAt: parent?.lastReplyAt },
+      expected: { replyCount: 2, lastReplyAt: T2 },
+    });
+  });
+
+  it('locks the parent row before recomputing lastReplyAt on soft-delete — a path with no pre-existing parent lock to piggyback on', async () => {
+    testDbState.seed('channelMessages', [
+      { id: 'parent-1', pageId: 'page-1', userId: 'u-1', content: 'root', isActive: true, parentId: null, replyCount: 1, lastReplyAt: T1, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', pageId: 'page-1', userId: 'u-2', content: 'only', isActive: true, parentId: 'parent-1', createdAt: T1 },
+    ]);
+
+    await channelMessageRepository.softDeleteChannelMessage('reply-1');
+
+    assert({
+      given: 'a reply soft-delete — softDeleteChannelMessage never pre-locks the parent the way restoreChannelMessage does',
+      should: 'invoke .for("update") against the parent row exactly once via recomputeThreadLastReply (#2153), closing the same concurrent-delete race window restore already had covered',
+      actual: testDbState.selectsForUpdate('channelMessages').length,
+      expected: 1,
+    });
+  });
+});
+
+describe('channel mirror edit propagation (#2153)', () => {
+  const T1 = new Date('2026-07-01T10:00:00Z');
+  const editedAt = new Date('2026-07-01T12:00:00Z');
+
+  it('editing a thread reply propagates the new content to its top-level mirror', async () => {
+    testDbState.seed('channelMessages', [
+      { id: 'parent-1', pageId: 'page-1', userId: 'u-1', content: 'root', isActive: true, parentId: null, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', pageId: 'page-1', userId: 'u-2', content: 'echo', isActive: true, parentId: 'parent-1', createdAt: T1 },
+      { id: 'mirror-1', pageId: 'page-1', userId: 'u-2', content: 'echo', isActive: true, parentId: null, mirroredFromId: 'reply-1', createdAt: T1 },
+    ]);
+
+    await channelMessageRepository.updateChannelMessageContent({
+      messageId: 'reply-1',
+      content: 'edited echo',
+      editedAt,
+    });
+
+    const mirror = testDbState.rows('channelMessages').find((r) => r.id === 'mirror-1');
+    assert({
+      given: 'an edit of a channel thread reply that has an alsoSendToParent mirror',
+      should: 'propagate the edit to the mirror row so the two copies cannot disagree',
+      actual: { content: mirror?.content, editedAt: mirror?.editedAt },
+      expected: { content: 'edited echo', editedAt },
+    });
+  });
+
+  it('editing the mirror propagates the new content back to the thread reply', async () => {
+    testDbState.seed('channelMessages', [
+      { id: 'parent-1', pageId: 'page-1', userId: 'u-1', content: 'root', isActive: true, parentId: null, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', pageId: 'page-1', userId: 'u-2', content: 'echo', isActive: true, parentId: 'parent-1', createdAt: T1 },
+      { id: 'mirror-1', pageId: 'page-1', userId: 'u-2', content: 'echo', isActive: true, parentId: null, mirroredFromId: 'reply-1', createdAt: T1 },
+    ]);
+
+    await channelMessageRepository.updateChannelMessageContent({
+      messageId: 'mirror-1',
+      content: 'edited echo',
+      editedAt,
+    });
+
+    const reply = testDbState.rows('channelMessages').find((r) => r.id === 'reply-1');
+    assert({
+      given: 'an edit of the top-level mirror row',
+      should: 'propagate the edit back to the source thread reply',
+      actual: { content: reply?.content, editedAt: reply?.editedAt },
+      expected: { content: 'edited echo', editedAt },
+    });
+  });
+
+  it('does not propagate aiMeta to the mirror — only content and editedAt', async () => {
+    testDbState.seed('channelMessages', [
+      { id: 'reply-1', pageId: 'page-1', userId: 'u-2', content: 'echo', isActive: true, parentId: 'parent-1', createdAt: T1 },
+      { id: 'mirror-1', pageId: 'page-1', userId: 'u-2', content: 'echo', isActive: true, parentId: null, mirroredFromId: 'reply-1', aiMeta: null, createdAt: T1 },
+    ]);
+
+    await channelMessageRepository.updateChannelMessageContent({
+      messageId: 'reply-1',
+      content: 'edited echo',
+      editedAt,
+      aiMeta: { senderType: 'agent', senderName: 'Agent Smith' },
+    });
+
+    const rows = testDbState.rows('channelMessages');
+    const reply = rows.find((r) => r.id === 'reply-1');
+    const mirror = rows.find((r) => r.id === 'mirror-1');
+    assert({
+      given: 'an edit carrying an aiMeta replacement for the source reply',
+      should: 'apply aiMeta to the edited row only while still syncing the mirror content',
+      actual: { replyAiMeta: reply?.aiMeta, mirrorAiMeta: mirror?.aiMeta, mirrorContent: mirror?.content },
+      expected: { replyAiMeta: { senderType: 'agent', senderName: 'Agent Smith' }, mirrorAiMeta: null, mirrorContent: 'edited echo' },
     });
   });
 });

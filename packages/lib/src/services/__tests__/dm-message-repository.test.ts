@@ -180,9 +180,9 @@ describe('dmMessageRepository.restoreDmMessage', () => {
 
     assert({
       given: 'a DM restore parent re-read inside the tx',
-      should: 'invoke .for("update") against directMessages exactly once — the lock blocks a concurrent softDelete until the bump commits',
+      should: 'invoke .for("update") against directMessages twice — once for the parent re-validation before the replyCount bump, once more inside recomputeThreadLastReply (#2153) before it re-derives lastReplyAt — both against the same parent row, so the second is a safe reentrant re-lock, not a new race window',
       actual: testDbState.selectsForUpdate('directMessages').length,
-      expected: 1,
+      expected: 2,
     });
   });
 });
@@ -1260,6 +1260,318 @@ describe('dmMessageRepository — PII decryption at the read edge (GDPR #965)', 
       should: 'pass the plaintext name through unchanged',
       actual: (rows[0]?.sender as { name: string } | null)?.name,
       expected: 'Plain Pat',
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #2153 — derived-field maintenance on every mutation path.
+// dmConversations.lastMessageAt/lastMessagePreview and parent.lastReplyAt are
+// derived from the surviving active rows; every mutation (insert, edit,
+// delete, restore, purge) must leave them consistent with that source.
+// ---------------------------------------------------------------------------
+
+describe('DM conversation derived state (#2153)', () => {
+  const T1 = new Date('2026-07-01T10:00:00Z');
+  const T2 = new Date('2026-07-01T11:00:00Z');
+
+  const seedConversation = () => {
+    testDbState.seed('dmConversations', [
+      {
+        id: 'conv-1',
+        participant1Id: 'u-1',
+        participant2Id: 'u-2',
+        lastMessageAt: T2,
+        lastMessagePreview: 'newest words',
+      },
+    ]);
+  };
+
+  it('soft-deleting the newest DM recomputes the conversation preview from the surviving row', async () => {
+    seedConversation();
+    testDbState.seed('directMessages', [
+      { id: 'm-old', conversationId: 'conv-1', senderId: 'u-1', content: 'older words', isActive: true, parentId: null, createdAt: T1 },
+      { id: 'm-new', conversationId: 'conv-1', senderId: 'u-2', content: 'newest words', isActive: true, parentId: null, createdAt: T2 },
+    ]);
+
+    await dmMessageRepository.softDeleteMessage('m-new');
+
+    const conv = testDbState.rows('dmConversations')[0];
+    assert({
+      given: 'a soft-delete of the newest top-level DM',
+      should: 'recompute lastMessageAt/lastMessagePreview from the surviving older message — deleted content must not linger in the inbox',
+      actual: { lastMessageAt: conv.lastMessageAt, lastMessagePreview: conv.lastMessagePreview },
+      expected: { lastMessageAt: T1, lastMessagePreview: 'older words' },
+    });
+  });
+
+  it('soft-deleting the only DM clears the conversation preview', async () => {
+    seedConversation();
+    testDbState.seed('directMessages', [
+      { id: 'm-only', conversationId: 'conv-1', senderId: 'u-1', content: 'newest words', isActive: true, parentId: null, createdAt: T2 },
+    ]);
+
+    await dmMessageRepository.softDeleteMessage('m-only');
+
+    const conv = testDbState.rows('dmConversations')[0];
+    assert({
+      given: 'a soft-delete of the only active DM in the conversation',
+      should: 'null out both derived fields instead of leaving the deleted content visible',
+      actual: { lastMessageAt: conv.lastMessageAt, lastMessagePreview: conv.lastMessagePreview },
+      expected: { lastMessageAt: null, lastMessagePreview: null },
+    });
+  });
+
+  it('editing the newest DM recomputes the conversation preview to the new content', async () => {
+    seedConversation();
+    testDbState.seed('directMessages', [
+      { id: 'm-new', conversationId: 'conv-1', senderId: 'u-2', content: 'newest words', isActive: true, parentId: null, createdAt: T2 },
+    ]);
+
+    await dmMessageRepository.editActiveMessage({
+      messageId: 'm-new',
+      content: 'edited words',
+      editedAt: new Date('2026-07-01T12:00:00Z'),
+    });
+
+    const conv = testDbState.rows('dmConversations')[0];
+    assert({
+      given: 'an edit of the newest top-level DM',
+      should: 'recompute the preview so the inbox shows the edited content, not the original',
+      actual: { lastMessageAt: conv.lastMessageAt, lastMessagePreview: conv.lastMessagePreview },
+      expected: { lastMessageAt: T2, lastMessagePreview: 'edited words' },
+    });
+  });
+
+  it('restoring a top-level DM recomputes the conversation preview from it', async () => {
+    testDbState.seed('dmConversations', [
+      { id: 'conv-1', participant1Id: 'u-1', participant2Id: 'u-2', lastMessageAt: T1, lastMessagePreview: 'older words' },
+    ]);
+    testDbState.seed('directMessages', [
+      { id: 'm-old', conversationId: 'conv-1', senderId: 'u-1', content: 'older words', isActive: true, parentId: null, createdAt: T1 },
+      { id: 'm-new', conversationId: 'conv-1', senderId: 'u-2', content: 'newest words', isActive: false, deletedAt: T2, parentId: null, createdAt: T2 },
+    ]);
+
+    await dmMessageRepository.restoreDmMessage('m-new');
+
+    const conv = testDbState.rows('dmConversations')[0];
+    assert({
+      given: 'a restore of the newest (previously soft-deleted) top-level DM',
+      should: 'recompute the conversation derived state from the restored row',
+      actual: { lastMessageAt: conv.lastMessageAt, lastMessagePreview: conv.lastMessagePreview },
+      expected: { lastMessageAt: T2, lastMessagePreview: 'newest words' },
+    });
+  });
+
+  it('inserting a top-level DM recomputes the conversation preview inside the same transaction', async () => {
+    testDbState.seed('dmConversations', [
+      { id: 'conv-1', participant1Id: 'u-1', participant2Id: 'u-2', lastMessageAt: null, lastMessagePreview: null },
+    ]);
+
+    await dmMessageRepository.insertDmMessageWithAttachment({
+      conversationId: 'conv-1',
+      senderId: 'u-1',
+      content: 'fresh send',
+      fileId: null,
+      attachmentMeta: null,
+    });
+
+    const conv = testDbState.rows('dmConversations')[0];
+    const msg = testDbState.rows('directMessages')[0];
+    assert({
+      given: 'a top-level DM insert',
+      should: 'set the conversation derived state from the inserted row — the repository, not the route, owns the bump',
+      actual: { lastMessageAt: conv.lastMessageAt, lastMessagePreview: conv.lastMessagePreview },
+      expected: { lastMessageAt: msg.createdAt, lastMessagePreview: 'fresh send' },
+    });
+  });
+
+  it('a mirror created by alsoSendToParent bumps the conversation preview', async () => {
+    testDbState.seed('dmConversations', [
+      { id: 'conv-1', participant1Id: 'u-1', participant2Id: 'u-2', lastMessageAt: null, lastMessagePreview: null },
+    ]);
+    testDbState.seed('directMessages', [
+      { id: 'parent-1', conversationId: 'conv-1', senderId: 'u-1', content: 'root', isActive: true, parentId: null, replyCount: 0, createdAt: T1 },
+    ]);
+
+    const result = await dmMessageRepository.insertDmThreadReply({
+      parentId: 'parent-1',
+      conversationId: 'conv-1',
+      senderId: 'u-2',
+      content: 'echoed reply',
+      fileId: null,
+      attachmentMeta: null,
+      alsoSendToParent: true,
+    });
+
+    const conv = testDbState.rows('dmConversations')[0];
+    assert({
+      given: 'a thread reply mirrored to the top-level stream',
+      should: 'derive the conversation preview from the mirror row inside the same transaction',
+      actual: {
+        kind: result.kind,
+        lastMessagePreview: conv.lastMessagePreview,
+        lastMessageAtIsDate: conv.lastMessageAt instanceof Date,
+      },
+      expected: { kind: 'ok', lastMessagePreview: 'echoed reply', lastMessageAtIsDate: true },
+    });
+  });
+
+  it('purging tombstones repairs a conversation preview that drifted before the fix', async () => {
+    // Pre-fix drift: the tombstone's content is still in the preview.
+    testDbState.seed('dmConversations', [
+      { id: 'conv-1', participant1Id: 'u-1', participant2Id: 'u-2', lastMessageAt: T2, lastMessagePreview: 'newest words' },
+    ]);
+    testDbState.seed('directMessages', [
+      { id: 'm-old', conversationId: 'conv-1', senderId: 'u-1', content: 'older words', isActive: true, parentId: null, createdAt: T1 },
+      { id: 'm-dead', conversationId: 'conv-1', senderId: 'u-2', content: 'newest words', isActive: false, deletedAt: new Date('2026-06-01T00:00:00Z'), parentId: null, createdAt: T2 },
+    ]);
+
+    await dmMessageRepository.purgeInactiveMessages(new Date('2026-06-15T00:00:00Z'));
+
+    const conv = testDbState.rows('dmConversations')[0];
+    assert({
+      given: 'a purge that hard-deletes a tombstone whose content still sat in the (pre-fix drifted) preview',
+      should: 'recompute the preview from the surviving rows while purging',
+      actual: { lastMessageAt: conv.lastMessageAt, lastMessagePreview: conv.lastMessagePreview },
+      expected: { lastMessageAt: T1, lastMessagePreview: 'older words' },
+    });
+  });
+
+  it('locks the conversation row before recomputing (SELECT ... FOR UPDATE), so a concurrent recompute cannot interleave and overwrite a fresher preview with a stale one', async () => {
+    seedConversation();
+    testDbState.seed('directMessages', [
+      { id: 'm-only', conversationId: 'conv-1', senderId: 'u-1', content: 'newest words', isActive: true, parentId: null, createdAt: T2 },
+    ]);
+
+    await dmMessageRepository.softDeleteMessage('m-only');
+
+    assert({
+      given: 'a soft-delete that triggers the conversation-preview recompute — a path with no pre-existing parent-row lock to piggyback on',
+      should: 'invoke .for("update") against dmConversations exactly once before reading the surviving messages (#2153) — this is the lock a concurrent send/edit/delete/restore/purge on the same conversation must serialize against',
+      actual: testDbState.selectsForUpdate('dmConversations').length,
+      expected: 1,
+    });
+  });
+});
+
+describe('DM thread lastReplyAt recompute (#2153)', () => {
+  const T1 = new Date('2026-07-01T10:00:00Z');
+  const T2 = new Date('2026-07-01T11:00:00Z');
+
+  it('soft-deleting the newest reply moves parent.lastReplyAt back to the surviving reply', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'parent-1', conversationId: 'conv-1', senderId: 'u-1', content: 'root', isActive: true, parentId: null, replyCount: 2, lastReplyAt: T2, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', conversationId: 'conv-1', senderId: 'u-2', content: 'first', isActive: true, parentId: 'parent-1', createdAt: T1 },
+      { id: 'reply-2', conversationId: 'conv-1', senderId: 'u-1', content: 'second', isActive: true, parentId: 'parent-1', createdAt: T2 },
+    ]);
+
+    await dmMessageRepository.softDeleteMessage('reply-2');
+
+    const parent = testDbState.rows('directMessages').find((r) => r.id === 'parent-1');
+    assert({
+      given: 'a soft-delete of the newest reply in a DM thread',
+      should: 'recompute lastReplyAt from the surviving replies instead of leaving it pointing at the deleted one',
+      actual: { replyCount: parent?.replyCount, lastReplyAt: parent?.lastReplyAt },
+      expected: { replyCount: 1, lastReplyAt: T1 },
+    });
+  });
+
+  it('soft-deleting the only reply clears parent.lastReplyAt', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'parent-1', conversationId: 'conv-1', senderId: 'u-1', content: 'root', isActive: true, parentId: null, replyCount: 1, lastReplyAt: T1, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', conversationId: 'conv-1', senderId: 'u-2', content: 'only', isActive: true, parentId: 'parent-1', createdAt: T1 },
+    ]);
+
+    await dmMessageRepository.softDeleteMessage('reply-1');
+
+    const parent = testDbState.rows('directMessages').find((r) => r.id === 'parent-1');
+    assert({
+      given: 'a soft-delete of the only reply in a DM thread',
+      should: 'clear lastReplyAt (no surviving replies) alongside the counter decrement',
+      actual: { replyCount: parent?.replyCount, lastReplyAt: parent?.lastReplyAt },
+      expected: { replyCount: 0, lastReplyAt: null },
+    });
+  });
+
+  it('restoring a reply recomputes parent.lastReplyAt from the now-surviving rows', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'parent-1', conversationId: 'conv-1', senderId: 'u-1', content: 'root', isActive: true, parentId: null, replyCount: 1, lastReplyAt: T1, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', conversationId: 'conv-1', senderId: 'u-2', content: 'first', isActive: true, parentId: 'parent-1', createdAt: T1 },
+      { id: 'reply-2', conversationId: 'conv-1', senderId: 'u-1', content: 'second', isActive: false, deletedAt: T2, parentId: 'parent-1', createdAt: T2 },
+    ]);
+
+    await dmMessageRepository.restoreDmMessage('reply-2');
+
+    const parent = testDbState.rows('directMessages').find((r) => r.id === 'parent-1');
+    assert({
+      given: 'a restore of the newest (previously soft-deleted) DM reply',
+      should: 'move lastReplyAt forward to the restored reply',
+      actual: { replyCount: parent?.replyCount, lastReplyAt: parent?.lastReplyAt },
+      expected: { replyCount: 2, lastReplyAt: T2 },
+    });
+  });
+
+  it('locks the parent row before recomputing lastReplyAt on soft-delete — a path with no pre-existing parent lock to piggyback on', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'parent-1', conversationId: 'conv-1', senderId: 'u-1', content: 'root', isActive: true, parentId: null, replyCount: 1, lastReplyAt: T1, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', conversationId: 'conv-1', senderId: 'u-2', content: 'only', isActive: true, parentId: 'parent-1', createdAt: T1 },
+    ]);
+
+    await dmMessageRepository.softDeleteMessage('reply-1');
+
+    assert({
+      given: 'a reply soft-delete — softDeleteMessage never pre-locks the parent the way restoreDmMessage does',
+      should: 'invoke .for("update") against the parent row exactly once via recomputeThreadLastReply (#2153), closing the same concurrent-delete race window restore already had covered',
+      actual: testDbState.selectsForUpdate('directMessages').length,
+      expected: 1,
+    });
+  });
+});
+
+describe('DM mirror edit propagation (#2153)', () => {
+  const T1 = new Date('2026-07-01T10:00:00Z');
+  const editedAt = new Date('2026-07-01T12:00:00Z');
+
+  it('editing a thread reply propagates the new content to its top-level mirror', async () => {
+    testDbState.seed('dmConversations', [
+      { id: 'conv-1', participant1Id: 'u-1', participant2Id: 'u-2', lastMessageAt: T1, lastMessagePreview: 'echo' },
+    ]);
+    testDbState.seed('directMessages', [
+      { id: 'parent-1', conversationId: 'conv-1', senderId: 'u-1', content: 'root', isActive: true, parentId: null, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', conversationId: 'conv-1', senderId: 'u-2', content: 'echo', isActive: true, parentId: 'parent-1', createdAt: T1 },
+      { id: 'mirror-1', conversationId: 'conv-1', senderId: 'u-2', content: 'echo', isActive: true, parentId: null, mirroredFromId: 'reply-1', createdAt: T1 },
+    ]);
+
+    await dmMessageRepository.editActiveMessage({ messageId: 'reply-1', content: 'edited echo', editedAt });
+
+    const mirror = testDbState.rows('directMessages').find((r) => r.id === 'mirror-1');
+    assert({
+      given: 'an edit of a thread reply that has an alsoSendToParent mirror',
+      should: 'propagate the edit to the mirror row so the two copies cannot disagree',
+      actual: { content: mirror?.content, isEdited: mirror?.isEdited, editedAt: mirror?.editedAt },
+      expected: { content: 'edited echo', isEdited: true, editedAt },
+    });
+  });
+
+  it('editing the mirror propagates the new content back to the thread reply', async () => {
+    testDbState.seed('dmConversations', [
+      { id: 'conv-1', participant1Id: 'u-1', participant2Id: 'u-2', lastMessageAt: T1, lastMessagePreview: 'echo' },
+    ]);
+    testDbState.seed('directMessages', [
+      { id: 'parent-1', conversationId: 'conv-1', senderId: 'u-1', content: 'root', isActive: true, parentId: null, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', conversationId: 'conv-1', senderId: 'u-2', content: 'echo', isActive: true, parentId: 'parent-1', createdAt: T1 },
+      { id: 'mirror-1', conversationId: 'conv-1', senderId: 'u-2', content: 'echo', isActive: true, parentId: null, mirroredFromId: 'reply-1', createdAt: T1 },
+    ]);
+
+    await dmMessageRepository.editActiveMessage({ messageId: 'mirror-1', content: 'edited echo', editedAt });
+
+    const reply = testDbState.rows('directMessages').find((r) => r.id === 'reply-1');
+    assert({
+      given: 'an edit of the top-level mirror row',
+      should: 'propagate the edit back to the source thread reply',
+      actual: { content: reply?.content, isEdited: reply?.isEdited, editedAt: reply?.editedAt },
+      expected: { content: 'edited echo', isEdited: true, editedAt },
     });
   });
 });
