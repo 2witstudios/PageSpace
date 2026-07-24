@@ -176,6 +176,15 @@ export interface MachinePaneBindingProject {
   id?: string;
   sandboxId?: string | null;
   spriteTornDownAt?: Date | null;
+  /**
+   * The LOCAL branch name this project's checkout was last observed on (a
+   * `git status -b` snapshot, `machine-project-promotion.ts`'s capture) —
+   * `undefined`/`null` until first captured. Used ONLY to synthesize one
+   * extra branch-shaped handle for the project's own checkout (see
+   * `currentBranchHandle`); it never changes what `projectHandle` itself
+   * resolves to.
+   */
+  currentBranchName?: string | null;
 }
 
 /** A branch row as this module sees it: its identity, its Sprite, and whether that Sprite is confirmed destroyed. */
@@ -187,7 +196,12 @@ export interface MachinePaneBindingBranch {
   spriteTornDownAt: Date | null;
 }
 
-/** The minimal slice of the Projects store this module needs — the bound project, plus the machine's whole project list for a machine-root cascade. */
+/**
+ * The minimal slice of the Projects store this module needs — the bound
+ * project, plus the machine's whole project list for a machine-root cascade.
+ * Rows carry `currentBranchName` (see `MachinePaneBindingProject`), the
+ * observed-branch snapshot `currentBranchHandle` synthesizes from.
+ */
 export interface MachinePaneBindingProjectLookup {
   findByName(machineId: string, name: string): Promise<MachinePaneBindingProject | null>;
   list(machineId: string): Promise<MachinePaneBindingProject[]>;
@@ -267,19 +281,30 @@ export async function deriveMachinePaneBinding(
     deps.branchLookup.listAll(row.machineId),
   ]);
   const liveBranchesByProject = new Map<string, MachinePaneBindingBranch[]>();
+  // ALL branches (live + torn-down) per project — `currentBranchHandle`'s
+  // suppression check needs the full history, not just the live set.
+  const allBranchesByProject = new Map<string, MachinePaneBindingBranch[]>();
   for (const branch of allBranches) {
+    const allGroup = allBranchesByProject.get(branch.projectName) ?? [];
+    allGroup.push(branch);
+    allBranchesByProject.set(branch.projectName, allGroup);
     if (branch.spriteTornDownAt !== null) continue; // same fail-closed rule as `branchHandles`
     const group = liveBranchesByProject.get(branch.projectName) ?? [];
     group.push(branch);
     liveBranchesByProject.set(branch.projectName, group);
   }
   // Depth-first, in the store's own project order: each project immediately
-  // followed by its branches. Order is part of the contract only insofar as
+  // followed by its branches (live, then one synthesized handle if any — see
+  // `currentBranchHandle`). Order is part of the contract only insofar as
   // self is first (see `MachineNodeHandleSet`); the rest is display sanity.
-  const descendants = projects.flatMap((project) => [
-    projectHandle(row.machineId, project),
-    ...(liveBranchesByProject.get(project.name) ?? []).map((b) => branchHandle(row.machineId, b)),
-  ]);
+  const descendants = projects.flatMap((project) => {
+    const synthesized = currentBranchHandle(row.machineId, project, allBranchesByProject.get(project.name) ?? []);
+    return [
+      projectHandle(row.machineId, project),
+      ...(liveBranchesByProject.get(project.name) ?? []).map((b) => branchHandle(row.machineId, b)),
+      ...(synthesized ? [synthesized] : []),
+    ];
+  });
   return { ok: true, binding: { self, handles: [self, ...descendants] } };
 }
 
@@ -324,11 +349,14 @@ function branchHandle(machineId: string, branch: MachinePaneBindingBranch): Mach
 }
 
 /**
- * The live branches of one project. A branch whose Sprite is CONFIRMED
- * destroyed (`spriteTornDownAt`) is omitted rather than derived-then-denied:
- * that is the same fail-closed rule the natively-bound branch path applies
- * (`branch_not_found`), expressed as absence from the set. A torn-down branch
- * is unaddressable from anywhere.
+ * The live branches of one project, PLUS one synthesized handle when the
+ * project's own checkout is observably on a branch no explicitly-spawned
+ * worktree already claims (`currentBranchHandle`). A branch whose Sprite is
+ * CONFIRMED destroyed (`spriteTornDownAt`) is omitted from the LIVE set
+ * rather than derived-then-denied — that is the same fail-closed rule the
+ * natively-bound branch path applies (`branch_not_found`), expressed as
+ * absence from the set — but it still COUNTS toward the synthesis
+ * suppression check below: a torn-down worktree's name is still claimed.
  */
 async function branchHandles(
   machineId: string,
@@ -336,5 +364,44 @@ async function branchHandles(
   deps: DeriveMachinePaneBindingDeps,
 ): Promise<MachineNodeHandle[]> {
   const branches = await deps.branchLookup.list(machineId, project.name);
-  return branches.filter((b) => b.spriteTornDownAt === null).map((b) => branchHandle(machineId, b));
+  const live = branches.filter((b) => b.spriteTornDownAt === null).map((b) => branchHandle(machineId, b));
+  const synthesized = currentBranchHandle(machineId, project, branches);
+  return synthesized ? [...live, synthesized] : live;
+}
+
+/**
+ * Synthesize ONE MORE handle for the project's own checkout, addressable
+ * under the LOCAL branch name it was last OBSERVED on (`project.
+ * currentBranchName` — a `git status -b` snapshot, `machine-project-
+ * promotion.ts`'s capture) — or `null` when there is nothing to synthesize.
+ *
+ * This is deliberately NOT the naming-convention fallback rejected three
+ * times across PR #2232's review (falling back to the project whenever an
+ * unresolved branch name matched a conventional alias like "main"/"master"):
+ * that guessed a DESTINATION from a NAME, with no way to confirm the guess
+ * was true — a typo fell through, a torn-down same-named branch got silently
+ * misrouted, a hard-deleted branch left no trace to tell "gone" from "never
+ * existed" apart. This synthesizes a handle ONLY for a name actually OBSERVED
+ * on the project's OWN checkout, and that handle copies the SAME
+ * `cwd`/`projectSandbox` the project's own handle already resolves to — it is
+ * the same physical checkout, not a new Sprite, so there is no second
+ * destination for a bad guess to land on.
+ *
+ * The one residual risk — a SEPARATELY spawned branch worktree existing under
+ * the same name, live or since torn down — is closed by fail-closed
+ * suppression: synthesis requires `allProjectBranches` (every branch record
+ * for this project, torn-down included) to have NO ROW at all under that
+ * name. Any record, even a dead one, means a real second worktree once
+ * claimed that name, and this must defer to it rather than guess which one
+ * the caller meant.
+ */
+function currentBranchHandle(
+  machineId: string,
+  project: MachinePaneBindingProject,
+  allProjectBranches: readonly MachinePaneBindingBranch[],
+): MachineNodeHandle | null {
+  const branchName = project.currentBranchName;
+  if (!branchName) return null;
+  if (allProjectBranches.some((b) => b.branchName === branchName)) return null;
+  return { ...projectHandle(machineId, project), kind: 'branch', branch: branchName };
 }
