@@ -9,7 +9,7 @@ import {
   STORAGE_TIERS,
   formatBytes
 } from '@pagespace/lib/services/storage-limits';
-import { getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { getUserDriveAccess, getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db'
 import { eq, or, inArray } from '@pagespace/db/operators'
 import { drives } from '@pagespace/db/schema/core';
@@ -54,7 +54,11 @@ export async function GET(request: NextRequest) {
       }
       try {
         const reconcileResult = await reconcileStorageUsage(user.id);
-        console.log(`Storage reconciled for user ${user.id}:`, reconcileResult);
+        if (reconcileResult.outcome === 'lock_busy') {
+          console.log(`Storage reconcile for user ${user.id} skipped: another reconcile is already running`);
+        } else {
+          console.log(`Storage reconciled for user ${user.id}:`, reconcileResult);
+        }
       } catch (error) {
         console.error('Storage reconciliation failed:', error);
       }
@@ -80,15 +84,8 @@ export async function GET(request: NextRequest) {
     // created in ANY drive the user has upload access to, not just owned
     // ones (#2225 review) — without the union, a shared-drive upload's bytes
     // would count toward the total but be invisible in this breakdown.
-    // Union both driveId (the blob's creation drive, for byte attribution) and
-    // pageDriveId (the representative page's own drive, for the title/id
-    // access check below — these can differ under cross-drive dedup).
     const referencedDriveIds = Array.from(
-      new Set(
-        userFiles
-          .flatMap(f => [f.driveId, f.pageDriveId])
-          .filter((id): id is string => id !== null),
-      ),
+      new Set(userFiles.map(f => f.driveId).filter((id): id is string => id !== null)),
     );
     const driveWhere = referencedDriveIds.length > 0
       ? or(eq(drives.ownerId, user.id), inArray(drives.id, referencedDriveIds))
@@ -111,24 +108,37 @@ export async function GET(request: NextRequest) {
 
     const fileTypeBreakdown = buildFileTypeBreakdown(userFiles);
 
-    // #2225 review: files.createdBy survives drive-membership removal, so the
-    // representative page's title/id must not be shown once the user has lost
-    // access to THAT page's drive (pageDriveId, not files.driveId — they can
-    // differ under cross-drive dedup). Reuses the same access-checked drive
-    // set as storageByDrive; a page in an inaccessible drive falls back to the
-    // same fileId/"Untitled file" placeholder already used for DM attachments.
-    const accessibleDriveIds = new Set(userDrives.map(d => d.id));
-    const canShowPage = (f: { pageDriveId: string | null }) =>
-      f.pageDriveId !== null && accessibleDriveIds.has(f.pageDriveId);
+    const topLargestFiles = pickLargestFiles(userFiles, 10);
+    const topRecentFiles = pickRecentFiles(userFiles, 10);
 
-    const largestFiles = pickLargestFiles(userFiles, 10).map(f => ({
+    // #2225 review (Codex round 4, P1): drive-level access is NOT sufficient to
+    // show a page's title/id — a drive member (or anyone with access to ANY
+    // page in the drive) passes getUserDriveAccess even though a specific page
+    // in that drive is marked private and they have no explicit grant on it.
+    // Only the centralized page-level check (getUserAccessLevel, batched here)
+    // is authoritative for "can this user see THIS page". Batched over just the
+    // pages actually surfaced (top 10 largest + top 10 recent, deduped) rather
+    // than every userFiles row, since that's the only set whose title/id we
+    // might reveal.
+    const candidatePageIds = Array.from(
+      new Set(
+        [...topLargestFiles, ...topRecentFiles]
+          .map(f => f.pageId)
+          .filter((id): id is string => id !== null),
+      ),
+    );
+    const pagePermissions = await getBatchPagePermissions(user.id, candidatePageIds);
+    const canShowPage = (f: { pageId: string | null }) =>
+      f.pageId !== null && (pagePermissions.get(f.pageId)?.canView ?? false);
+
+    const largestFiles = topLargestFiles.map(f => ({
       id: canShowPage(f) ? f.pageId! : f.fileId,
       title: canShowPage(f) ? f.title! : 'Untitled file',
       mimeType: f.mimeType,
       formattedSize: formatBytes(f.sizeBytes)
     }));
 
-    const recentFiles = pickRecentFiles(userFiles, 10).map(f => ({
+    const recentFiles = topRecentFiles.map(f => ({
       id: canShowPage(f) ? f.pageId! : f.fileId,
       title: canShowPage(f) ? f.title! : 'Untitled file',
       mimeType: f.mimeType,

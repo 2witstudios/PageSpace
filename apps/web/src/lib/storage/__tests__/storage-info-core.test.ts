@@ -18,7 +18,6 @@ function row(overrides: Partial<UserFileRow>): UserFileRow {
     driveId: 'drive-1',
     pageId: 'page-1',
     title: 'file.pdf',
-    pageDriveId: 'drive-1',
     ...overrides,
   };
 }

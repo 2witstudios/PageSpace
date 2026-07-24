@@ -18,18 +18,16 @@ export interface UserFileRow {
   createdAt: Date;
   /** Null for files with no drive-page linkage (e.g. DM-only attachments). */
   driveId: string | null;
-  /** The page this row is displayed as (first/primary link), if any. */
+  /**
+   * The page this row is displayed as (first/primary link), if any. Callers
+   * MUST gate showing `pageId`/`title` on a current page-level permission
+   * check for THIS page (e.g. getBatchPagePermissions), not on drive access:
+   * `files.createdBy` survives drive-membership removal, and drive access is
+   * broader than page access (a drive member can still be denied a specific
+   * private page) — so page metadata can otherwise leak (#2225 review).
+   */
   pageId: string | null;
   title: string | null;
-  /**
-   * The REPRESENTATIVE PAGE's own drive (not necessarily the same as
-   * `driveId`, which is the blob's original creation drive — they can differ
-   * under cross-drive dedup). Callers MUST gate showing `pageId`/`title` on
-   * current access to THIS drive, not `driveId`: `files.createdBy` survives
-   * drive-membership removal, so the page metadata can otherwise leak after
-   * access is revoked (#2225 review).
-   */
-  pageDriveId: string | null;
 }
 
 export function getFileTypeCategory(mimeType: string | null): string {

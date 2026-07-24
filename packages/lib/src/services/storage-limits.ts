@@ -311,8 +311,14 @@ export async function getUserFileCount(userId: string): Promise<number> {
  * time the correction transaction actually runs. `actualUsage` in the return
  * value reflects the counter's value immediately after the correction, which
  * is the source of truth if a concurrent write did land.
+ *
+ * Unlocked — callers MUST serialize invocations for the same user (see the
+ * exported `reconcileStorageUsage`, which wraps this in the same advisory
+ * lock as the scheduled sweep). Two unserialized concurrent calls would each
+ * read the same drift and each apply the correction delta once, double
+ * counting it exactly like two overlapping cron ticks would (#2225 review).
  */
-export async function reconcileStorageUsage(userId: string): Promise<{
+async function reconcileStorageUsageUnlocked(userId: string): Promise<{
   previousUsage: number;
   actualUsage: number;
   difference: number;
@@ -485,6 +491,35 @@ export async function reconcileAllStorageUsageSerialized(
 ): Promise<ReconcileAllStorageUsageRunResult> {
   const locked = await withAdvisoryLock(pgPool, RECONCILE_STORAGE_LOCK_KEY, () =>
     reconcileAllStorageUsage(),
+  );
+  if (locked.outcome === 'lock_busy') {
+    return { outcome: 'lock_busy' };
+  }
+  if (locked.outcome === 'connection_error') {
+    throw locked.error;
+  }
+  return { outcome: 'reconciled', ...locked.result };
+}
+
+export type ReconcileStorageUsageRunResult =
+  | { outcome: 'lock_busy' }
+  | ({ outcome: 'reconciled' } & Awaited<ReturnType<typeof reconcileStorageUsageUnlocked>>);
+
+/**
+ * The admin-triggered single-user reconcile (api/storage/info's
+ * `?reconcile=true`). Serializes against the SAME advisory lock as the
+ * scheduled sweep (#2225 review) — two overlapping admin triggers, or an
+ * admin trigger overlapping the cron, would otherwise both read the same
+ * drift and each apply the correction delta once, double-counting it. A run
+ * that loses the race is a clean no-op (returns `lock_busy`); the caller can
+ * retry or just rely on the next scheduled sweep.
+ */
+export async function reconcileStorageUsage(
+  userId: string,
+  pgPool: AdvisoryLockPool = getAdvisoryLockPool(),
+): Promise<ReconcileStorageUsageRunResult> {
+  const locked = await withAdvisoryLock(pgPool, RECONCILE_STORAGE_LOCK_KEY, () =>
+    reconcileStorageUsageUnlocked(userId),
   );
   if (locked.outcome === 'lock_busy') {
     return { outcome: 'lock_busy' };
