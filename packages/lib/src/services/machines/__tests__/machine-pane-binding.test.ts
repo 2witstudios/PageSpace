@@ -366,33 +366,6 @@ describe('deriveMachinePaneBinding — handle-set derivation (cascade)', () => {
     expect(binding.handles).toContainEqual(SIBLING_BRANCH_HANDLE);
   });
 
-  // Codex review (PR #2232): a torn-down branch's name must still be
-  // reported (separately from `handles`) so resolveMachineNodeTarget's
-  // default-checkout fallback can tell "torn down" apart from "never
-  // existed" — the fallback must not treat these the same way.
-  it('given a torn-down branch in a machine-root closure, should report it in tornDownBranches', async () => {
-    const row = makeRow({ scope: 'machine', projectName: null, machineBranchId: null });
-    const deps = makeDeps({
-      terminalStore: makeTerminalStore(row),
-      projectLookup: makeProjectLookup(PROJECT_ROWS),
-      branchLookup: makeBranchLookup([{ ...BRANCH_ROWS[0], spriteTornDownAt: NOW }, BRANCH_ROWS[1]]),
-    });
-    const binding = await deriveOk(deps);
-    expect(binding.tornDownBranches).toEqual([{ project: PROJECT_NAME, branch: 'feature' }]);
-  });
-
-  it('given a torn-down branch in a project-scoped binding, should report it in tornDownBranches', async () => {
-    const row = makeRow({ scope: 'project', projectName: PROJECT_NAME, machineBranchId: null });
-    const deps = makeDeps({
-      terminalStore: makeTerminalStore(row),
-      projectLookup: makeProjectLookup(PROJECT_ROWS),
-      branchLookup: makeBranchLookup([{ ...BRANCH_ROWS[0], spriteTornDownAt: NOW }]),
-    });
-    const binding = await deriveOk(deps);
-    expect(binding.tornDownBranches).toEqual([{ project: PROJECT_NAME, branch: 'feature' }]);
-    expect(binding.handles.some((h) => h.branch === 'feature')).toBe(false);
-  });
-
   it('given every handle in a derived set, should carry the owning machine page id (the billing/payer key)', async () => {
     const row = makeRow({ scope: 'machine', projectName: null, machineBranchId: null });
     const binding = await deriveOk(makeCascadeDeps(row));
@@ -472,84 +445,21 @@ describe('resolveMachineNodeTarget', () => {
     });
   });
 
-  // Field bug: a model reasoning in ordinary git terms asks for a project's
-  // own default branch (commonly "main") as if it were an addressable branch
-  // node — but a branch handle only ever exists for an EXPLICITLY created
-  // worktree. Denying the whole target here reads as "you have no access to
-  // this project at all", when the project itself was right there in scope.
-  it('given a project in the set + a branch name that has no branch handle, should fall back to the project handle', () => {
+  // PR #2232 history: an earlier version of this function fell back to the
+  // project handle when an unresolved branch name was a conventional
+  // default-checkout alias ("main"/"master"). Three rounds of review each
+  // found a different way that silent substitution could route a tool call
+  // to the WRONG worktree (an unrelated typo, a torn-down branch, a branch
+  // explicitly killed and hard-deleted with no trace left to distinguish it
+  // from "never existed"). The fallback was removed entirely rather than
+  // patched again — an unresolved target of ANY shape always denies. This
+  // pins that a caller cannot get a project handle back just by naming a
+  // conventional default branch that doesn't actually have a tracked handle.
+  it('given a project in the set + an unresolved default-checkout-shaped branch name ("main"), should refuse as out of set, not fall back to the project', () => {
     const projectSet = { self: PROJECT_HANDLE, handles: [PROJECT_HANDLE] };
     expect(resolveMachineNodeTarget(projectSet, { project: PROJECT_NAME, branch: 'main' })).toEqual({
-      ok: true,
-      handle: PROJECT_HANDLE,
-    });
-  });
-
-  it('given a project OUTSIDE the set + an unresolved branch name, should still refuse as out of set', () => {
-    const branchSet = { self: BRANCH_HANDLE, handles: [BRANCH_HANDLE] };
-    expect(resolveMachineNodeTarget(branchSet, { project: SIBLING_PROJECT_NAME, branch: 'main' })).toEqual({
       ok: false,
       reason: 'target_not_in_set',
-    });
-  });
-
-  // Codex review (PR #2232): the fallback must NOT catch every unresolved
-  // branch name — only the conventional default-checkout aliases. Otherwise a
-  // genuinely misspelled or deleted branch name would silently redirect
-  // tool calls to the project's default checkout instead of denying, and the
-  // caller would never learn its target didn't exist.
-  it('given a project in the set + a branch name that is NOT a default-checkout alias, should still refuse as out of set (not fall back)', () => {
-    const projectSet = { self: PROJECT_HANDLE, handles: [PROJECT_HANDLE] };
-    expect(resolveMachineNodeTarget(projectSet, { project: PROJECT_NAME, branch: 'feature-typo' })).toEqual({
-      ok: false,
-      reason: 'target_not_in_set',
-    });
-  });
-
-  it('given a project in the set + "master" (the other default-checkout alias) unresolved, should fall back to the project handle', () => {
-    const projectSet = { self: PROJECT_HANDLE, handles: [PROJECT_HANDLE] };
-    expect(resolveMachineNodeTarget(projectSet, { project: PROJECT_NAME, branch: 'master' })).toEqual({
-      ok: true,
-      handle: PROJECT_HANDLE,
-    });
-  });
-
-  it('given a BRANCH-scoped self (no project handle in its own set) + an unresolved bare branch name, should refuse rather than fall back', () => {
-    // A branch pane's derived set is [self] only (deriveMachinePaneBinding) — its
-    // own enclosing project is never itself a handle here, so there is nothing
-    // for the fallback to find even though `project` defaults to self.project.
-    const branchOnlySet = { self: BRANCH_HANDLE, handles: [BRANCH_HANDLE] };
-    expect(resolveMachineNodeTarget(branchOnlySet, { branch: 'main' })).toEqual({
-      ok: false,
-      reason: 'target_not_in_set',
-    });
-  });
-
-  // Codex review (PR #2232, second finding): a default-named branch that WAS
-  // explicitly created and later torn down must stay denied, never silently
-  // rerouted to the project's (different) checkout — "torn down" is not
-  // "never existed", and the two must not be treated the same by the fallback.
-  it('given a torn-down "main" branch on record for the project, should refuse rather than fall back', () => {
-    const projectSet = {
-      self: PROJECT_HANDLE,
-      handles: [PROJECT_HANDLE],
-      tornDownBranches: [{ project: PROJECT_NAME, branch: 'main' }],
-    };
-    expect(resolveMachineNodeTarget(projectSet, { project: PROJECT_NAME, branch: 'main' })).toEqual({
-      ok: false,
-      reason: 'target_not_in_set',
-    });
-  });
-
-  it('given tornDownBranches recorded for a DIFFERENT project/branch, should not block this project\'s own fallback', () => {
-    const projectSet = {
-      self: PROJECT_HANDLE,
-      handles: [PROJECT_HANDLE],
-      tornDownBranches: [{ project: SIBLING_PROJECT_NAME, branch: 'main' }],
-    };
-    expect(resolveMachineNodeTarget(projectSet, { project: PROJECT_NAME, branch: 'main' })).toEqual({
-      ok: true,
-      handle: PROJECT_HANDLE,
     });
   });
 });

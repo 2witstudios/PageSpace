@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 // The factory is provider-agnostic and imports no DB or backing-provider SDK, so
 // it is exercised directly with injected fakes (the production wiring + the Fly
 // Sprites driver live in sandbox-tools-runtime.ts).
-import { createSandboxTools, nodeScopedPath, type MachineDirectoryDeps, type ResolveSandboxContext, type SandboxGate } from '../sandbox-tools';
+import { createSandboxTools, nodeScopedPath, nodeTargetDeniedError, type MachineDirectoryDeps, type ResolveSandboxContext, type SandboxGate } from '../sandbox-tools';
 import type { SandboxRunDeps, SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';
 import type { ToolExecutionContext } from '../../core/types';
 import type { MachineNodeHandle, MachineNodeHandleSet } from '@pagespace/lib/services/machines/machine-pane-binding';
@@ -1001,6 +1001,42 @@ describe('createSandboxTools', () => {
       await exec(tools.readFile, { path: 'a.txt' }, {});
       await exec(tools.editFile, { path: 'a.txt', oldString: 'data', newString: 'X' }, {});
       expect(listMachines).toHaveBeenCalledTimes(4);
+    });
+  });
+
+  describe('nodeTargetDeniedError', () => {
+    // PR #2232 history: this used to be a silent fallback to the project
+    // handle instead of a denial. Three rounds of review found different ways
+    // that substitution could route a tool call to the wrong worktree (a
+    // typo, a torn-down branch, a branch explicitly killed with no trace
+    // left). The fallback is gone — an unresolved target always denies now —
+    // and this hint is the replacement: it tells the caller exactly what to
+    // do differently on its NEXT call instead of the runtime guessing for it.
+    it('given target_not_in_set with a default-checkout-shaped branch ("main"), should append a corrective hint naming the fix', () => {
+      const result = nodeTargetDeniedError('target_not_in_set', { project: 'my-repo', branch: 'main' });
+      expect(result.error).toContain('is not part of this conversation\'s machine scope');
+      expect(result.error).toContain('"main" isn\'t a separately tracked branch here');
+      expect(result.error).toContain('target: { project: "my-repo" } without a branch');
+    });
+
+    it('given target_not_in_set with "master", should also append the hint (the other default-checkout alias)', () => {
+      const result = nodeTargetDeniedError('target_not_in_set', { project: 'my-repo', branch: 'master' });
+      expect(result.error).toContain('"master" isn\'t a separately tracked branch here');
+    });
+
+    it('given target_not_in_set with a non-default branch name, should NOT append the hint', () => {
+      const result = nodeTargetDeniedError('target_not_in_set', { project: 'my-repo', branch: 'feature-x' });
+      expect(result.error).not.toContain('isn\'t a separately tracked branch here');
+    });
+
+    it('given target_not_in_set with no branch at all (project-only target), should NOT append the hint', () => {
+      const result = nodeTargetDeniedError('target_not_in_set', { project: 'my-repo' });
+      expect(result.error).not.toContain('isn\'t a separately tracked branch here');
+    });
+
+    it('given ambiguous_target, should NOT append the hint even with a default-checkout branch name', () => {
+      const result = nodeTargetDeniedError('ambiguous_target', { project: 'my-repo', branch: 'main' });
+      expect(result.error).not.toContain('isn\'t a separately tracked branch here');
     });
   });
 });

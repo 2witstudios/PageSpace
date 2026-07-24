@@ -27,7 +27,6 @@
 
 import type { MachineAgentTerminalStore } from './agent-terminals-store';
 import { SANDBOX_ROOT, BRANCH_REPO_PATH, PROJECT_REPO_PATH } from '../sandbox/sandbox-paths';
-import { isMainBranchName } from '../sandbox/machine-diff-scope';
 import { isAgentRuntimeType, isPtyAgentType } from './agent-terminal-types';
 
 export type MachinePaneBindingFailureReason = 'binding_page_mismatch' | 'project_not_found' | 'branch_not_found';
@@ -104,16 +103,6 @@ export interface MachineNodeHandleSet {
   self: MachineNodeHandle;
   /** self + the downward closure, self first, then depth-first by project. */
   handles: readonly MachineNodeHandle[];
-  /**
-   * Branches that HAD a row here but whose Sprite was torn down — omitted
-   * from `handles` (fail-closed, same as any other torn-down branch), but
-   * still recorded here so `resolveMachineNodeTarget`'s default-checkout
-   * fallback can tell "this name was never tracked" (fall back to the
-   * project) apart from "this name existed and was deliberately torn down"
-   * (must stay denied, never silently reroute to a DIFFERENT checkout).
-   * Empty/absent means nothing by that name was ever tracked under this set.
-   */
-  tornDownBranches?: readonly { project: string; branch: string }[];
 }
 
 export type MachinePaneBinding = MachineNodeHandleSet;
@@ -132,12 +121,10 @@ export type MachineNodeTargetResolution =
   | { ok: false; reason: 'ambiguous_target' };
 
 /**
- * Resolve a tool call's `target` against a derived handle set. Mostly a PURE
- * LOOKUP — the set already IS the policy (see `MachineNodeHandleSet`): "not
- * in the set" is normally the same fact as "never derived". The one
- * exception is the default-checkout branch-name fallback below, which is a
- * deliberately narrow carve-out, not a second place deciding node access —
- * see its own note for why it doesn't widen the set.
+ * Resolve a tool call's `target` against a derived handle set. PURE LOOKUP —
+ * it makes no policy decision of its own, because the set already IS the
+ * policy (see `MachineNodeHandleSet`): "not in the set" is the same fact as
+ * "never derived", so there is no second place that can decide differently.
  *
  * An omitted `target` (or an empty one) is the node the conversation is
  * natively bound to. A bare `branch` defaults its project to `self.project`
@@ -149,22 +136,22 @@ export type MachineNodeTargetResolution =
  * own row, its own Sprite) — never "whatever git branch the project's own
  * checkout happens to be on". A project's default checkout has no branch
  * handle of its own, so a caller (a model reasoning in ordinary git terms)
- * naturally but incorrectly asks for `{ project, branch: "main" }` to mean
- * "this project's own state". When that branch name is the repo's own
- * default-branch name (`isMainBranchName` — same main/master convention as
- * `machine-diff-scope.ts`) and doesn't resolve, but the project half of the
- * target does, we fall back to the PROJECT handle rather than denying the
- * whole target — the project was already in `set`, so this grants nothing
- * new, it only re-resolves a request for a node that was already reachable.
+ * may naturally but incorrectly ask for `{ project, branch: "main" }` to mean
+ * "this project's own state".
  *
- * This fallback is DELIBERATELY narrow — only that default-branch name, never
- * any other unresolved branch. A misspelled or deleted branch name must
- * still deny outright: silently redirecting it to the project's default
- * checkout would let bash/file/git tools run against the wrong worktree
- * without the caller ever finding out. That includes a default-named branch
- * that WAS explicitly created and later torn down (`set.tornDownBranches`):
- * it stays denied exactly as before, never rerouted to the project's
- * (different) checkout — "torn down" is not "never existed".
+ * An earlier version of this function tried to help by falling back to the
+ * PROJECT handle when the unresolved branch name was a conventional
+ * default-checkout alias (`main`/`master`). Three rounds of review (#2232)
+ * kept finding new ways that silent substitution could route a tool call to
+ * the WRONG worktree: an unrelated typo, a branch that existed and was torn
+ * down, a branch explicitly killed (`killBranch` hard-deletes its row —
+ * `machine-branches.ts` — leaving no trace to distinguish "deleted" from
+ * "never existed"). There is no data this function can see that closes that
+ * gap for every case, so the fallback is gone: an unresolved target ALWAYS
+ * denies, full stop. The caller-facing error (`sandbox-tools.ts`'s
+ * `nodeTargetDeniedError`) carries the corrective guidance instead — telling
+ * the caller to drop the `branch` field rather than the runtime guessing on
+ * its behalf.
  */
 export function resolveMachineNodeTarget(
   set: MachineNodeHandleSet,
@@ -178,15 +165,7 @@ export function resolveMachineNodeTarget(
       (h) => h.kind === 'branch' && h.branch === target.branch && (project === undefined || h.project === project),
     );
     if (matches.length === 1) return { ok: true, handle: matches[0] };
-    if (matches.length > 1) return { ok: false, reason: 'ambiguous_target' };
-    const wasTornDown = set.tornDownBranches?.some(
-      (b) => b.project === project && b.branch === target.branch,
-    );
-    if (project !== undefined && isMainBranchName(target.branch) && !wasTornDown) {
-      const projectHandle = set.handles.find((h) => h.kind === 'project' && h.project === project);
-      if (projectHandle) return { ok: true, handle: projectHandle };
-    }
-    return { ok: false, reason: 'target_not_in_set' };
+    return { ok: false, reason: matches.length === 0 ? 'target_not_in_set' : 'ambiguous_target' };
   }
 
   const project = set.handles.find((h) => h.kind === 'project' && h.project === target.project);
@@ -299,8 +278,7 @@ export async function deriveMachinePaneBinding(
     const project = await deps.projectLookup.findByName(row.machineId, row.projectName);
     if (!project) return { ok: false, reason: 'project_not_found' };
     const self = projectHandle(row.machineId, project);
-    const { handles: branches, tornDown } = await branchHandles(row.machineId, project, deps);
-    return { ok: true, binding: { self, handles: [self, ...branches], tornDownBranches: tornDown } };
+    return { ok: true, binding: { self, handles: [self, ...(await branchHandles(row.machineId, project, deps))] } };
   }
 
   const self: MachineNodeHandle = { kind: 'machine', machineId: row.machineId, cwd: SANDBOX_ROOT };
@@ -310,12 +288,8 @@ export async function deriveMachinePaneBinding(
     deps.branchLookup.listAll(row.machineId),
   ]);
   const liveBranchesByProject = new Map<string, MachinePaneBindingBranch[]>();
-  const tornDownBranches: { project: string; branch: string }[] = [];
   for (const branch of allBranches) {
-    if (branch.spriteTornDownAt !== null) {
-      tornDownBranches.push({ project: branch.projectName, branch: branch.branchName });
-      continue; // same fail-closed rule as `branchHandles`
-    }
+    if (branch.spriteTornDownAt !== null) continue; // same fail-closed rule as `branchHandles`
     const group = liveBranchesByProject.get(branch.projectName) ?? [];
     group.push(branch);
     liveBranchesByProject.set(branch.projectName, group);
@@ -327,7 +301,7 @@ export async function deriveMachinePaneBinding(
     projectHandle(row.machineId, project),
     ...(liveBranchesByProject.get(project.name) ?? []).map((b) => branchHandle(row.machineId, b)),
   ]);
-  return { ok: true, binding: { self, handles: [self, ...descendants], tornDownBranches } };
+  return { ok: true, binding: { self, handles: [self, ...descendants] } };
 }
 
 function projectHandle(machineId: string, project: MachinePaneBindingProject): MachineNodeHandle {
@@ -371,25 +345,17 @@ function branchHandle(machineId: string, branch: MachinePaneBindingBranch): Mach
 }
 
 /**
- * The live branches of one project, plus the names of any torn-down ones. A
- * branch whose Sprite is CONFIRMED destroyed (`spriteTornDownAt`) is omitted
- * from `handles` rather than derived-then-denied: that is the same
- * fail-closed rule the natively-bound branch path applies (`branch_not_found`),
- * expressed as absence from the set. A torn-down branch is unaddressable from
- * anywhere — its name is still returned (separately) so a caller resolving a
- * target can tell it apart from a name that was never tracked at all.
+ * The live branches of one project. A branch whose Sprite is CONFIRMED
+ * destroyed (`spriteTornDownAt`) is omitted rather than derived-then-denied:
+ * that is the same fail-closed rule the natively-bound branch path applies
+ * (`branch_not_found`), expressed as absence from the set. A torn-down branch
+ * is unaddressable from anywhere.
  */
 async function branchHandles(
   machineId: string,
   project: MachinePaneBindingProject,
   deps: DeriveMachinePaneBindingDeps,
-): Promise<{ handles: MachineNodeHandle[]; tornDown: { project: string; branch: string }[] }> {
+): Promise<MachineNodeHandle[]> {
   const branches = await deps.branchLookup.list(machineId, project.name);
-  const handles: MachineNodeHandle[] = [];
-  const tornDown: { project: string; branch: string }[] = [];
-  for (const b of branches) {
-    if (b.spriteTornDownAt === null) handles.push(branchHandle(machineId, b));
-    else tornDown.push({ project: b.projectName, branch: b.branchName });
-  }
-  return { handles, tornDown };
+  return branches.filter((b) => b.spriteTornDownAt === null).map((b) => branchHandle(machineId, b));
 }
