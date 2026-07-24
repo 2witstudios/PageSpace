@@ -163,7 +163,12 @@ export function describeNode(handle: MachineNodeHandle): string {
 /**
  * The `{projectName?, branchName?}` half of a node — what every stored row
  * keys on, and what `agent-terminals.ts`'s `resolveScopeKey` looks up a REAL
- * `machine_branches` row by name for.
+ * `machine_branches` row by name for. THE ONE PLACE this conversion happens —
+ * `session-tools-runtime.ts` (spawn/list/kill) and `session-io-pty.ts`
+ * (the liveness sweep) both import this rather than each keeping their own
+ * copy, so the rule below can never drift out of sync between them again (it
+ * already did once: PR #2233 initially patched only two of these three call
+ * sites with a hand-copied version of this same function).
  *
  * `branchName` is included ONLY when the handle carries `branchSandbox` — a
  * REAL branch always has its own Sprite descriptor there
@@ -175,7 +180,7 @@ export function describeNode(handle: MachineNodeHandle): string {
  * the underlying PROJECT scope instead, which is what it already resolves to
  * (same `cwd`/`projectSandbox` as the project's own handle).
  */
-function nodeNames(handle: MachineNodeHandle): { projectName?: string; branchName?: string } {
+export function nodeNames(handle: MachineNodeHandle): { projectName?: string; branchName?: string } {
   return {
     ...(handle.project ? { projectName: handle.project } : {}),
     ...(handle.branch && handle.branchSandbox ? { branchName: handle.branch } : {}),

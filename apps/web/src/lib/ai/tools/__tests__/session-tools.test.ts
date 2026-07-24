@@ -3,6 +3,7 @@ import { assert } from './riteway';
 
 import {
   createSessionTools,
+  nodeNames,
   readSessionState,
   type SessionIoInput,
   type SessionReadInput,
@@ -129,6 +130,52 @@ function shellRow(name: string, overrides: Partial<SessionRow> = {}): SessionRow
     ...overrides,
   };
 }
+
+/**
+ * `nodeNames` is the ONE place a `MachineNodeHandle` becomes the
+ * `{projectName?, branchName?}` pair `agent-terminals.ts` looks a row up by —
+ * `session-tools-runtime.ts` and `session-io-pty.ts` both import it rather
+ * than keeping their own copy (PR #2233 review: two of three call sites were
+ * initially hand-duplicated, and one of those two drifted out of sync with
+ * the third before consolidation).
+ */
+describe('nodeNames', () => {
+  it('given a REAL branch handle (branchSandbox present), should include branchName', () => {
+    assert({
+      given: 'a branch handle with its own Sprite descriptor',
+      should: 'include branchName',
+      actual: nodeNames(branchHandle('repo', 'feature')),
+      expected: { projectName: 'repo', branchName: 'feature' },
+    });
+  });
+
+  it('given a SYNTHESIZED branch handle (branch set, no branchSandbox), should omit branchName and keep only projectName', () => {
+    assert({
+      given: 'an observed-branch synthesis handle with no machine_branches row behind it',
+      should: 'omit branchName — there is nothing resolveScopeKey could find by that name',
+      actual: nodeNames({ kind: 'branch', machineId: 'm1', project: 'repo', branch: 'main', cwd: '/home/pagespace/repo' }),
+      expected: { projectName: 'repo' },
+    });
+  });
+
+  it('given a project handle (no branch at all), should include only projectName', () => {
+    assert({
+      given: 'a project handle',
+      should: 'include only projectName',
+      actual: nodeNames(projectHandle('repo')),
+      expected: { projectName: 'repo' },
+    });
+  });
+
+  it('given a machine handle (no project, no branch), should return an empty scope', () => {
+    assert({
+      given: 'a machine handle',
+      should: 'return an empty scope',
+      actual: nodeNames(machineHandle()),
+      expected: {},
+    });
+  });
+});
 
 describe('readSessionState', () => {
   it('given a shell session whose PTY has never been started, should report reserved', () => {

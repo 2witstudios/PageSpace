@@ -36,7 +36,7 @@ import { annotateToolOutput } from '@pagespace/lib/services/sandbox/injection-se
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import type { MachineNodeHandle } from '@pagespace/lib/services/machines/machine-pane-binding';
 import { scrollbackLines, tailOfLines } from '@pagespace/lib/services/machines/session-scrollback';
-import type { SessionIoResult, SessionReadInput, SessionSendInput } from './session-tools';
+import { nodeNames, type SessionIoResult, type SessionReadInput, type SessionSendInput } from './session-tools';
 
 /** Default scrollback tail when the model does not ask for a size. */
 const DEFAULT_TAIL_LINES = 100;
@@ -128,14 +128,6 @@ export interface RealtimeSessionReadPayload {
 export interface RealtimeSessionIoTransport {
   read: (payload: RealtimeSessionReadPayload) => Promise<RealtimeSessionReadResponse | null>;
   send: (payload: RealtimeSessionSendPayload) => Promise<RealtimeSessionSendResponse | null>;
-}
-
-/** The `{projectName?, branchName?}` half of a node, as the endpoints take it. */
-function nodeNames(node: { project?: string; branch?: string }): { projectName?: string; branchName?: string } {
-  return {
-    ...(node.project ? { projectName: node.project } : {}),
-    ...(node.branch ? { branchName: node.branch } : {}),
-  };
 }
 
 /** Apply a reader's `limit` (in lines) to an already-normalized stored cold tail — the reader-facing half of `session-scrollback.ts`'s shared core. */
