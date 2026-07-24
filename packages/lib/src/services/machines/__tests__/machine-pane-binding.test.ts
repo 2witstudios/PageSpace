@@ -473,4 +473,15 @@ describe('resolveMachineNodeTarget', () => {
       handle: PROJECT_HANDLE,
     });
   });
+
+  it('given a BRANCH-scoped self (no project handle in its own set) + an unresolved bare branch name, should refuse rather than fall back', () => {
+    // A branch pane's derived set is [self] only (deriveMachinePaneBinding) — its
+    // own enclosing project is never itself a handle here, so there is nothing
+    // for the fallback to find even though `project` defaults to self.project.
+    const branchOnlySet = { self: BRANCH_HANDLE, handles: [BRANCH_HANDLE] };
+    expect(resolveMachineNodeTarget(branchOnlySet, { branch: 'main' })).toEqual({
+      ok: false,
+      reason: 'target_not_in_set',
+    });
+  });
 });
