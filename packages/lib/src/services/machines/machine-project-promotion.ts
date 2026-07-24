@@ -546,43 +546,50 @@ export function isMissingParentCommitError(gitOutput: string): boolean {
 }
 
 /**
+ * What `inspectMachineCheckout` found: the dirty-tree gate's verdict, plus
+ * whatever it observed about the current branch along the way. `branchName`
+ * is `undefined` when the read itself failed or never happened (`absent`, or
+ * any `unknown` case) — genuinely "we don't know," which a caller must never
+ * persist over an existing snapshot. It is `string | null` — a DEFINITIVE
+ * observation, including `null` for detached HEAD — whenever `git status`
+ * itself succeeded, which is every other case.
+ */
+interface InspectedCheckout {
+  state: CheckoutState;
+  branchName: string | null | undefined;
+}
+
+/**
  * Inspect the project's OLD home on the machine Sprite. Promotion is only safe
- * when this returns `absent` or `clean`.
+ * when `.state` is `absent` or `clean`.
  *
  * Existence is probed separately (`test -e`) rather than inferred from `git
  * status` failing, because a failed status has two completely opposite
  * meanings — "there is no checkout here, nothing can be lost" and "the checkout
  * is there but we could not read it" — and guessing wrong in the second
  * direction destroys the user's uncommitted work.
+ *
+ * Pure inspection, no side effects: it never persists `branchName` itself.
+ * Whether an observation is even WORTH persisting depends on context this
+ * function doesn't have — the gate-check call (before promotion is decided)
+ * should, an already-superseded post-CAS recheck should not (see the call
+ * sites in `promoteProject`) — so that decision stays with the caller.
  */
 async function inspectMachineCheckout({
   machineId,
   project,
   actor,
   deps,
-  captureBranch,
 }: {
   machineId: string;
   project: MachineProjectRecord;
   actor: MachineActorContext;
   deps: PromoteProjectDeps;
-  /**
-   * Persist the branch parsed from THIS call's `git status -b`, when true.
-   * The GATE-CHECK call (before promotion is decided) passes `true`: while
-   * the project is still on this checkout — which is unconditionally true if
-   * promotion is then refused, and momentarily true even if it proceeds — the
-   * observation is accurate. The POST-CAS RECLAIM RECHECK call passes
-   * `false`: by then promotion has ALREADY succeeded, the row points at a
-   * freshly-cloned, DIFFERENT Sprite (`noteCurrentBranchFromHandle` captures
-   * that one instead), and this checkout is about to be deleted — persisting
-   * ITS branch here would describe a checkout the row no longer represents.
-   */
-  captureBranch: boolean;
-}): Promise<CheckoutState> {
+}): Promise<InspectedCheckout> {
   const acquired = await deps.acquireMachineSandbox(machineId);
-  if (!acquired.ok) return { kind: 'unknown', detail: `machine sandbox unavailable (${acquired.reason})` };
+  if (!acquired.ok) return { state: { kind: 'unknown', detail: `machine sandbox unavailable (${acquired.reason})` }, branchName: undefined };
   const sandbox = await deps.reconnect(acquired.sandboxId);
-  if (!sandbox) return { kind: 'unknown', detail: 'machine sandbox could not be reconnected' };
+  if (!sandbox) return { state: { kind: 'unknown', detail: 'machine sandbox could not be reconnected' }, branchName: undefined };
 
   let exists: boolean;
   try {
@@ -594,9 +601,9 @@ async function inspectMachineCheckout({
     });
     exists = probe.exitCode === 0;
   } catch (error) {
-    return { kind: 'unknown', detail: error instanceof Error ? error.message : String(error) };
+    return { state: { kind: 'unknown', detail: error instanceof Error ? error.message : String(error) }, branchName: undefined };
   }
-  if (!exists) return { kind: 'absent' };
+  if (!exists) return { state: { kind: 'absent' }, branchName: undefined };
 
   // `-b` for the branch header: a clean tree still loses work if its commits
   // are not on a remote (see classifyCheckoutStatus).
@@ -607,21 +614,24 @@ async function inspectMachineCheckout({
     ctx: buildActorCtx(`${machineId}:${project.name}`, actor),
     deps: buildGitDepsForMachine(machineId, deps),
   });
-  if (!status.success) return { kind: 'unknown', detail: status.error ?? 'git status did not complete' };
-  if (status.exitCode !== 0) return { kind: 'unknown', detail: status.stderr || status.stdout };
+  if (!status.success) return { state: { kind: 'unknown', detail: status.error ?? 'git status did not complete' }, branchName: undefined };
+  if (status.exitCode !== 0) return { state: { kind: 'unknown', detail: status.stderr || status.stdout }, branchName: undefined };
 
   // Zero additional exec: the branch header is already in `status.stdout`
-  // above, read for the dirty-tree gate. Capturing it here is a pure parse of
-  // output already in hand. `branchName` NULL (detached HEAD) is still a
-  // DEFINITIVE observation — worth persisting as an explicit clear — since
-  // the read itself succeeded; only a failed/unreadable status (handled by
-  // the two `return`s above) means we truly don't know and must leave any
-  // existing snapshot alone.
-  if (captureBranch) {
-    const branchName = parseCheckoutBranchName(status.stdout);
-    noteCurrentBranch(deps.recordCurrentBranch, { machineProjectId: project.id, branchName, observedAt: deps.now() });
-  }
-  return classifyCheckoutStatus(status.stdout);
+  // above, read for the dirty-tree gate. Parsing it here is a pure parse of
+  // output already in hand.
+  const state = classifyCheckoutStatus(status.stdout);
+  return {
+    state,
+    // `classifyCheckoutStatus` can ALSO land on `unknown` here — a
+    // successful `git status` with no `## ` branch line at all (hostile or
+    // malformed output). `parseCheckoutBranchName` reads the same absence as
+    // `null` (its "detached HEAD" answer), which would misreport an
+    // unparseable read as a definitive observation. Route it through the
+    // same `undefined` ("we don't know") the earlier failure returns above
+    // already use.
+    branchName: state.kind === 'unknown' ? undefined : parseCheckoutBranchName(status.stdout),
+  };
 }
 
 /** Acquire + reconnect the OWNING Machine's Sprite, or `null` when either step fails. */
@@ -1031,9 +1041,19 @@ export async function promoteProject({
   // and the provision: refusing costs the user nothing, whereas a Sprite
   // provisioned for a promotion we are about to refuse would have to be cleaned
   // up on a path that has no reason to exist.
-  // GATE-CHECK call: accurate to persist regardless of outcome — see
-  // `inspectMachineCheckout`'s `captureBranch` doc comment.
-  const checkout = await inspectMachineCheckout({ machineId, project, actor, deps, captureBranch: true });
+  const inspected = await inspectMachineCheckout({ machineId, project, actor, deps });
+  const checkout = inspected.state;
+  // GATE-CHECK observation: accurate to persist regardless of what the gate
+  // below decides — the project is still on this checkout either way (denied
+  // stays; a proceeding promotion supersedes it later via
+  // `noteCurrentBranchFromHandle`, once the NEW Sprite exists to observe).
+  if (inspected.branchName !== undefined) {
+    noteCurrentBranch(deps.recordCurrentBranch, {
+      machineProjectId: project.id,
+      branchName: inspected.branchName,
+      observedAt: deps.now(),
+    });
+  }
   // `carryDirty` moves the work instead of refusing it (issue #2207) — but only
   // for the two states we can actually READ and bundle. `unknown` still refuses
   // below: carrying what we could not inspect would promote on a promise.
@@ -1199,10 +1219,10 @@ export async function promoteProject({
     // A CARRIED checkout can never come back `clean` — we committed the work
     // there, so it is clean-but-one-ahead — hence its own predicate, which asks
     // the equivalent question: is this still exactly the tree we bundled?
-    // RECLAIM-RECHECK call: the row now points at the freshly-promoted
-    // Sprite, not this (about-to-be-deleted) checkout — never capture from
-    // here. See `inspectMachineCheckout`'s `captureBranch` doc comment.
-    const recheck = await inspectMachineCheckout({ machineId, project, actor, deps, captureBranch: false });
+    // RECLAIM-RECHECK: the row now points at the freshly-promoted Sprite, not
+    // this (about-to-be-deleted) checkout — discard `.branchName` entirely,
+    // never capture from here (see `inspectMachineCheckout`'s doc comment).
+    const recheck = (await inspectMachineCheckout({ machineId, project, actor, deps })).state;
     const reclaimable = carrying
       ? isReclaimableAfterCarry({
           recheckKind: recheck.kind,

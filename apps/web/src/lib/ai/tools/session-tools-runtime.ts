@@ -38,8 +38,7 @@ import { buildMachineWorkspacesDeps } from '@/lib/machines/machine-workspaces-ru
 import { applyWorkspaceVerbLocked, broadcastWorkspaceVerbResult } from '@/lib/machines/workspace-verbs-runtime';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { agentSurfaceOf, isAgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
-import type { MachineNodeHandle } from '@pagespace/lib/services/machines/machine-pane-binding';
-import { createSessionTools, type SessionToolsDeps } from './session-tools';
+import { createSessionTools, nodeNames, type SessionToolsDeps } from './session-tools';
 import { readAgentSession, sendAgentSession } from './session-io-agent';
 import { readPtyLiveness, readPtySession, sendPtySession } from './session-io-pty';
 import type { SessionView } from './session-layout';
@@ -94,24 +93,6 @@ async function readStreamingConversationIds(ids: string[]): Promise<Set<string>>
 }
 
 /**
- * A node's `{projectName?, branchName?}` half, as the agent-terminal API
- * takes it. `branchName` is included ONLY when the node carries a REAL
- * `branchSandbox` — see `session-tools.ts`'s `nodeNames`, the identical rule
- * for the exact same reason (a synthesized branch handle has no
- * `machine_branches` row for `resolveScopeKey` to find by name; it must route
- * as the underlying project scope instead).
- */
-export function scopeArgs(node: Pick<MachineNodeHandle, 'project' | 'branch' | 'branchSandbox'>): {
-  projectName?: string;
-  branchName?: string;
-} {
-  return {
-    ...(node.project ? { projectName: node.project } : {}),
-    ...(node.branch && node.branchSandbox ? { branchName: node.branch } : {}),
-  };
-}
-
-/**
  * Apply one planned verb through the SAME `applyWorkspaceVerb` engine
  * `POST /api/machines/workspaces/verbs` uses, then broadcast the same
  * verb+rev event (plus the legacy vocabulary — see its module doc). A failed
@@ -133,7 +114,7 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
     listSessions: async (node) => {
       const result = await listAgentTerminals({
         machineId: node.machineId,
-        ...scopeArgs(node),
+        ...nodeNames(node),
         deps: buildListAgentTerminalsDeps(),
       });
       if (!result.ok) return [];
@@ -163,7 +144,7 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
     findSession: async (node, name) => {
       const result = await listAgentTerminals({
         machineId: node.machineId,
-        ...scopeArgs(node),
+        ...nodeNames(node),
         deps: buildListAgentTerminalsDeps(),
       });
       if (!result.ok) return null;
@@ -188,7 +169,7 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
     spawnSession: async ({ node, name, agentType, userId }) => {
       const result = await spawnAgentTerminal({
         machineId: node.machineId,
-        ...scopeArgs(node),
+        ...nodeNames(node),
         name,
         agentType,
         actor: { userId },
@@ -204,7 +185,7 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
     killSession: async ({ node, name, userId }) => {
       const result = await killAgentTerminal({
         machineId: node.machineId,
-        ...scopeArgs(node),
+        ...nodeNames(node),
         name,
         deps: await buildKillAgentTerminalDeps(userId),
       });

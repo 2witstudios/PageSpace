@@ -10,7 +10,17 @@ import {
 import type { SessionTerminalIdentity } from '../session-tools';
 
 const IDENTITY: SessionTerminalIdentity = {
-  node: { kind: 'branch', machineId: 'm1', project: 'repo', branch: 'feature', cwd: '/repo' },
+  // A REAL branch (branchSandbox set) — `nodeNames` (session-tools.ts) only
+  // passes branchName through for one of these; an observed-branch synthesis
+  // (no branchSandbox) has no `machine_branches` row to address by name.
+  node: {
+    kind: 'branch',
+    machineId: 'm1',
+    project: 'repo',
+    branch: 'feature',
+    cwd: '/repo',
+    branchSandbox: { machineBranchId: 'b1', sandboxId: 'sbx-1' },
+  },
   name: 'sh',
   address: { machineId: 'm1', projectName: 'repo', branchName: 'feature', name: 'sh' },
 };
@@ -364,6 +374,22 @@ describe('readPtyLiveness (the list_sessions sweep)', () => {
         live: ['a'],
         asked: [{ machineId: 'm1', projectName: 'repo', branchName: 'feature', names: ['a', 'b'], limit: 0 }],
       },
+    });
+  });
+
+  it('given a SYNTHESIZED branch node (observed-branch alias, no branchSandbox), should ask at project scope — no machine_branches row exists to address by that name', async () => {
+    const { transport: fake, recorded } = transport({
+      read: { success: true, sessions: [{ name: 'a', live: true, hasOutput: true, viewers: 0, output: '' }] },
+    });
+    const synthesized = { kind: 'branch' as const, machineId: 'm1', project: 'repo', branch: 'main', cwd: '/home/pagespace/repo' };
+
+    await createPtySessionIo(fake).liveness(synthesized, ['a']);
+
+    assert({
+      given: 'a liveness sweep against a synthesized (observed-branch) node',
+      should: 'ask with projectName only — omitting a branchName the realtime service could never resolve',
+      actual: recorded.reads,
+      expected: [{ machineId: 'm1', projectName: 'repo', names: ['a'], limit: 0 }],
     });
   });
 
