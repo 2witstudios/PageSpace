@@ -92,6 +92,7 @@ describe('GET /api/storage/check', () => {
 
   describe('#2225 review (Codex round 5) — reads the cross-process pending_uploads count, not the process-local semaphore', () => {
     it('reports canUpload true and echoes the live count when under the tier limit', async () => {
+      vi.mocked(uploadSemaphore.canAcquireSlot).mockResolvedValue(true);
       vi.mocked(countLiveUploadsForUser).mockResolvedValue(2);
 
       const request = new Request('https://example.com/api/storage/check');
@@ -104,6 +105,7 @@ describe('GET /api/storage/check', () => {
     });
 
     it('reports canUpload false once the live count reaches the tier limit', async () => {
+      vi.mocked(uploadSemaphore.canAcquireSlot).mockResolvedValue(true);
       vi.mocked(countLiveUploadsForUser).mockResolvedValue(3);
 
       const request = new Request('https://example.com/api/storage/check');
@@ -111,6 +113,18 @@ describe('GET /api/storage/check', () => {
       const body = await res.json();
 
       expect(body.activeUploads).toBe(3);
+      expect(body.canUpload).toBe(false);
+    });
+
+    it('reports canUpload false when this replica\'s global semaphore is exhausted even though the per-user count is under the tier limit (#2225 review — CodeRabbit round 7)', async () => {
+      vi.mocked(uploadSemaphore.canAcquireSlot).mockResolvedValue(false);
+      vi.mocked(countLiveUploadsForUser).mockResolvedValue(0);
+
+      const request = new Request('https://example.com/api/storage/check');
+      const res = await GET(request as never);
+      const body = await res.json();
+
+      expect(body.activeUploads).toBe(0);
       expect(body.canUpload).toBe(false);
     });
   });

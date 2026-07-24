@@ -105,8 +105,14 @@ export async function GET(request: NextRequest) {
     }
 
     // Cross-process live-upload count (#2225 review — Codex round 5), same
-    // basis presign's atomic reserve enforces.
-    const userActiveUploads = await countLiveUploadsForUser(userId);
+    // basis presign's atomic reserve enforces. Also checked alongside this
+    // replica's global semaphore capacity (#2225 review — CodeRabbit round 7)
+    // so GET's canUpload can't disagree with what POST /check (and presign
+    // itself) would decide on the same replica.
+    const [hasGlobalCapacity, userActiveUploads] = await Promise.all([
+      uploadSemaphore.canAcquireSlot(userId, quota.tier),
+      countLiveUploadsForUser(userId),
+    ]);
 
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'storage', resourceId: userId });
 
@@ -114,7 +120,7 @@ export async function GET(request: NextRequest) {
       quota,
       tierLimits: STORAGE_TIERS[quota.tier],
       activeUploads: userActiveUploads,
-      canUpload: userActiveUploads < STORAGE_TIERS[quota.tier].maxConcurrentUploads
+      canUpload: hasGlobalCapacity && userActiveUploads < STORAGE_TIERS[quota.tier].maxConcurrentUploads
     });
 
   } catch (error) {
