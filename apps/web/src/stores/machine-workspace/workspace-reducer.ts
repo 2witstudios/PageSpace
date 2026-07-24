@@ -509,13 +509,13 @@ function hasWorkspace(state: MachineWorkspacesState, workspaceId: string): boole
  * asked for it, so it is what they want to be looking at. */
 export function addWorkspace(state: MachineWorkspacesState, workspace: WorkspaceState): MachineWorkspacesState {
   if (hasWorkspace(state, workspace.id)) return setActiveWorkspace(state, workspace.id);
+  // workspace.id is checked against the exact dangerous key set on the line
+  // above; any other key is a plain own-property on a fresh object-literal
+  // spread below, which is by construction not exploitable for prototype
+  // pollution.
   if (workspace.id === '__proto__' || workspace.id === 'constructor' || workspace.id === 'prototype') return state;
   return {
-    // codeql[js/remote-property-injection] -- workspace.id is checked against
-    // the exact dangerous key set immediately above (inline, not via a helper,
-    // so CodeQL's sanitizer barrier recognizes it); any other key is a plain
-    // own-property on a fresh object-literal spread, which is by construction
-    // not exploitable for prototype pollution.
+    // codeql[js/remote-property-injection] workspace.id validated two lines above against __proto__/constructor/prototype
     workspaces: { ...state.workspaces, [workspace.id]: workspace },
     order: [...state.order, workspace.id],
     activeWorkspaceId: workspace.id,
