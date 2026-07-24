@@ -48,6 +48,14 @@ describe('promotedProjectColumns', () => {
     expect(promotedProjectColumns({ ...base, spriteInstanceId: null }).spriteInstanceId).toBeNull();
   });
 
+  it('given a (re-)promotion, should null out the observed-branch snapshot — a fresh clone may not land on the same branch the old checkout was on', () => {
+    const columns = promotedProjectColumns(base);
+    expect({
+      currentBranchName: columns.currentBranchName,
+      currentBranchObservedAt: columns.currentBranchObservedAt,
+    }).toEqual({ currentBranchName: null, currentBranchObservedAt: null });
+  });
+
   it('given a promotion, should stamp updatedAt from the injected clock', () => {
     expect(promotedProjectColumns(base).updatedAt).toEqual(now);
   });

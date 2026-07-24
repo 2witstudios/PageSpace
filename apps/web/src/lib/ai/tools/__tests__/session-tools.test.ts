@@ -37,10 +37,26 @@ function branchHandle(project: string, branch: string, machineId = 'm1'): Machin
   };
 }
 
+/**
+ * `machine-pane-binding.ts`'s observed-branch SYNTHESIS: a branch-shaped
+ * handle for a project's own checkout, addressed under an extra (observed)
+ * name — no `branchSandbox`, because there is no separate `machine_branches`
+ * row. Same `cwd` as the project's own handle, never a new destination.
+ */
+function synthesizedBranchHandle(project: string, branch: string, machineId = 'm1'): MachineNodeHandle {
+  return { kind: 'branch', machineId, project, branch, cwd: `/home/pagespace/${project}` };
+}
+
 /** A machine-root binding over one project with one branch — the shape `deriveMachinePaneBinding` returns. */
 function rootBinding(): MachineNodeHandleSet {
   const self = machineHandle();
   return { self, handles: [self, projectHandle('repo'), branchHandle('repo', 'feature')] };
+}
+
+/** Same, but the project's branch node is a SYNTHESIZED (observed-branch) handle rather than a real one. */
+function rootBindingWithSynthesizedBranch(): MachineNodeHandleSet {
+  const self = machineHandle();
+  return { self, handles: [self, projectHandle('repo'), synthesizedBranchHandle('repo', 'main')] };
 }
 
 interface Recorded {
@@ -421,6 +437,31 @@ describe('add_session', () => {
       should: 'report the reserved state',
       actual: { state: result.state, type: result.type },
       expected: { state: 'reserved', type: 'shell' },
+    });
+  });
+
+  it('given a target resolving to a SYNTHESIZED branch handle (an observed-branch alias with no branchSandbox), should scope the workspace verb at the underlying PROJECT — there is no machine_branches row to address by that name (Codex review, PR #2233)', async () => {
+    const { deps: d, recorded } = deps();
+    const tools = createSessionTools(d);
+
+    await exec(
+      tools.add_session,
+      { type: 'agent', name: 'worker', target: { project: 'repo', branch: 'main' } },
+      context(rootBindingWithSynthesizedBranch()),
+    );
+
+    const createVerb = recorded.verbCalls[0]?.verbs.find((verb) => verb.type === 'create-workspace');
+    assert({
+      given: 'a session added at a synthesized (observed-branch) handle',
+      should: 'spawn against the branch-shaped node (for display/targeting) but scope the stored workspace at project only',
+      actual: {
+        spawnedNode: recorded.spawned[0]?.node,
+        verbScope: createVerb && createVerb.type === 'create-workspace' ? createVerb.scope : undefined,
+      },
+      expected: {
+        spawnedNode: synthesizedBranchHandle('repo', 'main'),
+        verbScope: { projectName: 'repo' },
+      },
     });
   });
 

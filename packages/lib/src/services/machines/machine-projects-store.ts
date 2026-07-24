@@ -38,6 +38,10 @@ export interface MachineProjectRecord {
   teardownRequestedAt: Date | null;
   /** When `sandboxId`'s Sprite was CONFIRMED destroyed; NULL while we believe it is live. The row outlives its Sprite on purpose — it is re-creatable config. */
   spriteTornDownAt: Date | null;
+  /** The LOCAL branch name this project's checkout was last observed on (`git status -b` snapshot). NULL until first captured. See the doc comment on the schema column for why staleness carries no misrouting risk. */
+  currentBranchName: string | null;
+  /** When `currentBranchName` was captured. NULL until first captured. */
+  currentBranchObservedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -89,6 +93,12 @@ export interface PromoteMachineProjectInput {
  *    carried the previous generation's measurement across the downtime. So the
  *    watermark restarts here, and the measurement — which described a
  *    filesystem that no longer exists — is dropped rather than inherited.
+ *
+ * A freshly (re-)promoted Sprite is also a fresh CLONE, which may not land on
+ * the same branch the old checkout was observed on — so `currentBranchName`/
+ * `currentBranchObservedAt` are nulled out here too, for the identical reason
+ * the storage measurement is: carrying either forward describes a filesystem
+ * that no longer exists.
  */
 export function promotedProjectColumns(input: {
   sessionKey: string;
@@ -104,6 +114,8 @@ export function promotedProjectColumns(input: {
   storageLastBilledAt: Date;
   storageMeasuredBytes: null;
   storageMeasuredAt: null;
+  currentBranchName: null;
+  currentBranchObservedAt: null;
   updatedAt: Date;
 } {
   return {
@@ -115,6 +127,8 @@ export function promotedProjectColumns(input: {
     storageLastBilledAt: input.now,
     storageMeasuredBytes: null,
     storageMeasuredAt: null,
+    currentBranchName: null,
+    currentBranchObservedAt: null,
     updatedAt: input.now,
   };
 }
@@ -152,6 +166,25 @@ export interface MachineProjectStore {
    * remove-then-re-add of the same name and silently delete the NEW row.
    */
   remove(machineId: string, id: string): Promise<void>;
+  /**
+   * Persist the LOCAL branch name this project's checkout was last observed
+   * on (`git status -b`), captured opportunistically whenever a Sprite is
+   * already awake for other work — see `machine-project-promotion.ts`'s
+   * `noteCurrentBranch`/`noteCurrentBranchFromHandle`, the only callers.
+   * `branchName: null` explicitly CLEARS the snapshot (a definitive
+   * observation of detached HEAD, not "we don't know") — distinct from never
+   * calling this at all, which leaves a stale name in place.
+   *
+   * ORDER-SAFE: multiple captures can be in flight at once (a promotion's own
+   * gate-check racing its post-clone capture, two concurrent reattaches), and
+   * fire-and-forget calls are not guaranteed to LAND in the order they were
+   * OBSERVED. The write only applies while the row's existing
+   * `currentBranchObservedAt` is null or NO NEWER than `observedAt`, so a
+   * late-arriving but chronologically OLDER observation can never clobber a
+   * fresher one. A no-op UPDATE if the row is gone, so callers need not
+   * pre-check.
+   */
+  recordCurrentBranch(id: string, branchName: string | null, observedAt: Date): Promise<void>;
 }
 
 /** Re-exported so callers can classify a `create` rejection without importing the DB layer directly. */
@@ -163,7 +196,7 @@ export { isUniqueViolation };
  * the DB module graph.
  */
 export async function createDbMachineProjectStore(): Promise<MachineProjectStore> {
-  const [{ db }, { eq, and, eqOrIsNull }, { machineProjects }] = await Promise.all([
+  const [{ db }, { eq, and, or, isNull, lte, eqOrIsNull }, { machineProjects }] = await Promise.all([
     import('@pagespace/db/db'),
     import('@pagespace/db/operators'),
     import('@pagespace/db/schema/machine-projects'),
@@ -225,6 +258,18 @@ export async function createDbMachineProjectStore(): Promise<MachineProjectStore
       await db
         .delete(machineProjects)
         .where(and(eq(machineProjects.machineId, machineId), eq(machineProjects.id, id)));
+    },
+
+    async recordCurrentBranch(id, branchName, observedAt) {
+      await db
+        .update(machineProjects)
+        .set({ currentBranchName: branchName, currentBranchObservedAt: observedAt })
+        .where(
+          and(
+            eq(machineProjects.id, id),
+            or(isNull(machineProjects.currentBranchObservedAt), lte(machineProjects.currentBranchObservedAt, observedAt)),
+          ),
+        );
     },
   };
 }

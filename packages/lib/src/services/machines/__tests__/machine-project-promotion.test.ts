@@ -50,6 +50,8 @@ function makeRecord(overrides: Partial<MachineProjectRecord> = {}): MachineProje
     spriteInstanceId: null,
     teardownRequestedAt: null,
     spriteTornDownAt: null,
+    currentBranchName: null,
+    currentBranchObservedAt: null,
     createdAt: NOW,
     updatedAt: NOW,
     ...overrides,
@@ -93,8 +95,15 @@ interface SpriteState {
   files: Map<string, string>;
 }
 
-/** Same fake-host contract as machine-branches.test.ts: provision auto-resumes BY NAME, and two names never share state. */
-function makeFakeHost() {
+/**
+ * Same fake-host contract as machine-branches.test.ts: provision auto-resumes
+ * BY NAME, and two names never share state. `execImpl`, when given, is
+ * consulted BEFORE the default `mv`/no-op handling — returning `undefined`
+ * falls through, so a test can special-case just the one command it cares
+ * about (e.g. `git status` on the promoted Sprite) without reimplementing the
+ * rest of the fake.
+ */
+function makeFakeHost(execImpl?: (args: RunCommandArgs, state: SpriteState) => SandboxRunResult | undefined) {
   const byName = new Map<string, SpriteState>();
   const byId = new Map<string, SpriteState>();
   const provisionCalls: string[] = [];
@@ -107,6 +116,8 @@ function makeFakeHost() {
       spriteInstanceId: `inst-${state.machineId}`,
       exec: async (args) => {
         state.execLog.push(args);
+        const overridden = execImpl?.(args, state);
+        if (overridden) return overridden;
         if (args.cmd === 'mv' && args.args?.[0] !== undefined && args.args[1] !== undefined) {
           const [src, dst] = args.args;
           const content = state.files.get(src);
@@ -246,6 +257,7 @@ function makeDeps(
   const { host, byId, provisionCalls, killCalls } = makeFakeHost();
   const machineSandbox = machine ?? makeMachineSandbox();
   const storageCalls: ProjectStorageMeasurement[] = [];
+  const branchCalls: Array<{ machineProjectId: string; branchName: string | null; observedAt: Date }> = [];
 
   const deps: PromoteProjectDeps = {
     store,
@@ -268,9 +280,12 @@ function makeDeps(
     measureProjectStorage: async (input) => {
       storageCalls.push(input);
     },
+    recordCurrentBranch: async (input) => {
+      branchCalls.push(input);
+    },
     ...overrides,
   };
-  return { deps, store, rows, promoteCalls, host, byId, provisionCalls, killCalls, machineSandbox, storageCalls };
+  return { deps, store, rows, promoteCalls, host, byId, provisionCalls, killCalls, machineSandbox, storageCalls, branchCalls };
 }
 
 const SESSION_KEY = deriveProjectSessionKey({
@@ -370,6 +385,87 @@ describe('promoteProject — first promotion', () => {
     expect(seeded.promoteCalls).toEqual([]);
     // Only the manual pre-promotion above ever provisioned — the reattach did not.
     expect(provisionCalls).toEqual([SESSION_KEY]);
+  });
+});
+
+/**
+ * Observed-branch capture (`machine-pane-binding.ts`'s handle synthesis feeds
+ * off this): a project's checkout snapshot of the LOCAL branch it was last
+ * seen on, persisted opportunistically wherever a `git status -b` already ran
+ * for other reasons — never a new connection/exec of its own.
+ */
+describe('promoteProject — observed-branch capture', () => {
+  it('given a first promotion, should capture the branch observed on the machine-side checkout at the gate check — the SAME git status the dirty-tree gate already read', async () => {
+    const { deps, branchCalls } = makeDeps();
+
+    await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, deps });
+
+    // Synchronous: a pure parse of `status.stdout` already in hand, no extra
+    // exec or await. The post-CAS reclaim recheck does NOT also capture (see
+    // `inspectMachineCheckout`'s `captureBranch` doc comment) — this is the
+    // ONLY capture that lands before `promoteProject` returns.
+    expect(branchCalls).toEqual([{ machineProjectId: PROJECT_ID, branchName: 'main', observedAt: NOW }]);
+  });
+
+  it('given a first promotion where the fresh clone lands on a DIFFERENT branch than the old machine-side checkout, should supersede the gate-check capture with what the NEW Sprite is actually on', async () => {
+    // The OLD machine-side checkout is tracked on `develop`...
+    const machine = makeMachineSandbox({ status: { exitCode: 0, stdout: '## develop...origin/develop\n', stderr: '' } });
+    // ...but the fresh `git clone` of this project's own Sprite lands on `main`
+    // (its remote's default) — exactly the divergence a promotion can create.
+    const { host } = makeFakeHost((args) => {
+      if (args.cmd === 'git' && gitSubcommand(args.args) === 'status') {
+        return { exitCode: 0, stdout: '## main...origin/main\n', stderr: '' };
+      }
+      return undefined;
+    });
+    const { deps, branchCalls } = makeDeps({ host }, { machine });
+
+    const result = await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, deps });
+    expect(result.ok).toBe(true);
+
+    // The gate-check's capture (the OLD checkout) lands synchronously first...
+    expect(branchCalls[0]).toEqual({ machineProjectId: PROJECT_ID, branchName: 'develop', observedAt: NOW });
+
+    // ...and the post-clone capture (fire-and-forget: flush before asserting)
+    // supersedes it with the NEW Sprite's actual branch. Nothing from the
+    // reclaim-recheck lands in between.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(branchCalls).toEqual([
+      { machineProjectId: PROJECT_ID, branchName: 'develop', observedAt: NOW },
+      { machineProjectId: PROJECT_ID, branchName: 'main', observedAt: NOW },
+    ]);
+  });
+
+  it('given a machine-side checkout in detached HEAD (no branch header name), should EXPLICITLY CLEAR rather than skip — a definitive observation, not an unreadable one', async () => {
+    const machine = makeMachineSandbox({ status: { exitCode: 0, stdout: '## HEAD (no branch)\n', stderr: '' } });
+    const { deps, branchCalls } = makeDeps({}, { machine });
+
+    await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, deps });
+
+    expect(branchCalls).toEqual([{ machineProjectId: PROJECT_ID, branchName: null, observedAt: NOW }]);
+  });
+
+  it('given a reattach, should capture the branch observed on the PROMOTED Sprite\'s OWN git status — the far more common wake, not the (irrelevant, already-gone) machine-side checkout', async () => {
+    const { host } = makeFakeHost((args) => {
+      if (args.cmd === 'git' && gitSubcommand(args.args) === 'status') {
+        return { exitCode: 0, stdout: '## develop...origin/develop\n', stderr: '' };
+      }
+      return undefined;
+    });
+    const existing = await host.provision({ name: SESSION_KEY, substrate: { kind: 'sprite' }, options: {} });
+    const seeded = makeDeps(
+      { host },
+      { seed: [makeRecord({ sessionKey: SESSION_KEY, sandboxId: existing.machineId, spriteInstanceId: existing.spriteInstanceId ?? null })] },
+    );
+
+    const result = await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, deps: seeded.deps });
+    expect(result).toEqual(expect.objectContaining({ ok: true, resumed: true }));
+
+    // Fire-and-forget: the capture chain runs its own `git status` + persist
+    // AFTER promoteProject already returned — flush the queue before asserting.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(seeded.branchCalls).toEqual([{ machineProjectId: PROJECT_ID, branchName: 'develop', observedAt: NOW }]);
   });
 });
 

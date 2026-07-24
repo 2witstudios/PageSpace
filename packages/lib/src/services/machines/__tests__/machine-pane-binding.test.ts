@@ -47,7 +47,14 @@ function makeTerminalStore(row: MachineAgentTerminalRecord | null): DeriveMachin
   return { findById: async (id) => (id === CONVERSATION_ID ? row : null) };
 }
 
-type ProjectRow = { name: string; path: string; id?: string; sandboxId?: string | null; spriteTornDownAt?: Date | null };
+type ProjectRow = {
+  name: string;
+  path: string;
+  id?: string;
+  sandboxId?: string | null;
+  spriteTornDownAt?: Date | null;
+  currentBranchName?: string | null;
+};
 type BranchRow = {
   id: string;
   projectName: string;
@@ -376,6 +383,135 @@ describe('deriveMachinePaneBinding — handle-set derivation (cascade)', () => {
     const row = makeRow({ scope: 'project', projectName: PROJECT_NAME, machineBranchId: null });
     const binding = await deriveOk(makeCascadeDeps(row));
     expect(binding.handles[0]).toEqual(binding.self);
+  });
+});
+
+/**
+ * Observed-branch synthesis (`currentBranchHandle`): a project's own checkout
+ * records what LOCAL branch it was last observed on (a `git status -b`
+ * snapshot — `machine-project-promotion.ts`'s capture), and derivation
+ * synthesizes ONE extra handle under that name so a model reasoning in
+ * ordinary git terms ("my own current branch") can address its own checkout
+ * without a separately-spawned worktree ever having existed for it.
+ *
+ * This is deliberately NOT the naming-convention fallback rejected three
+ * times across PR #2232's review (see `currentBranchHandle`'s doc comment for
+ * the full distinction: that guessed a destination from a NAME; this only
+ * ever synthesizes from an OBSERVED fact, and only ever points at the SAME
+ * checkout the project handle already resolves to). These tests exercise the
+ * two things that make it safe: it fires only from that observed fact, and it
+ * is suppressed the instant a real branch record — live OR torn down — could
+ * be confused for it.
+ */
+describe('deriveMachinePaneBinding — observed-branch synthesis', () => {
+  it('given a project with an observed currentBranchName and no spawned branch rows, should resolve {project, branch} to a synthesized handle — no worktree ever created', async () => {
+    const row = makeRow({ scope: 'machine', projectName: null, machineBranchId: null });
+    const deps = makeDeps({
+      terminalStore: makeTerminalStore(row),
+      projectLookup: makeProjectLookup([{ name: PROJECT_NAME, path: PROJECT_PATH, currentBranchName: 'main' }]),
+      branchLookup: makeBranchLookup([]),
+    });
+    const binding = await deriveOk(deps);
+    expect(resolveMachineNodeTarget(binding, { project: PROJECT_NAME, branch: 'main' })).toEqual({
+      ok: true,
+      handle: { kind: 'branch', machineId: MACHINE_ID, project: PROJECT_NAME, branch: 'main', cwd: PROJECT_PATH },
+    });
+  });
+
+  it('given the SAME project scoped as self, should resolve a bare {branch} target to the synthesized handle too (the branchHandles() code path, not just the machine-root cascade)', async () => {
+    const row = makeRow({ scope: 'project', projectName: PROJECT_NAME, machineBranchId: null });
+    const deps = makeDeps({
+      terminalStore: makeTerminalStore(row),
+      projectLookup: makeProjectLookup([{ name: PROJECT_NAME, path: PROJECT_PATH, currentBranchName: 'main' }]),
+      branchLookup: makeBranchLookup([]),
+    });
+    const binding = await deriveOk(deps);
+    expect(resolveMachineNodeTarget(binding, { branch: 'main' })).toEqual({
+      ok: true,
+      handle: { kind: 'branch', machineId: MACHINE_ID, project: PROJECT_NAME, branch: 'main', cwd: PROJECT_PATH },
+    });
+  });
+
+  it('given the observed branch name ALSO claimed by a real, LIVE branch record, should suppress synthesis — exactly one "main" handle, the real one', async () => {
+    const row = makeRow({ scope: 'machine', projectName: null, machineBranchId: null });
+    const deps = makeDeps({
+      terminalStore: makeTerminalStore(row),
+      projectLookup: makeProjectLookup([{ name: PROJECT_NAME, path: PROJECT_PATH, currentBranchName: 'main' }]),
+      branchLookup: makeBranchLookup([
+        { id: 'branch-main', projectName: PROJECT_NAME, branchName: 'main', sandboxId: 'sprite-main', spriteTornDownAt: null },
+      ]),
+    });
+    const binding = await deriveOk(deps);
+    const mainHandles = binding.handles.filter((h) => h.kind === 'branch' && h.project === PROJECT_NAME && h.branch === 'main');
+    expect(mainHandles).toEqual([
+      {
+        kind: 'branch',
+        machineId: MACHINE_ID,
+        project: PROJECT_NAME,
+        branch: 'main',
+        cwd: BRANCH_REPO_PATH,
+        branchSandbox: { machineBranchId: 'branch-main', sandboxId: 'sprite-main' },
+      },
+    ]);
+  });
+
+  it('given the observed branch name claimed by a TORN-DOWN branch record, should still suppress synthesis (fail closed) — this is the residual risk #2232\'s review history warns about', async () => {
+    const row = makeRow({ scope: 'machine', projectName: null, machineBranchId: null });
+    const deps = makeDeps({
+      terminalStore: makeTerminalStore(row),
+      projectLookup: makeProjectLookup([{ name: PROJECT_NAME, path: PROJECT_PATH, currentBranchName: 'main' }]),
+      branchLookup: makeBranchLookup([
+        { id: 'branch-main', projectName: PROJECT_NAME, branchName: 'main', sandboxId: 'sprite-main', spriteTornDownAt: NOW },
+      ]),
+    });
+    const binding = await deriveOk(deps);
+    // The torn-down branch is omitted (fail-closed, as ever) AND no
+    // synthesized stand-in takes its name.
+    expect(binding.handles.some((h) => h.kind === 'branch' && h.project === PROJECT_NAME && h.branch === 'main')).toBe(false);
+    expect(resolveMachineNodeTarget(binding, { project: PROJECT_NAME, branch: 'main' })).toEqual({
+      ok: false,
+      reason: 'target_not_in_set',
+    });
+  });
+
+  it('given no currentBranchName ever observed (the pre-existing #2232 case: no observed data at all), should synthesize nothing and deny an unresolved conventional name', async () => {
+    const row = makeRow({ scope: 'machine', projectName: null, machineBranchId: null });
+    const deps = makeDeps({
+      terminalStore: makeTerminalStore(row),
+      projectLookup: makeProjectLookup([{ name: PROJECT_NAME, path: PROJECT_PATH }]),
+      branchLookup: makeBranchLookup([]),
+    });
+    const binding = await deriveOk(deps);
+    expect(binding.handles.some((h) => h.kind === 'branch')).toBe(false);
+    expect(resolveMachineNodeTarget(binding, { project: PROJECT_NAME, branch: 'main' })).toEqual({
+      ok: false,
+      reason: 'target_not_in_set',
+    });
+  });
+
+  it('given a PROMOTED project with an observed currentBranchName, resolving {project} alone and {project, branch: <that name>} should return IDENTICAL cwd/projectSandbox — the concrete proof there is no "wrong worktree" risk, since both point at the one Sprite that already existed', async () => {
+    const row = makeRow({ scope: 'machine', projectName: null, machineBranchId: null });
+    const deps = makeDeps({
+      terminalStore: makeTerminalStore(row),
+      projectLookup: makeProjectLookup([
+        {
+          name: PROJECT_NAME,
+          path: PROJECT_PATH,
+          id: 'proj-1',
+          sandboxId: 'sprite-project-1',
+          spriteTornDownAt: null,
+          currentBranchName: 'main',
+        },
+      ]),
+      branchLookup: makeBranchLookup([]),
+    });
+    const binding = await deriveOk(deps);
+    const byProject = resolveMachineNodeTarget(binding, { project: PROJECT_NAME });
+    const byBranch = resolveMachineNodeTarget(binding, { project: PROJECT_NAME, branch: 'main' });
+    if (!byProject.ok || !byBranch.ok) throw new Error(`expected both to resolve, got ${JSON.stringify({ byProject, byBranch })}`);
+    expect(byBranch.handle.cwd).toBe(byProject.handle.cwd);
+    expect(byBranch.handle.projectSandbox).toEqual(byProject.handle.projectSandbox);
+    expect(byProject.handle.cwd).toBe(PROJECT_REPO_PATH);
   });
 });
 

@@ -125,6 +125,21 @@ export const machineProjects = pgTable('machine_projects', {
   // and the reconcile's staleness signal.
   storageMeasuredAt: timestamp('storageMeasuredAt', { mode: 'date' }),
 
+  // ---------------------------------------------------------------------------
+  // The LOCAL branch name this project's checkout was actually, observably on,
+  // last time anything read it — a `git status -b` SNAPSHOT, not live truth,
+  // captured opportunistically whenever the Sprite is already awake for other
+  // work (a promotion's own inspect, a reattach) — never by waking a
+  // hibernating Sprite just to check. Staleness here carries no misrouting
+  // risk the way a wrong branch pointer normally would: this column only ever
+  // labels the PROJECT'S OWN single checkout (see `machine-pane-binding.ts`'s
+  // handle synthesis), never a different destination, so an out-of-date value
+  // is at worst a missed convenience, not a wrong one.
+  // ---------------------------------------------------------------------------
+
+  currentBranchName: text('currentBranchName'),
+  currentBranchObservedAt: timestamp('currentBranchObservedAt'),
+
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
 }, (table) => ({

@@ -35,6 +35,8 @@ function makeRecord(overrides: Partial<MachineProjectRecord> = {}): MachineProje
     spriteInstanceId: null,
     teardownRequestedAt: null,
     spriteTornDownAt: null,
+    currentBranchName: null,
+    currentBranchObservedAt: null,
     createdAt: NOW,
     updatedAt: NOW,
     ...overrides,
@@ -85,6 +87,11 @@ function makeStore(seed: MachineProjectRecord[] = []) {
       removeCalls.push({ machineId, id });
       const row = rows.get(id);
       if (row && row.machineId === machineId) rows.delete(id);
+    },
+    // Exercised by machine-project-promotion.test.ts / machine-pane-binding.test.ts; here it only has to exist.
+    recordCurrentBranch: async (id, branchName, observedAt) => {
+      const row = rows.get(id);
+      if (row) rows.set(id, { ...row, currentBranchName: branchName, currentBranchObservedAt: observedAt });
     },
   };
   return { store, rows, removeCalls };
