@@ -327,11 +327,6 @@ function getPanesStore() {
   return panesStorePromise;
 }
 
-/** The machine's current rev — used by `GET` to answer `{ rev, workspaces }`. */
-export async function getCurrentRev(machineId: string): Promise<number> {
-  return (await getPanesStore()).currentRev(machineId);
-}
-
 /**
  * `GET`'s consistent read: the workspace list (legacy `machine_workspaces`
  * rows) and the machine's current rev, from ONE `REPEATABLE READ` snapshot —
