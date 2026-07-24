@@ -20,15 +20,9 @@ import {
 import { resolveMachinePayerId, lookupPageOwnerId } from '../../billing/machine-payer';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
 import { calculateMachineCostDollars } from '../../monitoring/machine-pricing';
-import type { SubscriptionTier } from '../subscription-utils';
+import { toSubscriptionTier, type SubscriptionTier } from '../../billing/subscription-tiers';
 import { getCodeExecutionConcurrencyLimit } from './quota';
 import type { SandboxBillingDeps } from './tool-runners';
-
-const VALID_TIERS: ReadonlySet<string> = new Set(['free', 'pro', 'founder', 'business']);
-
-function toTier(value: string | null | undefined): SubscriptionTier {
-  return value && VALID_TIERS.has(value) ? (value as SubscriptionTier) : 'free';
-}
 
 /**
  * The gate must evaluate the PAYER's own balance/tier, not the acting user's —
@@ -42,7 +36,7 @@ async function resolvePayerTier(payerId: string): Promise<SubscriptionTier> {
     .from(users)
     .where(eq(users.id, payerId))
     .limit(1);
-  return toTier(row?.subscriptionTier);
+  return toSubscriptionTier(row?.subscriptionTier);
 }
 
 export const defaultSandboxBillingDeps: SandboxBillingDeps = {

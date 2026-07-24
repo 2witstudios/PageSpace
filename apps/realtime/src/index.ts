@@ -70,7 +70,22 @@ import {
 } from './validation';
 import { loggers, initializeLogging } from '@pagespace/lib/logging/logger-config';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
-import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
+// Room names come EXCLUSIVELY from the shared grammar (#2158) — the same
+// module the broadcast-audience validator checks against, so a join shape
+// added here is automatically broadcastable (and vice versa). The drift guard
+// (__tests__/room-grammar-drift-guard.test.ts) rejects hand-rolled room names.
+import {
+  notificationsRoom,
+  userTasksRoom,
+  userCalendarRoom,
+  userDrivesRoom,
+  userGlobalRoom,
+  driveRoom,
+  driveCalendarRoom,
+  dmRoom,
+  driveActivityRoom,
+  pageActivityRoom,
+} from '@pagespace/lib/realtime/rooms';
 import { socketRegistry } from './socket-registry';
 import { handleKickRequest } from './kick-handler';
 import { authorizeBroadcastAudience } from './broadcast-audience';
@@ -1175,25 +1190,21 @@ io.on('connection', (socket: AuthSocket) => {
 
   // Auto-join user's personal rooms on connection
   if (user?.id) {
-    const notificationRoom = `notifications:${user.id}`;
-    const taskRoom = `user:${user.id}:tasks`;
-    const calendarRoom = `user:${user.id}:calendar`;
-    const userDrivesRoom = `user:${user.id}:drives`;
-    const globalRoom = globalChannelId(user.id);
-    socket.join(notificationRoom);
-    socket.join(taskRoom);
-    socket.join(calendarRoom);
-    socket.join(userDrivesRoom);
-    socket.join(globalRoom);
-    // Track in registry (these are always-on rooms, not permission-gated)
-    socketRegistry.trackRoomJoin(socket.id, notificationRoom);
-    socketRegistry.trackRoomJoin(socket.id, taskRoom);
-    socketRegistry.trackRoomJoin(socket.id, calendarRoom);
-    socketRegistry.trackRoomJoin(socket.id, userDrivesRoom);
-    socketRegistry.trackRoomJoin(socket.id, globalRoom);
+    const personalRooms = [
+      notificationsRoom(user.id),
+      userTasksRoom(user.id),
+      userCalendarRoom(user.id),
+      userDrivesRoom(user.id),
+      userGlobalRoom(user.id),
+    ];
+    for (const room of personalRooms) {
+      socket.join(room);
+      // Track in registry (these are always-on rooms, not permission-gated)
+      socketRegistry.trackRoomJoin(socket.id, room);
+    }
     loggers.realtime.debug('User joined notification, task, calendar, drives, and global rooms', {
       userId: user.id,
-      rooms: [notificationRoom, taskRoom, calendarRoom, userDrivesRoom, globalRoom]
+      rooms: personalRooms
     });
   }
 
@@ -1254,15 +1265,14 @@ io.on('connection', (socket: AuthSocket) => {
     try {
       const hasAccess = await getUserDriveAccess(user.id, driveId);
       if (hasAccess) {
-        const driveRoom = `drive:${driveId}`;
-        const driveCalendarRoom = `drive:${driveId}:calendar`;
-        socket.join(driveRoom);
-        socket.join(driveCalendarRoom);
-        socketRegistry.trackRoomJoin(socket.id, driveRoom);
-        socketRegistry.trackRoomJoin(socket.id, driveCalendarRoom);
+        const rooms = [driveRoom(driveId), driveCalendarRoom(driveId)];
+        for (const room of rooms) {
+          socket.join(room);
+          socketRegistry.trackRoomJoin(socket.id, room);
+        }
         loggers.realtime.debug('User joined drive and drive calendar rooms', {
           userId: user.id,
-          rooms: [driveRoom, driveCalendarRoom],
+          rooms,
         });
       } else {
         loggers.realtime.warn('User denied access to drive', { userId: user.id, driveId });
@@ -1309,7 +1319,7 @@ io.on('connection', (socket: AuthSocket) => {
         return;
       }
 
-      const room = `dm:${conversationId}`;
+      const room = dmRoom(conversationId);
       socket.join(room);
       socketRegistry.trackRoomJoin(socket.id, room);
       loggers.realtime.debug('User joined DM room', { userId, room });
@@ -1331,7 +1341,7 @@ io.on('connection', (socket: AuthSocket) => {
     }
     const conversationId = validation.value;
 
-    const room = `dm:${conversationId}`;
+    const room = dmRoom(conversationId);
     socket.leave(room);
     socketRegistry.trackRoomLeave(socket.id, room);
     loggers.realtime.debug('User left DM room', { userId, room });
@@ -1349,15 +1359,14 @@ io.on('connection', (socket: AuthSocket) => {
     }
     const driveId = validation.value;
 
-    const driveRoom = `drive:${driveId}`;
-    const driveCalendarRoom = `drive:${driveId}:calendar`;
-    socket.leave(driveRoom);
-    socket.leave(driveCalendarRoom);
-    socketRegistry.trackRoomLeave(socket.id, driveRoom);
-    socketRegistry.trackRoomLeave(socket.id, driveCalendarRoom);
+    const rooms = [driveRoom(driveId), driveCalendarRoom(driveId)];
+    for (const room of rooms) {
+      socket.leave(room);
+      socketRegistry.trackRoomLeave(socket.id, room);
+    }
     loggers.realtime.debug('User left drive and drive calendar rooms', {
       userId: user.id,
-      rooms: [driveRoom, driveCalendarRoom],
+      rooms,
     });
   });
 
@@ -1377,7 +1386,7 @@ io.on('connection', (socket: AuthSocket) => {
     try {
       const hasAccess = await getUserDriveAccess(user.id, driveId);
       if (hasAccess) {
-        const activityRoom = `activity:drive:${driveId}`;
+        const activityRoom = driveActivityRoom(driveId);
         socket.join(activityRoom);
         socketRegistry.trackRoomJoin(socket.id, activityRoom);
         loggers.realtime.debug('User joined activity drive room', { userId: user.id, room: activityRoom });
@@ -1404,7 +1413,7 @@ io.on('connection', (socket: AuthSocket) => {
     try {
       const accessLevel = await getUserAccessLevel(user.id, pageId);
       if (accessLevel) {
-        const activityRoom = `activity:page:${pageId}`;
+        const activityRoom = pageActivityRoom(pageId);
         socket.join(activityRoom);
         socketRegistry.trackRoomJoin(socket.id, activityRoom);
         loggers.realtime.debug('User joined activity page room', { userId: user.id, room: activityRoom });
@@ -1428,7 +1437,7 @@ io.on('connection', (socket: AuthSocket) => {
     }
     const driveId = validation.value;
 
-    const activityRoom = `activity:drive:${driveId}`;
+    const activityRoom = driveActivityRoom(driveId);
     socket.leave(activityRoom);
     socketRegistry.trackRoomLeave(socket.id, activityRoom);
     loggers.realtime.debug('User left activity drive room', { userId: user.id, room: activityRoom });
@@ -1446,7 +1455,7 @@ io.on('connection', (socket: AuthSocket) => {
     }
     const pageId = validation.value;
 
-    const activityRoom = `activity:page:${pageId}`;
+    const activityRoom = pageActivityRoom(pageId);
     socket.leave(activityRoom);
     socketRegistry.trackRoomLeave(socket.id, activityRoom);
     loggers.realtime.debug('User left activity page room', { userId: user.id, room: activityRoom });
@@ -1502,7 +1511,7 @@ io.on('connection', (socket: AuthSocket) => {
       });
 
       // Broadcast to the drive room (for the sidebar page tree)
-      io.to(`drive:${driveId}`).emit('presence:page_viewers', {
+      io.to(driveRoom(driveId)).emit('presence:page_viewers', {
         pageId,
         viewers: uniqueViewers,
       });
@@ -1540,7 +1549,7 @@ io.on('connection', (socket: AuthSocket) => {
 
     // Broadcast to drive room if we know the driveId
     if (driveId) {
-      io.to(`drive:${driveId}`).emit('presence:page_viewers', {
+      io.to(driveRoom(driveId)).emit('presence:page_viewers', {
         pageId,
         viewers: uniqueViewers,
       });
@@ -1621,7 +1630,7 @@ io.on('connection', (socket: AuthSocket) => {
       });
 
       if (driveId) {
-        io.to(`drive:${driveId}`).emit('presence:page_viewers', {
+        io.to(driveRoom(driveId)).emit('presence:page_viewers', {
           pageId,
           viewers: uniqueViewers,
         });

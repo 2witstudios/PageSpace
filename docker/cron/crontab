@@ -56,6 +56,14 @@
 # Detects and deletes file records with zero references + physical files
 0 6 * * 0 cron-curl GET __WEB_URL__/api/cron/cleanup-orphaned-files >> /var/log/cron/orphan-cleanup.log 2>&1
 
+# Subscription tier reconcile - Every 30 minutes
+# Compares users.subscriptionTier (denormalized cache) against the
+# subscriptions table and repairs repairable drift; indeterminate drift
+# (an entitled subscription on an unmapped price id) is logged/audited for
+# a human, never auto-repaired. Backstop for missed/failed Stripe webhooks
+# (see subscription-tier-reconcile.ts in @pagespace/lib).
+*/30 * * * * cron-curl GET __WEB_URL__/api/cron/reconcile-subscription-tiers >> /var/log/cron/reconcile-subscription-tiers.log 2>&1
+
 # Credit reconcile - Every 10 minutes
 # Re-settles ledger rows stuck 'pending' and bills usage rows that never
 # decremented the prepaid balance, so every AI call is charged exactly once

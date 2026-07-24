@@ -64,7 +64,12 @@ export const users = pgTable('users', {
   lastStorageCalculated: timestamp('lastStorageCalculated', { mode: 'date' }),
   // Subscription fields
   stripeCustomerId: text('stripeCustomerId').unique(),
-  subscriptionTier: text('subscriptionTier').default('free').notNull(), // 'free' | 'pro' | 'founder' | 'business'
+  // Untyped text; the canonical vocabulary is SubscriptionTier in
+  // @pagespace/lib/billing/subscription-tiers (TIERS). This is a denormalized
+  // CACHE of the subscriptions table — see subscription-tier-sync.ts for the
+  // single write-through derivation and subscription-tier-reconcile.ts for the
+  // periodic drift repair. Read call sites must coerce with toSubscriptionTier().
+  subscriptionTier: text('subscriptionTier').default('free').notNull(),
   tosAcceptedAt: timestamp('tosAcceptedAt', { mode: 'date' }),
   // Account lockout fields
   failedLoginAttempts: integer('failedLoginAttempts').default(0).notNull(),

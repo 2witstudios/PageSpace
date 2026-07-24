@@ -152,6 +152,21 @@
       "import": "./dist/observability/error-resolutions.js",
       "require": "./dist/observability/error-resolutions.js"
     },
+    "./billing/subscription-tiers": {
+      "types": "./dist/billing/subscription-tiers.d.ts",
+      "import": "./dist/billing/subscription-tiers.js",
+      "require": "./dist/billing/subscription-tiers.js"
+    },
+    "./billing/subscription-tier-sync": {
+      "types": "./dist/billing/subscription-tier-sync.d.ts",
+      "import": "./dist/billing/subscription-tier-sync.js",
+      "require": "./dist/billing/subscription-tier-sync.js"
+    },
+    "./billing/subscription-tier-reconcile": {
+      "types": "./dist/billing/subscription-tier-reconcile.d.ts",
+      "import": "./dist/billing/subscription-tier-reconcile.js",
+      "require": "./dist/billing/subscription-tier-reconcile.js"
+    },
     "./billing/credit-pricing": {
       "types": "./dist/billing/credit-pricing.d.ts",
       "import": "./dist/billing/credit-pricing.js",
@@ -677,6 +692,11 @@
       "import": "./dist/services/machines/machine-workspaces-store.js",
       "require": "./dist/services/machines/machine-workspaces-store.js"
     },
+    "./services/machines/machine-panes-store": {
+      "types": "./dist/services/machines/machine-panes-store.d.ts",
+      "import": "./dist/services/machines/machine-panes-store.js",
+      "require": "./dist/services/machines/machine-panes-store.js"
+    },
     "./services/machines/machine-workspaces": {
       "types": "./dist/services/machines/machine-workspaces.d.ts",
       "import": "./dist/services/machines/machine-workspaces.js",
@@ -806,6 +826,11 @@
       "types": "./dist/services/channel-message-repository.d.ts",
       "import": "./dist/services/channel-message-repository.js",
       "require": "./dist/services/channel-message-repository.js"
+    },
+    "./services/message-derived-state": {
+      "types": "./dist/services/message-derived-state.d.ts",
+      "import": "./dist/services/message-derived-state.js",
+      "require": "./dist/services/message-derived-state.js"
     },
     "./services/page-webhook-service": {
       "types": "./dist/services/page-webhook-service.d.ts",
@@ -1552,6 +1577,21 @@
       "import": "./dist/permissions/permission-mutations.js",
       "require": "./dist/permissions/permission-mutations.js"
     },
+    "./permissions/revocation-kick": {
+      "types": "./dist/permissions/revocation-kick.d.ts",
+      "import": "./dist/permissions/revocation-kick.js",
+      "require": "./dist/permissions/revocation-kick.js"
+    },
+    "./realtime/rooms": {
+      "types": "./dist/realtime/rooms.d.ts",
+      "import": "./dist/realtime/rooms.js",
+      "require": "./dist/realtime/rooms.js"
+    },
+    "./realtime/kick-client": {
+      "types": "./dist/realtime/kick-client.d.ts",
+      "import": "./dist/realtime/kick-client.js",
+      "require": "./dist/realtime/kick-client.js"
+    },
     "./permissions/share-link-service": {
       "types": "./dist/permissions/share-link-service.d.ts",
       "import": "./dist/permissions/share-link-service.js",
@@ -1962,6 +2002,9 @@
       ],
       "services/machines/machine-workspaces-store": [
         "./dist/services/machines/machine-workspaces-store.d.ts"
+      ],
+      "services/machines/machine-panes-store": [
+        "./dist/services/machines/machine-panes-store.d.ts"
       ],
       "services/machines/machine-workspaces": [
         "./dist/services/machines/machine-workspaces.d.ts"

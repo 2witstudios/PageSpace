@@ -11,6 +11,7 @@ import { buildAssistantPersistencePayload } from '@/lib/ai/core/persistAssistant
 import { extractStructuredContentFromParts } from '@/lib/ai/core/message-utils';
 import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import type { UIMessagePart } from '@/lib/ai/core/stream-multicast-registry';
 
 /**
@@ -174,6 +175,16 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
           // `'complete'` — see the docblock above for why `!= 'complete'` alone isn't enough.
           setWhere: eq(messages.status, 'streaming'),
         });
+
+      // The route's own terminal writes bump this after every persist
+      // (execute-end, onFinish) — the materializer is a terminal write by a
+      // different door and must not skip it, or the recovered conversation
+      // sorts stale in the history list (#2153). Deliberately inside this
+      // same try/catch as the message write: a failure here must degrade
+      // exactly like a failed write, leaving the row `'streaming'` for the
+      // next sweep to retry, not a half-materialized row whose session gets
+      // settled anyway.
+      await globalConversationRepository.recomputeLastMessageAt(row.conversationId);
     } else {
       const written = await db
         .insert(chatMessages)

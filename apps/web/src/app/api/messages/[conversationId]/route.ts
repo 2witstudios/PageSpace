@@ -6,6 +6,7 @@ import { createOrUpdateMessageNotification } from '@pagespace/lib/notifications/
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { dmMessageRepository } from '@pagespace/lib/services/dm-message-repository';
+import { buildLastMessagePreview } from '@pagespace/lib/services/message-derived-state';
 import { attachQuotedMessages } from '@pagespace/lib/services/quote-enrichment';
 import { broadcastInboxEvent, broadcastThreadReplyCountUpdated } from '@/lib/websocket/socket-utils';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
@@ -211,23 +212,6 @@ function isValidAttachmentMeta(value: unknown): value is AttachmentMeta {
   );
 }
 
-function buildLastMessagePreview(
-  content: string,
-  attachmentMeta: AttachmentMeta | null
-): string {
-  const trimmed = content.trim();
-  if (trimmed.length > 0) {
-    return trimmed.length > 100 ? trimmed.substring(0, 100) + '...' : trimmed;
-  }
-  if (attachmentMeta) {
-    const isImage = attachmentMeta.mimeType.startsWith('image/');
-    return isImage
-      ? `[image: ${attachmentMeta.originalName}]`
-      : `[file: ${attachmentMeta.originalName}]`;
-  }
-  return '';
-}
-
 // POST /api/messages/[conversationId] - Send a message
 export async function POST(
   request: Request,
@@ -375,17 +359,15 @@ export async function POST(
         resourceId: result.reply.id,
       });
 
-      // Mirror row, when present, behaves as a top-level message — it should
-      // bump the conversation preview/inbox just like a regular send. The
-      // thread-only reply does NOT touch the inbox preview here; PR 5 wires
-      // the inbox bump for thread followers separately.
+      // Mirror row, when present, behaves as a top-level message — it bumps
+      // the conversation preview/inbox just like a regular send.
+      // insertDmThreadReply already recomputed the stored preview from the
+      // mirror row (#2153); this local copy is only for the
+      // notification/broadcast payloads below. The thread-only reply does
+      // NOT touch the inbox preview here; PR 5 wires the inbox bump for
+      // thread followers separately.
       if (result.mirror) {
         const previewSource = buildLastMessagePreview(content, attachmentMeta);
-        await dmMessageRepository.updateConversationLastMessage({
-          conversationId,
-          lastMessageAt: result.mirror.createdAt,
-          lastMessagePreview: previewSource,
-        });
 
         const recipientId = conversation.participant1Id === userId
           ? conversation.participant2Id
@@ -555,13 +537,10 @@ export async function POST(
       resourceId: newMessage.id,
     });
 
+    // insertDmMessageWithAttachment already recomputed the stored preview
+    // (#2153); this local copy is only for the notification/broadcast
+    // payloads below.
     const messagePreview = buildLastMessagePreview(content, attachmentMeta);
-
-    await dmMessageRepository.updateConversationLastMessage({
-      conversationId,
-      lastMessageAt: newMessage.createdAt,
-      lastMessagePreview: messagePreview,
-    });
 
     const recipientId = conversation.participant1Id === userId
       ? conversation.participant2Id

@@ -129,7 +129,27 @@ function getStore() {
   return storePromise;
 }
 
-export function buildMachineWorkspacesDeps(): MachineWorkspacesDeps {
+/**
+ * `executor` defaults to the memoized real-`db`-backed store above; pass a
+ * transaction (as obtained from `machine-panes-store.ts`'s `withMachineLock`)
+ * to route every query through it instead, bypassing the memoized default so
+ * this deps object is scoped to exactly that transaction/lock.
+ */
+export function buildMachineWorkspacesDeps(executor?: Parameters<typeof createDbMachineWorkspaceStore>[0]): MachineWorkspacesDeps {
+  if (executor) {
+    const lockedStore = createDbMachineWorkspaceStore(executor);
+    return {
+      store: {
+        list: async (machineId) => (await lockedStore).list(machineId),
+        findById: async (machineId, id) => (await lockedStore).findById(machineId, id),
+        insertIfAbsent: async (input) => (await lockedStore).insertIfAbsent(input),
+        update: async (machineId, id, patch, now) => (await lockedStore).update(machineId, id, patch, now),
+        remove: async (machineId, id) => (await lockedStore).remove(machineId, id),
+      },
+      now: () => new Date(),
+    };
+  }
+
   return {
     store: {
       list: async (machineId) => (await getStore()).list(machineId),
@@ -137,8 +157,6 @@ export function buildMachineWorkspacesDeps(): MachineWorkspacesDeps {
       insertIfAbsent: async (input) => (await getStore()).insertIfAbsent(input),
       update: async (machineId, id, patch, now) => (await getStore()).update(machineId, id, patch, now),
       remove: async (machineId, id) => (await getStore()).remove(machineId, id),
-      isBootstrapped: async (machineId) => (await getStore()).isBootstrapped(machineId),
-      bootstrapSeed: async (input) => (await getStore()).bootstrapSeed(input),
     },
     now: () => new Date(),
   };

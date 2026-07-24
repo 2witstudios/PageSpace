@@ -1,72 +1,62 @@
 'use client';
 
 /**
- * Server-authoritative sync for a Machine's workspace list (#2048) — the
- * successor to PR #2031's `localStorage`-only `useMachineWorkspaceStore`.
+ * Server-authoritative sync for a Machine's workspace list — entity
+ * promotion (#2202), the successor to #2048's full-blob PUT/PATCH sync.
+ *
+ * The blob era needed `hydratedOnce` (a full-list replace must run at most
+ * once per mount, or a later revalidation could wipe a workspace this
+ * browser just created locally before its own create round-tripped),
+ * `declinedBootstraps` (module-level, shared across this hook's TWO
+ * mount-cardinalities — see below — so a second instance's bootstrap
+ * decision agrees with the first's), and the `bootstrapped` echo dance. All
+ * of that existed because the shared store was reconciled from a
+ * full-replace blob with no ordering information.
+ *
+ * Every workspace/pane row now carries a per-MACHINE monotonic `rev`
+ * (`machine-panes-store.ts`), and `useMachineWorkspaceStore`'s
+ * `applyServerSnapshot`/`applyServerVerb` are REV-GATED: a payload at or
+ * behind what this browser has already applied is simply dropped. That
+ * makes every hydrate safely re-runnable — `revalidateOnFocus`/`onReconnect`
+ * can stay on, a snapshot GET is no longer "only the first one counts", and
+ * dual-mount (see below) needs no cross-instance coordination at all,
+ * because the shared STORE's rev/pendingVerbs state is itself the
+ * coordination — there is nothing left for a module-level `Set` to guard.
  *
  * Two exports, split because they have different mount-cardinality needs:
  *
- * - {@link useMachineWorkspaceSync} owns the stateful side effects (SWR fetch,
- *   the one-time bootstrap race, the socket subscription). It is mounted MORE
- *   THAN ONCE for the machine the user has open: `DevelopmentSidebar` mounts
- *   one instance per machine ROW (so an expanded row renders live workspaces
- *   without ever visiting the machine), and `MachineView` mounts one for the
- *   open machine — the true per-machine root that survives Terminal-tab
- *   unmount/remount (Radix `TabsContent` unmounts inactive tabs; `MachineView`
- *   doesn't). Dual mount is DESIGNED FOR, not tolerated: the bootstrap claim
- *   is resolved server-side by the claim table, and the "nothing to migrate"
- *   decision is shared across instances by the module-level
- *   {@link declinedBootstraps} precisely because instances see each other's
- *   writes through the one shared store.
- * - {@link useSyncedWorkspaceActions} has no internal state to coordinate (see
- *   its own doc for why), so it's safe to call from every component that
- *   mutates a workspace — `WorkspaceLeaves` (sidebar) and `TerminalPanes`
- *   (pane grid) each call it independently.
- *
- * Two races remain, both ACCEPTED (each is a lost view of a row, never lost
- * server state — the server row survives in both):
- *
- * 1. A stale full-replace hydrate landing AFTER a workspace's bound `created`
- *    echo can still drop a just-created workspace: `hydratedOnce` is
- *    per-instance, so a second instance whose GET predates the create replaces
- *    the list from a payload that never contained it. No later event
- *    reintroduces it (`updated` skips unknown workspaces — see below); a
- *    reload or remount does. The real fix is per-machine, cross-instance
- *    hydration state (the shape `declinedBootstraps` already has) — or the
- *    entity-promotion successor that removes the full-replace hydrate
- *    entirely. Tracked in issue #2202.
- * 2. A `machine-workspace:created` missed while the socket was disconnected
- *    leaves this browser without that workspace until the next full hydrate —
- *    see `onUpdated`'s doc for why an `updated` event can't introduce one.
+ * - {@link useMachineWorkspaceSync} owns the stateful side effects (SWR
+ *   fetch, the socket subscription). It is mounted MORE THAN ONCE for the
+ *   machine the user has open: `DevelopmentSidebar` mounts one instance per
+ *   machine ROW, and `MachineView` mounts one for the open machine. Harmless
+ *   by construction now: both instances read/write the SAME shared store,
+ *   and every write is rev-gated, so two instances hydrating from two GETs
+ *   in either order converge on the same state.
+ * - {@link useSyncedWorkspaceActions} pushes whichever {@link WorkspaceVerb}
+ *   the local store action just queued onto `pendingVerbs` — no per-action
+ *   diffing (the old `ChangedFields`/PATCH-then-404-POST fallback) needed,
+ *   since a verb IS the diff.
  */
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo } from 'react';
 import useSWR from 'swr';
-import { fetchWithAuth, post, del } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import { useSocket } from './useSocket';
 import { usePageSocketRoom } from './usePageSocketRoom';
 import {
   useMachineWorkspaceStore,
-  workspacesOf,
-  workspaceShowing,
-  sessionWorkspaceId,
-  nodeScopeNames,
-  paneScopeForWire,
   type MachineNodeScope,
   type OpenTerminalScope,
-  type ServerColumnDTO,
   type ServerWorkspaceDTO,
-  type TerminalColumnState,
+  type WorkspaceVerb,
 } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 
-interface WorkspaceListResponse {
+interface WorkspaceSnapshotResponse {
   workspaces: ServerWorkspaceDTO[];
+  rev: number;
+  /** Vestigial — the server always reports `true` post-#2202; kept only so an
+   * old cached response shape doesn't need a type gate at every call site. */
   bootstrapped: boolean;
-}
-
-interface BootstrapResponse {
-  claimed: boolean;
-  workspaces: ServerWorkspaceDTO[];
 }
 
 const fetcher = (url: string) =>
@@ -75,48 +65,13 @@ const fetcher = (url: string) =>
       const body = await res.json().catch(() => null);
       throw new Error(body?.error ?? 'Failed to fetch workspaces');
     }
-    return res.json() as Promise<WorkspaceListResponse>;
+    return res.json() as Promise<WorkspaceSnapshotResponse>;
   });
 
 /**
- * Machines where this browser session already decided "nothing local to
- * migrate — claim nothing" (the empty-payload branch below). MODULE-level, not
- * a per-instance ref, because this hook is mounted more than once for the same
- * machine (`DevelopmentSidebar` mounts it per machine row AND `MachineView`
- * mounts it for the open machine) and the instances share one store: on an
- * unbootstrapped machine whose server list is non-empty, instance 1's
- * empty-payload hydrate writes the server's rows INTO the store, so instance
- * 2's effect would then read a non-empty local list and POST a bootstrap claim
- * that merely echoes the server's own rows back at it — burning the
- * first-writer-wins claim on nothing, which permanently forecloses a legacy
- * browser's real un-migrated history. Exactly what the empty-payload guard
- * exists to prevent, so the decision has to be visible across instances.
- */
-const declinedBootstraps = new Set<string>();
-
-/**
- * Strips local-only pane state (`pendingPrompt`) before a layout crosses the
- * wire — the server's layout DTO has no such field, and a starting prompt not
- * yet typed into its PTY must never be persisted or broadcast to other browsers.
- *
- * Also WIDENS each pane scope back to a full session address
- * ({@link paneScopeForWire}), which is why the workspace's node scope is a
- * parameter: local state keeps the narrow pane, the wire keeps the address a
- * pre-narrowing client needs to resolve it correctly.
- */
-function toWireColumns(node: MachineNodeScope, columns: TerminalColumnState[]) {
-  return columns.map((column) => ({
-    id: column.id,
-    panes: column.panes.map((pane) => ({ id: pane.id, scope: paneScopeForWire(node, pane.scope) })),
-  }));
-}
-
-/**
- * Fetches the server's workspace list, seeds it from this browser's local
- * history on first-ever load for this machine (see
- * `machine-workspaces.ts`'s module doc for the claim/race design this relies
- * on), and keeps the store reconciled with live `machine-workspace:*`
- * broadcasts. Returns nothing — like `usePagePresence`, it's a side-effect hook.
+ * Fetches the server's workspace snapshot and keeps the store reconciled
+ * with live `machine-workspace:verb` broadcasts. Returns nothing — like
+ * `usePagePresence`, it's a side-effect hook.
  *
  * `machineId` is nullable so a caller can mount this unconditionally (React's
  * rules of hooks forbid calling it only for admins) while still skipping all
@@ -125,42 +80,11 @@ function toWireColumns(node: MachineNodeScope, columns: TerminalColumnState[]) {
  */
 export function useMachineWorkspaceSync(machineId: string | null): void {
   const ensureMachine = useMachineWorkspaceStore((state) => state.ensureMachine);
-  const hydrateFromServer = useMachineWorkspaceStore((state) => state.hydrateFromServer);
-  const applyServerUpsert = useMachineWorkspaceStore((state) => state.applyServerUpsert);
-  const applyServerDelete = useMachineWorkspaceStore((state) => state.applyServerDelete);
+  const applyServerSnapshot = useMachineWorkspaceStore((state) => state.applyServerSnapshot);
+  const applyServerVerb = useMachineWorkspaceStore((state) => state.applyServerVerb);
 
   const socket = useSocket();
   usePageSocketRoom(machineId ?? undefined);
-
-  // Records that this browser has made its one bootstrap decision for this
-  // machine — either it POSTed a claim, or it had nothing local to migrate and
-  // deliberately declined to (the empty-payload branch below). Guards against
-  // re-deciding on every SWR revalidation — not against the cross-browser
-  // race, which the server's claim table (not this ref) resolves.
-  const bootstrapAttempted = useRef(false);
-
-  // `hydrateFromServer` is a FULL-LIST replace that deliberately drops any
-  // local-only workspace not in the server's list (see `mergeServerWorkspaces`'s
-  // doc — correct for a one-time initial hydrate, wrong for a background
-  // refresh). SWR's `data` can change more than once for the SAME machine —
-  // `revalidateOnReconnect` defaults true, so a brief network drop refetches —
-  // and re-running the full-replace on a LATER revalidation would silently
-  // wipe a workspace this browser just created locally whose own create
-  // request hasn't round-tripped (and broadcast) yet. So this only ever runs
-  // ONCE per mount; every subsequent change to the store comes from the socket
-  // subscription below. Safe as a plain ref (not reset on `machineId` change)
-  // because no instance is ever reused across machineIds: `MachineView` is kept
-  // by `MachineKeepAliveHost` as one distinct component instance per machine,
-  // and `DevelopmentSidebar`'s instances are one per machine row.
-  //
-  // It is per-INSTANCE, though, and the machine the user has open has two
-  // instances (sidebar row + `MachineView` — see this module's doc). Each
-  // hydrates once from its own GET, so a second instance's stale full-replace
-  // can still land after the first has applied a `created` echo and drop that
-  // workspace locally. That is residual race (1) in the module doc: accepted,
-  // server row intact, recovered by a reload; the fix is cross-instance
-  // hydration state, not a second per-instance ref.
-  const hydratedOnce = useRef(false);
 
   useEffect(() => {
     if (!machineId) return;
@@ -168,285 +92,149 @@ export function useMachineWorkspaceSync(machineId: string | null): void {
   }, [machineId, ensureMachine]);
 
   const key = machineId ? `/api/machines/workspaces?machineId=${encodeURIComponent(machineId)}` : null;
-  const { data } = useSWR<WorkspaceListResponse>(key, fetcher, { revalidateOnFocus: false });
+  // Revalidating on focus/reconnect is now safe to leave ON: `applyServerSnapshot`
+  // drops anything at or behind the rev already applied, so a late/stale
+  // response from an earlier revalidation can never regress the store.
+  const { data } = useSWR<WorkspaceSnapshotResponse>(key, fetcher);
 
   useEffect(() => {
-    if (!machineId || !data || hydratedOnce.current) return;
-
-    if (data.bootstrapped) {
-      hydratedOnce.current = true;
-      hydrateFromServer(machineId, data.workspaces);
-      return;
-    }
-
-    if (bootstrapAttempted.current) return;
-
-    const local = useMachineWorkspaceStore.getState().machines[machineId];
-    const payload = (local ? workspacesOf(local) : []).map((workspace) => ({
-      id: workspace.id,
-      name: workspace.name,
-      scope: nodeScopeNames(workspace.scope),
-      columns: toWireColumns(workspace.scope, workspace.columns),
-    }));
-
-    // Nothing local to seed — so claim nothing. Bootstrap is first-writer-wins
-    // (one row per machine, PK machineId): claiming with an empty list would
-    // burn the claim and permanently discard the un-migrated history of a
-    // browser that DOES have some. This matters now that `ensureMachine` no
-    // longer fabricates a Workspace 1: the Development sidebar mounts this hook
-    // per machine row, so merely rendering it would otherwise fire an empty
-    // claim at every machine in the drive before the user opens any of them.
-    //
-    // Must HYDRATE, not just skip the POST: the hydrate above is gated on
-    // `data.bootstrapped`, so returning without one would leave this browser
-    // showing an empty machine while the server holds real rows.
-    //
-    // And the hydrate must stay PROVISIONAL — it marks the bootstrap decision
-    // (`bootstrapAttempted`: nothing to migrate, ever), NOT `hydratedOnce`.
-    // Not claiming means another browser WITH history can still win the claim
-    // later, and its seeded list arrives only as a
-    // `machine-workspace:bootstrapped` broadcast — which `onBootstrapped`
-    // ignores once `hydratedOnce` is set. Marking this hydrate final would
-    // strand this browser on the unclaimed (usually empty) list until remount.
-    // Leaving `hydratedOnce` unset here is safe: this branch only runs when the
-    // local list is empty, so the full-list replace cannot wipe anything, and a
-    // later `bootstrapped: true` revalidation (a missed broadcast) re-enters
-    // the hydrate above instead of being gated out.
-    if (payload.length === 0 || declinedBootstraps.has(machineId)) {
-      bootstrapAttempted.current = true;
-      // Only the FIRST decliner applies the provisional hydrate. A later
-      // instance (or a later effect run) re-applying it with SWR's possibly
-      // STALE cached list would full-replace away workspaces that arrived over
-      // the socket since — the store is already current; leave it alone.
-      if (!declinedBootstraps.has(machineId)) {
-        declinedBootstraps.add(machineId);
-        hydrateFromServer(machineId, data.workspaces);
-      }
-      return;
-    }
-
-    bootstrapAttempted.current = true;
-
-    post<BootstrapResponse>('/api/machines/workspaces/bootstrap', { machineId, workspaces: payload })
-      .then((res) => {
-        // This request's own resolution races the socket subscription below:
-        // apps/realtime's `io.to(channelId).emit(...)` broadcasts this exact
-        // bootstrap claim back to every socket in the room, INCLUDING this
-        // browser's own — so `onBootstrapped` can already have hydrated (and
-        // set `hydratedOnce`) before this `.then()` runs. Re-running the
-        // full-list replace here too would risk wiping a workspace created in
-        // that window.
-        if (hydratedOnce.current) return;
-        hydratedOnce.current = true;
-        hydrateFromServer(machineId, res.workspaces);
-      })
-      .catch(() => {
-        // Retry on the next data change (e.g. a manual refresh) rather than
-        // leaving this machine permanently un-bootstrapped over a transient failure.
-        bootstrapAttempted.current = false;
-      });
-  }, [machineId, data, hydrateFromServer]);
+    if (!machineId || !data) return;
+    applyServerSnapshot(machineId, data.rev, data.workspaces);
+  }, [machineId, data, applyServerSnapshot]);
 
   useEffect(() => {
     if (!socket || !machineId) return;
-    // Narrowed copy for the closures below — a `string | null` parameter
-    // doesn't stay narrowed inside nested function expressions.
+    // Narrowed copy for the closure below — a `string | null` parameter
+    // doesn't stay narrowed inside a nested function expression.
     const mid = machineId;
 
-    const onCreated = (payload: ServerWorkspaceDTO & { machineId: string }) => {
+    const onVerb = (payload: { machineId: string; rev: number; workspaceId: string; workspace: ServerWorkspaceDTO | null }) => {
       if (payload.machineId !== mid) return;
-      applyServerUpsert(mid, payload);
-    };
-    const onUpdated = (payload: {
-      machineId: string;
-      workspaceId: string;
-      name?: string;
-      // As they arrive: a client still running the pre-narrowing code sends
-      // panes carrying their own checkout. `applyServerUpsert` projects.
-      columns?: ServerColumnDTO[];
-    }) => {
-      if (payload.machineId !== mid) return;
-      // `updated` only carries whichever of name/columns actually changed —
-      // fill in the rest from what this browser already has for it. It NEVER
-      // carries `scope` (immutable, so the PATCH route never re-sends it), so
-      // an `updated` event can only ever be applied to a workspace this
-      // browser already knows about — there is no safe default for `scope`
-      // (defaulting to machine-scope would misfile a project/branch-scoped
-      // workspace under the wrong sidebar node) nor for missing name/columns
-      // (defaulting to `''`/`[]` would plant a broken, zero-pane entry). If
-      // this browser hasn't hydrated the workspace yet (e.g. it missed the
-      // `created` broadcast on a reconnect), skip and wait for a `created`
-      // event or the next full hydration to introduce it correctly.
-      const current = useMachineWorkspaceStore.getState().machines[mid]?.workspaces[payload.workspaceId];
-      if (!current) return;
-      applyServerUpsert(mid, {
-        id: payload.workspaceId,
-        name: payload.name ?? current.name,
-        scope: current.scope,
-        columns: payload.columns ?? current.columns,
-      });
-    };
-    const onDeleted = (payload: { machineId: string; workspaceId: string }) => {
-      if (payload.machineId !== mid) return;
-      applyServerDelete(mid, payload.workspaceId);
-    };
-    const onBootstrapped = (payload: { machineId: string; workspaces: ServerWorkspaceDTO[] }) => {
-      if (payload.machineId !== mid) return;
-      // `io.to(channelId).emit(...)` (apps/realtime) reaches EVERY socket in the
-      // room, including the one that POSTed this very bootstrap — so the
-      // browser that just won the claim race receives its own broadcast back.
-      // Its own bootstrap POST already ran the (guarded) full-list replace via
-      // `hydratedOnce`; re-running it here unconditionally would risk wiping a
-      // workspace this browser created in the narrow window between that POST
-      // resolving and this broadcast arriving. Only apply it if this browser
-      // hasn't hydrated yet (e.g. it's a DIFFERENT browser that joined the
-      // socket room before its own GET/bootstrap round trip completed).
-      if (hydratedOnce.current) return;
-      hydratedOnce.current = true;
-      hydrateFromServer(mid, payload.workspaces);
+      // `machine-workspace:verb` payloads are self-contained snapshots of the
+      // ONE workspace their verb touched, not a diff — fine for consecutive
+      // revs, but a genuine gap (this browser missed an earlier verb, e.g. a
+      // dropped socket message) means whatever this payload changed relative
+      // to the workspace(s) it depended on is unknown. Applying it anyway
+      // would silently strand this browser on a state no verb sequence could
+      // have produced. Detect the gap and fetch a fresh full snapshot instead
+      // of applying — `applyServerSnapshot` is itself rev-gated, so if the
+      // snapshot GET loses a race with a still-later verb broadcast, it's
+      // simply dropped rather than regressing anything.
+      const knownRev = useMachineWorkspaceStore.getState().serverRev[mid] ?? 0;
+      if (payload.rev > knownRev + 1) {
+        void resyncMachine(mid);
+        return;
+      }
+      applyServerVerb(mid, { rev: payload.rev, workspaceId: payload.workspaceId, workspace: payload.workspace });
     };
 
-    socket.on('machine-workspace:created', onCreated);
-    socket.on('machine-workspace:updated', onUpdated);
-    socket.on('machine-workspace:deleted', onDeleted);
-    socket.on('machine-workspace:bootstrapped', onBootstrapped);
+    socket.on('machine-workspace:verb', onVerb);
     return () => {
-      socket.off('machine-workspace:created', onCreated);
-      socket.off('machine-workspace:updated', onUpdated);
-      socket.off('machine-workspace:deleted', onDeleted);
-      socket.off('machine-workspace:bootstrapped', onBootstrapped);
+      socket.off('machine-workspace:verb', onVerb);
     };
-  }, [socket, machineId, applyServerUpsert, applyServerDelete, hydrateFromServer]);
+  }, [socket, machineId, applyServerVerb]);
 }
 
-interface CreateWorkspaceResponse {
-  created: boolean;
-  workspace: ServerWorkspaceDTO;
+interface VerbResponse {
+  rev: number;
+  workspaceId: string;
+  workspace: ServerWorkspaceDTO | null;
+  applied: boolean;
 }
 
-async function pushNewWorkspace(machineId: string, workspaceId: string): Promise<void> {
-  const workspace = useMachineWorkspaceStore.getState().machines[machineId]?.workspaces[workspaceId];
-  if (!workspace) return;
-  await post<CreateWorkspaceResponse>('/api/machines/workspaces', {
-    machineId,
-    id: workspace.id,
-    name: workspace.name,
-    scope: nodeScopeNames(workspace.scope),
-    columns: toWireColumns(workspace.scope, workspace.columns),
-  })
-    .then((res) => {
-      // Lost the first-writer-wins race (another browser materialized the
-      // same client-derived id first, e.g. two tabs opening the same session)
-      // — the API's contract is that the loser adopts the winner's row, not
-      // its own payload. Without this, this browser would keep showing its
-      // own diverged local layout forever instead of the shared canonical one.
-      if (!res.created) useMachineWorkspaceStore.getState().applyServerUpsert(machineId, res.workspace);
-    })
-    .catch(() => {});
-}
-
-/** Which of this workspace's server-visible fields a given local action actually
- * changed — {@link pushWorkspaceUpdate} sends only these, so a PATCH racing a
- * DIFFERENT browser's concurrent edit to the OTHER field can't clobber it with
- * a stale copy (see that function's doc for the concrete two-browser scenario). */
-type ChangedFields = { name?: true; columns?: true };
-
-/** For a workspace that MIGHT already exist server-side (any layout/rename change
- * after creation): PATCH first, falling back to POST-create on a 404 — a brand
- * new workspace materialized via `openTerminal`'s "existing session, new pane"
- * branch has never gone through `createWorkspace`'s own POST.
- *
- * `changed` restricts the PATCH body to the field(s) this specific action
- * touched. The route (and `updateWorkspace`) already support a true partial
- * update — name-only, columns-only, or both — precisely so this can avoid
- * sending the field it did NOT touch: if it always sent both, a rename in one
- * browser racing a pane split in another (each reading its OWN possibly-stale
- * copy of the field it didn't mean to change) would have the later PATCH
- * silently revert the earlier one's change.
- *
- * Calls `fetchWithAuth` directly (rather than the higher-level `patch()`
- * helper) specifically to read the real HTTP status code: `patch()`/`post()`
- * go through `fetchJSON`, which throws a plain `Error` with no status
- * attached, so branching on `error.message === 'not_found'` would couple this
- * to the exact JSON body shape `{error: 'not_found'}` and `fetchJSON`'s
- * `json.error || json.message || text` construction — fragile to either
- * changing out from under this call site. A raw 404 status check has no such
- * coupling. */
-async function pushWorkspaceUpdate(machineId: string, workspaceId: string, changed: ChangedFields): Promise<void> {
-  const workspace = useMachineWorkspaceStore.getState().machines[machineId]?.workspaces[workspaceId];
-  if (!workspace) return;
-  const columns = toWireColumns(workspace.scope, workspace.columns);
-
+/** GETs the current snapshot and applies it — the resync path a failed push
+ * falls back to, so a dropped POST (network failure) doesn't leave this
+ * browser permanently diverged from the server. */
+async function resyncMachine(machineId: string): Promise<void> {
   try {
-    const response = await fetchWithAuth('/api/machines/workspaces', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        machineId,
-        workspaceId,
-        ...(changed.name ? { name: workspace.name } : {}),
-        ...(changed.columns ? { columns } : {}),
-      }),
-    });
-    if (response.ok) return;
-    if (response.status !== 404) return;
-    // Not found server-side yet — create it. This IS a brand-new row, so the
-    // full current snapshot is sent regardless of `changed` — there is no
-    // narrower "what changed" for a row that doesn't exist yet.
+    const res = await fetchWithAuth(`/api/machines/workspaces?machineId=${encodeURIComponent(machineId)}`);
+    if (!res.ok) return;
+    const body = (await res.json()) as WorkspaceSnapshotResponse;
+    useMachineWorkspaceStore.getState().applyServerSnapshot(machineId, body.rev, body.workspaces);
   } catch {
-    // Network failure or similar — swallow. The local grid already reflects
-    // the user's action, and the next successful push (this browser's own,
-    // or a broadcast from elsewhere) reconciles the server.
-    return;
+    // Best-effort — the next successful push, broadcast, or SWR revalidation reconciles.
   }
-
-  await post('/api/machines/workspaces', {
-    machineId,
-    id: workspace.id,
-    name: workspace.name,
-    scope: nodeScopeNames(workspace.scope),
-    columns,
-  }).catch(() => {});
 }
 
-/** Fire-and-forget DELETE with bounded retries. Removal is optimistic like
- * every other push here (the local grid already updated), but unlike a layout
- * PATCH there is no "next push" to reconcile a transient failure — so this IS
- * the reconciliation. If every attempt fails, the server row survives and the
- * next full hydrate resurrects the row locally: visible and annoying, but
- * recoverable (remove it again) — whereas rolling the local removal back would
- * restore a grid whose PTYs were already killed, a strictly worse dead-pane
- * state. Each retry first checks the workspace is STILL locally removed:
- * session-derived workspace ids are deterministic (`sessionWorkspaceId`), so
- * the user re-opening that session re-materializes the SAME id, and a stale
- * retry would delete the new incarnation out from under them. A 404 also lands
- * in the catch (`del()` hides the status) when another browser already removed
- * the row — the capped retries just expire against it harmlessly. */
-function pushRemoval(machineId: string, workspaceId: string, attempt = 0): void {
-  del(
-    `/api/machines/workspaces?machineId=${encodeURIComponent(machineId)}&workspaceId=${encodeURIComponent(workspaceId)}`
-  ).catch(() => {
-    if (attempt >= 2) return;
-    setTimeout(() => {
-      const revived = useMachineWorkspaceStore.getState().machines[machineId]?.workspaces[workspaceId];
-      if (!revived) pushRemoval(machineId, workspaceId, attempt + 1);
-    }, 1500 * (attempt + 1));
+/**
+ * Pushes one verb the local store already applied optimistically. On success,
+ * the response IS a verb+rev payload — applied immediately via
+ * `applyServerVerb` rather than waiting for this browser's own broadcast
+ * echo, so convergence doesn't depend on socket delivery. `settleVerb` always
+ * runs first (success or failure): either the push is confirmed and the
+ * pending copy is no longer needed, or it's abandoned and a resync is the
+ * recovery, not an indefinitely-retried pending verb.
+ */
+async function pushVerb(machineId: string, verb: WorkspaceVerb): Promise<void> {
+  try {
+    const res = await post<VerbResponse>('/api/machines/workspaces/verbs', { machineId, verb });
+    useMachineWorkspaceStore.getState().settleVerb(machineId, verb);
+    if (res.applied) {
+      useMachineWorkspaceStore.getState().applyServerVerb(machineId, { rev: res.rev, workspaceId: res.workspaceId, workspace: res.workspace });
+    }
+  } catch {
+    useMachineWorkspaceStore.getState().settleVerb(machineId, verb);
+    void resyncMachine(machineId);
+  }
+}
+
+/** The verb a local action just queued onto `pendingVerbs`, if any — `before`
+ * is that machine's queue length captured immediately before calling the
+ * local action. A local action is a pure no-op (unresolvable target) exactly
+ * when nothing was appended. */
+function verbJustQueued(machineId: string, before: number): WorkspaceVerb | undefined {
+  const pending = useMachineWorkspaceStore.getState().pendingVerbs[machineId] ?? [];
+  return pending.length > before ? pending[pending.length - 1] : undefined;
+}
+
+/**
+ * The tail of each machine's push chain — module-level, not store state,
+ * because it's pure HTTP-REQUEST-ORDERING bookkeeping (which POST fires
+ * next), not application state a component ever reads. Two rapid dependent
+ * actions on the SAME machine (create a workspace, then immediately split
+ * its first pane) apply locally in order, but their pushes are two
+ * independent `fetch` calls — without this, network reordering can let the
+ * split's POST reach the server before the create's, which then fails with
+ * `applied: false` (the target workspace doesn't exist there yet) and is
+ * dequeued as if it had succeeded, leaving the split silently unconfirmed
+ * forever. Chaining every push for a machine behind the previous one's
+ * settlement (success OR failure — `.catch` keeps the chain alive so one
+ * failed push doesn't wedge every push after it) closes that gap by
+ * construction: a dependent verb's push is never even SENT until the verb
+ * it depends on has already resolved server-side.
+ */
+const machinePushChains = new Map<string, Promise<void>>();
+
+function enqueuePush(machineId: string, verb: WorkspaceVerb): void {
+  const previous = machinePushChains.get(machineId);
+  const run = () => pushVerb(machineId, verb);
+  // When nothing is queued yet, call `run` directly (not via `.then`) so the
+  // first push of a chain still fires its POST synchronously, same as before
+  // this queue existed — a dependent push only waits when there's a prior
+  // push it must actually wait for.
+  const next = previous ? previous.then(run, run) : run();
+  // The chain itself must never reject (a rejected tail would wedge every
+  // later push for this machine) — `pushVerb` already catches its own
+  // errors, this only guards a hypothetical future one that doesn't.
+  const settled = next.catch(() => {});
+  machinePushChains.set(machineId, settled);
+  // Once this push (and everything chained behind it so far) has settled,
+  // drop the map entry — otherwise the NEXT unrelated push for this machine
+  // would needlessly defer a tick behind an already-finished chain forever
+  // (`.then` on a resolved promise is still asynchronous).
+  void settled.then(() => {
+    if (machinePushChains.get(machineId) === settled) {
+      machinePushChains.delete(machineId);
+    }
   });
 }
 
 /**
  * Server-pushing wrappers around the workspace store's identity/layout
- * actions: call the real local action first (unchanged, instant), then push
- * the affected workspace's resulting state to the server. `createWorkspace`
- * knows its workspace is brand new (a fresh local id) and POSTs directly;
- * every other action might be touching a workspace that already exists
- * server-side OR doesn't yet (e.g. `openTerminal` materializing a new one),
- * so those PATCH first and fall back to POST-create on a 404. That fallback
- * (rather than a client-tracked "known server ids" set) is what lets this be
- * called independently from more than one component with no shared state to
- * keep in sync.
+ * actions: call the real local action first (unchanged, instant, optimistic),
+ * then push whichever verb it queued.
  *
- * Actions that stay purely local, not wrapped here: `setActiveWorkspace`,
+ * Actions that stay purely local, never pushed: `setActiveWorkspace`,
  * `selectPane`, `dismissPicker`, `clearPanePrompt`, `ensureMachine`.
  */
 export function useSyncedWorkspaceActions(machineId: string) {
@@ -462,63 +250,72 @@ export function useSyncedWorkspaceActions(machineId: string) {
   const bindPaneTerminalLocal = useMachineWorkspaceStore((state) => state.bindPaneTerminal);
   const openTerminalLocal = useMachineWorkspaceStore((state) => state.openTerminal);
 
-  return useMemo(() => ({
-    createWorkspace(scope?: MachineNodeScope): string {
-      const id = createWorkspaceLocal(machineId, scope);
-      void pushNewWorkspace(machineId, id);
-      return id;
-    },
-    removeWorkspace(workspaceId: string): void {
-      removeWorkspaceLocal(machineId, workspaceId);
-      pushRemoval(machineId, workspaceId);
-    },
-    renameWorkspace(workspaceId: string, name: string): void {
-      renameWorkspaceLocal(machineId, workspaceId, name);
-      void pushWorkspaceUpdate(machineId, workspaceId, { name: true });
-    },
-    splitRight(workspaceId: string, fromPaneId: string): void {
-      splitRightLocal(machineId, workspaceId, fromPaneId);
-      void pushWorkspaceUpdate(machineId, workspaceId, { columns: true });
-    },
-    splitDown(workspaceId: string, fromPaneId: string): void {
-      splitDownLocal(machineId, workspaceId, fromPaneId);
-      void pushWorkspaceUpdate(machineId, workspaceId, { columns: true });
-    },
-    /** Closing the last pane removes the whole workspace, and that case must
-     * DELETE, not PATCH: `pushWorkspaceUpdate` falls back to POST-create on a
-     * 404, so PATCHing a workspace this very call just removed would RE-CREATE
-     * it server-side and broadcast the resurrected row back to every browser —
-     * including the one whose user just closed it. */
-    closePane(workspaceId: string, paneId: string): void {
-      const removedWorkspace = closePaneLocal(machineId, workspaceId, paneId);
-      if (removedWorkspace) pushRemoval(machineId, workspaceId);
-      else void pushWorkspaceUpdate(machineId, workspaceId, { columns: true });
-    },
-    bindPaneTerminal(workspaceId: string, paneId: string, scope: OpenTerminalScope, pendingPrompt?: string): boolean {
-      const bound = bindPaneTerminalLocal(machineId, workspaceId, paneId, scope, pendingPrompt);
-      if (bound) void pushWorkspaceUpdate(machineId, workspaceId, { columns: true });
-      return bound;
-    },
-    /** `openTerminal` can materialize a new workspace, relocate an existing
-     * one to front, or land in one already showing the session — push
-     * whichever workspace it actually affected, resolved the same way the
-     * local action itself resolves "where does this session live".
-     *
-     * RETURNS that workspace's id, because the caller cannot derive it: a
-     * session another workspace is already showing lands THERE
-     * (`workspaceShowing`), not in its own `sessionWorkspaceId` workspace —
-     * a spawn that assumed the derived id would navigate to a workspace that
-     * doesn't contain the session, or doesn't exist. `undefined` only when
-     * the machine itself is missing (nothing was opened). */
-    openTerminal(scope: OpenTerminalScope): string | undefined {
-      openTerminalLocal(machineId, scope);
-      const machine = useMachineWorkspaceStore.getState().machines[machineId];
-      if (!machine) return undefined;
-      const home = workspaceShowing(machine, scope) ?? machine.workspaces[sessionWorkspaceId(scope)];
-      if (home) void pushWorkspaceUpdate(machineId, home.id, { columns: true });
-      return home?.id;
-    },
-  }), [
+  return useMemo(() => {
+    const pendingCount = () => (useMachineWorkspaceStore.getState().pendingVerbs[machineId] ?? []).length;
+    const pushIfQueued = (before: number) => {
+      const verb = verbJustQueued(machineId, before);
+      if (verb) enqueuePush(machineId, verb);
+    };
+
+    return {
+      createWorkspace(scope?: MachineNodeScope): string {
+        const before = pendingCount();
+        const id = createWorkspaceLocal(machineId, scope);
+        pushIfQueued(before);
+        return id;
+      },
+      removeWorkspace(workspaceId: string): void {
+        const before = pendingCount();
+        removeWorkspaceLocal(machineId, workspaceId);
+        pushIfQueued(before);
+      },
+      renameWorkspace(workspaceId: string, name: string): void {
+        const before = pendingCount();
+        renameWorkspaceLocal(machineId, workspaceId, name);
+        pushIfQueued(before);
+      },
+      splitRight(workspaceId: string, fromPaneId: string): void {
+        const before = pendingCount();
+        splitRightLocal(machineId, workspaceId, fromPaneId);
+        pushIfQueued(before);
+      },
+      splitDown(workspaceId: string, fromPaneId: string): void {
+        const before = pendingCount();
+        splitDownLocal(machineId, workspaceId, fromPaneId);
+        pushIfQueued(before);
+      },
+      closePane(workspaceId: string, paneId: string): void {
+        const before = pendingCount();
+        closePaneLocal(machineId, workspaceId, paneId);
+        pushIfQueued(before);
+      },
+      bindPaneTerminal(workspaceId: string, paneId: string, scope: OpenTerminalScope, pendingPrompt?: string): boolean {
+        const before = pendingCount();
+        const bound = bindPaneTerminalLocal(machineId, workspaceId, paneId, scope, pendingPrompt);
+        pushIfQueued(before);
+        return bound;
+      },
+      /** `openTerminal` can materialize a new workspace, relocate an existing
+       * one to front, or land in one already showing the session — the
+       * pushed verb is whichever the local action queued, resolved the same
+       * way the local action itself resolves "where does this session live".
+       *
+       * RETURNS that workspace's id, because the caller cannot derive it: a
+       * session another workspace is already showing lands THERE
+       * (`workspaceShowing`), not in its own `sessionWorkspaceId` workspace —
+       * a spawn that assumed the derived id would navigate to a workspace
+       * that doesn't contain the session, or doesn't exist. `undefined` only
+       * when the machine itself is missing (nothing was opened).
+       */
+      openTerminal(scope: OpenTerminalScope): string | undefined {
+        const before = pendingCount();
+        openTerminalLocal(machineId, scope);
+        pushIfQueued(before);
+        const machine = useMachineWorkspaceStore.getState().machines[machineId];
+        return machine?.activeWorkspaceId || undefined;
+      },
+    };
+  }, [
     machineId,
     createWorkspaceLocal,
     removeWorkspaceLocal,

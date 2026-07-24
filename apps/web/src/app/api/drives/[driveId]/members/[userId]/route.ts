@@ -19,11 +19,8 @@ import {
   broadcastDriveMemberEvent,
   broadcastDriveMemberEventToRecipients,
   createDriveMemberEventPayload,
-  kickUserFromDrive,
-  kickUserFromDriveActivity,
-  kickUserFromPage,
-  kickUserFromPageActivity,
 } from '@/lib/websocket';
+import { kickForDriveMembershipRevocation } from '@pagespace/lib/permissions/revocation-kick';
 import { getActorInfo, logMemberActivity, logPermissionActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { db } from '@pagespace/db/db'
@@ -393,33 +390,18 @@ export async function DELETE(
       );
     }
 
-    // CRITICAL: Kick user from real-time rooms immediately (zero-trust revocation)
-    // This ensures the user stops receiving updates even if their socket is still connected.
-    // Same best-effort contract as the broadcast above: the membership delete has
-    // already committed, so any post-commit failure here must be logged and not
-    // propagated as a 500 (would falsely signal failure on an applied removal).
-    try {
-      // First, kick from drive-level rooms
-      await Promise.all([
-        kickUserFromDrive(driveId, targetUserId, 'member_removed', access.drive.name),
-        kickUserFromDriveActivity(driveId, targetUserId, 'member_removed'),
-      ]);
-
-      // Also kick from all page rooms in this drive (page rooms use pageId, not drive pattern)
-      const drivePages = await db.select({ id: pages.id }).from(pages).where(eq(pages.driveId, driveId));
-      if (drivePages.length > 0) {
-        const pageKickPromises = drivePages.flatMap((page) => [
-          kickUserFromPage(page.id, targetUserId, 'member_removed'),
-          kickUserFromPageActivity(page.id, targetUserId, 'member_removed'),
-        ]);
-        await Promise.all(pageKickPromises);
-      }
-    } catch (kickError) {
-      loggers.api.error(
-        'Failed to kick user from rooms (post-commit, non-fatal)',
-        kickError instanceof Error ? kickError : new Error(String(kickError)),
-      );
-    }
+    // Kick user from real-time rooms immediately (zero-trust revocation): the
+    // centralized hook (#2158) kicks the drive-level rooms plus every page
+    // room in the drive (page rooms use pageId, not a drive pattern). It is
+    // best-effort by design and never throws — same contract as the broadcast
+    // above: the membership delete has already committed, so a kick failure
+    // must not turn a successful removal into a 500 response.
+    await kickForDriveMembershipRevocation({
+      userId: targetUserId,
+      driveId,
+      driveName: access.drive.name,
+      reason: 'member_removed',
+    });
 
     // Note: No in-app notification sent for removal - the broadcast event
     // will trigger a page refresh/redirect for the removed user, and the

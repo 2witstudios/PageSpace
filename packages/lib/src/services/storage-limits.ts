@@ -1,4 +1,4 @@
-import { getStorageConfigFromSubscription, getStorageTierFromSubscription, STORAGE_TIERS, type SubscriptionTier } from './subscription-utils';
+import { getStorageConfigFromSubscription, STORAGE_TIERS, type SubscriptionTier } from './subscription-utils';
 import { storageRepository, type DrizzleTx } from './storage-repository';
 import { reserveUploadSlot } from './pending-uploads';
 import { getAdvisoryLockPool } from '@pagespace/db/db';
@@ -13,14 +13,8 @@ export interface StorageQuota {
   usedBytes: number;
   availableBytes: number;
   utilizationPercent: number;
-  tier: 'free' | 'pro' | 'founder' | 'business';
+  tier: SubscriptionTier;
   warningLevel: 'none' | 'warning' | 'critical';
-}
-
-// Map subscription tiers to storage tiers (deprecated - use subscription-utils instead)
-export function mapSubscriptionToStorageTier(subscriptionTier: 'free' | 'pro' | 'founder' | 'business'): 'free' | 'pro' | 'founder' | 'business' {
-  const tier = getStorageTierFromSubscription(subscriptionTier);
-  return tier; // Return tier directly since we've removed enterprise
 }
 
 export interface StorageCheckResult {
@@ -571,18 +565,4 @@ export function parseBytes(size: string): number {
 
   const [, value, unit] = match;
   return Math.floor(parseFloat(value) * (units[unit.toUpperCase()] || 1));
-}
-
-/**
- * @deprecated - Removed: Use subscription tier changes instead
- */
-export async function changeUserTier(): Promise<void> {
-  throw new Error('changeUserTier has been removed - storage tiers are computed from subscription tiers automatically');
-}
-
-/**
- * @deprecated - Removed: Storage tiers are computed dynamically
- */
-export async function updateStorageTierFromSubscription(): Promise<void> {
-  throw new Error('updateStorageTierFromSubscription has been removed - storage tiers are computed dynamically');
 }

@@ -7,8 +7,6 @@ import {
   updateWorkspace,
   removeWorkspace,
   listWorkspaces,
-  isBootstrapped,
-  bootstrapWorkspaces,
   type MachineWorkspacesDeps,
   type WorkspaceLayoutInput,
 } from '../machine-workspaces';
@@ -31,7 +29,6 @@ function rowKey(machineId: string, id: string): string {
 function makeStore(seed: MachineWorkspaceRecord[] = []) {
   const rows = new Map<string, MachineWorkspaceRecord>();
   for (const row of seed) rows.set(rowKey(row.machineId, row.id), row);
-  const bootstrapped = new Set<string>();
 
   const rowsForMachine = (machineId: string) =>
     [...rows.values()]
@@ -80,44 +77,15 @@ function makeStore(seed: MachineWorkspaceRecord[] = []) {
     remove: async (machineId, id) => {
       return rows.delete(rowKey(machineId, id));
     },
-
-    isBootstrapped: async (machineId) => bootstrapped.has(machineId),
-
-    bootstrapSeed: async ({ machineId, workspaces }) => {
-      // Mirrors the real store's transaction: claim first, and only seed rows
-      // if THIS call actually won the claim.
-      if (bootstrapped.has(machineId)) {
-        return { claimed: false, workspaces: rowsForMachine(machineId) };
-      }
-      bootstrapped.add(machineId);
-      for (const workspace of workspaces) {
-        const key = rowKey(workspace.machineId, workspace.id);
-        if (!rows.has(key)) {
-          rows.set(key, {
-            id: workspace.id,
-            ownerId: workspace.ownerId,
-            machineId: workspace.machineId,
-            scope: workspace.scope,
-            projectName: workspace.projectName,
-            branchName: workspace.branchName,
-            name: workspace.name,
-            layout: workspace.layout,
-            createdAt: workspace.now,
-            updatedAt: workspace.now,
-          });
-        }
-      }
-      return { claimed: true, workspaces: rowsForMachine(machineId) };
-    },
   };
 
-  return { store, rows, bootstrapped };
+  return { store, rows };
 }
 
 function makeDeps(seed: MachineWorkspaceRecord[] = []) {
-  const { store, rows, bootstrapped } = makeStore(seed);
+  const { store, rows } = makeStore(seed);
   const deps: MachineWorkspacesDeps = { store, now: () => NOW };
-  return { deps, store, rows, bootstrapped };
+  return { deps, store, rows };
 }
 
 describe('deriveWorkspaceScope', () => {
@@ -350,7 +318,7 @@ describe('removeWorkspace', () => {
   });
 });
 
-describe('listWorkspaces / isBootstrapped', () => {
+describe('listWorkspaces', () => {
   it('filters by machineId only', async () => {
     const { deps } = makeDeps([
       {
@@ -380,65 +348,5 @@ describe('listWorkspaces / isBootstrapped', () => {
     ]);
     const result = await listWorkspaces({ machineId: MACHINE_ID, store: deps.store });
     expect(result.map((r) => r.id)).toEqual(['ws-1']);
-  });
-
-  it('is false until a machine has been bootstrapped', async () => {
-    const { deps } = makeDeps();
-    expect(await isBootstrapped({ machineId: MACHINE_ID, store: deps.store })).toBe(false);
-  });
-});
-
-describe('bootstrapWorkspaces', () => {
-  const input = (id: string, name: string) => ({ id, name, scope: {}, layout: VALID_COLUMNS });
-
-  it('claims and seeds on the FIRST call for a machine', async () => {
-    const { deps } = makeDeps();
-    const result = await bootstrapWorkspaces({
-      machineId: MACHINE_ID,
-      ownerId: 'user-1',
-      userId: 'user-1',
-      workspaces: [input('ws-1', 'Workspace 1'), input('ws-2', 'Workspace 2')],
-      deps,
-    });
-    expect(result).toMatchObject({ ok: true, claimed: true });
-    if (result.ok) expect(result.workspaces.map((w) => w.id)).toEqual(['ws-1', 'ws-2']);
-  });
-
-  it('a SECOND call for the same machine loses the claim and gets the current list back, unseeded', async () => {
-    const { deps } = makeDeps();
-    const first = await bootstrapWorkspaces({
-      machineId: MACHINE_ID,
-      ownerId: 'user-1',
-      userId: 'user-1',
-      workspaces: [input('ws-1', "winner's workspace")],
-      deps,
-    });
-    const second = await bootstrapWorkspaces({
-      machineId: MACHINE_ID,
-      ownerId: 'user-2',
-      userId: 'user-2',
-      workspaces: [input('ws-2', "loser's workspace — must NOT be seeded")],
-      deps,
-    });
-
-    expect(first).toMatchObject({ ok: true, claimed: true });
-    expect(second).toMatchObject({ ok: true, claimed: false });
-    if (second.ok) {
-      // The loser gets back exactly the winner's list — its own payload never landed.
-      expect(second.workspaces.map((w) => w.id)).toEqual(['ws-1']);
-    }
-  });
-
-  it('rejects a malformed entry before claiming — a bad payload must not consume the claim', async () => {
-    const { deps, bootstrapped } = makeDeps();
-    const result = await bootstrapWorkspaces({
-      machineId: MACHINE_ID,
-      ownerId: 'user-1',
-      userId: 'user-1',
-      workspaces: [input('ws-1', '   ')],
-      deps,
-    });
-    expect(result).toEqual({ ok: false, reason: 'invalid_name' });
-    expect(bootstrapped.has(MACHINE_ID)).toBe(false);
   });
 });

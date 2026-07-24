@@ -59,7 +59,7 @@ import { isMachinePage } from '@pagespace/lib/content/page-types.config';
 import { decideMachineToggleAccess } from '@pagespace/lib/services/machines/machine-access';
 import type { MachineSettings } from '@pagespace/lib/services/machines/machine-settings';
 import type { PageType } from '@pagespace/lib/utils/enums';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { createSandboxTools, type MachineDirectoryDeps, type ResolveSandboxContext } from './sandbox-tools';
 import { canActorViewPage, getAgentPageId, hasAgentUserScopedAccess } from './actor-permissions';
 import { pageAgentRepository, type MachineRef } from '@/lib/repositories/page-agent-repository';
@@ -267,12 +267,6 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
   };
 }
 
-const VALID_TIERS: ReadonlySet<string> = new Set(['free', 'pro', 'founder', 'business']);
-
-function toTier(value: string | null | undefined): SubscriptionTier {
-  return value && VALID_TIERS.has(value) ? (value as SubscriptionTier) : 'free';
-}
-
 /**
  * Lazily stamp a stable turn id onto `context` the first time it's read, then
  * return it. `context` is the SAME object reference for every tool call
@@ -370,7 +364,7 @@ export function createResolveSandboxActorContext(
       actorDisplayName: actorInfo.actorDisplayName,
       aiProvider: context?.aiProvider,
       aiModel: context?.aiModel,
-      tier: toTier(actorRow?.subscriptionTier),
+      tier: toSubscriptionTier(actorRow?.subscriptionTier),
       turnId,
     };
 

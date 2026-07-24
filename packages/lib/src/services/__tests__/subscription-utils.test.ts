@@ -6,7 +6,6 @@ vi.mock('../../deployment-mode', () => ({
 }));
 
 import {
-  getStorageTierFromSubscription,
   getStorageQuotaFromSubscription,
   getStorageConfigFromSubscription,
   subscriptionAllows,
@@ -21,21 +20,10 @@ describe('subscription-utils', () => {
     vi.mocked(isTenantMode).mockReturnValue(false);
   });
 
-  describe('getStorageTierFromSubscription', () => {
-    it('should return business for business tier', () => {
-      expect(getStorageTierFromSubscription('business')).toBe('business');
-    });
-
-    it('should return founder for founder tier', () => {
-      expect(getStorageTierFromSubscription('founder')).toBe('founder');
-    });
-
-    it('should return pro for pro tier', () => {
-      expect(getStorageTierFromSubscription('pro')).toBe('pro');
-    });
-
-    it('should return free for free tier', () => {
-      expect(getStorageTierFromSubscription('free')).toBe('free');
+  describe('unknown stored tier coercion', () => {
+    it('should fall back to free-tier config for values outside the vocabulary', () => {
+      expect(getStorageConfigFromSubscription('enterprise').tier).toBe('free');
+      expect(getStorageQuotaFromSubscription('garbage')).toBe(500 * 1024 * 1024);
     });
   });
 

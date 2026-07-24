@@ -20,6 +20,7 @@ import {
 } from '@pagespace/db/schema/chat';
 import { files, type AttachmentMeta } from '@pagespace/db/schema/storage';
 import { decryptField } from '../encryption/field-crypto';
+import { deriveLatestTimestamp } from './message-derived-state';
 
 export type ChannelMessageRow = InferSelectModel<typeof channelMessages>;
 export type ChannelReactionRow = InferSelectModel<typeof channelMessageReactions>;
@@ -264,17 +265,98 @@ export interface UpdateChannelMessageContentInput {
   aiMeta?: ChannelMessageAiMeta | null;
 }
 
+/**
+ * The "message mutated" recompute for a channel thread's `lastReplyAt`
+ * (#2153). Soft-delete/restore of a reply calls this after adjusting
+ * `replyCount` so the timestamp always points at a surviving reply instead
+ * of a tombstoned one. Mirrors `recomputeThreadLastReply` in
+ * `dm-message-repository.ts`, including the parent-row lock: two concurrent
+ * reply deletes under the same parent can otherwise each snapshot
+ * "surviving replies" before the other's tombstone commits, and the later
+ * commit can silently restore `lastReplyAt` to an already-deleted reply.
+ */
+async function recomputeThreadLastReply(tx: Tx, parentId: string): Promise<void> {
+  await tx
+    .select({ id: channelMessages.id })
+    .from(channelMessages)
+    .where(eq(channelMessages.id, parentId))
+    .for('update');
+
+  const replies = await tx
+    .select({ createdAt: channelMessages.createdAt })
+    .from(channelMessages)
+    .where(
+      and(
+        eq(channelMessages.parentId, parentId),
+        eq(channelMessages.isActive, true)
+      )
+    );
+
+  await tx
+    .update(channelMessages)
+    .set({ lastReplyAt: deriveLatestTimestamp(replies.map((r) => r.createdAt)) })
+    .where(eq(channelMessages.id, parentId));
+}
+
+interface ChannelMirrorEditPropagationInput {
+  id: string;
+  content: string;
+  editedAt: Date;
+  mirroredFromId: string | null;
+}
+
+/**
+ * Propagate an edit to the other half of a `mirroredFromId` pair (#2153) —
+ * a thread reply and its "Also send to channel" top-level mirror must never
+ * disagree after one side is edited. Mirrors `propagateMirrorEdit` in
+ * `dm-message-repository.ts`. Deliberately excludes `aiMeta`: that field
+ * describes the sender of the specific row being edited, not shared content,
+ * so it must never be copied across to the other row.
+ */
+async function propagateChannelMirrorEdit(
+  tx: Tx,
+  edited: ChannelMirrorEditPropagationInput
+): Promise<void> {
+  const patch = { content: edited.content, editedAt: edited.editedAt };
+  if (edited.mirroredFromId) {
+    await tx
+      .update(channelMessages)
+      .set(patch)
+      .where(eq(channelMessages.id, edited.mirroredFromId));
+    return;
+  }
+  await tx
+    .update(channelMessages)
+    .set(patch)
+    .where(eq(channelMessages.mirroredFromId, edited.id));
+}
+
 async function updateChannelMessageContent(
   input: UpdateChannelMessageContentInput
 ): Promise<void> {
-  await db
-    .update(channelMessages)
-    .set({
+  await db.transaction(async (tx) => {
+    const [row] = await tx
+      .update(channelMessages)
+      .set({
+        content: input.content,
+        editedAt: input.editedAt,
+        ...(input.aiMeta !== undefined ? { aiMeta: input.aiMeta } : {}),
+      })
+      .where(eq(channelMessages.id, input.messageId))
+      .returning({
+        id: channelMessages.id,
+        mirroredFromId: channelMessages.mirroredFromId,
+      });
+
+    if (!row) return;
+
+    await propagateChannelMirrorEdit(tx, {
+      id: row.id,
       content: input.content,
       editedAt: input.editedAt,
-      ...(input.aiMeta !== undefined ? { aiMeta: input.aiMeta } : {}),
-    })
-    .where(eq(channelMessages.id, input.messageId));
+      mirroredFromId: row.mirroredFromId,
+    });
+  });
 }
 
 async function softDeleteChannelMessage(messageId: string): Promise<number> {
@@ -303,6 +385,9 @@ async function softDeleteChannelMessage(messageId: string): Promise<number> {
           replyCount: sql`GREATEST(${channelMessages.replyCount} - 1, 0)`,
         })
         .where(eq(channelMessages.id, row.parentId));
+      // The deleted row was itself a reply — its parent's lastReplyAt may
+      // have pointed at the row we just tombstoned (#2153).
+      await recomputeThreadLastReply(tx, row.parentId);
     }
 
     return result.length;
@@ -342,6 +427,9 @@ async function restoreChannelMessage(messageId: string): Promise<number> {
             replyCount: sql`${channelMessages.replyCount} + 1`,
           })
           .where(eq(channelMessages.id, row.parentId));
+        // Mirrors the counter bump's own guard — only move lastReplyAt
+        // forward for a parent that's still active (#2153).
+        await recomputeThreadLastReply(tx, row.parentId);
       }
     }
 

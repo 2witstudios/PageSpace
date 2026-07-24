@@ -1,6 +1,6 @@
 /**
- * Machine Workspaces: create / rename / update-layout / remove / list / bootstrap
- * a Machine's shared, named pane-grid workspaces (IO, dependency-injected).
+ * Machine Workspaces: create / rename / update-layout / remove / list a
+ * Machine's shared, named pane-grid workspaces (IO, dependency-injected).
  *
  * Unlike `machine-projects.ts`/`machine-branches.ts`, this is pure metadata
  * CRUD — no sandbox/git I/O, so `deps` is just `{ store, now }`.
@@ -12,13 +12,12 @@
  * legitimate, expected case, not an error — the loser just gets the winner's
  * row back.
  *
- * `bootstrapWorkspaces` is a SEPARATE, stronger guarantee: a one-time claim
- * (`machine_workspace_bootstraps`, PK `machineId`) so that when a machine's
- * workspace history is still `localStorage`-only, exactly ONE browser's local
- * list ever becomes the shared server truth. Per-id upsert alone doesn't
- * prevent this: two browsers with *disjoint* local workspace ids (the normal
- * case — most ids are random) would otherwise BOTH succeed, and the server
- * would end up with the union of both browsers' lists.
+ * Entity promotion (#2202) made `machine_workspaces.layout` a rolling-deploy
+ * shim rather than the source of truth (see `machine-panes-store.ts` and
+ * `apps/web/src/lib/machines/workspace-verbs-runtime.ts`) and retired the
+ * one-time `bootstrapWorkspaces` localStorage-seed claim entirely — the
+ * server has been the sole source of truth since #2048 shipped, so there is
+ * no un-migrated browser history left to claim.
  */
 
 export type MachineWorkspaceScope = 'machine' | 'project' | 'branch';
@@ -111,16 +110,6 @@ export async function listWorkspaces({
   return store.list(machineId);
 }
 
-export async function isBootstrapped({
-  machineId,
-  store,
-}: {
-  machineId: string;
-  store: MachineWorkspaceStore;
-}): Promise<boolean> {
-  return store.isBootstrapped(machineId);
-}
-
 export type CreateWorkspaceResult =
   | { ok: true; created: boolean; workspace: MachineWorkspaceRecord }
   | { ok: false; reason: WorkspacePlanDenialReason };
@@ -208,57 +197,6 @@ export async function removeWorkspace({
   const removed = await store.remove(machineId, workspaceId);
   if (!removed) return { ok: false, reason: 'not_found' };
   return { ok: true };
-}
-
-export interface BootstrapWorkspaceInput {
-  id: string;
-  name: string;
-  scope: WorkspaceScopeInput;
-  layout: unknown;
-}
-
-export type BootstrapWorkspacesResult =
-  | { ok: true; claimed: boolean; workspaces: MachineWorkspaceRecord[] }
-  | { ok: false; reason: WorkspacePlanDenialReason };
-
-/**
- * Claim-then-seed: see the module doc. Every entry in `workspaces` is
- * validated BEFORE the transaction runs — a malformed payload must reject
- * the whole call, not consume the claim on a partially-seeded machine.
- */
-export async function bootstrapWorkspaces({
-  machineId,
-  ownerId,
-  userId,
-  workspaces,
-  deps,
-}: {
-  machineId: string;
-  ownerId: string;
-  userId: string;
-  workspaces: BootstrapWorkspaceInput[];
-  deps: MachineWorkspacesDeps;
-}): Promise<BootstrapWorkspacesResult> {
-  const now = deps.now();
-  const inputs: NewMachineWorkspaceInput[] = [];
-  for (const workspace of workspaces) {
-    const plan = planWorkspacePayload({ name: workspace.name, layout: workspace.layout });
-    if (!plan.ok) return plan;
-    inputs.push({
-      id: workspace.id,
-      ownerId,
-      machineId,
-      scope: deriveWorkspaceScope(workspace.scope),
-      projectName: workspace.scope.projectName ?? null,
-      branchName: workspace.scope.branchName ?? null,
-      name: plan.name,
-      layout: plan.layout,
-      now,
-    });
-  }
-
-  const result = await deps.store.bootstrapSeed({ machineId, userId, workspaces: inputs, now });
-  return { ok: true, claimed: result.claimed, workspaces: result.workspaces };
 }
 
 /** Re-exported so callers can classify a create rejection without importing the store directly. */

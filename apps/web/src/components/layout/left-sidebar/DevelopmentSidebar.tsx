@@ -357,10 +357,10 @@ function MachineTreeSection({
   // rows. So the failure this guards against is narrower than it was: acting on
   // stale local state, not inventing rows. The machine currently open therefore
   // has TWO instances of the sync hook — this one and `MachineView`'s — which is
-  // by design and documented as such in that hook's module doc, along with the
-  // residual races it accepts: the server claim table makes the second bootstrap
-  // POST a no-op, and the module-level `declinedBootstraps` shares the
-  // "nothing to migrate" decision across instances.)
+  // by design and documented as such in that hook's module doc: entity
+  // promotion (#2202) made every hydrate/verb application rev-gated, so two
+  // instances converge on the same state with no cross-instance coordination
+  // needed at all, unlike the blob era's module-level bootstrap-decline registry.)
   //
   // Mounted once per machine row (this component's own lifetime in the sidebar
   // list, not tied to the tree node's expand/collapse) so it doesn't re-join the

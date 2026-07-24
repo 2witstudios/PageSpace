@@ -76,9 +76,14 @@ vi.mock('@pagespace/db/db', () => ({
     })),
   },
 }));
+// exists/sql: globalConversationRepository's module-scope `hasMessages` query
+// (now reachable transitively via stream-takeover -> materialize-interrupted-stream
+// -> global-conversation-repository, #2153) needs both or the module throws on import.
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
+  exists: vi.fn(),
+  sql: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id' },

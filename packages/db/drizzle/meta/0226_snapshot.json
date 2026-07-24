@@ -1,6 +1,6 @@
 {
-  "id": "06cd4682-a368-42cd-8c21-043c4ea907fa",
-  "prevId": "b647ffdf-de89-481f-91e0-c494cf894f9d",
+  "id": "9870a072-7a0f-49d7-a6b5-1bab3c45aad0",
+  "prevId": "4017f451-77e2-4411-9d0b-40d43f746a03",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -20190,6 +20190,272 @@
             "id"
           ],
           "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.machine_pane_columns": {
+      "name": "machine_pane_columns",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "machineId": {
+          "name": "machineId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "workspaceId": {
+          "name": "workspaceId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "orderIndex": {
+          "name": "orderIndex",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "widthFraction": {
+          "name": "widthFraction",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "machine_pane_columns_workspace_idx": {
+          "name": "machine_pane_columns_workspace_idx",
+          "columns": [
+            {
+              "expression": "machineId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "workspaceId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "machine_pane_columns_machineId_workspaceId_machine_workspaces_machineId_id_fk": {
+          "name": "machine_pane_columns_machineId_workspaceId_machine_workspaces_machineId_id_fk",
+          "tableFrom": "machine_pane_columns",
+          "tableTo": "machine_workspaces",
+          "columnsFrom": [
+            "machineId",
+            "workspaceId"
+          ],
+          "columnsTo": [
+            "machineId",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "machine_pane_columns_machineId_workspaceId_id_pk": {
+          "name": "machine_pane_columns_machineId_workspaceId_id_pk",
+          "columns": [
+            "machineId",
+            "workspaceId",
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.machine_panes": {
+      "name": "machine_panes",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "machineId": {
+          "name": "machineId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "workspaceId": {
+          "name": "workspaceId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "columnId": {
+          "name": "columnId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "orderIndex": {
+          "name": "orderIndex",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sessionName": {
+          "name": "sessionName",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sessionKind": {
+          "name": "sessionKind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "heightFraction": {
+          "name": "heightFraction",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "machine_panes_workspace_idx": {
+          "name": "machine_panes_workspace_idx",
+          "columns": [
+            {
+              "expression": "machineId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "workspaceId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "machine_panes_machineId_workspaceId_columnId_machine_pane_columns_machineId_workspaceId_id_fk": {
+          "name": "machine_panes_machineId_workspaceId_columnId_machine_pane_columns_machineId_workspaceId_id_fk",
+          "tableFrom": "machine_panes",
+          "tableTo": "machine_pane_columns",
+          "columnsFrom": [
+            "machineId",
+            "workspaceId",
+            "columnId"
+          ],
+          "columnsTo": [
+            "machineId",
+            "workspaceId",
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "machine_panes_machineId_workspaceId_id_pk": {
+          "name": "machine_panes_machineId_workspaceId_id_pk",
+          "columns": [
+            "machineId",
+            "workspaceId",
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.machine_workspace_revs": {
+      "name": "machine_workspace_revs",
+      "schema": "",
+      "columns": {
+        "machineId": {
+          "name": "machineId",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "rev": {
+          "name": "rev",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "machine_workspace_revs_machineId_pages_id_fk": {
+          "name": "machine_workspace_revs_machineId_pages_id_fk",
+          "tableFrom": "machine_workspace_revs",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "machineId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },

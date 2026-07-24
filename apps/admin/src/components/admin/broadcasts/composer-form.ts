@@ -1,6 +1,7 @@
 import type { AudienceDefinitionInput, BroadcastCreateInput } from "@/lib/broadcasts/schema";
+import { TIERS } from "@pagespace/lib/billing/subscription-tiers";
 
-export const PLAN_TIERS = ["free", "pro", "founder", "business"] as const;
+export const PLAN_TIERS = TIERS;
 
 export interface AudienceFormState {
   includeUnverified: boolean;

@@ -56,6 +56,7 @@ export * from './schema/machine-sprite-reclaims';
 export * from './schema/machine-agent-terminals';
 export * from './schema/machine-workspaces';
 export * from './schema/machine-workspace-bootstraps';
+export * from './schema/machine-panes';
 export * from './schema/email-broadcasts';
 export * from './schema/page-webhooks';
 
@@ -117,6 +118,7 @@ import * as machineSpriteReclaims from './schema/machine-sprite-reclaims';
 import * as machineAgentTerminals from './schema/machine-agent-terminals';
 import * as machineWorkspaces from './schema/machine-workspaces';
 import * as machineWorkspaceBootstraps from './schema/machine-workspace-bootstraps';
+import * as machinePanes from './schema/machine-panes';
 import * as emailBroadcasts from './schema/email-broadcasts';
 import * as pageWebhooks from './schema/page-webhooks';
 
@@ -179,6 +181,7 @@ export const schema = {
   ...machineAgentTerminals,
   ...machineWorkspaces,
   ...machineWorkspaceBootstraps,
+  ...machinePanes,
   ...emailBroadcasts,
   ...pageWebhooks,
 };
