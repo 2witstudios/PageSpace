@@ -20,11 +20,11 @@ describe('buildMachineBindingPrompt', () => {
   // the warning is now unconditional (for any non-branch self) and makes no
   // claim about the set's contents — it just tells the reader to check the
   // "Currently reachable" list, which is always itemized and accurate.
-  it('given a project self with no branches at all beneath it, should warn and defer to the reachable list', () => {
+  it('given a project self with no branches at all beneath it, should warn and instruct omitting branch for default-checkout intent', () => {
     const binding: MachineNodeHandleSet = { self: PROJECT_SELF, handles: [PROJECT_SELF] };
     const prompt = buildMachineBindingPrompt(binding);
     expect(prompt).toContain('"branch" here is NOT "whatever git branch a project happens to be on"');
-    expect(prompt).toContain('only add branch: "main"/"master" if that exact project+branch pairing is listed above');
+    expect(prompt).toContain('pass target: { project } alone and omit branch');
   });
 
   it('given a project self with a non-default branch listed (e.g. feature-x), should still warn without claiming no branch is listed', () => {
@@ -40,10 +40,15 @@ describe('buildMachineBindingPrompt', () => {
     expect(prompt).toContain('branch: "feature-x"'); // the reachable list still names it — untouched by the warning
   });
 
-  it('given a project self with a LIVE branch actually named "main", should still warn — the warning is conditional advice, not a false claim', () => {
-    // The warning says "only use branch: main if it's listed above" — which
-    // remains TRUE and safe to show even when "main" genuinely is listed:
-    // following it correctly leads the reader to use it, since it IS listed.
+  // Codex review (PR #2232, fifth pass): a separately created worktree named
+  // "main"/"master" is still a DIFFERENT Sprite from the project's own
+  // default checkout. Telling the model "add branch: main if it's listed" is
+  // wrong when the model's actual intent is its own default checkout —
+  // following that advice would route the call to the wrong worktree, the
+  // exact risk this warning exists to prevent. The fix: default-checkout
+  // intent always means target: { project } alone, regardless of what's
+  // listed; the warning must say so unconditionally, not "if listed".
+  it('given a project self with a LIVE branch actually named "main", should still instruct omitting branch for default-checkout intent — not "add branch: main since it is listed"', () => {
     const binding: MachineNodeHandleSet = {
       self: PROJECT_SELF,
       handles: [
@@ -53,7 +58,9 @@ describe('buildMachineBindingPrompt', () => {
     };
     const prompt = buildMachineBindingPrompt(binding);
     expect(prompt).toContain('"branch" here is NOT "whatever git branch a project happens to be on"');
-    expect(prompt).toContain('branch: "main"'); // reachable list names it — the source of truth
+    expect(prompt).toContain('pass target: { project } alone and omit branch');
+    expect(prompt).toContain('even if a branch named "main"/"master" is listed below');
+    expect(prompt).toContain('branch: "main"'); // reachable list still names the separate worktree — untouched by the warning
   });
 
   // Codex review (PR #2232, fifth pass): a machine-root binding can reach

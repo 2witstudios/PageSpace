@@ -61,6 +61,18 @@ export function buildMachineBindingPrompt(binding: MachineNodeHandleSet): string
   // can be answered correctly. No claim here can be wrong for any subset of
   // the set, because it makes no claim about the set's contents at all.
   //
+  // Fifth round of review: telling the model "add branch: main/master if
+  // that pairing is listed" is itself wrong when the model's actual INTENT
+  // is the project's own default checkout — a separately created worktree
+  // that happens to be named "main"/"master" is still a DIFFERENT Sprite
+  // from the project's default checkout, so following that advice for
+  // default-checkout intent routes the call to the wrong worktree, exactly
+  // the risk this whole warning exists to prevent. The fix isn't about what
+  // is listed at all: default-checkout intent always means target: { project
+  // } alone, full stop, regardless of what branch names happen to be
+  // reachable. branch is only ever for when the caller specifically means
+  // that separate worktree, not as an alternate spelling of "my own checkout".
+  //
   // Skipped when self.kind === 'branch': deriveMachinePaneBinding gives a
   // branch pane handles: [self] only — no project handle is EVER in scope
   // from there, so "pass target: { project }" would just trade one denial
@@ -68,7 +80,7 @@ export function buildMachineBindingPrompt(binding: MachineNodeHandleSet): string
   const branchWarning =
     self.kind === 'branch'
       ? ''
-      : '\n• "branch" here is NOT "whatever git branch a project happens to be on" — it only names a separately created branch worktree. A project\'s own default checkout has no branch of its own to address UNLESS the reachable list above explicitly names one for it: pass target: { project } alone to run at a project\'s own checkout, and only add branch: "main"/"master" if that exact project+branch pairing is listed above — otherwise it will be refused.';
+      : '\n• "branch" here is NOT "whatever git branch a project happens to be on" — it names a separately created branch worktree that runs in its own Sprite, distinct from the project\'s default checkout. To address a project\'s own default checkout, pass target: { project } alone and omit branch — do this even if a branch named "main"/"master" is listed below, since that pairing names a different, separately created worktree, not the project\'s own checkout. Only add branch: "<name>" when you specifically intend to address that separate worktree, and only if the exact project+branch pairing is listed above — otherwise it will be refused.';
   return (
     `\n\nMACHINE BINDING (this conversation)` +
     `\n• This conversation is bound to machine "${self.machineId}" at ${where} — code-execution tools (bash, readFile, writeFile, editFile, git/gh) operate from working directory: ${self.cwd}` +
