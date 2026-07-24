@@ -257,7 +257,7 @@ function makeDeps(
   const { host, byId, provisionCalls, killCalls } = makeFakeHost();
   const machineSandbox = machine ?? makeMachineSandbox();
   const storageCalls: ProjectStorageMeasurement[] = [];
-  const branchCalls: Array<{ machineProjectId: string; branchName: string; observedAt: Date }> = [];
+  const branchCalls: Array<{ machineProjectId: string; branchName: string | null; observedAt: Date }> = [];
 
   const deps: PromoteProjectDeps = {
     store,
@@ -395,29 +395,54 @@ describe('promoteProject — first promotion', () => {
  * for other reasons — never a new connection/exec of its own.
  */
 describe('promoteProject — observed-branch capture', () => {
-  it('given a first promotion, should capture the branch observed on the machine-side checkout — the SAME git status the dirty-tree gate already read', async () => {
+  it('given a first promotion, should capture the branch observed on the machine-side checkout at the gate check — the SAME git status the dirty-tree gate already read', async () => {
     const { deps, branchCalls } = makeDeps();
 
     await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, deps });
 
-    // Fires TWICE from this one call: the initial gate-check inspect, and the
-    // post-CAS reclaim recheck (`inspectMachineCheckout` runs on both, and the
-    // default CLEAN_STATUS fixture makes both reads identical) — see
-    // `inspectMachineCheckout`'s doc comment for why persisting from either is
-    // safe (it only ever labels the project's own single checkout).
+    // Synchronous: a pure parse of `status.stdout` already in hand, no extra
+    // exec or await. The post-CAS reclaim recheck does NOT also capture (see
+    // `inspectMachineCheckout`'s `captureBranch` doc comment) — this is the
+    // ONLY capture that lands before `promoteProject` returns.
+    expect(branchCalls).toEqual([{ machineProjectId: PROJECT_ID, branchName: 'main', observedAt: NOW }]);
+  });
+
+  it('given a first promotion where the fresh clone lands on a DIFFERENT branch than the old machine-side checkout, should supersede the gate-check capture with what the NEW Sprite is actually on', async () => {
+    // The OLD machine-side checkout is tracked on `develop`...
+    const machine = makeMachineSandbox({ status: { exitCode: 0, stdout: '## develop...origin/develop\n', stderr: '' } });
+    // ...but the fresh `git clone` of this project's own Sprite lands on `main`
+    // (its remote's default) — exactly the divergence a promotion can create.
+    const { host } = makeFakeHost((args) => {
+      if (args.cmd === 'git' && gitSubcommand(args.args) === 'status') {
+        return { exitCode: 0, stdout: '## main...origin/main\n', stderr: '' };
+      }
+      return undefined;
+    });
+    const { deps, branchCalls } = makeDeps({ host }, { machine });
+
+    const result = await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, deps });
+    expect(result.ok).toBe(true);
+
+    // The gate-check's capture (the OLD checkout) lands synchronously first...
+    expect(branchCalls[0]).toEqual({ machineProjectId: PROJECT_ID, branchName: 'develop', observedAt: NOW });
+
+    // ...and the post-clone capture (fire-and-forget: flush before asserting)
+    // supersedes it with the NEW Sprite's actual branch. Nothing from the
+    // reclaim-recheck lands in between.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(branchCalls).toEqual([
-      { machineProjectId: PROJECT_ID, branchName: 'main', observedAt: NOW },
+      { machineProjectId: PROJECT_ID, branchName: 'develop', observedAt: NOW },
       { machineProjectId: PROJECT_ID, branchName: 'main', observedAt: NOW },
     ]);
   });
 
-  it('given a machine-side checkout in detached HEAD (no branch header name), should capture nothing rather than a bogus name', async () => {
+  it('given a machine-side checkout in detached HEAD (no branch header name), should EXPLICITLY CLEAR rather than skip — a definitive observation, not an unreadable one', async () => {
     const machine = makeMachineSandbox({ status: { exitCode: 0, stdout: '## HEAD (no branch)\n', stderr: '' } });
     const { deps, branchCalls } = makeDeps({}, { machine });
 
     await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, deps });
 
-    expect(branchCalls).toEqual([]);
+    expect(branchCalls).toEqual([{ machineProjectId: PROJECT_ID, branchName: null, observedAt: NOW }]);
   });
 
   it('given a reattach, should capture the branch observed on the PROMOTED Sprite\'s OWN git status — the far more common wake, not the (irrelevant, already-gone) machine-side checkout', async () => {

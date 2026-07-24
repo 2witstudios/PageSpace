@@ -170,10 +170,21 @@ export interface MachineProjectStore {
    * Persist the LOCAL branch name this project's checkout was last observed
    * on (`git status -b`), captured opportunistically whenever a Sprite is
    * already awake for other work — see `machine-project-promotion.ts`'s
-   * `noteCurrentBranch`/`noteCurrentBranchOnReattach`, the only callers. A
-   * no-op UPDATE if the row is gone, so callers need not pre-check.
+   * `noteCurrentBranch`/`noteCurrentBranchFromHandle`, the only callers.
+   * `branchName: null` explicitly CLEARS the snapshot (a definitive
+   * observation of detached HEAD, not "we don't know") — distinct from never
+   * calling this at all, which leaves a stale name in place.
+   *
+   * ORDER-SAFE: multiple captures can be in flight at once (a promotion's own
+   * gate-check racing its post-clone capture, two concurrent reattaches), and
+   * fire-and-forget calls are not guaranteed to LAND in the order they were
+   * OBSERVED. The write only applies while the row's existing
+   * `currentBranchObservedAt` is null or NO NEWER than `observedAt`, so a
+   * late-arriving but chronologically OLDER observation can never clobber a
+   * fresher one. A no-op UPDATE if the row is gone, so callers need not
+   * pre-check.
    */
-  recordCurrentBranch(id: string, branchName: string, observedAt: Date): Promise<void>;
+  recordCurrentBranch(id: string, branchName: string | null, observedAt: Date): Promise<void>;
 }
 
 /** Re-exported so callers can classify a `create` rejection without importing the DB layer directly. */
@@ -185,7 +196,7 @@ export { isUniqueViolation };
  * the DB module graph.
  */
 export async function createDbMachineProjectStore(): Promise<MachineProjectStore> {
-  const [{ db }, { eq, and, eqOrIsNull }, { machineProjects }] = await Promise.all([
+  const [{ db }, { eq, and, or, isNull, lte, eqOrIsNull }, { machineProjects }] = await Promise.all([
     import('@pagespace/db/db'),
     import('@pagespace/db/operators'),
     import('@pagespace/db/schema/machine-projects'),
@@ -253,7 +264,12 @@ export async function createDbMachineProjectStore(): Promise<MachineProjectStore
       await db
         .update(machineProjects)
         .set({ currentBranchName: branchName, currentBranchObservedAt: observedAt })
-        .where(eq(machineProjects.id, id));
+        .where(
+          and(
+            eq(machineProjects.id, id),
+            or(isNull(machineProjects.currentBranchObservedAt), lte(machineProjects.currentBranchObservedAt, observedAt)),
+          ),
+        );
     },
   };
 }
