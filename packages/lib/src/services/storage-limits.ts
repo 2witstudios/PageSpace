@@ -1,7 +1,6 @@
 import { getStorageConfigFromSubscription, getStorageTierFromSubscription, STORAGE_TIERS, type SubscriptionTier } from './subscription-utils';
 import { storageRepository, type DrizzleTx } from './storage-repository';
-import { countLiveUploadsForUser } from './pending-uploads';
-import { canStartUpload } from './pending-uploads-core';
+import { reserveUploadSlot } from './pending-uploads';
 import { getAdvisoryLockPool } from '@pagespace/db/db';
 import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
 
@@ -116,22 +115,34 @@ export async function checkStorageQuota(
 }
 
 /**
- * Check if user has available upload slots.
+ * Atomically check the user's live-upload count against their tier's
+ * concurrency limit AND reserve the slot (insert the `pending_uploads` row)
+ * in one step — the presign routes' cross-process concurrency gate (#2154).
  *
- * #2154: derived from live (unexpired) `pending_uploads` rows rather than the
- * old `users.activeUploads` counter, which leaked +1 forever when a process
- * died between presign and complete.
+ * #2225 review: a separate "check the count" call followed later by a
+ * separate "insert the row" call is NOT safe under concurrency — two presigns
+ * for the same user landing on different web replicas can both read the same
+ * live count before either inserts, both pass, and both reserve, exceeding
+ * the tier limit by however many requests race. `reserveUploadSlot` closes
+ * that gap with a single transaction serialized per-user (see
+ * `pendingUploadsRepository.reserveIfUnderLimit`).
+ *
+ * Derived from live (unexpired) `pending_uploads` rows rather than the old
+ * `users.activeUploads` counter, which leaked +1 forever when a process died
+ * between presign and complete.
  */
-export async function checkConcurrentUploads(userId: string): Promise<boolean> {
+export async function reserveConcurrentUploadSlot(
+  jobId: string,
+  userId: string,
+  fileSize: number,
+): Promise<boolean> {
   const user = await storageRepository.findUserForStorage(userId);
-
   if (!user) return false;
 
   const subscriptionTier = (user.subscriptionTier || 'free') as SubscriptionTier;
   const storageConfig = getStorageConfigFromSubscription(subscriptionTier);
 
-  const liveUploads = await countLiveUploadsForUser(userId);
-  return canStartUpload(liveUploads, storageConfig.maxConcurrentUploads);
+  return reserveUploadSlot(jobId, userId, fileSize, storageConfig.maxConcurrentUploads);
 }
 
 /**

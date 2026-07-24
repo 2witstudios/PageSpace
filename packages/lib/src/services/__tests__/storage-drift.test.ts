@@ -15,8 +15,7 @@ vi.mock('../storage-repository', () => ({
 }));
 
 vi.mock('../pending-uploads', () => ({
-  countLiveUploadsForUser: vi.fn(),
-  registerPendingUpload: vi.fn(),
+  reserveUploadSlot: vi.fn(),
   releasePendingUpload: vi.fn(),
   sweepExpiredPendingUploads: vi.fn(),
 }));

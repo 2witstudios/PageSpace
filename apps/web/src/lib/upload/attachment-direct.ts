@@ -11,11 +11,11 @@
 import {
   getUserStorageQuota,
   checkStorageQuota,
-  checkConcurrentUploads,
+  reserveConcurrentUploadSlot,
   updateStorageUsage,
   shouldChargeForStore,
 } from '@pagespace/lib/services/storage-limits';
-import { registerPendingUpload, releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
+import { releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { buildS3Key } from '@pagespace/lib/services/upload-validation';
 import { attachmentUploadRepository } from '@pagespace/lib/services/attachment-upload-repository';
@@ -71,19 +71,6 @@ export async function presignAttachment(args: PresignAttachmentArgs): Promise<Or
     return { status: 413, body: { error: quotaCheck.reason, storageInfo: quotaCheck.quota } };
   }
 
-  // #2154: cross-process concurrency gate, backed by live `pending_uploads`
-  // rows. The semaphore below also gates concurrency, but only within THIS
-  // process — with multiple web replicas a user's uploads can land on
-  // different processes, each enforcing the tier limit independently. This
-  // check catches that case; whichever gate is stricter wins.
-  const canUpload = await checkConcurrentUploads(userId);
-  if (!canUpload) {
-    return {
-      status: 429,
-      body: { error: 'Too many concurrent uploads. Please wait for current uploads to complete.' },
-    };
-  }
-
   const key = buildS3Key(canonicalHash);
   const exists = await checkObjectExists(key);
 
@@ -104,8 +91,17 @@ export async function presignAttachment(args: PresignAttachmentArgs): Promise<Or
   // Any failure after the slot is acquired must release it, or it leaks until the
   // semaphore's stale-slot sweep.
   try {
-    // #2154: TTL'd reservation row (replaces the users.activeUploads counter).
-    await registerPendingUpload(jobId, userId, fileSize);
+    // #2154/#2225: atomic cross-process reservation — see the page-file
+    // presign route's identical comment for why this must be one atomic
+    // check-and-insert rather than a separate check then a separate insert.
+    const reserved = await reserveConcurrentUploadSlot(jobId, userId, fileSize);
+    if (!reserved) {
+      uploadSemaphore.releaseUploadSlot(jobId);
+      return {
+        status: 429,
+        body: { error: 'Too many concurrent uploads. Please wait for current uploads to complete.' },
+      };
+    }
 
     if (exists) {
       return { status: 200, body: { alreadyExists: true, jobId, key } };

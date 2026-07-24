@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, integer, index, uniqueIndex, pgEnum, real, boolean } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, integer, bigint, index, uniqueIndex, pgEnum, real, boolean } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { chatMessages } from './core';
@@ -40,7 +40,27 @@ export const users = pgTable('users', {
   // honest by the scheduled reconcile (api/cron/reconcile-storage →
   // reconcileAllStorageUsage), which rewrites it from the files rows when it
   // drifts. Never treat a read of this column as exact (#2155).
-  storageUsedBytes: real('storageUsedBytes').default(0).notNull(),
+  //
+  // bigint/mode:'number', NOT real (#2225 review): `real` is IEEE-754 single
+  // precision, exact only up to 2^24 (~16 MiB) — past that, storing an exact
+  // byte count can round to an adjacent representable float, permanently
+  // differing from the BIGINT-exact `files.sizeBytes` sum by more than the
+  // reconcile's 1-byte tolerance. That made every correction round straight
+  // back to the same (still-wrong) value, so any user over ~16 MiB would
+  // re-flag as drifted and get "corrected" every single cron tick forever,
+  // never converging. Mirrors `files.sizeBytes`'s bigint/number pattern below.
+  storageUsedBytes: bigint('storageUsedBytes', { mode: 'number' }).default(0).notNull(),
+  // @deprecated (#2154) — superseded by the TTL'd `pending_uploads` table
+  // (packages/db/src/schema/storage.ts); no application code reads or writes
+  // this column anymore. Kept in the schema (not dropped) because deploys run
+  // migrations BEFORE the new app image takes traffic
+  // (.github/workflows/docker-images.yml: "Run migrations" precedes "Deploy
+  // web"), so dropping it in the SAME migration as this cutover would 500
+  // every upload presign/complete/cancel request served by the still-running
+  // OLD image during the rollout window (same constraint documented on
+  // `machineAccess` in schema/core.ts). Drop in a follow-up migration once
+  // this deploy has fully rolled out and no old image can still write it.
+  activeUploads: integer('activeUploads').default(0).notNull(),
   lastStorageCalculated: timestamp('lastStorageCalculated', { mode: 'date' }),
   // Subscription fields
   stripeCustomerId: text('stripeCustomerId').unique(),

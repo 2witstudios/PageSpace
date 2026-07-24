@@ -9,6 +9,7 @@ import {
   STORAGE_TIERS,
   formatBytes
 } from '@pagespace/lib/services/storage-limits';
+import { getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db'
 import { eq, or, inArray } from '@pagespace/db/operators'
 import { drives } from '@pagespace/db/schema/core';
@@ -86,10 +87,20 @@ export async function GET(request: NextRequest) {
       ? or(eq(drives.ownerId, user.id), inArray(drives.id, referencedDriveIds))
       : eq(drives.ownerId, user.id);
     // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
-    const userDrives = await db.query.drives.findMany({
+    const candidateDrives = await db.query.drives.findMany({
       where: driveWhere,
-      columns: { id: true, name: true }
+      columns: { id: true, name: true, ownerId: true }
     });
+
+    // #2225 review: a referenced (non-owned) drive can be one the user
+    // uploaded into and was LATER REMOVED from — files.createdBy survives
+    // membership changes, but the drive's metadata (name) must not keep
+    // leaking to a user who no longer has access. Owned drives always pass
+    // trivially; only re-check the ones the user doesn't own.
+    const accessChecks = await Promise.all(
+      candidateDrives.map(d => d.ownerId === user.id ? Promise.resolve(true) : getUserDriveAccess(user.id, d.id)),
+    );
+    const userDrives = candidateDrives.filter((_, i) => accessChecks[i]);
 
     const fileTypeBreakdown = buildFileTypeBreakdown(userFiles);
 

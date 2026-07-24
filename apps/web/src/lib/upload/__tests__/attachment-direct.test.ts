@@ -3,21 +3,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // --- Effect seams (pure core is left real) -------------------------------------
 const mockGetUserStorageQuota = vi.fn();
 const mockCheckStorageQuota = vi.fn();
-const mockCheckConcurrentUploads = vi.fn();
+const mockReserveConcurrentUploadSlot = vi.fn();
 const mockUpdateStorageUsage = vi.fn();
 vi.mock('@pagespace/lib/services/storage-limits', () => ({
   getUserStorageQuota: (...a: unknown[]) => mockGetUserStorageQuota(...a),
   checkStorageQuota: (...a: unknown[]) => mockCheckStorageQuota(...a),
-  checkConcurrentUploads: (...a: unknown[]) => mockCheckConcurrentUploads(...a),
+  reserveConcurrentUploadSlot: (...a: unknown[]) => mockReserveConcurrentUploadSlot(...a),
   updateStorageUsage: (...a: unknown[]) => mockUpdateStorageUsage(...a),
   // Real (pure) impl: charge iff the files row was newly inserted (M8).
   shouldChargeForStore: (inserted: boolean) => inserted,
 }));
 
-const mockRegisterPendingUpload = vi.fn();
 const mockReleasePendingUpload = vi.fn();
 vi.mock('@pagespace/lib/services/pending-uploads', () => ({
-  registerPendingUpload: (...a: unknown[]) => mockRegisterPendingUpload(...a),
   releasePendingUpload: (...a: unknown[]) => mockReleasePendingUpload(...a),
 }));
 
@@ -88,11 +86,10 @@ describe('presignAttachment', () => {
     vi.clearAllMocks();
     mockGetUserStorageQuota.mockResolvedValue({ tier: 'free', usedBytes: 0, quotaBytes: 500 * 1024 * 1024 });
     mockCheckStorageQuota.mockResolvedValue({ allowed: true });
-    mockCheckConcurrentUploads.mockResolvedValue(true);
     mockCheckObjectExists.mockResolvedValue(false);
     mockAcquire.mockResolvedValue('job-1');
     mockIssuePresignedPutUrl.mockResolvedValue('https://tigris/put');
-    mockRegisterPendingUpload.mockResolvedValue(undefined);
+    mockReserveConcurrentUploadSlot.mockResolvedValue(true);
     mockReleasePendingUpload.mockResolvedValue(undefined);
   });
 
@@ -105,7 +102,7 @@ describe('presignAttachment', () => {
       driveId: 'drive-1',
       attachmentTarget: PAGE_TARGET,
     }));
-    expect(mockRegisterPendingUpload).toHaveBeenCalledWith('job-1', 'user-1', 1024);
+    expect(mockReserveConcurrentUploadSlot).toHaveBeenCalledWith('job-1', 'user-1', 1024);
   });
 
   it('reserves driveId "" for a conversation target', async () => {
@@ -142,11 +139,11 @@ describe('presignAttachment', () => {
     expect(res.status).toBe(429);
   });
 
-  it('#2154: returns 429 and never reserves a semaphore slot when the cross-process concurrency gate rejects', async () => {
-    mockCheckConcurrentUploads.mockResolvedValue(false);
+  it('#2154/#2225: returns 429 and releases the semaphore slot when the atomic reservation is denied', async () => {
+    mockReserveConcurrentUploadSlot.mockResolvedValue(false);
     const res = await presignAttachment(presignArgs());
     expect(res.status).toBe(429);
-    expect(mockAcquire).not.toHaveBeenCalled();
+    expect(mockRelease).toHaveBeenCalledWith('job-1');
   });
 
   it('releases the slot if issuing the presigned URL throws', async () => {

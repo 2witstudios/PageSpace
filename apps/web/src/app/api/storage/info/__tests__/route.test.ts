@@ -16,6 +16,10 @@ vi.mock('@/lib/auth/admin-role', () => ({
   validateAdminAccess: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  getUserDriveAccess: vi.fn(),
+}));
+
 vi.mock('@pagespace/lib/services/storage-limits', () => ({
   getUserStorageQuota: vi.fn().mockResolvedValue({ tier: 'free', usedBytes: 0, quotaBytes: 1e9, availableBytes: 1e9 }),
   getUserFileCount: vi.fn().mockResolvedValue(0),
@@ -48,6 +52,8 @@ import { verifyAuth } from '@/lib/auth';
 import { validateAdminAccess } from '@/lib/auth/admin-role';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { reconcileStorageUsage } from '@pagespace/lib/services/storage-limits';
+import { getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { db } from '@pagespace/db/db';
 import { eq, or, inArray } from '@pagespace/db/operators';
 import { findUserFileRows } from '@/lib/storage/storage-info-repository';
 
@@ -147,6 +153,46 @@ describe('GET /api/storage/info', () => {
       // Deduplicated: 'shared-drive-1' appears once despite two files referencing it.
       expect(inArray).toHaveBeenCalledWith('id', ['shared-drive-1']);
       expect(or).toHaveBeenCalled();
+    });
+
+    it('re-checks current access for non-owned candidate drives and excludes ones the user has lost access to', async () => {
+      vi.mocked(findUserFileRows).mockResolvedValue([
+        { fileId: 'f1', sizeBytes: 100, mimeType: 'text/plain', createdAt: new Date(), driveId: 'still-shared', pageId: 'p1', title: 't1' },
+        { fileId: 'f2', sizeBytes: 200, mimeType: 'text/plain', createdAt: new Date(), driveId: 'access-revoked', pageId: 'p2', title: 't2' },
+      ]);
+      vi.mocked(db.query.drives.findMany).mockResolvedValue([
+        { id: 'still-shared', name: 'Still Shared', ownerId: 'other-owner' },
+        { id: 'access-revoked', name: 'Revoked Drive', ownerId: 'other-owner' },
+      ] as never);
+      vi.mocked(getUserDriveAccess).mockImplementation(async (_userId, driveId) => driveId === 'still-shared');
+
+      const request = new Request('https://example.com/api/storage/info');
+      const res = await GET(request as never);
+      const body = await res.json();
+
+      expect(getUserDriveAccess).toHaveBeenCalledWith('user_1', 'still-shared');
+      expect(getUserDriveAccess).toHaveBeenCalledWith('user_1', 'access-revoked');
+      const driveIds = body.storageByDrive.map((d: { driveId: string }) => d.driveId);
+      expect(driveIds).toContain('still-shared');
+      expect(driveIds).not.toContain('access-revoked');
+      // The bytes stay in the overall accounting even though the drive metadata is hidden.
+      expect(body.fileTypeBreakdown.Text.totalSize).toBe(300);
+    });
+
+    it('never re-checks access for drives the user owns', async () => {
+      vi.mocked(findUserFileRows).mockResolvedValue([
+        { fileId: 'f1', sizeBytes: 100, mimeType: 'text/plain', createdAt: new Date(), driveId: 'owned-drive', pageId: 'p1', title: 't1' },
+      ]);
+      vi.mocked(db.query.drives.findMany).mockResolvedValue([
+        { id: 'owned-drive', name: 'My Drive', ownerId: 'user_1' },
+      ] as never);
+
+      const request = new Request('https://example.com/api/storage/info');
+      const res = await GET(request as never);
+      const body = await res.json();
+
+      expect(getUserDriveAccess).not.toHaveBeenCalled();
+      expect(body.storageByDrive.map((d: { driveId: string }) => d.driveId)).toContain('owned-drive');
     });
   });
 });

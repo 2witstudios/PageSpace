@@ -1,6 +1,6 @@
 {
-  "id": "b647ffdf-de89-481f-91e0-c494cf894f9d",
-  "prevId": "a275f6cf-eb38-4c2c-ba1c-510b5fd6ddb5",
+  "id": "06cd4682-a368-42cd-8c21-043c4ea907fa",
+  "prevId": "b647ffdf-de89-481f-91e0-c494cf894f9d",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -856,7 +856,7 @@
         },
         "storageUsedBytes": {
           "name": "storageUsedBytes",
-          "type": "real",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": true,
           "default": 0

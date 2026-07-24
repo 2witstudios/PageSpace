@@ -15,8 +15,7 @@ vi.mock('../storage-repository', () => ({
 }));
 
 vi.mock('../pending-uploads', () => ({
-  countLiveUploadsForUser: vi.fn(),
-  registerPendingUpload: vi.fn(),
+  reserveUploadSlot: vi.fn(),
   releasePendingUpload: vi.fn(),
   sweepExpiredPendingUploads: vi.fn(),
 }));
@@ -39,7 +38,7 @@ vi.mock('../subscription-utils', async (importOriginal) => {
 import {
   getUserStorageQuota,
   checkStorageQuota,
-  checkConcurrentUploads,
+  reserveConcurrentUploadSlot,
   updateStorageUsage,
   calculateActualStorageUsage,
   getUserFileCount,
@@ -57,7 +56,7 @@ import {
   updateStorageTierFromSubscription,
 } from '../storage-limits';
 import { storageRepository } from '../storage-repository';
-import { countLiveUploadsForUser } from '../pending-uploads';
+import { reserveUploadSlot } from '../pending-uploads';
 
 describe('storage-limits', () => {
   beforeEach(() => {
@@ -219,31 +218,32 @@ describe('storage-limits', () => {
     });
   });
 
-  describe('checkConcurrentUploads (#2154 — derived from live pending_uploads rows)', () => {
-    it('checkConcurrentUploads_withNonexistentUser_returnsFalse', async () => {
+  describe('reserveConcurrentUploadSlot (#2154/#2225 — atomic check-and-reserve)', () => {
+    it('reserveConcurrentUploadSlot_withNonexistentUser_returnsFalse', async () => {
       vi.mocked(storageRepository.findUserForStorage).mockResolvedValue(undefined);
 
-      expect(await checkConcurrentUploads('nonexistent')).toBe(false);
-      expect(countLiveUploadsForUser).not.toHaveBeenCalled();
+      expect(await reserveConcurrentUploadSlot('job-1', 'nonexistent', 1024)).toBe(false);
+      expect(reserveUploadSlot).not.toHaveBeenCalled();
     });
 
-    it('checkConcurrentUploads_withLiveUploadsUnderLimit_returnsTrue', async () => {
+    it('reserveConcurrentUploadSlot_delegatesToPendingUploadsWithTheResolvedTierLimit', async () => {
       vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
         id: 'user-1', storageUsedBytes: 0, subscriptionTier: 'free',
       });
-      vi.mocked(countLiveUploadsForUser).mockResolvedValue(0);
+      vi.mocked(reserveUploadSlot).mockResolvedValue(true);
 
-      expect(await checkConcurrentUploads('user-1')).toBe(true);
-      expect(countLiveUploadsForUser).toHaveBeenCalledWith('user-1');
+      expect(await reserveConcurrentUploadSlot('job-1', 'user-1', 1024)).toBe(true);
+      // free tier maxConcurrentUploads is 3 per the mocked subscription config above.
+      expect(reserveUploadSlot).toHaveBeenCalledWith('job-1', 'user-1', 1024, 3);
     });
 
-    it('checkConcurrentUploads_withLiveUploadsAtLimit_returnsFalse', async () => {
+    it('reserveConcurrentUploadSlot_withAtomicReserveDenied_returnsFalse', async () => {
       vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
         id: 'user-1', storageUsedBytes: 0, subscriptionTier: 'free',
       });
-      vi.mocked(countLiveUploadsForUser).mockResolvedValue(3);
+      vi.mocked(reserveUploadSlot).mockResolvedValue(false);
 
-      expect(await checkConcurrentUploads('user-1')).toBe(false);
+      expect(await reserveConcurrentUploadSlot('job-1', 'user-1', 1024)).toBe(false);
     });
   });
 

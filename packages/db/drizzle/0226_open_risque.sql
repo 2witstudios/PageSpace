@@ -1,0 +1,1 @@
+ALTER TABLE "users" ALTER COLUMN "storageUsedBytes" SET DATA TYPE bigint;
