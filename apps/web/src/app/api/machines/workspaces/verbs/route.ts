@@ -14,9 +14,8 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import {
-  applyWorkspaceVerb,
+  applyWorkspaceVerbLocked,
   broadcastWorkspaceVerbResult,
-  buildApplyWorkspaceVerbDeps,
   parseWorkspaceVerb,
 } from '@/lib/machines/workspace-verbs-runtime';
 import { canAccessMachine, forbiddenMachineAccess, RESOURCE_TYPE, WORKSPACE_DENIAL_STATUS } from '@/lib/machines/machine-workspaces-runtime';
@@ -44,8 +43,7 @@ export async function POST(request: Request) {
 
   if (!(await canAccessMachine(auth.userId, machineId))) return forbiddenMachineAccess(request, auth.userId, machineId);
 
-  const deps = buildApplyWorkspaceVerbDeps(auth.userId);
-  const result = await applyWorkspaceVerb(machineId, parsed.verb, deps);
+  const result = await applyWorkspaceVerbLocked(machineId, parsed.verb, auth.userId);
 
   if (!result.ok) {
     return NextResponse.json({ error: result.reason, reason: result.reason }, { status: WORKSPACE_DENIAL_STATUS[result.reason] ?? 500 });

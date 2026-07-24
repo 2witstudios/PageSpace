@@ -31,6 +31,7 @@ import {
   setActiveWorkspace as setActiveWorkspaceTransition,
   assignPane as assignPaneTransition,
   clearPanePrompt as clearPanePromptTransition,
+  restorePanePendingPrompt,
   dismissPicker as dismissPickerTransition,
   selectPane as selectPaneTransition,
   nodeOfTerminalScope,
@@ -230,15 +231,50 @@ function applyVerbAndQueue(
   return outcome;
 }
 
-/** Re-applies every still-pending local verb on top of freshly-arrived server
+/** Every pane's `pendingPrompt`, before a rebase — see `rebasePendingVerbs`.
+ * Keyed by pane id (unique within a machine's grids in practice: split-and-
+ * pick mints pane ids with `crypto.randomUUID()`), holding enough to find
+ * the pane again after the rebase and restore it. */
+function collectPendingPrompts(machine: MachineWorkspacesState): { workspaceId: string; paneId: string; pendingPrompt: string }[] {
+  const prompts: { workspaceId: string; paneId: string; pendingPrompt: string }[] = [];
+  for (const workspace of workspacesOf(machine)) {
+    for (const pane of panesOf(workspace)) {
+      if (pane.pendingPrompt !== undefined) {
+        prompts.push({ workspaceId: workspace.id, paneId: pane.id, pendingPrompt: pane.pendingPrompt });
+      }
+    }
+  }
+  return prompts;
+}
+
+/**
+ * Re-applies every still-pending local verb on top of freshly-arrived server
  * truth (a snapshot or another workspace's verb echo) — shared by
  * `applyServerSnapshot`/`applyServerVerb`. An in-flight local change (e.g. a
  * bind whose POST hasn't resolved yet) must never be visibly undone by an
- * unrelated update landing first. */
+ * unrelated update landing first.
+ *
+ * `pendingPrompt` needs its OWN restore pass around that replay:
+ * `WorkspaceVerb` carries no `pendingPrompt` field (it's local-only, never
+ * on the wire — see `workspace-verbs.ts`'s module doc), so replaying a
+ * pending `bind-pane` verb through `applyVerbLocal` re-binds the pane's
+ * scope correctly but leaves `pendingPrompt` cleared, silently dropping a
+ * starting prompt that just hadn't been typed into the PTY yet. Captured
+ * before the replay and restored after, onto whichever pane still resolves —
+ * a verb never legitimately changes `pendingPrompt` itself, so anything a
+ * pane had beforehand must still hold it afterward.
+ */
 function rebasePendingVerbs(state: MachineWorkspaceStoreState, machineId: string, machine: MachineWorkspacesState): MachineWorkspacesState {
+  const pendingVerbs = state.pendingVerbs[machineId] ?? [];
+  if (pendingVerbs.length === 0) return machine;
+
+  const prompts = collectPendingPrompts(machine);
   let next = machine;
-  for (const verb of state.pendingVerbs[machineId] ?? []) {
+  for (const verb of pendingVerbs) {
     next = applyVerbLocal(next, verb).state;
+  }
+  for (const { workspaceId, paneId, pendingPrompt } of prompts) {
+    next = updateWorkspace(next, workspaceId, (workspace) => restorePanePendingPrompt(workspace, paneId, pendingPrompt));
   }
   return next;
 }

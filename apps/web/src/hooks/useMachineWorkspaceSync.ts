@@ -110,6 +110,21 @@ export function useMachineWorkspaceSync(machineId: string | null): void {
 
     const onVerb = (payload: { machineId: string; rev: number; workspaceId: string; workspace: ServerWorkspaceDTO | null }) => {
       if (payload.machineId !== mid) return;
+      // `machine-workspace:verb` payloads are self-contained snapshots of the
+      // ONE workspace their verb touched, not a diff — fine for consecutive
+      // revs, but a genuine gap (this browser missed an earlier verb, e.g. a
+      // dropped socket message) means whatever this payload changed relative
+      // to the workspace(s) it depended on is unknown. Applying it anyway
+      // would silently strand this browser on a state no verb sequence could
+      // have produced. Detect the gap and fetch a fresh full snapshot instead
+      // of applying — `applyServerSnapshot` is itself rev-gated, so if the
+      // snapshot GET loses a race with a still-later verb broadcast, it's
+      // simply dropped rather than regressing anything.
+      const knownRev = useMachineWorkspaceStore.getState().serverRev[mid] ?? 0;
+      if (payload.rev > knownRev + 1) {
+        void resyncMachine(mid);
+        return;
+      }
       applyServerVerb(mid, { rev: payload.rev, workspaceId: payload.workspaceId, workspace: payload.workspace });
     };
 
@@ -173,6 +188,48 @@ function verbJustQueued(machineId: string, before: number): WorkspaceVerb | unde
 }
 
 /**
+ * The tail of each machine's push chain — module-level, not store state,
+ * because it's pure HTTP-REQUEST-ORDERING bookkeeping (which POST fires
+ * next), not application state a component ever reads. Two rapid dependent
+ * actions on the SAME machine (create a workspace, then immediately split
+ * its first pane) apply locally in order, but their pushes are two
+ * independent `fetch` calls — without this, network reordering can let the
+ * split's POST reach the server before the create's, which then fails with
+ * `applied: false` (the target workspace doesn't exist there yet) and is
+ * dequeued as if it had succeeded, leaving the split silently unconfirmed
+ * forever. Chaining every push for a machine behind the previous one's
+ * settlement (success OR failure — `.catch` keeps the chain alive so one
+ * failed push doesn't wedge every push after it) closes that gap by
+ * construction: a dependent verb's push is never even SENT until the verb
+ * it depends on has already resolved server-side.
+ */
+const machinePushChains = new Map<string, Promise<void>>();
+
+function enqueuePush(machineId: string, verb: WorkspaceVerb): void {
+  const previous = machinePushChains.get(machineId);
+  const run = () => pushVerb(machineId, verb);
+  // When nothing is queued yet, call `run` directly (not via `.then`) so the
+  // first push of a chain still fires its POST synchronously, same as before
+  // this queue existed — a dependent push only waits when there's a prior
+  // push it must actually wait for.
+  const next = previous ? previous.then(run, run) : run();
+  // The chain itself must never reject (a rejected tail would wedge every
+  // later push for this machine) — `pushVerb` already catches its own
+  // errors, this only guards a hypothetical future one that doesn't.
+  const settled = next.catch(() => {});
+  machinePushChains.set(machineId, settled);
+  // Once this push (and everything chained behind it so far) has settled,
+  // drop the map entry — otherwise the NEXT unrelated push for this machine
+  // would needlessly defer a tick behind an already-finished chain forever
+  // (`.then` on a resolved promise is still asynchronous).
+  void settled.then(() => {
+    if (machinePushChains.get(machineId) === settled) {
+      machinePushChains.delete(machineId);
+    }
+  });
+}
+
+/**
  * Server-pushing wrappers around the workspace store's identity/layout
  * actions: call the real local action first (unchanged, instant, optimistic),
  * then push whichever verb it queued.
@@ -197,7 +254,7 @@ export function useSyncedWorkspaceActions(machineId: string) {
     const pendingCount = () => (useMachineWorkspaceStore.getState().pendingVerbs[machineId] ?? []).length;
     const pushIfQueued = (before: number) => {
       const verb = verbJustQueued(machineId, before);
-      if (verb) void pushVerb(machineId, verb);
+      if (verb) enqueuePush(machineId, verb);
     };
 
     return {

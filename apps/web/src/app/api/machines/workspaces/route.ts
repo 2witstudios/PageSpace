@@ -26,10 +26,8 @@ import {
   createWorkspace,
   updateWorkspace,
   removeWorkspace,
-  listWorkspaces,
 } from '@pagespace/lib/services/machines/machine-workspaces';
 import {
-  buildMachineWorkspacesDeps,
   canAccessMachine,
   canViewMachine,
   forbiddenMachineAccess,
@@ -39,7 +37,7 @@ import {
   WORKSPACE_DENIAL_STATUS,
 } from '@/lib/machines/machine-workspaces-runtime';
 import { broadcastMachineWorkspaceEvent } from '@/lib/websocket';
-import { broadcastLegacyGridSync, getCurrentRev, syncRelationalGrid } from '@/lib/machines/workspace-verbs-runtime';
+import { broadcastLegacyGridSync, getConsistentWorkspaceSnapshot, syncRelationalGrid, withLegacyWorkspaceLock } from '@/lib/machines/workspace-verbs-runtime';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -65,11 +63,7 @@ export async function GET(request: Request) {
 
   if (!(await canViewMachine(auth.userId, machineId.value))) return forbiddenMachineAccess(request, auth.userId, machineId.value);
 
-  const deps = buildMachineWorkspacesDeps();
-  const [workspaces, rev] = await Promise.all([
-    listWorkspaces({ machineId: machineId.value, store: deps.store }),
-    getCurrentRev(machineId.value),
-  ]);
+  const { workspaces, rev } = await getConsistentWorkspaceSnapshot(machineId.value);
   // Vestigial: the server is now the sole source of truth (#2202) — no
   // client ever needs to seed it from localStorage again. Hardcoded `true`
   // so an old, not-yet-redeployed client never re-attempts the (deleted)
@@ -96,30 +90,33 @@ export async function POST(request: Request) {
 
   if (!(await canAccessMachine(auth.userId, machineId.value))) return forbiddenMachineAccess(request, auth.userId, machineId.value);
 
-  const deps = buildMachineWorkspacesDeps();
-  const result = await createWorkspace({
-    machineId: machineId.value,
-    ownerId: auth.userId,
-    id: id.value,
-    name: body.name,
-    scope: scopeFromBody(body.scope),
-    layout: { columns: body.columns },
-    deps,
+  // Locked: the legacy metadata write and its relational-grid mirror commit
+  // as one critical section, atomically with any other write (legacy or a
+  // new verb) for this machine — see `withLegacyWorkspaceLock`'s doc.
+  const { result, rev } = await withLegacyWorkspaceLock(machineId.value, async (deps, executor) => {
+    const created = await createWorkspace({
+      machineId: machineId.value,
+      ownerId: auth.userId,
+      id: id.value,
+      name: body.name as string,
+      scope: scopeFromBody(body.scope),
+      layout: { columns: body.columns },
+      deps,
+    });
+    if (!created.ok || !created.created) return { result: created, rev: undefined };
+    const synced = await syncRelationalGrid(machineId.value, id.value, created.workspace.layout.columns, executor);
+    return { result: created, rev: synced.rev };
   });
 
   if (!result.ok) {
     return NextResponse.json({ error: result.reason, reason: result.reason }, { status: WORKSPACE_DENIAL_STATUS[result.reason] ?? 500 });
   }
 
-  if (result.created) {
+  if (result.created && rev !== undefined) {
     void broadcastMachineWorkspaceEvent(machineId.value, 'machine-workspace:created', {
       machineId: machineId.value,
       ...toWorkspaceDTO(result.workspace),
     });
-    // Rolling-deploy shim — see workspace-verbs-runtime.ts's module doc: mirror
-    // this legacy create into the relational rows so new clients (watching
-    // rev/`machine-workspace:verb`) see it too.
-    const { rev } = await syncRelationalGrid(machineId.value, id.value, result.workspace.layout.columns);
     broadcastLegacyGridSync(machineId.value, id.value, rev, { ...toWorkspaceDTO(result.workspace) });
     auditRequest(request, {
       eventType: 'data.write',
@@ -161,13 +158,22 @@ export async function PATCH(request: Request) {
 
   if (!(await canAccessMachine(auth.userId, machineId.value))) return forbiddenMachineAccess(request, auth.userId, machineId.value);
 
-  const deps = buildMachineWorkspacesDeps();
-  const result = await updateWorkspace({
-    machineId: machineId.value,
-    workspaceId: workspaceId.value,
-    name: hasName ? (body.name as string) : undefined,
-    layout: hasColumns ? { columns: body.columns } : undefined,
-    deps,
+  const nameToSet = hasName ? (body.name as string) : undefined;
+  const columnsToSet = hasColumns ? body.columns : undefined;
+
+  // Locked: see `withLegacyWorkspaceLock`'s doc — the metadata update and its
+  // relational-grid mirror commit as one critical section.
+  const { result, rev } = await withLegacyWorkspaceLock(machineId.value, async (deps, executor) => {
+    const updated = await updateWorkspace({
+      machineId: machineId.value,
+      workspaceId: workspaceId.value,
+      name: nameToSet,
+      layout: hasColumns ? { columns: columnsToSet } : undefined,
+      deps,
+    });
+    if (!updated.ok) return { result: updated, rev: undefined };
+    const synced = await syncRelationalGrid(machineId.value, workspaceId.value, hasColumns ? updated.workspace.layout.columns : null, executor);
+    return { result: updated, rev: synced.rev };
   });
 
   if (!result.ok) {
@@ -180,9 +186,7 @@ export async function PATCH(request: Request) {
     ...(hasName ? { name: result.workspace.name } : {}),
     ...(hasColumns ? { columns: result.workspace.layout.columns } : {}),
   });
-  // Rolling-deploy shim — see workspace-verbs-runtime.ts's module doc.
-  const { rev } = await syncRelationalGrid(machineId.value, workspaceId.value, hasColumns ? result.workspace.layout.columns : null);
-  broadcastLegacyGridSync(machineId.value, workspaceId.value, rev, { ...toWorkspaceDTO(result.workspace) });
+  broadcastLegacyGridSync(machineId.value, workspaceId.value, rev as number, { ...toWorkspaceDTO(result.workspace) });
   auditRequest(request, {
     eventType: 'data.write',
     userId: auth.userId,
@@ -207,8 +211,15 @@ export async function DELETE(request: Request) {
 
   if (!(await canAccessMachine(auth.userId, machineId.value))) return forbiddenMachineAccess(request, auth.userId, machineId.value);
 
-  const deps = buildMachineWorkspacesDeps();
-  const result = await removeWorkspace({ machineId: machineId.value, workspaceId: workspaceId.value, store: deps.store });
+  // Locked: see `withLegacyWorkspaceLock`'s doc — the row removal and the
+  // rev advance (its pane rows are already gone via FK cascade) commit as
+  // one critical section.
+  const { result, rev } = await withLegacyWorkspaceLock(machineId.value, async (deps, executor) => {
+    const removed = await removeWorkspace({ machineId: machineId.value, workspaceId: workspaceId.value, store: deps.store });
+    if (!removed.ok) return { result: removed, rev: undefined };
+    const synced = await syncRelationalGrid(machineId.value, workspaceId.value, null, executor);
+    return { result: removed, rev: synced.rev };
+  });
 
   if (!result.ok) {
     return NextResponse.json({ error: result.reason }, { status: 404 });
@@ -218,11 +229,7 @@ export async function DELETE(request: Request) {
     machineId: machineId.value,
     workspaceId: workspaceId.value,
   });
-  // Rolling-deploy shim — see workspace-verbs-runtime.ts's module doc. The
-  // workspace row (and its pane rows, via FK cascade) is already gone; only
-  // the rev needs to advance.
-  const { rev } = await syncRelationalGrid(machineId.value, workspaceId.value, null);
-  broadcastLegacyGridSync(machineId.value, workspaceId.value, rev, null);
+  broadcastLegacyGridSync(machineId.value, workspaceId.value, rev as number, null);
   auditRequest(request, {
     eventType: 'data.delete',
     userId: auth.userId,

@@ -35,7 +35,7 @@ import {
   buildKillAgentTerminalDeps,
 } from '@/lib/machines/agent-terminals-runtime';
 import { buildMachineWorkspacesDeps } from '@/lib/machines/machine-workspaces-runtime';
-import { applyWorkspaceVerb, broadcastWorkspaceVerbResult, buildApplyWorkspaceVerbDeps } from '@/lib/machines/workspace-verbs-runtime';
+import { applyWorkspaceVerbLocked, broadcastWorkspaceVerbResult } from '@/lib/machines/workspace-verbs-runtime';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { agentSurfaceOf, isAgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
 import { createSessionTools, type SessionToolsDeps } from './session-tools';
@@ -109,7 +109,7 @@ function scopeArgs(node: { project?: string; branch?: string }): { projectName?:
  * layout row would leave the model believing nothing happened at all.
  */
 async function applyVerb(machineId: string, verb: WorkspaceVerb, actor: { userId: string }): Promise<void> {
-  const result = await applyWorkspaceVerb(machineId, verb, buildApplyWorkspaceVerbDeps(actor.userId));
+  const result = await applyWorkspaceVerbLocked(machineId, verb, actor.userId);
   if (!result.ok) {
     loggers.ai.warn('session-tools: workspace verb rejected', { machineId, verb: verb.type, reason: result.reason });
     return;

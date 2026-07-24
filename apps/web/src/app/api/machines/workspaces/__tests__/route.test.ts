@@ -8,35 +8,31 @@ const {
   mockIsAuthError,
   mockCanAccessMachine,
   mockCanViewMachine,
-  mockBuildMachineWorkspacesDeps,
   mockToWorkspaceDTO,
   mockCreateWorkspace,
   mockUpdateWorkspace,
   mockRemoveWorkspace,
-  mockListWorkspaces,
-  mockIsBootstrapped,
   mockBroadcastMachineWorkspaceEvent,
   mockAuditRequest,
-  mockGetCurrentRev,
+  mockGetConsistentWorkspaceSnapshot,
   mockSyncRelationalGrid,
   mockBroadcastLegacyGridSync,
+  mockWithLegacyWorkspaceLock,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
   mockIsAuthError: vi.fn((result: unknown) => result != null && typeof result === 'object' && 'error' in result),
   mockCanAccessMachine: vi.fn(),
   mockCanViewMachine: vi.fn(),
-  mockBuildMachineWorkspacesDeps: vi.fn(),
   mockToWorkspaceDTO: vi.fn(),
   mockCreateWorkspace: vi.fn(),
   mockUpdateWorkspace: vi.fn(),
   mockRemoveWorkspace: vi.fn(),
-  mockListWorkspaces: vi.fn(),
-  mockIsBootstrapped: vi.fn(),
   mockBroadcastMachineWorkspaceEvent: vi.fn(),
   mockAuditRequest: vi.fn(),
-  mockGetCurrentRev: vi.fn(),
+  mockGetConsistentWorkspaceSnapshot: vi.fn(),
   mockSyncRelationalGrid: vi.fn(),
   mockBroadcastLegacyGridSync: vi.fn(),
+  mockWithLegacyWorkspaceLock: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -51,12 +47,11 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 // `scopeFromBody`/`forbiddenMachineAccess`/`RESOURCE_TYPE`/`WORKSPACE_DENIAL_STATUS`
 // are pure/shared helpers (no DB or sandbox I/O) — reused via `importOriginal`
 // rather than re-implemented a third time here; only the DB/auth-backed pieces
-// (deps, access checks, DTO mapping) are mocked.
+// (access checks, DTO mapping) are mocked.
 vi.mock('@/lib/machines/machine-workspaces-runtime', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/machines/machine-workspaces-runtime')>();
   return {
     ...actual,
-    buildMachineWorkspacesDeps: (...args: unknown[]) => mockBuildMachineWorkspacesDeps(...args),
     canAccessMachine: (...args: unknown[]) => mockCanAccessMachine(...args),
     canViewMachine: (...args: unknown[]) => mockCanViewMachine(...args),
     toWorkspaceDTO: (...args: unknown[]) => mockToWorkspaceDTO(...args),
@@ -67,8 +62,6 @@ vi.mock('@pagespace/lib/services/machines/machine-workspaces', () => ({
   createWorkspace: (...args: unknown[]) => mockCreateWorkspace(...args),
   updateWorkspace: (...args: unknown[]) => mockUpdateWorkspace(...args),
   removeWorkspace: (...args: unknown[]) => mockRemoveWorkspace(...args),
-  listWorkspaces: (...args: unknown[]) => mockListWorkspaces(...args),
-  isBootstrapped: (...args: unknown[]) => mockIsBootstrapped(...args),
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -78,10 +71,15 @@ vi.mock('@/lib/websocket', () => ({
 // Rolling-deploy shim (#2202) — the relational sync side-effects of the
 // legacy blob routes are DB-backed via `workspace-verbs-runtime.ts`'s lazy
 // `machine-panes-store`; mocked here same as every other I/O dependency.
+// `withLegacyWorkspaceLock` is mocked to just invoke its callback with fake
+// deps/executor (no real transaction) — the callback's own `createWorkspace`/
+// `updateWorkspace`/`removeWorkspace`/`syncRelationalGrid` calls are mocked
+// separately, same as before this test moved them inside the lock.
 vi.mock('@/lib/machines/workspace-verbs-runtime', () => ({
-  getCurrentRev: (...args: unknown[]) => mockGetCurrentRev(...args),
+  getConsistentWorkspaceSnapshot: (...args: unknown[]) => mockGetConsistentWorkspaceSnapshot(...args),
   syncRelationalGrid: (...args: unknown[]) => mockSyncRelationalGrid(...args),
   broadcastLegacyGridSync: (...args: unknown[]) => mockBroadcastLegacyGridSync(...args),
+  withLegacyWorkspaceLock: (...args: unknown[]) => mockWithLegacyWorkspaceLock(...args),
 }));
 
 import { GET, POST, PATCH, DELETE } from '../route';
@@ -89,6 +87,7 @@ import { GET, POST, PATCH, DELETE } from '../route';
 const AUTH_OK = { userId: 'user-1' };
 const AUTH_DENIED = { error: new Response(null, { status: 401 }) };
 const FAKE_DEPS = { store: {} } as never;
+const FAKE_EXECUTOR = {} as never;
 
 const SAMPLE_RECORD = {
   id: 'ws-1',
@@ -115,10 +114,13 @@ const SAMPLE_DTO = {
 beforeEach(() => {
   vi.clearAllMocks();
   mockAuthenticateRequest.mockResolvedValue(AUTH_OK);
-  mockBuildMachineWorkspacesDeps.mockReturnValue(FAKE_DEPS);
   mockToWorkspaceDTO.mockImplementation(() => SAMPLE_DTO);
-  mockGetCurrentRev.mockResolvedValue(0);
   mockSyncRelationalGrid.mockResolvedValue({ rev: 1, applied: true });
+  // Simulates the real lock: run `mutate` with fake deps/executor, same as
+  // `withMachineLock` would with a real transaction.
+  mockWithLegacyWorkspaceLock.mockImplementation((_machineId: string, mutate: (deps: unknown, executor: unknown) => unknown) =>
+    mutate(FAKE_DEPS, FAKE_EXECUTOR),
+  );
 });
 
 describe('GET /api/machines/workspaces', () => {
@@ -133,29 +135,27 @@ describe('GET /api/machines/workspaces', () => {
     expect(res.status).toBe(400);
   });
 
-  it('given no view access, returns 403 without listing, and audits the denial', async () => {
+  it('given no view access, returns 403 without reading a snapshot, and audits the denial', async () => {
     mockCanViewMachine.mockResolvedValue(false);
     const res = await GET(new Request('https://x.test/api/machines/workspaces?machineId=t1'));
     expect(res.status).toBe(403);
-    expect(mockListWorkspaces).not.toHaveBeenCalled();
+    expect(mockGetConsistentWorkspaceSnapshot).not.toHaveBeenCalled();
     expect(mockAuditRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ eventType: 'authz.access.denied', resourceId: 't1' }),
     );
   });
 
-  it('given view access, lists workspaces and reports bootstrap status and rev', async () => {
+  it('given view access, reports the consistent snapshot\'s workspaces and rev, and bootstrapped: true', async () => {
     mockCanViewMachine.mockResolvedValue(true);
-    mockListWorkspaces.mockResolvedValue([SAMPLE_RECORD]);
-    mockIsBootstrapped.mockResolvedValue(true);
-    mockGetCurrentRev.mockResolvedValue(7);
+    mockGetConsistentWorkspaceSnapshot.mockResolvedValue({ workspaces: [SAMPLE_RECORD], rev: 7 });
     const res = await GET(new Request('https://x.test/api/machines/workspaces?machineId=t1'));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.bootstrapped).toBe(true);
     expect(body.workspaces).toEqual([SAMPLE_DTO]);
     expect(body.rev).toBe(7);
-    expect(mockListWorkspaces).toHaveBeenCalledWith(expect.objectContaining({ machineId: 't1' }));
+    expect(mockGetConsistentWorkspaceSnapshot).toHaveBeenCalledWith('t1');
   });
 });
 
@@ -168,10 +168,11 @@ describe('POST /api/machines/workspaces', () => {
     });
   }
 
-  it('given no edit access, returns 403 without creating', async () => {
+  it('given no edit access, returns 403 without locking/creating', async () => {
     mockCanAccessMachine.mockResolvedValue(false);
     const res = await POST(req({ machineId: 't1', id: 'ws-1', name: 'Workspace 1', columns: [] }));
     expect(res.status).toBe(403);
+    expect(mockWithLegacyWorkspaceLock).not.toHaveBeenCalled();
     expect(mockCreateWorkspace).not.toHaveBeenCalled();
   });
 
@@ -182,6 +183,8 @@ describe('POST /api/machines/workspaces', () => {
     expect(res.status).toBe(201);
     const body = await res.json();
     expect(body.created).toBe(true);
+    // The create + relational sync ran as ONE locked critical section.
+    expect(mockWithLegacyWorkspaceLock).toHaveBeenCalledWith('t1', expect.any(Function));
     expect(mockBroadcastMachineWorkspaceEvent).toHaveBeenCalledWith(
       't1',
       'machine-workspace:created',
@@ -191,8 +194,9 @@ describe('POST /api/machines/workspaces', () => {
       expect.anything(),
       expect.objectContaining({ eventType: 'data.write', resourceId: 't1' }),
     );
-    // Rolling-deploy shim: mirrors the create into the relational rows too.
-    expect(mockSyncRelationalGrid).toHaveBeenCalledWith('t1', 'ws-1', SAMPLE_RECORD.layout.columns);
+    // Rolling-deploy shim: mirrors the create into the relational rows too,
+    // through the SAME executor the lock handed the callback.
+    expect(mockSyncRelationalGrid).toHaveBeenCalledWith('t1', 'ws-1', SAMPLE_RECORD.layout.columns, FAKE_EXECUTOR);
     expect(mockBroadcastLegacyGridSync).toHaveBeenCalledWith('t1', 'ws-1', 1, expect.objectContaining({ id: 'ws-1' }));
   });
 
@@ -238,10 +242,11 @@ describe('PATCH /api/machines/workspaces', () => {
     expect(mockCanAccessMachine).not.toHaveBeenCalled();
   });
 
-  it('given no edit access, returns 403 without updating', async () => {
+  it('given no edit access, returns 403 without locking/updating', async () => {
     mockCanAccessMachine.mockResolvedValue(false);
     const res = await PATCH(req({ machineId: 't1', workspaceId: 'ws-1', name: 'Renamed' }));
     expect(res.status).toBe(403);
+    expect(mockWithLegacyWorkspaceLock).not.toHaveBeenCalled();
     expect(mockUpdateWorkspace).not.toHaveBeenCalled();
   });
 
@@ -262,7 +267,7 @@ describe('PATCH /api/machines/workspaces', () => {
       expect.objectContaining({ eventType: 'data.write', resourceId: 't1', details: { workspaceId: 'ws-1', fields: ['name'] } }),
     );
     // A name-only rename has no columns to mirror — the shim still bumps rev (grid: null).
-    expect(mockSyncRelationalGrid).toHaveBeenCalledWith('t1', 'ws-1', null);
+    expect(mockSyncRelationalGrid).toHaveBeenCalledWith('t1', 'ws-1', null, FAKE_EXECUTOR);
   });
 
   it('given a not_found workspace, returns 404', async () => {
@@ -270,16 +275,19 @@ describe('PATCH /api/machines/workspaces', () => {
     mockUpdateWorkspace.mockResolvedValue({ ok: false, reason: 'not_found' });
     const res = await PATCH(req({ machineId: 't1', workspaceId: 'missing', name: 'Renamed' }));
     expect(res.status).toBe(404);
+    // A denial inside the lock must not have tried to sync a grid.
+    expect(mockSyncRelationalGrid).not.toHaveBeenCalled();
   });
 });
 
 describe('DELETE /api/machines/workspaces', () => {
-  it('given no edit access, returns 403 without removing', async () => {
+  it('given no edit access, returns 403 without locking/removing', async () => {
     mockCanAccessMachine.mockResolvedValue(false);
     const res = await DELETE(
       new Request('https://x.test/api/machines/workspaces?machineId=t1&workspaceId=ws-1', { method: 'DELETE' }),
     );
     expect(res.status).toBe(403);
+    expect(mockWithLegacyWorkspaceLock).not.toHaveBeenCalled();
     expect(mockRemoveWorkspace).not.toHaveBeenCalled();
   });
 
@@ -290,6 +298,7 @@ describe('DELETE /api/machines/workspaces', () => {
       new Request('https://x.test/api/machines/workspaces?machineId=t1&workspaceId=ws-1', { method: 'DELETE' }),
     );
     expect(res.status).toBe(404);
+    expect(mockSyncRelationalGrid).not.toHaveBeenCalled();
   });
 
   it('given a successful removal, returns 200, broadcasts machine-workspace:deleted, and audits data.delete', async () => {
@@ -308,7 +317,7 @@ describe('DELETE /api/machines/workspaces', () => {
       expect.objectContaining({ eventType: 'data.delete', resourceId: 't1' }),
     );
     // The row (and its pane rows, via FK cascade) is already gone — the shim only bumps rev.
-    expect(mockSyncRelationalGrid).toHaveBeenCalledWith('t1', 'ws-1', null);
+    expect(mockSyncRelationalGrid).toHaveBeenCalledWith('t1', 'ws-1', null, FAKE_EXECUTOR);
     expect(mockBroadcastLegacyGridSync).toHaveBeenCalledWith('t1', 'ws-1', 1, null);
   });
 

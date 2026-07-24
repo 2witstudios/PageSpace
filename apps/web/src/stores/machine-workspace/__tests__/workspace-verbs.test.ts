@@ -204,8 +204,8 @@ describe('applyVerbLocal: bind-pane', () => {
     assert({
       given: 'bind-pane, whose SessionRef has no project/branch fields',
       should: 'bind under the workspace\'s own scope without needing (or being able to express) a node match',
-      actual: outcome.applied,
-      expected: true,
+      actual: { applied: outcome.applied, panes: panesOf(outcome.state.workspaces['ws-1']) },
+      expected: { applied: true, panes: [{ id: 'pane-1', scope: { name: 'shell' } }] },
     });
   });
 
@@ -348,12 +348,16 @@ describe('workspaceIdOf', () => {
       { type: 'create-workspace', workspaceId: 'a', name: 'A', scope: {}, firstPaneId: 'p', session: null },
       { type: 'rename-workspace', workspaceId: 'b', name: 'B' },
       { type: 'remove-workspace', workspaceId: 'c' },
+      { type: 'split-pane', workspaceId: 'd', fromPaneId: 'p1', direction: 'right', newPaneId: 'p2' },
+      { type: 'bind-pane', workspaceId: 'e', paneId: 'p1', session: { name: 'shell' } },
+      { type: 'close-pane', workspaceId: 'f', paneId: 'p1' },
+      { type: 'add-pane', workspaceId: 'g', newPaneId: 'p1', session: { name: 'shell' } },
     ];
     assert({
-      given: 'a mix of verb shapes',
+      given: 'every verb shape',
       should: 'return each one\'s workspaceId',
       actual: verbs.map(workspaceIdOf),
-      expected: ['a', 'b', 'c'],
+      expected: ['a', 'b', 'c', 'd', 'e', 'f', 'g'],
     });
   });
 });

@@ -881,6 +881,40 @@ describe('useMachineWorkspaceStore', () => {
       });
     });
 
+    it('a pending bind\'s pendingPrompt survives a rebase — WorkspaceVerb carries no pendingPrompt field, so replaying the verb alone would silently clear it', () => {
+      seedMachine('m1');
+      const workspaceId = activeOf('m1')!.id;
+      const paneId = panesOf(activeOf('m1')!)[0].id;
+
+      // Optimistic local bind WITH a starting prompt — its own push hasn't
+      // settled, so both the bind-pane verb AND the local pendingPrompt are
+      // still only known locally.
+      store().bindPaneTerminal('m1', workspaceId, paneId, MACHINE_NODE_SCOPE_TERMINAL_SCOPE(SESSION), 'echo hello');
+      assert({
+        given: 'a bind with a starting prompt, before any rebase',
+        should: 'set the pendingPrompt locally',
+        actual: panesOf(selectWorkspace('m1', workspaceId)(store())!)[0]?.pendingPrompt,
+        expected: 'echo hello',
+      });
+
+      // A snapshot arrives that predates the bind (this browser's own GET,
+      // in flight before the bind) — the store rebases the still-pending
+      // bind-pane verb on top of it.
+      store().applyServerSnapshot('m1', 1, [
+        { id: workspaceId, name: activeOf('m1')!.name, scope: {}, columns: [{ id: 'c1', panes: [{ id: paneId, scope: null }] }] },
+      ]);
+
+      assert({
+        given: 'a pending local bind (with a starting prompt) rebased on top of an unrelated snapshot',
+        should: 'keep BOTH the bound scope and the pendingPrompt — the verb replay alone restores only the scope',
+        actual: {
+          scope: panesOf(selectWorkspace('m1', workspaceId)(store())!)[0]?.scope,
+          pendingPrompt: panesOf(selectWorkspace('m1', workspaceId)(store())!)[0]?.pendingPrompt,
+        },
+        expected: { scope: SESSION, pendingPrompt: 'echo hello' },
+      });
+    });
+
     it('applyServerVerb at a rev at or behind the current one is discarded (duplicate/stale echo)', () => {
       store().ensureMachine('m1');
       useMachineWorkspaceStore.setState((state) => ({ serverRev: { ...state.serverRev, m1: 3 } }));

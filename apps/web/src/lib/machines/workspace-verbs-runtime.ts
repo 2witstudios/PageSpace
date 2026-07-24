@@ -37,7 +37,7 @@ import {
   type WorkspacePlanDenialReason,
 } from '@pagespace/lib/services/machines/machine-workspaces';
 import type { MachineWorkspaceRecord } from '@pagespace/lib/services/machines/machine-workspaces-store';
-import { createDbMachinePanesStore, type MachinePanesStore, type WorkspaceGridColumnRecord } from '@pagespace/lib/services/machines/machine-panes-store';
+import { createDbMachinePanesStore, withMachineLock, type DbExecutor, type MachinePanesStore, type WorkspaceGridColumnRecord } from '@pagespace/lib/services/machines/machine-panes-store';
 import { buildMachineWorkspacesDeps } from './machine-workspaces-runtime';
 import { broadcastMachineWorkspaceEvent } from '@/lib/websocket';
 import {
@@ -333,6 +333,35 @@ export async function getCurrentRev(machineId: string): Promise<number> {
 }
 
 /**
+ * `GET`'s consistent read: the workspace list (legacy `machine_workspaces`
+ * rows) and the machine's current rev, from ONE `REPEATABLE READ` snapshot —
+ * so a grid-touching write racing this GET can't be observed half-applied
+ * (a rev that already advanced paired with a `layout` mirror that hasn't
+ * caught up yet, or vice versa). `REPEATABLE READ` (not the default `READ
+ * COMMITTED`) is what actually buys this: every statement in the same
+ * transaction sees the exact snapshot taken at the transaction's start,
+ * not "whatever's committed as of each individual statement".
+ */
+export async function getConsistentWorkspaceSnapshot(
+  machineId: string,
+): Promise<{ workspaces: MachineWorkspaceRecord[]; rev: number }> {
+  const { db } = await import('@pagespace/db/db');
+  return db.transaction(
+    async (tx) => {
+      // Both stores bound to THIS transaction — the whole point: a plain
+      // `db`-backed store here would read on a different connection/snapshot
+      // than `tx`, silently reintroducing the inconsistency this exists to close.
+      const [workspaces, rev] = await Promise.all([
+        buildMachineWorkspacesDeps(tx).store.list(machineId),
+        (await createDbMachinePanesStore(tx)).currentRev(machineId),
+      ]);
+      return { workspaces, rev };
+    },
+    { isolationLevel: 'repeatable read', accessMode: 'read only' },
+  );
+}
+
+/**
  * Legacy-route shim: mirrors a blob POST/PATCH/DELETE's effect into the
  * relational rows and bumps rev, so an old client (still speaking
  * `../route.ts`'s POST/PATCH/DELETE) is visible to new clients watching
@@ -341,15 +370,43 @@ export async function getCurrentRev(machineId: string): Promise<number> {
  * change" (a legacy rename with no columns) — rev still advances, but no
  * pane rows are touched. Returns `applied: false` (rev unchanged) only when
  * `grid` is a byte-for-byte repeat of what's already stored.
+ *
+ * `executor` defaults to the memoized real-`db`-backed pane store; a legacy
+ * route write passes the SAME transaction its metadata write used (see
+ * `withLegacyWorkspaceLock`) so the two can never commit independently —
+ * either both land, or (on a crash mid-transaction) neither does, closing
+ * the "legacy write committed, relational sync silently failed" gap.
  */
 export async function syncRelationalGrid(
   machineId: string,
   workspaceId: string,
   grid: WorkspaceGridColumnRecord[] | null,
+  executor?: DbExecutor,
 ): Promise<{ rev: number; applied: boolean }> {
-  const store = await getPanesStore();
+  const store = executor ? await createDbMachinePanesStore(executor) : await getPanesStore();
   if (grid === null) return { rev: await store.bumpRev(machineId), applied: true };
   return store.replaceWorkspaceGrid({ machineId, workspaceId, grid });
+}
+
+/**
+ * THE production entry point for every legacy (`../route.ts`) write: holds
+ * the SAME per-machine advisory lock `applyWorkspaceVerbLocked` does for the
+ * ENTIRE metadata-write-plus-relational-sync cycle, in ONE transaction. This
+ * closes two gaps at once: a concurrent write (legacy OR a new verb) for the
+ * same machine can't interleave with this one (the lost-update class
+ * `withMachineLock` exists for), and the metadata write and its relational
+ * mirror commit atomically — a crash between them leaves NEITHER applied,
+ * rather than a legacy row with no matching pane rows/rev.
+ *
+ * `mutate` receives the metadata deps AND the raw executor (both bound to
+ * the lock's transaction) — do the `machine_workspaces` write with the
+ * former, then call `syncRelationalGrid(..., executor)` with the latter.
+ */
+export async function withLegacyWorkspaceLock<T>(
+  machineId: string,
+  mutate: (deps: MachineWorkspacesDeps, executor: DbExecutor) => Promise<T>,
+): Promise<T> {
+  return withMachineLock(machineId, (tx) => mutate(buildMachineWorkspacesDeps(tx), tx));
 }
 
 /** Broadcasts the NEW verb+rev event for a legacy-route write, alongside
@@ -369,9 +426,35 @@ export function broadcastLegacyGridSync(
   });
 }
 
-/** Builds the production `ApplyWorkspaceVerbDeps` — one call per request, same
- * laziness convention as `buildMachineWorkspacesDeps`. */
-export function buildApplyWorkspaceVerbDeps(ownerId: string): ApplyWorkspaceVerbDeps {
+/**
+ * Builds the production `ApplyWorkspaceVerbDeps`, one call per request, same
+ * laziness convention as `buildMachineWorkspacesDeps`.
+ *
+ * `executor` defaults to the memoized real-`db`-backed pane store above; pass
+ * a transaction (from `withMachineLock`) to route every read AND write
+ * through it instead — see `applyWorkspaceVerbLocked`, the caller that
+ * actually needs this: an `executor`-less deps object is only safe for a
+ * caller that doesn't need cross-request serialization (none of this repo's
+ * callers qualify — every production call site goes through
+ * `applyWorkspaceVerbLocked`; this parameter exists so `applyWorkspaceVerb`
+ * itself stays a pure function of its `deps`, testable without a lock).
+ */
+export function buildApplyWorkspaceVerbDeps(ownerId: string, executor?: DbExecutor): ApplyWorkspaceVerbDeps {
+  if (executor) {
+    const lockedPanesStore = createDbMachinePanesStore(executor);
+    return {
+      workspacesDeps: buildMachineWorkspacesDeps(executor),
+      panesStore: {
+        getWorkspaceGrid: async (machineId, workspaceId) => (await lockedPanesStore).getWorkspaceGrid(machineId, workspaceId),
+        getMachineGrids: async (machineId) => (await lockedPanesStore).getMachineGrids(machineId),
+        replaceWorkspaceGrid: async (input) => (await lockedPanesStore).replaceWorkspaceGrid(input),
+        bumpRev: async (machineId) => (await lockedPanesStore).bumpRev(machineId),
+        currentRev: async (machineId) => (await lockedPanesStore).currentRev(machineId),
+      },
+      ownerId,
+    };
+  }
+
   return {
     workspacesDeps: buildMachineWorkspacesDeps(),
     panesStore: {
@@ -383,4 +466,18 @@ export function buildApplyWorkspaceVerbDeps(ownerId: string): ApplyWorkspaceVerb
     },
     ownerId,
   };
+}
+
+/**
+ * THE production entry point for every verb mutation (the HTTP route and the
+ * AI session tools both call this, not `applyWorkspaceVerb` directly): holds
+ * the per-machine advisory lock for the ENTIRE read-reduce-write cycle, so a
+ * concurrent verb for the same machine can never read the grid this call is
+ * about to overwrite (see `machine-panes-store.ts`'s `withMachineLock` doc
+ * for why `replaceWorkspaceGrid`'s own internal transaction alone isn't
+ * enough — the caller's READ has to be inside the lock too, not just the
+ * write).
+ */
+export async function applyWorkspaceVerbLocked(machineId: string, verb: WorkspaceVerb, ownerId: string): Promise<ApplyWorkspaceVerbResult> {
+  return withMachineLock(machineId, (tx) => applyWorkspaceVerb(machineId, verb, buildApplyWorkspaceVerbDeps(ownerId, tx)));
 }

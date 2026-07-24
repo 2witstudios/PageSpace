@@ -10,6 +10,7 @@
  */
 
 import type { WorkspaceLayoutDTO } from '@pagespace/db/schema/machine-workspaces';
+import type { DbExecutor } from './machine-panes-store';
 import { isUniqueViolation } from '../subdomain-allocation';
 
 export interface MachineWorkspaceRecord {
@@ -81,17 +82,25 @@ function toRecord(row: {
  * Production DB-backed implementation. Lazily resolves the db client, schema
  * tables, and operators so callers that inject a fake (in tests) never load
  * the DB module graph — same laziness as `createDbMachineProjectStore`.
+ *
+ * `executor` defaults to the real pooled `db`; pass a transaction (as
+ * obtained from `machine-panes-store.ts`'s `withMachineLock`) to route every
+ * query through it instead — required for `applyWorkspaceVerb`'s
+ * read-reduce-write cycle to stay inside the same lock scope as its grid
+ * writes (see that module's doc for why a caller's own read has to be
+ * inside the lock, not just this store's individual writes).
  */
-export async function createDbMachineWorkspaceStore(): Promise<MachineWorkspaceStore> {
+export async function createDbMachineWorkspaceStore(executor?: DbExecutor): Promise<MachineWorkspaceStore> {
   const [{ db }, { eq, and, asc }, { machineWorkspaces }] = await Promise.all([
     import('@pagespace/db/db'),
     import('@pagespace/db/operators'),
     import('@pagespace/db/schema/machine-workspaces'),
   ]);
+  const client = executor ?? db;
 
   return {
     async list(machineId) {
-      const rows = await db
+      const rows = await client
         .select()
         .from(machineWorkspaces)
         .where(eq(machineWorkspaces.machineId, machineId))
@@ -100,7 +109,7 @@ export async function createDbMachineWorkspaceStore(): Promise<MachineWorkspaceS
     },
 
     async findById(machineId, id) {
-      const [row] = await db
+      const [row] = await client
         .select()
         .from(machineWorkspaces)
         .where(and(eq(machineWorkspaces.machineId, machineId), eq(machineWorkspaces.id, id)))
@@ -109,7 +118,7 @@ export async function createDbMachineWorkspaceStore(): Promise<MachineWorkspaceS
     },
 
     async insertIfAbsent(input) {
-      const [inserted] = await db
+      const [inserted] = await client
         .insert(machineWorkspaces)
         .values({
           id: input.id,
@@ -132,7 +141,7 @@ export async function createDbMachineWorkspaceStore(): Promise<MachineWorkspaceS
         .returning();
       if (inserted) return { created: true, row: toRecord(inserted) };
 
-      const [existing] = await db
+      const [existing] = await client
         .select()
         .from(machineWorkspaces)
         .where(and(eq(machineWorkspaces.machineId, input.machineId), eq(machineWorkspaces.id, input.id)))
@@ -146,7 +155,7 @@ export async function createDbMachineWorkspaceStore(): Promise<MachineWorkspaceS
     },
 
     async update(machineId, id, patch, now) {
-      const [row] = await db
+      const [row] = await client
         .update(machineWorkspaces)
         .set({
           ...(patch.name !== undefined ? { name: patch.name } : {}),
@@ -159,7 +168,7 @@ export async function createDbMachineWorkspaceStore(): Promise<MachineWorkspaceS
     },
 
     async remove(machineId, id) {
-      const rows = await db
+      const rows = await client
         .delete(machineWorkspaces)
         .where(and(eq(machineWorkspaces.machineId, machineId), eq(machineWorkspaces.id, id)))
         .returning({ id: machineWorkspaces.id });

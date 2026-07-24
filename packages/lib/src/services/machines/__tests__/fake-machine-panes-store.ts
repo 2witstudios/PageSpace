@@ -20,15 +20,20 @@ export function createFakeMachinePanesStore(): MachinePanesStore {
   };
 
   return {
+    // Every boundary crossing (read or write) clones — a real DB round-trip
+    // never hands back the caller's own array/object references, so a caller
+    // mutating what it got from `getWorkspaceGrid` or what it passed into
+    // `replaceWorkspaceGrid` must not be able to corrupt this fake's storage
+    // (or vice versa), matching the real store's isolation semantics.
     async getWorkspaceGrid(machineId, workspaceId) {
-      return grids.get(rowKey(machineId, workspaceId)) ?? [];
+      return structuredClone(grids.get(rowKey(machineId, workspaceId)) ?? []);
     },
 
     async getMachineGrids(machineId) {
       const result = new Map<string, WorkspaceGridColumnRecord[]>();
       for (const [key, grid] of grids) {
         const [rowMachineId, workspaceId] = key.split('::');
-        if (rowMachineId === machineId) result.set(workspaceId, grid);
+        if (rowMachineId === machineId) result.set(workspaceId, structuredClone(grid));
       }
       return result;
     },
@@ -39,7 +44,7 @@ export function createFakeMachinePanesStore(): MachinePanesStore {
       if (gridsEqual(current, grid)) {
         return { rev: revs.get(machineId) ?? 0, applied: false };
       }
-      grids.set(key, grid);
+      grids.set(key, structuredClone(grid));
       return { rev: bump(machineId), applied: true };
     },
 

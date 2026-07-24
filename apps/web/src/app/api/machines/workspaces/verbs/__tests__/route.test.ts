@@ -7,17 +7,15 @@ const {
   mockAuthenticateRequest,
   mockIsAuthError,
   mockCanAccessMachine,
-  mockApplyWorkspaceVerb,
+  mockApplyWorkspaceVerbLocked,
   mockBroadcastWorkspaceVerbResult,
-  mockBuildApplyWorkspaceVerbDeps,
   mockAuditRequest,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
   mockIsAuthError: vi.fn((result: unknown) => result != null && typeof result === 'object' && 'error' in result),
   mockCanAccessMachine: vi.fn(),
-  mockApplyWorkspaceVerb: vi.fn(),
+  mockApplyWorkspaceVerbLocked: vi.fn(),
   mockBroadcastWorkspaceVerbResult: vi.fn(),
-  mockBuildApplyWorkspaceVerbDeps: vi.fn(),
   mockAuditRequest: vi.fn(),
 }));
 
@@ -36,9 +34,8 @@ vi.mock('@/lib/machines/workspace-verbs-runtime', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/machines/workspace-verbs-runtime')>();
   return {
     ...actual,
-    applyWorkspaceVerb: (...args: unknown[]) => mockApplyWorkspaceVerb(...args),
+    applyWorkspaceVerbLocked: (...args: unknown[]) => mockApplyWorkspaceVerbLocked(...args),
     broadcastWorkspaceVerbResult: (...args: unknown[]) => mockBroadcastWorkspaceVerbResult(...args),
-    buildApplyWorkspaceVerbDeps: (...args: unknown[]) => mockBuildApplyWorkspaceVerbDeps(...args),
   };
 });
 
@@ -54,7 +51,6 @@ import { POST } from '../route';
 
 const AUTH_OK = { userId: 'user-1' };
 const AUTH_DENIED = { error: new Response(null, { status: 401 }) };
-const FAKE_DEPS = { ownerId: 'user-1' } as never;
 
 function req(body: unknown) {
   return new Request('https://x.test/api/machines/workspaces/verbs', {
@@ -68,7 +64,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockAuthenticateRequest.mockResolvedValue(AUTH_OK);
   mockCanAccessMachine.mockResolvedValue(true);
-  mockBuildApplyWorkspaceVerbDeps.mockReturnValue(FAKE_DEPS);
 });
 
 describe('POST /api/machines/workspaces/verbs', () => {
@@ -94,11 +89,11 @@ describe('POST /api/machines/workspaces/verbs', () => {
     mockCanAccessMachine.mockResolvedValue(false);
     const res = await POST(req({ machineId: 't1', verb: { type: 'rename-workspace', workspaceId: 'ws-1', name: 'X' } }));
     expect(res.status).toBe(403);
-    expect(mockApplyWorkspaceVerb).not.toHaveBeenCalled();
+    expect(mockApplyWorkspaceVerbLocked).not.toHaveBeenCalled();
   });
 
   it('given a successful apply, returns 200, broadcasts, and audits data.write', async () => {
-    mockApplyWorkspaceVerb.mockResolvedValue({ ok: true, rev: 3, workspaceId: 'ws-1', applied: true, workspace: { id: 'ws-1' } });
+    mockApplyWorkspaceVerbLocked.mockResolvedValue({ ok: true, rev: 3, workspaceId: 'ws-1', applied: true, workspace: { id: 'ws-1' } });
     const res = await POST(req({ machineId: 't1', verb: { type: 'rename-workspace', workspaceId: 'ws-1', name: 'Renamed' } }));
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -111,20 +106,20 @@ describe('POST /api/machines/workspaces/verbs', () => {
   });
 
   it('given an idempotent no-op apply, returns 200 without auditing a write', async () => {
-    mockApplyWorkspaceVerb.mockResolvedValue({ ok: true, rev: 3, workspaceId: 'ws-1', applied: false, workspace: { id: 'ws-1' } });
+    mockApplyWorkspaceVerbLocked.mockResolvedValue({ ok: true, rev: 3, workspaceId: 'ws-1', applied: false, workspace: { id: 'ws-1' } });
     const res = await POST(req({ machineId: 't1', verb: { type: 'rename-workspace', workspaceId: 'ws-1', name: 'Renamed' } }));
     expect(res.status).toBe(200);
     expect(mockAuditRequest).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write' }));
   });
 
   it('given a denial reason from applyWorkspaceVerb, maps it to the right status', async () => {
-    mockApplyWorkspaceVerb.mockResolvedValue({ ok: false, reason: 'invalid_name' });
+    mockApplyWorkspaceVerbLocked.mockResolvedValue({ ok: false, reason: 'invalid_name' });
     const res = await POST(req({ machineId: 't1', verb: { type: 'rename-workspace', workspaceId: 'ws-1', name: 'Renamed' } }));
     expect(res.status).toBe(400);
   });
 
   it('given a not_found denial, returns 404', async () => {
-    mockApplyWorkspaceVerb.mockResolvedValue({ ok: false, reason: 'not_found' });
+    mockApplyWorkspaceVerbLocked.mockResolvedValue({ ok: false, reason: 'not_found' });
     const res = await POST(req({ machineId: 't1', verb: { type: 'rename-workspace', workspaceId: 'ws-1', name: 'Renamed' } }));
     expect(res.status).toBe(404);
   });
