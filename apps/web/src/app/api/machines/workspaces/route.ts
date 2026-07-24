@@ -40,6 +40,7 @@ import {
   WORKSPACE_DENIAL_STATUS,
 } from '@/lib/machines/machine-workspaces-runtime';
 import { broadcastMachineWorkspaceEvent } from '@/lib/websocket';
+import { broadcastLegacyGridSync, getCurrentRev, syncRelationalGrid } from '@/lib/machines/workspace-verbs-runtime';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -66,11 +67,12 @@ export async function GET(request: Request) {
   if (!(await canViewMachine(auth.userId, machineId.value))) return forbiddenMachineAccess(request, auth.userId, machineId.value);
 
   const deps = buildMachineWorkspacesDeps();
-  const [workspaces, bootstrapped] = await Promise.all([
+  const [workspaces, bootstrapped, rev] = await Promise.all([
     listWorkspaces({ machineId: machineId.value, store: deps.store }),
     isBootstrapped({ machineId: machineId.value, store: deps.store }),
+    getCurrentRev(machineId.value),
   ]);
-  return NextResponse.json({ workspaces: workspaces.map(toWorkspaceDTO), bootstrapped });
+  return NextResponse.json({ workspaces: workspaces.map(toWorkspaceDTO), bootstrapped, rev });
 }
 
 export async function POST(request: Request) {
@@ -112,6 +114,11 @@ export async function POST(request: Request) {
       machineId: machineId.value,
       ...toWorkspaceDTO(result.workspace),
     });
+    // Rolling-deploy shim — see workspace-verbs-runtime.ts's module doc: mirror
+    // this legacy create into the relational rows so new clients (watching
+    // rev/`machine-workspace:verb`) see it too.
+    const { rev } = await syncRelationalGrid(machineId.value, id.value, result.workspace.layout.columns);
+    broadcastLegacyGridSync(machineId.value, id.value, rev, { ...toWorkspaceDTO(result.workspace) });
     auditRequest(request, {
       eventType: 'data.write',
       userId: auth.userId,
@@ -171,6 +178,9 @@ export async function PATCH(request: Request) {
     ...(hasName ? { name: result.workspace.name } : {}),
     ...(hasColumns ? { columns: result.workspace.layout.columns } : {}),
   });
+  // Rolling-deploy shim — see workspace-verbs-runtime.ts's module doc.
+  const { rev } = await syncRelationalGrid(machineId.value, workspaceId.value, hasColumns ? result.workspace.layout.columns : null);
+  broadcastLegacyGridSync(machineId.value, workspaceId.value, rev, { ...toWorkspaceDTO(result.workspace) });
   auditRequest(request, {
     eventType: 'data.write',
     userId: auth.userId,
@@ -206,6 +216,11 @@ export async function DELETE(request: Request) {
     machineId: machineId.value,
     workspaceId: workspaceId.value,
   });
+  // Rolling-deploy shim — see workspace-verbs-runtime.ts's module doc. The
+  // workspace row (and its pane rows, via FK cascade) is already gone; only
+  // the rev needs to advance.
+  const { rev } = await syncRelationalGrid(machineId.value, workspaceId.value, null);
+  broadcastLegacyGridSync(machineId.value, workspaceId.value, rev, null);
   auditRequest(request, {
     eventType: 'data.delete',
     userId: auth.userId,

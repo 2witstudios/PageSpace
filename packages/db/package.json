@@ -71,6 +71,10 @@
       "types": "./dist/schema/machine-workspace-bootstraps.d.ts",
       "default": "./dist/schema/machine-workspace-bootstraps.js"
     },
+    "./schema/machine-panes": {
+      "types": "./dist/schema/machine-panes.d.ts",
+      "default": "./dist/schema/machine-panes.js"
+    },
     "./schema/share-links": {
       "types": "./dist/schema/share-links.d.ts",
       "default": "./dist/schema/share-links.js"

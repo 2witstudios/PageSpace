@@ -17,6 +17,9 @@ const {
   mockIsBootstrapped,
   mockBroadcastMachineWorkspaceEvent,
   mockAuditRequest,
+  mockGetCurrentRev,
+  mockSyncRelationalGrid,
+  mockBroadcastLegacyGridSync,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
   mockIsAuthError: vi.fn((result: unknown) => result != null && typeof result === 'object' && 'error' in result),
@@ -31,6 +34,9 @@ const {
   mockIsBootstrapped: vi.fn(),
   mockBroadcastMachineWorkspaceEvent: vi.fn(),
   mockAuditRequest: vi.fn(),
+  mockGetCurrentRev: vi.fn(),
+  mockSyncRelationalGrid: vi.fn(),
+  mockBroadcastLegacyGridSync: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -69,6 +75,15 @@ vi.mock('@/lib/websocket', () => ({
   broadcastMachineWorkspaceEvent: (...args: unknown[]) => mockBroadcastMachineWorkspaceEvent(...args),
 }));
 
+// Rolling-deploy shim (#2202) — the relational sync side-effects of the
+// legacy blob routes are DB-backed via `workspace-verbs-runtime.ts`'s lazy
+// `machine-panes-store`; mocked here same as every other I/O dependency.
+vi.mock('@/lib/machines/workspace-verbs-runtime', () => ({
+  getCurrentRev: (...args: unknown[]) => mockGetCurrentRev(...args),
+  syncRelationalGrid: (...args: unknown[]) => mockSyncRelationalGrid(...args),
+  broadcastLegacyGridSync: (...args: unknown[]) => mockBroadcastLegacyGridSync(...args),
+}));
+
 import { GET, POST, PATCH, DELETE } from '../route';
 
 const AUTH_OK = { userId: 'user-1' };
@@ -102,6 +117,8 @@ beforeEach(() => {
   mockAuthenticateRequest.mockResolvedValue(AUTH_OK);
   mockBuildMachineWorkspacesDeps.mockReturnValue(FAKE_DEPS);
   mockToWorkspaceDTO.mockImplementation(() => SAMPLE_DTO);
+  mockGetCurrentRev.mockResolvedValue(0);
+  mockSyncRelationalGrid.mockResolvedValue({ rev: 1, applied: true });
 });
 
 describe('GET /api/machines/workspaces', () => {
@@ -127,15 +144,17 @@ describe('GET /api/machines/workspaces', () => {
     );
   });
 
-  it('given view access, lists workspaces and reports bootstrap status', async () => {
+  it('given view access, lists workspaces and reports bootstrap status and rev', async () => {
     mockCanViewMachine.mockResolvedValue(true);
     mockListWorkspaces.mockResolvedValue([SAMPLE_RECORD]);
     mockIsBootstrapped.mockResolvedValue(true);
+    mockGetCurrentRev.mockResolvedValue(7);
     const res = await GET(new Request('https://x.test/api/machines/workspaces?machineId=t1'));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.bootstrapped).toBe(true);
     expect(body.workspaces).toEqual([SAMPLE_DTO]);
+    expect(body.rev).toBe(7);
     expect(mockListWorkspaces).toHaveBeenCalledWith(expect.objectContaining({ machineId: 't1' }));
   });
 });
@@ -172,14 +191,18 @@ describe('POST /api/machines/workspaces', () => {
       expect.anything(),
       expect.objectContaining({ eventType: 'data.write', resourceId: 't1' }),
     );
+    // Rolling-deploy shim: mirrors the create into the relational rows too.
+    expect(mockSyncRelationalGrid).toHaveBeenCalledWith('t1', 'ws-1', SAMPLE_RECORD.layout.columns);
+    expect(mockBroadcastLegacyGridSync).toHaveBeenCalledWith('t1', 'ws-1', 1, expect.objectContaining({ id: 'ws-1' }));
   });
 
-  it('given an idempotent replay (already existed), returns 200 and does NOT re-broadcast or re-audit', async () => {
+  it('given an idempotent replay (already existed), returns 200 and does NOT re-broadcast, re-audit, or re-sync', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockCreateWorkspace.mockResolvedValue({ ok: true, created: false, workspace: SAMPLE_RECORD });
     const res = await POST(req({ machineId: 't1', id: 'ws-1', name: 'Workspace 1', columns: [] }));
     expect(res.status).toBe(200);
     expect(mockBroadcastMachineWorkspaceEvent).not.toHaveBeenCalled();
+    expect(mockSyncRelationalGrid).not.toHaveBeenCalled();
     expect(mockAuditRequest).not.toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ eventType: 'data.write' }),
@@ -238,6 +261,8 @@ describe('PATCH /api/machines/workspaces', () => {
       expect.anything(),
       expect.objectContaining({ eventType: 'data.write', resourceId: 't1', details: { workspaceId: 'ws-1', fields: ['name'] } }),
     );
+    // A name-only rename has no columns to mirror — the shim still bumps rev (grid: null).
+    expect(mockSyncRelationalGrid).toHaveBeenCalledWith('t1', 'ws-1', null);
   });
 
   it('given a not_found workspace, returns 404', async () => {
@@ -282,6 +307,9 @@ describe('DELETE /api/machines/workspaces', () => {
       expect.anything(),
       expect.objectContaining({ eventType: 'data.delete', resourceId: 't1' }),
     );
+    // The row (and its pane rows, via FK cascade) is already gone — the shim only bumps rev.
+    expect(mockSyncRelationalGrid).toHaveBeenCalledWith('t1', 'ws-1', null);
+    expect(mockBroadcastLegacyGridSync).toHaveBeenCalledWith('t1', 'ws-1', 1, null);
   });
 
   it('given no workspaceId, returns 400', async () => {
