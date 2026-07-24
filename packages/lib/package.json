@@ -722,6 +722,16 @@
       "import": "./dist/services/machines/agent-terminals-store.js",
       "require": "./dist/services/machines/agent-terminals-store.js"
     },
+    "./services/machines/agent-terminal-sprite-session": {
+      "types": "./dist/services/machines/agent-terminal-sprite-session.d.ts",
+      "import": "./dist/services/machines/agent-terminal-sprite-session.js",
+      "require": "./dist/services/machines/agent-terminal-sprite-session.js"
+    },
+    "./services/machines/agent-terminal-sprites": {
+      "types": "./dist/services/machines/agent-terminal-sprites.d.ts",
+      "import": "./dist/services/machines/agent-terminal-sprites.js",
+      "require": "./dist/services/machines/agent-terminal-sprites.js"
+    },
     "./services/machines/session-scrollback": {
       "types": "./dist/services/machines/session-scrollback.d.ts",
       "import": "./dist/services/machines/session-scrollback.js",
@@ -2020,6 +2030,12 @@
       ],
       "services/machines/agent-terminals-store": [
         "./dist/services/machines/agent-terminals-store.d.ts"
+      ],
+      "services/machines/agent-terminal-sprite-session": [
+        "./dist/services/machines/agent-terminal-sprite-session.d.ts"
+      ],
+      "services/machines/agent-terminal-sprites": [
+        "./dist/services/machines/agent-terminal-sprites.d.ts"
       ],
       "services/machines/session-scrollback": [
         "./dist/services/machines/session-scrollback.d.ts"

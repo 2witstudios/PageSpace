@@ -38,8 +38,12 @@
 
 import { type MachineHandle, type MachineHost } from '../sandbox/machine-host';
 import { SANDBOX_ROOT } from '../sandbox/sandbox-paths';
-import { BRANCH_REPO_PATH } from './machine-branches';
+import { BRANCH_REPO_PATH, type MachineActorContext } from './machine-branches';
 import { PROJECT_REPO_PATH, isPromotedProject } from './machine-project-promotion';
+import {
+  provisionAgentTerminalSprite,
+  type AgentTerminalSpriteProvisionDeps,
+} from './agent-terminal-sprites';
 import {
   isUniqueViolation,
   type MachineAgentTerminalStore,
@@ -130,6 +134,18 @@ export interface AgentTerminalsDeps {
   projectPromotion?: AgentTerminalProjectPromotion;
   /** Live-PTY probe consulted before a promotion — required wherever `projectPromotion` is wired. */
   liveSessions?: AgentTerminalLiveSessions;
+  /**
+   * Per-session Sprite provisioning (sessions-per-location). When wired, every
+   * FRESHLY-reserved (or legacy-unprovisioned) row gets its OWN Sprite at spawn,
+   * mirroring `spawnBranch`. Optional — a caller that omits it (a test, or a
+   * consumer that only ever reattaches) leaves rows unprovisioned, which the
+   * resolve path handles via the shared-Sprite fallback. Requires an actor
+   * resolver because provisioning needs the full tenant/tier context spawn's
+   * bare `{ userId }` does not carry (same lazy pattern as `projectPromotion`).
+   */
+  spriteProvision?: AgentTerminalSpriteProvisionDeps & {
+    resolveActor: (userId: string) => Promise<MachineActorContext>;
+  };
   store: MachineAgentTerminalStore;
   host: MachineHost;
   now: () => Date;
@@ -138,7 +154,7 @@ export interface AgentTerminalsDeps {
 /** Each function below asks for exactly the slice of `AgentTerminalsDeps` it touches — e.g. a read-only resolver never needs `host`, so a caller (like the realtime PTY bridge) doesn't have to fabricate one just to satisfy the type. */
 export type SpawnAgentTerminalDeps = Pick<
   AgentTerminalsDeps,
-  'branchStore' | 'projectStore' | 'store' | 'now' | 'projectPromotion' | 'liveSessions'
+  'branchStore' | 'projectStore' | 'store' | 'now' | 'projectPromotion' | 'liveSessions' | 'spriteProvision'
 >;
 export type ResolveAgentTerminalDeps = Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'machineSandbox' | 'store'>;
 export type ListAgentTerminalsDeps = Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'store'>;
@@ -343,6 +359,42 @@ export type SpawnAgentTerminalResult =
   | { ok: false; reason: SpawnAgentTerminalDenialReason; detail?: string };
 
 /**
+ * Give this session its OWN Sprite if provisioning is wired and the row does not
+ * already point at a live one — the sessions-per-location step, invoked right
+ * after the row is reserved (the row id is the Sprite-key fold, so the row must
+ * exist first).
+ *
+ * BEST-EFFORT to the spawn: a wired-but-failing provision is swallowed rather
+ * than failing the reservation. The row keeps its NULL `sandboxId`, which
+ * `resolveLocationForRow` resolves via the shared-Sprite fallback, and the next
+ * spawn re-provisions — the session is never left unusable, and
+ * `provisionAgentTerminalSprite` already kills any VM it provisioned before a
+ * later step failed, so nothing is left billing unreferenced.
+ */
+async function maybeProvisionSprite(
+  row: MachineAgentTerminalRecord,
+  userId: string,
+  deps: Pick<SpawnAgentTerminalDeps, 'spriteProvision'>,
+): Promise<void> {
+  const provision = deps.spriteProvision;
+  if (!provision) return;
+  // A row already pointing at a live Sprite is reattached to by the resolve
+  // path — never re-provisioned here (that would orphan the live VM).
+  if (row.sandboxId && !row.spriteTornDownAt) return;
+  // Only PTY-launching agent types get a Sprite; a chat-surface row (e.g.
+  // `pagespace`) never opens a PTY, so provisioning one for it would be a
+  // billing VM nothing ever attaches to.
+  if (!isAgentRuntimeType(row.agentType) || !isPtyAgentType(row.agentType)) return;
+  try {
+    const actor = await provision.resolveActor(userId);
+    await provisionAgentTerminalSprite({ row, actor, deps: provision });
+  } catch {
+    // Best-effort — see doc comment. A resolver/provision failure must never
+    // fail the reservation; the fallback resolution keeps the session usable.
+  }
+}
+
+/**
  * Promote this project to its OWN Sprite if it has not been promoted yet.
  *
  * Idempotent and race-safe by construction: the promotion itself persists under
@@ -463,6 +515,9 @@ export async function spawnAgentTerminal({
   const existing = await deps.store.findByName(scope.scopeKey, name);
   if (existing) {
     if (existing.agentType !== resolvedType) return { ok: false, reason: 'name_in_use' };
+    // Heal a legacy/prior-failed row that never got its own Sprite; a no-op once
+    // it points at a live one.
+    await maybeProvisionSprite(existing, actor.userId, deps);
     return { ok: true, id: existing.id, agentType: resolvedType, resumed: true };
   }
 
@@ -478,12 +533,14 @@ export async function spawnAgentTerminal({
       command: command ?? null,
       now: deps.now(),
     });
+    await maybeProvisionSprite(row, actor.userId, deps);
     return { ok: true, id: row.id, agentType: resolvedType, resumed: false };
   } catch (error) {
     if (isUniqueViolation(error)) {
       // Lost a race against a concurrent spawn of the same name.
       const reconciled = await deps.store.findByName(scope.scopeKey, name);
       if (reconciled && reconciled.agentType === resolvedType) {
+        await maybeProvisionSprite(reconciled, actor.userId, deps);
         return { ok: true, id: reconciled.id, agentType: resolvedType, resumed: true };
       }
       if (reconciled) return { ok: false, reason: 'name_in_use' };

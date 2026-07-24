@@ -16,6 +16,9 @@ import {
   type AgentTerminalMachineSandbox,
 } from '../agent-terminals';
 import type { MachineAgentTerminalStore, MachineAgentTerminalRecord, AgentTerminalScopeKey } from '../agent-terminals-store';
+import type { AgentTerminalSpriteProvisionDeps } from '../agent-terminal-sprites';
+import type { MachineActorContext } from '../machine-branches';
+import { deriveAgentTerminalSessionSpriteKey } from '../agent-terminal-sprite-session';
 import { type MachineHost, type MachineHandle } from '../../sandbox/machine-host';
 import { SANDBOX_ROOT } from '../../sandbox/sandbox-paths';
 import { BRANCH_REPO_PATH } from '../machine-branches';
@@ -31,6 +34,19 @@ const MACHINE_SANDBOX_ID = 'sprite-machine-1';
 const PROJECT_PATH = '/workspace/projects/my-repo';
 
 const actor = { userId: 'user-1' };
+
+/** The per-session Sprite identity columns default to NULL on an unprovisioned row (sessions-per-location). */
+const SPRITE_COLUMN_DEFAULTS = {
+  sessionKey: null,
+  sandboxId: null,
+  spriteInstanceId: null,
+  egressPolicyToken: null,
+  teardownRequestedAt: null,
+  spriteTornDownAt: null,
+} satisfies Pick<
+  MachineAgentTerminalRecord,
+  'sessionKey' | 'sandboxId' | 'spriteInstanceId' | 'egressPolicyToken' | 'teardownRequestedAt' | 'spriteTornDownAt'
+>;
 
 function makeBranchLookup(rows: Record<string, { id: string; sandboxId: string }> = {}): AgentTerminalBranchLookup {
   const byId = new Map<string, { sandboxId: string }>();
@@ -100,6 +116,7 @@ function makeStore(seed: MachineAgentTerminalRecord[] = []) {
         agentType: input.agentType,
         command: input.command,
         streamSessionId: null,
+        ...SPRITE_COLUMN_DEFAULTS,
         coldTail: null,
         coldTailAt: null,
         coldTailHasOutput: false,
@@ -126,6 +143,45 @@ function makeStore(seed: MachineAgentTerminalRecord[] = []) {
           return;
         }
       }
+    },
+    updateSpriteIdentity: async ({ id, previousSandboxId, sessionKey, sandboxId, spriteInstanceId, egressPolicyToken, now }) => {
+      for (const [k, row] of rows) {
+        if (row.id === id) {
+          if ((row.sandboxId ?? null) !== (previousSandboxId ?? null)) return false;
+          rows.set(k, {
+            ...row,
+            sessionKey,
+            sandboxId,
+            spriteInstanceId,
+            egressPolicyToken,
+            spriteTornDownAt: null,
+            teardownRequestedAt: null,
+            updatedAt: now,
+          });
+          return true;
+        }
+      }
+      return false;
+    },
+    stampSpriteTornDown: async ({ id, sandboxId, spriteInstanceId, now }) => {
+      for (const [k, row] of rows) {
+        if (row.id === id) {
+          if (row.sandboxId !== sandboxId || (row.spriteInstanceId ?? null) !== (spriteInstanceId ?? null)) return false;
+          rows.set(k, { ...row, spriteTornDownAt: now });
+          return true;
+        }
+      }
+      return false;
+    },
+    removeIfSandbox: async ({ id, sandboxId, spriteInstanceId }) => {
+      for (const [k, row] of rows) {
+        if (row.id === id) {
+          if (row.sandboxId !== sandboxId || (row.spriteInstanceId ?? null) !== (spriteInstanceId ?? null)) return false;
+          rows.delete(k);
+          return true;
+        }
+      }
+      return false;
     },
     remove: async (scope, name) => {
       rows.delete(key(scope, name));
@@ -194,6 +250,7 @@ function makeLegacyRow(overrides: Partial<MachineAgentTerminalRecord> = {}): Mac
     agentType: 'pagespace-cli',
     command: null,
     streamSessionId: null,
+    ...SPRITE_COLUMN_DEFAULTS,
     coldTail: null,
     coldTailAt: null,
     coldTailHasOutput: false,
@@ -1340,6 +1397,7 @@ describe('killAgentTerminal', () => {
         agentType: 'shell',
         command: null,
         streamSessionId: 'sess-abc',
+        ...SPRITE_COLUMN_DEFAULTS,
         coldTail: null,
         coldTailAt: null,
         coldTailHasOutput: false,
@@ -1382,6 +1440,7 @@ describe('killAgentTerminal', () => {
         agentType: 'shell',
         command: null,
         streamSessionId: 'sess-proj',
+        ...SPRITE_COLUMN_DEFAULTS,
         coldTail: null,
         coldTailAt: null,
         coldTailHasOutput: false,
@@ -1422,6 +1481,7 @@ describe('killAgentTerminal', () => {
         agentType: 'shell',
         command: null,
         streamSessionId: 'sess-machine',
+        ...SPRITE_COLUMN_DEFAULTS,
         coldTail: null,
         coldTailAt: null,
         coldTailHasOutput: false,
@@ -1463,6 +1523,7 @@ describe('killAgentTerminal', () => {
         agentType: 'shell',
         command: null,
         streamSessionId: 'sess-abc',
+        ...SPRITE_COLUMN_DEFAULTS,
         coldTail: null,
         coldTailAt: null,
         coldTailHasOutput: false,
@@ -1496,6 +1557,7 @@ describe('killAgentTerminal', () => {
         agentType: 'shell',
         command: null,
         streamSessionId: 'sess-dangling',
+        ...SPRITE_COLUMN_DEFAULTS,
         coldTail: null,
         coldTailAt: null,
         coldTailHasOutput: false,
@@ -1529,6 +1591,7 @@ describe('killAgentTerminal', () => {
         agentType: 'shell',
         command: null,
         streamSessionId: 'sess-abc',
+        ...SPRITE_COLUMN_DEFAULTS,
         coldTail: null,
         coldTailAt: null,
         coldTailHasOutput: false,
@@ -1569,6 +1632,7 @@ describe('killAgentTerminal', () => {
         agentType: 'shell',
         command: null,
         streamSessionId: 'sess-abc',
+        ...SPRITE_COLUMN_DEFAULTS,
         coldTail: null,
         coldTailAt: null,
         coldTailHasOutput: false,
@@ -1975,5 +2039,173 @@ describe('spawnAgentTerminal — promotion gate consults real PTY liveness', () 
     });
 
     expect(spawned).toMatchObject({ ok: false, reason: 'live_sessions_block_promotion' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sessions-per-location: spawn-time per-session Sprite provisioning (leaf 3.3)
+// ---------------------------------------------------------------------------
+
+const SPRITE_SECRET = 'test-secret-at-least-32-chars-long-xxxxx';
+const SESSION_SANDBOX_ID = 'sprite-session-1';
+const SESSION_INSTANCE_ID = 'inst-session-1';
+const ROOT_MACHINE_SANDBOX_ID = 'sprite-root-1';
+
+const provisionActor: MachineActorContext = {
+  userId: 'user-1',
+  tenantId: 'tenant-1',
+  actorEmail: 'user-1@example.com',
+  tier: 'free',
+};
+
+/** A session Sprite handle that records the housekeeping execs + file writes the credential copy makes. */
+function makeSessionHandle(over: Partial<MachineHandle> = {}) {
+  const execCalls: string[][] = [];
+  const writes: string[] = [];
+  const handle = makeHandle({
+    machineId: SESSION_SANDBOX_ID,
+    spriteInstanceId: SESSION_INSTANCE_ID,
+    exec: async (args) => {
+      execCalls.push([args.cmd, ...(args.args ?? [])]);
+      return { success: true, exitCode: 0, stdout: '', stderr: '' };
+    },
+    writeFiles: async (files) => {
+      for (const f of files) writes.push(f.path);
+    },
+    ...over,
+  });
+  return { handle, execCalls, writes };
+}
+
+/** A root Machine Sprite that hands back a Claude credential for the copy to propagate. */
+function makeRootHandleWithCredential() {
+  return makeHandle({
+    machineId: ROOT_MACHINE_SANDBOX_ID,
+    readFile: async ({ path }) => (path.endsWith('.credentials.json') ? Buffer.from('{"token":"x"}') : null),
+  });
+}
+
+function makeSpriteProvision(
+  store: MachineAgentTerminalStore,
+  over: Partial<AgentTerminalSpriteProvisionDeps & { resolveActor: (u: string) => Promise<MachineActorContext> }> = {},
+  provisioned?: ReturnType<typeof makeSessionHandle>,
+) {
+  const session = provisioned ?? makeSessionHandle();
+  const provisionCalls: string[] = [];
+  const killed: Array<{ machineId: string }> = [];
+  const deps: AgentTerminalSpriteProvisionDeps & { resolveActor: (u: string) => Promise<MachineActorContext> } = {
+    isEnabled: () => true,
+    now: () => NOW,
+    host: {
+      provision: async (args) => {
+        provisionCalls.push(args.name);
+        return session.handle;
+      },
+      attach: async () => null,
+      kill: async (args) => {
+        killed.push({ machineId: args.machineId });
+      },
+    },
+    substrate: { kind: 'sprite' },
+    options: {} as AgentTerminalSpriteProvisionDeps['options'],
+    secret: SPRITE_SECRET,
+    checkFullEgressEnablement: async () => ({ ok: true }),
+    resolveGitHubToken: async () => null,
+    resolveRootMachineHandle: async () => makeRootHandleWithCredential(),
+    resolveProjectRepoUrl: async () => 'https://github.com/acme/repo.git',
+    resolveBranchName: async () => BRANCH_NAME,
+    updateSpriteIdentity: async (input) => store.updateSpriteIdentity(input),
+    quota: { acquireSlot: () => true, releaseSlot: () => {} } as AgentTerminalSpriteProvisionDeps['quota'],
+    buildEnv: () => ({}),
+    audit: async () => {},
+    resolveActor: async () => provisionActor,
+    ...over,
+  };
+  return { deps, provisionCalls, killed, session };
+}
+
+describe('spawnAgentTerminal — per-session Sprite provisioning', () => {
+  it('given a machine-scope spawn with provisioning wired, should provision its OWN Sprite under the derived key and record it on the row', async () => {
+    const { store, rows } = makeStore();
+    const { deps: provision, provisionCalls } = makeSpriteProvision(store);
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+    expect(result.ok).toBe(true);
+
+    const row = [...rows.values()][0];
+    const expectedKey = deriveAgentTerminalSessionSpriteKey({
+      tenantId: provisionActor.tenantId,
+      machineId: TERMINAL_ID,
+      terminalId: row.id,
+      secret: SPRITE_SECRET,
+    });
+    expect(provisionCalls).toEqual([expectedKey]);
+    expect(row.sandboxId).toBe(SESSION_SANDBOX_ID);
+    expect(row.spriteInstanceId).toBe(SESSION_INSTANCE_ID);
+    expect(row.sessionKey).toBe(expectedKey);
+  });
+
+  it('should copy the Claude credential FROM the owning Machine root Sprite onto the session Sprite (invariant 1)', async () => {
+    const { store } = makeStore();
+    const session = makeSessionHandle();
+    const { deps: provision } = makeSpriteProvision(store, {}, session);
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+    // The credential copy wrote a temp file onto the session Sprite (then mv'd it).
+    expect(session.writes.some((p) => p.includes('.credentials.json'))).toBe(true);
+  });
+
+  it('given the egress gate is closed, should NOT provision a Sprite and leave the row unprovisioned (spawn still succeeds via fallback)', async () => {
+    const { store, rows } = makeStore();
+    const { deps: provision, provisionCalls } = makeSpriteProvision(store, {
+      checkFullEgressEnablement: async () => ({ ok: false, reason: 'code_execution_disabled' }),
+    });
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+    expect(result.ok).toBe(true); // reservation is not failed by a provisioning refusal
+    expect(provisionCalls).toEqual([]);
+    expect([...rows.values()][0].sandboxId).toBeNull();
+  });
+
+  it('given a chat-surface agent type (pagespace), should never provision a Sprite (no PTY to run)', async () => {
+    const { store, rows } = makeStore();
+    const { deps: provision, provisionCalls } = makeSpriteProvision(store);
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'agent', agentType: 'pagespace', actor, deps });
+    expect(provisionCalls).toEqual([]);
+    expect([...rows.values()][0].sandboxId).toBeNull();
+  });
+
+  it('given an already-provisioned row (resume), should NOT re-provision (reattach happens in the resolve path)', async () => {
+    const { store, rows } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-x',
+        name: 'cli',
+        agentType: 'shell',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+        sessionKey: 'pgs-agt-existing',
+      }),
+    ]);
+    const { deps: provision, provisionCalls } = makeSpriteProvision(store);
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+    expect(result).toMatchObject({ ok: true, resumed: true });
+    expect(provisionCalls).toEqual([]);
+    expect(rows.size).toBe(1);
+  });
+
+  it('given no provisioning deps wired, should reserve the row without a Sprite (pre-per-session behavior preserved)', async () => {
+    const { store, rows } = makeStore();
+    const deps = makeDeps({ store }); // no spriteProvision
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+    expect(result.ok).toBe(true);
+    expect([...rows.values()][0].sandboxId).toBeNull();
   });
 });
