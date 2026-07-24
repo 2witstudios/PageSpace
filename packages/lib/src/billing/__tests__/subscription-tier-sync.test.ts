@@ -3,6 +3,7 @@ import {
   ENTITLED_SUBSCRIPTION_STATUSES,
   deriveTierFromSubscriptions,
   computeTierDrift,
+  isTierDriftRepairable,
 } from '../subscription-tier-sync';
 import type { SubscriptionTier } from '../subscription-tiers';
 
@@ -76,55 +77,59 @@ describe('deriveTierFromSubscriptions', () => {
 
 describe('computeTierDrift', () => {
   it('reports no drift when stored matches derived', () => {
-    expect(
-      computeTierDrift({
-        storedTier: 'pro',
-        derived: { tier: 'pro', indeterminate: false },
-        hasAnySubscriptionRecord: true,
-      }),
-    ).toEqual({ drifted: false, repairable: false, storedTier: 'pro', expectedTier: 'pro' });
+    expect(computeTierDrift({ storedTier: 'pro', derived: { tier: 'pro', indeterminate: false } })).toEqual({
+      drifted: false,
+      storedTier: 'pro',
+      expectedTier: 'pro',
+    });
   });
 
-  it('flags repairable drift when determinate, mismatched, and the user has a subscription record (e.g. a canceled row)', () => {
+  it('reports drift when stored and derived mismatch, regardless of indeterminacy', () => {
+    expect(computeTierDrift({ storedTier: 'founder', derived: { tier: 'free', indeterminate: false } })).toEqual({
+      drifted: true,
+      storedTier: 'founder',
+      expectedTier: 'free',
+    });
+  });
+
+  it('an indeterminate derivation that happens to match stored is not drift', () => {
+    expect(computeTierDrift({ storedTier: 'pro', derived: { tier: 'pro', indeterminate: true } })).toEqual({
+      drifted: false,
+      storedTier: 'pro',
+      expectedTier: 'pro',
+    });
+  });
+
+  it('coerces an unknown stored value to free before comparing', () => {
+    expect(computeTierDrift({ storedTier: 'enterprise', derived: { tier: 'free', indeterminate: false } })).toEqual({
+      drifted: false,
+      storedTier: 'free',
+      expectedTier: 'free',
+    });
+  });
+});
+
+describe('isTierDriftRepairable', () => {
+  it('is repairable when determinate and the user has a subscription record (e.g. a canceled row)', () => {
     // A canceled/expired subscription still LEAVES A ROW — this is the normal
     // downgrade path, not the unmigrated-legacy-user case below.
     expect(
-      computeTierDrift({
+      isTierDriftRepairable({
         storedTier: 'founder',
         derived: { tier: 'free', indeterminate: false },
         hasAnySubscriptionRecord: true,
       }),
-    ).toEqual({ drifted: true, repairable: true, storedTier: 'founder', expectedTier: 'free' });
+    ).toBe(true);
   });
 
-  it('flags NON-repairable drift when the derivation is indeterminate (unmapped price)', () => {
+  it('is NOT repairable when the derivation is indeterminate (unmapped price)', () => {
     expect(
-      computeTierDrift({
+      isTierDriftRepairable({
         storedTier: 'pro',
         derived: { tier: 'free', indeterminate: true },
         hasAnySubscriptionRecord: true,
       }),
-    ).toEqual({ drifted: true, repairable: false, storedTier: 'pro', expectedTier: 'free' });
-  });
-
-  it('an indeterminate derivation that happens to match stored is not drift', () => {
-    expect(
-      computeTierDrift({
-        storedTier: 'pro',
-        derived: { tier: 'pro', indeterminate: true },
-        hasAnySubscriptionRecord: true,
-      }),
-    ).toEqual({ drifted: false, repairable: false, storedTier: 'pro', expectedTier: 'pro' });
-  });
-
-  it('coerces an unknown stored value to free before comparing', () => {
-    expect(
-      computeTierDrift({
-        storedTier: 'enterprise',
-        derived: { tier: 'free', indeterminate: false },
-        hasAnySubscriptionRecord: true,
-      }),
-    ).toEqual({ drifted: false, repairable: false, storedTier: 'free', expectedTier: 'free' });
+    ).toBe(false);
   });
 
   describe('unmigrated legacy paid user (no subscription record at all)', () => {
@@ -135,36 +140,36 @@ describe('computeTierDrift', () => {
     // grant). The reconciler must NOT auto-repair this downward to free —
     // that would silently revoke a paying customer's entitlements.
 
-    it('flags NON-repairable drift for a non-free stored tier with no subscription record', () => {
+    it('is NOT repairable for a non-free stored tier with no subscription record', () => {
       expect(
-        computeTierDrift({
+        isTierDriftRepairable({
           storedTier: 'founder',
           derived: { tier: 'free', indeterminate: false },
           hasAnySubscriptionRecord: false,
         }),
-      ).toEqual({ drifted: true, repairable: false, storedTier: 'founder', expectedTier: 'free' });
+      ).toBe(false);
     });
 
     it('does not apply the no-record guard to an ALREADY-free stored tier', () => {
       // A free user with no subscriptions row is the ordinary case, not
       // an unmigrated legacy user — nothing to protect here.
       expect(
-        computeTierDrift({
+        isTierDriftRepairable({
           storedTier: 'free',
           derived: { tier: 'free', indeterminate: false },
           hasAnySubscriptionRecord: false,
         }),
-      ).toEqual({ drifted: false, repairable: false, storedTier: 'free', expectedTier: 'free' });
+      ).toBe(true);
     });
 
     it('does not apply the no-record guard once a subscription record exists (normal cancel path)', () => {
       expect(
-        computeTierDrift({
+        isTierDriftRepairable({
           storedTier: 'founder',
           derived: { tier: 'free', indeterminate: false },
           hasAnySubscriptionRecord: true,
         }),
-      ).toEqual({ drifted: true, repairable: true, storedTier: 'founder', expectedTier: 'free' });
+      ).toBe(true);
     });
   });
 });

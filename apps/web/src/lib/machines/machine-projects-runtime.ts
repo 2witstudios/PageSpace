@@ -95,7 +95,6 @@ function getMachineProjectStore() {
   return machineProjectStorePromise;
 }
 
-
 export async function resolveMachineActorContext(userId: string): Promise<MachineActorContext> {
   const [user, actorInfo] = await Promise.all([
     db.query.users.findFirst({ where: eq(users.id, userId), columns: { subscriptionTier: true } }),

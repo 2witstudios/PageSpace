@@ -8,8 +8,10 @@
  *
  *   - pure core: {@link deriveTierFromSubscriptions} resolves a tier from a
  *     user's subscription rows; {@link computeTierDrift} compares it against
- *     the cached column (modeled on computeBalanceDrift in credit-core). The
- *     Stripe webhook (apps/web .../stripe/webhook/route.ts) calls
+ *     the cached column (modeled on computeBalanceDrift in credit-core);
+ *     {@link isTierDriftRepairable} is the separate operational-caution
+ *     policy over whether a detected drift is safe to auto-write. The Stripe
+ *     webhook (apps/web .../stripe/webhook/route.ts) calls
  *     deriveTierFromSubscriptions with the single row from the event it just
  *     received and writes the result through — the same function the
  *     reconciler below uses across the whole table, so there is exactly one
@@ -74,14 +76,28 @@ export interface TierDriftResult {
   storedTier: SubscriptionTier;
   expectedTier: SubscriptionTier;
   drifted: boolean;
-  /** Drift the reconciler may write back; false when the derivation is indeterminate. */
-  repairable: boolean;
 }
 
 /**
  * Compare the cached users.subscriptionTier against what the subscriptions
- * rows imply. Pure; modeled on computeBalanceDrift. Two cases are flagged for
- * a human and never auto-repaired:
+ * rows imply. Pure; modeled on computeBalanceDrift. This is ONLY the
+ * comparison — whether a detected drift is safe to auto-repair is a separate
+ * policy decision, see {@link isTierDriftRepairable}, so a diagnostic that
+ * just wants "does stored match derived" isn't forced to inherit the repair
+ * policy too.
+ */
+export function computeTierDrift(input: { storedTier: string; derived: DerivedTier }): TierDriftResult {
+  const storedTier = toSubscriptionTier(input.storedTier);
+  const expectedTier = input.derived.tier;
+  return { storedTier, expectedTier, drifted: storedTier !== expectedTier };
+}
+
+/**
+ * Whether a detected tier drift is safe for the reconciler to auto-repair
+ * (write the derived tier back). An operational-caution POLICY, not a
+ * property of the drift itself — kept separate from {@link computeTierDrift}
+ * so other consumers of that comparison aren't forced to inherit it. Two
+ * cases are withheld for a human instead:
  *
  *   - an indeterminate derivation (an entitled row on an unmapped legacy
  *     price) — repairing would downgrade a legacy paid user whose price id
@@ -95,20 +111,12 @@ export interface TierDriftResult {
  *     'free' and IS repairable — only the true zero-rows case is ambiguous
  *     enough to withhold from auto-repair.
  */
-export function computeTierDrift(input: {
-  storedTier: string;
+export function isTierDriftRepairable(input: {
+  storedTier: SubscriptionTier;
   derived: DerivedTier;
   /** Whether the user has ANY subscriptions row, of any status. */
   hasAnySubscriptionRecord: boolean;
-}): TierDriftResult {
-  const storedTier = toSubscriptionTier(input.storedTier);
-  const expectedTier = input.derived.tier;
-  const drifted = storedTier !== expectedTier;
-  const unmigratedLegacyPaidUser = storedTier !== 'free' && !input.hasAnySubscriptionRecord;
-  return {
-    storedTier,
-    expectedTier,
-    drifted,
-    repairable: drifted && !input.derived.indeterminate && !unmigratedLegacyPaidUser,
-  };
+}): boolean {
+  const unmigratedLegacyPaidUser = input.storedTier !== 'free' && !input.hasAnySubscriptionRecord;
+  return !input.derived.indeterminate && !unmigratedLegacyPaidUser;
 }

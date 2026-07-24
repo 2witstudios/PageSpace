@@ -4,10 +4,10 @@ import { eq, and, isNull, lte } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { subscriptions, stripeEvents } from '@pagespace/db/schema/subscriptions';
 import { stripe, Stripe, getTierFromPrice } from '@/lib/stripe';
-import { isSubscriptionTier, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import type { SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { deriveTierFromSubscriptions } from '@pagespace/lib/billing/subscription-tier-sync';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { resolveControlPlaneTier } from './control-plane-tier';
+import { resolveWebhookMetadataTierForControlPlane } from './control-plane-tier';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { userEmailMatch } from '@pagespace/lib/auth/user-repository';
 import { applyStripeFunding } from '@pagespace/lib/billing/credit-funding';
@@ -526,16 +526,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
         loggers.api.warn('CONTROL_PLANE_URL not set, skipping tenant provisioning', { slug });
       } else {
         try {
-          const rawTier = session.metadata?.tier;
-          // Only remap tiers from the canonical SaaS vocabulary (fixes the
-          // 'founder' bug — control-plane has no founder price/tier). A
-          // control-plane-only value control-plane's own checkout can set
-          // here (e.g. 'enterprise', which control-plane sells directly and
-          // the SaaS vocabulary doesn't) must pass through UNCHANGED — it is
-          // already valid for control-plane's tenant-validation, and forcing
-          // it through the SaaS vocabulary would silently downgrade a paid
-          // enterprise tenant to 'pro'.
-          const tier = rawTier && isSubscriptionTier(rawTier) ? resolveControlPlaneTier(rawTier) : rawTier || 'pro';
+          const tier = resolveWebhookMetadataTierForControlPlane(session.metadata?.tier);
           const ownerEmail = session.customer_details?.email || '';
           const response = await fetch(`${controlPlaneUrl}/api/tenants`, {
             method: 'POST',

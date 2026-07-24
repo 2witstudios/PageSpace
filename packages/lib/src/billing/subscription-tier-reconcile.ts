@@ -31,6 +31,7 @@ import {
   ENTITLED_SUBSCRIPTION_STATUSES,
   computeTierDrift,
   deriveTierFromSubscriptions,
+  isTierDriftRepairable,
   type PriceTierResolver,
   type SubscriptionRowLike,
 } from './subscription-tier-sync';
@@ -106,34 +107,53 @@ export async function reconcileSubscriptionTiers(options: {
       rowsByUser.set(row.userId, list);
     }
 
-    for (const user of batch) {
-      const allRows = rowsByUser.get(user.id) ?? [];
-      const entitledRows = allRows.filter((row) => ENTITLED_SUBSCRIPTION_STATUSES.includes(row.status));
-      const derived = deriveTierFromSubscriptions(entitledRows, options.priceTier);
-      const hasAnySubscriptionRecord = allRows.length > 0;
-      const drift = computeTierDrift({ storedTier: user.subscriptionTier, derived, hasAnySubscriptionRecord });
-      if (!drift.drifted) continue;
+    // Compute drift for the whole batch first (cheap, synchronous) so the
+    // independent per-user CAS repairs below can run concurrently instead of
+    // one DB round-trip at a time.
+    const driftedUsers = batch
+      .map((user) => {
+        const allRows = rowsByUser.get(user.id) ?? [];
+        const entitledRows = allRows.filter((row) => ENTITLED_SUBSCRIPTION_STATUSES.includes(row.status));
+        const derived = deriveTierFromSubscriptions(entitledRows, options.priceTier);
+        const hasAnySubscriptionRecord = allRows.length > 0;
+        const drift = computeTierDrift({ storedTier: user.subscriptionTier, derived });
+        if (!drift.drifted) return null;
+        return {
+          user,
+          drift,
+          hasAnySubscriptionRecord,
+          indeterminate: derived.indeterminate,
+          repairable: isTierDriftRepairable({ storedTier: drift.storedTier, derived, hasAnySubscriptionRecord }),
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null);
 
-      result.drifted += 1;
-      let repaired = false;
-      if (repair && drift.repairable) {
-        // CAS on the stored value: if the webhook rewrote the tier since we
-        // read it, this matches zero rows and the sweep defers to the webhook.
+    result.drifted += driftedUsers.length;
+
+    // Each repair is an independent CAS UPDATE (different user id + guarded on
+    // the observed stored value) — safe to run concurrently.
+    const repairedFlags = await Promise.all(
+      driftedUsers.map(async ({ user, drift, repairable }) => {
+        if (!repair || !repairable) return false;
         const updated = await db
           .update(users)
           .set({ subscriptionTier: drift.expectedTier, updatedAt: new Date() })
           .where(and(eq(users.id, user.id), eq(users.subscriptionTier, user.subscriptionTier)))
           .returning({ id: users.id });
-        repaired = updated.length > 0;
-        result.repaired += repaired ? 1 : 0;
-      }
-      if (!repaired && !drift.repairable) result.flaggedOnly += 1;
+        return updated.length > 0;
+      }),
+    );
+
+    driftedUsers.forEach(({ user, drift, hasAnySubscriptionRecord, indeterminate, repairable }, i) => {
+      const repaired = repairedFlags[i];
+      if (!repaired && !repairable) result.flaggedOnly += 1;
+      if (repaired) result.repaired += 1;
 
       loggers.system.warn('Subscription tier drift detected', {
         userId: user.id,
         storedTier: user.subscriptionTier,
         expectedTier: drift.expectedTier,
-        indeterminate: derived.indeterminate,
+        indeterminate,
         hasAnySubscriptionRecord,
         repaired,
       });
@@ -143,11 +163,11 @@ export async function reconcileSubscriptionTiers(options: {
           storedTier: user.subscriptionTier,
           expectedTier: drift.expectedTier,
           repaired,
-          indeterminate: derived.indeterminate,
+          indeterminate,
           hasAnySubscriptionRecord,
         });
       }
-    }
+    });
   }
 
   return result;
