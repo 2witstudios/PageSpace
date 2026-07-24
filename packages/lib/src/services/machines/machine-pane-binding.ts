@@ -104,6 +104,16 @@ export interface MachineNodeHandleSet {
   self: MachineNodeHandle;
   /** self + the downward closure, self first, then depth-first by project. */
   handles: readonly MachineNodeHandle[];
+  /**
+   * Branches that HAD a row here but whose Sprite was torn down — omitted
+   * from `handles` (fail-closed, same as any other torn-down branch), but
+   * still recorded here so `resolveMachineNodeTarget`'s default-checkout
+   * fallback can tell "this name was never tracked" (fall back to the
+   * project) apart from "this name existed and was deliberately torn down"
+   * (must stay denied, never silently reroute to a DIFFERENT checkout).
+   * Empty/absent means nothing by that name was ever tracked under this set.
+   */
+  tornDownBranches?: readonly { project: string; branch: string }[];
 }
 
 export type MachinePaneBinding = MachineNodeHandleSet;
@@ -151,7 +161,10 @@ export type MachineNodeTargetResolution =
  * any other unresolved branch. A misspelled or deleted branch name must
  * still deny outright: silently redirecting it to the project's default
  * checkout would let bash/file/git tools run against the wrong worktree
- * without the caller ever finding out.
+ * without the caller ever finding out. That includes a default-named branch
+ * that WAS explicitly created and later torn down (`set.tornDownBranches`):
+ * it stays denied exactly as before, never rerouted to the project's
+ * (different) checkout — "torn down" is not "never existed".
  */
 export function resolveMachineNodeTarget(
   set: MachineNodeHandleSet,
@@ -166,7 +179,10 @@ export function resolveMachineNodeTarget(
     );
     if (matches.length === 1) return { ok: true, handle: matches[0] };
     if (matches.length > 1) return { ok: false, reason: 'ambiguous_target' };
-    if (project !== undefined && isMainBranchName(target.branch)) {
+    const wasTornDown = set.tornDownBranches?.some(
+      (b) => b.project === project && b.branch === target.branch,
+    );
+    if (project !== undefined && isMainBranchName(target.branch) && !wasTornDown) {
       const projectHandle = set.handles.find((h) => h.kind === 'project' && h.project === project);
       if (projectHandle) return { ok: true, handle: projectHandle };
     }
@@ -283,7 +299,8 @@ export async function deriveMachinePaneBinding(
     const project = await deps.projectLookup.findByName(row.machineId, row.projectName);
     if (!project) return { ok: false, reason: 'project_not_found' };
     const self = projectHandle(row.machineId, project);
-    return { ok: true, binding: { self, handles: [self, ...(await branchHandles(row.machineId, project, deps))] } };
+    const { handles: branches, tornDown } = await branchHandles(row.machineId, project, deps);
+    return { ok: true, binding: { self, handles: [self, ...branches], tornDownBranches: tornDown } };
   }
 
   const self: MachineNodeHandle = { kind: 'machine', machineId: row.machineId, cwd: SANDBOX_ROOT };
@@ -293,8 +310,12 @@ export async function deriveMachinePaneBinding(
     deps.branchLookup.listAll(row.machineId),
   ]);
   const liveBranchesByProject = new Map<string, MachinePaneBindingBranch[]>();
+  const tornDownBranches: { project: string; branch: string }[] = [];
   for (const branch of allBranches) {
-    if (branch.spriteTornDownAt !== null) continue; // same fail-closed rule as `branchHandles`
+    if (branch.spriteTornDownAt !== null) {
+      tornDownBranches.push({ project: branch.projectName, branch: branch.branchName });
+      continue; // same fail-closed rule as `branchHandles`
+    }
     const group = liveBranchesByProject.get(branch.projectName) ?? [];
     group.push(branch);
     liveBranchesByProject.set(branch.projectName, group);
@@ -306,7 +327,7 @@ export async function deriveMachinePaneBinding(
     projectHandle(row.machineId, project),
     ...(liveBranchesByProject.get(project.name) ?? []).map((b) => branchHandle(row.machineId, b)),
   ]);
-  return { ok: true, binding: { self, handles: [self, ...descendants] } };
+  return { ok: true, binding: { self, handles: [self, ...descendants], tornDownBranches } };
 }
 
 function projectHandle(machineId: string, project: MachinePaneBindingProject): MachineNodeHandle {
@@ -350,17 +371,25 @@ function branchHandle(machineId: string, branch: MachinePaneBindingBranch): Mach
 }
 
 /**
- * The live branches of one project. A branch whose Sprite is CONFIRMED
- * destroyed (`spriteTornDownAt`) is omitted rather than derived-then-denied:
- * that is the same fail-closed rule the natively-bound branch path applies
- * (`branch_not_found`), expressed as absence from the set. A torn-down branch
- * is unaddressable from anywhere.
+ * The live branches of one project, plus the names of any torn-down ones. A
+ * branch whose Sprite is CONFIRMED destroyed (`spriteTornDownAt`) is omitted
+ * from `handles` rather than derived-then-denied: that is the same
+ * fail-closed rule the natively-bound branch path applies (`branch_not_found`),
+ * expressed as absence from the set. A torn-down branch is unaddressable from
+ * anywhere — its name is still returned (separately) so a caller resolving a
+ * target can tell it apart from a name that was never tracked at all.
  */
 async function branchHandles(
   machineId: string,
   project: MachinePaneBindingProject,
   deps: DeriveMachinePaneBindingDeps,
-): Promise<MachineNodeHandle[]> {
+): Promise<{ handles: MachineNodeHandle[]; tornDown: { project: string; branch: string }[] }> {
   const branches = await deps.branchLookup.list(machineId, project.name);
-  return branches.filter((b) => b.spriteTornDownAt === null).map((b) => branchHandle(machineId, b));
+  const handles: MachineNodeHandle[] = [];
+  const tornDown: { project: string; branch: string }[] = [];
+  for (const b of branches) {
+    if (b.spriteTornDownAt === null) handles.push(branchHandle(machineId, b));
+    else tornDown.push({ project: b.projectName, branch: b.branchName });
+  }
+  return { handles, tornDown };
 }

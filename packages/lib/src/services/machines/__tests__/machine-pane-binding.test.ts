@@ -366,6 +366,33 @@ describe('deriveMachinePaneBinding — handle-set derivation (cascade)', () => {
     expect(binding.handles).toContainEqual(SIBLING_BRANCH_HANDLE);
   });
 
+  // Codex review (PR #2232): a torn-down branch's name must still be
+  // reported (separately from `handles`) so resolveMachineNodeTarget's
+  // default-checkout fallback can tell "torn down" apart from "never
+  // existed" — the fallback must not treat these the same way.
+  it('given a torn-down branch in a machine-root closure, should report it in tornDownBranches', async () => {
+    const row = makeRow({ scope: 'machine', projectName: null, machineBranchId: null });
+    const deps = makeDeps({
+      terminalStore: makeTerminalStore(row),
+      projectLookup: makeProjectLookup(PROJECT_ROWS),
+      branchLookup: makeBranchLookup([{ ...BRANCH_ROWS[0], spriteTornDownAt: NOW }, BRANCH_ROWS[1]]),
+    });
+    const binding = await deriveOk(deps);
+    expect(binding.tornDownBranches).toEqual([{ project: PROJECT_NAME, branch: 'feature' }]);
+  });
+
+  it('given a torn-down branch in a project-scoped binding, should report it in tornDownBranches', async () => {
+    const row = makeRow({ scope: 'project', projectName: PROJECT_NAME, machineBranchId: null });
+    const deps = makeDeps({
+      terminalStore: makeTerminalStore(row),
+      projectLookup: makeProjectLookup(PROJECT_ROWS),
+      branchLookup: makeBranchLookup([{ ...BRANCH_ROWS[0], spriteTornDownAt: NOW }]),
+    });
+    const binding = await deriveOk(deps);
+    expect(binding.tornDownBranches).toEqual([{ project: PROJECT_NAME, branch: 'feature' }]);
+    expect(binding.handles.some((h) => h.branch === 'feature')).toBe(false);
+  });
+
   it('given every handle in a derived set, should carry the owning machine page id (the billing/payer key)', async () => {
     const row = makeRow({ scope: 'machine', projectName: null, machineBranchId: null });
     const binding = await deriveOk(makeCascadeDeps(row));
@@ -495,6 +522,34 @@ describe('resolveMachineNodeTarget', () => {
     expect(resolveMachineNodeTarget(branchOnlySet, { branch: 'main' })).toEqual({
       ok: false,
       reason: 'target_not_in_set',
+    });
+  });
+
+  // Codex review (PR #2232, second finding): a default-named branch that WAS
+  // explicitly created and later torn down must stay denied, never silently
+  // rerouted to the project's (different) checkout — "torn down" is not
+  // "never existed", and the two must not be treated the same by the fallback.
+  it('given a torn-down "main" branch on record for the project, should refuse rather than fall back', () => {
+    const projectSet = {
+      self: PROJECT_HANDLE,
+      handles: [PROJECT_HANDLE],
+      tornDownBranches: [{ project: PROJECT_NAME, branch: 'main' }],
+    };
+    expect(resolveMachineNodeTarget(projectSet, { project: PROJECT_NAME, branch: 'main' })).toEqual({
+      ok: false,
+      reason: 'target_not_in_set',
+    });
+  });
+
+  it('given tornDownBranches recorded for a DIFFERENT project/branch, should not block this project\'s own fallback', () => {
+    const projectSet = {
+      self: PROJECT_HANDLE,
+      handles: [PROJECT_HANDLE],
+      tornDownBranches: [{ project: SIBLING_PROJECT_NAME, branch: 'main' }],
+    };
+    expect(resolveMachineNodeTarget(projectSet, { project: PROJECT_NAME, branch: 'main' })).toEqual({
+      ok: true,
+      handle: PROJECT_HANDLE,
     });
   });
 });
