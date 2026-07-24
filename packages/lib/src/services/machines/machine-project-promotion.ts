@@ -177,6 +177,15 @@ export interface PromoteProjectDeps {
    * known shrink, not an opportunistic wake.
    */
   remeasureMachineStorage?: (input: { machinePageId: string }) => Promise<void>;
+  /**
+   * Optional opportunistic branch-capture seam: persist the LOCAL branch name
+   * a project's checkout was observed on (`git status -b`), whenever that
+   * status already ran for other reasons — the dirty-tree gate, a reattach.
+   * Never triggers its own exec; see the call sites. Best-effort and
+   * fire-and-forget, exactly like `measureProjectStorage`: a failure must
+   * never affect promotion or reattach.
+   */
+  recordCurrentBranch?: (input: { machineProjectId: string; branchName: string; observedAt: Date }) => Promise<void>;
 }
 
 export type PromoteProjectResult =
@@ -223,6 +232,60 @@ function noteRootStorageAfterReclaim(machineId: string, deps: PromoteProjectDeps
   if (!deps.remeasureMachineStorage) return;
   void deps.remeasureMachineStorage({ machinePageId: machineId }).catch(() => {
     /* Best-effort: the seam already logs. */
+  });
+}
+
+/** See `noteProjectStorage`: a branch-capture failure must never affect promotion or reattach. */
+function noteCurrentBranch(
+  record: PromoteProjectDeps['recordCurrentBranch'],
+  input: { machineProjectId: string; branchName: string; observedAt: Date },
+): void {
+  if (!record) return;
+  void record(input).catch(() => {
+    /* Best-effort: a failed capture must never affect promotion or reattach. */
+  });
+}
+
+/**
+ * The REATTACH path's own branch-capture site. It skips `inspectMachineCheckout`
+ * entirely (the OLD machine-side checkout is irrelevant once a project is
+ * promoted), so it runs its OWN `git status -b` — against the promoted Sprite
+ * `deps.host.attach` just confirmed live — rather than reusing output that
+ * doesn't exist on this path. This is the FAR more common wake (every
+ * subsequent spawn, not just the first promotion), so skipping it here would
+ * leave `currentBranchName` stale almost always. Fire-and-forget: see
+ * `noteCurrentBranch`.
+ */
+function noteCurrentBranchOnReattach({
+  machineId,
+  projectName,
+  project,
+  actor,
+  handle,
+  deps,
+}: {
+  machineId: string;
+  projectName: string;
+  project: MachineProjectRecord;
+  actor: MachineActorContext;
+  handle: MachineHandle;
+  deps: PromoteProjectDeps;
+}): void {
+  if (!deps.recordCurrentBranch) return;
+  void (async () => {
+    const status = await runGitInSandbox({
+      cmd: 'git',
+      args: ['status', '--porcelain', '-b'],
+      cwd: PROJECT_REPO_PATH,
+      ctx: buildActorCtx(`${machineId}:${projectName}`, actor),
+      deps: buildGitDepsForHandle(handle, deps),
+    });
+    if (!status.success || status.exitCode !== 0) return;
+    const branchName = parseCheckoutBranchName(status.stdout);
+    if (!branchName) return;
+    await deps.recordCurrentBranch!({ machineProjectId: project.id, branchName, observedAt: deps.now() });
+  })().catch(() => {
+    /* Best-effort: a failed capture must never affect the reattach. */
   });
 }
 
@@ -517,6 +580,14 @@ async function inspectMachineCheckout({
   if (!status.success) return { kind: 'unknown', detail: status.error ?? 'git status did not complete' };
   if (status.exitCode !== 0) return { kind: 'unknown', detail: status.stderr || status.stdout };
 
+  // Zero additional exec: the branch header is already in `status.stdout`
+  // above, read for the dirty-tree gate. Capturing it here is a pure parse of
+  // output already in hand, opportunistic on THIS call regardless of which
+  // gate outcome follows.
+  const branchName = parseCheckoutBranchName(status.stdout);
+  if (branchName) {
+    noteCurrentBranch(deps.recordCurrentBranch, { machineProjectId: project.id, branchName, observedAt: deps.now() });
+  }
   return classifyCheckoutStatus(status.stdout);
 }
 
@@ -917,6 +988,7 @@ export async function promoteProject({
       // reason `spawnBranch` re-copies on every reattach).
       await propagateClaudeCredential({ machineId, branchHandle: handle, resolveRootMachineHandle: deps.resolveRootMachineHandle });
       noteProjectStorage(deps.measureProjectStorage, { machineProjectId: project.id, machinePageId: machineId, handle });
+      noteCurrentBranchOnReattach({ machineId, projectName, project, actor, handle, deps });
       return { ok: true, sandboxId: handle.machineId, sessionKey: project.sessionKey, promoted: false, resumed: true, carried: false };
     }
     // Vanished — fall through and re-provision under the SAME session key.

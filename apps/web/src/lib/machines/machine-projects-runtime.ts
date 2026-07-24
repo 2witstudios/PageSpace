@@ -141,6 +141,8 @@ export function buildMachineProjectsDeps({ actorUserId }: { actorUserId: string 
       promote: async (input) => (await getMachineProjectStore()).promote(input),
       create: async (input) => (await getMachineProjectStore()).create(input),
       remove: async (machineId, id) => (await getMachineProjectStore()).remove(machineId, id),
+      recordCurrentBranch: async (id, branchName, observedAt) =>
+        (await getMachineProjectStore()).recordCurrentBranch(id, branchName, observedAt),
     },
     isEnabled: isCodeExecutionEnabled,
     now: () => new Date(),
@@ -275,5 +277,12 @@ export function buildPromoteProjectDeps({ actorUserId }: { actorUserId: string }
         resolveHandle: () => branches.resolveRootMachineHandle(machinePageId),
         force: true,
       }),
+    // Opportunistic branch capture (`machine-pane-binding.ts`'s handle
+    // synthesis): a pure persist, no exec of its own — the `git status -b`
+    // already ran on the promotion or reattach path that calls this.
+    recordCurrentBranch: async ({ machineProjectId, branchName, observedAt }) => {
+      const store = await getMachineProjectStore();
+      await store.recordCurrentBranch(machineProjectId, branchName, observedAt);
+    },
   };
 }

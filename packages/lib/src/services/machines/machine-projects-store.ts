@@ -166,6 +166,14 @@ export interface MachineProjectStore {
    * remove-then-re-add of the same name and silently delete the NEW row.
    */
   remove(machineId: string, id: string): Promise<void>;
+  /**
+   * Persist the LOCAL branch name this project's checkout was last observed
+   * on (`git status -b`), captured opportunistically whenever a Sprite is
+   * already awake for other work — see `machine-project-promotion.ts`'s
+   * `noteCurrentBranch`/`noteCurrentBranchOnReattach`, the only callers. A
+   * no-op UPDATE if the row is gone, so callers need not pre-check.
+   */
+  recordCurrentBranch(id: string, branchName: string, observedAt: Date): Promise<void>;
 }
 
 /** Re-exported so callers can classify a `create` rejection without importing the DB layer directly. */
@@ -239,6 +247,13 @@ export async function createDbMachineProjectStore(): Promise<MachineProjectStore
       await db
         .delete(machineProjects)
         .where(and(eq(machineProjects.machineId, machineId), eq(machineProjects.id, id)));
+    },
+
+    async recordCurrentBranch(id, branchName, observedAt) {
+      await db
+        .update(machineProjects)
+        .set({ currentBranchName: branchName, currentBranchObservedAt: observedAt })
+        .where(eq(machineProjects.id, id));
     },
   };
 }
