@@ -107,3 +107,11 @@
 # Scheduled drive backups - Hourly
 # Fires automated drive backups for pro+ users whose nextRunAt is due
 0 * * * * cron-curl POST __WEB_URL__/api/cron/scheduled-backups >> /var/log/cron/scheduled-backups.log 2>&1
+
+# Storage reconcile - Every 15 minutes
+# Rewrites users.storageUsedBytes from SUM(files.sizeBytes) wherever the cache
+# has drifted from the charge basis (#2155). Idempotent — a run that finds no
+# drift for a user makes no writes. The route itself holds a Postgres advisory
+# lock across ALL callers (any container, any manual trigger); flock -n here
+# is just this container's own defense-in-depth against overlapping ticks.
+*/15 * * * * flock -n /run/reconcile-storage.lock cron-curl GET __WEB_URL__/api/cron/reconcile-storage >> /var/log/cron/reconcile-storage.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-storage.log

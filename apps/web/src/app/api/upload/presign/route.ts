@@ -9,7 +9,8 @@ import {
   canClaimExistingObject,
 } from '@pagespace/lib/services/upload-validation';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
-import { checkStorageQuota, getUserStorageQuota, updateActiveUploads, userReferencesContentHash } from '@pagespace/lib/services/storage-limits';
+import { checkStorageQuota, reserveConcurrentUploadSlot, getUserStorageQuota, userReferencesContentHash } from '@pagespace/lib/services/storage-limits';
+import { releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkObjectExists, issuePresignedPutUrl } from '@/lib/upload/s3-effects';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -138,7 +139,19 @@ export async function POST(request: Request) {
   // Once the slot is acquired, any failure before we return must release it,
   // or the slot leaks until the semaphore's stale-slot sweep.
   try {
-    await updateActiveUploads(userId, 1);
+    // #2154/#2225: atomic cross-process reservation — check the user's live
+    // pending_uploads count against their tier limit AND insert this row in
+    // one transaction, so two presigns racing on different replicas can't
+    // both pass the count check before either reserves. If the process dies
+    // before /complete, the row simply expires — no permanent slot leak.
+    const reserved = await reserveConcurrentUploadSlot(jobId, userId, fileSize);
+    if (!reserved) {
+      uploadSemaphore.releaseUploadSlot(jobId);
+      return NextResponse.json(
+        { error: 'Too many concurrent uploads. Please wait for current uploads to complete.' },
+        { status: 429 },
+      );
+    }
 
     if (exists && allowFastPath) {
       return NextResponse.json({ alreadyExists: true, jobId, key });
@@ -158,7 +171,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ url, jobId, key, expiresAt });
   } catch (err) {
     uploadSemaphore.releaseUploadSlot(jobId);
-    await updateActiveUploads(userId, -1).catch(() => undefined);
+    await releasePendingUpload(jobId).catch(() => undefined);
     throw err;
   }
 }

@@ -17,9 +17,13 @@ vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
 
 vi.mock('@pagespace/lib/services/storage-limits', () => ({
   getUserStorageQuota: vi.fn(),
-  updateActiveUploads: vi.fn(),
   checkStorageQuota: vi.fn(),
+  reserveConcurrentUploadSlot: vi.fn(),
   userReferencesContentHash: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/services/pending-uploads', () => ({
+  releasePendingUpload: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/services/upload-semaphore', () => ({
@@ -40,7 +44,7 @@ vi.mock('@/lib/upload/s3-effects', () => ({
 import { POST } from '../route';
 import { authenticateRequestWithOptions, checkMCPCreateScope } from '@/lib/auth';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
-import { getUserStorageQuota, updateActiveUploads, checkStorageQuota, userReferencesContentHash } from '@pagespace/lib/services/storage-limits';
+import { getUserStorageQuota, checkStorageQuota, reserveConcurrentUploadSlot, userReferencesContentHash } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkObjectExists, issuePresignedPutUrl } from '@/lib/upload/s3-effects';
 
@@ -81,7 +85,7 @@ beforeEach(() => {
   vi.mocked(checkObjectExists).mockResolvedValue(false);
   vi.mocked(issuePresignedPutUrl).mockResolvedValue(MOCK_URL);
   vi.mocked(uploadSemaphore.acquireUploadSlot).mockResolvedValue(MOCK_SLOT);
-  vi.mocked(updateActiveUploads).mockResolvedValue(undefined);
+  vi.mocked(reserveConcurrentUploadSlot).mockResolvedValue(true);
   // Default: caller already references the hash, so the dedup fast-path stays
   // available for the existing dedup tests. H3-specific tests override this.
   vi.mocked(userReferencesContentHash).mockResolvedValue(true);
@@ -231,9 +235,9 @@ describe('POST /api/upload/presign', () => {
       });
     });
 
-    it('increments activeUploads after acquiring the slot', async () => {
+    it('reserves the pending-upload slot atomically after acquiring the semaphore permit', async () => {
       await POST(makeRequest(VALID_BODY));
-      expect(updateActiveUploads).toHaveBeenCalledWith('user-1', 1);
+      expect(reserveConcurrentUploadSlot).toHaveBeenCalledWith(MOCK_SLOT, 'user-1', 1024);
     });
   });
 
@@ -283,10 +287,24 @@ describe('POST /api/upload/presign', () => {
       expect(res.status).toBe(429);
     });
 
-    it('does not increment activeUploads when slot acquisition fails', async () => {
+    it('does not attempt the atomic reservation when slot acquisition fails', async () => {
       vi.mocked(uploadSemaphore.acquireUploadSlot).mockResolvedValue(null);
       await POST(makeRequest(VALID_BODY));
-      expect(updateActiveUploads).not.toHaveBeenCalled();
+      expect(reserveConcurrentUploadSlot).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('#2154/#2225 — cross-process concurrency gate (atomic pending_uploads reserve)', () => {
+    it('returns 429 when the atomic reservation is denied (user at their live-upload limit on another process)', async () => {
+      vi.mocked(reserveConcurrentUploadSlot).mockResolvedValue(false);
+      const res = await POST(makeRequest(VALID_BODY));
+      expect(res.status).toBe(429);
+    });
+
+    it('releases the in-process semaphore slot when the atomic reservation is denied', async () => {
+      vi.mocked(reserveConcurrentUploadSlot).mockResolvedValue(false);
+      await POST(makeRequest(VALID_BODY));
+      expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_SLOT);
     });
   });
 });

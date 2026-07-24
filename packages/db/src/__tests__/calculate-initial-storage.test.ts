@@ -134,12 +134,14 @@ describe('scripts/calculate-initial-storage.ts', () => {
     );
   });
 
-  it('processes users with no drives and sets storage to 0', async () => {
+  it('processes a user with no files and sets storage to 0', async () => {
     const user = { id: 'u1', email: 'nodrive@example.com', subscriptionTier: 'free' };
     // allUsers
     selectFromQueue.push(() => Promise.resolve([user]));
-    // drives for user: empty
-    findManyQueue.push(() => Promise.resolve([]));
+    // files query (db.select({...}).from(files).where(...)): .from() dequeues an
+    // unused placeholder, .where() dequeues the actual (empty) result.
+    selectFromQueue.push(() => Promise.resolve([]));
+    selectFromQueue.push(() => Promise.resolve([]));
     // summary
     selectFromQueue.push(() => Promise.resolve([{
       totalUsers: 1, totalStorage: 0, avgStorage: 0, normalUsers: 1, proUsers: 0,
@@ -151,14 +153,13 @@ describe('scripts/calculate-initial-storage.ts', () => {
     expect(processExitSpy).toHaveBeenCalledWith(0);
   });
 
-  it('processes users with drives and files correctly', async () => {
+  it('processes a user with files correctly', async () => {
     const user = { id: 'u2', email: 'files@example.com', subscriptionTier: 'pro' };
     // allUsers
     selectFromQueue.push(() => Promise.resolve([user]));
-    // drives for user
-    findManyQueue.push(() => Promise.resolve([{ id: 'drive-1', name: 'My Drive' }]));
-    // file size query (db.select({...}).from(pages).where())
-    selectFromQueue.push(() => Promise.resolve([{ totalSize: 1024000, fileCount: 5 }]));
+    // files query: db.select({...}).from(files).where(eq(files.createdBy, user.id))
+    selectFromQueue.push(() => Promise.resolve([])); // from() — unused placeholder
+    selectFromQueue.push(() => Promise.resolve([{ totalSize: 1024000, fileCount: 5 }])); // where() — actual
     // summary
     selectFromQueue.push(() => Promise.resolve([{
       totalUsers: 1, totalStorage: 1024000, avgStorage: 1024000, normalUsers: 0, proUsers: 1,
@@ -194,10 +195,12 @@ describe('scripts/calculate-initial-storage.ts', () => {
     ];
     // allUsers
     selectFromQueue.push(() => Promise.resolve(users));
-    // user 1: drives throws
-    findManyQueue.push(() => Promise.reject(new Error('Drive query failed')));
-    // user 2: drives also throws
-    findManyQueue.push(() => Promise.reject(new Error('Drive query 2 failed')));
+    // user 1: files query throws (from() placeholder, then where() rejects)
+    selectFromQueue.push(() => Promise.resolve([]));
+    selectFromQueue.push(() => Promise.reject(new Error('Files query failed')));
+    // user 2: files query also throws
+    selectFromQueue.push(() => Promise.resolve([]));
+    selectFromQueue.push(() => Promise.reject(new Error('Files query 2 failed')));
     // summary
     selectFromQueue.push(() => Promise.resolve([{
       totalUsers: 2, totalStorage: 0, avgStorage: 0, normalUsers: 2, proUsers: 0,
@@ -208,7 +211,7 @@ describe('scripts/calculate-initial-storage.ts', () => {
 
     expect(processExitSpy).toHaveBeenCalledWith(0);
     // Error logged for failed users
-    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Error'), expect.objectContaining({ message: 'Drive query failed' }));
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Error'), expect.objectContaining({ message: 'Files query failed' }));
     // Complete banner still shown
     expect(consoleLogSpy).toHaveBeenCalledWith(
       expect.stringContaining('Storage calculation complete')
@@ -218,7 +221,6 @@ describe('scripts/calculate-initial-storage.ts', () => {
   it('defaults to free subscription when subscriptionTier is null', async () => {
     const user = { id: 'u-null-tier', email: 'nulltier@example.com', subscriptionTier: null };
     selectFromQueue.push(() => Promise.resolve([user]));
-    findManyQueue.push(() => Promise.resolve([{ id: 'drive-1', name: 'Drive' }]));
     selectFromQueue.push(() => Promise.resolve([])); // from()
     selectFromQueue.push(() => Promise.resolve([{ totalSize: 1024, fileCount: 1 }])); // where()
     selectFromQueue.push(() => Promise.resolve([{
@@ -238,8 +240,6 @@ describe('scripts/calculate-initial-storage.ts', () => {
     const user = { id: 'u5', email: 'heavy@example.com', subscriptionTier: 'free' };
     // allUsers - consumed by smartFrom's thenable
     selectFromQueue.push(() => Promise.resolve([user]));
-    // drives
-    findManyQueue.push(() => Promise.resolve([{ id: 'drive-1', name: 'Drive' }]));
     // file sizes query: smartFrom dequeues once (from()), then .where() dequeues again
     selectFromQueue.push(() => Promise.resolve([])); // consumed by from() - unused
     selectFromQueue.push(() => Promise.resolve([{ totalSize: bigSize, fileCount: 100 }])); // consumed by where()
@@ -261,8 +261,6 @@ describe('scripts/calculate-initial-storage.ts', () => {
     const user = { id: 'u6', email: 'probig@example.com', subscriptionTier: 'pro' };
     // allUsers - consumed by smartFrom's thenable
     selectFromQueue.push(() => Promise.resolve([user]));
-    // drives
-    findManyQueue.push(() => Promise.resolve([{ id: 'drive-1', name: 'Drive' }]));
     // file sizes query: smartFrom dequeues once (from()), then .where() dequeues again
     selectFromQueue.push(() => Promise.resolve([])); // consumed by from() - unused
     selectFromQueue.push(() => Promise.resolve([{ totalSize: bigSize, fileCount: 500 }])); // consumed by where()

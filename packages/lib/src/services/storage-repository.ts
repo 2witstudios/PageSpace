@@ -4,7 +4,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, sql, and, inArray } from '@pagespace/db/operators';
+import { eq, sql, and, inArray, desc } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { pages, drives, storageEvents } from '@pagespace/db/schema/core';
 import { files } from '@pagespace/db/schema/storage';
@@ -17,9 +17,12 @@ export interface StorageUserRecord {
   subscriptionTier: string | null;
 }
 
-export interface UploadUserRecord {
-  activeUploads: number;
-  subscriptionTier: string | null;
+export interface StorageDriftCandidate {
+  userId: string;
+  /** users.storageUsedBytes — the cached counter. */
+  materializedBytes: number;
+  /** SUM(files.sizeBytes) for files.createdBy = userId — the source of truth. */
+  derivedBytes: number;
 }
 
 export const storageRepository = {
@@ -30,11 +33,74 @@ export const storageRepository = {
     }) as Promise<StorageUserRecord | undefined>;
   },
 
-  findUserForUploads: async (userId: string): Promise<UploadUserRecord | undefined> => {
-    return db.query.users.findFirst({
-      where: eq(users.id, userId),
-      columns: { activeUploads: true, subscriptionTier: true },
-    }) as Promise<UploadUserRecord | undefined>;
+  /**
+   * #2155 — set-based drift scan for the scheduled reconcile: every user whose
+   * storageUsedBytes cache differs from SUM(files.sizeBytes) over their files
+   * rows by more than the tolerance. One aggregate over `files` (grouped by
+   * creator) joined to `users`, so the cron pays a single pass regardless of
+   * user count.
+   *
+   * #2225 review — excludes users with a `files` row created within the last
+   * `cooldownSeconds`: upload/complete inserts the `files` row and calls
+   * `updateStorageUsage` as two SEPARATE steps (deliberately non-atomic — a
+   * failure in the second must not roll back the successful page creation),
+   * so there's a real window where `derivedBytes` already reflects a new
+   * upload but `materializedBytes` doesn't yet. Scanning during that window
+   * looks like drift; correcting it via delta lands the counter on the
+   * CORRECT value in the instant, but then the upload's own pending
+   * `updateStorageUsage` call still lands afterward and double-applies the
+   * same bytes. The cooldown gives that pending call time to land before this
+   * user is ever treated as a candidate, closing the window without touching
+   * the upload route's intentionally-non-atomic bookkeeping split. (The
+   * analogous window exists on the orphan-reaper's credit path too, but that
+   * path deletes the `files` row so there's no timestamp left to key a
+   * cooldown on — accepted as a narrower, self-healing residual risk.)
+   */
+  findStorageDriftCandidates: async (toleranceBytes: number, cooldownSeconds: number): Promise<StorageDriftCandidate[]> => {
+    const result = await db.execute(sql`
+      SELECT u.id AS "userId",
+             u."storageUsedBytes" AS "materializedBytes",
+             COALESCE(f.total, 0) AS "derivedBytes"
+      FROM users u
+      LEFT JOIN (
+        SELECT "createdBy", SUM("sizeBytes") AS total, MAX("createdAt") AS "lastCreatedAt"
+        FROM files
+        WHERE "createdBy" IS NOT NULL
+        GROUP BY "createdBy"
+      ) f ON f."createdBy" = u.id
+      WHERE ABS(ROUND(u."storageUsedBytes") - COALESCE(f.total, 0)) > ${Math.max(0, Math.round(toleranceBytes))}
+        AND (f."lastCreatedAt" IS NULL OR f."lastCreatedAt" < now() - make_interval(secs => ${Math.max(0, cooldownSeconds)}))
+    `);
+    return result.rows.map((row) => {
+      const r = row as { userId: string; materializedBytes: number | string; derivedBytes: number | string };
+      return {
+        userId: r.userId,
+        materializedBytes: Number(r.materializedBytes),
+        derivedBytes: Number(r.derivedBytes),
+      };
+    });
+  },
+
+  /**
+   * #2225 review (Codex round 5) — the single-user admin reconcile reads
+   * `users.storageUsedBytes` and sums `files.sizeBytes` as two separate
+   * queries, the same TOCTOU window `findStorageDriftCandidates`'s cooldown
+   * closes for the cron sweep: if a `files` row commits between those two
+   * reads (upload/complete's insert lands but its separate storageUsedBytes
+   * update hasn't yet), the derived sum already includes it while the cached
+   * counter doesn't, so the delta correction double-counts it once the
+   * upload's own pending update lands. Callers use this to skip correcting
+   * a user whose most recent `files` row is too fresh, mirroring the cron's
+   * cooldown for the same race on the single-user path.
+   */
+  findLastFileCreatedAtForUser: async (userId: string): Promise<Date | null> => {
+    const [row] = await db
+      .select({ createdAt: files.createdAt })
+      .from(files)
+      .where(eq(files.createdBy, userId))
+      .orderBy(desc(files.createdAt))
+      .limit(1);
+    return row?.createdAt ?? null;
   },
 
   findUserDriveIds: async (userId: string): Promise<string[]> => {
@@ -95,12 +161,6 @@ export const storageRepository = {
     return Number(result[0]?.count ?? 0);
   },
 
-  updateActiveUploads: async (userId: string, delta: number): Promise<void> => {
-    await db.update(users)
-      .set({ activeUploads: sql`GREATEST(0, COALESCE("activeUploads", 0) + ${delta})` })
-      .where(eq(users.id, userId));
-  },
-
   updateStorageInTx: async (
     tx: DrizzleTx,
     userId: string,
@@ -122,16 +182,6 @@ export const storageRepository = {
     event: typeof storageEvents.$inferInsert,
   ): Promise<void> => {
     await tx.insert(storageEvents).values(event);
-  },
-
-  setUserStorageInTx: async (
-    tx: DrizzleTx,
-    userId: string,
-    absoluteBytes: number,
-  ): Promise<void> => {
-    await tx.update(users)
-      .set({ storageUsedBytes: absoluteBytes, lastStorageCalculated: new Date() })
-      .where(eq(users.id, userId));
   },
 
   runTransaction: <T>(fn: (tx: DrizzleTx) => Promise<T>): Promise<T> => {

@@ -7,7 +7,7 @@ import {
   getUserStorageQuota,
   STORAGE_TIERS
 } from '@pagespace/lib/services/storage-limits';
-import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
+import { countLiveUploadsForUser } from '@pagespace/lib/services/pending-uploads';
 import { safeParseBody } from '@/lib/validation/parse-body';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -49,8 +49,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Could not retrieve storage quota' }, { status: 500 });
     }
 
-    // Check if user can acquire an upload slot
-    const canUpload = await uploadSemaphore.canAcquireSlot(userId, quota.tier);
+    // Check if user can acquire an upload slot. Reads the same pending_uploads
+    // rows presign's atomic reserve enforces (#2225 review — Codex round 5):
+    // the process-local semaphore alone can't see slots reserved on other web
+    // replicas, so it could say "allowed" here only for presign to 429 moments
+    // later.
+    const liveUploads = await countLiveUploadsForUser(userId);
+    const canUpload = liveUploads < STORAGE_TIERS[quota.tier].maxConcurrentUploads;
     if (!canUpload) {
       return NextResponse.json({
         allowed: false,
@@ -90,9 +95,9 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Could not retrieve storage quota' }, { status: 500 });
     }
 
-    // Get semaphore status
-    const semaphoreStatus = uploadSemaphore.getStatus();
-    const userActiveUploads = semaphoreStatus.userUploads.get(userId) || 0;
+    // Cross-process live-upload count (#2225 review — Codex round 5), same
+    // basis presign's atomic reserve enforces.
+    const userActiveUploads = await countLiveUploadsForUser(userId);
 
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'storage', resourceId: userId });
 

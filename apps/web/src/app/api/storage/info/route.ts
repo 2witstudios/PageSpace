@@ -9,9 +9,17 @@ import {
   STORAGE_TIERS,
   formatBytes
 } from '@pagespace/lib/services/storage-limits';
+import { getUserDriveAccess, getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db'
-import { eq, and, desc, inArray } from '@pagespace/db/operators'
-import { pages, drives } from '@pagespace/db/schema/core';
+import { eq, or, inArray } from '@pagespace/db/operators'
+import { drives } from '@pagespace/db/schema/core';
+import { findUserFileRows } from '@/lib/storage/storage-info-repository';
+import {
+  buildFileTypeBreakdown,
+  pickLargestFiles,
+  pickRecentFiles,
+  buildStorageByDrive,
+} from '@/lib/storage/storage-info-core';
 
 export async function GET(request: NextRequest) {
   try {
@@ -46,7 +54,11 @@ export async function GET(request: NextRequest) {
       }
       try {
         const reconcileResult = await reconcileStorageUsage(user.id);
-        console.log(`Storage reconciled for user ${user.id}:`, reconcileResult);
+        if (reconcileResult.outcome === 'lock_busy') {
+          console.log(`Storage reconcile for user ${user.id} skipped: another reconcile is already running`);
+        } else {
+          console.log(`Storage reconciled for user ${user.id}:`, reconcileResult);
+        }
       } catch (error) {
         console.error('Storage reconciliation failed:', error);
       }
@@ -61,84 +73,83 @@ export async function GET(request: NextRequest) {
     // Get file count
     const fileCount = await getUserFileCount(user.id);
 
-    // Get user's drives
+    // The charge basis: files.sizeBytes for files this user created, joined to
+    // a representative page for display. Matches what quota/reconcile read, so
+    // this surface never disagrees with the number that blocks an upload.
+    const userFiles = await findUserFileRows(user.id);
+
+    // Drives to show in the by-drive breakdown: every drive the user OWNS
+    // (even at 0 bytes, so the table stays a complete inventory) UNION every
+    // drive a referenced file actually lives in. userFiles includes files
+    // created in ANY drive the user has upload access to, not just owned
+    // ones (#2225 review) — without the union, a shared-drive upload's bytes
+    // would count toward the total but be invisible in this breakdown.
+    const referencedDriveIds = Array.from(
+      new Set(userFiles.map(f => f.driveId).filter((id): id is string => id !== null)),
+    );
+    const driveWhere = referencedDriveIds.length > 0
+      ? or(eq(drives.ownerId, user.id), inArray(drives.id, referencedDriveIds))
+      : eq(drives.ownerId, user.id);
     // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
-    const userDrives = await db.query.drives.findMany({
-      where: eq(drives.ownerId, user.id),
-      columns: { id: true, name: true }
+    const candidateDrives = await db.query.drives.findMany({
+      where: driveWhere,
+      columns: { id: true, name: true, ownerId: true }
     });
 
-    if (userDrives.length === 0) {
-      auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'storage', resourceId: user.id });
-      return NextResponse.json({
-        quota,
-        tierInfo: STORAGE_TIERS[quota.tier],
-        fileCount,
-        files: [],
-        largestFiles: [],
-        fileTypeBreakdown: {},
-        recentFiles: []
-      });
-    }
+    // #2225 review: a referenced (non-owned) drive can be one the user
+    // uploaded into and was LATER REMOVED from — files.createdBy survives
+    // membership changes, but the drive's metadata (name) must not keep
+    // leaking to a user who no longer has access. Owned drives always pass
+    // trivially; only re-check the ones the user doesn't own.
+    const accessChecks = await Promise.all(
+      candidateDrives.map(d => d.ownerId === user.id ? Promise.resolve(true) : getUserDriveAccess(user.id, d.id)),
+    );
+    const userDrives = candidateDrives.filter((_, i) => accessChecks[i]);
 
-    const driveIds = userDrives.map(d => d.id);
+    const fileTypeBreakdown = buildFileTypeBreakdown(userFiles);
 
-    // Get all user's files
-    const files = await db
-      .select({
-        id: pages.id,
-        title: pages.title,
-        fileSize: pages.fileSize,
-        mimeType: pages.mimeType,
-        createdAt: pages.createdAt,
-        driveId: pages.driveId
-      })
-      .from(pages)
-      .where(and(
-        inArray(pages.driveId, driveIds),
-        eq(pages.type, 'FILE'),
-        eq(pages.isTrashed, false)
-      ))
-      .orderBy(desc(pages.createdAt));
+    const topLargestFiles = pickLargestFiles(userFiles, 10);
+    const topRecentFiles = pickRecentFiles(userFiles, 10);
 
-    // Calculate file type breakdown
-    const fileTypeBreakdown: Record<string, { count: number; totalSize: number }> = {};
-    files.forEach(file => {
-      const type = getFileTypeCategory(file.mimeType || 'unknown');
-      if (!fileTypeBreakdown[type]) {
-        fileTypeBreakdown[type] = { count: 0, totalSize: 0 };
-      }
-      fileTypeBreakdown[type].count++;
-      fileTypeBreakdown[type].totalSize += file.fileSize || 0;
-    });
+    // #2225 review (Codex round 4, P1): drive-level access is NOT sufficient to
+    // show a page's title/id — a drive member (or anyone with access to ANY
+    // page in the drive) passes getUserDriveAccess even though a specific page
+    // in that drive is marked private and they have no explicit grant on it.
+    // Only the centralized page-level check (getUserAccessLevel, batched here)
+    // is authoritative for "can this user see THIS page". Batched over just the
+    // pages actually surfaced (top 10 largest + top 10 recent, deduped) rather
+    // than every userFiles row, since that's the only set whose title/id we
+    // might reveal.
+    const candidatePageIds = Array.from(
+      new Set(
+        [...topLargestFiles, ...topRecentFiles]
+          .map(f => f.pageId)
+          .filter((id): id is string => id !== null),
+      ),
+    );
+    const pagePermissions = await getBatchPagePermissions(user.id, candidatePageIds);
+    const canShowPage = (f: { pageId: string | null }) =>
+      f.pageId !== null && (pagePermissions.get(f.pageId)?.canView ?? false);
 
-    // Get largest files
-    const largestFiles = [...files]
-      .sort((a, b) => (b.fileSize || 0) - (a.fileSize || 0))
-      .slice(0, 10)
-      .map(f => ({
-        ...f,
-        formattedSize: formatBytes(f.fileSize || 0)
-      }));
-
-    // Get recent files
-    const recentFiles = files.slice(0, 10).map(f => ({
-      ...f,
-      formattedSize: formatBytes(f.fileSize || 0)
+    const largestFiles = topLargestFiles.map(f => ({
+      id: canShowPage(f) ? f.pageId! : f.fileId,
+      title: canShowPage(f) ? f.title! : 'Untitled file',
+      mimeType: f.mimeType,
+      formattedSize: formatBytes(f.sizeBytes)
     }));
 
-    // Calculate storage by drive
-    const storageByDrive = userDrives.map(drive => {
-      const driveFiles = files.filter(f => f.driveId === drive.id);
-      const totalSize = driveFiles.reduce((sum, f) => sum + (f.fileSize || 0), 0);
-      return {
-        driveId: drive.id,
-        driveName: drive.name,
-        fileCount: driveFiles.length,
-        totalSize,
-        formattedSize: formatBytes(totalSize)
-      };
-    });
+    const recentFiles = topRecentFiles.map(f => ({
+      id: canShowPage(f) ? f.pageId! : f.fileId,
+      title: canShowPage(f) ? f.title! : 'Untitled file',
+      mimeType: f.mimeType,
+      createdAt: f.createdAt,
+      formattedSize: formatBytes(f.sizeBytes)
+    }));
+
+    const storageByDrive = buildStorageByDrive(userFiles, userDrives).map(d => ({
+      ...d,
+      formattedSize: formatBytes(d.totalSize)
+    }));
 
     auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'storage', resourceId: user.id });
 
@@ -151,7 +162,13 @@ export async function GET(request: NextRequest) {
       },
       tierInfo: STORAGE_TIERS[quota.tier],
       fileCount,
-      totalFiles: files.length,
+      // `totalFiles` is shown beside tierInfo.maxFileCount in the UI, so it must
+      // stay on the same basis checkStorageQuota enforces (getUserFileCount's
+      // drive-scoped FILE-page count) — NOT userFiles.length, which counts
+      // distinct blobs (files.createdBy) and would double under dedup (N pages
+      // can share one blob) or diverge via attachments the file-count limit
+      // doesn't gate.
+      totalFiles: fileCount,
       fileTypeBreakdown,
       largestFiles,
       recentFiles,
@@ -165,23 +182,4 @@ export async function GET(request: NextRequest) {
       { status: 500 }
     );
   }
-}
-
-/**
- * Categorize file types for breakdown
- */
-function getFileTypeCategory(mimeType: string): string {
-  if (!mimeType || mimeType === 'unknown') return 'Other';
-
-  if (mimeType.startsWith('image/')) return 'Images';
-  if (mimeType.startsWith('video/')) return 'Videos';
-  if (mimeType.startsWith('audio/')) return 'Audio';
-  if (mimeType.startsWith('text/')) return 'Text';
-  if (mimeType.includes('pdf')) return 'PDFs';
-  if (mimeType.includes('word') || mimeType.includes('document')) return 'Documents';
-  if (mimeType.includes('sheet') || mimeType.includes('excel')) return 'Spreadsheets';
-  if (mimeType.includes('presentation') || mimeType.includes('powerpoint')) return 'Presentations';
-  if (mimeType.includes('zip') || mimeType.includes('compress') || mimeType.includes('archive')) return 'Archives';
-
-  return 'Other';
 }

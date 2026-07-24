@@ -10,8 +10,8 @@ vi.mock('@pagespace/lib/services/upload-semaphore', () => ({
   uploadSemaphore: { verifySlotOwner: vi.fn(), getSlotMetadata: vi.fn(), releaseUploadSlot: vi.fn() },
 }));
 
-vi.mock('@pagespace/lib/services/storage-limits', () => ({
-  updateActiveUploads: vi.fn(),
+vi.mock('@pagespace/lib/services/pending-uploads', () => ({
+  releasePendingUpload: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
@@ -19,7 +19,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
-import { updateActiveUploads } from '@pagespace/lib/services/storage-limits';
+import { releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const JOB_ID = 'user-1-slot-abc';
@@ -41,7 +41,7 @@ beforeEach(() => {
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(makeAuth());
   vi.mocked(uploadSemaphore.verifySlotOwner).mockReturnValue(true);
   vi.mocked(uploadSemaphore.getSlotMetadata).mockReturnValue({ contentHash: 'a'.repeat(64), driveId: 'drive-1', fileSize: 1024, mimeType: 'image/jpeg' });
-  vi.mocked(updateActiveUploads).mockResolvedValue(undefined);
+  vi.mocked(releasePendingUpload).mockResolvedValue(undefined);
 });
 
 describe('POST /api/upload/cancel', () => {
@@ -56,11 +56,11 @@ describe('POST /api/upload/cancel', () => {
     expect(res.status).toBe(400);
   });
 
-  it('releases the slot and decrements activeUploads for a slot the user owns', async () => {
+  it('releases the slot and the pending-upload reservation for a slot the user owns', async () => {
     const res = await POST(makeRequest({ jobId: JOB_ID }));
     expect(res.status).toBe(200);
     expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(JOB_ID);
-    expect(updateActiveUploads).toHaveBeenCalledWith('user-1', -1);
+    expect(releasePendingUpload).toHaveBeenCalledWith(JOB_ID);
     expect(auditRequest).toHaveBeenCalled();
   });
 

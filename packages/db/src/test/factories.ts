@@ -18,7 +18,6 @@ export const factories = {
       currentAiProvider: 'openai',
       currentAiModel: 'openai/gpt-5.3-chat',
       storageUsedBytes: 0,
-      activeUploads: 0,
       subscriptionTier: 'free',
       createdAt: new Date(),
       updatedAt: new Date(),
