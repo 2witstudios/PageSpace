@@ -137,12 +137,20 @@ export type MachineNodeTargetResolution =
  * checkout happens to be on". A project's default checkout has no branch
  * handle of its own, so a caller (a model reasoning in ordinary git terms)
  * naturally but incorrectly asks for `{ project, branch: "main" }` to mean
- * "this project's own state". When the branch half of that target doesn't
- * resolve but the project half does, we fall back to the PROJECT handle
- * rather than denying the whole target — the project was already in `set`,
- * so this grants nothing new, it just stops a wrong-shaped-but-harmless
- * target from reading as "get out of this machine entirely".
+ * "this project's own state". When that branch name is a conventional
+ * default-checkout alias (`main`/`master`) and doesn't resolve, but the
+ * project half of the target does, we fall back to the PROJECT handle rather
+ * than denying the whole target — the project was already in `set`, so this
+ * grants nothing new.
+ *
+ * This fallback is DELIBERATELY narrow — only those two alias names, never
+ * any other unresolved branch. A misspelled or deleted branch name must
+ * still deny outright: silently redirecting it to the project's default
+ * checkout would let bash/file/git tools run against the wrong worktree
+ * without the caller ever finding out.
  */
+const DEFAULT_CHECKOUT_BRANCH_ALIASES = new Set(['main', 'master']);
+
 export function resolveMachineNodeTarget(
   set: MachineNodeHandleSet,
   target: MachineNodeTarget | undefined,
@@ -156,7 +164,7 @@ export function resolveMachineNodeTarget(
     );
     if (matches.length === 1) return { ok: true, handle: matches[0] };
     if (matches.length > 1) return { ok: false, reason: 'ambiguous_target' };
-    if (project !== undefined) {
+    if (project !== undefined && DEFAULT_CHECKOUT_BRANCH_ALIASES.has(target.branch)) {
       const projectHandle = set.handles.find((h) => h.kind === 'project' && h.project === project);
       if (projectHandle) return { ok: true, handle: projectHandle };
     }

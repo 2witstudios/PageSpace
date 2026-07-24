@@ -474,6 +474,27 @@ describe('resolveMachineNodeTarget', () => {
     });
   });
 
+  // Codex review (PR #2232): the fallback must NOT catch every unresolved
+  // branch name — only the conventional default-checkout aliases. Otherwise a
+  // genuinely misspelled or deleted branch name would silently redirect
+  // tool calls to the project's default checkout instead of denying, and the
+  // caller would never learn its target didn't exist.
+  it('given a project in the set + a branch name that is NOT a default-checkout alias, should still refuse as out of set (not fall back)', () => {
+    const projectSet = { self: PROJECT_HANDLE, handles: [PROJECT_HANDLE] };
+    expect(resolveMachineNodeTarget(projectSet, { project: PROJECT_NAME, branch: 'feature-typo' })).toEqual({
+      ok: false,
+      reason: 'target_not_in_set',
+    });
+  });
+
+  it('given a project in the set + "master" (the other default-checkout alias) unresolved, should fall back to the project handle', () => {
+    const projectSet = { self: PROJECT_HANDLE, handles: [PROJECT_HANDLE] };
+    expect(resolveMachineNodeTarget(projectSet, { project: PROJECT_NAME, branch: 'master' })).toEqual({
+      ok: true,
+      handle: PROJECT_HANDLE,
+    });
+  });
+
   it('given a BRANCH-scoped self (no project handle in its own set) + an unresolved bare branch name, should refuse rather than fall back', () => {
     // A branch pane's derived set is [self] only (deriveMachinePaneBinding) — its
     // own enclosing project is never itself a handle here, so there is nothing
