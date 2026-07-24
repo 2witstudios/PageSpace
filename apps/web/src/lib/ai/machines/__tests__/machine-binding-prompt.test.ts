@@ -75,13 +75,13 @@ describe('buildMachineBindingPrompt', () => {
     expect(prompt).not.toContain('"branch" here is NOT "whatever git branch a project happens to be on"');
   });
 
-  // Codex review (PR #2232, second pass): a conversation bound DIRECTLY to a
-  // branch has `handles: [self]` — nothing beneath it at all. The live-branch
-  // check must still recognize `self` itself as a live default-named branch,
-  // or it wrongly concludes "no such branch exists" about the very branch
-  // the conversation IS, and recommends target: { project } — which a
-  // branch-scoped conversation can't even address (its handle set has no
-  // project handle in it).
+  // Codex review (PR #2232, third pass): the warning's OWN advice — "to run
+  // at a project, pass target: { project }" — is unreachable from ANY
+  // branch-scoped self, not just one named main/master. deriveMachinePaneBinding
+  // gives a branch pane handles: [self] only — no project handle is EVER in
+  // scope from there, regardless of what this branch is named. Recommending
+  // it would just trade one target_not_in_set for another, so the whole
+  // warning is skipped for a branch self unconditionally.
   it('given self IS a live branch named "main" (branch-bound conversation, nothing beneath it), should NOT warn', () => {
     const branchSelf: MachineNodeHandleSet['self'] = {
       kind: 'branch',
@@ -95,7 +95,7 @@ describe('buildMachineBindingPrompt', () => {
     expect(prompt).not.toContain('"branch" here is NOT "whatever git branch a project happens to be on"');
   });
 
-  it('given self is a branch NOT named main/master (branch-bound, nothing beneath it), should still warn (it is genuinely not a default-checkout name)', () => {
+  it('given self is a branch NOT named main/master (branch-bound, nothing beneath it), should ALSO not warn — recommending target: { project } would be unreachable advice regardless of this branch\'s name', () => {
     const branchSelf: MachineNodeHandleSet['self'] = {
       kind: 'branch',
       machineId: 'm1',
@@ -104,6 +104,15 @@ describe('buildMachineBindingPrompt', () => {
       cwd: '/workspace/branches/feature-x',
     };
     const binding: MachineNodeHandleSet = { self: branchSelf, handles: [branchSelf] };
+    const prompt = buildMachineBindingPrompt(binding);
+    expect(prompt).not.toContain('"branch" here is NOT "whatever git branch a project happens to be on"');
+  });
+
+  it('given a project-scoped self with no live default branch beneath it, should still warn (the project handle IS reachable, so the advice is valid here)', () => {
+    // Regression guard: the branch-self suppression above must not
+    // accidentally widen to suppress the warning for project/machine selfs
+    // too, where the recommended target: { project } genuinely does resolve.
+    const binding: MachineNodeHandleSet = { self: PROJECT_SELF, handles: [PROJECT_SELF] };
     const prompt = buildMachineBindingPrompt(binding);
     expect(prompt).toContain('"branch" here is NOT "whatever git branch a project happens to be on"');
   });
