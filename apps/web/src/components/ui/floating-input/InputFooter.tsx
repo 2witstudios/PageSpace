@@ -7,7 +7,7 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from '@/components/ui/tooltip';
-import { Mic, AudioLines, MicOff } from 'lucide-react';
+import { Mic, AudioLines, MicOff, Volume2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ProviderModelSelector } from '@/components/ai/chat/input/ProviderModelSelector';
 import { ToolsPopover } from './ToolsPopover';
@@ -61,6 +61,12 @@ export interface InputFooterProps {
   onVoiceModeClick?: () => void;
   /** Whether voice mode is currently active */
   isVoiceModeActive?: boolean;
+  /** Callback when the read-aloud button is clicked */
+  onReadAloudClick?: () => void;
+  /** Whether read-aloud is currently playing */
+  isReadingAloud?: boolean;
+  /** Whether there is anything eligible to read aloud right now */
+  canReadAloud?: boolean;
   /** Error message from microphone/speech recognition */
   micError?: string | null;
   /** Callback to clear the mic error */
@@ -110,6 +116,9 @@ export function InputFooter({
   isMicSupported = true,
   onVoiceModeClick,
   isVoiceModeActive = false,
+  onReadAloudClick,
+  isReadingAloud = false,
+  canReadAloud = false,
   micError,
   onClearMicError,
   selectedProvider,
@@ -164,6 +173,44 @@ export function InputFooter({
             disabled={disabled}
           />
         )}
+
+        {/* Read Aloud button (on-demand TTS for the assistant's last turn) */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onReadAloudClick}
+              disabled={!isReadingAloud && (disabled || isVoiceProGated || !canReadAloud)}
+              className={cn(
+                'h-8 w-8 p-0 transition-all duration-200 hover:bg-transparent dark:hover:bg-transparent',
+                isReadingAloud
+                  ? 'animate-pulse text-primary'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              <Volume2 className="h-4 w-4" />
+              <span className="sr-only">
+                {isVoiceProGated
+                  ? 'Read aloud requires Pro'
+                  : isReadingAloud
+                    ? 'Stop reading aloud'
+                    : isListening
+                      ? 'Read aloud unavailable while dictating'
+                      : 'Read aloud'}
+              </span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            {isVoiceProGated
+              ? 'Read aloud requires a Pro plan'
+              : isReadingAloud
+                ? 'Stop reading aloud'
+                : isListening
+                  ? 'Read aloud unavailable while dictating'
+                  : 'Read aloud'}
+          </TooltipContent>
+        </Tooltip>
 
         {/* Voice Mode button (hands-free STT/TTS) */}
         <Tooltip>

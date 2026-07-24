@@ -1,3 +1,12 @@
+// @vitest-environment node
+//
+// This tests a Node.js server route handler, not browser code — running it
+// under jsdom (the project default) creates two competing AbortController/
+// AbortSignal globals (jsdom's polyfill vs. Node's native one), and jsdom's
+// Request constructor rejects a signal from the "wrong" realm with
+// "Expected signal to be an instance of AbortSignal". The route itself runs
+// in a real Node/Edge runtime with a single Fetch API implementation, so
+// `node` here is the more accurate environment, not a workaround.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
@@ -142,6 +151,42 @@ describe('POST /api/voice/synthesize — metering', () => {
 
     const res = await POST(ttsRequest({ text: 'hello' }));
 
+    expect(res.status).toBe(500);
+    expect(mockTrackUsage).not.toHaveBeenCalled();
+    expect(mockReleaseHold).toHaveBeenCalledWith('hold_1');
+  });
+
+  it('propagates the caller abort signal to the upstream OpenAI request, so a cancelled client request releases the hold without billing', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((_url: string, opts: RequestInit) => {
+      capturedSignal = opts.signal ?? undefined;
+      return new Promise((_resolve, reject) => {
+        const abort = () => reject(new DOMException('The operation was aborted', 'AbortError'));
+        // The route awaits auth/gating before ever reaching fetch(), so by
+        // then the signal may already be aborted — a listener alone would
+        // miss an abort event that already fired in the past.
+        if (opts.signal?.aborted) {
+          abort();
+          return;
+        }
+        opts.signal?.addEventListener('abort', abort);
+      });
+    }));
+
+    const controller = new AbortController();
+    const request = new Request('http://localhost/api/voice/synthesize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'hello' }),
+      signal: controller.signal,
+    });
+
+    const resPromise = POST(request);
+    controller.abort();
+    const res = await resPromise;
+
+    expect(capturedSignal).toBeDefined();
+    expect(capturedSignal?.aborted).toBe(true);
     expect(res.status).toBe(500);
     expect(mockTrackUsage).not.toHaveBeenCalled();
     expect(mockReleaseHold).toHaveBeenCalledWith('hold_1');
