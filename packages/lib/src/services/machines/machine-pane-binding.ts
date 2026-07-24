@@ -149,9 +149,8 @@ export type MachineNodeTargetResolution =
  * "never existed"). There is no data this function can see that closes that
  * gap for every case, so the fallback is gone: an unresolved target ALWAYS
  * denies, full stop. The caller-facing error (`sandbox-tools.ts`'s
- * `nodeTargetDeniedError`) carries the corrective guidance instead — telling
- * the caller to drop the `branch` field rather than the runtime guessing on
- * its behalf.
+ * `nodeTargetDeniedError`) provides neutral guidance to inspect
+ * `list_sessions`, rather than the runtime guessing on its behalf.
  */
 export function resolveMachineNodeTarget(
   set: MachineNodeHandleSet,

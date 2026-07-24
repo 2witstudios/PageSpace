@@ -59,7 +59,7 @@ describe('buildMachineBindingPrompt', () => {
     const prompt = buildMachineBindingPrompt(binding);
     expect(prompt).toContain('"branch" here is NOT "whatever git branch a project happens to be on"');
     expect(prompt).toContain('pass target: { project } alone and omit branch');
-    expect(prompt).toContain('even if a branch named "main"/"master" is listed below');
+    expect(prompt).toContain('even if a branch named "main"/"master" is listed above');
     expect(prompt).toContain('branch: "main"'); // reachable list still names the separate worktree — untouched by the warning
   });
 

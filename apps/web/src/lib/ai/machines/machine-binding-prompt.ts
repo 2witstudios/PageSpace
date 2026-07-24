@@ -80,7 +80,7 @@ export function buildMachineBindingPrompt(binding: MachineNodeHandleSet): string
   const branchWarning =
     self.kind === 'branch'
       ? ''
-      : '\n• "branch" here is NOT "whatever git branch a project happens to be on" — it names a separately created branch worktree that runs in its own Sprite, distinct from the project\'s default checkout. To address a project\'s own default checkout, pass target: { project } alone and omit branch — do this even if a branch named "main"/"master" is listed below, since that pairing names a different, separately created worktree, not the project\'s own checkout. Only add branch: "<name>" when you specifically intend to address that separate worktree, and only if the exact project+branch pairing is listed above — otherwise it will be refused.';
+      : '\n• "branch" here is NOT "whatever git branch a project happens to be on" — it names a separately created branch worktree that runs in its own Sprite, distinct from the project\'s default checkout. To address a project\'s own default checkout, pass target: { project } alone and omit branch — do this even if a branch named "main"/"master" is listed above, since that pairing names a different, separately created worktree, not the project\'s own checkout. Only add branch: "<name>" when you specifically intend to address that separate worktree, and only if the exact project+branch pairing is listed above — otherwise it will be refused.';
   return (
     `\n\nMACHINE BINDING (this conversation)` +
     `\n• This conversation is bound to machine "${self.machineId}" at ${where} — code-execution tools (bash, readFile, writeFile, editFile, git/gh) operate from working directory: ${self.cwd}` +
