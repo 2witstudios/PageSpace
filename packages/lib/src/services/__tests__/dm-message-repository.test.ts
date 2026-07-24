@@ -180,9 +180,9 @@ describe('dmMessageRepository.restoreDmMessage', () => {
 
     assert({
       given: 'a DM restore parent re-read inside the tx',
-      should: 'invoke .for("update") against directMessages exactly once — the lock blocks a concurrent softDelete until the bump commits',
+      should: 'invoke .for("update") against directMessages twice — once for the parent re-validation before the replyCount bump, once more inside recomputeThreadLastReply (#2153) before it re-derives lastReplyAt — both against the same parent row, so the second is a safe reentrant re-lock, not a new race window',
       actual: testDbState.selectsForUpdate('directMessages').length,
-      expected: 1,
+      expected: 2,
     });
   });
 });
@@ -1437,6 +1437,22 @@ describe('DM conversation derived state (#2153)', () => {
       expected: { lastMessageAt: T1, lastMessagePreview: 'older words' },
     });
   });
+
+  it('locks the conversation row before recomputing (SELECT ... FOR UPDATE), so a concurrent recompute cannot interleave and overwrite a fresher preview with a stale one', async () => {
+    seedConversation();
+    testDbState.seed('directMessages', [
+      { id: 'm-only', conversationId: 'conv-1', senderId: 'u-1', content: 'newest words', isActive: true, parentId: null, createdAt: T2 },
+    ]);
+
+    await dmMessageRepository.softDeleteMessage('m-only');
+
+    assert({
+      given: 'a soft-delete that triggers the conversation-preview recompute — a path with no pre-existing parent-row lock to piggyback on',
+      should: 'invoke .for("update") against dmConversations exactly once before reading the surviving messages (#2153) — this is the lock a concurrent send/edit/delete/restore/purge on the same conversation must serialize against',
+      actual: testDbState.selectsForUpdate('dmConversations').length,
+      expected: 1,
+    });
+  });
 });
 
 describe('DM thread lastReplyAt recompute (#2153)', () => {
@@ -1493,6 +1509,22 @@ describe('DM thread lastReplyAt recompute (#2153)', () => {
       should: 'move lastReplyAt forward to the restored reply',
       actual: { replyCount: parent?.replyCount, lastReplyAt: parent?.lastReplyAt },
       expected: { replyCount: 2, lastReplyAt: T2 },
+    });
+  });
+
+  it('locks the parent row before recomputing lastReplyAt on soft-delete — a path with no pre-existing parent lock to piggyback on', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'parent-1', conversationId: 'conv-1', senderId: 'u-1', content: 'root', isActive: true, parentId: null, replyCount: 1, lastReplyAt: T1, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', conversationId: 'conv-1', senderId: 'u-2', content: 'only', isActive: true, parentId: 'parent-1', createdAt: T1 },
+    ]);
+
+    await dmMessageRepository.softDeleteMessage('reply-1');
+
+    assert({
+      given: 'a reply soft-delete — softDeleteMessage never pre-locks the parent the way restoreDmMessage does',
+      should: 'invoke .for("update") against the parent row exactly once via recomputeThreadLastReply (#2153), closing the same concurrent-delete race window restore already had covered',
+      actual: testDbState.selectsForUpdate('directMessages').length,
+      expected: 1,
     });
   });
 });

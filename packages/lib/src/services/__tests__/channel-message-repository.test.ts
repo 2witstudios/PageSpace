@@ -520,9 +520,9 @@ describe('channelMessageRepository.restoreChannelMessage', () => {
 
     assert({
       given: 'a restore of a thread reply whose parent must be re-validated under lock',
-      should: 'invoke .for("update") against channelMessages exactly once — the lock blocks a concurrent softDelete until the bump commits',
+      should: 'invoke .for("update") against channelMessages twice — once for the parent re-validation before the replyCount bump, once more inside recomputeThreadLastReply (#2153) before it re-derives lastReplyAt — both against the same parent row, so the second is a safe reentrant re-lock, not a new race window',
       actual: testDbState.selectsForUpdate('channelMessages').length,
-      expected: 1,
+      expected: 2,
     });
   });
 });
@@ -1292,6 +1292,22 @@ describe('channel thread lastReplyAt recompute (#2153)', () => {
       should: 'move lastReplyAt forward to the restored reply',
       actual: { replyCount: parent?.replyCount, lastReplyAt: parent?.lastReplyAt },
       expected: { replyCount: 2, lastReplyAt: T2 },
+    });
+  });
+
+  it('locks the parent row before recomputing lastReplyAt on soft-delete — a path with no pre-existing parent lock to piggyback on', async () => {
+    testDbState.seed('channelMessages', [
+      { id: 'parent-1', pageId: 'page-1', userId: 'u-1', content: 'root', isActive: true, parentId: null, replyCount: 1, lastReplyAt: T1, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', pageId: 'page-1', userId: 'u-2', content: 'only', isActive: true, parentId: 'parent-1', createdAt: T1 },
+    ]);
+
+    await channelMessageRepository.softDeleteChannelMessage('reply-1');
+
+    assert({
+      given: 'a reply soft-delete — softDeleteChannelMessage never pre-locks the parent the way restoreChannelMessage does',
+      should: 'invoke .for("update") against the parent row exactly once via recomputeThreadLastReply (#2153), closing the same concurrent-delete race window restore already had covered',
+      actual: testDbState.selectsForUpdate('channelMessages').length,
+      expected: 1,
     });
   });
 });

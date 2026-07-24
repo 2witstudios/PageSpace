@@ -229,16 +229,30 @@ async function insertDmMessageWithAttachment(
  * / `lastMessagePreview` (#2153). Every mutation that can change which
  * top-level message is newest — insert, edit, soft-delete, restore, purge —
  * calls this instead of writing the derived fields ad hoc, so none of them
- * can drift from the surviving rows. Always re-derives from a fresh query
- * inside the caller's transaction rather than trusting the mutation's own
- * row to still be newest, which is what makes this safe to call
- * unconditionally instead of threading a "was this the newest row" check
- * through every call site.
+ * can drift from the surviving rows.
+ *
+ * Locks the conversation row FIRST, before reading the surviving messages.
+ * Without this, two concurrent recomputes for the same conversation (e.g.
+ * two concurrent sends) can each snapshot "newest message" before the
+ * other's insert commits — whichever recompute commits last then silently
+ * overwrites a fresher preview with a stale one, and nothing repairs it
+ * until the next mutation touches that conversation. The lock forces
+ * concurrent recomputes to serialize: the second one only proceeds after
+ * the first commits, at which point its own SELECT sees the first's
+ * already-committed row too. Mirrors the `SELECT ... FOR UPDATE` pattern
+ * `restoreDmMessage` already uses to serialize a parent-row bump against a
+ * concurrent soft-delete.
  */
 async function recomputeConversationLastMessage(
   tx: Tx,
   conversationId: string
 ): Promise<void> {
+  await tx
+    .select({ id: dmConversations.id })
+    .from(dmConversations)
+    .where(eq(dmConversations.id, conversationId))
+    .for('update');
+
   const [newest] = await tx
     .select({
       createdAt: directMessages.createdAt,
@@ -272,8 +286,21 @@ async function recomputeConversationLastMessage(
  * Soft-delete/restore of a reply calls this after adjusting `replyCount` so
  * the timestamp always points at a surviving reply instead of a tombstoned
  * one.
+ *
+ * Locks the parent row first, for the same reason
+ * `recomputeConversationLastMessage` locks the conversation row: two
+ * concurrent reply deletes under the same parent can otherwise each
+ * snapshot "surviving replies" before the other's tombstone commits, and
+ * the later commit can silently restore `lastReplyAt` to an
+ * already-deleted reply.
  */
 async function recomputeThreadLastReply(tx: Tx, parentId: string): Promise<void> {
+  await tx
+    .select({ id: directMessages.id })
+    .from(directMessages)
+    .where(eq(directMessages.id, parentId))
+    .for('update');
+
   const replies = await tx
     .select({ createdAt: directMessages.createdAt })
     .from(directMessages)

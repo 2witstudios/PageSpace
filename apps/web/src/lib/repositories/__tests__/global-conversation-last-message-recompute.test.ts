@@ -10,23 +10,34 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const {
   mockSelectLimit,
+  mockSelectFor,
   mockUpdateSet,
   mockUpdateWhere,
   mockDeleteReturning,
   mockUpdateReturning,
+  mockTransaction,
 } = vi.hoisted(() => ({
   mockSelectLimit: vi.fn(),
+  // The conversation-row lock (`.for('update')`) recomputeLastMessageAt now
+  // takes before reading the surviving messages (#2153) — see the
+  // concurrency-safety tests below.
+  mockSelectFor: vi.fn(),
   mockUpdateSet: vi.fn(),
   mockUpdateWhere: vi.fn(),
   mockDeleteReturning: vi.fn(),
   mockUpdateReturning: vi.fn(),
+  mockTransaction: vi.fn(),
 }));
 
-vi.mock('@pagespace/db/db', () => ({
-  db: {
+vi.mock('@pagespace/db/db', () => {
+  // A single chain shape serves both the lock select (`.for('update')`) and
+  // the newest-message select (`.orderBy().limit()`) — each call site uses
+  // only the branch it needs.
+  const dbShape = {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockReturnValue({
+          for: mockSelectFor,
           orderBy: vi.fn().mockReturnValue({ limit: mockSelectLimit }),
         }),
       }),
@@ -35,8 +46,15 @@ vi.mock('@pagespace/db/db', () => ({
     delete: vi.fn().mockReturnValue({
       where: vi.fn().mockReturnValue({ returning: mockDeleteReturning }),
     }),
-  },
-}));
+    // recomputeLastMessageAt now runs its lock+read+write inside its own
+    // transaction (#2153) — the mock just invokes the callback with the
+    // same shape, since none of these tests need real transactional
+    // isolation, only to observe the calls made through `tx`.
+    transaction: mockTransaction,
+  };
+  mockTransaction.mockImplementation((cb: (tx: typeof dbShape) => unknown) => cb(dbShape));
+  return { db: dbShape };
+});
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ type: 'eq', field, value })),
   and: vi.fn((...conditions) => ({ type: 'and', conditions })),
@@ -77,6 +95,7 @@ const NEWEST = new Date('2026-07-10T10:00:00Z');
 beforeEach(() => {
   vi.clearAllMocks();
   mockSelectLimit.mockResolvedValue([]);
+  mockSelectFor.mockResolvedValue([]);
   mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
   mockUpdateWhere.mockReturnValue({ returning: mockUpdateReturning });
   // Awaiting the update chain without .returning() must also work.
@@ -114,6 +133,22 @@ describe('globalConversationRepository.recomputeLastMessageAt', () => {
       should: 'null out lastMessageAt instead of leaving it pointing at a deleted message',
       actual: { called: mockUpdateSet.mock.calls.length > 0, lastMessageAt: setArg?.lastMessageAt },
       expected: { called: true, lastMessageAt: null },
+    });
+  });
+
+  it('locks the conversation row (SELECT ... FOR UPDATE) inside its own transaction before reading the surviving messages (#2153)', async () => {
+    mockSelectLimit.mockResolvedValue([{ createdAt: NEWEST }]);
+
+    await globalConversationRepository.recomputeLastMessageAt('conv-1');
+
+    assert({
+      given: 'a lastMessageAt recompute',
+      should: 'take the conversation-row lock exactly once, inside a transaction, before writing — closing the race where a concurrent save or another recompute commits between this read and this write',
+      actual: {
+        forUpdateCalls: mockSelectFor.mock.calls.length,
+        ranInTransaction: mockTransaction.mock.calls.length > 0,
+      },
+      expected: { forUpdateCalls: 1, ranInTransaction: true },
     });
   });
 });

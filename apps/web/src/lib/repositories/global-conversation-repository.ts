@@ -431,22 +431,42 @@ export const globalConversationRepository = {
    * soft-delete, hard-delete, purge, and the interrupted-stream materializer
    * — calls this instead of writing the field ad hoc, so a recovered or
    * deleted message can't leave a conversation sorted on a stale timestamp.
+   *
+   * Runs in its own transaction and locks the conversation row FIRST, before
+   * reading the surviving messages. Without this, a concurrent writer (a
+   * normal message save, or another recompute from a concurrent delete)
+   * targeting the same conversation can commit between this function's own
+   * SELECT and UPDATE, and this UPDATE then silently overwrites that
+   * writer's fresher timestamp with a stale snapshot. The lock forces
+   * concurrent recomputes (and any other writer to this row — a plain
+   * UPDATE takes the same implicit row lock even without FOR UPDATE) to
+   * serialize: whichever runs second only proceeds after the first commits,
+   * at which point its own SELECT sees the first's already-committed state.
+   * Mirrors `recomputeConversationLastMessage` in dm-message-repository.ts.
    */
   async recomputeLastMessageAt(conversationId: string): Promise<void> {
-    const [newest] = await db
-      .select({ createdAt: messages.createdAt })
-      .from(messages)
-      .where(and(
-        eq(messages.conversationId, conversationId),
-        eq(messages.isActive, true)
-      ))
-      .orderBy(desc(messages.createdAt))
-      .limit(1);
+    await db.transaction(async (tx) => {
+      await tx
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(eq(conversations.id, conversationId))
+        .for('update');
 
-    await db
-      .update(conversations)
-      .set({ lastMessageAt: newest ? newest.createdAt : null })
-      .where(eq(conversations.id, conversationId));
+      const [newest] = await tx
+        .select({ createdAt: messages.createdAt })
+        .from(messages)
+        .where(and(
+          eq(messages.conversationId, conversationId),
+          eq(messages.isActive, true)
+        ))
+        .orderBy(desc(messages.createdAt))
+        .limit(1);
+
+      await tx
+        .update(conversations)
+        .set({ lastMessageAt: newest ? newest.createdAt : null })
+        .where(eq(conversations.id, conversationId));
+    });
   },
 
   /**

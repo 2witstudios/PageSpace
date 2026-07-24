@@ -270,9 +270,18 @@ export interface UpdateChannelMessageContentInput {
  * (#2153). Soft-delete/restore of a reply calls this after adjusting
  * `replyCount` so the timestamp always points at a surviving reply instead
  * of a tombstoned one. Mirrors `recomputeThreadLastReply` in
- * `dm-message-repository.ts`.
+ * `dm-message-repository.ts`, including the parent-row lock: two concurrent
+ * reply deletes under the same parent can otherwise each snapshot
+ * "surviving replies" before the other's tombstone commits, and the later
+ * commit can silently restore `lastReplyAt` to an already-deleted reply.
  */
 async function recomputeThreadLastReply(tx: Tx, parentId: string): Promise<void> {
+  await tx
+    .select({ id: channelMessages.id })
+    .from(channelMessages)
+    .where(eq(channelMessages.id, parentId))
+    .for('update');
+
   const replies = await tx
     .select({ createdAt: channelMessages.createdAt })
     .from(channelMessages)
