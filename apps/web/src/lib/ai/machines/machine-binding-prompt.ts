@@ -23,7 +23,6 @@
  */
 
 import type { MachineNodeHandleSet } from '@pagespace/lib/services/machines/machine-pane-binding';
-import { isMainBranchName } from '@pagespace/lib/services/sandbox/machine-diff-scope';
 
 export function buildMachineBindingPrompt(binding: MachineNodeHandleSet): string {
   const { self, handles } = binding;
@@ -44,24 +43,32 @@ export function buildMachineBindingPrompt(binding: MachineNodeHandleSet): string
               : `project "${handle.project}"`,
           )
           .join(', ')}.`;
-  // A project can have a genuinely LIVE branch worktree named "main"/"master"
-  // (spawnBranch doesn't reserve these names) — when one is actually in the
-  // reachable list, targeting it by name is correct, so the blanket "never"
-  // below would be actively wrong advice for that case. Only warn when no
-  // such live branch is listed (Codex review, PR #2232): the reachable list
-  // itself is always the source of truth, this is just interpreting it.
-  const hasLiveDefaultBranch = beneath.some((h) => h.kind === 'branch' && h.branch !== undefined && isMainBranchName(h.branch));
-  // The warning's advice ("run at a project via target: { project }") is
-  // UNREACHABLE from a branch-scoped self: deriveMachinePaneBinding gives a
-  // branch pane handles: [self] only — no project handle in scope, ever,
-  // regardless of what this branch happens to be named. Recommending it
-  // would just trade one target_not_in_set for another (Codex review, third
-  // pass) — so the whole warning is skipped for a branch self, not only when
-  // that branch happens to be named main/master.
+  // "branch" only ever names an EXPLICITLY created branch worktree — never
+  // "whatever git branch a project's own checkout happens to be on". A model
+  // reasoning in ordinary git terms may add branch: "main"/"master" assuming
+  // it addresses a project's own state, which is wrong unless that exact
+  // pairing happens to be a real, separately created worktree.
+  //
+  // This used to assert whether such a worktree existed (`hasLiveDefaultBranch`,
+  // computed once over the whole reachable set) — four rounds of review (PR
+  // #2232) kept finding cases where that single yes/no answer was wrong for
+  // SOME part of the set: a live branch under one project said nothing about
+  // a different, also-reachable project without one (and machine-root scope
+  // can reach many projects, each independently). Rather than track this
+  // per-project, the warning is now unconditional whenever self isn't itself
+  // a branch — it defers entirely to the "Currently reachable" list above,
+  // which is already itemized per project/branch and is the only place this
+  // can be answered correctly. No claim here can be wrong for any subset of
+  // the set, because it makes no claim about the set's contents at all.
+  //
+  // Skipped when self.kind === 'branch': deriveMachinePaneBinding gives a
+  // branch pane handles: [self] only — no project handle is EVER in scope
+  // from there, so "pass target: { project }" would just trade one denial
+  // for another, regardless of what this branch happens to be named.
   const branchWarning =
-    self.kind === 'branch' || hasLiveDefaultBranch
+    self.kind === 'branch'
       ? ''
-      : '\n• "branch" here is NOT "whatever git branch a project happens to be on" — it only names a separately created branch worktree, and no branch named "main"/"master" is currently listed above (other branches may be, if any exist — that listing is authoritative). A project\'s own default checkout has no branch of its own to address: to run at a project, pass target: { project } alone, not target: { project, branch: "main" } — there is no such branch here.';
+      : '\n• "branch" here is NOT "whatever git branch a project happens to be on" — it only names a separately created branch worktree. A project\'s own default checkout has no branch of its own to address UNLESS the reachable list above explicitly names one for it: pass target: { project } alone to run at a project\'s own checkout, and only add branch: "main"/"master" if that exact project+branch pairing is listed above — otherwise it will be refused.';
   return (
     `\n\nMACHINE BINDING (this conversation)` +
     `\n• This conversation is bound to machine "${self.machineId}" at ${where} — code-execution tools (bash, readFile, writeFile, editFile, git/gh) operate from working directory: ${self.cwd}` +
