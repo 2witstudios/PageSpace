@@ -28,15 +28,13 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
 }));
 
 import { toast } from 'sonner';
-import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 
-// `pushWorkspaceUpdate` (useMachineWorkspaceSync) PATCHes via `fetchWithAuth`
-// directly rather than the `patch()` helper, to read the real HTTP status
-// code — see that file's doc comment. These tests assert on the PATCH calls
-// made through the shared `fetchWithAuth` mock.
-const patchCallsTo = (url: string) =>
-  vi.mocked(fetchWithAuth).mock.calls.filter(
-    ([calledUrl, options]) => calledUrl === url && (options as RequestInit | undefined)?.method === 'PATCH',
+// #2202: every synced workspace action now pushes a verb through
+// `post('/api/machines/workspaces/verbs', {...})` instead of a PATCH.
+const verbCallsOfType = (type: string) =>
+  vi.mocked(post).mock.calls.filter(
+    ([calledUrl, body]) => calledUrl === '/api/machines/workspaces/verbs' && (body as { verb?: { type?: string } })?.verb?.type === type,
   );
 
 // Every session removal — `killAgentTerminal` AND the hook's
@@ -514,11 +512,10 @@ describe('WorkspaceLeaves', () => {
           expected: { name: 'Renamed', stillEditing: false },
         });
       });
-      const [, options] = patchCallsTo('/api/machines/workspaces')[0] ?? [];
-      expect(JSON.parse((options as RequestInit).body as string)).toMatchObject({
+      const [, body] = verbCallsOfType('rename-workspace')[0] ?? [];
+      expect(body).toMatchObject({
         machineId: 'm1',
-        workspaceId,
-        name: 'Renamed',
+        verb: { type: 'rename-workspace', workspaceId, name: 'Renamed' },
       });
     });
 
@@ -538,7 +535,7 @@ describe('WorkspaceLeaves', () => {
         actual: selectMachine('m1')(store())!.workspaces[workspaceId].name,
         expected: 'Workspace 1',
       });
-      expect(patchCallsTo('/api/machines/workspaces')).toHaveLength(0);
+      expect(verbCallsOfType('rename-workspace')).toHaveLength(0);
     });
 
     // Regression (CodeRabbit): in Chromium, unmounting the still-focused
@@ -566,7 +563,7 @@ describe('WorkspaceLeaves', () => {
         actual: selectMachine('m1')(store())!.workspaces[workspaceId].name,
         expected: 'Workspace 1',
       });
-      expect(patchCallsTo('/api/machines/workspaces')).toHaveLength(0);
+      expect(verbCallsOfType('rename-workspace')).toHaveLength(0);
     });
 
     test('a blur event firing immediately after Enter does not fire a redundant second commit', async () => {
@@ -580,7 +577,7 @@ describe('WorkspaceLeaves', () => {
       fireEvent.keyDown(input, { key: 'Enter' });
       fireEvent.blur(input);
 
-      await waitFor(() => expect(patchCallsTo('/api/machines/workspaces')).toHaveLength(1));
+      await waitFor(() => expect(verbCallsOfType('rename-workspace')).toHaveLength(1));
     });
   });
 

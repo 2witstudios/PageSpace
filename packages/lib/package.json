@@ -682,6 +682,11 @@
       "import": "./dist/services/machines/machine-workspaces-store.js",
       "require": "./dist/services/machines/machine-workspaces-store.js"
     },
+    "./services/machines/machine-panes-store": {
+      "types": "./dist/services/machines/machine-panes-store.d.ts",
+      "import": "./dist/services/machines/machine-panes-store.js",
+      "require": "./dist/services/machines/machine-panes-store.js"
+    },
     "./services/machines/machine-workspaces": {
       "types": "./dist/services/machines/machine-workspaces.d.ts",
       "import": "./dist/services/machines/machine-workspaces.js",
@@ -1981,6 +1986,9 @@
       ],
       "services/machines/machine-workspaces-store": [
         "./dist/services/machines/machine-workspaces-store.d.ts"
+      ],
+      "services/machines/machine-panes-store": [
+        "./dist/services/machines/machine-panes-store.d.ts"
       ],
       "services/machines/machine-workspaces": [
         "./dist/services/machines/machine-workspaces.d.ts"

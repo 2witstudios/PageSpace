@@ -154,6 +154,26 @@ describe('addWorkspace', () => {
       expected: { active: 'ws-a', panes: 2, order: ['ws-a', 'ws-b'] },
     });
   });
+
+  // CodeQL "remote property injection": a workspace id is client-minted and
+  // travels straight from a verb's request body (`parseWorkspaceVerb`) with
+  // no allowlist beyond "non-empty string" — `__proto__`/`constructor`/
+  // `prototype` must never reach a computed-key write on the `workspaces` record.
+  it('given a workspace id of "__proto__", should refuse rather than write it', () => {
+    const before = initialMachineWorkspaces(aWorkspace('ws-a', 'a1'));
+    const machine = addWorkspace(before, aWorkspace('__proto__', 'poisoned'));
+
+    assert({
+      given: 'a workspace whose id is exactly "__proto__"',
+      should: 'no-op — never write it as a computed key, and never poison the object\'s own prototype',
+      actual: {
+        unchanged: machine === before,
+        stillAnObject: Object.getPrototypeOf(machine.workspaces) === Object.prototype,
+        order: machine.order,
+      },
+      expected: { unchanged: true, stillAnObject: true, order: ['ws-a'] },
+    });
+  });
 });
 
 describe('updateWorkspace — a split lands in the workspace it was made in', () => {
@@ -177,6 +197,17 @@ describe('updateWorkspace — a split lands in the workspace it was made in', ()
       given: 'a write addressed to a workspace that is gone',
       should: 'be a no-op rather than an error',
       actual: updateWorkspace(machine, 'ws-gone', (workspace) => splitDown(workspace, 'pane-1', 'pane-2')),
+      expected: machine,
+    });
+  });
+
+  it('given a workspaceId of "constructor", should be a no-op, not resolve to the inherited Object constructor', () => {
+    const machine = initialMachineWorkspaces(aWorkspace());
+
+    assert({
+      given: 'a write addressed to the unsafe key "constructor"',
+      should: 'no-op — never treat the inherited Object.prototype.constructor as a real workspace',
+      actual: updateWorkspace(machine, 'constructor', (workspace) => splitDown(workspace, 'pane-1', 'pane-2')),
       expected: machine,
     });
   });
@@ -681,6 +712,17 @@ describe('removeWorkspace', () => {
     });
   });
 
+  it('given a workspaceId of "__proto__", should be a no-op rather than delete through the prototype chain', () => {
+    const machine = initialMachineWorkspaces(aWorkspace());
+
+    assert({
+      given: 'a removal addressed to the unsafe key "__proto__"',
+      should: 'no-op — the key never resolves as an owned workspace, regardless of its truthy inherited lookup',
+      actual: removeWorkspace(machine, '__proto__'),
+      expected: machine,
+    });
+  });
+
   it('given the last workspace, should remove it and leave the machine empty', () => {
     const machine = initialMachineWorkspaces(aWorkspace());
 
@@ -781,6 +823,20 @@ describe('mergeServerWorkspaces — reconciling the server\'s workspace list', (
         'apply it — returning `local` here (the old fallback) meant "server has zero" could NEVER converge, since this hydrate runs once per mount and nothing prunes afterwards',
       actual: { order: merged.order, active: merged.activeWorkspaceId },
       expected: { order: [], active: '' },
+    });
+  });
+
+  it('given a server workspace id of "__proto__", should skip it rather than reassign the built object\'s own prototype', () => {
+    const merged = mergeServerWorkspaces(undefined, [serverWorkspace({ id: '__proto__' }), serverWorkspace({ id: 'ws-safe' })]);
+
+    assert({
+      given: 'a server list containing a workspace id of exactly "__proto__" (a plain `workspaces[id] = …` assignment on the freshly-built object, unlike a spread-with-computed-key write, DOES invoke the inherited setter for that exact key)',
+      should: 'skip the poisoned entry, keep the rest, and leave the built object\'s own prototype untouched',
+      actual: {
+        order: merged.order,
+        stillAnObject: Object.getPrototypeOf(merged.workspaces) === Object.prototype,
+      },
+      expected: { order: ['ws-safe'], stillAnObject: true },
     });
   });
 
@@ -923,6 +979,24 @@ describe('applyServerWorkspaceUpsert', () => {
       expected: { order: ['ws-a', 'ws-b'], name: 'Renamed elsewhere' },
     });
   });
+
+  it('given a broadcast id of "__proto__", should refuse it — a plain `obj[id] = …` assignment for that exact key would reassign the object\'s own prototype', () => {
+    const machine = initialMachineWorkspaces(aWorkspace('ws-a', 'a1'));
+
+    const applied = applyServerWorkspaceUpsert(machine, {
+      id: '__proto__',
+      name: 'poisoned',
+      scope: {},
+      columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }],
+    });
+
+    assert({
+      given: 'a machine-workspace:created/updated event whose workspace id is exactly "__proto__"',
+      should: 'no-op — never write it, and never corrupt the workspaces object\'s own prototype',
+      actual: { unchanged: applied === machine, stillAnObject: Object.getPrototypeOf(applied.workspaces) === Object.prototype },
+      expected: { unchanged: true, stillAnObject: true },
+    });
+  });
 });
 
 describe('applyServerWorkspaceDeleted', () => {
@@ -964,6 +1038,36 @@ describe('sanitizeMachines — what comes back from storage is untrusted', () =>
         'drop the entry — ensureMachine re-adds it on mount, so this is equivalent to keeping it, and the UI must therefore key its empty state on "no active workspace resolves" rather than on the entry existing',
       actual: Object.keys(actual),
       expected: [],
+    });
+  });
+
+  it('given a persisted machine id or workspace id of "__proto__", should skip it rather than reassign an own prototype from untrusted JSON', () => {
+    // Built by parsing a raw JSON STRING, not an object literal: a literal
+    // `{ __proto__: x }` is spec-special-cased to set the LITERAL's own
+    // prototype rather than create an enumerable "__proto__" property, so it
+    // wouldn't exercise this path at all. `JSON.parse` (what this function
+    // actually receives from storage) has no such special case — it produces
+    // a genuine own property named "__proto__", which is the shape under test.
+    const validWorkspace = aWorkspace('ws-safe', 'p1');
+    const persisted = JSON.parse(`{
+      "__proto__": ${JSON.stringify({ workspaces: { good: aWorkspace('good', 'p1') }, order: ['good'], activeWorkspaceId: 'good' })},
+      "m1": {
+        "workspaces": { "__proto__": ${JSON.stringify(validWorkspace)}, "ws-safe": ${JSON.stringify(validWorkspace)} },
+        "order": ["ws-safe"],
+        "activeWorkspaceId": "ws-safe"
+      }
+    }`);
+    const actual = sanitizeMachines(persisted);
+
+    assert({
+      given: 'a localStorage blob (untrusted) whose machine id or workspace id is exactly "__proto__" — plain assignment on the freshly-built `machines`/`workspaces` objects would otherwise invoke the inherited setter for that exact key',
+      should: 'skip the poisoned entries, keep the rest, and leave every built object\'s own prototype untouched',
+      actual: {
+        machineIds: Object.keys(actual),
+        workspaceIds: actual.m1 ? Object.keys(actual.m1.workspaces) : [],
+        stillAnObject: actual.m1 ? Object.getPrototypeOf(actual.m1.workspaces) === Object.prototype : false,
+      },
+      expected: { machineIds: ['m1'], workspaceIds: ['ws-safe'], stillAnObject: true },
     });
   });
 

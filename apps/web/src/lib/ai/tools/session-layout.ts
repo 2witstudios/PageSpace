@@ -7,41 +7,31 @@
  * `kill_session`) all mutate the second half, and this module is the ONE place
  * that decides what those mutations look like.
  *
- * It writes NO new layout rules. Every transition here is the phase-1 CLIENT
- * reducer (`@/stores/machine-workspace/workspace-reducer`) applied to a
- * server-loaded view list: `newWorkspace`/`addWorkspace` for a born-bound
- * view, `splitRight`/`splitDown` + `assignPane` for a split, `closePaneIn`
- * for a kill. That is deliberate and load-bearing — the server is now a SECOND
- * writer of the same layout blob the browser writes (the phase-4 exit
- * criterion: #2202 becomes the entity-promotion successor), so the only
- * defensible way to keep the two byte-identical is to run the same code. A
- * server-side re-implementation would drift on its first bug fix.
- *
- * The plan is expressed as WRITES (create / update / remove) rather than a new
- * layout blob, because that is exactly the shape of the three existing
- * persistence + broadcast paths (`POST`/`PATCH`/`DELETE /api/machines/
- * workspaces`): a caller applies them through the same service functions the
- * human UI already goes through, so both writers converge on one row set and
- * one broadcast vocabulary.
+ * #2202 (entity promotion): this module used to run the client reducer
+ * server-side and diff before/after state into `SessionViewWrite`s, because
+ * the server was a SECOND writer of the same layout blob the browser wrote —
+ * the only defensible way to keep two independent writers byte-identical was
+ * to run the same code. That reasoning is now structural rather than a
+ * convention: every placement/close decision here is expressed as a
+ * {@link WorkspaceVerb} from `@/stores/machine-workspace/workspace-verbs`, and
+ * `applyVerbLocal` — the SAME function the client's optimistic apply and the
+ * HTTP verb route both call — is used here too, purely to SIMULATE what a
+ * verb would do so the next decision (does this session already have a home,
+ * is a pane still open to close) sees the right state. The actual persistence
+ * happens once, in `session-tools-runtime.ts`, through the identical
+ * `applyWorkspaceVerb` engine `POST /api/machines/workspaces/verbs` uses —
+ * there is only one write path left, not two writers of one blob.
  */
 
 import {
-  addWorkspace,
-  assignPane,
-  closePaneIn,
   isSameNodeScope,
   machineNodeScope,
-  newWorkspace,
   nodeOfTerminalScope,
   nodeScopeNames,
   paneScopeOf,
   paneShowing,
   projectStoredPaneScope,
-  showSessionIn,
   sessionWorkspaceId,
-  splitDown,
-  splitRight,
-  updateWorkspace,
   workspacesOf,
   workspaceShowing,
   type MachineWorkspacesState,
@@ -50,8 +40,11 @@ import {
   type TerminalColumnState,
   type WorkspaceState,
 } from '@/stores/machine-workspace/workspace-reducer';
+import { applyVerbLocal, type SessionRef, type WorkspaceVerb } from '@/stores/machine-workspace/workspace-verbs';
 
-/** One pane as it crosses the wire — the client's `toWireColumns` shape. */
+/** One pane as it crosses the wire — structurally identical to
+ * `WorkspaceGridPaneRecord` (`machine-panes-store.ts`); named locally so this
+ * module doesn't need a `packages/lib` import for a shape it only reads. */
 export interface WirePane {
   id: string;
   scope: PaneSessionScope | null;
@@ -63,10 +56,11 @@ export interface WireColumn {
 }
 
 /**
- * A machine's stored VIEW (a `machine_workspaces` row), narrowed to what
- * layout planning needs. `projectName`/`branchName` are the stored node
- * columns — the discriminant is re-derived here (`machineNodeScope`) exactly
- * as the client re-derives it on the way in, so the two can never disagree.
+ * A machine's stored VIEW (a `machine_workspaces` row + its relational grid),
+ * narrowed to what layout planning needs. `projectName`/`branchName` are the
+ * stored node columns — the discriminant is re-derived here
+ * (`machineNodeScope`) exactly as the client re-derives it on the way in, so
+ * the two can never disagree.
  */
 export interface SessionView {
   id: string;
@@ -75,12 +69,6 @@ export interface SessionView {
   branchName: string | null;
   columns: WireColumn[];
 }
-
-/** One persistence step: create a row, replace a row's layout, or drop a row. */
-export type SessionViewWrite =
-  | { kind: 'create'; id: string; name: string; scope: { projectName?: string; branchName?: string }; columns: WireColumn[] }
-  | { kind: 'update'; id: string; columns: WireColumn[] }
-  | { kind: 'remove'; id: string };
 
 /**
  * Where a session should MATERIALIZE. `'new-view'` gives it its own
@@ -97,21 +85,15 @@ export interface SessionPlacementIds {
 }
 
 export type SessionLayoutPlan =
-  | { ok: true; writes: SessionViewWrite[]; viewId: string }
+  | { ok: true; verbs: WorkspaceVerb[]; viewId: string }
   /** `splitInto` named a view this machine doesn't have. */
   | { ok: false; reason: 'view_not_found' }
   /** `splitInto` named a view at a DIFFERENT node — a pane's checkout is its view's. */
   | { ok: false; reason: 'cross_node' };
 
-/** Strips local-only pane state before a layout crosses the wire — the server's copy of `useMachineWorkspaceSync`'s own helper. */
-export function toWireColumns(columns: TerminalColumnState[]): WireColumn[] {
-  return columns.map((column) => ({
-    id: column.id,
-    panes: column.panes.map((pane) => ({ id: pane.id, scope: pane.scope })),
-  }));
-}
-
-/** A stored view as the reducer sees it. Local-only fields are defaulted, never persisted back. */
+/** A stored view as the reducer sees it — used only to answer READ questions
+ * (is this session already shown, does a named view exist, what's its scope)
+ * before a verb is chosen. Local-only fields are defaulted, never persisted. */
 function toWorkspaceState(view: SessionView): WorkspaceState {
   const columns: TerminalColumnState[] = view.columns.map((column) => ({
     id: column.id,
@@ -146,86 +128,60 @@ function toMachineState(views: SessionView[]): MachineWorkspacesState {
   return { workspaces, order, activeWorkspaceId: '' };
 }
 
-/**
- * The writes that carry `before` to `after`. Ordered removes-then-creates-
- * then-updates is deliberately NOT imposed: the writes are emitted in the
- * order a caller should apply them — removals first (so a moved session never
- * exists in two places, even briefly, for a browser applying the broadcasts in
- * order), then the rest.
- */
-function diffViews(before: MachineWorkspacesState, after: MachineWorkspacesState): SessionViewWrite[] {
-  const removes: SessionViewWrite[] = [];
-  const rest: SessionViewWrite[] = [];
-
-  for (const id of before.order) {
-    if (!after.workspaces[id]) removes.push({ kind: 'remove', id });
-  }
-
-  for (const workspace of workspacesOf(after)) {
-    const previous = before.workspaces[workspace.id];
-    const columns = toWireColumns(workspace.columns);
-    if (!previous) {
-      rest.push({
-        kind: 'create',
-        id: workspace.id,
-        name: workspace.name,
-        scope: nodeScopeNames(workspace.scope),
-        columns,
-      });
-      continue;
-    }
-    const previousColumns = toWireColumns(previous.columns);
-    if (JSON.stringify(previousColumns) !== JSON.stringify(columns)) {
-      rest.push({ kind: 'update', id: workspace.id, columns });
-    }
-  }
-
-  return [...removes, ...rest];
+function sessionRefOf(scope: OpenTerminalScope): SessionRef {
+  return paneScopeOf(scope);
 }
 
 /**
- * THE placement writer. `add_session` uses it to materialize a brand-new
+ * THE placement decision. `add_session` uses it to materialize a brand-new
  * session; `move_session` re-uses it verbatim after closing the session's old
  * manifestations, which is why re-homing needs no layout code of its own.
  *
  * `'new-view'` mirrors the client's `openTerminal` exactly, including its
- * branches: a session already shown somewhere stays there, a session whose own
- * (deterministic) view still exists is shown INSIDE it rather than duplicated,
- * and only a session with no home at all gets a fresh born-bound view.
+ * branches: a session already shown somewhere (or whose own deterministic
+ * view already exists) is shown there via `add-pane` (server-side
+ * `showSessionIn`), and only a session with no home at all gets a fresh
+ * `create-workspace`, born-bound.
  */
 function placeSession(
   state: MachineWorkspacesState,
   scope: OpenTerminalScope,
   placement: SessionPlacement,
   ids: SessionPlacementIds,
-): { ok: true; state: MachineWorkspacesState; viewId: string } | { ok: false; reason: 'view_not_found' | 'cross_node' } {
+): { ok: true; verb: WorkspaceVerb; viewId: string } | { ok: false; reason: 'view_not_found' | 'cross_node' } {
+  const session = sessionRefOf(scope);
+
   if (placement === 'new-view') {
     const showing = workspaceShowing(state, scope);
     if (showing) {
-      return { ok: true, state: updateWorkspace(state, showing.id, (workspace) => showSessionIn(workspace, scope, ids.paneId)), viewId: showing.id };
+      return { ok: true, verb: { type: 'add-pane', workspaceId: showing.id, newPaneId: ids.paneId, session }, viewId: showing.id };
     }
 
     const viewId = sessionWorkspaceId(scope);
     if (state.workspaces[viewId]) {
-      return { ok: true, state: updateWorkspace(state, viewId, (workspace) => showSessionIn(workspace, scope, ids.paneId)), viewId };
+      return { ok: true, verb: { type: 'add-pane', workspaceId: viewId, newPaneId: ids.paneId, session }, viewId };
     }
 
     // Born bound: the session's node becomes the VIEW's checkout (the single
     // copy of that fact) and the pane keeps only the name and surface kind.
-    const workspace = newWorkspace({
-      id: viewId,
-      name: scope.name,
-      scope: nodeOfTerminalScope(scope),
-      firstPaneId: ids.paneId,
-      firstPaneScope: paneScopeOf(scope),
-    });
-    return { ok: true, state: addWorkspace(state, workspace), viewId };
+    return {
+      ok: true,
+      viewId,
+      verb: {
+        type: 'create-workspace',
+        workspaceId: viewId,
+        name: scope.name,
+        scope: nodeScopeNames(nodeOfTerminalScope(scope)),
+        firstPaneId: ids.paneId,
+        session,
+      },
+    };
   }
 
   const view = state.workspaces[placement.splitInto];
   if (!view) return { ok: false, reason: 'view_not_found' };
   // A pane's checkout is its view's, so a session can only be shown in a view
-  // at its own node. Refusing here (rather than letting `assignPane`'s
+  // at its own node. Refusing here (rather than letting the verb engine's
   // bind-time assertion throw) is what makes a cross-node placement a tool
   // denial the model can act on.
   if (!isSameNodeScope(view.scope, nodeOfTerminalScope(scope))) return { ok: false, reason: 'cross_node' };
@@ -233,31 +189,45 @@ function placeSession(
   return {
     ok: true,
     viewId: view.id,
-    state: updateWorkspace(state, view.id, (workspace) => {
-      const split =
-        placement.direction === 'right'
-          ? splitRight(workspace, workspace.activePaneId, ids.columnId, ids.paneId)
-          : splitDown(workspace, workspace.activePaneId, ids.paneId);
-      return assignPane(split, ids.paneId, scope);
-    }),
+    verb: {
+      type: 'split-pane',
+      workspaceId: view.id,
+      fromPaneId: view.activePaneId,
+      direction: placement.direction,
+      newColumnId: ids.columnId,
+      newPaneId: ids.paneId,
+      session,
+    },
   };
 }
 
-/** Every pane of every view that currently renders this session, closed — the kill-manifestation half. */
-function closeSession(state: MachineWorkspacesState, scope: OpenTerminalScope): MachineWorkspacesState {
-  let next = state;
+/** Every pane of every view that currently renders this session, closed — the
+ * kill-manifestation half. Returns the ordered `close-pane` verbs AND which
+ * workspace ids they removed entirely (a close-pane that empties a view's
+ * last pane takes the view with it) — `kill_session`'s `closedViews` count
+ * needs the latter, not just "how many panes closed". */
+function closeSession(state: MachineWorkspacesState, scope: OpenTerminalScope): { verbs: WorkspaceVerb[]; state: MachineWorkspacesState; closedWorkspaceIds: string[] } {
+  const verbs: WorkspaceVerb[] = [];
+  const closedWorkspaceIds: string[] = [];
+  let current = state;
   // Re-read the workspace list each round: closing a view's last pane removes
   // the view itself, so iterating a snapshot would address rows that are gone.
   for (;;) {
-    const workspace = workspacesOf(next).find((candidate) => paneShowing(candidate, scope) !== undefined);
-    if (!workspace) return next;
+    const workspace = workspacesOf(current).find((candidate) => paneShowing(candidate, scope) !== undefined);
+    if (!workspace) return { verbs, state: current, closedWorkspaceIds };
     const pane = paneShowing(workspace, scope);
-    if (!pane) return next;
-    const after = closePaneIn(next, workspace.id, pane.id);
-    // `closePaneIn` returns its input when nothing changed; without this the
-    // loop above would spin forever on a pane it cannot close.
-    if (after === next) return next;
-    next = after;
+    if (!pane) return { verbs, state: current, closedWorkspaceIds };
+
+    const verb: WorkspaceVerb = { type: 'close-pane', workspaceId: workspace.id, paneId: pane.id };
+    const outcome = applyVerbLocal(current, verb);
+    // `applied: false` means the pane didn't resolve — shouldn't happen given
+    // `paneShowing` just found it, but mirrors the old no-op guard rather than
+    // spinning forever.
+    if (!outcome.applied) return { verbs, state: current, closedWorkspaceIds };
+
+    verbs.push(verb);
+    if (outcome.removedWorkspaceId) closedWorkspaceIds.push(outcome.removedWorkspaceId);
+    current = outcome.state;
   }
 }
 
@@ -271,26 +241,25 @@ export function planPlaceSession(
   const before = toMachineState(views);
   const placed = placeSession(before, scope, placement, ids);
   if (!placed.ok) return placed;
-  return { ok: true, writes: diffViews(before, placed.state), viewId: placed.viewId };
+  return { ok: true, verbs: [placed.verb], viewId: placed.viewId };
 }
 
 /** Plan the removal of every manifestation of a session (`kill_session`). */
-export function planCloseSession(views: SessionView[], scope: OpenTerminalScope): SessionViewWrite[] {
+export function planCloseSession(views: SessionView[], scope: OpenTerminalScope): { verbs: WorkspaceVerb[]; closedWorkspaceIds: string[] } {
   const before = toMachineState(views);
-  return diffViews(before, closeSession(before, scope));
+  const { verbs, closedWorkspaceIds } = closeSession(before, scope);
+  return { verbs, closedWorkspaceIds };
 }
 
 /**
  * Plan a re-home: close every existing manifestation, then run the SAME
- * placement writer `add_session` uses. Composed, not re-implemented — the
+ * placement decision `add_session` uses. Composed, not re-implemented — the
  * epic's rule is that a move introduces no second layout writer.
  *
  * Closing FIRST is what keeps the destination honest: a session whose old view
  * held nothing else is removed by the close, so the placement sees the same
  * world a fresh `add_session` would, and the new pane is a brand-new pane id
- * bound IN THE SAME WRITE — never an unbound pane that a later echo has to
- * repair (the monotone merge guard's null→bound invariant is preserved by
- * construction).
+ * bound IN THE SAME VERB — never an unbound pane a later echo has to repair.
  */
 export function planMoveSession(
   views: SessionView[],
@@ -299,10 +268,10 @@ export function planMoveSession(
   ids: SessionPlacementIds,
 ): SessionLayoutPlan {
   const before = toMachineState(views);
-  const closed = closeSession(before, scope);
+  const { verbs: closeVerbs, state: closed } = closeSession(before, scope);
   const placed = placeSession(closed, scope, placement, ids);
   if (!placed.ok) return placed;
-  return { ok: true, writes: diffViews(before, placed.state), viewId: placed.viewId };
+  return { ok: true, verbs: [...closeVerbs, placed.verb], viewId: placed.viewId };
 }
 
 /** The views that hang under one node, as `list_sessions` reports them. */

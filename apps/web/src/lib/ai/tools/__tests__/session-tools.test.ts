@@ -10,7 +10,8 @@ import {
   type SessionToolsDeps,
 } from '../session-tools';
 import { readPtySession, sendPtySession } from '../session-io-pty';
-import type { SessionView, SessionViewWrite } from '../session-layout';
+import type { SessionView } from '../session-layout';
+import type { WorkspaceVerb } from '@/stores/machine-workspace/workspace-verbs';
 import type { ToolExecutionContext } from '../../core/types';
 import type {
   MachineNodeHandle,
@@ -44,13 +45,13 @@ function rootBinding(): MachineNodeHandleSet {
 
 interface Recorded {
   spawned: { node: MachineNodeHandle; name: string; agentType: string }[];
-  writes: { machineId: string; writes: SessionViewWrite[] }[];
+  verbCalls: { machineId: string; verbs: WorkspaceVerb[] }[];
 }
 
 function deps(
   overrides: Partial<SessionToolsDeps> = {},
 ): { deps: SessionToolsDeps; recorded: Recorded } {
-  const recorded: Recorded = { spawned: [], writes: [] };
+  const recorded: Recorded = { spawned: [], verbCalls: [] };
   let ids = 0;
   const base: SessionToolsDeps = {
     listSessions: async () => [],
@@ -61,8 +62,8 @@ function deps(
     },
     killSession: async () => ({ ok: true }),
     listViews: async () => [],
-    applyViewWrites: async (machineId, writes) => {
-      recorded.writes.push({ machineId, writes });
+    applyVerbs: async (machineId, verbs) => {
+      recorded.verbCalls.push({ machineId, verbs });
     },
     io: {
       agent: { read: notDispatched, send: notDispatched },
@@ -372,21 +373,22 @@ describe('add_session', () => {
       should: 'spawn at the bound node and materialize one born-bound view',
       actual: {
         spawned: recorded.spawned,
-        writes: recorded.writes,
+        verbCalls: recorded.verbCalls,
         result,
       },
       expected: {
         spawned: [{ node: machineHandle(), name: 'worker', agentType: 'pagespace' }],
-        writes: [
+        verbCalls: [
           {
             machineId: 'm1',
-            writes: [
+            verbs: [
               {
-                kind: 'create',
-                id: 'sessionworker',
+                type: 'create-workspace',
+                workspaceId: 'sessionworker',
                 name: 'worker',
                 scope: {},
-                columns: [{ id: 'id1', panes: [{ id: 'id1', scope: { name: 'worker', kind: 'chat' } }] }],
+                firstPaneId: 'id1',
+                session: { name: 'worker', kind: 'chat' },
               },
             ],
           },
@@ -453,9 +455,9 @@ describe('add_session', () => {
 
     assert({
       given: 'a split-into placement',
-      should: 'plan one update to the named view',
-      actual: recorded.writes[0]?.writes.map((write) => ({ kind: write.kind, id: write.id })),
-      expected: [{ kind: 'update', id: 'w1' }],
+      should: 'plan one split-pane verb against the named view',
+      actual: recorded.verbCalls[0]?.verbs.map((verb) => ({ type: verb.type, workspaceId: verb.workspaceId })),
+      expected: [{ type: 'split-pane', workspaceId: 'w1' }],
     });
   });
 
@@ -529,8 +531,8 @@ describe('add_session', () => {
     assert({
       given: 'a spawn the runtime refuses',
       should: 'report the failure and materialize nothing',
-      actual: { success: result.success, writes: recorded.writes.length },
-      expected: { success: false, writes: 0 },
+      actual: { success: result.success, verbCalls: recorded.verbCalls.length },
+      expected: { success: false, verbCalls: 0 },
     });
   });
 });
@@ -570,14 +572,14 @@ describe('move_session', () => {
       actual: {
         success: result.success,
         view: result.view?.id,
-        writes: recorded.writes[0]?.writes.map((write) => ({ kind: write.kind, id: write.id })),
+        verbs: recorded.verbCalls[0]?.verbs.map((verb) => ({ type: verb.type, workspaceId: verb.workspaceId })),
       },
       expected: {
         success: true,
         view: 'w2',
-        writes: [
-          { kind: 'remove', id: 'w1' },
-          { kind: 'update', id: 'w2' },
+        verbs: [
+          { type: 'close-pane', workspaceId: 'w1' },
+          { type: 'split-pane', workspaceId: 'w2' },
         ],
       },
     });
@@ -606,8 +608,8 @@ describe('move_session', () => {
     assert({
       given: 'a machine-scoped session moved into a project-scoped view',
       should: 'refuse — a move never changes a session\'s sandbox',
-      actual: { success: result.success, writes: recorded.writes.length },
-      expected: { success: false, writes: 0 },
+      actual: { success: result.success, verbCalls: recorded.verbCalls.length },
+      expected: { success: false, verbCalls: 0 },
     });
   });
 
@@ -624,8 +626,8 @@ describe('move_session', () => {
     assert({
       given: 'a name no session at this node carries',
       should: 'refuse and write nothing',
-      actual: { success: result.success, writes: recorded.writes.length },
-      expected: { success: false, writes: 0 },
+      actual: { success: result.success, verbCalls: recorded.verbCalls.length },
+      expected: { success: false, verbCalls: 0 },
     });
   });
 
@@ -646,8 +648,8 @@ describe('move_session', () => {
     assert({
       given: 'a target outside the derived handle set',
       should: 'deny',
-      actual: { success: result.success, writes: recorded.writes.length },
-      expected: { success: false, writes: 0 },
+      actual: { success: result.success, verbCalls: recorded.verbCalls.length },
+      expected: { success: false, verbCalls: 0 },
     });
   });
 });
@@ -683,12 +685,12 @@ describe('kill_session', () => {
       actual: {
         success: result.success,
         killed,
-        writes: recorded.writes[0]?.writes,
+        verbs: recorded.verbCalls[0]?.verbs,
       },
       expected: {
         success: true,
         killed: ['worker'],
-        writes: [{ kind: 'remove', id: 'w1' }],
+        verbs: [{ type: 'close-pane', workspaceId: 'w1', paneId: 'p1' }],
       },
     });
   });
@@ -713,8 +715,8 @@ describe('kill_session', () => {
     assert({
       given: 'a kill aimed at a node the derived set never contained',
       should: 'deny and touch nothing',
-      actual: { success: result.success, writes: recorded.writes.length },
-      expected: { success: false, writes: 0 },
+      actual: { success: result.success, verbCalls: recorded.verbCalls.length },
+      expected: { success: false, verbCalls: 0 },
     });
   });
 
@@ -733,8 +735,8 @@ describe('kill_session', () => {
     assert({
       given: 'a kill the runtime could not complete',
       should: 'report the failure and close no panes',
-      actual: { success: result.success, writes: recorded.writes.length },
-      expected: { success: false, writes: 0 },
+      actual: { success: result.success, verbCalls: recorded.verbCalls.length },
+      expected: { success: false, verbCalls: 0 },
     });
   });
 });

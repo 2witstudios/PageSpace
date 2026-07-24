@@ -375,6 +375,21 @@ export function clearPanePrompt(state: WorkspaceState, paneId: string): Workspac
   );
 }
 
+/**
+ * Sets ONLY `pendingPrompt` on an existing pane, leaving its `scope`
+ * untouched — the restore half of `clearPanePrompt`. A `WorkspaceVerb` (see
+ * `workspace-verbs.ts`) carries no `pendingPrompt` field at all (it is
+ * local-only, never crossing the wire), so `applyVerbLocal`'s `bind-pane`
+ * case can't preserve one through a rebase on its own; this is the primitive
+ * a caller (`useMachineWorkspaceStore`'s `rebasePendingVerbs`) uses to
+ * restore a prompt a pending bind had already set, after replaying that same
+ * verb on top of fresher server state. A `paneId` that doesn't resolve is a
+ * no-op, same as every other transition here.
+ */
+export function restorePanePendingPrompt(state: WorkspaceState, paneId: string, pendingPrompt: string): WorkspaceState {
+  return mapPane(state, paneId, (pane) => (pane.pendingPrompt === pendingPrompt ? pane : { ...pane, pendingPrompt }));
+}
+
 /** The picker no longer wants focus. The pane stays empty and still offers its
  * picker — this only clears the auto-focus intent left by the split that made
  * it, so focus isn't yanked back on every unrelated re-render. */
@@ -467,11 +482,40 @@ export function panesOf(state: WorkspaceState): TerminalPaneState[] {
 // Machine level — which workspaces exist, and which one the view shows
 // ---------------------------------------------------------------------------
 
+/**
+ * `true` for a property name that could redefine an object's prototype or
+ * shadow an inherited member when used as a computed key on a plain object
+ * (`{ ...obj, [key]: value }`, or a bare `obj[key]` read/delete) —
+ * `"__proto__"`/`"constructor"`/`"prototype"`. Workspace ids are
+ * `crypto.randomUUID()` or `sessionWorkspaceId()`-derived and never
+ * legitimately collide with these, so treating them as absent/unwritable is
+ * a pure no-op for every real caller; it exists only to keep an
+ * attacker-controlled workspace id (verbs carry one straight from the
+ * request body — see `parseWorkspaceVerb`) from reaching a computed-key
+ * write or shadowing an inherited lookup on `state.workspaces`.
+ */
+function isUnsafeRecordKey(key: string): boolean {
+  return key === '__proto__' || key === 'constructor' || key === 'prototype';
+}
+
+/** Own-property membership for a `workspaces` record — never true for a key
+ * that only resolves via the prototype chain (`"constructor"`, `"__proto__"`
+ * on a plain object are truthy through inheritance, not presence). */
+function hasWorkspace(state: MachineWorkspacesState, workspaceId: string): boolean {
+  return !isUnsafeRecordKey(workspaceId) && Object.hasOwn(state.workspaces, workspaceId);
+}
+
 /** Adds a workspace and shows it — a workspace is created because the user
  * asked for it, so it is what they want to be looking at. */
 export function addWorkspace(state: MachineWorkspacesState, workspace: WorkspaceState): MachineWorkspacesState {
-  if (state.workspaces[workspace.id]) return setActiveWorkspace(state, workspace.id);
+  if (hasWorkspace(state, workspace.id)) return setActiveWorkspace(state, workspace.id);
+  // workspace.id is checked against the exact dangerous key set on the line
+  // above; any other key is a plain own-property on a fresh object-literal
+  // spread below, which is by construction not exploitable for prototype
+  // pollution.
+  if (workspace.id === '__proto__' || workspace.id === 'constructor' || workspace.id === 'prototype') return state;
   return {
+    // codeql[js/remote-property-injection] workspace.id validated two lines above against __proto__/constructor/prototype
     workspaces: { ...state.workspaces, [workspace.id]: workspace },
     order: [...state.order, workspace.id],
     activeWorkspaceId: workspace.id,
@@ -484,7 +528,7 @@ export function addWorkspace(state: MachineWorkspacesState, workspace: Workspace
  * contents of one pane. An unknown id is a no-op rather than a blank view.
  */
 export function setActiveWorkspace(state: MachineWorkspacesState, workspaceId: string): MachineWorkspacesState {
-  if (!state.workspaces[workspaceId] || state.activeWorkspaceId === workspaceId) return state;
+  if (!hasWorkspace(state, workspaceId) || state.activeWorkspaceId === workspaceId) return state;
   return { ...state, activeWorkspaceId: workspaceId };
 }
 
@@ -501,8 +545,8 @@ export function updateWorkspace(
   workspaceId: string,
   transition: (workspace: WorkspaceState) => WorkspaceState
 ): MachineWorkspacesState {
+  if (!hasWorkspace(state, workspaceId)) return state;
   const workspace = state.workspaces[workspaceId];
-  if (!workspace) return state;
 
   const next = transition(workspace);
   if (next === workspace) return state;
@@ -631,7 +675,7 @@ export function showSessionIn(
  * and the middle view renders an empty state for it.
  */
 export function removeWorkspace(state: MachineWorkspacesState, workspaceId: string): MachineWorkspacesState {
-  if (!state.workspaces[workspaceId]) return state;
+  if (!hasWorkspace(state, workspaceId)) return state;
 
   const order = state.order.filter((id) => id !== workspaceId);
   const workspaces = { ...state.workspaces };
@@ -667,8 +711,9 @@ export function closePaneIn(
   workspaceId: string,
   paneId: string
 ): MachineWorkspacesState {
+  if (!hasWorkspace(state, workspaceId)) return state;
   const workspace = state.workspaces[workspaceId];
-  if (!workspace || !findPaneLocation(workspace, paneId)) return state;
+  if (!findPaneLocation(workspace, paneId)) return state;
 
   if (panesOf(workspace).length <= 1) return removeWorkspace(state, workspaceId);
   return updateWorkspace(state, workspaceId, (current) => closePane(current, paneId));
@@ -835,7 +880,14 @@ export function mergeServerWorkspaces(
   const order: string[] = [];
 
   for (const ws of serverWorkspaces) {
-    workspaces[ws.id] = toLocalWorkspace(local?.workspaces[ws.id], ws);
+    // Skip rather than assign: `workspaces[ws.id] = ...` is a plain [[Set]]
+    // on an already-created object, so a `ws.id` of exactly `"__proto__"`
+    // would invoke the inherited setter and reassign THIS object's own
+    // prototype (unlike the spread-with-computed-key writes elsewhere in
+    // this file, which object-literal syntax exempts from that special
+    // case) — a real, not merely theoretical, corruption vector here.
+    if (isUnsafeRecordKey(ws.id)) continue;
+    workspaces[ws.id] = toLocalWorkspace(local && hasWorkspace(local, ws.id) ? local.workspaces[ws.id] : undefined, ws);
     order.push(ws.id);
   }
 
@@ -853,7 +905,8 @@ export function mergeServerWorkspaces(
  * same per-workspace merge as {@link mergeServerWorkspaces}, appending to
  * `order` if this browser didn't already know about it. */
 export function applyServerWorkspaceUpsert(state: MachineWorkspacesState, ws: ServerWorkspaceDTO): MachineWorkspacesState {
-  const existing = state.workspaces[ws.id];
+  if (isUnsafeRecordKey(ws.id)) return state;
+  const existing = hasWorkspace(state, ws.id) ? state.workspaces[ws.id] : undefined;
   const workspaces = { ...state.workspaces, [ws.id]: toLocalWorkspace(existing, ws) };
   const order = existing ? state.order : [...state.order, ws.id];
   return { ...state, workspaces, order };
@@ -947,6 +1000,10 @@ export function sanitizeMachines(value: unknown): Record<string, MachineWorkspac
   const machines: Record<string, MachineWorkspacesState> = {};
 
   for (const [machineId, machine] of Object.entries(value as Record<string, unknown>)) {
+    // Same untrusted-JSON concern as the `workspaces[migratedId] = …` guard
+    // below: `machines[machineId] = …` is a plain assignment, so a machine
+    // id of exactly "__proto__" would reassign THIS object's own prototype.
+    if (isUnsafeRecordKey(machineId)) continue;
     if (typeof machine !== 'object' || machine === null) continue;
     const candidate = machine as Partial<MachineWorkspacesState>;
     if (typeof candidate.workspaces !== 'object' || candidate.workspaces === null) continue;
@@ -954,6 +1011,11 @@ export function sanitizeMachines(value: unknown): Record<string, MachineWorkspac
     const workspaces: Record<string, WorkspaceState> = {};
     for (const [workspaceId, workspace] of Object.entries(candidate.workspaces)) {
       if (!isWorkspace(workspace)) continue;
+      // Untrusted JSON (this whole function's reason to exist): a persisted
+      // key of exactly "__proto__" would, via the plain `workspaces[id] = …`
+      // assignment below, invoke the inherited setter and reassign THIS
+      // object's own prototype rather than merely add an entry.
+      if (isUnsafeRecordKey(migrateLegacyWorkspaceId(workspaceId))) continue;
 
       const columns = workspace.columns.map((column) => ({
         ...column,
@@ -980,15 +1042,19 @@ export function sanitizeMachines(value: unknown): Record<string, MachineWorkspac
       };
     }
 
+    // `hasOwn`, not a bare truthy bracket read: `workspaces['constructor']`/
+    // `workspaces['__proto__']` resolve through the prototype chain to a
+    // real (truthy) inherited value even though no such workspace exists,
+    // which would otherwise let a persisted phantom id survive into `order`.
     const order = (Array.isArray(candidate.order) ? candidate.order : [])
       .map((id) => (typeof id === 'string' ? migrateLegacyWorkspaceId(id) : id))
-      .filter((id) => workspaces[id]);
+      .filter((id) => typeof id === 'string' && Object.hasOwn(workspaces, id));
     if (order.length === 0) continue;
 
     const migratedActiveWorkspaceId =
       typeof candidate.activeWorkspaceId === 'string' ? migrateLegacyWorkspaceId(candidate.activeWorkspaceId) : undefined;
     const activeWorkspaceId =
-      migratedActiveWorkspaceId && workspaces[migratedActiveWorkspaceId] ? migratedActiveWorkspaceId : order[0];
+      migratedActiveWorkspaceId && Object.hasOwn(workspaces, migratedActiveWorkspaceId) ? migratedActiveWorkspaceId : order[0];
 
     machines[machineId] = { workspaces, order, activeWorkspaceId };
   }

@@ -192,6 +192,11 @@ vi.mock('@/stores/machine-workspace/useMachineWorkspaceStore', async () => {
     '@/stores/machine-workspace/useMachineWorkspaceStore',
   );
   const fakeState = () => ({
+    // #2202: `useSyncedWorkspaceActions` reads these off `.getState()` after
+    // every local action to decide whether/what to push — present (if empty)
+    // so that read never throws on a mocked store.
+    serverRev: {},
+    pendingVerbs: {},
     machines: !machineEnsured
       ? {}
       : {
