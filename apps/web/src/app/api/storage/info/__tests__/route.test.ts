@@ -107,16 +107,21 @@ describe('GET /api/storage/info', () => {
       expect(reconcileStorageUsage).toHaveBeenCalledWith('user_1');
     });
 
-    it('handles a lock_busy reconcile outcome without erroring', async () => {
+    it('handles a lock_busy reconcile outcome without erroring, still returning the pre-reconcile storage numbers', async () => {
       vi.mocked(verifyAuth).mockResolvedValue({ id: 'user_1', role: 'admin', adminRoleVersion: 3 } as never);
       vi.mocked(validateAdminAccess).mockResolvedValue({ isValid: true } as never);
       vi.mocked(reconcileStorageUsage).mockResolvedValue({ outcome: 'lock_busy' } as never);
 
       const request = new Request('https://example.com/api/storage/info?reconcile=true');
       const res = await GET(request as never);
+      const body = await res.json();
 
       expect(res.status).toBe(200);
       expect(reconcileStorageUsage).toHaveBeenCalledWith('user_1');
+      // A lock_busy correction is a no-op — the response reads whatever
+      // getUserStorageQuota returns (the mocked default: usedBytes 0), not a
+      // value the skipped correction would have produced.
+      expect(body.quota.usedBytes).toBe(0);
     });
 
     it('rejects a stale admin session whose adminRoleVersion no longer validates', async () => {
