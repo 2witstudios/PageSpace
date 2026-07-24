@@ -125,15 +125,17 @@ export function nodeTargetDeniedError(
     };
   }
   // A model reasoning in ordinary git terms often adds `branch: "main"` (or
-  // "master") to address a project's own default checkout — but `branch`
-  // here only ever names a separately created branch worktree, so that
-  // target is always denied (deliberately: see resolveMachineNodeTarget's
-  // doc comment on why guessing a substitute isn't safe). Naming the actual
-  // fix inline gets the very next call right instead of leaving the caller
-  // to guess or re-derive it from list_sessions.
+  // "master") assuming it addresses a project's own default checkout. This
+  // hint stays deliberately NEUTRAL about why THIS particular target was
+  // denied — it could be a name that was never tracked, one that existed and
+  // was torn down, or a project that isn't even in scope, and only
+  // list_sessions (already pointed to below) can tell those apart. Naming a
+  // specific "just retry with the project instead" fix here would recreate
+  // the exact wrong-worktree risk this denial exists to prevent, for
+  // whichever of those cases isn't "never tracked" (Codex review, PR #2232).
   const defaultBranchHint =
-    target.project && target.branch && isMainBranchName(target.branch)
-      ? ` "${target.branch}" isn't a separately tracked branch here — to run at the project's own checkout, pass target: { project: "${target.project}" } without a branch.`
+    target.branch && isMainBranchName(target.branch)
+      ? ` Note: "${target.branch}" is never an implicit alias for a project's own default checkout — it only resolves if list_sessions lists it as an actual branch.`
       : '';
   return {
     success: false,

@@ -23,6 +23,7 @@
  */
 
 import type { MachineNodeHandleSet } from '@pagespace/lib/services/machines/machine-pane-binding';
+import { isMainBranchName } from '@pagespace/lib/services/sandbox/machine-diff-scope';
 
 export function buildMachineBindingPrompt(binding: MachineNodeHandleSet): string {
   const { self, handles } = binding;
@@ -43,11 +44,21 @@ export function buildMachineBindingPrompt(binding: MachineNodeHandleSet): string
               : `project "${handle.project}"`,
           )
           .join(', ')}.`;
+  // A project can have a genuinely LIVE branch worktree named "main"/"master"
+  // (spawnBranch doesn't reserve these names) — when one is actually in the
+  // reachable list, targeting it by name is correct, so the blanket "never"
+  // below would be actively wrong advice for that case. Only warn when no
+  // such live branch is listed (Codex review, PR #2232): the reachable list
+  // itself is always the source of truth, this is just interpreting it.
+  const hasLiveDefaultBranch = beneath.some((h) => h.kind === 'branch' && h.branch !== undefined && isMainBranchName(h.branch));
+  const branchWarning = hasLiveDefaultBranch
+    ? ''
+    : '\n• "branch" here is NOT "whatever git branch a project happens to be on" — it only names a separately created branch worktree (none is currently listed above). A project\'s own default checkout has no branch of its own to address: to run at a project, pass target: { project } alone, not target: { project, branch: "main" } — there is no such branch here.';
   return (
     `\n\nMACHINE BINDING (this conversation)` +
     `\n• This conversation is bound to machine "${self.machineId}" at ${where} — code-execution tools (bash, readFile, writeFile, editFile, git/gh) operate from working directory: ${self.cwd}` +
     `\n${reachable}` +
-    `\n• "branch" here is NOT "whatever git branch a project happens to be on" — it only names a separately created branch worktree (listed above, if any exist). A project's own default checkout (its "main"/"master") has no branch of its own to address: to run at a project, pass target: { project } alone, never target: { project, branch: "main" }.` +
+    branchWarning +
     `\n• A node outside this scope (a sibling project or branch, another machine) is not addressable — such a target is refused.` +
     `\n• Call list_sessions to see the nodes in this scope and what is running in them; it is the only discovery tool for this machine.` +
     `\n• switch_machine and list_machines are unavailable — this conversation cannot leave its bound machine`
