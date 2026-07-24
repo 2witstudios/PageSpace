@@ -38,7 +38,7 @@ export type PageRevocationReason = Extract<KickReason, 'permission_revoked' | 'p
  * `member_removed`: a role CHANGE (still a member) never cascades to kicking
  * page rooms the way membership loss does, so it isn't modeled here.
  */
-export type DriveRevocationReason = Extract<KickReason, 'member_removed'>;
+export type DriveRevocationReason = 'member_removed';
 
 // ---------------------------------------------------------------------------
 // Pure core — payload builders
@@ -62,6 +62,22 @@ export function pageRevocationKickPayloads({
   }));
 }
 
+/** One kick payload per drive-scoped room (drive, drive calendar, drive activity) — no page enumeration needed. */
+export function driveScopedKickPayloads({
+  userId,
+  driveId,
+  driveName,
+  reason,
+}: {
+  userId: string;
+  driveId: string;
+  driveName?: string;
+  reason: DriveRevocationReason;
+}): KickPayload[] {
+  const metadata = driveName === undefined ? { driveId } : { driveId, driveName };
+  return roomsForDriveKick(driveId).map((roomPattern) => ({ userId, roomPattern, reason, metadata }));
+}
+
 /**
  * One kick payload per room a drive membership grants: the drive-scoped rooms
  * (drive, drive calendar, drive activity) plus every page in the drive (page
@@ -80,17 +96,10 @@ export function driveRevocationKickPayloads({
   driveName?: string;
   reason: DriveRevocationReason;
 }): KickPayload[] {
-  const driveMetadata = driveName === undefined ? { driveId } : { driveId, driveName };
-  const drivePayloads = roomsForDriveKick(driveId).map((roomPattern) => ({
-    userId,
-    roomPattern,
-    reason,
-    metadata: driveMetadata,
-  }));
   const pagePayloads = pageIds.flatMap((pageId) =>
     pageRevocationKickPayloads({ userId, pageId, reason }),
   );
-  return [...drivePayloads, ...pagePayloads];
+  return [...driveScopedKickPayloads({ userId, driveId, driveName, reason }), ...pagePayloads];
 }
 
 // ---------------------------------------------------------------------------
@@ -136,25 +145,39 @@ export async function kickForPagePermissionRevocation(
 /**
  * Kick a user from every room a drive membership granted — the drive-scoped
  * rooms plus every page room in the drive — after their membership was
- * revoked. If page enumeration fails, the drive-scoped kicks still run.
- * Never throws.
+ * revoked. Never throws.
+ *
+ * The drive-scoped kicks don't need the page list, so they fire immediately
+ * rather than waiting on the page-enumeration DB query: for "immediately
+ * revoke real-time access," gating drive-room kicks behind an unrelated
+ * round-trip would only widen the window. If page enumeration fails, the
+ * drive-scoped kicks still run (unaffected by the failure).
  */
 export async function kickForDriveMembershipRevocation(
   args: { userId: string; driveId: string; driveName?: string; reason: DriveRevocationReason },
   deps: RevocationKickDeps = defaultDeps,
 ): Promise<void> {
-  let pageIds: string[] = [];
-  try {
-    pageIds = await deps.listDrivePageIds(args.driveId);
-  } catch (error) {
-    loggers.realtime.error('Revocation kick: drive page enumeration failed; kicking drive rooms only',
-      error instanceof Error ? error : undefined,
-      { driveId: args.driveId },
-    );
-  }
-  await executeKicks(
-    driveRevocationKickPayloads({ ...args, pageIds }),
+  const driveKicks = executeKicks(
+    driveScopedKickPayloads(args),
     deps,
     { driveId: args.driveId, reason: args.reason },
   );
+
+  const pageKicks = deps.listDrivePageIds(args.driveId)
+    .catch((error): string[] => {
+      loggers.realtime.error('Revocation kick: drive page enumeration failed; kicking drive rooms only',
+        error instanceof Error ? error : undefined,
+        { driveId: args.driveId },
+      );
+      return [];
+    })
+    .then((pageIds) =>
+      executeKicks(
+        pageIds.flatMap((pageId) => pageRevocationKickPayloads({ userId: args.userId, pageId, reason: args.reason })),
+        deps,
+        { driveId: args.driveId, reason: args.reason },
+      )
+    );
+
+  await Promise.all([driveKicks, pageKicks]);
 }

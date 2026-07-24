@@ -14,6 +14,7 @@ vi.mock('../../logging/logger-config', () => ({
 
 import {
   pageRevocationKickPayloads,
+  driveScopedKickPayloads,
   driveRevocationKickPayloads,
   kickForPagePermissionRevocation,
   kickForDriveMembershipRevocation,
@@ -37,6 +38,23 @@ describe('pageRevocationKickPayloads (pure)', () => {
   it('supports the page_private reason', () => {
     const payloads = pageRevocationKickPayloads({ userId, pageId: pageA, reason: 'page_private' });
     expect(payloads.every((p) => p.reason === 'page_private')).toBe(true);
+  });
+});
+
+describe('driveScopedKickPayloads (pure)', () => {
+  it('targets only the drive, drive calendar, and drive activity rooms', () => {
+    const payloads = driveScopedKickPayloads({ userId, driveId, driveName: 'Team', reason: 'member_removed' });
+    expect(payloads.map((p) => p.roomPattern)).toEqual([
+      `drive:${driveId}`,
+      `drive:${driveId}:calendar`,
+      `activity:drive:${driveId}`,
+    ]);
+    expect(payloads[0].metadata).toEqual({ driveId, driveName: 'Team' });
+  });
+
+  it('omits driveName from metadata when not provided', () => {
+    const payloads = driveScopedKickPayloads({ userId, driveId, reason: 'member_removed' });
+    expect(payloads[0].metadata).toEqual({ driveId });
   });
 });
 
@@ -128,5 +146,35 @@ describe('kickForDriveMembershipRevocation (shell)', () => {
     await expect(
       kickForDriveMembershipRevocation({ userId, driveId, reason: 'member_removed' }, deps)
     ).resolves.toBeUndefined();
+  });
+
+  it('kicks the drive-scoped rooms without waiting on page enumeration', async () => {
+    // "Immediately revoke real-time access" — the drive/calendar/activity
+    // kicks don't need the page list, so they must not queue behind an
+    // unrelated DB round-trip. Proven with a deferred listDrivePageIds: by
+    // the time it resolves, the drive-scoped kicks must already have fired.
+    let resolvePageIds: (ids: string[]) => void;
+    const pageIdsPromise = new Promise<string[]>((resolve) => { resolvePageIds = resolve; });
+    const deps = makeDeps({ listDrivePageIds: vi.fn().mockReturnValue(pageIdsPromise) });
+
+    const kickPromise = kickForDriveMembershipRevocation({ userId, driveId, reason: 'member_removed' }, deps);
+
+    // Drain the microtask queue up to (but not past) resolving pageIds.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(vi.mocked(deps.kick).mock.calls.map(([p]) => p.roomPattern)).toEqual([
+      `drive:${driveId}`,
+      `drive:${driveId}:calendar`,
+      `activity:drive:${driveId}`,
+    ]);
+
+    resolvePageIds!([pageA]);
+    await kickPromise;
+    expect(vi.mocked(deps.kick).mock.calls.map(([p]) => p.roomPattern)).toEqual([
+      `drive:${driveId}`,
+      `drive:${driveId}:calendar`,
+      `activity:drive:${driveId}`,
+      pageA,
+      `activity:page:${pageA}`,
+    ]);
   });
 });

@@ -33,7 +33,7 @@ export type KickReason = (typeof KICK_REASONS)[number];
 
 export interface KickPayload {
   userId: string;
-  /** A room name from ./rooms.ts builders, or a prefix wildcard like `drive:*`. */
+  /** An exact room name from ./rooms.ts builders. */
   roomPattern: string;
   reason: KickReason;
   metadata?: {

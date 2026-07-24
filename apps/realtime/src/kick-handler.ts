@@ -17,7 +17,6 @@
 
 import { Server, Socket } from 'socket.io';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { roomsForDriveKick, roomsForPageKick } from '@pagespace/lib/realtime/rooms';
 import { KICK_REASONS, type KickPayload, type KickResult } from '@pagespace/lib/realtime/kick-client';
 import { socketRegistry } from './socket-registry';
 
@@ -66,38 +65,16 @@ export function validateKickPayload(payload: KickPayload): ValidationResult {
 }
 
 /**
- * Check if a room matches the given pattern
- * Supports exact match and prefix wildcard (e.g., 'drive:*')
+ * Check if a room matches the given kick pattern.
+ *
+ * Every real caller (the revocation→kick hook,
+ * @pagespace/lib/permissions/revocation-kick) builds `roomPattern` from the
+ * shared room grammar (@pagespace/lib/realtime/rooms), which only ever emits
+ * concrete room names — never a prefix pattern — so exact match is the only
+ * case this needs to handle.
  */
 export function roomMatchesPattern(room: string, pattern: string): boolean {
-  // Exact match
-  if (room === pattern) {
-    return true;
-  }
-
-  // Wildcard match: 'drive:*' matches any room starting with 'drive:'
-  if (pattern.endsWith('*')) {
-    const prefix = pattern.slice(0, -1);
-    return room.startsWith(prefix);
-  }
-
-  return false;
-}
-
-/**
- * Get all rooms that should be kicked for a drive removal.
- * Delegates to the shared room grammar so the set cannot drift from the joins.
- */
-export function getRoomsForDriveKick(driveId: string): string[] {
-  return roomsForDriveKick(driveId);
-}
-
-/**
- * Get all rooms that should be kicked for a page permission revocation.
- * Delegates to the shared room grammar so the set cannot drift from the joins.
- */
-export function getRoomsForPageKick(pageId: string): string[] {
-  return roomsForPageKick(pageId);
+  return room === pattern;
 }
 
 /**
