@@ -4,6 +4,7 @@ vi.mock('../storage-repository', () => ({
   storageRepository: {
     findUserForStorage: vi.fn(),
     findStorageDriftCandidates: vi.fn(),
+    findLastFileCreatedAtForUser: vi.fn().mockResolvedValue(null),
     findUserDriveIds: vi.fn(),
     findFilesByCreator: vi.fn(),
     userReferencesContentHash: vi.fn(),
@@ -438,6 +439,39 @@ describe('storage-limits', () => {
       expect(storageRepository.updateStorageInTx).not.toHaveBeenCalled();
       expect(storageRepository.runTransaction).not.toHaveBeenCalled();
       expect(result).toEqual({ outcome: 'reconciled', previousUsage: 1000, actualUsage: 1000, difference: 0 });
+    });
+
+    it('reconcileStorageUsage_withARecentFilesRow_skipsTheCorrectionEvenThoughDriftExceedsTolerance (#2225 review — Codex round 5, upload/complete race)', async () => {
+      // upload/complete's files-insert and its separate storageUsedBytes update
+      // are non-atomic; if the insert already landed but the update hasn't,
+      // derivedUsage looks drifted from quota.usedBytes even though nothing is
+      // actually wrong yet. Applying that as a correction now would double-count
+      // once the upload's own pending update lands.
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
+        id: 'user-1', storageUsedBytes: 1000, subscriptionTier: 'free',
+      });
+      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([{ sizeBytes: 1500 }]);
+      vi.mocked(storageRepository.findLastFileCreatedAtForUser).mockResolvedValue(new Date());
+
+      const result = await reconcileStorageUsage('user-1', makeFakeLockPool().pool);
+
+      expect(storageRepository.updateStorageInTx).not.toHaveBeenCalled();
+      expect(result).toEqual({ outcome: 'reconciled', previousUsage: 1000, actualUsage: 1000, difference: 500 });
+    });
+
+    it('reconcileStorageUsage_withAnOldFilesRow_appliesTheCorrectionNormally', async () => {
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
+        id: 'user-1', storageUsedBytes: 1000, subscriptionTier: 'free',
+      });
+      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([{ sizeBytes: 1500 }]);
+      vi.mocked(storageRepository.findLastFileCreatedAtForUser).mockResolvedValue(new Date(Date.now() - 3600_000));
+      vi.mocked(storageRepository.runTransaction).mockImplementation(async (fn) => fn({} as never));
+      vi.mocked(storageRepository.updateStorageInTx).mockResolvedValue({ newUsage: 1500 });
+
+      const result = await reconcileStorageUsage('user-1', makeFakeLockPool().pool);
+
+      expect(storageRepository.updateStorageInTx).toHaveBeenCalledWith(expect.anything(), 'user-1', 500);
+      expect(result).toEqual({ outcome: 'reconciled', previousUsage: 1000, actualUsage: 1500, difference: 500 });
     });
 
     it('reconcileStorageUsage_withLockAlreadyHeld_isACleanNoOpAndNeverReadsTheUser (#2225 review — concurrent admin triggers must not double-apply)', async () => {

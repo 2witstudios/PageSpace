@@ -207,7 +207,15 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
   // here must not turn a successful upload into a 500 (which would make the client
   // retry and double-charge storage).
   try {
-    await releasePendingUpload(jobId);
+    // Isolated from the rest of this block: a transient failure releasing the
+    // pending_uploads row must not skip the storage charge or audit/activity
+    // logging below (#2225 review — CodeRabbit).
+    await releasePendingUpload(jobId).catch((err) => {
+      loggers.api.warn('releasePendingUpload failed after successful complete', {
+        jobId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
     if (shouldChargeForStore(fileWasInserted)) {
       await updateStorageUsage(userId, resolvedSize, {
         driveId: attachmentFileDriveId(target) ?? undefined,

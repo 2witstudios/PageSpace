@@ -327,8 +327,20 @@ async function reconcileStorageUsageUnlocked(userId: string): Promise<{
 
   let actualUsage = quota.usedBytes;
 
+  // #2225 review (Codex round 5) — upload/complete inserts the `files` row and
+  // calls `updateStorageUsage` as two separate, non-atomic steps. If the
+  // insert lands between the two reads above but its own storageUsedBytes
+  // update hasn't yet, derivedUsage already includes it while quota.usedBytes
+  // doesn't — applying that as drift here would double-count it once the
+  // upload's own pending update lands. Skip correcting (treat as a no-op this
+  // call) when this user's most recent files row is still within the same
+  // cooldown window the cron sweep uses for the identical race.
+  const lastFileCreatedAt = await storageRepository.findLastFileCreatedAtForUser(userId);
+  const withinCooldown = lastFileCreatedAt !== null
+    && Date.now() - lastFileCreatedAt.getTime() < STORAGE_DRIFT_COOLDOWN_SECONDS * 1000;
+
   // Update if there's a discrepancy
-  if (Math.abs(difference) > 1) { // Allow 1 byte tolerance for floating point
+  if (!withinCooldown && Math.abs(difference) > 1) { // Allow 1 byte tolerance for floating point
     actualUsage = await storageRepository.runTransaction(async (tx) => {
       const { newUsage } = await storageRepository.updateStorageInTx(tx, userId, difference);
 

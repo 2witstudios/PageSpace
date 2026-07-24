@@ -4,7 +4,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, sql, and, inArray } from '@pagespace/db/operators';
+import { eq, sql, and, inArray, desc } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { pages, drives, storageEvents } from '@pagespace/db/schema/core';
 import { files } from '@pagespace/db/schema/storage';
@@ -79,6 +79,28 @@ export const storageRepository = {
         derivedBytes: Number(r.derivedBytes),
       };
     });
+  },
+
+  /**
+   * #2225 review (Codex round 5) — the single-user admin reconcile reads
+   * `users.storageUsedBytes` and sums `files.sizeBytes` as two separate
+   * queries, the same TOCTOU window `findStorageDriftCandidates`'s cooldown
+   * closes for the cron sweep: if a `files` row commits between those two
+   * reads (upload/complete's insert lands but its separate storageUsedBytes
+   * update hasn't yet), the derived sum already includes it while the cached
+   * counter doesn't, so the delta correction double-counts it once the
+   * upload's own pending update lands. Callers use this to skip correcting
+   * a user whose most recent `files` row is too fresh, mirroring the cron's
+   * cooldown for the same race on the single-user path.
+   */
+  findLastFileCreatedAtForUser: async (userId: string): Promise<Date | null> => {
+    const [row] = await db
+      .select({ createdAt: files.createdAt })
+      .from(files)
+      .where(eq(files.createdBy, userId))
+      .orderBy(desc(files.createdAt))
+      .limit(1);
+    return row?.createdAt ?? null;
   },
 
   findUserDriveIds: async (userId: string): Promise<string[]> => {

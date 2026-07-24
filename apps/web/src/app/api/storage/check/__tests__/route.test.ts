@@ -21,11 +21,8 @@ vi.mock('@pagespace/lib/services/storage-limits', () => ({
   STORAGE_TIERS: { free: { maxConcurrentUploads: 3 } },
 }));
 
-vi.mock('@pagespace/lib/services/upload-semaphore', () => ({
-  uploadSemaphore: {
-    canAcquireSlot: vi.fn().mockResolvedValue(true),
-    getStatus: vi.fn().mockReturnValue({ userUploads: new Map() }),
-  },
+vi.mock('@pagespace/lib/services/pending-uploads', () => ({
+  countLiveUploadsForUser: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock('@pagespace/lib/services/memory-monitor', () => ({
@@ -39,6 +36,7 @@ vi.mock('@/lib/validation/parse-body', () => ({
 import { GET } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { countLiveUploadsForUser } from '@pagespace/lib/services/pending-uploads';
 
 const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,
@@ -78,5 +76,30 @@ describe('GET /api/storage/check', () => {
     await GET(request as never);
 
     expect(auditRequest).not.toHaveBeenCalled();
+  });
+
+  describe('#2225 review (Codex round 5) — reads the cross-process pending_uploads count, not the process-local semaphore', () => {
+    it('reports canUpload true and echoes the live count when under the tier limit', async () => {
+      vi.mocked(countLiveUploadsForUser).mockResolvedValue(2);
+
+      const request = new Request('https://example.com/api/storage/check');
+      const res = await GET(request as never);
+      const body = await res.json();
+
+      expect(countLiveUploadsForUser).toHaveBeenCalledWith('user_1');
+      expect(body.activeUploads).toBe(2);
+      expect(body.canUpload).toBe(true);
+    });
+
+    it('reports canUpload false once the live count reaches the tier limit', async () => {
+      vi.mocked(countLiveUploadsForUser).mockResolvedValue(3);
+
+      const request = new Request('https://example.com/api/storage/check');
+      const res = await GET(request as never);
+      const body = await res.json();
+
+      expect(body.activeUploads).toBe(3);
+      expect(body.canUpload).toBe(false);
+    });
   });
 });

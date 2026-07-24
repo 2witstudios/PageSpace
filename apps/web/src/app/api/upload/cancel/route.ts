@@ -41,7 +41,10 @@ export async function POST(request: Request) {
   }
 
   uploadSemaphore.releaseUploadSlot(jobId);
-  await releasePendingUpload(jobId);
+  // A transient failure releasing the pending_uploads row must not 500 an
+  // otherwise-successful cancel (#2225 review — CodeRabbit); the semaphore
+  // slot is already released, and sweep-expired is the backstop.
+  await releasePendingUpload(jobId).catch(() => undefined);
 
   auditRequest(request, {
     eventType: 'data.write',
