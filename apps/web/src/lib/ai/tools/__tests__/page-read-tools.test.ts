@@ -231,6 +231,36 @@ describe('page-read-tools', () => {
         });
       });
 
+      it('treats parentId: "" the same as omitting parentId at drive root', async () => {
+        setupDriveAccess();
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, parentId: '' },
+          createAuthContext()
+        ) as Record<string, unknown>;
+
+        assert({
+          given: 'list_pages with parentId: "" at drive root',
+          should: 'return success',
+          actual: result.success,
+          expected: true,
+        });
+
+        const pages = result.pages as Array<{ id: string }>;
+        assert({
+          given: 'list_pages with parentId: "" at drive root',
+          should: 'return the same root-level pages as omitting parentId (2, not 0)',
+          actual: pages.length,
+          expected: 2,
+        });
+
+        assert({
+          given: 'list_pages with parentId: "" at drive root',
+          should: 'not include the nested child page',
+          actual: pages.some(p => p.id === 'child-1'),
+          expected: false,
+        });
+      });
+
       it('includes hasChildren flag indicating whether folder has children', async () => {
         setupDriveAccess();
         const result = await pageReadTools.list_pages.execute!(
