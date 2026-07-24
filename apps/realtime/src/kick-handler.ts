@@ -3,13 +3,21 @@
  * Handles permission revocation by removing users from Socket.IO rooms.
  *
  * Supports multiple revocation scenarios:
- * - Drive member removal: kick from drive:*, drive:*:calendar, activity:drive:*
+ * - Drive member removal: kick from the drive-scoped rooms
  * - Page permission revocation: kick from specific page room
  * - Full user revocation: kick from all rooms
+ *
+ * Requests arrive via POST /api/kick from the centralized revocation hook
+ * (@pagespace/lib/permissions/revocation-kick). Kicks are a BEST-EFFORT
+ * delivery optimization: the authoritative permission fact lives in Postgres,
+ * enforced at join time and re-checked per sensitive event
+ * (./per-event-auth.ts). A missed or failed kick therefore only widens the
+ * stale fan-out window; it never grants authority.
  */
 
 import { Server, Socket } from 'socket.io';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { roomsForDriveKick, roomsForPageKick } from '@pagespace/lib/realtime/rooms';
 import { socketRegistry } from './socket-registry';
 
 export interface KickPayload {
@@ -94,25 +102,19 @@ export function roomMatchesPattern(room: string, pattern: string): boolean {
 }
 
 /**
- * Get all rooms that should be kicked for a drive removal
- * This includes the main drive room and associated activity rooms
+ * Get all rooms that should be kicked for a drive removal.
+ * Delegates to the shared room grammar so the set cannot drift from the joins.
  */
 export function getRoomsForDriveKick(driveId: string): string[] {
-  return [
-    `drive:${driveId}`,
-    `drive:${driveId}:calendar`,
-    `activity:drive:${driveId}`,
-  ];
+  return roomsForDriveKick(driveId);
 }
 
 /**
- * Get all rooms that should be kicked for a page permission revocation
+ * Get all rooms that should be kicked for a page permission revocation.
+ * Delegates to the shared room grammar so the set cannot drift from the joins.
  */
 export function getRoomsForPageKick(pageId: string): string[] {
-  return [
-    pageId, // Page room uses pageId directly
-    `activity:page:${pageId}`,
-  ];
+  return roomsForPageKick(pageId);
 }
 
 /**

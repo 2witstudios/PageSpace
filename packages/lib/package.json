@@ -1542,6 +1542,21 @@
       "import": "./dist/permissions/permission-mutations.js",
       "require": "./dist/permissions/permission-mutations.js"
     },
+    "./permissions/revocation-kick": {
+      "types": "./dist/permissions/revocation-kick.d.ts",
+      "import": "./dist/permissions/revocation-kick.js",
+      "require": "./dist/permissions/revocation-kick.js"
+    },
+    "./realtime/rooms": {
+      "types": "./dist/realtime/rooms.d.ts",
+      "import": "./dist/realtime/rooms.js",
+      "require": "./dist/realtime/rooms.js"
+    },
+    "./realtime/kick-client": {
+      "types": "./dist/realtime/kick-client.d.ts",
+      "import": "./dist/realtime/kick-client.js",
+      "require": "./dist/realtime/kick-client.js"
+    },
     "./permissions/share-link-service": {
       "types": "./dist/permissions/share-link-service.d.ts",
       "import": "./dist/permissions/share-link-service.js",

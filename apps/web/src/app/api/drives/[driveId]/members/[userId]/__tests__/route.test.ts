@@ -61,10 +61,14 @@ vi.mock('@/lib/websocket', () => ({
     operation,
     ...options,
   })),
-  kickUserFromDrive: vi.fn().mockResolvedValue(undefined),
-  kickUserFromDriveActivity: vi.fn().mockResolvedValue(undefined),
-  kickUserFromPage: vi.fn().mockResolvedValue(undefined),
-  kickUserFromPageActivity: vi.fn().mockResolvedValue(undefined),
+}));
+
+// Revocation kicking is centralized (#2158) — the route calls this hook
+// instead of picking rooms itself. Its own room-set and best-effort behavior
+// are covered by packages/lib/src/permissions/__tests__/revocation-kick.test.ts;
+// here we only assert the route wires it up with the right arguments.
+vi.mock('@pagespace/lib/permissions/revocation-kick', () => ({
+  kickForDriveMembershipRevocation: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
@@ -132,11 +136,8 @@ import {
   broadcastDriveMemberEvent,
   broadcastDriveMemberEventToRecipients,
   createDriveMemberEventPayload,
-  kickUserFromDrive,
-  kickUserFromDriveActivity,
-  kickUserFromPage,
-  kickUserFromPageActivity,
 } from '@/lib/websocket';
+import { kickForDriveMembershipRevocation } from '@pagespace/lib/permissions/revocation-kick';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { getActorInfo, logPermissionActivity } from '@pagespace/lib/monitoring/activity-logger';
@@ -1351,8 +1352,8 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
         'Failed to broadcast member_removed (post-commit, non-fatal)',
         lookupError,
       );
-      // Kicks still run after the swallowed broadcast failure.
-      expect(kickUserFromDrive).toHaveBeenCalled();
+      // The centralized kick hook still runs after the swallowed broadcast failure.
+      expect(kickForDriveMembershipRevocation).toHaveBeenCalled();
     });
 
     it('should still return 200 if broadcast itself rejects post-commit (non-fatal broadcast)', async () => {
@@ -1364,65 +1365,22 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
       const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
 
       expect(response.status).toBe(200);
-      // Kicks still run after the swallowed broadcast failure.
-      expect(kickUserFromDrive).toHaveBeenCalled();
+      // The centralized kick hook still runs after the swallowed broadcast failure.
+      expect(kickForDriveMembershipRevocation).toHaveBeenCalled();
     });
 
-    it('should still return 200 if the page-room db lookup rejects post-commit (non-fatal kicks)', async () => {
-      // Drive-level kicks succeed; the db.select for page rooms throws.
-      vi.mocked(db.select).mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockRejectedValue(new Error('Page lookup blew up')),
-        }),
-      } as never);
-
-      const response = await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.success).toBe(true);
-      // Drive-level kicks ran before the failure.
-      expect(kickUserFromDrive).toHaveBeenCalled();
-      // The error is logged, not propagated.
-      expect(loggers.api.error).toHaveBeenCalledWith(
-        'Failed to kick user from rooms (post-commit, non-fatal)',
-        expect.any(Error),
-      );
-    });
-
-    it('should kick user from drive rooms', async () => {
+    it('should kick the user from every room their drive membership granted', async () => {
       await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
 
-      expect(kickUserFromDrive).toHaveBeenCalledWith(
-        mockDriveId,
-        mockTargetUserId,
-        'member_removed',
-        'Test Drive'
-      );
-      expect(kickUserFromDriveActivity).toHaveBeenCalledWith(
-        mockDriveId,
-        mockTargetUserId,
-        'member_removed'
-      );
-    });
-
-    it('should kick user from page rooms when drive has pages', async () => {
-      // Drive has pages
-      vi.mocked(db.select).mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([
-            { id: 'page_1' },
-            { id: 'page_2' },
-          ]),
-        }),
-      } as never);
-
-      await DELETE(createDeleteRequest(), createContext(mockDriveId, mockTargetUserId));
-
-      expect(kickUserFromPage).toHaveBeenCalledWith('page_1', mockTargetUserId, 'member_removed');
-      expect(kickUserFromPage).toHaveBeenCalledWith('page_2', mockTargetUserId, 'member_removed');
-      expect(kickUserFromPageActivity).toHaveBeenCalledWith('page_1', mockTargetUserId, 'member_removed');
-      expect(kickUserFromPageActivity).toHaveBeenCalledWith('page_2', mockTargetUserId, 'member_removed');
+      // Room enumeration and best-effort failure handling are the centralized
+      // hook's own responsibility (see revocation-kick.test.ts) — this route
+      // only needs to wire it up with the right arguments.
+      expect(kickForDriveMembershipRevocation).toHaveBeenCalledWith({
+        userId: mockTargetUserId,
+        driveId: mockDriveId,
+        driveName: 'Test Drive',
+        reason: 'member_removed',
+      });
     });
 
     it('should log permission revocations and delete permissions when drive has pages', async () => {

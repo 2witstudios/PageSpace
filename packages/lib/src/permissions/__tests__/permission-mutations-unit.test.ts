@@ -58,11 +58,18 @@ vi.mock('../../monitoring/activity-logger', () => ({
   getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'actor@test.com', actorDisplayName: 'Actor' }),
 }));
 
+// Revocation→kick hook (#2158): revokePagePermission must trigger the kick
+// itself so no route can forget it. Mocked here to assert the wiring.
+vi.mock('../revocation-kick', () => ({
+  kickForPagePermissionRevocation: vi.fn().mockResolvedValue(undefined),
+}));
+
 // ---------------------------------------------------------------------------
 // Imports after mocks
 // ---------------------------------------------------------------------------
 
 import { grantPagePermission, revokePagePermission } from '../permission-mutations';
+import { kickForPagePermissionRevocation } from '../revocation-kick';
 import { db } from '@pagespace/db/db';
 import { EnforcedAuthContext } from '../enforced-context';
 
@@ -570,5 +577,51 @@ describe('revokePagePermission', () => {
       expect(result.data.revoked).toBe(true);
       expect((result.data as { revoked: true; permissionId: string }).permissionId).toBe('existing-perm-id');
     }
+  });
+
+  it('kicks the target from the page rooms after a successful revoke (#2158 centralized hook)', async () => {
+    const ctx = makeCtx();
+    mockPageAsOwner();
+
+    vi.mocked(db.select).mockReturnValueOnce({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({
+          limit: vi.fn().mockResolvedValue([{
+            id: 'existing-perm-id',
+            canView: true,
+            canEdit: false,
+            canShare: false,
+            canDelete: false,
+            grantedBy: 'some-user',
+          }]),
+        }),
+      }),
+    } as unknown as ReturnType<typeof db.select>);
+    vi.mocked(db.delete).mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) } as unknown as ReturnType<typeof db.delete>);
+
+    const result = await revokePagePermission(ctx, validRevokeInput());
+
+    expect(result.ok).toBe(true);
+    expect(kickForPagePermissionRevocation).toHaveBeenCalledWith({
+      userId: TARGET_ID,
+      pageId: PAGE_ID,
+      reason: 'permission_revoked',
+    });
+  });
+
+  it('does NOT kick when the permission did not exist (idempotent no-op)', async () => {
+    const ctx = makeCtx();
+    mockPageAsOwner();
+
+    vi.mocked(db.select).mockReturnValueOnce({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
+      }),
+    } as unknown as ReturnType<typeof db.select>);
+
+    const result = await revokePagePermission(ctx, validRevokeInput());
+
+    expect(result.ok).toBe(true);
+    expect(kickForPagePermissionRevocation).not.toHaveBeenCalled();
   });
 });
