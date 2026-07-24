@@ -280,28 +280,27 @@ export async function deriveMachinePaneBinding(
     deps.projectLookup.list(row.machineId),
     deps.branchLookup.listAll(row.machineId),
   ]);
-  const liveBranchesByProject = new Map<string, MachinePaneBindingBranch[]>();
-  // ALL branches (live + torn-down) per project — `currentBranchHandle`'s
-  // suppression check needs the full history, not just the live set.
-  const allBranchesByProject = new Map<string, MachinePaneBindingBranch[]>();
+  // ALL branches (live + torn-down) per project, in ONE pass — the live set
+  // (for real handles) and the full set (for `currentBranchHandle`'s
+  // suppression check, which needs the full history) both derive from this.
+  const branchesByProject = new Map<string, MachinePaneBindingBranch[]>();
   for (const branch of allBranches) {
-    const allGroup = allBranchesByProject.get(branch.projectName) ?? [];
-    allGroup.push(branch);
-    allBranchesByProject.set(branch.projectName, allGroup);
-    if (branch.spriteTornDownAt !== null) continue; // same fail-closed rule as `branchHandles`
-    const group = liveBranchesByProject.get(branch.projectName) ?? [];
+    const group = branchesByProject.get(branch.projectName) ?? [];
     group.push(branch);
-    liveBranchesByProject.set(branch.projectName, group);
+    branchesByProject.set(branch.projectName, group);
   }
   // Depth-first, in the store's own project order: each project immediately
   // followed by its branches (live, then one synthesized handle if any — see
   // `currentBranchHandle`). Order is part of the contract only insofar as
   // self is first (see `MachineNodeHandleSet`); the rest is display sanity.
   const descendants = projects.flatMap((project) => {
-    const synthesized = currentBranchHandle(row.machineId, project, allBranchesByProject.get(project.name) ?? []);
+    const projectBranches = branchesByProject.get(project.name) ?? [];
+    const synthesized = currentBranchHandle(row.machineId, project, projectBranches);
     return [
       projectHandle(row.machineId, project),
-      ...(liveBranchesByProject.get(project.name) ?? []).map((b) => branchHandle(row.machineId, b)),
+      // same fail-closed rule as `branchHandles`: a torn-down branch is omitted here...
+      ...projectBranches.filter((b) => b.spriteTornDownAt === null).map((b) => branchHandle(row.machineId, b)),
+      // ...but still counted above, toward suppression — its name is still claimed.
       ...(synthesized ? [synthesized] : []),
     ];
   });

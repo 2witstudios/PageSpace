@@ -401,9 +401,9 @@ describe('promoteProject — observed-branch capture', () => {
     await promoteProject({ machineId: MACHINE_ID, projectName: PROJECT_NAME, actor, deps });
 
     // Synchronous: a pure parse of `status.stdout` already in hand, no extra
-    // exec or await. The post-CAS reclaim recheck does NOT also capture (see
-    // `inspectMachineCheckout`'s `captureBranch` doc comment) — this is the
-    // ONLY capture that lands before `promoteProject` returns.
+    // exec or await. The post-CAS reclaim recheck discards its observed
+    // branch entirely (see `inspectMachineCheckout`'s doc comment) — this is
+    // the ONLY capture that lands before `promoteProject` returns.
     expect(branchCalls).toEqual([{ machineProjectId: PROJECT_ID, branchName: 'main', observedAt: NOW }]);
   });
 
