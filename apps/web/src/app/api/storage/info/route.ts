@@ -117,7 +117,13 @@ export async function GET(request: NextRequest) {
       },
       tierInfo: STORAGE_TIERS[quota.tier],
       fileCount,
-      totalFiles: userFiles.length,
+      // `totalFiles` is shown beside tierInfo.maxFileCount in the UI, so it must
+      // stay on the same basis checkStorageQuota enforces (getUserFileCount's
+      // drive-scoped FILE-page count) — NOT userFiles.length, which counts
+      // distinct blobs (files.createdBy) and would double under dedup (N pages
+      // can share one blob) or diverge via attachments the file-count limit
+      // doesn't gate.
+      totalFiles: fileCount,
       fileTypeBreakdown,
       largestFiles,
       recentFiles,

@@ -10,7 +10,6 @@ vi.mock('../storage-repository', () => ({
     countFiles: vi.fn(),
     updateStorageInTx: vi.fn(),
     insertStorageEvent: vi.fn(),
-    setUserStorageInTx: vi.fn(),
     runTransaction: vi.fn(),
   },
 }));
@@ -83,23 +82,48 @@ describe('reconcileAllStorageUsage', () => {
     const result = await reconcileAllStorageUsage();
 
     expect(result.corrected).toEqual([]);
-    expect(storageRepository.setUserStorageInTx).not.toHaveBeenCalled();
+    expect(storageRepository.updateStorageInTx).not.toHaveBeenCalled();
   });
 
-  it('reconcileAllStorageUsage_withDriftedUsers_resetsCounterToDerivedSum', async () => {
+  it('reconcileAllStorageUsage_withDriftedUsers_appliesTheDriftAsADelta', async () => {
+    // #2225 review: correction is a DELTA (-driftBytes) via updateStorageInTx,
+    // not an absolute overwrite — so a concurrent charge/credit write landing
+    // between the drift scan and this correction isn't silently discarded.
     vi.mocked(storageRepository.findStorageDriftCandidates).mockResolvedValue([
       { userId: 'user-1', materializedBytes: 2000, derivedBytes: 1500 },
       { userId: 'user-2', materializedBytes: 100, derivedBytes: 900 },
     ]);
+    vi.mocked(storageRepository.updateStorageInTx)
+      .mockResolvedValueOnce({ newUsage: 1500 })
+      .mockResolvedValueOnce({ newUsage: 900 });
 
     const result = await reconcileAllStorageUsage();
 
-    expect(storageRepository.setUserStorageInTx).toHaveBeenCalledTimes(2);
-    expect(storageRepository.setUserStorageInTx).toHaveBeenCalledWith(expect.anything(), 'user-1', 1500);
-    expect(storageRepository.setUserStorageInTx).toHaveBeenCalledWith(expect.anything(), 'user-2', 900);
+    expect(storageRepository.updateStorageInTx).toHaveBeenCalledTimes(2);
+    expect(storageRepository.updateStorageInTx).toHaveBeenCalledWith(expect.anything(), 'user-1', -500);
+    expect(storageRepository.updateStorageInTx).toHaveBeenCalledWith(expect.anything(), 'user-2', 800);
     expect(result.corrected).toEqual([
       { userId: 'user-1', previousUsage: 2000, actualUsage: 1500, driftBytes: 500 },
       { userId: 'user-2', previousUsage: 100, actualUsage: 900, driftBytes: -800 },
+    ]);
+  });
+
+  it('reconcileAllStorageUsage_withConcurrentWriteBetweenScanAndCorrection_reportsThePostCorrectionCounter', async () => {
+    // Simulates a concurrent upload landing +50 on the counter between the
+    // drift scan (materialized=2000) and this correction's write. The delta
+    // (-500) still applies on top of whatever the counter is by then (2050),
+    // so the reported actualUsage (1550) reflects that, not the stale scan-time
+    // derived value (1500) — proof the concurrent write wasn't clobbered.
+    vi.mocked(storageRepository.findStorageDriftCandidates).mockResolvedValue([
+      { userId: 'user-1', materializedBytes: 2000, derivedBytes: 1500 },
+    ]);
+    vi.mocked(storageRepository.updateStorageInTx).mockResolvedValueOnce({ newUsage: 1550 });
+
+    const result = await reconcileAllStorageUsage();
+
+    expect(storageRepository.updateStorageInTx).toHaveBeenCalledWith(expect.anything(), 'user-1', -500);
+    expect(result.corrected).toEqual([
+      { userId: 'user-1', previousUsage: 2000, actualUsage: 1550, driftBytes: 500 },
     ]);
   });
 
@@ -107,6 +131,7 @@ describe('reconcileAllStorageUsage', () => {
     vi.mocked(storageRepository.findStorageDriftCandidates).mockResolvedValue([
       { userId: 'user-1', materializedBytes: 2000, derivedBytes: 1500 },
     ]);
+    vi.mocked(storageRepository.updateStorageInTx).mockResolvedValueOnce({ newUsage: 1500 });
 
     await reconcileAllStorageUsage();
 
@@ -131,7 +156,7 @@ describe('reconcileAllStorageUsage', () => {
     const result = await reconcileAllStorageUsage();
 
     expect(result.corrected).toEqual([]);
-    expect(storageRepository.setUserStorageInTx).not.toHaveBeenCalled();
+    expect(storageRepository.updateStorageInTx).not.toHaveBeenCalled();
   });
 
   it('reconcileAllStorageUsage_withOneUserFailing_stillReconcilesTheRest', async () => {
@@ -142,6 +167,7 @@ describe('reconcileAllStorageUsage', () => {
     vi.mocked(storageRepository.runTransaction)
       .mockRejectedValueOnce(new Error('deadlock'))
       .mockImplementation(async (fn) => fn({} as never));
+    vi.mocked(storageRepository.updateStorageInTx).mockResolvedValue({ newUsage: 900 });
 
     const result = await reconcileAllStorageUsage();
 

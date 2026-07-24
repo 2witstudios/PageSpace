@@ -10,7 +10,6 @@ vi.mock('../storage-repository', () => ({
     countFiles: vi.fn(),
     updateStorageInTx: vi.fn(),
     insertStorageEvent: vi.fn(),
-    setUserStorageInTx: vi.fn(),
     runTransaction: vi.fn(),
   },
 }));
@@ -364,6 +363,74 @@ describe('storage-limits', () => {
       vi.mocked(storageRepository.findUserForStorage).mockResolvedValue(undefined);
 
       await expect(reconcileStorageUsage('nonexistent')).rejects.toThrow('User not found');
+    });
+
+    it('reconcileStorageUsage_withDriftBeyondTolerance_appliesTheDifferenceAsADelta', async () => {
+      // #2225 review: same delta-based correction as the cron path — must not
+      // overwrite with an absolute value that could clobber a concurrent write.
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
+        id: 'user-1', storageUsedBytes: 1000, subscriptionTier: 'free',
+      });
+      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([{ sizeBytes: 1500 }]);
+      vi.mocked(storageRepository.runTransaction).mockImplementation(async (fn) => fn({} as never));
+      vi.mocked(storageRepository.updateStorageInTx).mockResolvedValue({ newUsage: 1500 });
+
+      const result = await reconcileStorageUsage('user-1');
+
+      expect(storageRepository.updateStorageInTx).toHaveBeenCalledWith(expect.anything(), 'user-1', 500);
+      expect(result).toEqual({ previousUsage: 1000, actualUsage: 1500, difference: 500 });
+    });
+
+    it('reconcileStorageUsage_withDriftBeyondTolerance_writesReconcileAuditEvent', async () => {
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
+        id: 'user-1', storageUsedBytes: 1000, subscriptionTier: 'free',
+      });
+      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([{ sizeBytes: 1500 }]);
+      vi.mocked(storageRepository.runTransaction).mockImplementation(async (fn) => fn({} as never));
+      vi.mocked(storageRepository.updateStorageInTx).mockResolvedValue({ newUsage: 1500 });
+
+      await reconcileStorageUsage('user-1');
+
+      expect(storageRepository.insertStorageEvent).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          userId: 'user-1',
+          eventType: 'reconcile',
+          sizeDelta: 500,
+          totalSizeAfter: 1500,
+        }),
+      );
+    });
+
+    it('reconcileStorageUsage_withConcurrentWriteBetweenReadAndCorrection_reportsThePostCorrectionCounter', async () => {
+      // The scan reads usedBytes=1000, derived=1500 (difference=500). A
+      // concurrent charge lands +50 before the correction transaction runs, so
+      // the counter is actually 1050 by then; the delta (+500) applies on top
+      // of that, landing on 1550 — not the stale scan-time derived value 1500.
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
+        id: 'user-1', storageUsedBytes: 1000, subscriptionTier: 'free',
+      });
+      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([{ sizeBytes: 1500 }]);
+      vi.mocked(storageRepository.runTransaction).mockImplementation(async (fn) => fn({} as never));
+      vi.mocked(storageRepository.updateStorageInTx).mockResolvedValue({ newUsage: 1550 });
+
+      const result = await reconcileStorageUsage('user-1');
+
+      expect(storageRepository.updateStorageInTx).toHaveBeenCalledWith(expect.anything(), 'user-1', 500);
+      expect(result).toEqual({ previousUsage: 1000, actualUsage: 1550, difference: 500 });
+    });
+
+    it('reconcileStorageUsage_withDriftWithinTolerance_writesNothing', async () => {
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
+        id: 'user-1', storageUsedBytes: 1000, subscriptionTier: 'free',
+      });
+      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([{ sizeBytes: 1000 }]);
+
+      const result = await reconcileStorageUsage('user-1');
+
+      expect(storageRepository.updateStorageInTx).not.toHaveBeenCalled();
+      expect(storageRepository.runTransaction).not.toHaveBeenCalled();
+      expect(result).toEqual({ previousUsage: 1000, actualUsage: 1000, difference: 0 });
     });
   });
 

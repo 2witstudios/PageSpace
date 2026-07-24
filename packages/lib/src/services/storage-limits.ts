@@ -285,8 +285,19 @@ export async function getUserFileCount(userId: string): Promise<number> {
 }
 
 /**
- * Reconcile stored usage with actual usage
- * Should be run periodically to fix any drift
+ * Reconcile stored usage with actual usage. Should be run periodically to fix
+ * any drift.
+ *
+ * Applies the correction as a DELTA (via the same atomic `updateStorageInTx`
+ * the charge/credit paths use), not an absolute overwrite. `actualUsage` and
+ * `difference` are computed from a read taken before the correction runs, so
+ * a concurrent upload/delete can land its own delta in between; overwriting
+ * the counter with a stale absolute total would silently swallow that
+ * concurrent write. A delta commutes with concurrent deltas instead — it
+ * corrects the exact drift measured, whatever the counter's value is by the
+ * time the correction transaction actually runs. `actualUsage` in the return
+ * value reflects the counter's value immediately after the correction, which
+ * is the source of truth if a concurrent write did land.
  */
 export async function reconcileStorageUsage(userId: string): Promise<{
   previousUsage: number;
@@ -298,21 +309,25 @@ export async function reconcileStorageUsage(userId: string): Promise<{
     throw new Error('User not found');
   }
 
-  const actualUsage = await calculateActualStorageUsage(userId);
-  const difference = actualUsage - quota.usedBytes;
+  const derivedUsage = await calculateActualStorageUsage(userId);
+  const difference = derivedUsage - quota.usedBytes;
+
+  let actualUsage = quota.usedBytes;
 
   // Update if there's a discrepancy
   if (Math.abs(difference) > 1) { // Allow 1 byte tolerance for floating point
-    await storageRepository.runTransaction(async (tx) => {
-      await storageRepository.setUserStorageInTx(tx, userId, actualUsage);
+    actualUsage = await storageRepository.runTransaction(async (tx) => {
+      const { newUsage } = await storageRepository.updateStorageInTx(tx, userId, difference);
 
       await storageRepository.insertStorageEvent(tx, {
         userId,
         eventType: 'reconcile',
         sizeDelta: difference,
-        totalSizeAfter: actualUsage,
-        metadata: { previousUsage: quota.usedBytes, actualUsage, difference },
+        totalSizeAfter: newUsage,
+        metadata: { previousUsage: quota.usedBytes, derivedUsage, difference },
       });
+
+      return newUsage;
     });
   }
 
@@ -363,9 +378,19 @@ export interface StorageReconcileCorrection {
 /**
  * #2155 — the scheduled reconcile behind api/cron/reconcile-storage. Finds
  * every user whose storageUsedBytes cache has drifted from SUM(files.sizeBytes)
- * and rewrites the cache from the rows, logging a 'reconcile' storage event per
- * correction. Per-user failures are isolated so one bad account can't block
- * the sweep; callers alert on a non-empty `corrected`/`failed`.
+ * and corrects it, logging a 'reconcile' storage event per correction.
+ *
+ * The correction is applied as a DELTA (`updateStorageInTx`, the same atomic
+ * increment the charge/credit paths use), not an absolute overwrite. This
+ * cron runs every 15 minutes across every user; `findStorageDriftCandidates`
+ * takes one snapshot read, and a concurrent upload/delete can land its own
+ * delta on the SAME user between that snapshot and this correction's write.
+ * Overwriting with the snapshot's absolute total would silently discard that
+ * concurrent write. Applying the drift as a delta instead commutes with it —
+ * whatever the counter's value is when the correction transaction actually
+ * runs, adding the measured drift lands it on the correct total. Per-user
+ * failures are isolated so one bad account can't block the sweep; callers
+ * alert on a non-empty `corrected`/`failed`.
  */
 export async function reconcileAllStorageUsage(): Promise<{
   corrected: StorageReconcileCorrection[];
@@ -380,19 +405,22 @@ export async function reconcileAllStorageUsage(): Promise<{
     const drift = computeStorageDrift(candidate, STORAGE_DRIFT_TOLERANCE_BYTES);
     if (!drift.flagged) continue;
 
-    const actualUsage = Math.round(candidate.derivedBytes);
     const previousUsage = Math.round(candidate.materializedBytes);
+    // Move the cache toward the derived total: driftBytes = materialized − derived,
+    // so the correction that closes the gap is the negation of it.
+    const correctionDelta = -drift.driftBytes;
 
     try {
-      await storageRepository.runTransaction(async (tx) => {
-        await storageRepository.setUserStorageInTx(tx, candidate.userId, actualUsage);
+      const actualUsage = await storageRepository.runTransaction(async (tx) => {
+        const { newUsage } = await storageRepository.updateStorageInTx(tx, candidate.userId, correctionDelta);
         await storageRepository.insertStorageEvent(tx, {
           userId: candidate.userId,
           eventType: 'reconcile',
-          sizeDelta: actualUsage - previousUsage,
-          totalSizeAfter: actualUsage,
-          metadata: { previousUsage, actualUsage, difference: actualUsage - previousUsage, source: 'cron' },
+          sizeDelta: correctionDelta,
+          totalSizeAfter: newUsage,
+          metadata: { previousUsage, correctionDelta, actualUsage: newUsage, source: 'cron' },
         });
+        return newUsage;
       });
       corrected.push({ userId: candidate.userId, previousUsage, actualUsage, driftBytes: drift.driftBytes });
     } catch {

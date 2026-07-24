@@ -145,16 +145,6 @@ export const storageRepository = {
     await tx.insert(storageEvents).values(event);
   },
 
-  setUserStorageInTx: async (
-    tx: DrizzleTx,
-    userId: string,
-    absoluteBytes: number,
-  ): Promise<void> => {
-    await tx.update(users)
-      .set({ storageUsedBytes: absoluteBytes, lastStorageCalculated: new Date() })
-      .where(eq(users.id, userId));
-  },
-
   runTransaction: <T>(fn: (tx: DrizzleTx) => Promise<T>): Promise<T> => {
     return db.transaction(fn);
   },
