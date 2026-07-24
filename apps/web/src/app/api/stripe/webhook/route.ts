@@ -527,8 +527,15 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
       } else {
         try {
           const rawTier = session.metadata?.tier;
-          const saasTier: SubscriptionTier = rawTier && isSubscriptionTier(rawTier) ? rawTier : 'pro';
-          const tier = resolveControlPlaneTier(saasTier);
+          // Only remap tiers from the canonical SaaS vocabulary (fixes the
+          // 'founder' bug — control-plane has no founder price/tier). A
+          // control-plane-only value control-plane's own checkout can set
+          // here (e.g. 'enterprise', which control-plane sells directly and
+          // the SaaS vocabulary doesn't) must pass through UNCHANGED — it is
+          // already valid for control-plane's tenant-validation, and forcing
+          // it through the SaaS vocabulary would silently downgrade a paid
+          // enterprise tenant to 'pro'.
+          const tier = rawTier && isSubscriptionTier(rawTier) ? resolveControlPlaneTier(rawTier) : rawTier || 'pro';
           const ownerEmail = session.customer_details?.email || '';
           const response = await fetch(`${controlPlaneUrl}/api/tenants`, {
             method: 'POST',

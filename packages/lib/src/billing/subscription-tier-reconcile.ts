@@ -2,16 +2,24 @@
  * Periodic reconciler for the users.subscriptionTier cache — the counterpart
  * of the credit balance's computeBalanceDrift sweep, for subscription tiers.
  *
- * The cache is written only through syncUserTierFromSubscriptions (the Stripe
- * webhook), so a missed/failed webhook leaves it stale indefinitely. This
- * sweep walks every user, re-derives the tier from their subscriptions rows
- * (Stripe's local mirror — no Stripe calls), and repairs repairable drift in
- * place with logging + audit-friendly details. Indeterminate derivations
- * (entitled rows on unmapped legacy prices) are reported but never repaired —
- * see computeTierDrift.
+ * The cache is written only by the Stripe webhook, so a missed/failed webhook
+ * leaves it stale indefinitely. This sweep walks every user, re-derives the
+ * tier from their subscriptions rows (Stripe's local mirror — no Stripe
+ * calls), and repairs repairable drift in place with logging + audit-friendly
+ * details. Two drift shapes are reported but never auto-repaired — see
+ * computeTierDrift:
+ *   - an indeterminate derivation (an entitled row on an unmapped legacy price)
+ *   - a non-free stored tier with ZERO subscriptions rows at all — the exact
+ *     population `scripts/sync-legacy-subscriptions.ts` used to migrate.
+ *     Auto-repairing this would silently revoke a paying customer's
+ *     entitlements instead of completing that migration. A canceled/expired
+ *     subscription still leaves a row and derives to 'free' normally — this
+ *     guard only withholds the true zero-rows case.
  *
  * Replaces the one-shot repair scripts this drift class used to require
- * (scripts/sync-legacy-subscriptions.ts).
+ * for the entitled-row derivation itself (scripts/sync-legacy-subscriptions.ts);
+ * the zero-rows case it also handled still needs a human to complete (create
+ * the missing subscription/gift), which is why that case is flagged, not fixed.
  */
 
 import { db } from '@pagespace/db/db';
@@ -27,6 +35,9 @@ import {
   type SubscriptionRowLike,
 } from './subscription-tier-sync';
 
+/** Subscription rows include a non-entitled status too, so we can tell "no record at all" apart from "canceled". */
+type ReconcileSubscriptionRow = SubscriptionRowLike & { userId: string };
+
 export interface TierDriftDetail {
   userId: string;
   storedTier: string;
@@ -34,6 +45,8 @@ export interface TierDriftDetail {
   repaired: boolean;
   /** True when the derivation saw an entitled row with an unmapped price. */
   indeterminate: boolean;
+  /** False means a non-free stored tier with zero subscriptions rows — the unmigrated-legacy-user case. */
+  hasAnySubscriptionRecord: boolean;
 }
 
 export interface TierReconcileResult {
@@ -74,21 +87,19 @@ export async function reconcileSubscriptionTiers(options: {
     cursor = batch[batch.length - 1].id;
     result.scanned += batch.length;
 
-    const subRows = await db
+    // ALL statuses, not just entitled: a user with zero rows whatsoever is a
+    // different (non-repairable) case from a user whose only row is
+    // canceled — see computeTierDrift's unmigrated-legacy-user guard.
+    const subRows: ReconcileSubscriptionRow[] = await db
       .select({
         userId: subscriptions.userId,
         status: subscriptions.status,
         stripePriceId: subscriptions.stripePriceId,
       })
       .from(subscriptions)
-      .where(
-        and(
-          inArray(subscriptions.userId, batch.map((u) => u.id)),
-          inArray(subscriptions.status, [...ENTITLED_SUBSCRIPTION_STATUSES]),
-        ),
-      );
+      .where(inArray(subscriptions.userId, batch.map((u) => u.id)));
 
-    const rowsByUser = new Map<string, SubscriptionRowLike[]>();
+    const rowsByUser = new Map<string, ReconcileSubscriptionRow[]>();
     for (const row of subRows) {
       const list = rowsByUser.get(row.userId) ?? [];
       list.push(row);
@@ -96,8 +107,11 @@ export async function reconcileSubscriptionTiers(options: {
     }
 
     for (const user of batch) {
-      const derived = deriveTierFromSubscriptions(rowsByUser.get(user.id) ?? [], options.priceTier);
-      const drift = computeTierDrift({ storedTier: user.subscriptionTier, derived });
+      const allRows = rowsByUser.get(user.id) ?? [];
+      const entitledRows = allRows.filter((row) => ENTITLED_SUBSCRIPTION_STATUSES.includes(row.status));
+      const derived = deriveTierFromSubscriptions(entitledRows, options.priceTier);
+      const hasAnySubscriptionRecord = allRows.length > 0;
+      const drift = computeTierDrift({ storedTier: user.subscriptionTier, derived, hasAnySubscriptionRecord });
       if (!drift.drifted) continue;
 
       result.drifted += 1;
@@ -120,6 +134,7 @@ export async function reconcileSubscriptionTiers(options: {
         storedTier: user.subscriptionTier,
         expectedTier: drift.expectedTier,
         indeterminate: derived.indeterminate,
+        hasAnySubscriptionRecord,
         repaired,
       });
       if (result.details.length < MAX_DETAILS) {
@@ -129,6 +144,7 @@ export async function reconcileSubscriptionTiers(options: {
           expectedTier: drift.expectedTier,
           repaired,
           indeterminate: derived.indeterminate,
+          hasAnySubscriptionRecord,
         });
       }
     }

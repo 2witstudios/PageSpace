@@ -18,12 +18,6 @@ export const TIERS = ['free', 'pro', 'founder', 'business'] as const;
 
 export type SubscriptionTier = (typeof TIERS)[number];
 
-/**
- * Upgrade/downgrade ordering. Identical to TIERS — the vocabulary is declared
- * in rank order — exported under the name the plan UIs historically used.
- */
-export const PLAN_ORDER: readonly SubscriptionTier[] = TIERS;
-
 export function isSubscriptionTier(value: unknown): value is SubscriptionTier {
   return typeof value === 'string' && (TIERS as readonly string[]).includes(value);
 }
@@ -36,9 +30,14 @@ export function toSubscriptionTier(value: string | null | undefined): Subscripti
   return isSubscriptionTier(value) ? value : 'free';
 }
 
-/** Position of a tier in PLAN_ORDER — higher rank = higher plan. */
+/**
+ * Position of a tier in TIERS — higher rank = higher plan. TIERS doubles as
+ * the upgrade/downgrade ordering since the vocabulary is declared in rank
+ * order (the plan UIs historically called this "PLAN_ORDER"; apps/web's
+ * plans.ts still exports that name for its own callers).
+ */
 export function tierRank(tier: SubscriptionTier): number {
-  return PLAN_ORDER.indexOf(tier);
+  return TIERS.indexOf(tier);
 }
 
 /**

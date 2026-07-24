@@ -6,7 +6,7 @@ import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata, APP_URL } from "@/lib/metadata";
 import { MONTHLY_CREDITS } from "@/lib/credits";
 import {
-  PLAN_ORDER,
+  TIERS as PLAN_ORDER,
   TIER_PLAN_LIMITS,
   formatTierBytes,
   type SubscriptionTier,

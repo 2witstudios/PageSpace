@@ -1,7 +1,7 @@
 import { Crown, Zap, Shield, Star } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import {
-  PLAN_ORDER as CANONICAL_PLAN_ORDER,
+  TIERS as CANONICAL_PLAN_ORDER,
   TIER_PLAN_LIMITS,
   formatTierBytes,
   type SubscriptionTier,

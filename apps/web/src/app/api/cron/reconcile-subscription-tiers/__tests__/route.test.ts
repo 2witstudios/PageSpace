@@ -54,8 +54,22 @@ describe('/api/cron/reconcile-subscription-tiers', () => {
       repaired: 1,
       flaggedOnly: 1,
       details: [
-        { userId: 'u1', storedTier: 'founder', expectedTier: 'free', repaired: true, indeterminate: false },
-        { userId: 'u2', storedTier: 'pro', expectedTier: 'free', repaired: false, indeterminate: true },
+        {
+          userId: 'u1',
+          storedTier: 'founder',
+          expectedTier: 'free',
+          repaired: true,
+          indeterminate: false,
+          hasAnySubscriptionRecord: true,
+        },
+        {
+          userId: 'u2',
+          storedTier: 'pro',
+          expectedTier: 'free',
+          repaired: false,
+          indeterminate: true,
+          hasAnySubscriptionRecord: true,
+        },
       ],
     });
   });

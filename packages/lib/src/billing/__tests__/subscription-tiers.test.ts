@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   TIERS,
-  PLAN_ORDER,
   TIER_PLAN_LIMITS,
   isSubscriptionTier,
   toSubscriptionTier,
@@ -10,10 +9,9 @@ import {
   type SubscriptionTier,
 } from '../subscription-tiers';
 
-describe('TIERS / PLAN_ORDER', () => {
-  it('lists the canonical vocabulary in ascending plan order', () => {
+describe('TIERS', () => {
+  it('lists the canonical vocabulary in ascending plan order (also the upgrade/downgrade ordering)', () => {
     expect(TIERS).toEqual(['free', 'pro', 'founder', 'business']);
-    expect(PLAN_ORDER).toEqual(TIERS);
   });
 });
 

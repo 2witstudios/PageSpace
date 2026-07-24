@@ -80,22 +80,35 @@ export interface TierDriftResult {
 
 /**
  * Compare the cached users.subscriptionTier against what the subscriptions
- * rows imply. A drift on an indeterminate derivation (unmapped entitled price)
- * is flagged for a human, never auto-repaired — repairing would downgrade a
- * legacy paid user whose price id predates the current price map. Pure;
- * modeled on computeBalanceDrift.
+ * rows imply. Pure; modeled on computeBalanceDrift. Two cases are flagged for
+ * a human and never auto-repaired:
+ *
+ *   - an indeterminate derivation (an entitled row on an unmapped legacy
+ *     price) — repairing would downgrade a legacy paid user whose price id
+ *     predates the current price map.
+ *   - a non-free stored tier with NO subscription record at all
+ *     (`hasAnySubscriptionRecord: false`) — this is exactly the population
+ *     `scripts/sync-legacy-subscriptions.ts` existed to migrate: a paid tier
+ *     set before the subscriptions table (or a gift) was ever backed by a
+ *     real Stripe subscription row. A canceled/expired subscription still
+ *     LEAVES A ROW (status != active/trialing), which correctly derives to
+ *     'free' and IS repairable — only the true zero-rows case is ambiguous
+ *     enough to withhold from auto-repair.
  */
 export function computeTierDrift(input: {
   storedTier: string;
   derived: DerivedTier;
+  /** Whether the user has ANY subscriptions row, of any status. */
+  hasAnySubscriptionRecord: boolean;
 }): TierDriftResult {
   const storedTier = toSubscriptionTier(input.storedTier);
   const expectedTier = input.derived.tier;
   const drifted = storedTier !== expectedTier;
+  const unmigratedLegacyPaidUser = storedTier !== 'free' && !input.hasAnySubscriptionRecord;
   return {
     storedTier,
     expectedTier,
     drifted,
-    repairable: drifted && !input.derived.indeterminate,
+    repairable: drifted && !input.derived.indeterminate && !unmigratedLegacyPaidUser,
   };
 }
