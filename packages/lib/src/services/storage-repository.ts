@@ -54,7 +54,14 @@ export const storageRepository = {
    * the upload route's intentionally-non-atomic bookkeeping split. (The
    * analogous window exists on the orphan-reaper's credit path too, but that
    * path deletes the `files` row so there's no timestamp left to key a
-   * cooldown on — accepted as a narrower, self-healing residual risk.)
+   * cooldown on — accepted as a narrower, self-healing residual risk. #2225
+   * review round 6 — Codex flagged that this reconcile's cron schedule and
+   * the orphan reaper's were both aligned to fire in the SAME instant weekly
+   * (Sunday 06:00), turning that narrow race into a guaranteed weekly
+   * contention window; docker/cron/crontab now offsets this reconcile 5
+   * minutes off the hour specifically to break that alignment. The
+   * underlying race is still accepted as self-healing — this only removes
+   * the schedule-driven guarantee that it fires.)
    */
   findStorageDriftCandidates: async (toleranceBytes: number, cooldownSeconds: number): Promise<StorageDriftCandidate[]> => {
     const result = await db.execute(sql`

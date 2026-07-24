@@ -8,6 +8,7 @@ import {
   STORAGE_TIERS
 } from '@pagespace/lib/services/storage-limits';
 import { countLiveUploadsForUser } from '@pagespace/lib/services/pending-uploads';
+import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { safeParseBody } from '@/lib/validation/parse-body';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -49,13 +50,21 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Could not retrieve storage quota' }, { status: 500 });
     }
 
-    // Check if user can acquire an upload slot. Reads the same pending_uploads
-    // rows presign's atomic reserve enforces (#2225 review — Codex round 5):
-    // the process-local semaphore alone can't see slots reserved on other web
-    // replicas, so it could say "allowed" here only for presign to 429 moments
-    // later.
-    const liveUploads = await countLiveUploadsForUser(userId);
-    const canUpload = liveUploads < STORAGE_TIERS[quota.tier].maxConcurrentUploads;
+    // Check if user can acquire an upload slot: the per-user tier limit reads
+    // the same pending_uploads rows presign's atomic reserve enforces
+    // (#2225 review — Codex round 5), since the process-local semaphore alone
+    // can't see slots reserved on other web replicas. The replaced
+    // `canAcquireSlot` ALSO covered THIS replica's global concurrency limit
+    // (a separate, deliberately process-local cap — see upload-semaphore.ts),
+    // which countLiveUploadsForUser doesn't know about; dropping it would let
+    // this preflight say "allowed" while presign's acquireUploadSlot on the
+    // same replica then rejects at the global limit (#2225 review — Codex
+    // round 6). Both checks are required.
+    const [hasGlobalCapacity, liveUploads] = await Promise.all([
+      uploadSemaphore.canAcquireSlot(userId, quota.tier),
+      countLiveUploadsForUser(userId),
+    ]);
+    const canUpload = hasGlobalCapacity && liveUploads < STORAGE_TIERS[quota.tier].maxConcurrentUploads;
     if (!canUpload) {
       return NextResponse.json({
         allowed: false,

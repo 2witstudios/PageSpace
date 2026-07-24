@@ -25,6 +25,12 @@ vi.mock('@pagespace/lib/services/pending-uploads', () => ({
   countLiveUploadsForUser: vi.fn().mockResolvedValue(0),
 }));
 
+vi.mock('@pagespace/lib/services/upload-semaphore', () => ({
+  uploadSemaphore: {
+    canAcquireSlot: vi.fn().mockResolvedValue(true),
+  },
+}));
+
 vi.mock('@pagespace/lib/services/memory-monitor', () => ({
   checkMemoryMiddleware: vi.fn().mockResolvedValue({ allowed: true }),
 }));
@@ -33,10 +39,16 @@ vi.mock('@/lib/validation/parse-body', () => ({
   safeParseBody: vi.fn().mockResolvedValue({ success: true, data: { fileSize: 1024 } }),
 }));
 
-import { GET } from '../route';
+import { GET, POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { countLiveUploadsForUser } from '@pagespace/lib/services/pending-uploads';
+import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
+
+const postRequest = () => new Request('https://example.com/api/storage/check', {
+  method: 'POST',
+  body: JSON.stringify({ fileSize: 1024 }),
+});
 
 const mockWebAuth = (userId: string): SessionAuthResult => ({
   userId,
@@ -100,6 +112,41 @@ describe('GET /api/storage/check', () => {
 
       expect(body.activeUploads).toBe(3);
       expect(body.canUpload).toBe(false);
+    });
+  });
+
+  describe('POST /api/storage/check', () => {
+    it('allows when both the local semaphore has global capacity and the cross-process count is under the tier limit', async () => {
+      vi.mocked(uploadSemaphore.canAcquireSlot).mockResolvedValue(true);
+      vi.mocked(countLiveUploadsForUser).mockResolvedValue(0);
+
+      const res = await POST(postRequest() as never);
+      const body = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(body.allowed).toBe(true);
+    });
+
+    it('rejects with 429 when the cross-process per-user count is at the tier limit even though the local semaphore has global capacity', async () => {
+      vi.mocked(uploadSemaphore.canAcquireSlot).mockResolvedValue(true);
+      vi.mocked(countLiveUploadsForUser).mockResolvedValue(3);
+
+      const res = await POST(postRequest() as never);
+      const body = await res.json();
+
+      expect(res.status).toBe(429);
+      expect(body.allowed).toBe(false);
+    });
+
+    it('rejects with 429 when this replica\'s global semaphore is exhausted even though the per-user count is under the tier limit (#2225 review — Codex round 6)', async () => {
+      vi.mocked(uploadSemaphore.canAcquireSlot).mockResolvedValue(false);
+      vi.mocked(countLiveUploadsForUser).mockResolvedValue(0);
+
+      const res = await POST(postRequest() as never);
+      const body = await res.json();
+
+      expect(res.status).toBe(429);
+      expect(body.allowed).toBe(false);
     });
   });
 });
