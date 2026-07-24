@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 // The factory is provider-agnostic and imports no DB or backing-provider SDK, so
 // it is exercised directly with injected fakes (the production wiring + the Fly
 // Sprites driver live in sandbox-tools-runtime.ts).
-import { createSandboxTools, nodeScopedPath, type MachineDirectoryDeps, type ResolveSandboxContext, type SandboxGate } from '../sandbox-tools';
+import { createSandboxTools, nodeScopedPath, nodeTargetDeniedError, type MachineDirectoryDeps, type ResolveSandboxContext, type SandboxGate } from '../sandbox-tools';
 import type { SandboxRunDeps, SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';
 import type { ToolExecutionContext } from '../../core/types';
 import type { MachineNodeHandle, MachineNodeHandleSet } from '@pagespace/lib/services/machines/machine-pane-binding';
@@ -1001,6 +1001,53 @@ describe('createSandboxTools', () => {
       await exec(tools.readFile, { path: 'a.txt' }, {});
       await exec(tools.editFile, { path: 'a.txt', oldString: 'data', newString: 'X' }, {});
       expect(listMachines).toHaveBeenCalledTimes(4);
+    });
+  });
+
+  describe('nodeTargetDeniedError', () => {
+    // PR #2232 history: this used to be a silent fallback to the project
+    // handle instead of a denial. Three rounds of review found different ways
+    // that substitution could route a tool call to the wrong worktree (a
+    // typo, a torn-down branch, a branch explicitly killed with no trace
+    // left). The fallback is gone — an unresolved target always denies now.
+    // The hint below is deliberately NEUTRAL about why this specific target
+    // was denied (never tracked vs. torn down vs. project out of scope) and
+    // does NOT prescribe "just retry against the project" — a further Codex
+    // finding showed that specific instruction could recreate the same
+    // wrong-worktree risk for the torn-down/out-of-scope cases, where the
+    // project isn't actually what the caller should hit either.
+    it('given target_not_in_set with a default-checkout-shaped branch ("main"), should append a neutral hint pointing at list_sessions', () => {
+      const result = nodeTargetDeniedError('target_not_in_set', { project: 'my-repo', branch: 'main' });
+      expect(result.error).toContain('is not part of this conversation\'s machine scope');
+      expect(result.error).toContain('never an implicit alias for a project\'s own default checkout');
+      expect(result.error).not.toContain('target: { project:');
+    });
+
+    it('given target_not_in_set with "master", should also append the hint (the other default-checkout alias)', () => {
+      const result = nodeTargetDeniedError('target_not_in_set', { project: 'my-repo', branch: 'master' });
+      expect(result.error).toContain('"master" is never an implicit alias');
+    });
+
+    it('given target_not_in_set with a non-default branch name, should NOT append the hint', () => {
+      const result = nodeTargetDeniedError('target_not_in_set', { project: 'my-repo', branch: 'feature-x' });
+      expect(result.error).not.toContain('is never an implicit alias');
+    });
+
+    it('given target_not_in_set with a default-checkout branch but NO project (bare branch target), should still append the hint', () => {
+      // The hint is about the branch name's meaning in general — it doesn't
+      // require a project to be present to be true.
+      const result = nodeTargetDeniedError('target_not_in_set', { branch: 'main' });
+      expect(result.error).toContain('"main" is never an implicit alias');
+    });
+
+    it('given target_not_in_set with no branch at all (project-only target), should NOT append the hint', () => {
+      const result = nodeTargetDeniedError('target_not_in_set', { project: 'my-repo' });
+      expect(result.error).not.toContain('is never an implicit alias');
+    });
+
+    it('given ambiguous_target, should NOT append the hint even with a default-checkout branch name', () => {
+      const result = nodeTargetDeniedError('ambiguous_target', { project: 'my-repo', branch: 'main' });
+      expect(result.error).not.toContain('is never an implicit alias');
     });
   });
 });

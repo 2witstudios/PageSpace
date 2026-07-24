@@ -131,6 +131,26 @@ export type MachineNodeTargetResolution =
  * when self is inside one; from the machine root a bare branch name resolves
  * only when it is unambiguous across the whole set, so two projects sharing a
  * branch name can never silently route to the wrong one.
+ *
+ * A `branch` here only ever names an EXPLICITLY created branch worktree (its
+ * own row, its own Sprite) — never "whatever git branch the project's own
+ * checkout happens to be on". A project's default checkout has no branch
+ * handle of its own, so a caller (a model reasoning in ordinary git terms)
+ * may naturally but incorrectly ask for `{ project, branch: "main" }` to mean
+ * "this project's own state".
+ *
+ * An earlier version of this function tried to help by falling back to the
+ * PROJECT handle when the unresolved branch name was a conventional
+ * default-checkout alias (`main`/`master`). Three rounds of review (#2232)
+ * kept finding new ways that silent substitution could route a tool call to
+ * the WRONG worktree: an unrelated typo, a branch that existed and was torn
+ * down, a branch explicitly killed (`killBranch` hard-deletes its row —
+ * `machine-branches.ts` — leaving no trace to distinguish "deleted" from
+ * "never existed"). There is no data this function can see that closes that
+ * gap for every case, so the fallback is gone: an unresolved target ALWAYS
+ * denies, full stop. The caller-facing error (`sandbox-tools.ts`'s
+ * `nodeTargetDeniedError`) provides neutral guidance to inspect
+ * `list_sessions`, rather than the runtime guessing on its behalf.
  */
 export function resolveMachineNodeTarget(
   set: MachineNodeHandleSet,
