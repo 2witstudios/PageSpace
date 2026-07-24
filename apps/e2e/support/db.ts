@@ -11,7 +11,9 @@ import { sessionService } from '../../../packages/lib/src/auth/session-service';
 import { generateCSRFToken } from '../../../packages/lib/src/auth/csrf-utils';
 import { hashToken } from '../../../packages/lib/src/auth/token-utils';
 
-export type Tier = 'free' | 'pro' | 'founder' | 'business';
+import type { SubscriptionTier as Tier } from '@pagespace/lib/billing/subscription-tiers';
+
+export type { Tier };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 

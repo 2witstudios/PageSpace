@@ -152,6 +152,21 @@
       "import": "./dist/observability/error-resolutions.js",
       "require": "./dist/observability/error-resolutions.js"
     },
+    "./billing/subscription-tiers": {
+      "types": "./dist/billing/subscription-tiers.d.ts",
+      "import": "./dist/billing/subscription-tiers.js",
+      "require": "./dist/billing/subscription-tiers.js"
+    },
+    "./billing/subscription-tier-sync": {
+      "types": "./dist/billing/subscription-tier-sync.d.ts",
+      "import": "./dist/billing/subscription-tier-sync.js",
+      "require": "./dist/billing/subscription-tier-sync.js"
+    },
+    "./billing/subscription-tier-reconcile": {
+      "types": "./dist/billing/subscription-tier-reconcile.d.ts",
+      "import": "./dist/billing/subscription-tier-reconcile.js",
+      "require": "./dist/billing/subscription-tier-reconcile.js"
+    },
     "./billing/credit-pricing": {
       "types": "./dist/billing/credit-pricing.d.ts",
       "import": "./dist/billing/credit-pricing.js",

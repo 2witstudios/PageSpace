@@ -27,7 +27,6 @@ vi.mock('../subscription-utils', async (importOriginal) => {
       if (tier === 'pro') return { name: 'Pro', tier: 'pro', quotaBytes: 2 * 1024 * 1024 * 1024, maxFileSize: 250 * 1024 * 1024, maxConcurrentUploads: 5, maxFileCount: 500, features: [] };
       return { name: 'Business', tier: 'business', quotaBytes: 50 * 1024 * 1024 * 1024, maxFileSize: 1024 * 1024 * 1024, maxConcurrentUploads: 10, maxFileCount: 5000, features: [] };
     }),
-    getStorageTierFromSubscription: vi.fn((tier: string) => tier),
   };
 });
 
@@ -48,29 +47,12 @@ import {
   formatBytes,
   parseBytes,
   STORAGE_TIERS,
-  mapSubscriptionToStorageTier,
-  changeUserTier,
-  updateStorageTierFromSubscription,
 } from '../storage-limits';
 import { storageRepository } from '../storage-repository';
 
 describe('storage-limits', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  describe('mapSubscriptionToStorageTier', () => {
-    it('mapSubscriptionToStorageTier_withFreeTier_returnsFree', () => {
-      expect(mapSubscriptionToStorageTier('free')).toBe('free');
-    });
-
-    it('mapSubscriptionToStorageTier_withProTier_returnsPro', () => {
-      expect(mapSubscriptionToStorageTier('pro')).toBe('pro');
-    });
-
-    it('mapSubscriptionToStorageTier_withBusinessTier_returnsBusiness', () => {
-      expect(mapSubscriptionToStorageTier('business')).toBe('business');
-    });
   });
 
   describe('STORAGE_TIERS', () => {
@@ -485,16 +467,6 @@ describe('storage-limits', () => {
 
     it('returns null for a zero / invalid byte size', () => {
       expect(computeStorageCreditOnUnlink({ ...base, sizeBytes: 0 })).toBeNull();
-    });
-  });
-
-  describe('deprecated functions', () => {
-    it('changeUserTier_whenCalled_throwsRemovedError', async () => {
-      await expect(changeUserTier()).rejects.toThrow('changeUserTier has been removed');
-    });
-
-    it('updateStorageTierFromSubscription_whenCalled_throwsRemovedError', async () => {
-      await expect(updateStorageTierFromSubscription()).rejects.toThrow('updateStorageTierFromSubscription has been removed');
     });
   });
 });

@@ -41,7 +41,7 @@ import { resolveGitHubTokenForSandbox } from '@pagespace/lib/services/sandbox/gi
 import { isMachinePage } from '@pagespace/lib/content/page-types.config';
 import type { PageType } from '@pagespace/lib/utils/enums';
 import type { ExecSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/types';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { createDbMachineProjectStore } from '@pagespace/lib/services/machines/machine-projects-store';
@@ -95,10 +95,6 @@ function getMachineProjectStore() {
   return machineProjectStorePromise;
 }
 
-const VALID_TIERS: ReadonlySet<string> = new Set(['free', 'pro', 'founder', 'business']);
-function toTier(value: string | null | undefined): SubscriptionTier {
-  return value && VALID_TIERS.has(value) ? (value as SubscriptionTier) : 'free';
-}
 
 export async function resolveMachineActorContext(userId: string): Promise<MachineActorContext> {
   const [user, actorInfo] = await Promise.all([
@@ -110,7 +106,7 @@ export async function resolveMachineActorContext(userId: string): Promise<Machin
     tenantId: userId,
     actorEmail: actorInfo.actorEmail,
     actorDisplayName: actorInfo.actorDisplayName,
-    tier: toTier(user?.subscriptionTier),
+    tier: toSubscriptionTier(user?.subscriptionTier),
   };
 }
 

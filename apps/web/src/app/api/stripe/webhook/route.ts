@@ -4,8 +4,10 @@ import { eq, and, isNull, lte } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { subscriptions, stripeEvents } from '@pagespace/db/schema/subscriptions';
 import { stripe, Stripe, getTierFromPrice } from '@/lib/stripe';
-import type { SubscriptionTier } from '@/lib/subscription/plans';
+import { isSubscriptionTier, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { deriveTierFromSubscriptions } from '@pagespace/lib/billing/subscription-tier-sync';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { resolveControlPlaneTier } from './control-plane-tier';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { userEmailMatch } from '@pagespace/lib/auth/user-repository';
 import { applyStripeFunding } from '@pagespace/lib/billing/credit-funding';
@@ -365,20 +367,15 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
     throw new Error(`Subscription ${subscription.id} has no items`);
   }
 
-  // Determine subscription tier based on price or subscription status
-  const isEntitled = ['active', 'trialing'].includes(subscription.status);
-
-  let subscriptionTier: 'free' | 'pro' | 'founder' | 'business';
-
-  if (!isEntitled) {
-    // If not active/trialing, set to free regardless of price
-    subscriptionTier = 'free';
-  } else {
-    // Use centralized price → tier mapping
-    const priceId = firstItem.price.id;
-    const priceAmount = firstItem.price.unit_amount;
-    subscriptionTier = getTierFromPrice(priceId, priceAmount);
-  }
+  // Derive the tier through the single canonical resolver (subscription-tier-sync.ts):
+  // an entitled (active/trialing) row maps through the price→tier map; anything
+  // else derives to 'free'. The periodic reconciler (reconcile-subscription-tiers
+  // cron) uses this same function across the whole subscriptions table, so there
+  // is exactly one rule for what a subscription state implies about the tier.
+  const subscriptionTier = deriveTierFromSubscriptions(
+    [{ status: subscription.status, stripePriceId: firstItem.price.id }],
+    (priceId) => getTierFromPrice(priceId, firstItem.price.unit_amount),
+  ).tier;
 
   // Get period from the first subscription item (API version 2025-08-27 change)
   // Use intersection type to safely extend SubscriptionItem with the new fields
@@ -529,7 +526,9 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
         loggers.api.warn('CONTROL_PLANE_URL not set, skipping tenant provisioning', { slug });
       } else {
         try {
-          const tier = session.metadata?.tier || 'pro';
+          const rawTier = session.metadata?.tier;
+          const saasTier: SubscriptionTier = rawTier && isSubscriptionTier(rawTier) ? rawTier : 'pro';
+          const tier = resolveControlPlaneTier(saasTier);
           const ownerEmail = session.customer_details?.email || '';
           const response = await fetch(`${controlPlaneUrl}/api/tenants`, {
             method: 'POST',
