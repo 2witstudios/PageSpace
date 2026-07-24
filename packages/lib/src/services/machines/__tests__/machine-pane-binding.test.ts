@@ -444,4 +444,33 @@ describe('resolveMachineNodeTarget', () => {
       reason: 'target_not_in_set',
     });
   });
+
+  // Field bug: a model reasoning in ordinary git terms asks for a project's
+  // own default branch (commonly "main") as if it were an addressable branch
+  // node — but a branch handle only ever exists for an EXPLICITLY created
+  // worktree. Denying the whole target here reads as "you have no access to
+  // this project at all", when the project itself was right there in scope.
+  it('given a project in the set + a branch name that has no branch handle, should fall back to the project handle', () => {
+    const projectSet = { self: PROJECT_HANDLE, handles: [PROJECT_HANDLE] };
+    expect(resolveMachineNodeTarget(projectSet, { project: PROJECT_NAME, branch: 'main' })).toEqual({
+      ok: true,
+      handle: PROJECT_HANDLE,
+    });
+  });
+
+  it('given a project OUTSIDE the set + an unresolved branch name, should still refuse as out of set', () => {
+    const branchSet = { self: BRANCH_HANDLE, handles: [BRANCH_HANDLE] };
+    expect(resolveMachineNodeTarget(branchSet, { project: SIBLING_PROJECT_NAME, branch: 'main' })).toEqual({
+      ok: false,
+      reason: 'target_not_in_set',
+    });
+  });
+
+  it('given a project in the set with a REAL branch handle + a different unresolved branch name, should still fall back to the project handle', () => {
+    const projectSet = { self: PROJECT_HANDLE, handles: [PROJECT_HANDLE, BRANCH_HANDLE] };
+    expect(resolveMachineNodeTarget(projectSet, { project: PROJECT_NAME, branch: 'main' })).toEqual({
+      ok: true,
+      handle: PROJECT_HANDLE,
+    });
+  });
 });

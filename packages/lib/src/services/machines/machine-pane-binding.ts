@@ -131,6 +131,17 @@ export type MachineNodeTargetResolution =
  * when self is inside one; from the machine root a bare branch name resolves
  * only when it is unambiguous across the whole set, so two projects sharing a
  * branch name can never silently route to the wrong one.
+ *
+ * A `branch` here only ever names an EXPLICITLY created branch worktree (its
+ * own row, its own Sprite) — never "whatever git branch the project's own
+ * checkout happens to be on". A project's default checkout has no branch
+ * handle of its own, so a caller (a model reasoning in ordinary git terms)
+ * naturally but incorrectly asks for `{ project, branch: "main" }` to mean
+ * "this project's own state". When the branch half of that target doesn't
+ * resolve but the project half does, we fall back to the PROJECT handle
+ * rather than denying the whole target — the project was already in `set`,
+ * so this grants nothing new, it just stops a wrong-shaped-but-harmless
+ * target from reading as "get out of this machine entirely".
  */
 export function resolveMachineNodeTarget(
   set: MachineNodeHandleSet,
@@ -144,7 +155,12 @@ export function resolveMachineNodeTarget(
       (h) => h.kind === 'branch' && h.branch === target.branch && (project === undefined || h.project === project),
     );
     if (matches.length === 1) return { ok: true, handle: matches[0] };
-    return { ok: false, reason: matches.length === 0 ? 'target_not_in_set' : 'ambiguous_target' };
+    if (matches.length > 1) return { ok: false, reason: 'ambiguous_target' };
+    if (project !== undefined) {
+      const projectHandle = set.handles.find((h) => h.kind === 'project' && h.project === project);
+      if (projectHandle) return { ok: true, handle: projectHandle };
+    }
+    return { ok: false, reason: 'target_not_in_set' };
   }
 
   const project = set.handles.find((h) => h.kind === 'project' && h.project === target.project);
