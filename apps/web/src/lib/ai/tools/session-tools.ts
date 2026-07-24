@@ -160,11 +160,25 @@ export function describeNode(handle: MachineNodeHandle): string {
   }
 }
 
-/** The `{projectName?, branchName?}` half of a node — what every stored row keys on. */
+/**
+ * The `{projectName?, branchName?}` half of a node — what every stored row
+ * keys on, and what `agent-terminals.ts`'s `resolveScopeKey` looks up a REAL
+ * `machine_branches` row by name for.
+ *
+ * `branchName` is included ONLY when the handle carries `branchSandbox` — a
+ * REAL branch always has its own Sprite descriptor there
+ * (`machine-pane-binding.ts`'s `branchHandle`). A branch-SHAPED handle
+ * WITHOUT one is that module's observed-branch SYNTHESIS: the project's own
+ * checkout addressed under an extra name, with no `machine_branches` row
+ * `resolveScopeKey` could ever find — passing that name through would make
+ * every session operation on it fail with `branch_not_found`. Route it at
+ * the underlying PROJECT scope instead, which is what it already resolves to
+ * (same `cwd`/`projectSandbox` as the project's own handle).
+ */
 function nodeNames(handle: MachineNodeHandle): { projectName?: string; branchName?: string } {
   return {
     ...(handle.project ? { projectName: handle.project } : {}),
-    ...(handle.branch ? { branchName: handle.branch } : {}),
+    ...(handle.branch && handle.branchSandbox ? { branchName: handle.branch } : {}),
   };
 }
 

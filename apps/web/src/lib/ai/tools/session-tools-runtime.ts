@@ -38,6 +38,7 @@ import { buildMachineWorkspacesDeps } from '@/lib/machines/machine-workspaces-ru
 import { applyWorkspaceVerbLocked, broadcastWorkspaceVerbResult } from '@/lib/machines/workspace-verbs-runtime';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { agentSurfaceOf, isAgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
+import type { MachineNodeHandle } from '@pagespace/lib/services/machines/machine-pane-binding';
 import { createSessionTools, type SessionToolsDeps } from './session-tools';
 import { readAgentSession, sendAgentSession } from './session-io-agent';
 import { readPtyLiveness, readPtySession, sendPtySession } from './session-io-pty';
@@ -92,11 +93,21 @@ async function readStreamingConversationIds(ids: string[]): Promise<Set<string>>
   }
 }
 
-/** A node's `{projectName?, branchName?}` half, as the agent-terminal API takes it. */
-function scopeArgs(node: { project?: string; branch?: string }): { projectName?: string; branchName?: string } {
+/**
+ * A node's `{projectName?, branchName?}` half, as the agent-terminal API
+ * takes it. `branchName` is included ONLY when the node carries a REAL
+ * `branchSandbox` — see `session-tools.ts`'s `nodeNames`, the identical rule
+ * for the exact same reason (a synthesized branch handle has no
+ * `machine_branches` row for `resolveScopeKey` to find by name; it must route
+ * as the underlying project scope instead).
+ */
+export function scopeArgs(node: Pick<MachineNodeHandle, 'project' | 'branch' | 'branchSandbox'>): {
+  projectName?: string;
+  branchName?: string;
+} {
   return {
     ...(node.project ? { projectName: node.project } : {}),
-    ...(node.branch ? { branchName: node.branch } : {}),
+    ...(node.branch && node.branchSandbox ? { branchName: node.branch } : {}),
   };
 }
 
