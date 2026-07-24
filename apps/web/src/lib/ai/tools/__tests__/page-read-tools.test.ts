@@ -233,7 +233,11 @@ describe('page-read-tools', () => {
 
       it('treats parentId: "" the same as omitting parentId at drive root', async () => {
         setupDriveAccess();
-        const result = await pageReadTools.list_pages.execute!(
+        const omittedResult = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug },
+          createAuthContext()
+        ) as Record<string, unknown>;
+        const emptyStringResult = await pageReadTools.list_pages.execute!(
           { driveId, driveSlug, parentId: '' },
           createAuthContext()
         ) as Record<string, unknown>;
@@ -241,22 +245,31 @@ describe('page-read-tools', () => {
         assert({
           given: 'list_pages with parentId: "" at drive root',
           should: 'return success',
-          actual: result.success,
+          actual: emptyStringResult.success,
           expected: true,
         });
 
-        const pages = result.pages as Array<{ id: string }>;
+        const omittedPageIds = (omittedResult.pages as Array<{ id: string }>).map(p => p.id).sort();
+        const emptyStringPageIds = (emptyStringResult.pages as Array<{ id: string }>).map(p => p.id).sort();
+
         assert({
           given: 'list_pages with parentId: "" at drive root',
-          should: 'return the same root-level pages as omitting parentId (2, not 0)',
-          actual: pages.length,
-          expected: 2,
+          should: 'return the same pages as omitting parentId',
+          actual: emptyStringPageIds,
+          expected: omittedPageIds,
+        });
+
+        assert({
+          given: 'list_pages with parentId: "" at drive root',
+          should: 'return the same location as omitting parentId',
+          actual: emptyStringResult.location,
+          expected: omittedResult.location,
         });
 
         assert({
           given: 'list_pages with parentId: "" at drive root',
           should: 'not include the nested child page',
-          actual: pages.some(p => p.id === 'child-1'),
+          actual: emptyStringPageIds.includes('child-1'),
           expected: false,
         });
       });
