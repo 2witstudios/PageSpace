@@ -27,25 +27,22 @@ import {
   listAgentTerminals,
   killAgentTerminal,
 } from '@pagespace/lib/services/machines/agent-terminals';
-import {
-  createWorkspace,
-  updateWorkspace,
-  removeWorkspace,
-  listWorkspaces,
-} from '@pagespace/lib/services/machines/machine-workspaces';
+import { listWorkspaces } from '@pagespace/lib/services/machines/machine-workspaces';
+import { createDbMachinePanesStore } from '@pagespace/lib/services/machines/machine-panes-store';
 import {
   buildSpawnAgentTerminalDeps,
   buildListAgentTerminalsDeps,
   buildKillAgentTerminalDeps,
 } from '@/lib/machines/agent-terminals-runtime';
-import { buildMachineWorkspacesDeps, toWorkspaceDTO } from '@/lib/machines/machine-workspaces-runtime';
-import { broadcastMachineWorkspaceEvent } from '@/lib/websocket';
+import { buildMachineWorkspacesDeps } from '@/lib/machines/machine-workspaces-runtime';
+import { applyWorkspaceVerb, broadcastWorkspaceVerbResult, buildApplyWorkspaceVerbDeps } from '@/lib/machines/workspace-verbs-runtime';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { agentSurfaceOf, isAgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
 import { createSessionTools, type SessionToolsDeps } from './session-tools';
 import { readAgentSession, sendAgentSession } from './session-io-agent';
 import { readPtyLiveness, readPtySession, sendPtySession } from './session-io-pty';
-import type { SessionView, SessionViewWrite } from './session-layout';
+import type { SessionView } from './session-layout';
+import type { WorkspaceVerb } from '@/stores/machine-workspace/workspace-verbs';
 
 /**
  * Which of these sessions have a generation IN FLIGHT right now.
@@ -104,75 +101,20 @@ function scopeArgs(node: { project?: string; branch?: string }): { projectName?:
 }
 
 /**
- * Apply one planned layout write through the same service call the human UI's
- * route makes, then broadcast the same event with the same payload shape. A
- * failed write is logged and skipped rather than thrown: the session itself
- * already exists (or is already gone), and taking the whole tool call down
- * over a layout row would leave the model believing nothing happened at all.
+ * Apply one planned verb through the SAME `applyWorkspaceVerb` engine
+ * `POST /api/machines/workspaces/verbs` uses, then broadcast the same
+ * verb+rev event (plus the legacy vocabulary — see its module doc). A failed
+ * verb is logged and skipped rather than thrown: the session itself already
+ * exists (or is already gone), and taking the whole tool call down over a
+ * layout row would leave the model believing nothing happened at all.
  */
-async function applyWrite(
-  machineId: string,
-  write: SessionViewWrite,
-  actor: { userId: string },
-): Promise<void> {
-  const deps = buildMachineWorkspacesDeps();
-
-  if (write.kind === 'create') {
-    const result = await createWorkspace({
-      machineId,
-      ownerId: actor.userId,
-      id: write.id,
-      name: write.name,
-      scope: write.scope,
-      layout: { columns: write.columns },
-      deps,
-    });
-    if (!result.ok) {
-      loggers.ai.warn('session-tools: workspace create rejected', { machineId, reason: result.reason });
-      return;
-    }
-    // Only a genuine insert broadcasts `created`: `createWorkspace` is a
-    // first-writer-wins upsert-by-id, and re-announcing an existing row as new
-    // would append a duplicate to every browser's sidebar order.
-    if (result.created) {
-      void broadcastMachineWorkspaceEvent(machineId, 'machine-workspace:created', {
-        machineId,
-        ...toWorkspaceDTO(result.workspace),
-      });
-    }
-    return;
-  }
-
-  if (write.kind === 'update') {
-    const result = await updateWorkspace({
-      machineId,
-      workspaceId: write.id,
-      layout: { columns: write.columns },
-      deps,
-    });
-    if (!result.ok) {
-      loggers.ai.warn('session-tools: workspace update rejected', { machineId, reason: result.reason });
-      return;
-    }
-    // Columns only — the same partial-PATCH discipline the client uses, so a
-    // concurrent rename in a browser is never clobbered by a stale name.
-    void broadcastMachineWorkspaceEvent(machineId, 'machine-workspace:updated', {
-      machineId,
-      workspaceId: write.id,
-      columns: result.workspace.layout.columns,
-    });
-    return;
-  }
-
-  const result = await removeWorkspace({ machineId, workspaceId: write.id, store: deps.store });
+async function applyVerb(machineId: string, verb: WorkspaceVerb, actor: { userId: string }): Promise<void> {
+  const result = await applyWorkspaceVerb(machineId, verb, buildApplyWorkspaceVerbDeps(actor.userId));
   if (!result.ok) {
-    loggers.ai.warn('session-tools: workspace remove rejected', { machineId, reason: result.reason });
+    loggers.ai.warn('session-tools: workspace verb rejected', { machineId, verb: verb.type, reason: result.reason });
     return;
   }
-  void broadcastMachineWorkspaceEvent(machineId, 'machine-workspace:deleted', {
-    machineId,
-    workspaceId: write.id,
-  });
+  broadcastWorkspaceVerbResult(machineId, verb, result);
 }
 
 export function buildSessionToolsDeps(): SessionToolsDeps {
@@ -260,23 +202,26 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
 
     listViews: async (machineId) => {
       const deps = buildMachineWorkspacesDeps();
-      const rows = await listWorkspaces({ machineId, store: deps.store });
+      const [rows, grids] = await Promise.all([
+        listWorkspaces({ machineId, store: deps.store }),
+        (await createDbMachinePanesStore()).getMachineGrids(machineId),
+      ]);
       return rows.map(
         (row): SessionView => ({
           id: row.id,
           name: row.name,
           projectName: row.projectName,
           branchName: row.branchName,
-          columns: row.layout.columns,
+          columns: grids.get(row.id) ?? [],
         }),
       );
     },
 
-    applyViewWrites: async (machineId, writes, actor) => {
+    applyVerbs: async (machineId, verbs, actor) => {
       // Sequential, in plan order: a move's removal must land before its
       // placement so no browser ever sees the same session claimed twice.
-      for (const write of writes) {
-        await applyWrite(machineId, write, actor);
+      for (const verb of verbs) {
+        await applyVerb(machineId, verb, actor);
       }
     },
 

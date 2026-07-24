@@ -48,8 +48,8 @@ import {
   viewsAtNode,
   type SessionPlacement,
   type SessionView,
-  type SessionViewWrite,
 } from './session-layout';
+import type { WorkspaceVerb } from '@/stores/machine-workspace/workspace-verbs';
 
 /** The two kinds of session a machine runs: a PageSpace Agent, or a plain shell. */
 export type SessionType = 'agent' | 'shell';
@@ -386,8 +386,9 @@ export interface SessionToolsDeps {
   killSession: (input: { node: MachineNodeHandle; name: string; userId: string }) => Promise<SessionKillResult>;
   /** Every view of a machine, in creation order. */
   listViews: (machineId: string) => Promise<SessionView[]>;
-  /** Persist AND broadcast the planned layout writes, in order. */
-  applyViewWrites: (machineId: string, writes: SessionViewWrite[], actor: { userId: string }) => Promise<void>;
+  /** Persist AND broadcast the planned verbs, in order — the same
+   * `applyWorkspaceVerb` engine `POST /api/machines/workspaces/verbs` uses. */
+  applyVerbs: (machineId: string, verbs: WorkspaceVerb[], actor: { userId: string }) => Promise<void>;
   /** Per-surface IO, dispatched to by `read_session`/`send_session`. */
   io: SessionIoDeps;
   /**
@@ -583,7 +584,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
           return { success: false, error: `Could not start session "${resolvedName}": ${spawned.reason}.` };
         }
 
-        await deps.applyViewWrites(node.machineId, plan.writes, actor);
+        await deps.applyVerbs(node.machineId, plan.verbs, actor);
 
         // The first turn goes through the SAME seam send_session uses — same
         // engine, same run-claim, same depth cap — so a session born with a
@@ -601,7 +602,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
         }
 
         const row = await deps.findSession(node, resolvedName);
-        const view = plan.writes.find((write) => write.id === plan.viewId);
+        const createVerb = plan.verbs.find((verb) => verb.type === 'create-workspace' && verb.workspaceId === plan.viewId);
         return {
           success: true,
           name: resolvedName,
@@ -609,7 +610,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
           node: describeNode(node),
           resumed: spawned.resumed,
           state: row ? readSessionState(row, deps.now()) : reservedStateFor(agentType),
-          view: { id: plan.viewId, name: view && view.kind === 'create' ? view.name : undefined },
+          view: { id: plan.viewId, name: createVerb && createVerb.type === 'create-workspace' ? createVerb.name : undefined },
           // Reported, never thrown away: the session exists either way, so a
           // prompt that could not be dispatched (the session is already busy,
           // the chain is too deep) must be visible as exactly that.
@@ -645,14 +646,14 @@ export function createSessionTools(deps: SessionToolsDeps): {
         });
         if (!plan.ok) return placementDeniedError(plan.reason, placement, describeNode(opened.node));
 
-        await deps.applyViewWrites(opened.node.machineId, plan.writes, actor);
+        await deps.applyVerbs(opened.node.machineId, plan.verbs, actor);
 
         return {
           success: true,
           name,
           node: describeNode(opened.node),
           view: { id: plan.viewId },
-          moved: plan.writes.length > 0,
+          moved: plan.verbs.length > 0,
         };
       },
     }),
@@ -677,14 +678,14 @@ export function createSessionTools(deps: SessionToolsDeps): {
         }
 
         const views = await deps.listViews(opened.node.machineId);
-        const writes = planCloseSession(views, opened.scope);
-        await deps.applyViewWrites(opened.node.machineId, writes, actor);
+        const { verbs, closedWorkspaceIds } = planCloseSession(views, opened.scope);
+        await deps.applyVerbs(opened.node.machineId, verbs, actor);
 
         return {
           success: true,
           name,
           node: describeNode(opened.node),
-          closedViews: writes.filter((write) => write.kind === 'remove').length,
+          closedViews: closedWorkspaceIds.length,
         };
       },
     }),
