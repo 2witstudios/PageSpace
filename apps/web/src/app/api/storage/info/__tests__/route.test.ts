@@ -48,7 +48,6 @@ import { verifyAuth } from '@/lib/auth';
 import { validateAdminAccess } from '@/lib/auth/admin-role';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { reconcileStorageUsage } from '@pagespace/lib/services/storage-limits';
-import { db } from '@pagespace/db/db';
 import { eq, or, inArray } from '@pagespace/db/operators';
 import { findUserFileRows } from '@/lib/storage/storage-info-repository';
 
