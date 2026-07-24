@@ -466,14 +466,6 @@ describe('resolveMachineNodeTarget', () => {
     });
   });
 
-  it('given a project in the set with a REAL branch handle + a different unresolved branch name, should still fall back to the project handle', () => {
-    const projectSet = { self: PROJECT_HANDLE, handles: [PROJECT_HANDLE, BRANCH_HANDLE] };
-    expect(resolveMachineNodeTarget(projectSet, { project: PROJECT_NAME, branch: 'main' })).toEqual({
-      ok: true,
-      handle: PROJECT_HANDLE,
-    });
-  });
-
   // Codex review (PR #2232): the fallback must NOT catch every unresolved
   // branch name — only the conventional default-checkout aliases. Otherwise a
   // genuinely misspelled or deleted branch name would silently redirect

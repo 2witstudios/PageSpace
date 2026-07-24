@@ -43,13 +43,11 @@ export function buildMachineBindingPrompt(binding: MachineNodeHandleSet): string
               : `project "${handle.project}"`,
           )
           .join(', ')}.`;
-  const branchWarning =
-    '\n• "branch" here is NOT "whatever git branch a project happens to be on" — it only names a separately created branch worktree (listed above, if any exist). A project\'s own default checkout (its "main"/"master") has no branch of its own to address: to run at a project, pass target: { project } alone, never target: { project, branch: "main" }.';
   return (
     `\n\nMACHINE BINDING (this conversation)` +
     `\n• This conversation is bound to machine "${self.machineId}" at ${where} — code-execution tools (bash, readFile, writeFile, editFile, git/gh) operate from working directory: ${self.cwd}` +
     `\n${reachable}` +
-    branchWarning +
+    `\n• "branch" here is NOT "whatever git branch a project happens to be on" — it only names a separately created branch worktree (listed above, if any exist). A project's own default checkout (its "main"/"master") has no branch of its own to address: to run at a project, pass target: { project } alone, never target: { project, branch: "main" }.` +
     `\n• A node outside this scope (a sibling project or branch, another machine) is not addressable — such a target is refused.` +
     `\n• Call list_sessions to see the nodes in this scope and what is running in them; it is the only discovery tool for this machine.` +
     `\n• switch_machine and list_machines are unavailable — this conversation cannot leave its bound machine`

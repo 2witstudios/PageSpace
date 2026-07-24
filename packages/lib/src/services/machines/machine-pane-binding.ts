@@ -27,6 +27,7 @@
 
 import type { MachineAgentTerminalStore } from './agent-terminals-store';
 import { SANDBOX_ROOT, BRANCH_REPO_PATH, PROJECT_REPO_PATH } from '../sandbox/sandbox-paths';
+import { isMainBranchName } from '../sandbox/machine-diff-scope';
 import { isAgentRuntimeType, isPtyAgentType } from './agent-terminal-types';
 
 export type MachinePaneBindingFailureReason = 'binding_page_mismatch' | 'project_not_found' | 'branch_not_found';
@@ -121,10 +122,12 @@ export type MachineNodeTargetResolution =
   | { ok: false; reason: 'ambiguous_target' };
 
 /**
- * Resolve a tool call's `target` against a derived handle set. PURE LOOKUP —
- * it makes no policy decision of its own, because the set already IS the
- * policy (see `MachineNodeHandleSet`): "not in the set" is the same fact as
- * "never derived", so there is no second place that can decide differently.
+ * Resolve a tool call's `target` against a derived handle set. Mostly a PURE
+ * LOOKUP — the set already IS the policy (see `MachineNodeHandleSet`): "not
+ * in the set" is normally the same fact as "never derived". The one
+ * exception is the default-checkout branch-name fallback below, which is a
+ * deliberately narrow carve-out, not a second place deciding node access —
+ * see its own note for why it doesn't widen the set.
  *
  * An omitted `target` (or an empty one) is the node the conversation is
  * natively bound to. A bare `branch` defaults its project to `self.project`
@@ -137,20 +140,19 @@ export type MachineNodeTargetResolution =
  * checkout happens to be on". A project's default checkout has no branch
  * handle of its own, so a caller (a model reasoning in ordinary git terms)
  * naturally but incorrectly asks for `{ project, branch: "main" }` to mean
- * "this project's own state". When that branch name is a conventional
- * default-checkout alias (`main`/`master`) and doesn't resolve, but the
- * project half of the target does, we fall back to the PROJECT handle rather
- * than denying the whole target — the project was already in `set`, so this
- * grants nothing new.
+ * "this project's own state". When that branch name is the repo's own
+ * default-branch name (`isMainBranchName` — same main/master convention as
+ * `machine-diff-scope.ts`) and doesn't resolve, but the project half of the
+ * target does, we fall back to the PROJECT handle rather than denying the
+ * whole target — the project was already in `set`, so this grants nothing
+ * new, it only re-resolves a request for a node that was already reachable.
  *
- * This fallback is DELIBERATELY narrow — only those two alias names, never
+ * This fallback is DELIBERATELY narrow — only that default-branch name, never
  * any other unresolved branch. A misspelled or deleted branch name must
  * still deny outright: silently redirecting it to the project's default
  * checkout would let bash/file/git tools run against the wrong worktree
  * without the caller ever finding out.
  */
-const DEFAULT_CHECKOUT_BRANCH_ALIASES = new Set(['main', 'master']);
-
 export function resolveMachineNodeTarget(
   set: MachineNodeHandleSet,
   target: MachineNodeTarget | undefined,
@@ -164,7 +166,7 @@ export function resolveMachineNodeTarget(
     );
     if (matches.length === 1) return { ok: true, handle: matches[0] };
     if (matches.length > 1) return { ok: false, reason: 'ambiguous_target' };
-    if (project !== undefined && DEFAULT_CHECKOUT_BRANCH_ALIASES.has(target.branch)) {
+    if (project !== undefined && isMainBranchName(target.branch)) {
       const projectHandle = set.handles.find((h) => h.kind === 'project' && h.project === project);
       if (projectHandle) return { ok: true, handle: projectHandle };
     }
