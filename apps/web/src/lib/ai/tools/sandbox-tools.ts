@@ -33,7 +33,6 @@ import { isMainBranchName } from '@pagespace/lib/services/sandbox/machine-diff-s
 import type { SandboxToolGateResult } from '@pagespace/lib/services/sandbox/tool-gate';
 import type { MachineToggleDenialCode } from '@pagespace/lib/services/machines/machine-access';
 import {
-  resolveMachineNodeTarget,
   type MachineNodeHandle,
   type MachineNodeTarget,
 } from '@pagespace/lib/services/machines/machine-pane-binding';
@@ -54,9 +53,9 @@ export function machineRefEquals(a: MachineRef, b: MachineRef): boolean {
 /**
  * `bash`'s cwd-default policy for a machine-bound "PageSpace Agent" pane
  * (issue #2166 phase 7): an explicit `cwd` argument always wins; absent one,
- * the RESOLVED NODE's `cwd` (the pane's own checkout, or the checkout of the
- * node its `target` addressed) is used. Returns `undefined` when neither is
- * present, preserving the runner's own SANDBOX_ROOT default.
+ * the bound node's own `cwd` (the pane's own checkout) is used. Returns
+ * `undefined` when neither is present, preserving the runner's own
+ * SANDBOX_ROOT default.
  */
 export function bindingCwdFor(
   explicitCwd: string | undefined,
@@ -70,12 +69,12 @@ export function bindingCwdFor(
  *
  * `writeFile`/`readFile`/`editFile` take a path, not a cwd, and the runner
  * resolves it against SANDBOX_ROOT (`resolveSandboxPath`). Without this, a
- * relative path is rooted at `/workspace` no matter which node the call
- * resolved to — so `target: { project: 'foo' }` would read and write
- * `/workspace/a.txt` while `bash` in the same target ran in
- * `/workspace/projects/foo`. Two tools, one addressed node, different files.
+ * relative path is rooted at `/workspace` no matter which node the
+ * conversation is bound to — so a project- or branch-bound pane would read and
+ * write `/workspace/a.txt` while `bash` in the same pane ran in its checkout.
+ * Two tools, one bound node, different files.
  *
- * Relative paths are therefore anchored to the RESOLVED NODE's cwd, which is
+ * Relative paths are therefore anchored to the bound node's cwd, which is
  * exactly the default `bash` already applies. An ABSOLUTE path is left alone —
  * it is the file-tool analogue of `bash`'s explicit `cwd` argument, and the
  * runner still confines it to the sandbox root, so this can widen no reach.
@@ -87,12 +86,13 @@ export function nodeScopedPath(path: string, node: { cwd: string } | undefined):
 }
 
 /**
- * Direct child addressing (node epic): every code-execution tool may aim at a
- * node BENEATH the conversation's own — a project, or a branch — instead of
- * the node it is bound to. Resolution runs against the derived handle set
- * (`resolveMachineNodeTarget`), so a node outside the set is simply not
- * addressable. `branch` alone is enough when the conversation already lives in
- * a project, or when the name is unique across the whole set.
+ * A node address BENEATH the conversation's own — a project, or a branch. The
+ * code-execution tools (bash/file/git) no longer accept this: they always run
+ * at the conversation's own node. It survives only as the shape the
+ * session-family tools (`send_session`/`read_session`) use to name a sibling
+ * node, and `nodeTargetDeniedError` below renders its denials. `branch` alone
+ * is enough when the conversation already lives in a project, or when the name
+ * is unique across the whole set.
  */
 export const nodeTargetSchema = z
   .object({
@@ -158,7 +158,6 @@ export const bashInputSchema = z
     // Opt-in override for long-running commands (e.g. `bun install`), clamped
     // to SANDBOX_MAX_TIMEOUT_MS by the runner. Omit for the default (120s).
     timeoutMs: z.number().int().positive().optional(),
-    target: nodeTargetSchema.optional(),
   })
   .strict();
 
@@ -166,14 +165,12 @@ export const writeFileInputSchema = z
   .object({
     path: z.string().min(1, 'path is required').max(MAX_PATH_LENGTH),
     content: z.string().max(MAX_WRITE_BYTES, 'content is too large'),
-    target: nodeTargetSchema.optional(),
   })
   .strict();
 
 export const readFileInputSchema = z
   .object({
     path: z.string().min(1, 'path is required').max(MAX_PATH_LENGTH),
-    target: nodeTargetSchema.optional(),
   })
   .strict();
 
@@ -183,7 +180,6 @@ export const editFileInputSchema = z
     oldString: z.string().min(1, 'oldString is required'),
     newString: z.string(),
     replaceAll: z.boolean().optional(),
-    target: nodeTargetSchema.optional(),
   })
   .strict();
 
@@ -414,7 +410,6 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
   // session acquisition to that machine's persistent Sprite (machine-session.ts).
   const open = async (
     options: unknown,
-    target?: MachineNodeTarget,
   ): Promise<
     | { ok: true; ctx: SandboxActorContext & { activeMachine: MachineRef }; node?: MachineNodeHandle }
     | { ok: false; error: { success: false; error: string; retryAfter?: number } }
@@ -449,32 +444,23 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
     const tenantId = machines.resolveTenantId
       ? await machines.resolveTenantId(rawContext, activeMachine, ctx.tenantId)
       : ctx.tenantId;
-    // Which NODE this call runs at: the conversation's own by default, or the
-    // one its `target` addresses. Resolution is pure set membership
-    // (resolveMachineNodeTarget) — an unaddressable node is one the derived
-    // set never contained, which is the same fact `isMachineAccessible`
-    // enforces for the machine itself. No second policy lives here.
+    // This call always runs at the conversation's OWN node — the code-execution
+    // tools no longer accept a `target`. An unbound conversation runs at the
+    // machine root with no branch/project sandbox; a branch- or project-bound
+    // self carries those keys legitimately (issue #2204 phase 7).
     const binding = rawContext?.machineBinding;
     if (!binding) {
-      // A target without a node scope to resolve it in is a mistake, not a
-      // silent no-op: answering it at the machine root would run the call
-      // somewhere the model didn't ask for.
-      if (target && (target.project || target.branch)) {
-        return { ok: false, error: nodeTargetDeniedError('unbound', target) };
-      }
       return { ok: true, ctx: { ...ctx, driveId, tenantId, activeMachine, branchSandbox: undefined, projectSandbox: undefined } };
     }
-    const resolved = resolveMachineNodeTarget(binding, target);
-    if (!resolved.ok) return { ok: false, error: nodeTargetDeniedError(resolved.reason, target ?? {}) };
-    const node = resolved.handle;
+    const node = binding.self;
     // A node with its own Sprite — a branch, or a PROMOTED project (issue
     // #2204 phase 7) — routes acquireSandbox through that tier's attach-only
     // seam (acquireRequest in tool-runners.ts forwards both keys); an
     // unpromoted project carries neither and still runs on the machine's own
-    // Sprite at the checkout's cwd. This is the one place the resolved node is
+    // Sprite at the checkout's cwd. This is the one place the bound node is
     // translated onto the actor ctx. `machineId` comes off the handle, so the
-    // payer/guardrail key stays the owning machine page however deep the
-    // target reaches.
+    // payer/guardrail key stays the owning machine page however deep the bound
+    // node sits.
     const branchSandbox = node.branchSandbox
       ? { machineId: node.machineId, machineBranchId: node.branchSandbox.machineBranchId }
       : undefined;
@@ -487,10 +473,10 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
   return {
     bash: tool({
       description:
-        'Run a shell command in this conversation\'s isolated sandbox. Returns stdout, stderr, and the exit code. The filesystem is scoped to the sandbox. In a machine-bound conversation you may add target: { project?, branch? } to run against a project or branch beneath your node instead of your own; omit it to use your own node.',
+        'Run a shell command in this conversation\'s isolated sandbox. Returns stdout, stderr, and the exit code. The filesystem is scoped to the sandbox.',
       inputSchema: bashInputSchema,
-      execute: async ({ command, cwd, timeoutMs, target }, options) => {
-        const opened = await open(options, target);
+      execute: async ({ command, cwd, timeoutMs }, options) => {
+        const opened = await open(options);
         if (!opened.ok) return opened.error;
         return runBashInSandbox({
           command,
@@ -504,10 +490,10 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
 
     writeFile: tool({
       description:
-        'Write a file inside this conversation\'s sandbox. A relative path resolves from your node\'s working directory, and cannot escape the sandbox root. In a machine-bound conversation you may add target: { project?, branch? } to act on a project or branch beneath your node instead of your own — a relative path then resolves from THAT node\'s working directory; omit it to use your own node. Pass an absolute path to override this.',
+        'Write a file inside this conversation\'s sandbox. A relative path resolves from your node\'s working directory, and cannot escape the sandbox root. Pass an absolute path to override this.',
       inputSchema: writeFileInputSchema,
-      execute: async ({ path, content, target }, options) => {
-        const opened = await open(options, target);
+      execute: async ({ path, content }, options) => {
+        const opened = await open(options);
         if (!opened.ok) return opened.error;
         return writeSandboxFile({ path: nodeScopedPath(path, opened.node), content, ctx: opened.ctx, deps: runDeps });
       },
@@ -515,10 +501,10 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
 
     readFile: tool({
       description:
-        'Read a file from this conversation\'s sandbox. A relative path resolves from your node\'s working directory, and cannot escape the sandbox root. In a machine-bound conversation you may add target: { project?, branch? } to act on a project or branch beneath your node instead of your own — a relative path then resolves from THAT node\'s working directory; omit it to use your own node. Pass an absolute path to override this.',
+        'Read a file from this conversation\'s sandbox. A relative path resolves from your node\'s working directory, and cannot escape the sandbox root. Pass an absolute path to override this.',
       inputSchema: readFileInputSchema,
-      execute: async ({ path, target }, options) => {
-        const opened = await open(options, target);
+      execute: async ({ path }, options) => {
+        const opened = await open(options);
         if (!opened.ok) return opened.error;
         return readSandboxFile({ path: nodeScopedPath(path, opened.node), ctx: opened.ctx, deps: runDeps });
       },
@@ -526,10 +512,10 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
 
     editFile: tool({
       description:
-        'Edit a file in this conversation\'s sandbox by replacing oldString with newString. oldString must be unique in the file unless replaceAll is set. Prefer this over writeFile for targeted changes — it does not rewrite the whole file. A relative path resolves from your node\'s working directory, and cannot escape the sandbox root. In a machine-bound conversation you may add target: { project?, branch? } to act on a project or branch beneath your node instead of your own — a relative path then resolves from THAT node\'s working directory; omit it to use your own node. Pass an absolute path to override this.',
+        'Edit a file in this conversation\'s sandbox by replacing oldString with newString. oldString must be unique in the file unless replaceAll is set. Prefer this over writeFile for targeted changes — it does not rewrite the whole file. A relative path resolves from your node\'s working directory, and cannot escape the sandbox root. Pass an absolute path to override this.',
       inputSchema: editFileInputSchema,
-      execute: async ({ path, oldString, newString, replaceAll, target }, options) => {
-        const opened = await open(options, target);
+      execute: async ({ path, oldString, newString, replaceAll }, options) => {
+        const opened = await open(options);
         if (!opened.ok) return opened.error;
         return editSandboxFile({
           path: nodeScopedPath(path, opened.node),
