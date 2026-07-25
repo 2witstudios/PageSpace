@@ -32,6 +32,7 @@ import type { MachineHandle, MachineHost, MachineSubstrateSpec } from '../sandbo
 import { MachineSpriteReplacedError } from '../sandbox/machine-host';
 import type { SandboxCreateOptions } from '../sandbox/sandbox-options';
 import type { FullEgressEnablement } from '../sandbox/containment';
+import type { CanRunCodeInput, CanRunCodeResult } from '../sandbox/can-run-code';
 import { PROJECT_REPO_PATH } from '../sandbox/sandbox-paths';
 import {
   cloneAndCheckoutBranch,
@@ -58,14 +59,17 @@ export interface AgentTerminalSpriteProvisionDeps extends SpriteCloneDeps {
     now: Date;
   }) => Promise<boolean>;
   /**
-   * Re-read the row's persisted Sprite pointer, to RECONCILE a lost provisioning
-   * race against the winner BEFORE killing — the agent-terminal twin of
-   * `reconcileProvisionCollision` (machine-branches.ts). `MachineHost.provision`
+   * Re-read the row's persisted Sprite pointer AND INSTANCE, to RECONCILE a lost
+   * provisioning race against the winner BEFORE killing — the agent-terminal twin
+   * of `reconcileProvisionCollision` (machine-branches.ts). `MachineHost.provision`
    * is name-keyed, so two concurrent provisions of the same unprovisioned row
    * (same derived key) can hold the SAME physical Sprite; the CAS loser must not
-   * kill the very VM the winner just recorded.
+   * kill the very VM the winner just recorded. `spriteInstanceId` is load-bearing:
+   * a genuine winner recorded OUR generation (same instance), whereas a
+   * vanished-heal reprovision that failed leaves the OLD stale instance behind —
+   * see `reconcileBeforeKill`.
    */
-  reloadRow: (id: string) => Promise<{ sandboxId: string | null } | null>;
+  reloadRow: (id: string) => Promise<{ sandboxId: string | null; spriteInstanceId: string | null } | null>;
   /**
    * Pause, injected so `reconcileBeforeKill`'s bounded winner-poll is testable
    * against a fake clock (no real sleeps) — mirrors `PromoteProjectDeps.wait` /
@@ -86,6 +90,19 @@ export interface AgentTerminalSpriteProvisionDeps extends SpriteCloneDeps {
   options: SandboxCreateOptions;
   /** Server-held secret for Sprite-key derivation (same secret as machine-session-manager.ts). */
   secret: string;
+  /**
+   * Centralized code-execution authorization for the CURRENT actor, applied
+   * BEFORE any Sprite is provisioned (finding P — SECURITY). Same shape and
+   * fail-closed contract the session managers use (`authorize: canRunCode`,
+   * `machine-session.ts` / `tool-gate.ts`): it is the STRONGER check the realtime
+   * attach path enforces (app-admin + owner/admin drive role), whereas the spawn
+   * route only checked edit-level page access. Without it an editor correctly
+   * denied code execution could still create billable, full-egress Sprites by
+   * spawning terminals under distinct names. Must never throw.
+   */
+  authorize: (input: CanRunCodeInput) => Promise<CanRunCodeResult>;
+  /** Resolve the machine page's owning drive id — needed to run the drive-role arm of `authorize`. `null` when the page/drive can't be resolved (then authorization fails closed). */
+  resolveDriveId: (machineId: string) => Promise<string | null>;
   /** REQUIRED full-egress enablement gate — a session Sprite runs open egress, same as a branch's. */
   checkFullEgressEnablement: () => Promise<FullEgressEnablement>;
   /** Live handle to the OWNING Machine's own persistent Sprite — the source the Claude Code credential is copied from. `null` = graceful no-op. */
@@ -115,6 +132,7 @@ export type ProvisionAgentTerminalSpriteResult =
   | {
       ok: false;
       reason:
+        | 'unauthorized'
         | 'egress_denied'
         | 'project_not_found'
         | 'branch_not_found'
@@ -130,24 +148,37 @@ const AGENT_TERMINAL_RACE_POLLS = 3;
 const AGENT_TERMINAL_RACE_POLL_MS = 250;
 
 /**
- * Bounded wait for a concurrent WINNER to persist its identity onto this row —
- * the agent-terminal twin of `awaitPromotionWinner` (machine-project-promotion.ts).
+ * Bounded wait for a concurrent WINNER that recorded OUR GENERATION onto this row
+ * — the agent-terminal twin of `awaitPromotionWinner` (machine-project-promotion.ts).
  *
  * `MachineHost.provision` is name-keyed, so two first spawns of the same row can
  * hold the SAME physical Sprite; one clone can fail (the other already created
  * the checkout) WHILE the successful caller has not yet run its persisting CAS. A
  * single immediate reload would then see no winner and wrongly conclude the
  * shared Sprite is unreferenced. So we re-read a bounded number of times (first
- * read immediate, then `deps.wait` between the rest) and only give up once no
- * winner has appeared — never longer, since a user-facing spawn is held open.
+ * read immediate, then `deps.wait` between the rest).
+ *
+ * A row counts as a WINNER only when its `spriteInstanceId` MATCHES `ourInstance`
+ * (both non-null) — the generation of the handle WE hold (finding Q). In the true
+ * concurrent race both callers share the SAME name-keyed physical VM, so same
+ * instance ⇒ genuine shared winner. But when HEALING a vanished Sprite the row
+ * already carries a non-null `sandboxId` (the reused deterministic name) with the
+ * OLD, STALE instance; a reprovision whose clone/persist failed before recording
+ * the replacement would otherwise make a name-only check mistake that stale
+ * pointer for a winner and falsely resume against a checkout that may not exist.
+ * Matching on the instance rejects it. A null `ourInstance` can never be proven a
+ * winner — fail closed (never match).
  */
 async function awaitProvisionWinner(
   deps: Pick<AgentTerminalSpriteProvisionDeps, 'reloadRow' | 'wait'>,
   rowId: string,
+  ourInstance: string | null,
 ): Promise<{ sandboxId: string } | null> {
   for (let attempt = 0; attempt <= AGENT_TERMINAL_RACE_POLLS; attempt += 1) {
     const row = await deps.reloadRow(rowId).catch(() => null);
-    if (row?.sandboxId) return { sandboxId: row.sandboxId };
+    if (row?.sandboxId && ourInstance !== null && row.spriteInstanceId === ourInstance) {
+      return { sandboxId: row.sandboxId };
+    }
     if (attempt < AGENT_TERMINAL_RACE_POLLS) await deps.wait(AGENT_TERMINAL_RACE_POLL_MS);
   }
   return null;
@@ -197,13 +228,13 @@ async function killUnreferencedOrEnqueue(
  * `MachineHost.provision` is name-keyed on the row's deterministic session key,
  * so a concurrent provision of the SAME row can hand BOTH callers the SAME
  * physical Sprite. Killing "ours" — passing the same `spriteInstanceId` the
- * winner recorded — would DESTROY the winner's live, referenced VM, leaving the
- * row pointing at a dead Sprite. So: wait (bounded) for the persisted winner. If
- * the row points at a live Sprite, the session is usable and ours must NOT be
- * destroyed — resume against it. Only a genuinely unreferenced Sprite (no winner
- * after the bounded wait, or a different-named VM recorded under this row) is
- * killed — via `killUnreferencedOrEnqueue`, which rescues it to the outbox if the
- * kill cannot be confirmed.
+ * winner recorded — would DESTROY the winner's live, referenced VM. So: wait
+ * (bounded) for a winner that recorded OUR GENERATION (same `spriteInstanceId` —
+ * see `awaitProvisionWinner`). If one exists, the row points at the very live VM
+ * we hold — resume, do NOT kill. Otherwise (no winner, or the row holds only a
+ * STALE pre-reprovision instance) our Sprite is unreferenced for this generation
+ * — kill it via `killUnreferencedOrEnqueue`, which rescues it to the outbox if
+ * the kill cannot be confirmed.
  *
  * This is the single reconcile-before-kill the CAS-loss path introduced, lifted
  * so every kill site shares it (branch clone-fail, project clone-fail, and the
@@ -218,21 +249,15 @@ async function reconcileBeforeKill({
   row: Pick<MachineAgentTerminalRecord, 'id'>;
   handle: MachineHandle;
 }): Promise<{ kind: 'resumed'; sandboxId: string } | { kind: 'killed' }> {
-  const winner = await awaitProvisionWinner(deps, row.id);
-  if (winner?.sandboxId) {
-    if (winner.sandboxId !== handle.machineId) {
-      // A genuinely distinct VM is recorded under this row — ours is redundant
-      // and unreferenced, so it is safe to destroy (rescued to the outbox on an
-      // unconfirmed kill).
-      await killUnreferencedOrEnqueue(deps, handle);
-    }
-    // else: the winner recorded the very (shared, name-keyed) Sprite we hold —
-    // it is LIVE and REFERENCED; must NOT kill. Either way the row points at a
-    // live Sprite, so the session is usable — resume against it.
+  const winner = await awaitProvisionWinner(deps, row.id, handle.spriteInstanceId ?? null);
+  if (winner) {
+    // The row records OUR instance — it is the live, referenced VM we hold (a
+    // genuine shared winner). Must NOT kill; resume against it.
     return { kind: 'resumed', sandboxId: winner.sandboxId };
   }
-  // No winner after the bounded wait — ours is the only (unreferenced) candidate,
-  // and it failed. Kill it (or rescue it to the outbox) rather than leak a VM.
+  // No row records our generation — no winner, or only a STALE pre-reprovision
+  // instance (a vanished-heal whose replacement never landed). Ours is
+  // unreferenced: kill it (or rescue it to the outbox) rather than leak a VM.
   await killUnreferencedOrEnqueue(deps, handle);
   return { kind: 'killed' };
 }
@@ -254,6 +279,21 @@ export async function provisionAgentTerminalSprite({
   actor: MachineActorContext;
   deps: AgentTerminalSpriteProvisionDeps;
 }): Promise<ProvisionAgentTerminalSpriteResult> {
+  // SECURITY (finding P): apply the centralized code-execution authorization for
+  // the CURRENT actor BEFORE anything is provisioned — the same STRONGER check
+  // the realtime attach path enforces (app-admin + owner/admin drive role), not
+  // the weaker edit-level page access the spawn route already checked. Denied →
+  // skip provisioning entirely; the row keeps a NULL sandboxId and the
+  // resolve/attach path (which independently re-runs this check) governs from
+  // there. Resolved with `requestOrigin: 'user'` to match that attach path.
+  const driveId = await deps.resolveDriveId(row.machineId);
+  const authorized = await deps.authorize({
+    userId: actor.userId,
+    driveId: driveId ?? undefined,
+    requestOrigin: 'user',
+  });
+  if (!authorized.ok) return { ok: false, reason: 'unauthorized', detail: authorized.reason };
+
   const enablement = await deps.checkFullEgressEnablement();
   if (!enablement.ok) return { ok: false, reason: 'egress_denied', detail: enablement.reason };
 

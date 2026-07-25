@@ -2150,8 +2150,11 @@ function makeSpriteProvision(
     updateSpriteIdentity: async (input) => store.updateSpriteIdentity(input),
     reloadRow: async (id) => {
       const row = await store.findById(id);
-      return row ? { sandboxId: row.sandboxId } : null;
+      return row ? { sandboxId: row.sandboxId, spriteInstanceId: row.spriteInstanceId } : null;
     },
+    // Authorized by default; override to exercise the code-execution gate.
+    authorize: async () => ({ ok: true }),
+    resolveDriveId: async () => 'drive-1',
     // Deterministic clock: record the pauses, never actually sleep.
     wait: async (ms) => { waitCalls.push(ms); },
     enqueueReclaim: async ({ sandboxId, spriteInstanceId }) => {
@@ -2224,6 +2227,35 @@ describe('spawnAgentTerminal — per-session Sprite provisioning', () => {
     expect(result.ok).toBe(true); // reservation is not failed by a provisioning refusal
     expect(provisionCalls).toEqual([]);
     expect([...rows.values()][0].sandboxId).toBeNull();
+  });
+
+  // FINDING P (SECURITY): the centralized code-execution gate must run BEFORE any
+  // Sprite is provisioned — an actor denied by canRunCode (e.g. an editor who
+  // lacks the owner/admin drive role) must never create a billable VM.
+  it('given canRunCode DENIES the actor, should NOT provision a Sprite and leave the row unprovisioned', async () => {
+    const { store, rows } = makeStore();
+    const { deps: provision, provisionCalls, killed } = makeSpriteProvision(store, {
+      authorize: async () => ({ ok: false, reason: 'insufficient_role' }),
+    });
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+    expect(result.ok).toBe(true); // the row reservation is not failed by an authz denial
+    expect(provisionCalls).toEqual([]); // NO host.provision — no billable VM created
+    expect(killed).toEqual([]);
+    expect([...rows.values()][0].sandboxId).toBeNull(); // row stays unprovisioned; the attach path re-checks
+  });
+
+  it('given canRunCode denies BUT the actor is authorized on retry, should provision (authz runs before every provision)', async () => {
+    // Sanity: the default (authorized) path still provisions — the gate is not
+    // a blanket disable.
+    const { store, rows } = makeStore();
+    const { deps: provision, provisionCalls } = makeSpriteProvision(store); // authorize: ok by default
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+    expect(provisionCalls.length).toBe(1);
+    expect([...rows.values()][0].sandboxId).toBe(SESSION_SANDBOX_ID);
   });
 
   it('given a chat-surface agent type (pagespace), should never provision a Sprite (no PTY to run)', async () => {
@@ -2325,13 +2357,14 @@ describe('provisionAgentTerminalSprite — race + persistence safety (findings 1
     egressPolicyToken: null,
   } as const;
 
-  // FINDING 1: a name-keyed shared Sprite must NOT be killed when the CAS loses.
-  it('given the CAS loses to a winner that recorded OUR SAME name-keyed Sprite, should NOT kill it and should resume against the winner', async () => {
+  // FINDING 1 + Q: a genuine winner recorded OUR generation (same instance) — the
+  // shared name-keyed VM — so it must NOT be killed.
+  it('given the CAS loses to a winner that recorded OUR SAME instance, should NOT kill it and should resume against the winner', async () => {
     const { store } = makeStore();
     const { deps, killed } = makeSpriteProvision(store, {
       updateSpriteIdentity: async () => false, // we lost the race
-      // The winner recorded the exact Sprite our handle holds (name-keyed share).
-      reloadRow: async () => ({ sandboxId: SESSION_SANDBOX_ID }),
+      // The winner recorded the exact VM our handle holds — same name AND instance.
+      reloadRow: async () => ({ sandboxId: SESSION_SANDBOX_ID, spriteInstanceId: SESSION_INSTANCE_ID }),
     });
 
     const result = await provisionAgentTerminalSprite({ row: machineRow, actor: provisionActor, deps });
@@ -2339,16 +2372,22 @@ describe('provisionAgentTerminalSprite — race + persistence safety (findings 1
     expect(killed).toEqual([]); // the winner's live, referenced VM was left alone
   });
 
-  it('given the CAS loses to a winner that recorded a DIFFERENT VM, should kill our redundant Sprite and resume against the winner', async () => {
+  // FINDING Q: healing a vanished Sprite reprovisions under the SAME deterministic
+  // NAME with a NEW instance; if that reprovision fails before recording the
+  // replacement, the row still holds the OLD STALE instance. A name-only check
+  // would mistake it for a winner and falsely resume against a checkout that may
+  // not exist. The instance mismatch must reject it.
+  it('given the row holds a STALE pre-reprovision instance (vanished-heal failed), should treat OUR replacement as unreferenced and kill it — never falsely resume', async () => {
     const { store } = makeStore();
     const { deps, killed } = makeSpriteProvision(store, {
-      updateSpriteIdentity: async () => false,
-      reloadRow: async () => ({ sandboxId: 'sprite-different-winner' }),
+      updateSpriteIdentity: async () => false, // our replacement never recorded
+      // Same reused name, but the OLD (vanished) instance — NOT our fresh generation.
+      reloadRow: async () => ({ sandboxId: SESSION_SANDBOX_ID, spriteInstanceId: 'inst-stale-old' }),
     });
 
     const result = await provisionAgentTerminalSprite({ row: machineRow, actor: provisionActor, deps });
-    expect(result).toEqual({ ok: true, sandboxId: 'sprite-different-winner', resumed: true });
-    // Ours is genuinely distinct and unreferenced — killed, identity-guarded.
+    expect(result).toMatchObject({ ok: false, reason: 'race_lost' }); // not a winner for our generation
+    // Our fresh replacement is unreferenced → killed, identity-guarded.
     expect(killed).toEqual([{ machineId: SESSION_SANDBOX_ID, expectedInstanceId: SESSION_INSTANCE_ID }]);
   });
 
@@ -2393,9 +2432,11 @@ describe('provisionAgentTerminalSprite — race + persistence safety (findings 1
       updateSpriteIdentity: async () => { throw new Error('db blip'); },
       reloadRow: async () => {
         reloads += 1;
-        // The concurrent winner persists our SAME shared Sprite only after the
-        // first (immediate) read has already come back empty.
-        return reloads >= 2 ? { sandboxId: SESSION_SANDBOX_ID } : { sandboxId: null };
+        // The concurrent winner persists our SAME shared Sprite (same instance)
+        // only after the first (immediate) read has already come back empty.
+        return reloads >= 2
+          ? { sandboxId: SESSION_SANDBOX_ID, spriteInstanceId: SESSION_INSTANCE_ID }
+          : { sandboxId: null, spriteInstanceId: null };
       },
     });
 
@@ -2409,7 +2450,7 @@ describe('provisionAgentTerminalSprite — race + persistence safety (findings 1
     const { store } = makeStore();
     const { deps, killed, waitCalls, enqueuedReclaims } = makeSpriteProvision(store, {
       updateSpriteIdentity: async () => { throw new Error('db blip'); },
-      reloadRow: async () => ({ sandboxId: null }), // never a winner
+      reloadRow: async () => ({ sandboxId: null, spriteInstanceId: null }), // never a winner
     });
 
     const result = await provisionAgentTerminalSprite({ row: machineRow, actor: provisionActor, deps });
@@ -2428,7 +2469,7 @@ describe('provisionAgentTerminalSprite — race + persistence safety (findings 1
     const { store } = makeStore();
     const base = makeSpriteProvision(store, {
       updateSpriteIdentity: async () => { throw new Error('db down'); },
-      reloadRow: async () => ({ sandboxId: null }), // no winner
+      reloadRow: async () => ({ sandboxId: null, spriteInstanceId: null }), // no winner
     });
     const deps = {
       ...base.deps,
@@ -2445,7 +2486,7 @@ describe('provisionAgentTerminalSprite — race + persistence safety (findings 1
     const { store } = makeStore();
     const base = makeSpriteProvision(store, {
       updateSpriteIdentity: async () => { throw new Error('db down'); },
-      reloadRow: async () => ({ sandboxId: null }),
+      reloadRow: async () => ({ sandboxId: null, spriteInstanceId: null }),
     });
     const deps = {
       ...base.deps,

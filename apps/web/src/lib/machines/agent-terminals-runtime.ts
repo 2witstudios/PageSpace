@@ -28,7 +28,7 @@
 import { eq } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { pages, drives } from '@pagespace/db/schema/core';
-import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
+import { isCodeExecutionEnabled, canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
 import { decideFullEgressEnablement, isContainmentVerified } from '@pagespace/lib/services/sandbox/containment';
 import {
   acquireMachineSession,
@@ -280,7 +280,15 @@ function buildSpriteProvisionDeps(): NonNullable<SpawnAgentTerminalDeps['spriteP
     updateSpriteIdentity: async (input) => (await getMachineAgentTerminalStore()).updateSpriteIdentity(input),
     reloadRow: async (id) => {
       const row = await (await getMachineAgentTerminalStore()).findById(id);
-      return row ? { sandboxId: row.sandboxId } : null;
+      return row ? { sandboxId: row.sandboxId, spriteInstanceId: row.spriteInstanceId } : null;
+    },
+    // SECURITY (finding P): the centralized code-execution gate, applied before
+    // any Sprite is provisioned. Same helper the realtime attach path and the
+    // machine-session managers use; fail-closed and never throws.
+    authorize: canRunCode,
+    resolveDriveId: async (machineId) => {
+      const page = await db.query.pages.findFirst({ where: eq(pages.id, machineId), columns: { driveId: true } });
+      return page?.driveId ?? null;
     },
     // Bounded winner-poll clock for reconcileBeforeKill (see awaitProvisionWinner).
     wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
