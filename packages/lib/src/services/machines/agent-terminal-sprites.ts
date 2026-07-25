@@ -110,6 +110,57 @@ export type ProvisionAgentTerminalSpriteResult =
     };
 
 /**
+ * Reconcile against the persisted row BEFORE killing a Sprite we hold, at ANY
+ * post-provision failure site (a failed clone, a failed/lost persist).
+ *
+ * `MachineHost.provision` is name-keyed on the row's deterministic session key,
+ * so a concurrent provision of the SAME row can hand BOTH callers the SAME
+ * physical Sprite. Every `safeKillSprite(handle)` that fires after a successful
+ * provision is therefore unsafe on its own: if a concurrent WINNER already
+ * recorded that shared Sprite on the row, `safeKillSprite` — which passes our
+ * `spriteInstanceId`, the SAME instance the winner recorded — would DESTROY the
+ * winner's live, referenced VM, leaving the row pointing at a dead Sprite.
+ *
+ * So: reload the persisted winner first. If the row now points at a live Sprite,
+ * the session is usable and ours must NOT be destroyed — the caller resumes
+ * against it (`kind: 'resumed'`). Only a genuinely unreferenced Sprite — no
+ * winner pointer at all, or a different-named VM recorded under this row (a
+ * theoretical case, since the name is deterministic per row) — is killed
+ * (`kind: 'killed'`), after which the caller reports its own specific failure.
+ *
+ * This is the single reconcile-before-kill the CAS-loss path introduced (finding
+ * 1), lifted so every kill site shares it (the whole class Codex flagged: branch
+ * clone-fail, project clone-fail, and the persist-throw path all had the same
+ * bug).
+ */
+async function reconcileBeforeKill({
+  deps,
+  row,
+  handle,
+}: {
+  deps: Pick<AgentTerminalSpriteProvisionDeps, 'reloadRow' | 'host'>;
+  row: Pick<MachineAgentTerminalRecord, 'id'>;
+  handle: MachineHandle;
+}): Promise<{ kind: 'resumed'; sandboxId: string } | { kind: 'killed' }> {
+  const winner = await deps.reloadRow(row.id);
+  if (winner?.sandboxId) {
+    if (winner.sandboxId !== handle.machineId) {
+      // A genuinely distinct VM is recorded under this row — ours is redundant
+      // and unreferenced, so it is safe to destroy.
+      await safeKillSprite(deps.host, handle);
+    }
+    // else: the winner recorded the very (shared, name-keyed) Sprite we hold —
+    // it is LIVE and REFERENCED; must NOT kill. Either way the row points at a
+    // live Sprite, so the session is usable — resume against it.
+    return { kind: 'resumed', sandboxId: winner.sandboxId };
+  }
+  // No winner pointer to reconcile against — ours is the only (unreferenced)
+  // candidate, and it failed. Kill it rather than leak a billing VM.
+  await safeKillSprite(deps.host, handle);
+  return { kind: 'killed' };
+}
+
+/**
  * Provision (or resume) this session's OWN Sprite and record it on the row.
  * Idempotent by the row's own id: the Sprite key folds the row id, so a
  * re-provision of a vanished Sprite lands on the same name. Caller passes a row
@@ -167,18 +218,22 @@ export async function provisionAgentTerminalSprite({
     return { ok: false, reason: 'provision_failed', detail: error instanceof Error ? error.message : String(error) };
   }
 
-  // Clone per scope. On failure, kill the VM we just provisioned — a Sprite with
-  // no live sandboxId on its row is an unreferenced billing orphan.
+  // Clone per scope. On failure, DON'T blindly kill: a concurrent winner sharing
+  // our name-keyed Sprite may have created the checkout dir (which is exactly why
+  // our redundant clone failed) and already persisted/returned it — killing it
+  // would destroy the winner's live VM. Reconcile first (see `reconcileBeforeKill`).
   if (row.machineBranchId && repoUrl && branchName) {
     const cloned = await cloneAndCheckoutBranch({ handle, repoUrl, branchName, scopeKey, actor, deps });
     if (!cloned.ok) {
-      await safeKillSprite(deps.host, handle);
+      const outcome = await reconcileBeforeKill({ deps, row, handle });
+      if (outcome.kind === 'resumed') return { ok: true, sandboxId: outcome.sandboxId, resumed: true };
       return { ok: false, reason: 'clone_failed', detail: cloned.detail };
     }
   } else if (row.projectName && repoUrl) {
     const cloned = await cloneRepoInto({ handle, repoUrl, targetPath: PROJECT_REPO_PATH, scopeKey, actor, deps });
     if (!cloned.ok) {
-      await safeKillSprite(deps.host, handle);
+      const outcome = await reconcileBeforeKill({ deps, row, handle });
+      if (outcome.kind === 'resumed') return { ok: true, sandboxId: outcome.sandboxId, resumed: true };
       return { ok: false, reason: 'clone_failed', detail: cloned.detail };
     }
   }
@@ -202,32 +257,21 @@ export async function provisionAgentTerminalSprite({
     // FINDING 2: a transient DB error here would otherwise escape (swallowed by
     // `maybeProvisionSprite`) leaving the Sprite ALIVE with a NULL row pointer —
     // billing forever, and invisible to the reclaim trigger (which needs a
-    // non-null sandboxId). Kill the VM we just provisioned before reporting the
-    // failure; the row keeps its null pointer and a later spawn re-provisions.
-    await safeKillSprite(deps.host, handle);
+    // non-null sandboxId). But a blind kill has the SAME shared-winner hazard as
+    // the clone sites: if our `updateSpriteIdentity` threw while a concurrent
+    // winner's CAS on the same name-keyed Sprite succeeded (or ours committed and
+    // only the response threw), killing "ours" destroys the winner's — or our
+    // own now-referenced — live VM. Reconcile before killing.
+    const outcome = await reconcileBeforeKill({ deps, row, handle });
+    if (outcome.kind === 'resumed') return { ok: true, sandboxId: outcome.sandboxId, resumed: true };
     return { ok: false, reason: 'persist_failed', detail: error instanceof Error ? error.message : String(error) };
   }
   if (!recorded) {
-    // FINDING 1: another provision recorded a Sprite for this row first, so our
-    // CAS lost. `provision` is name-keyed, so the winner may hold our EXACT
-    // physical Sprite — and `safeKillSprite` passes our `spriteInstanceId`, which
-    // for a shared name-keyed VM is the SAME instance the winner recorded, so a
-    // blind kill would DESTROY the winner's live, referenced Sprite. Reconcile
-    // against the persisted winner first (mirrors `reconcileProvisionCollision`):
-    // only kill when the winner recorded a genuinely DIFFERENT VM.
-    const winner = await deps.reloadRow(row.id);
-    if (winner?.sandboxId) {
-      if (winner.sandboxId !== handle.machineId) {
-        // A genuinely distinct VM won the row — ours is redundant and unreferenced.
-        await safeKillSprite(deps.host, handle);
-      }
-      // else: the winner recorded the very (shared, name-keyed) Sprite we hold —
-      // it is LIVE and REFERENCED; must NOT kill. Resume against it.
-      return { ok: true, sandboxId: winner.sandboxId, resumed: true };
-    }
-    // No winner pointer to reconcile against (unexpected after a CAS-loss) —
-    // best-effort kill ours rather than leak it.
-    await safeKillSprite(deps.host, handle);
+    // FINDING 1: our CAS lost — another provision recorded a Sprite for this row
+    // first. The winner may hold our EXACT name-keyed physical Sprite, so
+    // reconcile before killing (the shared reconcile-before-kill).
+    const outcome = await reconcileBeforeKill({ deps, row, handle });
+    if (outcome.kind === 'resumed') return { ok: true, sandboxId: outcome.sandboxId, resumed: true };
     return { ok: false, reason: 'race_lost' };
   }
 

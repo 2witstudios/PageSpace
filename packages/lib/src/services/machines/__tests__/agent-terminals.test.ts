@@ -2333,6 +2333,113 @@ describe('provisionAgentTerminalSprite — race + persistence safety (findings 1
     // The VM never outlives the failed persist — it would bill forever with a null row pointer.
     expect(killed).toEqual([{ machineId: SESSION_SANDBOX_ID, expectedInstanceId: SESSION_INSTANCE_ID }]);
   });
+
+  // FINDING 2 (shared-winner variant): a persist THROW where a concurrent winner
+  // recorded OUR SAME shared Sprite (or our own write committed and only the
+  // response threw) must NOT kill it.
+  it('given persist THROWS but a winner recorded OUR SAME shared Sprite, should NOT kill it and resume against the winner', async () => {
+    const row = makeLegacyRow({ id: 'agt-persist-shared', name: 'cli', agentType: 'shell', scope: 'machine' });
+    const { store } = makeStore([row]);
+    const { deps, killed } = makeSpriteProvision(store, {
+      updateSpriteIdentity: async (input) => {
+        // Our write appears to fail, but the row now points at our SAME shared VM.
+        await store.updateSpriteIdentity({ ...input, sandboxId: SESSION_SANDBOX_ID, spriteInstanceId: SESSION_INSTANCE_ID });
+        throw new Error('connection reset after commit');
+      },
+    });
+
+    const result = await provisionAgentTerminalSprite({ row, actor: provisionActor, deps });
+    expect(result).toEqual({ ok: true, sandboxId: SESSION_SANDBOX_ID, resumed: true });
+    expect(killed).toEqual([]);
+  });
+});
+
+// The kill-site CLASS: `host.provision` is name-keyed, so a concurrent provision
+// of the SAME row can hand both callers the SAME physical Sprite. EVERY
+// safeKillSprite that fires after a successful provision — a failed clone (either
+// scope), a failed/lost persist — must reconcile-before-kill so it never destroys
+// a shared winner's live VM. These cover the clone sites Codex named.
+describe('provisionAgentTerminalSprite — clone-failure is a provisioning collision (kill-site class)', () => {
+  /** A session Sprite whose git `clone` fails; `onClone` runs the moment it does (to simulate a concurrent winner). */
+  function cloneFailingSession(onClone?: () => Promise<void>) {
+    return makeSessionHandle({
+      exec: async (args) => {
+        if (args.cmd === 'git' && args.args?.[0] === 'clone') {
+          if (onClone) await onClone();
+          return { success: true, exitCode: 128, stdout: '', stderr: 'fatal: destination path already exists' };
+        }
+        return { success: true, exitCode: 0, stdout: '', stderr: '' };
+      },
+    });
+  }
+
+  it('given a BRANCH clone fails because a concurrent winner already committed our SAME shared Sprite, should NOT kill it and resume against the winner', async () => {
+    const branchRow = makeLegacyRow({ id: 'agt-branch', name: 'cli', agentType: 'shell', scope: 'branch', projectName: PROJECT_NAME, machineBranchId: BRANCH_ID });
+    const { store } = makeStore([branchRow]);
+    const session = cloneFailingSession(async () => {
+      // The winner recorded THIS SAME (name-keyed) Sprite as the row's — which is
+      // exactly why our redundant clone failed ("destination already exists").
+      await store.updateSpriteIdentity({
+        id: 'agt-branch',
+        previousSandboxId: null,
+        sessionKey: 'pgs-agt-branch-winner',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+        egressPolicyToken: null,
+        now: NOW,
+      });
+    });
+    const { deps, killed } = makeSpriteProvision(store, {}, session);
+
+    const result = await provisionAgentTerminalSprite({ row: branchRow, actor: provisionActor, deps });
+    expect(result).toEqual({ ok: true, sandboxId: SESSION_SANDBOX_ID, resumed: true });
+    // The shared Sprite must NOT be killed — that would destroy the winner's live VM.
+    expect(killed).toEqual([]);
+  });
+
+  it('given a PROJECT clone fails because a concurrent winner already committed our SAME shared Sprite, should NOT kill it and resume against the winner', async () => {
+    const projectRow = makeLegacyRow({ id: 'agt-project', name: 'cli', agentType: 'shell', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null });
+    const { store } = makeStore([projectRow]);
+    const session = cloneFailingSession(async () => {
+      await store.updateSpriteIdentity({
+        id: 'agt-project',
+        previousSandboxId: null,
+        sessionKey: 'pgs-agt-project-winner',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+        egressPolicyToken: null,
+        now: NOW,
+      });
+    });
+    const { deps, killed } = makeSpriteProvision(store, {}, session);
+
+    const result = await provisionAgentTerminalSprite({ row: projectRow, actor: provisionActor, deps });
+    expect(result).toEqual({ ok: true, sandboxId: SESSION_SANDBOX_ID, resumed: true });
+    expect(killed).toEqual([]);
+  });
+
+  it('given a BRANCH clone fails with NO competing winner, should kill our own redundant Sprite and report clone_failed', async () => {
+    const branchRow = makeLegacyRow({ id: 'agt-branch-solo', name: 'cli', agentType: 'shell', scope: 'branch', projectName: PROJECT_NAME, machineBranchId: BRANCH_ID });
+    const { store } = makeStore([branchRow]);
+    const session = cloneFailingSession(); // no winner recorded
+    const { deps, killed } = makeSpriteProvision(store, {}, session);
+
+    const result = await provisionAgentTerminalSprite({ row: branchRow, actor: provisionActor, deps });
+    expect(result).toMatchObject({ ok: false, reason: 'clone_failed' });
+    // Nothing else references this Sprite — it must be killed, identity-guarded.
+    expect(killed).toEqual([{ machineId: SESSION_SANDBOX_ID, expectedInstanceId: SESSION_INSTANCE_ID }]);
+  });
+
+  it('given a PROJECT clone fails with NO competing winner, should kill our own redundant Sprite and report clone_failed', async () => {
+    const projectRow = makeLegacyRow({ id: 'agt-project-solo', name: 'cli', agentType: 'shell', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null });
+    const { store } = makeStore([projectRow]);
+    const session = cloneFailingSession();
+    const { deps, killed } = makeSpriteProvision(store, {}, session);
+
+    const result = await provisionAgentTerminalSprite({ row: projectRow, actor: provisionActor, deps });
+    expect(result).toMatchObject({ ok: false, reason: 'clone_failed' });
+    expect(killed).toEqual([{ machineId: SESSION_SANDBOX_ID, expectedInstanceId: SESSION_INSTANCE_ID }]);
+  });
 });
 
 describe('resolveAgentTerminal — per-session Sprite resolution (sessions-per-location)', () => {
