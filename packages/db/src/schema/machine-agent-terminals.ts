@@ -4,6 +4,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 import { pages } from './core';
 import { machineBranches } from './machine-branches';
+import { machineProjects } from './machine-projects';
 
 /**
  * Machine Agent Terminals
@@ -84,6 +85,16 @@ export const machineAgentTerminals = pgTable('machine_agent_terminals', {
 
   scope: text('scope').notNull(),
   projectName: text('projectName'),
+  /**
+   * FK to the owning project row, for PROJECT- and BRANCH-scoped rows (NULL for
+   * machine scope). Deleting a `machine_projects` row CASCADES to this row so its
+   * per-session Sprite pointer is rescued by the AFTER-DELETE reclaim trigger
+   * (0229) automatically — replacing the manual project-removal enumeration and
+   * dissolving the concurrent-spawn / same-name-recreate races (Codex DD/EE/CC/V).
+   * `projectName` is KEPT alongside it — the session-key HMAC and name lookups
+   * depend on it; this only ADDS the cascade the text link never gave.
+   */
+  machineProjectId: text('machineProjectId').references(() => machineProjects.id, { onDelete: 'cascade' }),
   machineBranchId: text('machineBranchId').references(() => machineBranches.id, { onDelete: 'cascade' }),
 
   name: text('name').notNull(),
@@ -156,6 +167,7 @@ export const machineAgentTerminals = pgTable('machine_agent_terminals', {
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
 }, (table) => ({
   machineIdIdx: index('machine_agent_terminals_machine_id_idx').on(table.machineId),
+  machineProjectIdIdx: index('machine_agent_terminals_project_id_idx').on(table.machineProjectId),
   machineBranchIdIdx: index('machine_agent_terminals_branch_id_idx').on(table.machineBranchId),
   scopeNameUnique: uniqueIndex('machine_agent_terminals_scope_name_idx').on(
     table.machineId,
@@ -173,6 +185,10 @@ export const machineAgentTerminalsRelations = relations(machineAgentTerminals, (
   machine: one(pages, {
     fields: [machineAgentTerminals.machineId],
     references: [pages.id],
+  }),
+  project: one(machineProjects, {
+    fields: [machineAgentTerminals.machineProjectId],
+    references: [machineProjects.id],
   }),
   branch: one(machineBranches, {
     fields: [machineAgentTerminals.machineBranchId],
