@@ -344,7 +344,55 @@ describe('resolveMachineSandbox', () => {
     });
   });
 
-  it('given a branch-scope target with refreshBranchCredential OMITTED, should still resolve successfully', async () => {
+  // measureAgentTerminalStorage — the session Sprite's storage is metered on the
+  // PTY connect wake (its attach-equivalent), gated on the SAME ownSprite signal
+  // as the credential refresh: an own-Sprite session is metered on its own row, a
+  // shared-Sprite fallback is metered on the machine/branch/project row instead.
+  // -------------------------------------------------------------------------
+
+  function spyMeasure() {
+    const calls: { machineAgentTerminalId: string; machinePageId: string; sandboxId: string }[] = [];
+    const fn = async (args: { machineAgentTerminalId: string; machinePageId: string; sandboxId: string }) => {
+      calls.push(args);
+    };
+    return { fn, calls };
+  }
+
+  it('given an OWN-SPRITE session, should measure its storage with the resolved id, machine page and sandbox', async () => {
+    const measure = spyMeasure();
+    await resolveMachineSandbox(
+      { machineId: 'm-1', projectName: 'proj', branchName: 'feature-x', name: 'claude' },
+      {
+        resolveAgentTerminal: async () => resolvedOwnSprite,
+        getSprite: spyGetSprite().fn,
+        measureAgentTerminalStorage: measure.fn,
+      },
+    );
+
+    assert({
+      given: 'an own-Sprite session resolution',
+      should: 'call measureAgentTerminalStorage once with the resolved agentTerminalId + machine page + sandboxId',
+      actual: measure.calls,
+      expected: [{ machineAgentTerminalId: 'at-1', machinePageId: 'm-1', sandboxId: 'sbx-1' }],
+    });
+  });
+
+  it('given a SHARED-SPRITE fallback resolution (ownSprite: false), should NOT measure it as a session', async () => {
+    const measure = spyMeasure();
+    await resolveMachineSandbox(
+      { machineId: 'm-1', name: 'shell' },
+      { resolveAgentTerminal: async () => resolvedOk, getSprite: spyGetSprite().fn, measureAgentTerminalStorage: measure.fn },
+    );
+
+    assert({
+      given: 'a resolution that fell back to the shared machine/branch/project Sprite',
+      should: 'never meter it as an agent-terminal — its bytes belong to the row it fell back to',
+      actual: measure.calls.length,
+      expected: 0,
+    });
+  });
+
+  it('given a branch-scope target with the optional own-Sprite deps OMITTED, should still resolve successfully', async () => {
     const result = await resolveMachineSandbox(
       { machineId: 'm-1', projectName: 'proj', branchName: 'feature-x', name: 'claude' },
       { resolveAgentTerminal: async () => resolvedOwnSprite, getSprite: spyGetSprite().fn },

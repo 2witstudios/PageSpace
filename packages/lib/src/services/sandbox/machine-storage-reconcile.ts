@@ -192,6 +192,32 @@ export interface ProjectStorageRow {
   lastActiveAt: Date;
 }
 
+/**
+ * A per-session agent-terminal's OWN Sprite (sessions-per-location) — the
+ * fourth persistent-filesystem source, identical in every billing respect to
+ * `BranchStorageRow`/`ProjectStorageRow`. Every spawned PTY session now owns a
+ * separate Sprite; without this row source its bytes would be metered nowhere.
+ * Rows without a live Sprite (`sandboxId` null) or torn down are expected to be
+ * filtered out by the row source, not billed at 0 here.
+ */
+export interface AgentTerminalStorageRow {
+  /** The `machine_agent_terminals` row id — where THIS Sprite's measurement/watermark are persisted. */
+  machineAgentTerminalId: string;
+  /** The owning Machine page — the attribution key (payer + usage-breakdown grouping). */
+  machinePageId: string;
+  storageLastBilledAt: Date;
+  /** Last opportunistically-measured used bytes on the SESSION Sprite; null when never measured. */
+  measuredBytes: number | null;
+  /** When `measuredBytes` was captured; null when never measured. */
+  measuredAt: Date | null;
+  /**
+   * The OWNING machine's last real-work activity — session runs record activity
+   * on the machine key, so this is the only awake signal it has. Used solely for
+   * the staleness health flag, never for billing.
+   */
+  lastActiveAt: Date;
+}
+
 /** One metered filesystem, kind-agnostic: what to bill, and who to bill it to. */
 interface BillableStorage {
   subject: StorageSubject;
@@ -216,6 +242,12 @@ export interface ReconcileMachineStorageDeps {
    * Same never-wake rule: this reads persisted measurements only.
    */
   listProjectSprites: () => Promise<ProjectStorageRow[]>;
+  /**
+   * Every LIVE per-session agent-terminal Sprite to meter (`sandboxId` set, not
+   * torn down) — a fourth persistent filesystem per row, billed to its owning
+   * Machine page. Same never-wake rule: this reads persisted measurements only.
+   */
+  listAgentTerminalSprites: () => Promise<AgentTerminalStorageRow[]>;
   /** Resolves a page's owning drive's ownerId; null when it can't be resolved (e.g. an orphaned row). */
   lookupPageOwnerId: (pageId: string) => Promise<string | null>;
   /** Charges the payer for this machine's accrued storage cost. Not hold-gated — a background reconcile charge, mirroring reconcile-ai-cost. */
@@ -230,6 +262,8 @@ export interface ReconcileMachineStorageDeps {
   advanceBranchWatermark: (input: { machineBranchId: string; billedThrough: Date }) => Promise<void>;
   /** The same watermark advance for a PROMOTED PROJECT Sprite, on its own `machine_projects` row. */
   advanceProjectWatermark: (input: { machineProjectId: string; billedThrough: Date }) => Promise<void>;
+  /** The same watermark advance for a per-session AGENT-TERMINAL Sprite, on its own `machine_agent_terminals` row. */
+  advanceAgentTerminalWatermark: (input: { machineAgentTerminalId: string; billedThrough: Date }) => Promise<void>;
   now: () => Date;
 }
 
@@ -261,10 +295,11 @@ export async function reconcileMachineStorage(
   // rule than a machine's own. Only two things vary by kind: which row the
   // watermark advance writes to, and nothing else (the charge always keys on
   // the attribution page — see machine-storage-attribution.ts).
-  const [machines, branches, projects] = await Promise.all([
+  const [machines, branches, projects, agentTerminals] = await Promise.all([
     deps.listMachines(),
     deps.listBranchSprites(),
     deps.listProjectSprites(),
+    deps.listAgentTerminalSprites(),
   ]);
   const now = deps.now();
 
@@ -290,6 +325,17 @@ export async function reconcileMachineStorage(
       measuredAt: p.measuredAt,
       lastActiveAt: p.lastActiveAt,
     })),
+    ...agentTerminals.map((a) => ({
+      subject: {
+        kind: 'agent-terminal',
+        machineAgentTerminalId: a.machineAgentTerminalId,
+        machinePageId: a.machinePageId,
+      } as const,
+      storageLastBilledAt: a.storageLastBilledAt,
+      measuredBytes: a.measuredBytes,
+      measuredAt: a.measuredAt,
+      lastActiveAt: a.lastActiveAt,
+    })),
   ];
 
   const advanceWatermark = (subject: StorageSubject, billedThrough: Date): Promise<void> => {
@@ -300,6 +346,11 @@ export async function reconcileMachineStorage(
         return deps.advanceBranchWatermark({ machineBranchId: subject.machineBranchId, billedThrough });
       case 'project':
         return deps.advanceProjectWatermark({ machineProjectId: subject.machineProjectId, billedThrough });
+      case 'agent-terminal':
+        return deps.advanceAgentTerminalWatermark({
+          machineAgentTerminalId: subject.machineAgentTerminalId,
+          billedThrough,
+        });
     }
   };
 

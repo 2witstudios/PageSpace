@@ -10,6 +10,7 @@ import {
   type MachineStorageRow,
   type BranchStorageRow,
   type ProjectStorageRow,
+  type AgentTerminalStorageRow,
 } from '../machine-storage-reconcile';
 
 describe('computeElapsedGbMonths', () => {
@@ -121,15 +122,18 @@ function makeDeps(over: Partial<ReconcileMachineStorageDeps> = {}): {
   advanceCalls: Array<{ pageId: string; billedThrough: Date }>;
   branchAdvanceCalls: Array<{ machineBranchId: string; billedThrough: Date }>;
   projectAdvanceCalls: Array<{ machineProjectId: string; billedThrough: Date }>;
+  agentTerminalAdvanceCalls: Array<{ machineAgentTerminalId: string; billedThrough: Date }>;
 } {
   const chargeCalls: Array<{ payerId: string; pageId: string; costDollars: number; gbMonths: number }> = [];
   const advanceCalls: Array<{ pageId: string; billedThrough: Date }> = [];
   const branchAdvanceCalls: Array<{ machineBranchId: string; billedThrough: Date }> = [];
   const projectAdvanceCalls: Array<{ machineProjectId: string; billedThrough: Date }> = [];
+  const agentTerminalAdvanceCalls: Array<{ machineAgentTerminalId: string; billedThrough: Date }> = [];
   const deps: ReconcileMachineStorageDeps = {
     listMachines: async () => [],
     listBranchSprites: async () => [],
     listProjectSprites: async () => [],
+    listAgentTerminalSprites: async () => [],
     lookupPageOwnerId: async () => 'owner-1',
     chargeStorage: async (input) => {
       chargeCalls.push(input);
@@ -143,10 +147,13 @@ function makeDeps(over: Partial<ReconcileMachineStorageDeps> = {}): {
     advanceProjectWatermark: async (input) => {
       projectAdvanceCalls.push(input);
     },
+    advanceAgentTerminalWatermark: async (input) => {
+      agentTerminalAdvanceCalls.push(input);
+    },
     now: () => new Date('2026-07-01T00:00:00.000Z'),
     ...over,
   };
-  return { deps, chargeCalls, advanceCalls, branchAdvanceCalls, projectAdvanceCalls };
+  return { deps, chargeCalls, advanceCalls, branchAdvanceCalls, projectAdvanceCalls, agentTerminalAdvanceCalls };
 }
 
 /** A measured PROMOTED-project Sprite: 1GB written, measured just before `now`, owned by `machine-page-1`. */
@@ -166,6 +173,19 @@ function project(over: Partial<ProjectStorageRow> = {}): ProjectStorageRow {
 function branch(over: Partial<BranchStorageRow> = {}): BranchStorageRow {
   return {
     machineBranchId: 'branch-1',
+    machinePageId: 'machine-page-1',
+    storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
+    measuredBytes: 1_000_000_000, // 1 GB
+    measuredAt: new Date('2026-06-30T23:00:00.000Z'),
+    lastActiveAt: new Date('2026-06-30T23:59:00.000Z'),
+    ...over,
+  };
+}
+
+/** A measured per-session agent-terminal Sprite: 1GB written, measured just before `now`, owned by `machine-page-1`. */
+function agentTerminal(over: Partial<AgentTerminalStorageRow> = {}): AgentTerminalStorageRow {
+  return {
+    machineAgentTerminalId: 'agt-1',
     machinePageId: 'machine-page-1',
     storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
     measuredBytes: 1_000_000_000, // 1 GB
@@ -258,7 +278,8 @@ describe('reconcileMachineStorage', () => {
     const deps: ReconcileMachineStorageDeps = {
       listMachines: async () => [machine({ pageId: 'page-1', storageLastBilledAt: watermark })],
       listBranchSprites: async () => [],
-    listProjectSprites: async () => [],
+      listProjectSprites: async () => [],
+      listAgentTerminalSprites: async () => [],
       lookupPageOwnerId: async () => 'owner-1',
       chargeStorage: async (input) => {
         chargeCalls.push(input);
@@ -268,7 +289,8 @@ describe('reconcileMachineStorage', () => {
         watermark = input.billedThrough;
       },
       advanceBranchWatermark: async () => {},
-    advanceProjectWatermark: async () => {},
+      advanceProjectWatermark: async () => {},
+      advanceAgentTerminalWatermark: async () => {},
       now: () => now,
     };
 
@@ -301,7 +323,8 @@ describe('reconcileMachineStorage', () => {
         },
       ],
       listBranchSprites: async () => [],
-    listProjectSprites: async () => [],
+      listProjectSprites: async () => [],
+      listAgentTerminalSprites: async () => [],
       lookupPageOwnerId: async () => 'owner-1',
       chargeStorage: async (input) => {
         chargeCalls.push(input);
@@ -310,7 +333,8 @@ describe('reconcileMachineStorage', () => {
         watermark = input.billedThrough;
       },
       advanceBranchWatermark: async () => {},
-    advanceProjectWatermark: async () => {},
+      advanceProjectWatermark: async () => {},
+      advanceAgentTerminalWatermark: async () => {},
       now: () => now,
     };
 
@@ -349,7 +373,8 @@ describe('reconcileMachineStorage', () => {
         },
       ],
       listBranchSprites: async () => [],
-    listProjectSprites: async () => [],
+      listProjectSprites: async () => [],
+      listAgentTerminalSprites: async () => [],
       lookupPageOwnerId: async () => 'owner-1',
       chargeStorage: async (input) => {
         chargeCalls.push(input);
@@ -358,7 +383,8 @@ describe('reconcileMachineStorage', () => {
         advanceCalls.push(input);
       },
       advanceBranchWatermark: async () => {},
-    advanceProjectWatermark: async () => {},
+      advanceProjectWatermark: async () => {},
+      advanceAgentTerminalWatermark: async () => {},
       now: () => now,
     };
 
@@ -385,7 +411,8 @@ describe('reconcileMachineStorage', () => {
         { pageId: 'grower', storageLastBilledAt: watermark, measuredBytes, measuredAt, lastActiveAt: measuredAt },
       ],
       listBranchSprites: async () => [],
-    listProjectSprites: async () => [],
+      listProjectSprites: async () => [],
+      listAgentTerminalSprites: async () => [],
       lookupPageOwnerId: async () => 'owner-1',
       chargeStorage: async (input) => {
         chargeCalls.push({ gbMonths: input.gbMonths });
@@ -394,7 +421,8 @@ describe('reconcileMachineStorage', () => {
         watermark = input.billedThrough;
       },
       advanceBranchWatermark: async () => {},
-    advanceProjectWatermark: async () => {},
+      advanceProjectWatermark: async () => {},
+      advanceAgentTerminalWatermark: async () => {},
       now: () => new Date(nowIso),
     };
 
@@ -438,7 +466,8 @@ describe('reconcileMachineStorage', () => {
         },
       ],
       listBranchSprites: async () => [],
-    listProjectSprites: async () => [],
+      listProjectSprites: async () => [],
+      listAgentTerminalSprites: async () => [],
       lookupPageOwnerId: async () => 'owner-1',
       chargeStorage: async (input) => {
         chargeCalls.push({ gbMonths: input.gbMonths });
@@ -447,7 +476,8 @@ describe('reconcileMachineStorage', () => {
         watermark = input.billedThrough;
       },
       advanceBranchWatermark: async () => {},
-    advanceProjectWatermark: async () => {},
+      advanceProjectWatermark: async () => {},
+      advanceAgentTerminalWatermark: async () => {},
       now: () => new Date(nowIso),
     };
 
@@ -768,6 +798,117 @@ describe('reconcileMachineStorage — promoted project-Sprite attribution (issue
       listMachines: async () => [machine({ pageId: 'machine-page-1' })],
       listProjectSprites: async () => [project()],
       advanceProjectWatermark: async () => {
+        throw new Error('watermark write failed');
+      },
+    });
+
+    const result = await reconcileMachineStorage(deps);
+
+    expect({ processed: result.processed, charged: result.charged, failed: result.failed }).toEqual({
+      processed: 2,
+      charged: 1,
+      failed: 1,
+    });
+  });
+});
+
+describe('reconcileMachineStorage — per-session agent-terminal Sprites (sessions-per-location)', () => {
+  it('bills a session Sprite to its OWNING machine page — the key the usage breakdown groups on', async () => {
+    const { deps, chargeCalls } = makeDeps({
+      listAgentTerminalSprites: async () => [agentTerminal({ machineAgentTerminalId: 'agt-1', machinePageId: 'machine-page-1' })],
+    });
+
+    const result = await reconcileMachineStorage(deps);
+
+    assert({
+      given: 'a per-session agent-terminal Sprite with a measured 1GB footprint',
+      should: 'charge its owning Machine page, exactly as a branch/project Sprite does',
+      actual: { charged: result.charged, pageId: chargeCalls[0]?.pageId },
+      expected: { charged: 1, pageId: 'machine-page-1' },
+    });
+    expect(chargeCalls[0].gbMonths).toBeCloseTo(1, 5);
+    expect(chargeCalls[0].costDollars).toBeGreaterThan(0);
+  });
+
+  it('resolves the payer from the OWNING machine page (a session is never its own payer)', async () => {
+    const lookup = vi.fn(async (pageId: string) => `owner-of-${pageId}`);
+    const { deps, chargeCalls } = makeDeps({
+      listAgentTerminalSprites: async () => [agentTerminal({ machinePageId: 'machine-page-9' })],
+      lookupPageOwnerId: lookup,
+    });
+
+    await reconcileMachineStorage(deps);
+
+    expect(lookup).toHaveBeenCalledWith('machine-page-9');
+    expect(chargeCalls[0]).toMatchObject({ payerId: 'owner-of-machine-page-9', pageId: 'machine-page-9' });
+  });
+
+  it('advances the AGENT-TERMINAL row watermark only — never the machine session, branch or project watermark', async () => {
+    const { deps, advanceCalls, branchAdvanceCalls, projectAdvanceCalls, agentTerminalAdvanceCalls } = makeDeps({
+      listAgentTerminalSprites: async () => [agentTerminal({ machineAgentTerminalId: 'agt-7' })],
+    });
+
+    await reconcileMachineStorage(deps);
+
+    assert({
+      given: 'a charged per-session agent-terminal Sprite',
+      should: 'advance only its own machine_agent_terminals watermark',
+      actual: {
+        agentTerminalAdvanceCalls,
+        machineAdvanceCalls: advanceCalls.length,
+        branchAdvanceCalls: branchAdvanceCalls.length,
+        projectAdvanceCalls: projectAdvanceCalls.length,
+      },
+      expected: {
+        agentTerminalAdvanceCalls: [{ machineAgentTerminalId: 'agt-7', billedThrough: new Date('2026-07-01T00:00:00.000Z') }],
+        machineAdvanceCalls: 0,
+        branchAdvanceCalls: 0,
+        projectAdvanceCalls: 0,
+      },
+    });
+  });
+
+  it('meters a machine, its branch, its project and its session as four independent footprints on one page', async () => {
+    const { deps, chargeCalls } = makeDeps({
+      listMachines: async () => [machine({ pageId: 'machine-page-1' })],
+      listBranchSprites: async () => [branch({ machineBranchId: 'branch-a', machinePageId: 'machine-page-1' })],
+      listProjectSprites: async () => [project({ machineProjectId: 'project-a', machinePageId: 'machine-page-1' })],
+      listAgentTerminalSprites: async () => [agentTerminal({ machineAgentTerminalId: 'agt-a', machinePageId: 'machine-page-1' })],
+    });
+
+    const result = await reconcileMachineStorage(deps);
+
+    expect(result.processed).toBe(4);
+    expect(result.charged).toBe(4);
+    // Four separate filesystems, one attribution page.
+    expect(chargeCalls.map((c) => c.pageId)).toEqual([
+      'machine-page-1',
+      'machine-page-1',
+      'machine-page-1',
+      'machine-page-1',
+    ]);
+  });
+
+  it('bills the never-measured 0 floor for a just-provisioned session and still advances its own watermark', async () => {
+    const { deps, chargeCalls, agentTerminalAdvanceCalls } = makeDeps({
+      listAgentTerminalSprites: async () => [agentTerminal({ measuredBytes: null, measuredAt: null })],
+    });
+
+    const result = await reconcileMachineStorage(deps);
+
+    assert({
+      given: 'a session whose Sprite has never been measured',
+      should: 'charge nothing (the 0 floor, never a provisioned cap) but still advance its watermark',
+      actual: { charged: result.charged, charges: chargeCalls.length, advanced: agentTerminalAdvanceCalls.length },
+      expected: { charged: 0, charges: 0, advanced: 1 },
+    });
+  });
+
+  it('reports a session failure distinguishably rather than aborting the batch', async () => {
+    const { deps } = makeDeps({
+      listMachines: async () => [machine({ pageId: 'machine-page-1' })],
+      listAgentTerminalSprites: async () => [agentTerminal()],
+      advanceAgentTerminalWatermark: async () => {
         throw new Error('watermark write failed');
       },
     });

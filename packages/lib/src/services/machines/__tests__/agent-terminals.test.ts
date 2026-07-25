@@ -2093,6 +2093,7 @@ function makeSpriteProvision(
   const session = provisioned ?? makeSessionHandle();
   const provisionCalls: string[] = [];
   const attachCalls: string[] = [];
+  const measuredCalls: Array<{ machineAgentTerminalId: string; machinePageId: string }> = [];
   const killed: Array<{ machineId: string; expectedInstanceId?: string | null }> = [];
   const deps: AgentTerminalSpriteProvisionDeps & { resolveActor: (u: string) => Promise<MachineActorContext> } = {
     isEnabled: () => true,
@@ -2125,13 +2126,16 @@ function makeSpriteProvision(
       const row = await store.findById(id);
       return row ? { sandboxId: row.sandboxId } : null;
     },
+    measureAgentTerminalStorage: async ({ machineAgentTerminalId, machinePageId }) => {
+      measuredCalls.push({ machineAgentTerminalId, machinePageId });
+    },
     quota: { acquireSlot: () => true, releaseSlot: () => {} } as AgentTerminalSpriteProvisionDeps['quota'],
     buildEnv: () => ({}),
     audit: async () => {},
     resolveActor: async () => provisionActor,
     ...over,
   };
-  return { deps, provisionCalls, attachCalls, killed, session };
+  return { deps, provisionCalls, attachCalls, measuredCalls, killed, session };
 }
 
 describe('spawnAgentTerminal — per-session Sprite provisioning', () => {
@@ -2154,6 +2158,17 @@ describe('spawnAgentTerminal — per-session Sprite provisioning', () => {
     expect(row.sandboxId).toBe(SESSION_SANDBOX_ID);
     expect(row.spriteInstanceId).toBe(SESSION_INSTANCE_ID);
     expect(row.sessionKey).toBe(expectedKey);
+  });
+
+  it('should MEASURE the session Sprite storage after provision (billed to the owning machine page)', async () => {
+    const { store, rows } = makeStore();
+    const { deps: provision, measuredCalls } = makeSpriteProvision(store);
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+
+    const row = [...rows.values()][0];
+    expect(measuredCalls).toEqual([{ machineAgentTerminalId: row.id, machinePageId: TERMINAL_ID }]);
   });
 
   it('should copy the Claude credential FROM the owning Machine root Sprite onto the session Sprite (invariant 1)', async () => {

@@ -111,6 +111,19 @@ export interface ResolveMachineSandboxDeps {
    * failures — as defense in depth against an unhandled rejection.
    */
   refreshBranchCredential?: (args: { machineId: string; sandboxId: string }) => Promise<void>;
+  /**
+   * OWN-SPRITE scopes only (sessions-per-location): opportunistically measure
+   * this session Sprite's storage footprint onto its own
+   * `machine_agent_terminals` row while it is already awake for this PTY connect
+   * — the reconcile relies on it to meter sessions used only through the
+   * interactive PTY (no agent tool ops), which would otherwise stay
+   * never-measured and bill the 0 floor forever. This is the session's `attach`
+   * equivalent of a branch's `attachBranch` measure. Fire-and-forget (NOT
+   * awaited — a background billing concern must never delay a PTY open), and
+   * best-effort on the implementation side. Optional; omitting it disables
+   * per-connect measurement.
+   */
+  measureAgentTerminalStorage?: (args: { machineAgentTerminalId: string; machinePageId: string; sandboxId: string }) => Promise<void>;
 }
 
 /**
@@ -214,6 +227,23 @@ export async function resolveMachineSandbox(
       deps.refreshBranchCredential({ machineId: target.machineId, sandboxId: resolved.sandboxId }),
       CREDENTIAL_REFRESH_TIMEOUT_MS,
     );
+  }
+
+  // Own-Sprite sessions only: meter THIS session Sprite's storage while it is
+  // awake for the connect. Fire-and-forget — a background billing concern must
+  // never delay the PTY open (unlike the credential refresh, which a fresh
+  // `claude` launch needs landed first). Gated on `ownSprite` so a legacy row
+  // falling back to the shared machine/branch Sprite is metered THERE, not here.
+  if (resolved.ownSprite && deps.measureAgentTerminalStorage) {
+    void deps
+      .measureAgentTerminalStorage({
+        machineAgentTerminalId: resolved.agentTerminalId,
+        machinePageId: target.machineId,
+        sandboxId: resolved.sandboxId,
+      })
+      .catch(() => {
+        /* Best-effort: the seam already logs; a PTY open must never fail on it. */
+      });
   }
 
   return {

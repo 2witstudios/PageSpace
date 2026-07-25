@@ -46,6 +46,7 @@ import { getConfiguredEgressIpTag } from '@pagespace/lib/services/sandbox/egress
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import { defaultBuildEnv } from '@pagespace/lib/services/sandbox/tool-runners';
 import { resolveGitHubTokenForSandbox } from '@pagespace/lib/services/sandbox/github-token';
+import { measureAgentTerminalStorageOpportunistically } from '@pagespace/lib/services/sandbox/machine-storage-billing';
 import type { ExecSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/types';
 import { createDbMachineBranchStore } from '@pagespace/lib/services/machines/machine-branches-store';
 import { createDbMachineAgentTerminalStore } from '@pagespace/lib/services/machines/agent-terminals-store';
@@ -286,6 +287,12 @@ function buildSpriteProvisionDeps(): NonNullable<SpawnAgentTerminalDeps['spriteP
     buildEnv: defaultBuildEnv,
     audit: (input) => writeCodeExecutionAudit({ input }),
     resolveActor: (userId) => resolveMachineActorContext(userId),
+    // Sessions-per-location storage metering: capture the session Sprite's bytes
+    // onto its own machine_agent_terminals row while it is awake right after the
+    // provision/clone, so the storage reconcile bills them to the owning Machine
+    // page. Throttled + best-effort inside; never wakes a hibernating Sprite.
+    measureAgentTerminalStorage: ({ machineAgentTerminalId, machinePageId, handle }) =>
+      measureAgentTerminalStorageOpportunistically({ machineAgentTerminalId, machinePageId, handle }),
   };
 }
 

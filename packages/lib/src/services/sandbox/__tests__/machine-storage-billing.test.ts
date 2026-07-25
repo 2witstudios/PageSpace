@@ -42,6 +42,17 @@ vi.mock('@pagespace/db/schema/machine-projects', () => ({
     spriteTornDownAt: 'machine_projects.spriteTornDownAt',
   },
 }));
+vi.mock('@pagespace/db/schema/machine-agent-terminals', () => ({
+  machineAgentTerminals: {
+    id: 'machine_agent_terminals.id',
+    machineId: 'machine_agent_terminals.machineId',
+    sandboxId: 'machine_agent_terminals.sandboxId',
+    storageLastBilledAt: 'machine_agent_terminals.storageLastBilledAt',
+    storageMeasuredBytes: 'machine_agent_terminals.storageMeasuredBytes',
+    storageMeasuredAt: 'machine_agent_terminals.storageMeasuredAt',
+    spriteTornDownAt: 'machine_agent_terminals.spriteTornDownAt',
+  },
+}));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id', driveId: 'pages.driveId' },
   drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
@@ -56,6 +67,7 @@ import {
   measureMachineStorageOpportunistically,
   measureBranchStorageOpportunistically,
   measureProjectStorageOpportunistically,
+  measureAgentTerminalStorageOpportunistically,
   reconcileMachineStorageSerialized,
   __resetStorageMeasurementCachesForTests,
 } from '../machine-storage-billing';
@@ -483,11 +495,13 @@ describe('reconcileMachineStorageSerialized', () => {
       listMachines: vi.fn(async () => []),
       listBranchSprites: vi.fn(async () => []),
       listProjectSprites: vi.fn(async () => []),
+      listAgentTerminalSprites: vi.fn(async () => []),
       lookupPageOwnerId: vi.fn(async () => null),
       chargeStorage: vi.fn(async () => {}),
       advanceWatermark: vi.fn(async () => {}),
       advanceBranchWatermark: vi.fn(async () => {}),
       advanceProjectWatermark: vi.fn(async () => {}),
+      advanceAgentTerminalWatermark: vi.fn(async () => {}),
       now: () => new Date('2026-07-13T00:00:00.000Z'),
       ...overrides,
     };
@@ -935,5 +949,188 @@ describe('measureProjectStorageOpportunistically (issue #2204 phase 7)', () => {
     });
 
     expect({ updated: updated.length, execCalls }).toEqual({ updated: 0, execCalls: 0 });
+  });
+});
+
+describe('defaultReconcileMachineStorageDeps.listAgentTerminalSprites (sessions-per-location)', () => {
+  it("selects each session's OWN measurement/watermark plus its owning machine page, excluding legacy and torn-down rows", async () => {
+    const rows = [
+      {
+        machineAgentTerminalId: 'agt-1',
+        machinePageId: 'machine-page-1',
+        storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
+        measuredBytes: 1_000_000_000,
+        measuredAt: new Date('2026-06-30T00:00:00.000Z'),
+        lastActiveAt: new Date('2026-06-30T12:00:00.000Z'),
+      },
+    ];
+    let selectedShape: Record<string, unknown> | undefined;
+    let whereArg: unknown;
+    mockDb.select.mockImplementation((shape: Record<string, unknown>) => {
+      selectedShape = shape;
+      return { from: () => ({ leftJoin: () => ({ where: (w: unknown) => { whereArg = w; return rows; } }) }) };
+    });
+
+    await expect(defaultReconcileMachineStorageDeps.listAgentTerminalSprites()).resolves.toEqual(rows);
+
+    expect(Object.keys(selectedShape ?? {}).sort()).toEqual(
+      ['lastActiveAt', 'machineAgentTerminalId', 'machinePageId', 'measuredAt', 'measuredBytes', 'storageLastBilledAt'].sort(),
+    );
+    // Legacy/unprovisioned sessions have no Sprite of their own (their cwd is
+    // inside the machine/branch/project Sprite already metered there); torn-down
+    // ones have no filesystem left.
+    expect(whereArg).toEqual({
+      op: 'and',
+      parts: [
+        { op: 'isNotNull', a: 'machine_agent_terminals.sandboxId' },
+        { op: 'isNull', a: 'machine_agent_terminals.spriteTornDownAt' },
+      ],
+    });
+  });
+
+  it('returns each session filesystem ONCE even when the machine-session join fans out', async () => {
+    const dup = (lastActiveAt: Date | null) => ({
+      machineAgentTerminalId: 'agt-1',
+      machinePageId: 'machine-page-1',
+      storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
+      measuredBytes: 1_000,
+      measuredAt: new Date('2026-06-30T00:00:00.000Z'),
+      lastActiveAt,
+    });
+    mockDb.select.mockReturnValue({
+      from: () => ({
+        leftJoin: () => ({
+          where: async () => [dup(new Date('2026-06-29T00:00:00.000Z')), dup(new Date('2026-06-30T12:00:00.000Z')), dup(null)],
+        }),
+      }),
+    });
+
+    const rows = await defaultReconcileMachineStorageDeps.listAgentTerminalSprites();
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ machineAgentTerminalId: 'agt-1', lastActiveAt: new Date('2026-06-30T12:00:00.000Z') });
+  });
+});
+
+describe('defaultReconcileMachineStorageDeps.advanceAgentTerminalWatermark', () => {
+  it("updates the SESSION row's own storageLastBilledAt, keyed by terminal id", async () => {
+    const setCalls: unknown[] = [];
+    const whereCalls: unknown[] = [];
+    mockDb.update.mockReturnValue({
+      set: (values: unknown) => {
+        setCalls.push(values);
+        return { where: async (w: unknown) => { whereCalls.push(w); } };
+      },
+    });
+
+    await defaultReconcileMachineStorageDeps.advanceAgentTerminalWatermark({
+      machineAgentTerminalId: 'agt-3',
+      billedThrough: new Date('2026-07-01T00:00:00.000Z'),
+    });
+
+    expect(setCalls).toEqual([{ storageLastBilledAt: new Date('2026-07-01T00:00:00.000Z') }]);
+    expect(whereCalls).toEqual([{ op: 'eq', a: 'machine_agent_terminals.id', b: 'agt-3' }]);
+  });
+});
+
+describe('measureAgentTerminalStorageOpportunistically (sessions-per-location)', () => {
+  it('persists a session measurement onto its OWN machine_agent_terminals row', async () => {
+    mockDb.select.mockReturnValue({
+      from: () => ({
+        where: () => ({
+          limit: async () => [{ storageMeasuredAt: null, sandboxId: 'sbx-agt-1', spriteTornDownAt: null }],
+        }),
+      }),
+    });
+    const updated: Array<{ values: unknown; where: unknown }> = [];
+    mockDb.update.mockImplementation(() => ({
+      set: (values: unknown) => ({
+        where: async (w: unknown) => {
+          updated.push({ values, where: w });
+          return undefined;
+        },
+      }),
+    }));
+    const execCalls: unknown[] = [];
+    const handle = {
+      exec: async (args: unknown) => {
+        execCalls.push(args);
+        return { exitCode: 0, stdout: '4096\t/workspace', stderr: '' };
+      },
+    };
+
+    await measureAgentTerminalStorageOpportunistically({
+      machineAgentTerminalId: 'agt-1',
+      machinePageId: 'machine-page-1',
+      handle: handle as never,
+    });
+
+    expect(updated).toHaveLength(1);
+    expect(updated[0].where).toEqual({ op: 'eq', a: 'machine_agent_terminals.id', b: 'agt-1' });
+    expect(execCalls).toHaveLength(1);
+  });
+
+  it('refuses to measure a LEGACY/unprovisioned session (sandboxId null) — the handle in hand is another Sprite\'s', async () => {
+    mockDb.select.mockReturnValue({
+      from: () => ({
+        where: () => ({ limit: async () => [{ storageMeasuredAt: null, sandboxId: null, spriteTornDownAt: null }] }),
+      }),
+    });
+    const updated: unknown[] = [];
+    mockDb.update.mockImplementation(() => ({ set: () => ({ where: async (w: unknown) => { updated.push(w); } }) }));
+    let execCalls = 0;
+    const handle = { exec: async () => { execCalls += 1; return { exitCode: 0, stdout: '4096\t/workspace', stderr: '' }; } };
+
+    await measureAgentTerminalStorageOpportunistically({
+      machineAgentTerminalId: 'agt-legacy',
+      machinePageId: 'machine-page-1',
+      handle: handle as never,
+    });
+
+    expect({ updated: updated.length, execCalls }).toEqual({ updated: 0, execCalls: 0 });
+  });
+
+  it('refuses to measure a TORN-DOWN session Sprite (its filesystem is gone)', async () => {
+    mockDb.select.mockReturnValue({
+      from: () => ({
+        where: () => ({
+          limit: async () => [{ storageMeasuredAt: null, sandboxId: 'sbx-agt-1', spriteTornDownAt: new Date('2026-06-30T00:00:00.000Z') }],
+        }),
+      }),
+    });
+    const updated: unknown[] = [];
+    mockDb.update.mockImplementation(() => ({ set: () => ({ where: async (w: unknown) => { updated.push(w); } }) }));
+    let execCalls = 0;
+    const handle = { exec: async () => { execCalls += 1; return { exitCode: 0, stdout: '4096\t/workspace', stderr: '' }; } };
+
+    await measureAgentTerminalStorageOpportunistically({
+      machineAgentTerminalId: 'agt-1',
+      machinePageId: 'machine-page-1',
+      handle: handle as never,
+    });
+
+    expect({ updated: updated.length, execCalls }).toEqual({ updated: 0, execCalls: 0 });
+  });
+});
+
+describe('persistStorageMeasurement — agent-terminal subject', () => {
+  it('writes measured bytes onto the machine_agent_terminals row, keyed by terminal id', async () => {
+    const updated: Array<{ values: unknown; where: unknown }> = [];
+    mockDb.update.mockImplementation(() => ({
+      set: (values: unknown) => ({ where: async (w: unknown) => { updated.push({ values, where: w }); } }),
+    }));
+
+    await persistStorageMeasurement({
+      subject: { kind: 'agent-terminal', machineAgentTerminalId: 'agt-9', machinePageId: 'machine-page-1' },
+      measuredBytes: 4096,
+      measuredAt: new Date('2026-07-01T00:00:00.000Z'),
+    });
+
+    expect(updated).toEqual([
+      {
+        values: { storageMeasuredBytes: 4096, storageMeasuredAt: new Date('2026-07-01T00:00:00.000Z') },
+        where: { op: 'eq', a: 'machine_agent_terminals.id', b: 'agt-9' },
+      },
+    ]);
   });
 });

@@ -78,6 +78,20 @@ export interface AgentTerminalSpriteProvisionDeps extends SpriteCloneDeps {
   resolveProjectRepoUrl: (machineId: string, projectName: string) => Promise<string | null>;
   /** A branch's checked-out name by its `machine_branches` row id. Needed only for branch-scope clones. */
   resolveBranchName: (machineBranchId: string) => Promise<string | null>;
+  /**
+   * Optional opportunistic storage-measurement seam (mirrors
+   * `MachineBranchesDeps.measureBranchStorage`). While this session's Sprite is
+   * ALREADY awake right after provision/clone, capture its used bytes onto its
+   * own `machine_agent_terminals` row so the storage reconcile bills them to the
+   * OWNING Machine page — without ever waking a hibernating Sprite. Best-effort
+   * and fire-and-forget; omitting it disables measurement (the reconcile then
+   * bills the conservative never-measured 0 floor).
+   */
+  measureAgentTerminalStorage?: (input: {
+    machineAgentTerminalId: string;
+    machinePageId: string;
+    handle: MachineHandle;
+  }) => Promise<void>;
 }
 
 export type ProvisionAgentTerminalSpriteResult =
@@ -224,6 +238,18 @@ export async function provisionAgentTerminalSprite({
     branchHandle: handle,
     resolveRootMachineHandle: deps.resolveRootMachineHandle,
   });
+
+  // Measure this session Sprite's footprint while it is still awake right after
+  // the provision/clone — the one moment its bytes are guaranteed non-trivial,
+  // exactly as spawnBranch measures a branch. Fire-and-forget: a billing concern
+  // must never be awaited by (or fail) the spawn.
+  if (deps.measureAgentTerminalStorage) {
+    void deps
+      .measureAgentTerminalStorage({ machineAgentTerminalId: row.id, machinePageId: row.machineId, handle })
+      .catch(() => {
+        /* Best-effort: the seam already logs; a spawn must never fail on it. */
+      });
+  }
 
   return { ok: true, sandboxId: handle.machineId, resumed: false };
 }

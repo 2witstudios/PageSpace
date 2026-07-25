@@ -36,7 +36,9 @@ export type StorageSubject =
   /** A branch-terminal's separate Sprite (`machine_branches` row), owned by `machinePageId`. */
   | { kind: 'branch'; machineBranchId: string; machinePageId: string }
   /** A PROMOTED project's separate Sprite (`machine_projects` row), owned by `machinePageId` (issue #2204 phase 7). */
-  | { kind: 'project'; machineProjectId: string; machinePageId: string };
+  | { kind: 'project'; machineProjectId: string; machinePageId: string }
+  /** A per-session agent-terminal's separate Sprite (`machine_agent_terminals` row), owned by `machinePageId` (sessions-per-location). */
+  | { kind: 'agent-terminal'; machineAgentTerminalId: string; machinePageId: string };
 
 /**
  * The page id every charge, payer lookup and usage-breakdown grouping for this
@@ -62,5 +64,7 @@ export function storageSubjectKey(subject: StorageSubject): string {
       return `branch:${subject.machineBranchId}`;
     case 'project':
       return `project:${subject.machineProjectId}`;
+    case 'agent-terminal':
+      return `agent-terminal:${subject.machineAgentTerminalId}`;
   }
 }
