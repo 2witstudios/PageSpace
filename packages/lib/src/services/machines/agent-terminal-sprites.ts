@@ -132,6 +132,15 @@ export type ProvisionAgentTerminalSpriteResult =
         | 'branch_not_found'
         | 'provision_failed'
         | 'clone_failed'
+        /**
+         * Our clone lost to a CONCURRENT winner that shares our name-keyed Sprite
+         * and already populated the checkout dir (finding: the dest-exists race).
+         * A BENIGN outcome, distinct from `clone_failed`: the shared Sprite is
+         * winner-owned and LIVE, so it was NOT killed, and the caller treats this
+         * as a resume-pending (the row converges to the winner's Sprite, or
+         * reprovisions on next use) rather than a spawn failure.
+         */
+        | 'clone_collision'
         | 'persist_failed'
         | 'race_lost';
       detail?: string;
@@ -202,6 +211,28 @@ async function killUnreferencedOrEnqueue(
  * The single reconcile-before-kill the CAS-loss path introduced, lifted so every
  * kill site shares it (branch clone-fail, project clone-fail, persist-throw).
  */
+/**
+ * Has a concurrent provision of the SAME row already recorded the Sprite WE hold?
+ * A row is a genuine shared winner ONLY when its `spriteInstanceId` MATCHES the
+ * instance of our handle (both non-null — finding Q): the true race shares one
+ * physical name-keyed VM ⇒ same instance ⇒ resume against it. A different or absent
+ * instance — including a vanished-heal row still carrying its OLD, STALE instance
+ * under the reused name — is NOT our generation. Pure reload + compare; kills
+ * nothing.
+ */
+async function findPersistedWinner(
+  deps: Pick<AgentTerminalSpriteProvisionDeps, 'reloadRow'>,
+  rowId: string,
+  handle: MachineHandle,
+): Promise<{ sandboxId: string } | null> {
+  const winner = await deps.reloadRow(rowId).catch(() => null);
+  const ourInstance = handle.spriteInstanceId ?? null;
+  if (winner?.sandboxId && ourInstance !== null && winner.spriteInstanceId === ourInstance) {
+    return { sandboxId: winner.sandboxId };
+  }
+  return null;
+}
+
 async function reconcileBeforeKill({
   deps,
   row,
@@ -211,9 +242,8 @@ async function reconcileBeforeKill({
   row: Pick<MachineAgentTerminalRecord, 'id'>;
   handle: MachineHandle;
 }): Promise<{ kind: 'resumed'; sandboxId: string } | { kind: 'killed' }> {
-  const winner = await deps.reloadRow(row.id).catch(() => null);
-  const ourInstance = handle.spriteInstanceId ?? null;
-  if (winner?.sandboxId && ourInstance !== null && winner.spriteInstanceId === ourInstance) {
+  const winner = await findPersistedWinner(deps, row.id, handle);
+  if (winner) {
     // The row records OUR instance — the live, referenced VM we hold (a genuine
     // shared winner). Must NOT kill; resume against it.
     return { kind: 'resumed', sandboxId: winner.sandboxId };
@@ -223,6 +253,66 @@ async function reconcileBeforeKill({
   // unreferenced: kill it (or rescue it to the outbox) rather than leak a VM.
   await killUnreferencedOrEnqueue(deps, handle);
   return { kind: 'killed' };
+}
+
+/**
+ * Does this clone failure detail carry git's specific "the destination already
+ * exists and is populated" error — as opposed to any other clone failure (auth,
+ * network, missing repo)?
+ *
+ * On a FRESH name-keyed Sprite the checkout path is EMPTY, so a populated
+ * destination is a strong CONCURRENT-WINNER signal: another caller racing for the
+ * SAME row got the SAME physical Sprite (provision is name-keyed) and is mid-clone
+ * into it. `git clone` into such a directory fails with a fixed fatal message.
+ * Matched narrowly (the exact phrase, both git's older/newer wordings) so a
+ * genuine clone error is never mistaken for a collision.
+ */
+function isDestinationExistsCloneFailure(detail: string | undefined): boolean {
+  if (!detail) return false;
+  return (
+    /already exists and is not an empty directory/i.test(detail) ||
+    /destination path .* already exists/i.test(detail)
+  );
+}
+
+/**
+ * Decide what a clone failure means for the Sprite we hold.
+ *
+ * DEST-EXISTS (the concurrent-provision race this closes): the checkout dir was
+ * already populated by a winner sharing our name-keyed Sprite. The shared Sprite
+ * is winner-owned and LIVE, so it must NEVER be killed — the previous single
+ * reload could see a not-yet-persisted winner (`sandboxId: null`) and kill the
+ * shared VM out from under it. So on this signal we RELOAD for a winner (resume if
+ * it has persisted a matching instance) but on a not-yet-persisted winner return a
+ * BENIGN `clone_collision` WITHOUT killing — the row converges to the winner's
+ * Sprite (or reprovisions on next use), never a killed-shared-VM.
+ *
+ * ANY OTHER clone failure (auth, network, corrupt repo) is a genuine error with no
+ * concurrent-winner implication, so it keeps the existing reconcile-then-kill: our
+ * handle is unreferenced and is killed (or rescued to the outbox).
+ */
+async function reconcileOnCloneFailure({
+  deps,
+  row,
+  handle,
+  detail,
+}: {
+  deps: Pick<AgentTerminalSpriteProvisionDeps, 'reloadRow' | 'host' | 'enqueueReclaim'>;
+  row: Pick<MachineAgentTerminalRecord, 'id'>;
+  handle: MachineHandle;
+  detail: string | undefined;
+}): Promise<ProvisionAgentTerminalSpriteResult> {
+  if (isDestinationExistsCloneFailure(detail)) {
+    const winner = await findPersistedWinner(deps, row.id, handle);
+    if (winner) return { ok: true, sandboxId: winner.sandboxId, resumed: true };
+    // Winner has not persisted yet — leave its shared Sprite alone (no kill, no
+    // enqueue: enqueuing would let the orphan reconciler destroy the winner's live
+    // VM later). Benign collision; the caller resumes-pending.
+    return { ok: false, reason: 'clone_collision', detail };
+  }
+  const outcome = await reconcileBeforeKill({ deps, row, handle });
+  if (outcome.kind === 'resumed') return { ok: true, sandboxId: outcome.sandboxId, resumed: true };
+  return { ok: false, reason: 'clone_failed', detail };
 }
 
 /**
@@ -377,21 +467,13 @@ export async function provisionAgentTerminalSprite({
   // Clone per scope. On failure, DON'T blindly kill: a concurrent winner sharing
   // our name-keyed Sprite may have created the checkout dir (which is exactly why
   // our redundant clone failed) and already persisted/returned it — killing it
-  // would destroy the winner's live VM. Reconcile first (see `reconcileBeforeKill`).
+  // would destroy the winner's live VM. Reconcile first (see `reconcileOnCloneFailure`).
   if (row.machineBranchId && repoUrl && branchName) {
     const cloned = await cloneAndCheckoutBranch({ handle, repoUrl, branchName, scopeKey, actor, deps });
-    if (!cloned.ok) {
-      const outcome = await reconcileBeforeKill({ deps, row, handle });
-      if (outcome.kind === 'resumed') return { ok: true, sandboxId: outcome.sandboxId, resumed: true };
-      return { ok: false, reason: 'clone_failed', detail: cloned.detail };
-    }
+    if (!cloned.ok) return reconcileOnCloneFailure({ deps, row, handle, detail: cloned.detail });
   } else if (row.projectName && repoUrl) {
     const cloned = await cloneRepoInto({ handle, repoUrl, targetPath: PROJECT_REPO_PATH, scopeKey, actor, deps });
-    if (!cloned.ok) {
-      const outcome = await reconcileBeforeKill({ deps, row, handle });
-      if (outcome.kind === 'resumed') return { ok: true, sandboxId: outcome.sandboxId, resumed: true };
-      return { ok: false, reason: 'clone_failed', detail: cloned.detail };
-    }
+    if (!cloned.ok) return reconcileOnCloneFailure({ deps, row, handle, detail: cloned.detail });
   }
   // machine scope: no clone — cwd is the Sprite home (SANDBOX_ROOT).
 

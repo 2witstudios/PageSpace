@@ -2932,18 +2932,27 @@ describe('provisionAgentTerminalSprite — race + persistence safety (findings 1
 // scope), a failed/lost persist — must reconcile-before-kill so it never destroys
 // a shared winner's live VM. These cover the clone sites Codex named.
 describe('provisionAgentTerminalSprite — clone-failure is a provisioning collision (kill-site class)', () => {
-  /** A session Sprite whose git `clone` fails; `onClone` runs the moment it does (to simulate a concurrent winner). */
-  function cloneFailingSession(onClone?: () => Promise<void>) {
+  /**
+   * A session Sprite whose git `clone` fails; `onClone` runs the moment it does
+   * (to simulate a concurrent winner). `stderr` defaults to a GENERIC failure that
+   * does NOT match the precise dest-exists signal (so the kill-site tests below
+   * exercise the ordinary reconcile-then-kill path); pass the real git
+   * "already exists and is not an empty directory" message to exercise the
+   * concurrent-collision mitigation.
+   */
+  function cloneFailingSession(onClone?: () => Promise<void>, stderr = 'fatal: unable to access repository (exit 128)') {
     return makeSessionHandle({
       exec: async (args) => {
         if (args.cmd === 'git' && args.args?.[0] === 'clone') {
           if (onClone) await onClone();
-          return { success: true, exitCode: 128, stdout: '', stderr: 'fatal: destination path already exists' };
+          return { success: true, exitCode: 128, stdout: '', stderr };
         }
         return { success: true, exitCode: 0, stdout: '', stderr: '' };
       },
     });
   }
+
+  const DEST_EXISTS_STDERR = "fatal: destination path '/workspace/repo' already exists and is not an empty directory.";
 
   it('given a BRANCH clone fails because a concurrent winner already committed our SAME shared Sprite, should NOT kill it and resume against the winner', async () => {
     const branchRow = makeLegacyRow({ id: 'agt-branch', name: 'cli', agentType: 'shell', scope: 'branch', projectName: PROJECT_NAME, machineBranchId: BRANCH_ID });
@@ -3009,6 +3018,93 @@ describe('provisionAgentTerminalSprite — clone-failure is a provisioning colli
     const { deps, killed } = makeSpriteProvision(store, {}, session);
 
     const result = await provisionAgentTerminalSprite({ row: projectRow, actor: provisionActor, deps });
+    expect(result).toMatchObject({ ok: false, reason: 'clone_failed' });
+    expect(killed).toEqual([{ machineId: SESSION_SANDBOX_ID, expectedInstanceId: SESSION_INSTANCE_ID }]);
+  });
+
+  // THE TARGETED MITIGATION: the loser's clone fails with git's specific
+  // dest-exists error BECAUSE a concurrent winner populated the checkout in the
+  // SHARED name-keyed Sprite, but the winner has NOT persisted its identity yet —
+  // the single reload sees sandboxId:null. The old code KILLED the shared Sprite
+  // here (destroying the winner's live VM). It must now stay a BENIGN collision.
+  it('given a PROJECT clone fails with the DEST-EXISTS signal and NO winner persisted yet, should NOT kill the shared Sprite (benign clone_collision)', async () => {
+    const projectRow = makeLegacyRow({ id: 'agt-p-collide', name: 'cli', agentType: 'shell', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null });
+    const { store } = makeStore([projectRow]);
+    const session = cloneFailingSession(undefined, DEST_EXISTS_STDERR); // dest-exists, but no winner recorded
+    const { deps, killed, enqueuedReclaims } = makeSpriteProvision(store, {}, session);
+
+    const result = await provisionAgentTerminalSprite({ row: projectRow, actor: provisionActor, deps });
+
+    expect(result).toMatchObject({ ok: false, reason: 'clone_collision' });
+    // The winner still owns and is cloning into the shared Sprite — it must survive.
+    expect(killed).toEqual([]);
+    expect(enqueuedReclaims).toEqual([]); // and NOT enqueued (the reconciler would kill it later otherwise)
+  });
+
+  it('given a BRANCH clone fails with the DEST-EXISTS signal and NO winner persisted yet, should NOT kill the shared Sprite (benign clone_collision)', async () => {
+    const branchRow = makeLegacyRow({ id: 'agt-b-collide', name: 'cli', agentType: 'shell', scope: 'branch', projectName: PROJECT_NAME, machineBranchId: BRANCH_ID });
+    const { store } = makeStore([branchRow]);
+    const session = cloneFailingSession(undefined, DEST_EXISTS_STDERR);
+    const { deps, killed, enqueuedReclaims } = makeSpriteProvision(store, {}, session);
+
+    const result = await provisionAgentTerminalSprite({ row: branchRow, actor: provisionActor, deps });
+
+    expect(result).toMatchObject({ ok: false, reason: 'clone_collision' });
+    expect(killed).toEqual([]);
+    expect(enqueuedReclaims).toEqual([]);
+  });
+
+  it('given a DEST-EXISTS clone failure AND the winner HAS persisted a matching instance, should resume against it (not kill)', async () => {
+    const projectRow = makeLegacyRow({ id: 'agt-p-collide-win', name: 'cli', agentType: 'shell', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null });
+    const { store } = makeStore([projectRow]);
+    const session = cloneFailingSession(async () => {
+      await store.updateSpriteIdentity({
+        id: 'agt-p-collide-win', previousSandboxId: null, sessionKey: 'pgs-winner',
+        sandboxId: SESSION_SANDBOX_ID, spriteInstanceId: SESSION_INSTANCE_ID, egressPolicyToken: null, now: NOW,
+      });
+    }, DEST_EXISTS_STDERR);
+    const { deps, killed } = makeSpriteProvision(store, {}, session);
+
+    const result = await provisionAgentTerminalSprite({ row: projectRow, actor: provisionActor, deps });
+
+    expect(result).toEqual({ ok: true, sandboxId: SESSION_SANDBOX_ID, resumed: true });
+    expect(killed).toEqual([]);
+  });
+
+  // At the spawn level: the loser's POST must succeed benignly (the row converges
+  // to the winner's Sprite) rather than fail or delete the row — deleting it would
+  // strand the winner's persist CAS.
+  it('given a resume whose reprovision hits a DEST-EXISTS collision, the spawn succeeds benignly and never kills the shared Sprite', async () => {
+    // A genuine legacy project-scope row (no own Sprite yet) → the resume path
+    // reprovisions, and the clone loses to a concurrent winner (dest-exists).
+    const { store } = makeStore([
+      makeLegacyRow({
+        id: 'agt-spawn-collide', name: 'cli', agentType: 'shell',
+        scope: 'project', projectName: PROJECT_NAME, machineBranchId: null,
+        sandboxId: null, spriteTornDownAt: null, sessionKey: null,
+      }),
+    ]);
+    const session = cloneFailingSession(undefined, DEST_EXISTS_STDERR);
+    const { deps: provision, killed } = makeSpriteProvision(store, {}, session);
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, name: 'cli', agentType: 'shell', actor, deps });
+
+    expect(result).toMatchObject({ ok: true, resumed: true }); // benign — winner owns the shared Sprite
+    expect(killed).toEqual([]); // shared Sprite never killed
+    expect(await store.findById('agt-spawn-collide')).not.toBeNull(); // row kept for the winner's CAS
+  });
+
+  // Precision guard: a NON-dest clone error (no winner) still kills, so the
+  // mitigation cannot be tripped by an unrelated clone failure.
+  it('given a NON-dest clone error with no winner, should STILL kill + report clone_failed (mitigation is precise)', async () => {
+    const projectRow = makeLegacyRow({ id: 'agt-p-neterr', name: 'cli', agentType: 'shell', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null });
+    const { store } = makeStore([projectRow]);
+    const session = cloneFailingSession(undefined, 'fatal: could not read from remote repository');
+    const { deps, killed } = makeSpriteProvision(store, {}, session);
+
+    const result = await provisionAgentTerminalSprite({ row: projectRow, actor: provisionActor, deps });
+
     expect(result).toMatchObject({ ok: false, reason: 'clone_failed' });
     expect(killed).toEqual([{ machineId: SESSION_SANDBOX_ID, expectedInstanceId: SESSION_INSTANCE_ID }]);
   });

@@ -524,6 +524,12 @@ async function maybeProvisionSprite(
     const actor = await provision.resolveActor(userId);
     const result = await provisionAgentTerminalSprite({ row, actor, deps: provision });
     if (result.ok) return { ok: true };
+    // A CONCURRENT-provision collision on our shared name-keyed Sprite (the
+    // dest-exists race) is BENIGN: the winner owns and is still cloning into the
+    // live Sprite, which was deliberately NOT killed. Treat it as a best-effort
+    // success — the row converges to the winner's Sprite (or reprovisions on next
+    // use); NEVER fail or delete the row here, which would strand the winner's CAS.
+    if (result.reason === 'clone_collision') return { ok: true };
     // A code-execution POLICY denial (finding P) is surfaced distinctly so the
     // spawn returns a 403 rather than a generic 500 — but the row is still
     // removed by the caller (never a lingering shared row). Every OTHER failure
