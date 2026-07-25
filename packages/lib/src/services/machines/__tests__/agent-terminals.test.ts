@@ -1327,6 +1327,101 @@ describe('resolveAgentTerminalById — level-agnostic (PurePoint Attach{agent_id
   });
 });
 
+/**
+ * A restored Machine leaves its terminal rows present with `spriteTornDownAt`
+ * stamped (their Sprites were destroyed on trash). The read-only resolve/attach
+ * path must NEVER route such a torn-down row onto a SHARED machine/project Sprite
+ * (isolation) or its own already-destroyed branch Sprite (dead pointer) — it must
+ * REJECT so a re-spawn reprovisions a fresh isolated Sprite. Only a GENUINE legacy
+ * row (both sandboxId AND spriteTornDownAt null) keeps the shared fallback.
+ */
+describe('resolveLocationForRow — a torn-down session never shares a Sprite (isolation)', () => {
+  function acquireSpy() {
+    const acquireCalls: string[] = [];
+    const machineSandbox = makeMachineSandbox({
+      acquire: async (machineId) => {
+        acquireCalls.push(machineId);
+        return { ok: true, sandboxId: MACHINE_SANDBOX_ID };
+      },
+    });
+    return { acquireCalls, machineSandbox };
+  }
+
+  it('MACHINE-scope torn-down row: rejects session_torn_down WITHOUT acquiring the shared machine Sprite', async () => {
+    const { acquireCalls, machineSandbox } = acquireSpy();
+    const row = makeLegacyRow({ id: 'agt-td-m', scope: 'machine', name: 'cli', agentType: 'shell', sandboxId: 'sbx-dead', spriteTornDownAt: NOW });
+    const { store } = makeStore([row]);
+    const deps = makeDeps({ store, machineSandbox });
+
+    const result = await resolveAgentTerminalById({ agentTerminalId: 'agt-td-m', deps });
+
+    expect(result).toEqual({ ok: false, reason: 'session_torn_down' });
+    expect(acquireCalls).toEqual([]); // never touched the shared Sprite
+  });
+
+  it('PROJECT-scope torn-down row: rejects session_torn_down WITHOUT resolving a shared/promoted project Sprite', async () => {
+    const { acquireCalls, machineSandbox } = acquireSpy();
+    const row = makeLegacyRow({
+      id: 'agt-td-p', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null,
+      name: 'cli', agentType: 'shell', sandboxId: 'sbx-dead', spriteTornDownAt: NOW,
+    });
+    const { store } = makeStore([row]);
+    // A promoted project sits under this name — resolving it would be the isolation breach.
+    const projectStore = makeProjectLookup({ [`${TERMINAL_ID}\0${PROJECT_NAME}`]: { id: 'proj-1', path: PROJECT_PATH, sandboxId: 'sbx-project', spriteTornDownAt: null } });
+    const deps = makeDeps({ store, machineSandbox, projectStore });
+
+    const result = await resolveAgentTerminalById({ agentTerminalId: 'agt-td-p', deps });
+
+    expect(result).toEqual({ ok: false, reason: 'session_torn_down' });
+    expect(acquireCalls).toEqual([]);
+  });
+
+  it('BRANCH-scope torn-down row: rejects session_torn_down WITHOUT resolving the (also-destroyed) branch Sprite', async () => {
+    const branchFindByIdCalls: string[] = [];
+    const row = makeLegacyRow({
+      id: 'agt-td-b', scope: 'branch', projectName: PROJECT_NAME, machineBranchId: BRANCH_ID,
+      name: 'cli', agentType: 'shell', sandboxId: 'sbx-dead', spriteTornDownAt: NOW,
+    });
+    const { store } = makeStore([row]);
+    const deps = makeDeps({
+      store,
+      branchStore: {
+        ...defaultBranchLookup,
+        findById: async (id) => { branchFindByIdCalls.push(id); return defaultBranchLookup.findById(id); },
+      },
+    });
+
+    const result = await resolveAgentTerminalById({ agentTerminalId: 'agt-td-b', deps });
+
+    expect(result).toEqual({ ok: false, reason: 'session_torn_down' });
+    expect(branchFindByIdCalls).toEqual([]); // never resolved the dead branch Sprite
+  });
+
+  it('GENUINE legacy row (sandboxId AND spriteTornDownAt both null): still uses the shared machine-Sprite fallback (backward compat)', async () => {
+    const { acquireCalls, machineSandbox } = acquireSpy();
+    const row = makeLegacyRow({ id: 'agt-legacy', scope: 'machine', name: 'cli', agentType: 'shell', sandboxId: null, spriteTornDownAt: null });
+    const { store } = makeStore([row]);
+    const deps = makeDeps({ store, machineSandbox });
+
+    const result = await resolveAgentTerminalById({ agentTerminalId: 'agt-legacy', deps });
+
+    expect(result).toMatchObject({ ok: true, sandboxId: MACHINE_SANDBOX_ID, cwd: SANDBOX_ROOT, ownSprite: false });
+    expect(acquireCalls).toEqual([TERMINAL_ID]); // shared fallback unchanged
+  });
+
+  it('LIVE own-Sprite row (sandboxId set, spriteTornDownAt null): resolves straight to its OWN Sprite (unchanged)', async () => {
+    const { acquireCalls, machineSandbox } = acquireSpy();
+    const row = makeLegacyRow({ id: 'agt-live', scope: 'machine', name: 'cli', agentType: 'shell', sandboxId: 'sbx-own', spriteTornDownAt: null });
+    const { store } = makeStore([row]);
+    const deps = makeDeps({ store, machineSandbox });
+
+    const result = await resolveAgentTerminalById({ agentTerminalId: 'agt-live', deps });
+
+    expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-own', ownSprite: true });
+    expect(acquireCalls).toEqual([]); // its own Sprite — never the shared one
+  });
+});
+
 describe('listAgentTerminals', () => {
   it('given two agent terminals spawned in one branch, should list both without leaking the project/machine-scoped ones', async () => {
     const { store } = makeStore();
@@ -2775,7 +2870,7 @@ describe('resolveAgentTerminal — per-session Sprite resolution (sessions-per-l
     expect(result).toMatchObject({ ok: true, sandboxId: SESSION_SANDBOX_ID, cwd: PROJECT_REPO_PATH, ownSprite: true });
   });
 
-  it('given a torn-down row, should FALL BACK to the pre-per-session shared resolution', async () => {
+  it('given a torn-down row, should REJECT (session_torn_down) rather than share the machine Sprite — a re-spawn reprovisions', async () => {
     const acquireCalls: string[] = [];
     const { store } = makeStore([
       makeLegacyRow({
@@ -2798,8 +2893,11 @@ describe('resolveAgentTerminal — per-session Sprite resolution (sessions-per-l
       }),
     });
     const result = await resolveAgentTerminalById({ agentTerminalId: 'agent-terminal-torn', deps });
-    expect(result).toMatchObject({ ok: true, sandboxId: MACHINE_SANDBOX_ID, ownSprite: false });
-    expect(acquireCalls).toEqual([TERMINAL_ID]); // fell back to the shared machine Sprite
+    // Torn-down = its own Sprite is destroyed. Sharing the machine Sprite would break
+    // per-session isolation, so the read-only resolve path rejects; a re-spawn (POST)
+    // reprovisions a fresh isolated Sprite and clears the teardown stamp.
+    expect(result).toEqual({ ok: false, reason: 'session_torn_down' });
+    expect(acquireCalls).toEqual([]); // never fell back to the shared machine Sprite
   });
 });
 

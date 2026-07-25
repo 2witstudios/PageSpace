@@ -194,7 +194,20 @@ export type AgentTerminalScopeDenialReason =
   | 'branch_not_found'
   | 'machine_unavailable'
   /** A project/machine-scope target was requested but the caller's deps didn't wire `projectStore`/`machineSandbox`. */
-  | 'scope_unsupported';
+  | 'scope_unsupported'
+  /**
+   * This session's OWN Sprite was torn down (its `spriteTornDownAt` is stamped) —
+   * e.g. its Machine was trashed and its Sprites destroyed, then the page restored,
+   * leaving the row present but its VM gone. The read-only resolve/attach path
+   * CANNOT reprovision (it has no provisioning deps), and it must NOT route a
+   * torn-down row onto a shared machine/project Sprite (that would let restored
+   * sessions clobber each other's files) or onto its own already-destroyed branch
+   * Sprite (a dead pointer). So it REJECTS: a re-spawn (POST) reprovisions a fresh
+   * isolated Sprite and clears the teardown stamp. Distinct from a genuine legacy
+   * row (`sandboxId` null AND `spriteTornDownAt` null), which still uses the shared
+   * fallback for pre-feature backward compatibility.
+   */
+  | 'session_torn_down';
 
 type ScopeKeyResolution =
   | { ok: true; scopeKey: AgentTerminalScopeKey }
@@ -299,13 +312,29 @@ async function resolveLocationForRow(
   // spawn (`maybeProvisionSprite`), the row carries its own `sandboxId` and
   // EVERY scope resolves straight to it — the same isolated "own Sprite" a
   // branch terminal has always had, now for machine- and project-scope
-  // sessions too. A NULL or torn-down `sandboxId` falls through to the
-  // pre-per-session path (a legacy row, or one whose best-effort provision
-  // has not landed yet), keeping the session usable until a later spawn
-  // re-provisions.
+  // sessions too.
   if (row.sandboxId && !row.spriteTornDownAt) {
     return { ok: true, sandboxId: row.sandboxId, cwd: repoPathForScope(row.scope), ownSprite: true };
   }
+
+  // TORN-DOWN row: its own Sprite was CONFIRMED destroyed (`spriteTornDownAt`
+  // stamped — e.g. the Machine was trashed and its Sprites reclaimed, then the
+  // page restored, so the row is back but its VM is gone). This read-only path
+  // has no provisioning deps, so it cannot revive the Sprite; and it MUST NOT
+  // fall through to the shared-Sprite fallback below — for machine/project scope
+  // that would route multiple restored sessions onto ONE shared Sprite (breaking
+  // the per-session isolation guarantee — they would see and overwrite each
+  // other's files), and for branch scope it would resolve the branch's OWN, now
+  // ALSO-destroyed Sprite (a dead pointer). REJECT instead: a re-spawn (POST →
+  // `maybeProvisionSprite`, which skips the probe for a torn-down row and
+  // reprovisions under the same key) gives it a fresh isolated Sprite and clears
+  // the teardown stamp via the identity CAS. Only a GENUINE legacy row
+  // (`sandboxId` null AND `spriteTornDownAt` null — provisioning never wired)
+  // takes the shared fallback, preserving pre-feature backward compatibility.
+  if (row.spriteTornDownAt) {
+    return { ok: false, reason: 'session_torn_down' };
+  }
+
   if (row.machineBranchId) {
     const branch = await deps.branchStore.findById(row.machineBranchId);
     if (!branch) return { ok: false, reason: 'branch_not_found' };

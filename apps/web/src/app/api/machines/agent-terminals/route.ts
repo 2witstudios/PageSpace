@@ -55,6 +55,11 @@ const SCOPE_DENIAL_STATUS: Record<string, number> = {
   branch_not_found: 404,
   machine_unavailable: 503,
   scope_unsupported: 503,
+  // The session's own Sprite was torn down (Machine trashed→restored); the row is
+  // fine but its VM is gone. A 409 (recoverable conflict) tells the client to
+  // re-spawn (POST), which reprovisions a fresh isolated Sprite — never a 500, and
+  // never a silent attach to a shared Sprite.
+  session_torn_down: 409,
 };
 
 const SPAWN_DENIAL_STATUS: Record<string, number> = {
