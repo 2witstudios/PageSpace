@@ -156,12 +156,12 @@ export type SpawnBranchResult =
 
 /**
  * The minimal slice of `MachineBranchesDeps` the hardened git-clone primitives
- * (`buildGitDepsForHandle`, `cloneAndCheckoutBranch`, `cloneRepoInto`) touch.
- * Exported so OTHER per-Sprite provisioners — the agent-terminal per-session
- * Sprite path (`agent-terminal-sprites.ts`) — can drive those same primitives
- * without fabricating a full `MachineBranchesDeps`. `MachineBranchesDeps`
- * satisfies it structurally (it declares every field), so existing callers pass
- * unchanged.
+ * (`cloneAndCheckoutBranch`, `cloneRepoInto`, and the private
+ * `buildGitDepsForHandle`) touch. Exported so OTHER per-Sprite provisioners —
+ * the agent-terminal per-session Sprite path (`agent-terminal-sprites.ts`) —
+ * can drive those exported clone helpers without fabricating a full
+ * `MachineBranchesDeps`. `MachineBranchesDeps` satisfies it structurally (it
+ * declares every field), so existing callers pass unchanged.
  */
 export interface SpriteCloneDeps {
   isEnabled: () => boolean;
@@ -199,11 +199,13 @@ export function buildActorCtx(scopeKey: string, actor: MachineActorContext): San
  * `MachineHandle` — no page-keyed acquire/reconnect lookup, because Branches
  * (unlike Projects) hold the live handle from the moment they provision it.
  *
- * Exported (with the narrow `SpriteCloneDeps` param) so the agent-terminal
- * per-session Sprite provisioner reuses this exact binding rather than
- * re-deriving it.
+ * Takes the narrow `SpriteCloneDeps` (not the full `MachineBranchesDeps`) so the
+ * exported `cloneAndCheckoutBranch`/`cloneRepoInto` — which the agent-terminal
+ * per-session Sprite provisioner reuses — stay drivable from any provisioner's
+ * deps. Kept private: the reuse goes through those two clone helpers, not this
+ * low-level binding.
  */
-export function buildGitDepsForHandle(handle: MachineHandle, deps: SpriteCloneDeps): GitSandboxRunDeps {
+function buildGitDepsForHandle(handle: MachineHandle, deps: SpriteCloneDeps): GitSandboxRunDeps {
   const sandbox = adaptMachineHandleToExecutableSandbox(handle);
   return {
     isEnabled: deps.isEnabled,

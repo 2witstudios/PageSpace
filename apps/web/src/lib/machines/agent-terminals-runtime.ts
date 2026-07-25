@@ -251,7 +251,7 @@ function buildLiveSessions(): AgentTerminalLiveSessions {
  * lazy — resolved only when a spawn actually provisions — so a resume that
  * reattaches never pays for the tenant/tier lookup.
  */
-function buildSpriteProvisionDeps(actorUserId: string): NonNullable<SpawnAgentTerminalDeps['spriteProvision']> {
+function buildSpriteProvisionDeps(): NonNullable<SpawnAgentTerminalDeps['spriteProvision']> {
   return {
     isEnabled: isCodeExecutionEnabled,
     now: () => new Date(),
@@ -291,7 +291,7 @@ export function buildSpawnAgentTerminalDeps(actorUserId: string): SpawnAgentTerm
     projectStore: buildProjectStoreLookup(),
     liveSessions: buildLiveSessions(),
     now: () => new Date(),
-    spriteProvision: buildSpriteProvisionDeps(actorUserId),
+    spriteProvision: buildSpriteProvisionDeps(),
     projectPromotion: {
       promote: async ({ machineId, projectName }) => {
         const actor = await resolveMachineActorContext(actorUserId);
