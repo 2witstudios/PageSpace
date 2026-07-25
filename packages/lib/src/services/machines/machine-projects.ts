@@ -325,13 +325,29 @@ export async function removeProject({
   const existing = await deps.store.findByName(machineId, name);
   if (!existing) return { ok: false, reason: 'not_found' };
 
-  // A PROMOTED project's Sprite is a real billing microVM, findable only via
-  // this row. Best-effort identity-guarded kill BEFORE the row goes away: on
-  // failure the delete still proceeds — the AFTER DELETE trigger copies the
-  // pointer into the reclaim outbox, and the orphan reconciler retries the
-  // kill forever — but waiting for a cron is a worse default than stopping the
-  // meter now. Skipped for a torn-down row: `sandboxId` is a NAME reused
-  // across re-creates, and re-killing it could destroy a replacement VM.
+  // FINDING V: DELETE the project row FIRST — before the slow agent-terminal
+  // teardown enumeration and filesystem cleanup below. Once the row is gone a
+  // concurrent project-scoped spawn can no longer RESOLVE this project
+  // (`spawnAgentTerminal` → `resolveScopeKey` returns `project_not_found` on the
+  // miss), so it cannot create and provision a NEW session AFTER our enumeration
+  // — a session the project delete would never cascade to (the link is only
+  // `projectName` text), leaving a live, billed Sprite and a stale row behind.
+  // By id, not name: a by-name delete could race a concurrent remove-then-re-add
+  // of this name and delete the NEW row (whose own directory the `rm -rf` below
+  // never touched). The row's own AFTER-DELETE trigger rescues its promoted Sprite
+  // pointer into the reclaim outbox, so the kill below is a best-effort fast-path,
+  // not the only reclaim path.
+  try {
+    await deps.store.remove(machineId, existing.id);
+  } catch {
+    return { ok: false, reason: 'error' };
+  }
+
+  // A PROMOTED project's Sprite is a real billing microVM. Best-effort
+  // identity-guarded kill to stop the meter now rather than wait for the reclaim
+  // cron (the AFTER-DELETE trigger already enqueued its pointer above, so a
+  // failure here is retried). Skipped for a torn-down row: `sandboxId` is a NAME
+  // reused across re-creates, and re-killing it could destroy a replacement VM.
   if (existing.sandboxId && !existing.spriteTornDownAt && deps.killSprite) {
     try {
       await deps.killSprite({
@@ -343,37 +359,25 @@ export async function removeProject({
     }
   }
 
-  // Tear down the project's PROJECT-SCOPED agent-terminal Sprites too. They have
-  // their OWN Sprites but link to this project only by `projectName` TEXT (no FK),
-  // so deleting the project row below never cascades to them — leaving live,
-  // billed VMs stranded and letting a recreated same-name project resume a stale
-  // session. Best-effort (per-row isolated inside the seam), before the row goes.
+  // Tear down the project's PROJECT-SCOPED agent-terminal Sprites. They have their
+  // OWN Sprites but link to this project only by `projectName` TEXT (no FK), so
+  // the project-row delete above never cascaded to them. The project is no longer
+  // spawnable now, so this enumeration cannot miss a late arrival. Best-effort
+  // (per-row isolated inside the seam).
   if (deps.teardownProjectSessions) {
     try {
       await deps.teardownProjectSessions({ machineId, projectName: name });
     } catch {
-      // Best-effort — the seam isolates per-row failures; a total failure here
-      // still lets the project delete proceed (its own machine_projects delete is
-      // what the user asked for). Any un-torn-down session Sprite is reclaimed
-      // when the owning machine is itself torn down or purged.
+      // Best-effort — the seam isolates per-row failures; any un-torn-down session
+      // Sprite is reclaimed when the owning machine is itself torn down or purged.
     }
   }
 
   // Best-effort filesystem cleanup of THIS ROW's own directory (its persisted
   // `path` — never a path re-derived from the name, which for pre-per-row-path
-  // rows wouldn't even match). The tracking row is removed regardless of
-  // whether `rm -rf` succeeds, since the user asked for the project gone from
-  // their list; a lingering directory is far less surprising than a project
-  // the user can never remove because the machine is briefly unreachable.
+  // rows wouldn't even match). Last, since it is the slow step and everything
+  // above has already made the project non-spawnable and reclaimable.
   await safeRemoveDirectory(machineId, existing.path, deps);
 
-  try {
-    // By id, not by name: a by-name delete could race a concurrent
-    // remove-then-re-add of this name and delete the NEW row (whose own
-    // directory the `rm -rf` above never touched).
-    await deps.store.remove(machineId, existing.id);
-    return { ok: true };
-  } catch {
-    return { ok: false, reason: 'error' };
-  }
+  return { ok: true };
 }

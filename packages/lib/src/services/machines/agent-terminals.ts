@@ -146,6 +146,17 @@ export interface AgentTerminalsDeps {
   spriteProvision?: AgentTerminalSpriteProvisionDeps & {
     resolveActor: (userId: string) => Promise<MachineActorContext>;
   };
+  /**
+   * Is the owning Machine page soft-trashed? (finding U). The spawn access check
+   * (`canAccessMachine`) deliberately does NOT exclude trashed pages
+   * (machine-settings-runtime.ts), so without this gate an editor could spawn —
+   * and eagerly PROVISION a billable Sprite — under a Machine that has already
+   * been deleted, whose teardown has already run; the fresh row's
+   * `teardownRequestedAt` stays null and the orphan reconciler never reclaims it.
+   * Wired for spawn; a missing/unresolvable page reads as trashed (fail closed).
+   * Optional so tests/older callers omit it (then no gate — the runtime wires it).
+   */
+  isMachineTrashed?: (machineId: string) => Promise<boolean>;
   store: MachineAgentTerminalStore;
   host: MachineHost;
   now: () => Date;
@@ -154,7 +165,7 @@ export interface AgentTerminalsDeps {
 /** Each function below asks for exactly the slice of `AgentTerminalsDeps` it touches — e.g. a read-only resolver never needs `host`, so a caller (like the realtime PTY bridge) doesn't have to fabricate one just to satisfy the type. */
 export type SpawnAgentTerminalDeps = Pick<
   AgentTerminalsDeps,
-  'branchStore' | 'projectStore' | 'store' | 'now' | 'projectPromotion' | 'liveSessions' | 'spriteProvision'
+  'branchStore' | 'projectStore' | 'store' | 'now' | 'projectPromotion' | 'liveSessions' | 'spriteProvision' | 'isMachineTrashed'
 >;
 export type ResolveAgentTerminalDeps = Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'machineSandbox' | 'store'>;
 export type ListAgentTerminalsDeps = Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'store'>;
@@ -324,6 +335,8 @@ export type SpawnAgentTerminalDenialReason =
    */
   | 'live_sessions_block_promotion'
   | 'name_in_use'
+  /** The owning Machine page is soft-trashed — no session may be reserved or provisioned under a deleted Machine (finding U). */
+  | 'machine_trashed'
   | 'error';
 
 /**
@@ -531,6 +544,14 @@ export async function spawnAgentTerminal({
   const plan = planSpawnAgentTerminal({ name, agentType, command });
   if (!plan.ok) return plan;
   const resolvedType = agentType as AgentRuntimeType;
+
+  // FINDING U: refuse a soft-trashed Machine BEFORE anything is reserved,
+  // PROMOTED, or provisioned — the spawn access check does not exclude trashed
+  // pages, so this is the only thing stopping a billable Sprite (and an
+  // unreclaimable row) from being created under an already-deleted Machine.
+  if (deps.isMachineTrashed && (await deps.isMachineTrashed(machineId))) {
+    return { ok: false, reason: 'machine_trashed' };
+  }
 
   const scope = await resolveScopeKey({ machineId, projectName, branchName, deps });
   if (!scope.ok) return scope;

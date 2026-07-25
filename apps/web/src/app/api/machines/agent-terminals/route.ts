@@ -66,6 +66,9 @@ const SPAWN_DENIAL_STATUS: Record<string, number> = {
   // A promotion refusal the caller can act on (commit or discard the work in
   // the machine-side checkout), matching the promote route's own mapping.
   promotion_failed: 409,
+  // The owning Machine has been trashed — it is gone from the user's view, so a
+  // spawn against it is a 404 (finding U).
+  machine_trashed: 404,
   error: 500,
 };
 

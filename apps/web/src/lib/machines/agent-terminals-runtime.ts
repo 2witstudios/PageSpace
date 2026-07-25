@@ -317,6 +317,13 @@ export function buildSpawnAgentTerminalDeps(actorUserId: string): SpawnAgentTerm
     liveSessions: buildLiveSessions(),
     now: () => new Date(),
     spriteProvision: buildSpriteProvisionDeps(),
+    // FINDING U: refuse spawning under a soft-trashed Machine (the access check
+    // doesn't exclude trashed pages). A missing/unresolvable page reads as
+    // trashed — fail closed, never provision under a page we can't confirm live.
+    isMachineTrashed: async (machineId) => {
+      const page = await db.query.pages.findFirst({ where: eq(pages.id, machineId), columns: { isTrashed: true } });
+      return page?.isTrashed ?? true;
+    },
     projectPromotion: {
       promote: async ({ machineId, projectName }) => {
         const actor = await resolveMachineActorContext(actorUserId);

@@ -2255,6 +2255,20 @@ describe('spawnAgentTerminal — per-session Sprite provisioning', () => {
     expect([...rows.values()][0].sandboxId).toBe(SESSION_SANDBOX_ID);
   });
 
+  // FINDING U: a soft-trashed Machine must reserve/provision NOTHING — the access
+  // check doesn't exclude trashed pages, so this gate stops a billable Sprite (and
+  // an unreclaimable row) from being created under an already-deleted Machine.
+  it('given the owning Machine page is soft-trashed, should deny with machine_trashed — no row, no host.provision', async () => {
+    const { store, rows } = makeStore();
+    const { deps: provision, provisionCalls } = makeSpriteProvision(store);
+    const deps = makeDeps({ store, spriteProvision: provision, isMachineTrashed: async () => true });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+    expect(result).toEqual({ ok: false, reason: 'machine_trashed' });
+    expect(provisionCalls).toEqual([]); // no Sprite created under a deleted Machine
+    expect(rows.size).toBe(0); // no reservation row either
+  });
+
   it('given a chat-surface agent type (pagespace), should never provision a Sprite (no PTY to run)', async () => {
     const { store, rows } = makeStore();
     const { deps: provision, provisionCalls } = makeSpriteProvision(store);
