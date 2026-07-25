@@ -33,6 +33,7 @@ import { MachineSpriteReplacedError } from '../sandbox/machine-host';
 import type { SandboxCreateOptions } from '../sandbox/sandbox-options';
 import type { FullEgressEnablement } from '../sandbox/containment';
 import type { CanRunCodeInput, CanRunCodeResult } from '../sandbox/can-run-code';
+import { SANDBOX_TIMEOUT_MS } from '../sandbox/execution-policy';
 import { PROJECT_REPO_PATH } from '../sandbox/sandbox-paths';
 import {
   cloneAndCheckoutBranch,
@@ -143,9 +144,34 @@ export type ProvisionAgentTerminalSpriteResult =
       detail?: string;
     };
 
-/** How many EXTRA reloads `awaitProvisionWinner` makes after its first, and the pause between them — mirrors `PROMOTION_RACE_POLLS`/`_MS` (machine-project-promotion.ts). */
-const AGENT_TERMINAL_RACE_POLLS = 3;
-const AGENT_TERMINAL_RACE_POLL_MS = 250;
+/**
+ * Poll interval and total deadline for `reconcileBeforeKill`'s collision
+ * winner-wait.
+ *
+ * This is a BACKGROUND reconcile — `maybeProvisionSprite` swallows the result and
+ * never blocks the user-facing spawn — so it can wait FAR longer than any UX
+ * budget, and it MUST: the wait has to OUTLAST a concurrent winner's CLONE. When
+ * two spawns of the same row share a name-keyed Sprite, the loser's redundant
+ * clone fails almost immediately ("destination already exists" — the winner
+ * already created the checkout), but the WINNER's clone runs up to
+ * `SANDBOX_TIMEOUT_MS` before it reaches `updateSpriteIdentity` and records its
+ * generation. The old sub-second deadline (3 × 250ms = 750ms) was far shorter
+ * than a clone, so the fast-failer gave up and KILLED the shared Sprite while the
+ * winner was still cloning — failing both provisions, or leaving a persisted
+ * pointer to a killed VM. So the deadline is the clone timeout PLUS a margin for
+ * the winner's checkout + identity write, polled at a few-second interval.
+ *
+ * NOT a DB advisory lock across the clone (that would hold a lock across a
+ * multi-second external clone — worse). A false-kill despite this is still
+ * recoverable (the next spawn re-provisions), and a genuine no-winner kill that
+ * cannot be confirmed is rescued to the outbox (finding Y) — but this deadline
+ * removes the common clone-scale false-kill entirely.
+ */
+const AGENT_TERMINAL_RACE_POLL_MS = 3_000;
+/** Clone timeout + a margin for the winner's checkout + identity write. */
+const AGENT_TERMINAL_RACE_DEADLINE_MS = SANDBOX_TIMEOUT_MS + 30_000;
+/** EXTRA reloads after the first — enough that the total wait (`× AGENT_TERMINAL_RACE_POLL_MS`) covers the deadline. Exported for the tests to assert the extended budget. */
+export const AGENT_TERMINAL_RACE_POLLS = Math.ceil(AGENT_TERMINAL_RACE_DEADLINE_MS / AGENT_TERMINAL_RACE_POLL_MS);
 
 /**
  * Bounded wait for a concurrent WINNER that recorded OUR GENERATION onto this row

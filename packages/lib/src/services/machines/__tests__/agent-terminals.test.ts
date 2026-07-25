@@ -19,6 +19,7 @@ import type { MachineAgentTerminalStore, MachineAgentTerminalRecord, AgentTermin
 import {
   provisionAgentTerminalSprite,
   teardownProjectAgentTerminalSprites,
+  AGENT_TERMINAL_RACE_POLLS,
   type AgentTerminalSpriteProvisionDeps,
 } from '../agent-terminal-sprites';
 import type { MachineActorContext } from '../machine-branches';
@@ -2446,7 +2447,31 @@ describe('provisionAgentTerminalSprite — race + persistence safety (findings 1
     expect(waitCalls.length).toBeGreaterThan(0); // it actually waited (deterministic clock)
   });
 
-  it('given no winner across ALL bounded polls, should give up and kill (still no leak)', async () => {
+  // A winner whose clone runs LONGER than the OLD 750ms deadline (3 × 250ms) must
+  // still be found — the wait now spans clone scale, so a fast-failing racer no
+  // longer kills the shared Sprite while the winner is still cloning.
+  it('given a winner that persists only AFTER the old 750ms deadline (still cloning), should wait for it and resume — never kill the shared Sprite', async () => {
+    const { store } = makeStore();
+    let reloads = 0;
+    const { deps, killed, waitCalls } = makeSpriteProvision(store, {
+      updateSpriteIdentity: async () => { throw new Error('db blip'); },
+      reloadRow: async () => {
+        reloads += 1;
+        // The winner's clone is still running past the old 3-poll deadline; it
+        // records its (SAME) generation only on the 10th read.
+        return reloads >= 10
+          ? { sandboxId: SESSION_SANDBOX_ID, spriteInstanceId: SESSION_INSTANCE_ID }
+          : { sandboxId: null, spriteInstanceId: null };
+      },
+    });
+
+    const result = await provisionAgentTerminalSprite({ row: machineRow, actor: provisionActor, deps });
+    expect(result).toEqual({ ok: true, sandboxId: SESSION_SANDBOX_ID, resumed: true });
+    expect(killed).toEqual([]); // the shared Sprite the winner is cloning into was NOT killed
+    expect(waitCalls.length).toBeGreaterThan(3); // it waited well past the old 750ms deadline
+  });
+
+  it('given no winner across the FULL clone-scale window, should give up and kill only after the extended deadline (still no leak)', async () => {
     const { store } = makeStore();
     const { deps, killed, waitCalls, enqueuedReclaims } = makeSpriteProvision(store, {
       updateSpriteIdentity: async () => { throw new Error('db blip'); },
@@ -2458,8 +2483,9 @@ describe('provisionAgentTerminalSprite — race + persistence safety (findings 1
     // Confirmed kill (default host.kill resolves) → nothing enqueued.
     expect(killed).toEqual([{ machineId: SESSION_SANDBOX_ID, expectedInstanceId: SESSION_INSTANCE_ID }]);
     expect(enqueuedReclaims).toEqual([]);
-    // It exhausted the bounded poll before giving up.
-    expect(waitCalls.length).toBe(3);
+    // It exhausted the FULL clone-scale poll budget before giving up — not 750ms.
+    expect(waitCalls.length).toBe(AGENT_TERMINAL_RACE_POLLS);
+    expect(AGENT_TERMINAL_RACE_POLLS).toBeGreaterThan(3);
   });
 
   // FINDING Y: when the cleanup kill CANNOT be confirmed, the handle must be
