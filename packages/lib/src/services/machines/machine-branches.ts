@@ -69,9 +69,9 @@ export interface MachineActorContext {
   tier: SubscriptionTier;
 }
 
-/** The minimal slice of the Projects store Branches needs — just enough to resolve a project's `repoUrl`. */
+/** The minimal slice of the Projects store Branches needs — the project's `id` (for the machineProjectId cascade FK) and `repoUrl` (to clone). */
 export interface MachineBranchProjectLookup {
-  findByName(machineId: string, name: string): Promise<{ repoUrl: string } | null>;
+  findByName(machineId: string, name: string): Promise<{ id: string; repoUrl: string } | null>;
 }
 
 export interface MachineBranchesDeps {
@@ -155,6 +155,25 @@ export type SpawnBranchResult =
   | { ok: false; reason: SpawnBranchDenialReason | FullEgressDenialReason; detail?: string };
 
 /**
+ * The minimal slice of `MachineBranchesDeps` the hardened git-clone primitives
+ * (`cloneAndCheckoutBranch`, `cloneRepoInto`, and the private
+ * `buildGitDepsForHandle`) touch. Exported so OTHER per-Sprite provisioners —
+ * the agent-terminal per-session Sprite path (`agent-terminal-sprites.ts`) —
+ * can drive those exported clone helpers without fabricating a full
+ * `MachineBranchesDeps`. `MachineBranchesDeps` satisfies it structurally (it
+ * declares every field), so existing callers pass unchanged.
+ */
+export interface SpriteCloneDeps {
+  isEnabled: () => boolean;
+  resolveGitHubToken: (userId: string) => Promise<string | null>;
+  quota: SandboxQuotaDeps;
+  buildEnv: () => Record<string, string>;
+  audit: (input: CodeExecutionAuditInput) => Promise<void>;
+  screenOutput?: (text: string) => Promise<string>;
+  now: () => Date;
+}
+
+/**
  * Exported so other Machine-scope callers that build a `SandboxActorContext`
  * for a branch-terminal op (e.g. `machine-git-blob-runtime.ts`) share this one
  * definition instead of re-typing the same literal — a future required field
@@ -179,8 +198,14 @@ export function buildActorCtx(scopeKey: string, actor: MachineActorContext): San
  * Build `runGitInSandbox` deps bound directly to an already-provisioned
  * `MachineHandle` — no page-keyed acquire/reconnect lookup, because Branches
  * (unlike Projects) hold the live handle from the moment they provision it.
+ *
+ * Takes the narrow `SpriteCloneDeps` (not the full `MachineBranchesDeps`) so the
+ * exported `cloneAndCheckoutBranch`/`cloneRepoInto` — which the agent-terminal
+ * per-session Sprite provisioner reuses — stay drivable from any provisioner's
+ * deps. Kept private: the reuse goes through those two clone helpers, not this
+ * low-level binding.
  */
-function buildGitDepsForHandle(handle: MachineHandle, deps: MachineBranchesDeps): GitSandboxRunDeps {
+function buildGitDepsForHandle(handle: MachineHandle, deps: SpriteCloneDeps): GitSandboxRunDeps {
   const sandbox = adaptMachineHandleToExecutableSandbox(handle);
   return {
     isEnabled: deps.isEnabled,
@@ -196,11 +221,41 @@ function buildGitDepsForHandle(handle: MachineHandle, deps: MachineBranchesDeps)
 }
 
 /** `createdNew`: no `origin/<branch>` existed, so the branch was created off the clone's default HEAD. */
-type CloneResult =
+export type CloneResult =
   | { ok: true; createdNew: boolean }
   | { ok: false; reason: 'clone_failed' | 'checkout_failed'; detail?: string };
 
-async function cloneAndCheckoutBranch({
+/**
+ * Clone `repoUrl` into `targetPath` on an already-provisioned handle — the
+ * project-scope clone sequence (`machine-project-promotion.ts`'s
+ * `git clone repoUrl PROJECT_REPO_PATH`), lifted here so the agent-terminal
+ * per-session Sprite provisioner reuses it for project-scope sessions without
+ * re-implementing the hardened git path.
+ */
+export async function cloneRepoInto({
+  handle,
+  repoUrl,
+  targetPath,
+  scopeKey,
+  actor,
+  deps,
+}: {
+  handle: MachineHandle;
+  repoUrl: string;
+  targetPath: string;
+  scopeKey: string;
+  actor: MachineActorContext;
+  deps: SpriteCloneDeps;
+}): Promise<{ ok: true } | { ok: false; reason: 'clone_failed'; detail?: string }> {
+  const ctx = buildActorCtx(scopeKey, actor);
+  const gitDeps = buildGitDepsForHandle(handle, deps);
+  const clone = await runGitInSandbox({ cmd: 'git', args: ['clone', repoUrl, targetPath], ctx, deps: gitDeps });
+  if (!clone.success) return { ok: false, reason: 'clone_failed', detail: clone.error };
+  if (clone.exitCode !== 0) return { ok: false, reason: 'clone_failed', detail: clone.stderr || clone.stdout };
+  return { ok: true };
+}
+
+export async function cloneAndCheckoutBranch({
   handle,
   repoUrl,
   branchName,
@@ -213,7 +268,7 @@ async function cloneAndCheckoutBranch({
   branchName: string;
   scopeKey: string;
   actor: MachineActorContext;
-  deps: MachineBranchesDeps;
+  deps: SpriteCloneDeps;
 }): Promise<CloneResult> {
   const ctx = buildActorCtx(scopeKey, actor);
   const gitDeps = buildGitDepsForHandle(handle, deps);
@@ -495,7 +550,7 @@ export async function propagateClaudeCredential({
  * killing it is the only cleanup available; if that fails too we can do no
  * better, and the original failure is what the caller reports.
  */
-async function safeKillSprite(host: MachineHost, handle: MachineHandle): Promise<void> {
+export async function safeKillSprite(host: MachineHost, handle: MachineHandle): Promise<void> {
   try {
     await host.kill({ machineId: handle.machineId, expectedInstanceId: handle.spriteInstanceId });
   } catch {
@@ -654,6 +709,10 @@ export async function spawnBranch({
       ownerId: actor.userId,
       machineId,
       projectName,
+      // The owning project's id — the ON DELETE cascade that reclaims this branch
+      // (and its branch-scoped terminals) when the project is removed. `project`
+      // was resolved above (project_not_found already returned if absent).
+      machineProjectId: project.id,
       branchName,
       sessionKey,
       sandboxId: handle.machineId,

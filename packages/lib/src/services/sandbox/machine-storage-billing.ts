@@ -15,6 +15,7 @@ import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-
 import { machineSessions } from '@pagespace/db/schema/machine-sessions';
 import { machineBranches } from '@pagespace/db/schema/machine-branches';
 import { machineProjects } from '@pagespace/db/schema/machine-projects';
+import { machineAgentTerminals } from '@pagespace/db/schema/machine-agent-terminals';
 import { lookupPageOwnerId } from '../../billing/machine-payer';
 import { MACHINE_MARKUP_BPS } from '../../billing/credit-pricing';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
@@ -127,6 +128,45 @@ export const defaultReconcileMachineStorageDeps: ReconcileMachineStorageDeps = {
     return [...byProject.values()].map((row) => ({ ...row, lastActiveAt: row.lastActiveAt ?? new Date(0) }));
   },
 
+  /**
+   * Every per-session agent-terminal Sprite we still believe is LIVE
+   * (sessions-per-location): `sandboxId IS NOT NULL` (a legacy/unprovisioned
+   * session has no Sprite of its own — its cwd is inside the machine/branch/
+   * project Sprite already metered there, so metering it here would DOUBLE-bill
+   * the same disk) AND `spriteTornDownAt IS NULL` (a destroyed filesystem is
+   * excluded, not billed at 0 — the row survives only as re-creatable config).
+   *
+   * `lastActiveAt` is joined from the OWNING machine's session row for the same
+   * reason a branch's is: session runs record activity on the machine key. It
+   * feeds ONLY the staleness health flag.
+   */
+  async listAgentTerminalSprites() {
+    const rows = await db
+      .select({
+        machineAgentTerminalId: machineAgentTerminals.id,
+        machinePageId: machineAgentTerminals.machineId,
+        storageLastBilledAt: machineAgentTerminals.storageLastBilledAt,
+        measuredBytes: machineAgentTerminals.storageMeasuredBytes,
+        measuredAt: machineAgentTerminals.storageMeasuredAt,
+        lastActiveAt: machineSessions.lastActiveAt,
+      })
+      .from(machineAgentTerminals)
+      .leftJoin(machineSessions, eq(machineSessions.pageId, machineAgentTerminals.machineId))
+      .where(and(isNotNull(machineAgentTerminals.sandboxId), isNull(machineAgentTerminals.spriteTornDownAt)));
+    // Identical de-fan as `listBranchSprites`: `machine_sessions.pageId` has no
+    // uniqueness guarantee, so the join can emit one row per matching session —
+    // and a fanned-out row here is a session disk BILLED TWICE. One row per
+    // session, freshest activity wins (the join only feeds the staleness flag).
+    const byTerminal = new Map<string, (typeof rows)[number]>();
+    for (const row of rows) {
+      const kept = byTerminal.get(row.machineAgentTerminalId);
+      if (!kept || (row.lastActiveAt ?? new Date(0)) > (kept.lastActiveAt ?? new Date(0))) {
+        byTerminal.set(row.machineAgentTerminalId, row);
+      }
+    }
+    return [...byTerminal.values()].map((row) => ({ ...row, lastActiveAt: row.lastActiveAt ?? new Date(0) }));
+  },
+
   lookupPageOwnerId,
 
   async chargeStorage({ payerId, pageId, costDollars, gbMonths }) {
@@ -184,6 +224,18 @@ export const defaultReconcileMachineStorageDeps: ReconcileMachineStorageDeps = {
       .update(machineProjects)
       .set({ storageLastBilledAt: billedThrough })
       .where(eq(machineProjects.id, machineProjectId));
+  },
+
+  // The per-session agent-terminal Sprite's OWN watermark — on its
+  // `machine_agent_terminals` row, keyed by the row id, even though the charge it
+  // follows was attributed to the owning machine page. A machine, its branches,
+  // its promoted projects and each of its per-session terminals bill their own
+  // window.
+  async advanceAgentTerminalWatermark({ machineAgentTerminalId, billedThrough }) {
+    await db
+      .update(machineAgentTerminals)
+      .set({ storageLastBilledAt: billedThrough })
+      .where(eq(machineAgentTerminals.id, machineAgentTerminalId));
   },
 
   now: () => new Date(),
@@ -268,10 +320,17 @@ export const persistStorageMeasurement: PersistStorageMeasurement = async ({
       .where(eq(machineBranches.id, subject.machineBranchId));
     return;
   }
+  if (subject.kind === 'project') {
+    await db
+      .update(machineProjects)
+      .set({ storageMeasuredBytes: measuredBytes, storageMeasuredAt: measuredAt })
+      .where(eq(machineProjects.id, subject.machineProjectId));
+    return;
+  }
   await db
-    .update(machineProjects)
+    .update(machineAgentTerminals)
     .set({ storageMeasuredBytes: measuredBytes, storageMeasuredAt: measuredAt })
-    .where(eq(machineProjects.id, subject.machineProjectId));
+    .where(eq(machineAgentTerminals.id, subject.machineAgentTerminalId));
 };
 
 /**
@@ -354,18 +413,34 @@ async function readMeasurementState(
     if (!row || row.spriteTornDownAt !== null) return { found: false, lastMeasuredAt: null };
     return { found: true, lastMeasuredAt: row.storageMeasuredAt ?? null };
   }
+  if (subject.kind === 'project') {
+    const [row] = await db
+      .select({
+        storageMeasuredAt: machineProjects.storageMeasuredAt,
+        sandboxId: machineProjects.sandboxId,
+        spriteTornDownAt: machineProjects.spriteTornDownAt,
+      })
+      .from(machineProjects)
+      .where(eq(machineProjects.id, subject.machineProjectId))
+      .limit(1);
+    // An UNPROMOTED project has no Sprite of its own — whatever handle the caller
+    // is holding is the MACHINE's, and recording its bytes here would both
+    // mis-attribute them and double-bill the machine's own row.
+    if (!row || !row.sandboxId || row.spriteTornDownAt !== null) return { found: false, lastMeasuredAt: null };
+    return { found: true, lastMeasuredAt: row.storageMeasuredAt ?? null };
+  }
   const [row] = await db
     .select({
-      storageMeasuredAt: machineProjects.storageMeasuredAt,
-      sandboxId: machineProjects.sandboxId,
-      spriteTornDownAt: machineProjects.spriteTornDownAt,
+      storageMeasuredAt: machineAgentTerminals.storageMeasuredAt,
+      sandboxId: machineAgentTerminals.sandboxId,
+      spriteTornDownAt: machineAgentTerminals.spriteTornDownAt,
     })
-    .from(machineProjects)
-    .where(eq(machineProjects.id, subject.machineProjectId))
+    .from(machineAgentTerminals)
+    .where(eq(machineAgentTerminals.id, subject.machineAgentTerminalId))
     .limit(1);
-  // An UNPROMOTED project has no Sprite of its own — whatever handle the caller
-  // is holding is the MACHINE's, and recording its bytes here would both
-  // mis-attribute them and double-bill the machine's own row.
+  // A legacy/unprovisioned session has no Sprite of its own — the handle the
+  // caller holds is the machine/branch/project's, and recording its bytes here
+  // would mis-attribute and double-bill that other row.
   if (!row || !row.sandboxId || row.spriteTornDownAt !== null) return { found: false, lastMeasuredAt: null };
   return { found: true, lastMeasuredAt: row.storageMeasuredAt ?? null };
 }
@@ -546,6 +621,37 @@ export async function measureProjectStorageOpportunistically(input: {
     subject: {
       kind: 'project',
       machineProjectId: input.machineProjectId,
+      machinePageId: input.machinePageId,
+    },
+    handle: input.handle,
+    resolveHandle: input.resolveHandle,
+  });
+}
+
+/**
+ * Measure a per-session AGENT-TERMINAL's own Sprite (persists to its
+ * `machine_agent_terminals` row; billed to the owning machine page by the
+ * reconcile — see machine-storage-attribution.ts).
+ *
+ * Wired at the session wake paths that hold a live handle: `provisionAgentTerminalSprite`
+ * (right after the clone/provision that writes the bulk of a session Sprite's
+ * footprint), and the realtime PTY connect path (`apps/realtime/src/index.ts`'s
+ * `resolveMachineSandbox`, every reattach) — the session's day-to-day wake, the
+ * equivalent of a branch's `attachBranch`. Same never-wake rule as the other
+ * entry points — it only ever measures a Sprite the caller already has awake, and
+ * `readMeasurementState` refuses a legacy/torn-down row so a machine's own bytes
+ * can never be recorded here.
+ */
+export async function measureAgentTerminalStorageOpportunistically(input: {
+  machineAgentTerminalId: string;
+  machinePageId: string;
+  handle?: Pick<MachineHandle, 'exec'>;
+  resolveHandle?: () => Promise<Pick<MachineHandle, 'exec'> | null>;
+}): Promise<void> {
+  await measureStorageOpportunistically({
+    subject: {
+      kind: 'agent-terminal',
+      machineAgentTerminalId: input.machineAgentTerminalId,
       machinePageId: input.machinePageId,
     },
     handle: input.handle,

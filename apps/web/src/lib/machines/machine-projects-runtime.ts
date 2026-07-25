@@ -95,6 +95,32 @@ function getMachineProjectStore() {
   return machineProjectStorePromise;
 }
 
+/**
+ * Identity-guarded, best-effort kill of a Sprite by (sandboxId, instance).
+ * `ok: true` = confirmed gone (killed, or a replacement already took the name);
+ * `ok: false` = genuine failure, may still be alive. Shared by `removeProject`'s
+ * own-Sprite kill and its project-scoped agent-terminal teardown.
+ */
+async function killSpriteIdentityGuarded({
+  sandboxId,
+  spriteInstanceId,
+}: {
+  sandboxId: string;
+  spriteInstanceId: string | null;
+}): Promise<{ ok: boolean }> {
+  const [{ getMachineHostForBranches }, { MachineSpriteReplacedError }] = await Promise.all([
+    import('./machine-branches-runtime'),
+    import('@pagespace/lib/services/sandbox/machine-host'),
+  ]);
+  try {
+    const host = await getMachineHostForBranches();
+    await host.kill({ machineId: sandboxId, expectedInstanceId: spriteInstanceId ?? undefined });
+    return { ok: true };
+  } catch (error) {
+    return { ok: error instanceof MachineSpriteReplacedError };
+  }
+}
+
 export async function resolveMachineActorContext(userId: string): Promise<MachineActorContext> {
   const [user, actorInfo] = await Promise.all([
     db.query.users.findFirst({ where: eq(users.id, userId), columns: { subscriptionTier: true } }),
@@ -201,23 +227,17 @@ export function buildMachineProjectsDeps({ actorUserId }: { actorUserId: string 
     },
     buildEnv: defaultBuildEnv,
     audit: (input) => writeCodeExecutionAudit({ input }),
-    killSprite: async ({ sandboxId, spriteInstanceId }) => {
-      // Identity-guarded, best-effort: a failure is fine — the machine_projects
-      // AFTER DELETE trigger rescues the pointer into the reclaim outbox and
-      // the orphan reconciler retries. A replaced instance means our target is
-      // already gone, which is the outcome we wanted.
-      const [{ getMachineHostForBranches }, { MachineSpriteReplacedError }] = await Promise.all([
-        import('./machine-branches-runtime'),
-        import('@pagespace/lib/services/sandbox/machine-host'),
-      ]);
-      try {
-        const host = await getMachineHostForBranches();
-        await host.kill({ machineId: sandboxId, expectedInstanceId: spriteInstanceId ?? undefined });
-        return { ok: true };
-      } catch (error) {
-        return { ok: error instanceof MachineSpriteReplacedError };
-      }
-    },
+    // Identity-guarded, best-effort: a failure is fine — the machine_projects
+    // AFTER DELETE trigger rescues the pointer into the reclaim outbox and the
+    // orphan reconciler retries. A replaced instance means our target is already
+    // gone, which is the outcome we wanted.
+    killSprite: killSpriteIdentityGuarded,
+    // The project's agent-terminal + branch Sprites are reclaimed automatically:
+    // deleting the machine_projects row CASCADES (migration 0230's machineProjectId
+    // FK) to every project- and branch-scoped machine_agent_terminals row and every
+    // machine_branches row, and each cascaded row's own AFTER-DELETE reclaim trigger
+    // (0229/0209) rescues its Sprite pointer into the outbox for the orphan
+    // reconciler to drain. No manual snapshot/enumeration teardown is needed.
   };
 }
 

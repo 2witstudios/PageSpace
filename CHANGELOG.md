@@ -137,6 +137,20 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **Every Terminal agent session now runs in its own isolated sandbox** — previously only a
+  *branch* session got a separate Sprite, while machine- and project-scoped sessions shared the
+  owning Machine's single Sprite, so two agents spawned at the same location collapsed onto one
+  filesystem. Now each spawned session (machine, project, or branch scope) provisions and runs in
+  its **own** Sprite: two agents at the same location are two independent, isolated machines that
+  can never see or clobber each other's files, and each one's Claude Code login is copied in from
+  the Machine's own Sprite (where you run `claude login`). **Billing implication:** a Machine can
+  now hold several concurrent Sprites instead of one, so active runtime cost scales with how many
+  sessions you actually run at once; each session's persistent disk is metered per session and
+  billed to the owning Machine (a paused/hibernating session bills only for the bytes it has
+  stored, not RAM). Closing a session, deleting its project, or deleting the Machine tears down and
+  reclaims that session's Sprite, so nothing keeps billing once you're done with it. Sessions
+  spawned under a Machine that has already been moved to Trash are refused rather than silently
+  creating a hidden, unreclaimable sandbox.
 - **`pagespace login` is for you, personally; `pagespace keys create` (or the guided `pagespace
   keys`) is for an agent** — the README, `docs/agent-access.md`, and the Settings > MCP page now
   say this explicitly and point agent/MCP setups at `pagespace keys create --drive <id>

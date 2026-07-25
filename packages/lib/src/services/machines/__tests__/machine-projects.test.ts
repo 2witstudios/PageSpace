@@ -491,10 +491,11 @@ describe('removeProject', () => {
     expect(await store.list(TERMINAL_ID)).toEqual([]);
   });
 
-  it('given a PROMOTED project with a live Sprite, should identity-guarded-kill it BEFORE deleting the row', async () => {
-    // A promoted project's Sprite is a real billing microVM findable only via
-    // this row. Deleting the row without the kill would leave the VM running
-    // with only the DB trigger's outbox pointer between it and billing forever.
+  it('given a PROMOTED project with a live Sprite, should identity-guarded-kill it (fast-path; the row delete + trigger backstop it)', async () => {
+    // A promoted project's Sprite is a real billing microVM. The row is deleted
+    // FIRST (finding V) — its AFTER-DELETE trigger rescues the pointer into the
+    // reclaim outbox — and this kill is the best-effort fast-path that stops the
+    // meter now rather than waiting for the reclaim cron.
     const promoted = makeRecord({
       sessionKey: 'sess-key-1',
       sandboxId: 'pgs-sbx-proj',

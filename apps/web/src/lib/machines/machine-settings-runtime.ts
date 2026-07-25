@@ -81,6 +81,7 @@ import { globalAssistantConfig } from '@pagespace/db/schema/integrations';
 import { machineBranches } from '@pagespace/db/schema/machine-branches';
 import { machineProjects } from '@pagespace/db/schema/machine-projects';
 import { machineSessions } from '@pagespace/db/schema/machine-sessions';
+import { machineAgentTerminals } from '@pagespace/db/schema/machine-agent-terminals';
 import {
   createDbMachineSessionStore,
   deriveMachineSessionKey,
@@ -351,6 +352,28 @@ async function teardownOneMachine(machineId: string): Promise<void> {
       ),
     );
 
+  // Per-session agent-terminal Sprites (sessions-per-location): every spawned
+  // session now owns its OWN Sprite (`machine_agent_terminals.sandboxId`),
+  // separate from the machine session / branch / project Sprites above. Only
+  // rows we still believe are LIVE — a NULL sandboxId is a legacy/unprovisioned
+  // row (nothing of its own to kill), a stamped `spriteTornDownAt` is already
+  // gone. Without this arm the page-delete cascade would drop these rows and
+  // strand their VMs as permanent billing orphans.
+  const agentTerminalRows = await db
+    .select({
+      id: machineAgentTerminals.id,
+      sandboxId: machineAgentTerminals.sandboxId,
+      spriteInstanceId: machineAgentTerminals.spriteInstanceId,
+    })
+    .from(machineAgentTerminals)
+    .where(
+      and(
+        eq(machineAgentTerminals.machineId, machineId),
+        isNotNull(machineAgentTerminals.sandboxId),
+        isNull(machineAgentTerminals.spriteTornDownAt),
+      ),
+    );
+
   const drive = await db.query.drives.findFirst({
     where: eq(drives.id, page.driveId),
     columns: { ownerId: true },
@@ -366,7 +389,7 @@ async function teardownOneMachine(machineId: string): Promise<void> {
   const sessionStore = await createDbMachineSessionStore();
   const session = sessionKey ? await sessionStore.findBySessionKey(sessionKey) : null;
 
-  if (branchRows.length === 0 && projectRows.length === 0 && !session) return; // Nothing live to tear down.
+  if (branchRows.length === 0 && projectRows.length === 0 && agentTerminalRows.length === 0 && !session) return; // Nothing live to tear down.
 
   // Record the INTENT to destroy, BEFORE any kill — this is what licenses the
   // orphan reconciler to finish the job if a kill below fails (or if this process
@@ -403,6 +426,32 @@ async function teardownOneMachine(machineId: string): Promise<void> {
           projectRows.map((project) => project.id),
         ),
       );
+  }
+  // GENERATION-GUARDED intent stamp (per row, CAS on sandboxId+instance) — NOT a
+  // bulk id-only update. A concurrent re-provision can replace this row's Sprite
+  // (new sandboxId/spriteInstanceId, and `revivedAgentTerminalColumns` clears
+  // teardownRequestedAt) between our select and this write. A bulk id-only stamp
+  // would ARM that fresh, LIVE replacement for reconciliation — and the
+  // instance-guarded kill/stamp below would then no-op against the old instance,
+  // leaving the row stamped-for-teardown while pointing at a live VM the
+  // reconciler would later destroy. CASing on the ORIGINALLY-SELECTED generation
+  // means a row whose Sprite changed under us simply is NOT armed (and is fenced
+  // out of the kill loop below). Only rows we actually armed are torn down.
+  const armedAgentTerminalRows: typeof agentTerminalRows = [];
+  for (const terminal of agentTerminalRows) {
+    if (!terminal.sandboxId) continue;
+    const armed = await db
+      .update(machineAgentTerminals)
+      .set({ teardownRequestedAt })
+      .where(
+        and(
+          eq(machineAgentTerminals.id, terminal.id),
+          eq(machineAgentTerminals.sandboxId, terminal.sandboxId),
+          eqOrIsNull(machineAgentTerminals.spriteInstanceId, terminal.spriteInstanceId),
+        ),
+      )
+      .returning({ id: machineAgentTerminals.id });
+    if (armed.length > 0) armedAgentTerminalRows.push(terminal);
   }
 
   const host = await getMachineHostForBranches();
@@ -464,6 +513,40 @@ async function teardownOneMachine(machineId: string): Promise<void> {
             eq(machineProjects.id, project.id),
             eq(machineProjects.sandboxId, project.sandboxId),
             eqOrIsNull(machineProjects.spriteInstanceId, project.spriteInstanceId),
+          ),
+        );
+    } catch {
+      // Best-effort; leave the row unstamped for the reconciler to retry.
+    }
+  }
+
+  // Per-session agent-terminal Sprites: same best-effort contract as branches/
+  // projects — a failed kill leaves the row unstamped for the orphan reconciler
+  // to retry. On a CONFIRMED kill we STAMP `spriteTornDownAt` (never delete the
+  // row here — the page-delete cascade below drops it, and its AFTER-DELETE
+  // reclaim trigger only fires for an UNSTAMPED sandboxId, so stamping now means
+  // the cascade won't redundantly re-enqueue an already-dead VM).
+  // Only rows we ARMED above (their generation was still the one we selected).
+  // A row whose Sprite was re-provisioned between select and stamp was fenced out
+  // — its fresh, live VM must never be killed here.
+  for (const terminal of armedAgentTerminalRows) {
+    if (!terminal.sandboxId) continue;
+    try {
+      // Identity-guarded: the kill is name-keyed and names are reused.
+      await host.kill({
+        machineId: terminal.sandboxId,
+        expectedInstanceId: terminal.spriteInstanceId ?? undefined,
+      });
+      await db
+        .update(machineAgentTerminals)
+        .set({ spriteTornDownAt: new Date() })
+        // CAS on the INSTANCE — a concurrent re-spawn may already have written a
+        // LIVE replacement into this row (see the branch loop).
+        .where(
+          and(
+            eq(machineAgentTerminals.id, terminal.id),
+            eq(machineAgentTerminals.sandboxId, terminal.sandboxId),
+            eqOrIsNull(machineAgentTerminals.spriteInstanceId, terminal.spriteInstanceId),
           ),
         );
     } catch {

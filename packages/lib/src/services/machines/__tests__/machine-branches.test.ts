@@ -10,7 +10,7 @@ import {
   type MachineBranchProjectLookup,
   type BranchStorageMeasurement,
 } from '../machine-branches';
-import type { MachineBranchStore, MachineBranchRecord } from '../machine-branches-store';
+import type { MachineBranchStore, MachineBranchRecord, NewMachineBranchInput } from '../machine-branches-store';
 import { deriveBranchSessionKey } from '../branch-session';
 import type { MachineHost, MachineHandle } from '../../sandbox/machine-host';
 import type { RunCommandArgs, SandboxRunResult } from '../../sandbox/sandbox-client/types';
@@ -31,6 +31,9 @@ const actor = {
 
 function makeStore(seed: MachineBranchRecord[] = []) {
   const rows = new Map<string, MachineBranchRecord>();
+  // Captures every create input so tests can assert what was persisted for columns
+  // the read record doesn't carry back (e.g. the machineProjectId cascade FK).
+  const createInputs: NewMachineBranchInput[] = [];
   const key = (machineId: string, projectName: string, branchName: string) => `${machineId}\0${projectName}\0${branchName}`;
   for (const row of seed) rows.set(key(row.machineId, row.projectName, row.branchName), row);
   let counter = 0;
@@ -41,6 +44,7 @@ function makeStore(seed: MachineBranchRecord[] = []) {
     findByName: async (machineId, projectName, branchName) => rows.get(key(machineId, projectName, branchName)) ?? null,
     findById: async (id) => [...rows.values()].find((r) => r.id === id) ?? null,
     create: async (input) => {
+      createInputs.push(input);
       const k = key(input.machineId, input.projectName, input.branchName);
       if (rows.has(k)) {
         throw Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' });
@@ -100,12 +104,12 @@ function makeStore(seed: MachineBranchRecord[] = []) {
       return false;
     },
   };
-  return { store, rows };
+  return { store, rows, createInputs };
 }
 
 function makeProjectStore(repoUrl: string | null = REPO_URL): MachineBranchProjectLookup {
   return {
-    findByName: async () => (repoUrl ? { repoUrl } : null),
+    findByName: async () => (repoUrl ? { id: 'project-1', repoUrl } : null),
   };
 }
 
@@ -202,7 +206,7 @@ function makeFakeHost(execImpl?: (state: SpriteState, args: RunCommandArgs) => S
 }
 
 function makeDeps(overrides: Partial<MachineBranchesDeps> = {}, storeSeed: MachineBranchRecord[] = []) {
-  const { store } = makeStore(storeSeed);
+  const { store, createInputs } = makeStore(storeSeed);
   const { host } = makeFakeHost();
   const auditCalls: unknown[] = [];
   const deps: MachineBranchesDeps = {
@@ -224,7 +228,7 @@ function makeDeps(overrides: Partial<MachineBranchesDeps> = {}, storeSeed: Machi
     },
     ...overrides,
   };
-  return { deps, store, host, auditCalls };
+  return { deps, store, host, auditCalls, createInputs };
 }
 
 describe('spawnBranch', () => {
@@ -248,6 +252,17 @@ describe('spawnBranch', () => {
     ]);
     // Token is injected into env for these commands only, never persisted.
     expect(state?.execLog[0]?.env).toMatchObject({ GH_TOKEN: 'ghp_secret_token', GITHUB_TOKEN: 'ghp_secret_token' });
+  });
+
+  it('should persist machineProjectId = the resolved project id on the branch row (the ON DELETE cascade FK, migration 0230)', async () => {
+    // makeProjectStore resolves to { id: 'project-1', repoUrl }.
+    const { deps, createInputs } = makeDeps();
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(createInputs).toHaveLength(1);
+    expect(createInputs[0]?.machineProjectId).toBe('project-1');
   });
 
   it('given the kill switch is off, should refuse without touching the host', async () => {
@@ -322,7 +337,7 @@ describe('spawnBranch', () => {
       projectStore: {
         findByName: async (_machineId: string, name: string) => {
           lookedUp.push(name);
-          return name === 'my-cool-feature' ? { repoUrl: REPO_URL } : null;
+          return name === 'my-cool-feature' ? { id: 'project-1', repoUrl: REPO_URL } : null;
         },
       },
     });
@@ -403,6 +418,7 @@ describe('spawnBranch', () => {
           ownerId: 'other-user',
           machineId: TERMINAL_ID,
           projectName: PROJECT_NAME,
+          machineProjectId: 'project-1',
           branchName: 'main',
           sessionKey: deriveBranchSessionKey({
             tenantId: actor.tenantId,
@@ -441,6 +457,7 @@ describe('spawnBranch', () => {
           ownerId: 'other-user',
           machineId: TERMINAL_ID,
           projectName: PROJECT_NAME,
+          machineProjectId: 'project-1',
           branchName: 'main',
           sessionKey: deriveBranchSessionKey({
             tenantId: actor.tenantId,

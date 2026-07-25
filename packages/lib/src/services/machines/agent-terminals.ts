@@ -38,8 +38,13 @@
 
 import { type MachineHandle, type MachineHost } from '../sandbox/machine-host';
 import { SANDBOX_ROOT } from '../sandbox/sandbox-paths';
-import { BRANCH_REPO_PATH } from './machine-branches';
+import { BRANCH_REPO_PATH, type MachineActorContext } from './machine-branches';
 import { PROJECT_REPO_PATH, isPromotedProject } from './machine-project-promotion';
+import {
+  provisionAgentTerminalSprite,
+  reconcileResumedSpriteInstance,
+  type AgentTerminalSpriteProvisionDeps,
+} from './agent-terminal-sprites';
 import {
   isUniqueViolation,
   type MachineAgentTerminalStore,
@@ -79,7 +84,7 @@ export interface AgentTerminalProjectLookup {
   findByName(
     machineId: string,
     name: string,
-  ): Promise<{ path: string; sandboxId?: string | null; spriteTornDownAt?: Date | null } | null>;
+  ): Promise<{ id: string; path: string; sandboxId?: string | null; spriteTornDownAt?: Date | null } | null>;
 }
 
 /**
@@ -130,6 +135,29 @@ export interface AgentTerminalsDeps {
   projectPromotion?: AgentTerminalProjectPromotion;
   /** Live-PTY probe consulted before a promotion — required wherever `projectPromotion` is wired. */
   liveSessions?: AgentTerminalLiveSessions;
+  /**
+   * Per-session Sprite provisioning (sessions-per-location). When wired, every
+   * FRESHLY-reserved (or legacy-unprovisioned) row gets its OWN Sprite at spawn,
+   * mirroring `spawnBranch`. Optional — a caller that omits it (a test, or a
+   * consumer that only ever reattaches) leaves rows unprovisioned, which the
+   * resolve path handles via the shared-Sprite fallback. Requires an actor
+   * resolver because provisioning needs the full tenant/tier context spawn's
+   * bare `{ userId }` does not carry (same lazy pattern as `projectPromotion`).
+   */
+  spriteProvision?: AgentTerminalSpriteProvisionDeps & {
+    resolveActor: (userId: string) => Promise<MachineActorContext>;
+  };
+  /**
+   * Is the owning Machine page soft-trashed? (finding U). The spawn access check
+   * (`canAccessMachine`) deliberately does NOT exclude trashed pages
+   * (machine-settings-runtime.ts), so without this gate an editor could spawn —
+   * and eagerly PROVISION a billable Sprite — under a Machine that has already
+   * been deleted, whose teardown has already run; the fresh row's
+   * `teardownRequestedAt` stays null and the orphan reconciler never reclaims it.
+   * Wired for spawn; a missing/unresolvable page reads as trashed (fail closed).
+   * Optional so tests/older callers omit it (then no gate — the runtime wires it).
+   */
+  isMachineTrashed?: (machineId: string) => Promise<boolean>;
   store: MachineAgentTerminalStore;
   host: MachineHost;
   now: () => Date;
@@ -138,7 +166,7 @@ export interface AgentTerminalsDeps {
 /** Each function below asks for exactly the slice of `AgentTerminalsDeps` it touches — e.g. a read-only resolver never needs `host`, so a caller (like the realtime PTY bridge) doesn't have to fabricate one just to satisfy the type. */
 export type SpawnAgentTerminalDeps = Pick<
   AgentTerminalsDeps,
-  'branchStore' | 'projectStore' | 'store' | 'now' | 'projectPromotion' | 'liveSessions'
+  'branchStore' | 'projectStore' | 'store' | 'now' | 'projectPromotion' | 'liveSessions' | 'spriteProvision' | 'isMachineTrashed'
 >;
 export type ResolveAgentTerminalDeps = Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'machineSandbox' | 'store'>;
 export type ListAgentTerminalsDeps = Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'store'>;
@@ -167,7 +195,20 @@ export type AgentTerminalScopeDenialReason =
   | 'branch_not_found'
   | 'machine_unavailable'
   /** A project/machine-scope target was requested but the caller's deps didn't wire `projectStore`/`machineSandbox`. */
-  | 'scope_unsupported';
+  | 'scope_unsupported'
+  /**
+   * This session's OWN Sprite was torn down (its `spriteTornDownAt` is stamped) —
+   * e.g. its Machine was trashed and its Sprites destroyed, then the page restored,
+   * leaving the row present but its VM gone. The read-only resolve/attach path
+   * CANNOT reprovision (it has no provisioning deps), and it must NOT route a
+   * torn-down row onto a shared machine/project Sprite (that would let restored
+   * sessions clobber each other's files) or onto its own already-destroyed branch
+   * Sprite (a dead pointer). So it REJECTS: a re-spawn (POST) reprovisions a fresh
+   * isolated Sprite and clears the teardown stamp. Distinct from a genuine legacy
+   * row (`sandboxId` null AND `spriteTornDownAt` null), which still uses the shared
+   * fallback for pre-feature backward compatibility.
+   */
+  | 'session_torn_down';
 
 type ScopeKeyResolution =
   | { ok: true; scopeKey: AgentTerminalScopeKey }
@@ -258,11 +299,43 @@ async function resolveProjectOrMachineLocation({
   return { ok: true, sandboxId: acquired.sandboxId, cwd, ownSprite: false };
 }
 
+/** The checkout directory a session's OWN Sprite runs at, by scope: a project/branch Sprite holds a clone; a machine-scope Sprite runs at its home. */
+function repoPathForScope(scope: AgentTerminalScope): string {
+  return scope === 'branch' ? BRANCH_REPO_PATH : scope === 'project' ? PROJECT_REPO_PATH : SANDBOX_ROOT;
+}
+
 /** Resolve WHERE an already-known ROW's Sprite + working directory live, by its OWN scope columns — the level-agnostic path (no name lookup at all). */
 async function resolveLocationForRow(
-  row: Pick<MachineAgentTerminalRecord, 'machineId' | 'projectName' | 'machineBranchId'>,
+  row: Pick<MachineAgentTerminalRecord, 'machineId' | 'scope' | 'projectName' | 'machineBranchId' | 'sandboxId' | 'spriteTornDownAt'>,
   deps: Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'machineSandbox'>,
 ): Promise<LocationResolution> {
+  // This session's OWN Sprite (sessions-per-location). Once provisioned at
+  // spawn (`maybeProvisionSprite`), the row carries its own `sandboxId` and
+  // EVERY scope resolves straight to it — the same isolated "own Sprite" a
+  // branch terminal has always had, now for machine- and project-scope
+  // sessions too.
+  if (row.sandboxId && !row.spriteTornDownAt) {
+    return { ok: true, sandboxId: row.sandboxId, cwd: repoPathForScope(row.scope), ownSprite: true };
+  }
+
+  // TORN-DOWN row: its own Sprite was CONFIRMED destroyed (`spriteTornDownAt`
+  // stamped — e.g. the Machine was trashed and its Sprites reclaimed, then the
+  // page restored, so the row is back but its VM is gone). This read-only path
+  // has no provisioning deps, so it cannot revive the Sprite; and it MUST NOT
+  // fall through to the shared-Sprite fallback below — for machine/project scope
+  // that would route multiple restored sessions onto ONE shared Sprite (breaking
+  // the per-session isolation guarantee — they would see and overwrite each
+  // other's files), and for branch scope it would resolve the branch's OWN, now
+  // ALSO-destroyed Sprite (a dead pointer). REJECT instead: a re-spawn (POST →
+  // `maybeProvisionSprite`, which skips the probe for a torn-down row and
+  // reprovisions under the same key) gives it a fresh isolated Sprite and clears
+  // the teardown stamp via the identity CAS. Only a GENUINE legacy row
+  // (`sandboxId` null AND `spriteTornDownAt` null — provisioning never wired)
+  // takes the shared fallback, preserving pre-feature backward compatibility.
+  if (row.spriteTornDownAt) {
+    return { ok: false, reason: 'session_torn_down' };
+  }
+
   if (row.machineBranchId) {
     const branch = await deps.branchStore.findById(row.machineBranchId);
     if (!branch) return { ok: false, reason: 'branch_not_found' };
@@ -292,6 +365,22 @@ export type SpawnAgentTerminalDenialReason =
    */
   | 'live_sessions_block_promotion'
   | 'name_in_use'
+  /** The owning Machine page is soft-trashed — no session may be reserved or provisioned under a deleted Machine (finding U). */
+  | 'machine_trashed'
+  /**
+   * A freshly-reserved session could not get its OWN isolated Sprite (clone /
+   * provisioning / persistence failure). Deliberately a FAILED spawn rather than a
+   * silent success on the shared Sprite: isolation is the guarantee (finding AA).
+   * `detail` carries the underlying provisioning reason. The reserved row is
+   * deleted, so a retry starts clean.
+   */
+  | 'provision_failed'
+  /**
+   * The actor is not authorized to run code (centralized `canRunCode` denied —
+   * finding P). Surfaced distinctly from `provision_failed` for a 403; like it,
+   * the freshly reserved row is deleted (never a lingering shared row).
+   */
+  | 'unauthorized'
   | 'error';
 
 /**
@@ -341,6 +430,119 @@ export type SpawnAgentTerminalResult =
   | { ok: true; id: string; agentType: AgentRuntimeType; resumed: boolean }
   /** `detail` carries a promotion refusal's actionable message; absent for every other denial. */
   | { ok: false; reason: SpawnAgentTerminalDenialReason; detail?: string };
+
+/**
+ * Give this session its OWN Sprite if provisioning is wired and the row does not
+ * already point at a live one — the sessions-per-location step, invoked right
+ * after the row is reserved (the row id is the Sprite-key fold, so the row must
+ * exist first).
+ *
+ * Returns whether provisioning succeeded, so the caller can enforce the isolation
+ * guarantee (finding AA): a FRESHLY-reserved session must get its OWN Sprite or
+ * the spawn FAILS — never a silent success with a null `sandboxId` that
+ * `resolveLocationForRow` would route onto the shared machine/branch/project
+ * Sprite, letting supposedly-isolated sessions clobber each other's files.
+ *
+ * `{ ok: true }` covers BOTH "provisioned" AND "provisioning not attempted":
+ *   - provisioning unwired (a legacy consumer / test) — a legacy row, not a
+ *     failed isolation, so the pre-feature shared-Sprite behaviour stays;
+ *   - a chat-surface agent type that never opens a PTY;
+ *   - a row already pointing at a live Sprite (probe hits, instance reconciled
+ *     per finding GG), or a probe the control plane couldn't answer (leave it;
+ *     the resolve path retries).
+ * `{ ok: false }` means provisioning WAS attempted for this row and failed
+ * (returned `{ ok: false }` or threw). `reprovisionOfUnusable` tells the caller
+ * whether the row is still SERVABLE without its own Sprite: `false` for a genuine
+ * legacy row (the shared fallback still serves it — a resume heal stays 200);
+ * `true` for a torn-down or vanished row (the resolve path rejects/dead-points it),
+ * so a resume must PROPAGATE the failure (finding HH) exactly as a fresh
+ * reservation does (finding AA). The fresh-reservation caller ignores the field
+ * (it always fails + deletes the row).
+ */
+type MaybeProvisionResult =
+  | { ok: true }
+  | { ok: false; reason: 'unauthorized' | 'provision_failed'; detail?: string; reprovisionOfUnusable: boolean };
+
+async function maybeProvisionSprite(
+  row: MachineAgentTerminalRecord,
+  userId: string,
+  deps: Pick<SpawnAgentTerminalDeps, 'spriteProvision'>,
+): Promise<MaybeProvisionResult> {
+  const provision = deps.spriteProvision;
+  if (!provision) return { ok: true }; // not attempted — legacy/unwired, keep shared-Sprite behaviour
+  // Only PTY-launching agent types get a Sprite; a chat-surface row (e.g.
+  // `pagespace`) never opens a PTY, so provisioning one for it would be a
+  // billing VM nothing ever attaches to.
+  if (!isAgentRuntimeType(row.agentType) || !isPtyAgentType(row.agentType)) return { ok: true };
+
+  // FINDING 4: a row pointing at a Sprite we still BELIEVE is live is not proof
+  // the VM still exists — a provider can destroy it out from under us. PROBE it
+  // with `host.attach` (mirrors spawnBranch's vanished-Sprite path): a live
+  // handle means reattach (the resolve path opens the PTY), a null means the VM
+  // vanished and we must fall through to reprovision under the SAME key,
+  // overwriting the stale pointer via the CAS. Without the probe, a destroyed
+  // Sprite would make `getSprite` fail in the realtime bridge on every later
+  // connect, and every re-spawn would false-succeed forever.
+  if (row.sandboxId && !row.spriteTornDownAt) {
+    let handle: MachineHandle | null;
+    try {
+      handle = await provision.host.attach({ machineId: row.sandboxId });
+    } catch {
+      // Control plane unreachable — we cannot tell whether the VM is alive, so
+      // we must NOT reprovision blind (that could duplicate a live VM on a
+      // transient blip). Leave the pointer as-is; the resolve path retries.
+      return { ok: true };
+    }
+    if (handle) {
+      // FINDING GG: the attached handle may be a REPLACEMENT provisioned under
+      // the same deterministic name whose identity never persisted, leaving the
+      // row on a STALE instance. Adopt the live instance BEFORE resuming, so
+      // later teardown/outbox target the VM that is actually alive. A clean
+      // adoption (or an already-matching instance) resumes; an adoption that
+      // can't land leaves the row unusable, so it propagates like a reprovision
+      // failure (finding HH).
+      const reconciled = await reconcileResumedSpriteInstance({ row, handle, deps: provision });
+      if (reconciled.ok) return { ok: true };
+      return { ok: false, reason: 'provision_failed', detail: reconciled.detail, reprovisionOfUnusable: true };
+    }
+    // Vanished — fall through to reprovision under the same key. The CAS in
+    // `provisionAgentTerminalSprite` uses `previousSandboxId = row.sandboxId`
+    // (the stale pointer), so it overwrites it rather than racing a phantom.
+  }
+
+  // FINDING HH: whether a reprovision FAILURE must PROPAGATE to the caller (403/
+  // 500) or stay a best-effort heal depends on whether the row is still SERVABLE
+  // WITHOUT its own Sprite. A genuine LEGACY row (no `sandboxId`, not torn down)
+  // resolves via the shared-Sprite fallback, so healing it is best-effort — a
+  // failure leaves it usable. A TORN-DOWN row (`spriteTornDownAt` set — the
+  // resolve path now rejects it) or a VANISHED row (had a `sandboxId` whose probe
+  // came back gone — a dead pointer) is UNSERVABLE, so its reprovision failure is
+  // fatal exactly like a fresh reservation's (finding AA): the caller must surface
+  // it, not report a false 200 resume that only fails later at realtime attach.
+  const reprovisionOfUnusable = row.sandboxId !== null || row.spriteTornDownAt !== null;
+  try {
+    const actor = await provision.resolveActor(userId);
+    const result = await provisionAgentTerminalSprite({ row, actor, deps: provision });
+    if (result.ok) return { ok: true };
+    // A CONCURRENT-provision collision on our shared name-keyed Sprite (the
+    // dest-exists race) is BENIGN: the winner owns and is still cloning into the
+    // live Sprite, which was deliberately NOT killed. Treat it as a best-effort
+    // success — the row converges to the winner's Sprite (or reprovisions on next
+    // use); NEVER fail or delete the row here, which would strand the winner's CAS.
+    if (result.reason === 'clone_collision') return { ok: true };
+    // A code-execution POLICY denial (finding P) is surfaced distinctly so the
+    // spawn returns a 403 rather than a generic 500 — but the row is still
+    // removed by the caller (never a lingering shared row). Every OTHER failure
+    // (clone / provision / persist / egress / liveness fence) is a genuine
+    // provisioning failure.
+    if (result.reason === 'unauthorized') return { ok: false, reason: 'unauthorized', detail: result.detail, reprovisionOfUnusable };
+    return { ok: false, reason: 'provision_failed', detail: result.detail ?? result.reason, reprovisionOfUnusable };
+  } catch (error) {
+    // `provisionAgentTerminalSprite` already killed/enqueued any VM it created
+    // before the throw (killUnreferencedOrEnqueue); we just report the failure.
+    return { ok: false, reason: 'provision_failed', detail: error instanceof Error ? error.message : String(error), reprovisionOfUnusable };
+  }
+}
 
 /**
  * Promote this project to its OWN Sprite if it has not been promoted yet.
@@ -442,6 +644,14 @@ export async function spawnAgentTerminal({
   if (!plan.ok) return plan;
   const resolvedType = agentType as AgentRuntimeType;
 
+  // FINDING U: refuse a soft-trashed Machine BEFORE anything is reserved,
+  // PROMOTED, or provisioned — the spawn access check does not exclude trashed
+  // pages, so this is the only thing stopping a billable Sprite (and an
+  // unreclaimable row) from being created under an already-deleted Machine.
+  if (deps.isMachineTrashed && (await deps.isMachineTrashed(machineId))) {
+    return { ok: false, reason: 'machine_trashed' };
+  }
+
   const scope = await resolveScopeKey({ machineId, projectName, branchName, deps });
   if (!scope.ok) return scope;
 
@@ -463,33 +673,85 @@ export async function spawnAgentTerminal({
   const existing = await deps.store.findByName(scope.scopeKey, name);
   if (existing) {
     if (existing.agentType !== resolvedType) return { ok: false, reason: 'name_in_use' };
+    // Heal a legacy/pre-existing row (finding GG reconciles a live-attach's
+    // instance; a vanished/torn-down row reprovisions). A genuine LEGACY row stays
+    // best-effort — it is still served by the shared fallback, so a heal failure
+    // leaves it as-is. But an UNUSABLE row (torn-down/vanished — the resolve path
+    // now rejects/dead-points it) whose reprovision FAILS must PROPAGATE (finding
+    // HH): surface the actionable 403/500 instead of a false 200 resume that only
+    // fails later at realtime attach. The row is LEFT in place (unlike a fresh
+    // reservation the fresh path deletes) — it is resumable config; a retry
+    // re-attempts the reprovision.
+    const healed = await maybeProvisionSprite(existing, actor.userId, deps);
+    if (!healed.ok && healed.reprovisionOfUnusable) {
+      return { ok: false, reason: healed.reason, detail: healed.detail };
+    }
     return { ok: true, id: existing.id, agentType: resolvedType, resumed: true };
   }
 
+  // Resolve the owning project's id for the machineProjectId FK — the ON DELETE
+  // cascade that reclaims this session's Sprite when its project is removed. Set
+  // for project- AND branch-scope (a branch always belongs to a project); NULL for
+  // machine scope. A project that can't be resolved fails the spawn rather than
+  // inserting a null-FK project row that the cascade would never reach.
+  let machineProjectId: string | null = null;
+  if (scope.scopeKey.projectName !== null) {
+    if (!deps.projectStore) return { ok: false, reason: 'scope_unsupported' };
+    const project = await deps.projectStore.findByName(scope.scopeKey.machineId, scope.scopeKey.projectName);
+    if (!project) return { ok: false, reason: 'project_not_found' };
+    machineProjectId = project.id;
+  }
+
+  let row: MachineAgentTerminalRecord;
   try {
-    const row = await deps.store.create({
+    row = await deps.store.create({
       ownerId: actor.userId,
       machineId: scope.scopeKey.machineId,
       scope: deriveAgentTerminalScope(scope.scopeKey),
       projectName: scope.scopeKey.projectName,
+      machineProjectId,
       machineBranchId: scope.scopeKey.machineBranchId,
       name,
       agentType: resolvedType,
       command: command ?? null,
       now: deps.now(),
     });
-    return { ok: true, id: row.id, agentType: resolvedType, resumed: false };
   } catch (error) {
     if (isUniqueViolation(error)) {
       // Lost a race against a concurrent spawn of the same name.
       const reconciled = await deps.store.findByName(scope.scopeKey, name);
       if (reconciled && reconciled.agentType === resolvedType) {
+        // Same resume contract as the `existing` path above (finding HH): an
+        // unusable row whose reprovision fails propagates; a live/legacy resume
+        // stays 200.
+        const healed = await maybeProvisionSprite(reconciled, actor.userId, deps);
+        if (!healed.ok && healed.reprovisionOfUnusable) {
+          return { ok: false, reason: healed.reason, detail: healed.detail };
+        }
         return { ok: true, id: reconciled.id, agentType: resolvedType, resumed: true };
       }
       if (reconciled) return { ok: false, reason: 'name_in_use' };
     }
     return { ok: false, reason: 'error' };
   }
+
+  // FINDING AA: this FRESH reservation must get its OWN Sprite or the spawn FAILS
+  // — isolation is the guarantee (own Sprite or error, never a silent shared
+  // fallback). On a wired-but-failed provision, DELETE the reserved row so no
+  // null-`sandboxId` row lingers for `resolveLocationForRow` to route onto a
+  // shared Sprite, and surface the failure. (When provisioning is unwired the
+  // result is `{ ok: true }`, so the legacy shared-Sprite path is unchanged.)
+  const provisioned = await maybeProvisionSprite(row, actor.userId, deps);
+  if (!provisioned.ok) {
+    // FINDING FF: delete the reservation by the ORIGINAL row id (only while still
+    // unprovisioned) — never by (scope, name). Between reserving this row and
+    // reaching here, a concurrent request could have deleted our still-null row
+    // and recreated the SAME name as a DIFFERENT row; a name delete would then
+    // drop that new caller's row (and strand its Sprite via the reclaim trigger).
+    await deps.store.removeIfUnprovisioned({ id: row.id });
+    return { ok: false, reason: provisioned.reason, detail: provisioned.detail };
+  }
+  return { ok: true, id: row.id, agentType: resolvedType, resumed: false };
 }
 
 export type ResolveAgentTerminalResult =
@@ -710,14 +972,52 @@ async function killAtLocation(
 }
 
 /**
- * A row with `streamSessionId === null` (a chat-surface row, which never has
- * one, or a PTY row whose stream was never opened) has nothing running to
- * kill — drop it with a DB-only write, no Sprite touch at all. Only a row
- * whose PTY IS running needs its scope's Sprite resolved (which, for
- * machine/project scope, may acquire/reconnect it) before `killAtLocation`
- * can reach in and kill that specific session.
+ * Destroy this session's OWN per-session Sprite and drop the row — the
+ * sessions-per-location kill, the exact mirror of `killBranch`. Runs whenever
+ * the row points at its own Sprite, EVEN with `streamSessionId === null`: a
+ * session provisioned at spawn but never PTY-connected still has a live billing
+ * VM, and a bare DB-delete would strand it (its AFTER-DELETE reclaim trigger
+ * would enqueue it, but killing here is the direct, immediate path). Destroying
+ * the whole Sprite terminates every process on it, so the PTY session is killed
+ * with it — no separate `killSession` needed.
+ */
+async function killOwnSprite(
+  row: MachineAgentTerminalRecord & { sandboxId: string },
+  deps: Pick<KillAgentTerminalDeps, 'store' | 'host'>,
+): Promise<KillAgentTerminalResult> {
+  try {
+    // Identity-guarded: the kill is name-keyed and names are reused across
+    // re-creates, so without this a Sprite re-provisioned under this session's
+    // key would be destroyed in place of the one we meant.
+    await deps.host.kill({ machineId: row.sandboxId, expectedInstanceId: row.spriteInstanceId ?? undefined });
+  } catch {
+    // Sprite may still be running — keep the tracking row so a retry (or the
+    // orphan reconciler, once teardown is requested) can still find and kill it.
+    return { ok: false, reason: 'error' };
+  }
+
+  // CAS on sandboxId+instance, NOT a name-keyed delete: a concurrent re-spawn can
+  // write a REPLACEMENT Sprite into this row between our kill and this delete, and
+  // a name-keyed delete would then destroy the pointer to that brand-new, LIVE VM
+  // (invisible even to the reconciler). Losing the CAS is the correct outcome —
+  // the winner's Sprite is live and tracked, and the one we killed was redundant.
+  await deps.store.removeIfSandbox({ id: row.id, sandboxId: row.sandboxId, spriteInstanceId: row.spriteInstanceId });
+  return { ok: true };
+}
+
+/**
+ * Tear a session down. A row with its OWN Sprite (sessions-per-location) has that
+ * Sprite destroyed via `killOwnSprite`. Otherwise (a legacy/pre-per-session row,
+ * or one whose provision never landed): a row with `streamSessionId === null`
+ * has nothing running — drop it with a DB-only write; a row whose PTY IS running
+ * needs its scope's shared Sprite resolved (which, for machine/project scope, may
+ * acquire/reconnect it) before `killAtLocation` kills that specific PTY session.
  */
 async function killRow(row: MachineAgentTerminalRecord, deps: KillAgentTerminalDeps): Promise<KillAgentTerminalResult> {
+  if (row.sandboxId && !row.spriteTornDownAt) {
+    return killOwnSprite({ ...row, sandboxId: row.sandboxId }, deps);
+  }
+
   if (row.streamSessionId === null) {
     await deps.store.remove({ machineId: row.machineId, projectName: row.projectName, machineBranchId: row.machineBranchId }, row.name);
     return { ok: true };

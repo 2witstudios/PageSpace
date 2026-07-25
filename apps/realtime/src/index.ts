@@ -25,7 +25,10 @@ import {
   findLiveMachineSandboxId,
 } from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/machine-billing';
-import { measureMachineStorageOpportunistically } from '@pagespace/lib/services/sandbox/machine-storage-billing';
+import {
+  measureMachineStorageOpportunistically,
+  measureAgentTerminalStorageOpportunistically,
+} from '@pagespace/lib/services/sandbox/machine-storage-billing';
 import { checkMachineRuntimeGuardrail, recordMachineActivity, acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
 import { createSpritesSandboxClient, createSpriteHandleCache, type SpritesSdk } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { createSpriteMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-machine-host';
@@ -358,6 +361,18 @@ async function resolveAgentTerminalSandbox({
           // opening the PTY itself (see `ResolveMachineSandboxDeps.
           // refreshBranchCredential`'s doc comment).
         }
+      },
+      // Meter this session Sprite's storage on the PTY connect wake (its
+      // `attachBranch` equivalent), so a session used only interactively still
+      // gets measured instead of billing the 0 floor forever. `resolveHandle` is
+      // lazy — paid only when a measurement is actually due — and shares this
+      // connect's handle cache; throttled + best-effort inside.
+      measureAgentTerminalStorage: async ({ machineAgentTerminalId, machinePageId, sandboxId }) => {
+        await measureAgentTerminalStorageOpportunistically({
+          machineAgentTerminalId,
+          machinePageId,
+          resolveHandle: () => host.attach({ machineId: sandboxId }),
+        });
       },
     },
   );

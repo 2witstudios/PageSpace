@@ -19,11 +19,28 @@ export interface MachineAgentTerminalRecord {
   machineId: string;
   scope: AgentTerminalScope;
   projectName: string | null;
+  /** FK to the owning `machine_projects` row (project/branch scope; NULL for machine scope) — the ON DELETE cascade that reclaims this session's Sprite when its project is removed. */
+  machineProjectId: string | null;
   machineBranchId: string | null;
   name: string;
   agentType: string;
   command: string | null;
   streamSessionId: string | null;
+  /**
+   * The opaque HMAC name this session's OWN Sprite is provisioned under
+   * (`deriveAgentTerminalSessionSpriteKey`). NULL on legacy/unprovisioned rows.
+   */
+  sessionKey: string | null;
+  /** This session's OWN Sprite NAME (reused across re-creates, so NOT an identity). NULL until first provisioned; the shared-Sprite fallback resolves such rows. */
+  sandboxId: string | null;
+  /** WHICH VM this row's Sprite is. NULL on legacy rows. Every teardown CAS keys on this, because `sandboxId` cannot tell a replacement Sprite from its predecessor. */
+  spriteInstanceId: string | null;
+  /** Egress-lockdown proof for this session's VM, handed back on the next provision. NULL when unproven. */
+  egressPolicyToken: string | null;
+  /** When a teardown of this session's Sprite was REQUESTED. Cleared whenever a live Sprite is recorded. */
+  teardownRequestedAt: Date | null;
+  /** When this session's Sprite was CONFIRMED destroyed; NULL while we believe it is live. A stamped row resolves via the shared-Sprite fallback. */
+  spriteTornDownAt: Date | null;
   /** The tail of the LAST DEAD incarnation's scrollback — see `recordColdTail`. Null until the first teardown. */
   coldTail: string | null;
   /** When the PTY that produced `coldTail` ended. */
@@ -39,6 +56,8 @@ export interface NewMachineAgentTerminalInput {
   machineId: string;
   scope: AgentTerminalScope;
   projectName: string | null;
+  /** FK to the owning project row (project/branch scope; NULL for machine scope). */
+  machineProjectId: string | null;
   machineBranchId: string | null;
   name: string;
   agentType: string;
@@ -102,7 +121,119 @@ export interface MachineAgentTerminalStore {
    * correct it.
    */
   recordColdTail(input: { id: string; tail: string; hasOutput: boolean; endedAt: Date }): Promise<void>;
+  /**
+   * Record this session's freshly-provisioned Sprite identity onto its row,
+   * under a compare-and-swap on the CURRENT `sandboxId` — the agent-terminal
+   * twin of `MachineBranchStore.updateSandboxId`. `previousSandboxId` is `null`
+   * for a FIRST provision (the row was reserved with a NULL Sprite) and the
+   * vanished Sprite's name when re-provisioning after it disappeared. Two
+   * concurrent provisions of the same unprovisioned row race here; the loser
+   * sees `false` and reconciles rather than orphaning its own live VM. Also
+   * clears `spriteTornDownAt`/`teardownRequestedAt` (a new generation voids a
+   * stale teardown), same as `revivedBranchColumns`.
+   */
+  updateSpriteIdentity(input: {
+    id: string;
+    previousSandboxId: string | null;
+    sessionKey: string;
+    sandboxId: string;
+    spriteInstanceId: string | null;
+    egressPolicyToken: string | null;
+    now: Date;
+  }): Promise<boolean>;
+  /**
+   * Stamp `spriteTornDownAt` on this row after its Sprite is CONFIRMED killed,
+   * under a CAS on the INSTANCE — the agent-terminal twin of the branch/project
+   * teardown stamp. Keeps the row (its FK-cascade and reservation live on); a
+   * concurrent re-provision that wrote a LIVE replacement instance is protected
+   * by the CAS. Returns whether it stamped.
+   */
+  stampSpriteTornDown(input: { id: string; sandboxId: string; spriteInstanceId: string | null; now: Date }): Promise<boolean>;
+  /**
+   * Compare-and-swap removal by row id: deletes ONLY if the row still points at
+   * `sandboxId` (and instance). Use this — never the name-keyed `remove` —
+   * after killing a session's OWN Sprite, for the same reason
+   * `MachineBranchStore.removeIfSandbox` exists: a concurrent re-spawn can write
+   * a replacement Sprite into the row between the kill and the delete, and a
+   * name-keyed delete would strand that live VM. Drops the rescued reclaim
+   * pointer with the row (the Sprite is already confirmed dead).
+   */
+  removeIfSandbox(input: { id: string; sandboxId: string; spriteInstanceId: string | null }): Promise<boolean>;
+  /**
+   * Compare-and-swap removal that RESCUES the Sprite pointer instead of dropping
+   * it — the twin of `removeIfSandbox` for an UNCONFIRMED kill.
+   *
+   * Deletes the row ONLY if it still points at (`sandboxId`, `spriteInstanceId`),
+   * exactly like `removeIfSandbox`, so a concurrent re-spawn's live replacement is
+   * never stranded. But it does NOT drop the reclaim-outbox pointer the
+   * AFTER-DELETE trigger enqueues as the row goes — so a Sprite whose kill could
+   * NOT be confirmed is left for the orphan reconciler's tier-A to retry, rather
+   * than billing forever. Use `removeIfSandbox` when the kill IS confirmed (drop
+   * the redundant pointer); use this when it is not (keep it).
+   */
+  removeIfSandboxToReclaim(input: { id: string; sandboxId: string; spriteInstanceId: string | null }): Promise<boolean>;
+  /**
+   * Delete a reservation row BY ID, but ONLY while it is still unprovisioned
+   * (`sandboxId IS NULL`) — the failed-fresh-provision cleanup (finding FF).
+   *
+   * Never a name-keyed delete: a name is reusable, so between this spawn
+   * reserving its row and reaching cleanup, a concurrent request can delete the
+   * still-unprovisioned row and recreate the SAME name as a DIFFERENT row — a
+   * name delete would then remove that new caller's row (and, once it provisions,
+   * strand its live Sprite via the reclaim trigger). Keying on the ORIGINAL id
+   * touches only the row this spawn reserved; the `sandboxId IS NULL` guard means
+   * a row that somehow acquired a live Sprite is never dropped.
+   */
+  removeIfUnprovisioned(input: { id: string }): Promise<boolean>;
+  /**
+   * Enqueue a Sprite pointer directly into the reclaim outbox
+   * (`machine_sprite_reclaims`) — for a Sprite that was PROVISIONED but never
+   * recorded on any row (its row still has a NULL `sandboxId`), so neither an
+   * AFTER-DELETE trigger nor the tracking-row reconciler could ever find it. The
+   * provisioning failure path uses this when a cleanup kill cannot be confirmed.
+   * Idempotent (ON CONFLICT), mirroring the trigger's own insert.
+   */
+  enqueueReclaim(input: { sandboxId: string; spriteInstanceId: string | null }): Promise<void>;
   remove(scope: AgentTerminalScopeKey, name: string): Promise<void>;
+}
+
+/**
+ * What recording a live (re-)provisioned Sprite writes onto a
+ * `machine_agent_terminals` row (pure) — the agent-terminal twin of
+ * `revivedBranchColumns`. A new Sprite generation voids BOTH teardown marks and
+ * resets the storage accounting period, so a revived row never bills the dead
+ * generation's measured size for a window it did not exist.
+ */
+export function revivedAgentTerminalColumns(input: {
+  sessionKey: string;
+  sandboxId: string;
+  spriteInstanceId: string | null;
+  egressPolicyToken: string | null;
+  now: Date;
+}): {
+  sessionKey: string;
+  sandboxId: string;
+  spriteInstanceId: string | null;
+  egressPolicyToken: string | null;
+  spriteTornDownAt: null;
+  teardownRequestedAt: null;
+  storageLastBilledAt: Date;
+  storageMeasuredBytes: null;
+  storageMeasuredAt: null;
+  updatedAt: Date;
+} {
+  return {
+    sessionKey: input.sessionKey,
+    sandboxId: input.sandboxId,
+    spriteInstanceId: input.spriteInstanceId,
+    egressPolicyToken: input.egressPolicyToken,
+    spriteTornDownAt: null,
+    teardownRequestedAt: null,
+    storageLastBilledAt: input.now,
+    storageMeasuredBytes: null,
+    storageMeasuredAt: null,
+    updatedAt: input.now,
+  };
 }
 
 /** Re-exported so callers can classify a `create` rejection without importing the DB layer directly. */
@@ -114,10 +245,20 @@ export { isUniqueViolation };
  * the DB module graph.
  */
 export async function createDbMachineAgentTerminalStore(): Promise<MachineAgentTerminalStore> {
-  const [{ db }, { eq, and, or, lt, isNull }, { machineAgentTerminals }] = await Promise.all([
+  const [
+    { db },
+    { eq, ne, and, or, lt, isNull, eqOrIsNull, exists, sql },
+    { machineAgentTerminals },
+    { machineSpriteReclaims },
+    { pages },
+    { machineProjects },
+  ] = await Promise.all([
     import('@pagespace/db/db'),
     import('@pagespace/db/operators'),
     import('@pagespace/db/schema/machine-agent-terminals'),
+    import('@pagespace/db/schema/machine-sprite-reclaims'),
+    import('@pagespace/db/schema/core'),
+    import('@pagespace/db/schema/machine-projects'),
   ]);
 
   // Coalescing equality: a NULL scope column (machine/project scope) must
@@ -162,6 +303,7 @@ export async function createDbMachineAgentTerminalStore(): Promise<MachineAgentT
           machineId: input.machineId,
           scope: input.scope,
           projectName: input.projectName,
+          machineProjectId: input.machineProjectId,
           machineBranchId: input.machineBranchId,
           name: input.name,
           agentType: input.agentType,
@@ -194,6 +336,146 @@ export async function createDbMachineAgentTerminalStore(): Promise<MachineAgentT
             or(isNull(machineAgentTerminals.coldTailAt), lt(machineAgentTerminals.coldTailAt, endedAt)),
           ),
         );
+    },
+
+    async updateSpriteIdentity({ id, previousSandboxId, sessionKey, sandboxId, spriteInstanceId, egressPolicyToken, now }) {
+      const updated = await db
+        .update(machineAgentTerminals)
+        .set(revivedAgentTerminalColumns({ sessionKey, sandboxId, spriteInstanceId, egressPolicyToken, now }))
+        .where(
+          and(
+            eq(machineAgentTerminals.id, id),
+            // CAS on the CURRENT sandboxId: null for a first provision, the vanished
+            // name for a re-provision. `eqOrIsNull` matches the null case.
+            eqOrIsNull(machineAgentTerminals.sandboxId, previousSandboxId),
+            // LIVENESS FENCE (findings BB/CC), FUSED into the CAS so it is ATOMIC
+            // with the identity write: only persist a live Sprite pointer if the
+            // owning resource STILL exists at this instant. A spawn that raced a
+            // machine trash or a project removal and reaches here AFTER teardown
+            // enumerated is fenced out (0 rows), and `provisionAgentTerminalSprite`
+            // then kills/enqueues the handle instead of leaving a persisted orphan
+            // the reconciler could never discover (its `teardownRequestedAt` would
+            // stay null). A persist that lands BEFORE the trash/removal is caught by
+            // the enumeration that runs after it (teardownOneMachine / removeProject).
+            //
+            // (1) the owning Machine page is NOT soft-trashed:
+            exists(
+              db
+                .select({ one: sql`1` })
+                .from(pages)
+                .where(and(eq(pages.id, machineAgentTerminals.machineId), eq(pages.isTrashed, false))),
+            ),
+            // (2) a PROJECT-scoped row's project row still exists (the link is only
+            // `projectName` TEXT, so a project delete never cascades to it):
+            or(
+              ne(machineAgentTerminals.scope, 'project'),
+              exists(
+                db
+                  .select({ one: sql`1` })
+                  .from(machineProjects)
+                  .where(
+                    and(
+                      eq(machineProjects.machineId, machineAgentTerminals.machineId),
+                      eq(machineProjects.name, machineAgentTerminals.projectName),
+                    ),
+                  ),
+              ),
+            ),
+          ),
+        )
+        .returning({ id: machineAgentTerminals.id });
+      return updated.length > 0;
+    },
+
+    async stampSpriteTornDown({ id, sandboxId, spriteInstanceId, now }) {
+      const updated = await db
+        .update(machineAgentTerminals)
+        .set({ spriteTornDownAt: now })
+        // CAS on the INSTANCE, not the name: a concurrent re-provision may have
+        // written a LIVE replacement into this row, and stamping that as torn
+        // down would hide a billing VM from the reconciler forever.
+        .where(
+          and(
+            eq(machineAgentTerminals.id, id),
+            eq(machineAgentTerminals.sandboxId, sandboxId),
+            eqOrIsNull(machineAgentTerminals.spriteInstanceId, spriteInstanceId),
+          ),
+        )
+        .returning({ id: machineAgentTerminals.id });
+      return updated.length > 0;
+    },
+
+    async removeIfSandbox({ id, sandboxId, spriteInstanceId }) {
+      // One transaction — see the identical note in `createDbMachineBranchStore`.
+      // The AFTER DELETE trigger rescues this row's sandboxId into the reclaim
+      // outbox as it goes; here the Sprite is already CONFIRMED dead, so we drop
+      // the rescued pointer with it rather than pay a redundant kill next tick.
+      return db.transaction(async (tx) => {
+        const deleted = await tx
+          .delete(machineAgentTerminals)
+          .where(
+            and(
+              eq(machineAgentTerminals.id, id),
+              eq(machineAgentTerminals.sandboxId, sandboxId),
+              eqOrIsNull(machineAgentTerminals.spriteInstanceId, spriteInstanceId),
+            ),
+          )
+          .returning({ id: machineAgentTerminals.id });
+        if (deleted.length === 0) return false;
+        await tx.delete(machineSpriteReclaims).where(eq(machineSpriteReclaims.sandboxId, sandboxId));
+        return true;
+      });
+    },
+
+    async removeIfSandboxToReclaim({ id, sandboxId, spriteInstanceId }) {
+      // Same CAS delete as `removeIfSandbox`, but WITHOUT dropping the reclaim
+      // pointer: the AFTER-DELETE trigger enqueues this row's (sandboxId,
+      // spriteInstanceId) into `machine_sprite_reclaims` as the row goes, and we
+      // LEAVE it there so the orphan reconciler's tier-A retries the kill — for a
+      // Sprite whose kill could not be confirmed. No transaction/reclaim-drop.
+      const deleted = await db
+        .delete(machineAgentTerminals)
+        .where(
+          and(
+            eq(machineAgentTerminals.id, id),
+            eq(machineAgentTerminals.sandboxId, sandboxId),
+            eqOrIsNull(machineAgentTerminals.spriteInstanceId, spriteInstanceId),
+          ),
+        )
+        .returning({ id: machineAgentTerminals.id });
+      return deleted.length > 0;
+    },
+
+    async removeIfUnprovisioned({ id }) {
+      // Delete the reserved row by its ORIGINAL id, ONLY while still
+      // unprovisioned — never by the reusable (scope, name). A null sandboxId
+      // means no AFTER-DELETE reclaim pointer is enqueued (the 0229 trigger
+      // fires only for a non-null sandboxId), so this cleanly drops the failed
+      // reservation without touching the reclaim outbox.
+      const deleted = await db
+        .delete(machineAgentTerminals)
+        .where(and(eq(machineAgentTerminals.id, id), isNull(machineAgentTerminals.sandboxId)))
+        .returning({ id: machineAgentTerminals.id });
+      return deleted.length > 0;
+    },
+
+    async enqueueReclaim({ sandboxId, spriteInstanceId }) {
+      // Mirror the AFTER-DELETE trigger's own insert (0209/0229): idempotent on
+      // the sandboxId PK, chasing the newest instance on conflict.
+      await db
+        .insert(machineSpriteReclaims)
+        .values({ sandboxId, spriteInstanceId })
+        .onConflictDoUpdate({
+          target: machineSpriteReclaims.sandboxId,
+          // Prefer the INCOMING instance — a newer generation took this
+          // deterministic name, so the outbox pointer must chase the VM that is
+          // actually alive now, not the one a stale row remembers. Matches the
+          // 0229 AFTER-DELETE trigger's `COALESCE(EXCLUDED, existing)` exactly;
+          // the reverse order would let the reconciler kill the old (already
+          // gone) instance, treat MachineSpriteReplacedError as done, drop the
+          // row, and leave the live replacement billing untracked.
+          set: { spriteInstanceId: sql`coalesce(excluded."spriteInstanceId", ${machineSpriteReclaims.spriteInstanceId})` },
+        });
     },
 
     async remove(scope, name) {

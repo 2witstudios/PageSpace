@@ -3,6 +3,7 @@ import { relations } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 import { pages } from './core';
+import { machineProjects } from './machine-projects';
 
 /**
  * Machine Branches
@@ -38,6 +39,15 @@ export const machineBranches = pgTable('machine_branches', {
     .references(() => pages.id, { onDelete: 'cascade' }),
 
   projectName: text('projectName').notNull(),
+  /**
+   * FK to the owning project row. Deleting a `machine_projects` row CASCADES to
+   * its branches (and, through each branch's `machine_agent_terminals.machineBranchId`
+   * FK, to their branch-scoped terminals), so every branch/session Sprite pointer
+   * is rescued by the AFTER-DELETE reclaim triggers automatically. Nullable for
+   * migration safety (backfilled from `projectName`); `projectName` is KEPT — the
+   * session-key HMAC and name lookups depend on it.
+   */
+  machineProjectId: text('machineProjectId').references(() => machineProjects.id, { onDelete: 'cascade' }),
   branchName: text('branchName').notNull(),
 
   sessionKey: text('sessionKey').notNull().unique(),
@@ -128,6 +138,7 @@ export const machineBranches = pgTable('machine_branches', {
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
 }, (table) => ({
   machineIdIdx: index('machine_branches_machine_id_idx').on(table.machineId),
+  machineProjectIdIdx: index('machine_branches_project_id_idx').on(table.machineProjectId),
   machineProjectBranchUnique: uniqueIndex('machine_branches_machine_project_branch_idx').on(
     table.machineId,
     table.projectName,
@@ -143,6 +154,10 @@ export const machineBranchesRelations = relations(machineBranches, ({ one }) => 
   machine: one(pages, {
     fields: [machineBranches.machineId],
     references: [pages.id],
+  }),
+  project: one(machineProjects, {
+    fields: [machineBranches.machineProjectId],
+    references: [machineProjects.id],
   }),
 }));
 

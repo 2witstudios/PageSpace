@@ -89,3 +89,28 @@ describe('storage attribution — promoted project Sprites (issue #2204 phase 7)
     });
   });
 });
+
+describe('storage attribution — per-session agent-terminal Sprites (sessions-per-location)', () => {
+  it('bills a session Sprite to its OWNING machine page, exactly as a branch/project Sprite is', () => {
+    assert({
+      given: 'an agent-terminal subject',
+      should: 'attribute to the owning machine page, never the session row',
+      actual: storageAttributionPageId({ kind: 'agent-terminal', machineAgentTerminalId: 'agt-1', machinePageId: 'machine-1' }),
+      expected: 'machine-1',
+    });
+  });
+
+  it('keys an agent-terminal subject distinctly from a project, branch or machine with the same id', () => {
+    assert({
+      given: 'an agent-terminal, project, branch and machine that happen to share an id',
+      should: 'produce four distinct bookkeeping keys',
+      actual: new Set([
+        storageSubjectKey({ kind: 'agent-terminal', machineAgentTerminalId: 'x', machinePageId: 'm' }),
+        storageSubjectKey({ kind: 'project', machineProjectId: 'x', machinePageId: 'm' }),
+        storageSubjectKey({ kind: 'branch', machineBranchId: 'x', machinePageId: 'm' }),
+        storageSubjectKey({ kind: 'machine', pageId: 'x' }),
+      ]).size,
+      expected: 4,
+    });
+  });
+});

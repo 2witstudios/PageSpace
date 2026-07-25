@@ -55,6 +55,11 @@ const SCOPE_DENIAL_STATUS: Record<string, number> = {
   branch_not_found: 404,
   machine_unavailable: 503,
   scope_unsupported: 503,
+  // The session's own Sprite was torn down (Machine trashed→restored); the row is
+  // fine but its VM is gone. A 409 (recoverable conflict) tells the client to
+  // re-spawn (POST), which reprovisions a fresh isolated Sprite — never a 500, and
+  // never a silent attach to a shared Sprite.
+  session_torn_down: 409,
 };
 
 const SPAWN_DENIAL_STATUS: Record<string, number> = {
@@ -66,6 +71,14 @@ const SPAWN_DENIAL_STATUS: Record<string, number> = {
   // A promotion refusal the caller can act on (commit or discard the work in
   // the machine-side checkout), matching the promote route's own mapping.
   promotion_failed: 409,
+  // The owning Machine has been trashed — it is gone from the user's view, so a
+  // spawn against it is a 404 (finding U).
+  machine_trashed: 404,
+  // A fresh session could not get its OWN isolated Sprite (finding AA) — a
+  // server-side provisioning failure.
+  provision_failed: 500,
+  // The actor is not authorized to run code (finding P/AA).
+  unauthorized: 403,
   error: 500,
 };
 

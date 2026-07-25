@@ -28,14 +28,25 @@
 import { eq } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { pages, drives } from '@pagespace/db/schema/core';
-import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
+import { isCodeExecutionEnabled, canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
 import { decideFullEgressEnablement, isContainmentVerified } from '@pagespace/lib/services/sandbox/containment';
 import {
   acquireMachineSession,
   createDbMachineSessionStore,
   getSandboxSessionSecret,
 } from '@pagespace/lib/services/sandbox/machine-session-manager';
-import { checkMachineRuntimeGuardrail, recordMachineActivity } from '@pagespace/lib/services/sandbox/quota';
+import {
+  checkMachineRuntimeGuardrail,
+  recordMachineActivity,
+  acquireCodeExecutionSlot,
+  releaseCodeExecutionSlot,
+} from '@pagespace/lib/services/sandbox/quota';
+import { resolveSandboxNetworkOptions } from '@pagespace/lib/services/sandbox/network-options';
+import { getConfiguredEgressIpTag } from '@pagespace/lib/services/sandbox/egress-ip';
+import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
+import { defaultBuildEnv } from '@pagespace/lib/services/sandbox/tool-runners';
+import { resolveGitHubTokenForSandbox } from '@pagespace/lib/services/sandbox/github-token';
+import { measureAgentTerminalStorageOpportunistically } from '@pagespace/lib/services/sandbox/machine-storage-billing';
 import type { ExecSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/types';
 import { createDbMachineBranchStore } from '@pagespace/lib/services/machines/machine-branches-store';
 import { createDbMachineAgentTerminalStore } from '@pagespace/lib/services/machines/agent-terminals-store';
@@ -122,6 +133,12 @@ function buildBaseDeps(): Pick<SpawnAgentTerminalDeps & KillAgentTerminalDeps, '
       create: async (input) => (await getMachineAgentTerminalStore()).create(input),
       updateStreamSessionId: async (input) => (await getMachineAgentTerminalStore()).updateStreamSessionId(input),
       recordColdTail: async (input) => (await getMachineAgentTerminalStore()).recordColdTail(input),
+      updateSpriteIdentity: async (input) => (await getMachineAgentTerminalStore()).updateSpriteIdentity(input),
+      stampSpriteTornDown: async (input) => (await getMachineAgentTerminalStore()).stampSpriteTornDown(input),
+      removeIfSandbox: async (input) => (await getMachineAgentTerminalStore()).removeIfSandbox(input),
+      removeIfSandboxToReclaim: async (input) => (await getMachineAgentTerminalStore()).removeIfSandboxToReclaim(input),
+      removeIfUnprovisioned: async (input) => (await getMachineAgentTerminalStore()).removeIfUnprovisioned(input),
+      enqueueReclaim: async (input) => (await getMachineAgentTerminalStore()).enqueueReclaim(input),
       remove: async (scope, name) => (await getMachineAgentTerminalStore()).remove(scope, name),
     },
   };
@@ -229,12 +246,85 @@ function buildLiveSessions(): AgentTerminalLiveSessions {
   };
 }
 
+/**
+ * Per-session Sprite provisioning (sessions-per-location): every spawned agent
+ * terminal gets its OWN Sprite at spawn, exactly the way a branch-terminal does.
+ * Assembles the same Sprite/git/credential seams `buildMachineBranchesDeps`
+ * (`./machine-branches-runtime`) wires for `spawnBranch`, plus the row-store CAS
+ * and the project/branch lookups the per-scope clone needs. `resolveActor` is
+ * lazy — resolved only when a spawn actually provisions — so a resume that
+ * reattaches never pays for the tenant/tier lookup.
+ */
+function buildSpriteProvisionDeps(): NonNullable<SpawnAgentTerminalDeps['spriteProvision']> {
+  return {
+    isEnabled: isCodeExecutionEnabled,
+    now: () => new Date(),
+    host: {
+      provision: async (args) => (await getMachineHostForBranches()).provision(args),
+      attach: async (args) => (await getMachineHostForBranches()).attach(args),
+      kill: async (args) => (await getMachineHostForBranches()).kill(args),
+    },
+    substrate: { kind: 'sprite' },
+    options: resolveSandboxNetworkOptions({ surface: 'machine', egressIpTag: getConfiguredEgressIpTag() }),
+    secret: getSandboxSessionSecret(),
+    checkFullEgressEnablement: async () =>
+      decideFullEgressEnablement({
+        adminGateEnabled: isCodeExecutionEnabled(),
+        containment: isContainmentVerified() ? { contained: true } : null,
+      }),
+    resolveGitHubToken: (userId) => resolveGitHubTokenForSandbox({ userId, db }),
+    resolveRootMachineHandle,
+    resolveProjectRepoUrl: async (machineId, projectName) =>
+      (await (await getMachineProjectStore()).findByName(machineId, projectName))?.repoUrl ?? null,
+    resolveBranchName: async (machineBranchId) =>
+      (await (await getMachineBranchStore()).findById(machineBranchId))?.branchName ?? null,
+    updateSpriteIdentity: async (input) => (await getMachineAgentTerminalStore()).updateSpriteIdentity(input),
+    reloadRow: async (id) => {
+      const row = await (await getMachineAgentTerminalStore()).findById(id);
+      return row ? { sandboxId: row.sandboxId, spriteInstanceId: row.spriteInstanceId } : null;
+    },
+    // SECURITY (finding P): the centralized code-execution gate, applied before
+    // any Sprite is provisioned. Same helper the realtime attach path and the
+    // machine-session managers use; fail-closed and never throws.
+    authorize: canRunCode,
+    resolveDriveId: async (machineId) => {
+      const page = await db.query.pages.findFirst({ where: eq(pages.id, machineId), columns: { driveId: true } });
+      return page?.driveId ?? null;
+    },
+    // Rescue a provisioned-but-never-persisted Sprite into the reclaim outbox when
+    // its cleanup kill cannot be confirmed — the row's sandboxId is NULL, so the
+    // trigger/tracking-row reconciler could never find it.
+    enqueueReclaim: async (input) => (await getMachineAgentTerminalStore()).enqueueReclaim(input),
+    quota: {
+      acquireSlot: acquireCodeExecutionSlot,
+      releaseSlot: releaseCodeExecutionSlot,
+    },
+    buildEnv: defaultBuildEnv,
+    audit: (input) => writeCodeExecutionAudit({ input }),
+    resolveActor: (userId) => resolveMachineActorContext(userId),
+    // Sessions-per-location storage metering: capture the session Sprite's bytes
+    // onto its own machine_agent_terminals row while it is awake right after the
+    // provision/clone, so the storage reconcile bills them to the owning Machine
+    // page. Throttled + best-effort inside; never wakes a hibernating Sprite.
+    measureAgentTerminalStorage: ({ machineAgentTerminalId, machinePageId, handle }) =>
+      measureAgentTerminalStorageOpportunistically({ machineAgentTerminalId, machinePageId, handle }),
+  };
+}
+
 export function buildSpawnAgentTerminalDeps(actorUserId: string): SpawnAgentTerminalDeps {
   return {
     ...buildBaseDeps(),
     projectStore: buildProjectStoreLookup(),
     liveSessions: buildLiveSessions(),
     now: () => new Date(),
+    spriteProvision: buildSpriteProvisionDeps(),
+    // FINDING U: refuse spawning under a soft-trashed Machine (the access check
+    // doesn't exclude trashed pages). A missing/unresolvable page reads as
+    // trashed — fail closed, never provision under a page we can't confirm live.
+    isMachineTrashed: async (machineId) => {
+      const page = await db.query.pages.findFirst({ where: eq(pages.id, machineId), columns: { isTrashed: true } });
+      return page?.isTrashed ?? true;
+    },
     projectPromotion: {
       promote: async ({ machineId, projectName }) => {
         const actor = await resolveMachineActorContext(actorUserId);

@@ -28,8 +28,10 @@ const {
   mockCreatePageEventPayload,
   mockSelectWhere,
   mockProjectSelectWhere,
+  mockAgentTerminalSelectWhere,
   mockUpdateSet,
   mockUpdateWhere,
+  mockUpdateReturning,
   mockFindPage,
   mockFindDrive,
   mockSessionFind,
@@ -47,8 +49,10 @@ const {
   }),
   mockSelectWhere: vi.fn(),
   mockProjectSelectWhere: vi.fn(),
+  mockAgentTerminalSelectWhere: vi.fn(),
   mockUpdateSet: vi.fn(),
   mockUpdateWhere: vi.fn(),
+  mockUpdateReturning: vi.fn(),
   mockFindPage: vi.fn(),
   mockFindDrive: vi.fn(),
   mockSessionFind: vi.fn(),
@@ -61,16 +65,29 @@ vi.mock('@pagespace/db/db', () => ({
   db: {
     select: () => ({
       from: (table: unknown) => ({
-        where: (...args: unknown[]) =>
-          (table as { __table?: string } | undefined)?.__table === 'machine_projects'
-            ? mockProjectSelectWhere(...args)
-            : mockSelectWhere(...args),
+        where: (...args: unknown[]) => {
+          const marker = (table as { __table?: string } | undefined)?.__table;
+          if (marker === 'machine_projects') return mockProjectSelectWhere(...args);
+          if (marker === 'machine_agent_terminals') return mockAgentTerminalSelectWhere(...args);
+          return mockSelectWhere(...args);
+        },
       }),
     }),
     update: () => ({
       set: (values: unknown) => {
         mockUpdateSet(values);
-        return { where: (...args: unknown[]) => mockUpdateWhere(...args) };
+        return {
+          // `.where(...)` is awaited directly by the branch/project/session
+          // stamps AND chained with `.returning()` by the generation-guarded
+          // agent-terminal CAS — so it must be both a thenable and carry
+          // `.returning`.
+          where: (...args: unknown[]) => {
+            const result = mockUpdateWhere(...args);
+            return Object.assign(Promise.resolve(result), {
+              returning: (...rargs: unknown[]) => mockUpdateReturning(...rargs),
+            });
+          },
+        };
       },
     }),
     query: {
@@ -109,6 +126,17 @@ vi.mock('@pagespace/db/schema/machine-branches', () => ({
 vi.mock('@pagespace/db/schema/machine-projects', () => ({
   machineProjects: {
     __table: 'machine_projects',
+    id: 'id',
+    machineId: 'machineId',
+    sandboxId: 'sandboxId',
+    spriteInstanceId: 'spriteInstanceId',
+    teardownRequestedAt: 'teardownRequestedAt',
+    spriteTornDownAt: 'spriteTornDownAt',
+  },
+}));
+vi.mock('@pagespace/db/schema/machine-agent-terminals', () => ({
+  machineAgentTerminals: {
+    __table: 'machine_agent_terminals',
     id: 'id',
     machineId: 'machineId',
     sandboxId: 'sandboxId',
@@ -167,7 +195,11 @@ beforeEach(() => {
   mockGetActorInfo.mockResolvedValue({ actorEmail: 'jono@x.test', actorDisplayName: 'Jono' });
   mockSelectWhere.mockResolvedValue([]);
   mockProjectSelectWhere.mockResolvedValue([]);
+  mockAgentTerminalSelectWhere.mockResolvedValue([]);
   mockUpdateWhere.mockResolvedValue(undefined);
+  // Default: the generation-guarded agent-terminal intent CAS ARMS the row (its
+  // Sprite generation is unchanged since the select). A race test overrides this.
+  mockUpdateReturning.mockResolvedValue([{ id: 'stamped' }]);
   mockApplyPageMutation.mockResolvedValue({});
   mockFindPage.mockResolvedValue({ driveId: 'drive-1' });
   mockFindDrive.mockResolvedValue({ ownerId: 'tenant-1' });
@@ -398,6 +430,61 @@ describe('createMachineSpriteTeardown().teardown', () => {
     const setCalls = mockUpdateSet.mock.calls.map((c) => Object.keys(c[0] as object)[0]);
     expect(setCalls).toContain('teardownRequestedAt');
     expect(setCalls).toContain('spriteTornDownAt');
+  });
+
+  it('kills per-session agent-terminal Sprites too, stamping their rows — the cascade would otherwise strand them as billing orphans', async () => {
+    mockSelectWhere
+      .mockResolvedValueOnce([]) // children of the root — none
+      .mockResolvedValueOnce([]); // root's branch rows — none
+    mockAgentTerminalSelectWhere.mockResolvedValueOnce([
+      { id: 'agt-1', sandboxId: 'sb-agent', spriteInstanceId: 'inst-agent' },
+    ]);
+
+    await createMachineSpriteTeardown().teardown(MACHINE);
+
+    // The session Sprite is killed (identity-guarded), before the machine's own.
+    expect(mockHostKill.mock.calls.map((c) => (c[0] as { machineId: string }).machineId)).toEqual([
+      'sb-agent',
+      `own-key-${MACHINE}`,
+    ]);
+    expect(mockHostKill).toHaveBeenCalledWith(
+      expect.objectContaining({ machineId: 'sb-agent', expectedInstanceId: 'inst-agent' }),
+    );
+    const setCalls = mockUpdateSet.mock.calls.map((c) => Object.keys(c[0] as object)[0]);
+    expect(setCalls).toContain('teardownRequestedAt');
+    expect(setCalls).toContain('spriteTornDownAt');
+  });
+
+  it('leaves the agent-terminal row UNSTAMPED when its kill fails, so the reconciler can retry it', async () => {
+    mockSelectWhere.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    mockAgentTerminalSelectWhere.mockResolvedValueOnce([{ id: 'agt-1', sandboxId: 'sb-agent', spriteInstanceId: 'inst-agent' }]);
+    mockHostKill.mockImplementation(async ({ machineId }: { machineId: string }) => {
+      if (machineId === 'sb-agent') throw new Error('sprite unreachable');
+    });
+
+    await createMachineSpriteTeardown().teardown(MACHINE);
+
+    expect(mockUpdateSet).not.toHaveBeenCalledWith({ spriteTornDownAt: expect.any(Date) });
+  });
+
+  it('does NOT arm or kill an agent-terminal whose Sprite was RE-PROVISIONED between select and stamp (generation-guarded intent CAS)', async () => {
+    // The race: the select read instance inst-agent, but a concurrent re-spawn
+    // replaced the row's Sprite (new instance) before the intent stamp. The CAS on
+    // (sandboxId, spriteInstanceId) then matches NO row — so the fresh, LIVE VM is
+    // neither armed for reconciliation nor killed here.
+    mockSelectWhere.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    mockAgentTerminalSelectWhere.mockResolvedValueOnce([{ id: 'agt-1', sandboxId: 'sb-agent', spriteInstanceId: 'inst-agent' }]);
+    // The generation-guarded intent CAS affects no rows (lost to the re-provision).
+    mockUpdateReturning.mockResolvedValue([]);
+
+    await createMachineSpriteTeardown().teardown(MACHINE);
+
+    // The replacement's live Sprite was NEVER killed — only the machine's own runs.
+    expect(mockHostKill.mock.calls.map((c) => (c[0] as { machineId: string }).machineId)).toEqual([
+      `own-key-${MACHINE}`,
+    ]);
+    // And it was never stamped torn down (which would hide a live VM from the reconciler).
+    expect(mockUpdateSet).not.toHaveBeenCalledWith({ spriteTornDownAt: expect.any(Date) });
   });
 
   it('records teardown INTENT before any kill, so a failed kill is reclaimable by the reconciler', async () => {

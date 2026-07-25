@@ -312,13 +312,37 @@ export async function removeProject({
   const existing = await deps.store.findByName(machineId, name);
   if (!existing) return { ok: false, reason: 'not_found' };
 
-  // A PROMOTED project's Sprite is a real billing microVM, findable only via
-  // this row. Best-effort identity-guarded kill BEFORE the row goes away: on
-  // failure the delete still proceeds — the AFTER DELETE trigger copies the
-  // pointer into the reclaim outbox, and the orphan reconciler retries the
-  // kill forever — but waiting for a cron is a worse default than stopping the
-  // meter now. Skipped for a torn-down row: `sandboxId` is a NAME reused
-  // across re-creates, and re-killing it could destroy a replacement VM.
+  // DELETE the project row (finding V: FIRST — before the slow filesystem cleanup
+  // below). Once the row is gone a concurrent project-scoped spawn can no longer
+  // RESOLVE this project (`spawnAgentTerminal` → `resolveScopeKey` returns
+  // `project_not_found`), so no NEW session can be provisioned for it. By id, not
+  // name: a by-name delete could race a concurrent remove-then-re-add of this name
+  // and delete the NEW row.
+  //
+  // The delete CASCADES (migration 0230's `machineProjectId` FK, ON DELETE cascade)
+  // to every project- AND branch-scoped `machine_agent_terminals` row and every
+  // `machine_branches` row of this project (which in turn cascades to its
+  // branch-scoped terminals via `machineBranchId`). Each cascaded row's OWN
+  // AFTER-DELETE reclaim trigger (0229 for terminals, 0209 for branches) rescues its
+  // live Sprite pointer into the `machine_sprite_reclaims` outbox, and the project
+  // row's own trigger (0219) rescues its promoted Sprite. The orphan-reconcile cron
+  // drains the outbox and destroys those VMs. This replaces the former manual
+  // snapshot/enumeration teardown (dissolving findings DD/EE/CC/V's spawn-vs-teardown
+  // and same-name-ABA races — the FK targets rows BY ID, so a same-name replacement
+  // project added after this delete is a different id the cascade never touches).
+  try {
+    await deps.store.remove(machineId, existing.id);
+  } catch {
+    return { ok: false, reason: 'error' };
+  }
+
+  // A PROMOTED project's Sprite is a real billing microVM. Best-effort
+  // identity-guarded fast-kill to stop the meter NOW rather than wait for the
+  // reclaim cron (the AFTER-DELETE trigger already enqueued its pointer above, so a
+  // failure here is retried by the cron). Only this project's OWN promoted Sprite —
+  // the cascaded session/branch Sprites are reclaimed exclusively through the
+  // outbox. Skipped for a torn-down row: `sandboxId` is a NAME reused across
+  // re-creates, and re-killing it could destroy a replacement VM.
   if (existing.sandboxId && !existing.spriteTornDownAt && deps.killSprite) {
     try {
       await deps.killSprite({
@@ -332,19 +356,9 @@ export async function removeProject({
 
   // Best-effort filesystem cleanup of THIS ROW's own directory (its persisted
   // `path` — never a path re-derived from the name, which for pre-per-row-path
-  // rows wouldn't even match). The tracking row is removed regardless of
-  // whether `rm -rf` succeeds, since the user asked for the project gone from
-  // their list; a lingering directory is far less surprising than a project
-  // the user can never remove because the machine is briefly unreachable.
+  // rows wouldn't even match). Last, since it is the slow step and everything
+  // above has already made the project non-spawnable and reclaimable.
   await safeRemoveDirectory(machineId, existing.path, deps);
 
-  try {
-    // By id, not by name: a by-name delete could race a concurrent
-    // remove-then-re-add of this name and delete the NEW row (whose own
-    // directory the `rm -rf` above never touched).
-    await deps.store.remove(machineId, existing.id);
-    return { ok: true };
-  } catch {
-    return { ok: false, reason: 'error' };
-  }
+  return { ok: true };
 }

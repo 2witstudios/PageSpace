@@ -16,7 +16,13 @@ import {
   type AgentTerminalMachineSandbox,
 } from '../agent-terminals';
 import type { MachineAgentTerminalStore, MachineAgentTerminalRecord, AgentTerminalScopeKey } from '../agent-terminals-store';
-import { type MachineHost, type MachineHandle } from '../../sandbox/machine-host';
+import {
+  provisionAgentTerminalSprite,
+  type AgentTerminalSpriteProvisionDeps,
+} from '../agent-terminal-sprites';
+import type { MachineActorContext } from '../machine-branches';
+import { deriveAgentTerminalSessionSpriteKey } from '../agent-terminal-sprite-session';
+import { MachineSpriteReplacedError, type MachineHost, type MachineHandle } from '../../sandbox/machine-host';
 import { SANDBOX_ROOT } from '../../sandbox/sandbox-paths';
 import { BRANCH_REPO_PATH } from '../machine-branches';
 import { PROJECT_REPO_PATH } from '../machine-project-promotion';
@@ -31,6 +37,20 @@ const MACHINE_SANDBOX_ID = 'sprite-machine-1';
 const PROJECT_PATH = '/workspace/projects/my-repo';
 
 const actor = { userId: 'user-1' };
+
+/** The per-session Sprite identity columns default to NULL on an unprovisioned row (sessions-per-location). */
+const SPRITE_COLUMN_DEFAULTS = {
+  machineProjectId: null,
+  sessionKey: null,
+  sandboxId: null,
+  spriteInstanceId: null,
+  egressPolicyToken: null,
+  teardownRequestedAt: null,
+  spriteTornDownAt: null,
+} satisfies Pick<
+  MachineAgentTerminalRecord,
+  'machineProjectId' | 'sessionKey' | 'sandboxId' | 'spriteInstanceId' | 'egressPolicyToken' | 'teardownRequestedAt' | 'spriteTornDownAt'
+>;
 
 function makeBranchLookup(rows: Record<string, { id: string; sandboxId: string }> = {}): AgentTerminalBranchLookup {
   const byId = new Map<string, { sandboxId: string }>();
@@ -47,10 +67,16 @@ const defaultBranchLookup = makeBranchLookup({
 });
 
 function makeProjectLookup(
-  rows: Record<string, { path: string; sandboxId?: string | null; spriteTornDownAt?: Date | null }> = {},
+  rows: Record<string, { id?: string; path: string; sandboxId?: string | null; spriteTornDownAt?: Date | null }> = {},
 ): AgentTerminalProjectLookup {
   return {
-    findByName: async (machineId, name) => rows[`${machineId}\0${name}`] ?? null,
+    findByName: async (machineId, name) => {
+      const row = rows[`${machineId}\0${name}`];
+      if (!row) return null;
+      // Default a stable id derived from the key so spawn's machineProjectId FK
+      // resolves; individual tests can pin `id` when they assert on it.
+      return { id: row.id ?? `project-${machineId}\0${name}`, ...row };
+    },
   };
 }
 
@@ -75,6 +101,8 @@ function sameScope(a: AgentTerminalScopeKey, b: AgentTerminalScopeKey): boolean 
 
 function makeStore(seed: MachineAgentTerminalRecord[] = []) {
   const rows = new Map<string, MachineAgentTerminalRecord>();
+  // Models the machine_sprite_reclaims outbox: sandboxId -> spriteInstanceId.
+  const reclaims = new Map<string, string | null>();
   const key = (scope: AgentTerminalScopeKey, name: string) =>
     `${scope.machineId}\0${scope.projectName ?? ''}\0${scope.machineBranchId ?? ''}\0${name}`;
   for (const row of seed) rows.set(key(scopeKeyOf(row), row.name), row);
@@ -100,6 +128,8 @@ function makeStore(seed: MachineAgentTerminalRecord[] = []) {
         agentType: input.agentType,
         command: input.command,
         streamSessionId: null,
+        ...SPRITE_COLUMN_DEFAULTS,
+        machineProjectId: input.machineProjectId,
         coldTail: null,
         coldTailAt: null,
         coldTailHasOutput: false,
@@ -127,11 +157,78 @@ function makeStore(seed: MachineAgentTerminalRecord[] = []) {
         }
       }
     },
+    updateSpriteIdentity: async ({ id, previousSandboxId, sessionKey, sandboxId, spriteInstanceId, egressPolicyToken, now }) => {
+      for (const [k, row] of rows) {
+        if (row.id === id) {
+          if ((row.sandboxId ?? null) !== (previousSandboxId ?? null)) return false;
+          rows.set(k, {
+            ...row,
+            sessionKey,
+            sandboxId,
+            spriteInstanceId,
+            egressPolicyToken,
+            spriteTornDownAt: null,
+            teardownRequestedAt: null,
+            updatedAt: now,
+          });
+          return true;
+        }
+      }
+      return false;
+    },
+    stampSpriteTornDown: async ({ id, sandboxId, spriteInstanceId, now }) => {
+      for (const [k, row] of rows) {
+        if (row.id === id) {
+          if (row.sandboxId !== sandboxId || (row.spriteInstanceId ?? null) !== (spriteInstanceId ?? null)) return false;
+          rows.set(k, { ...row, spriteTornDownAt: now });
+          return true;
+        }
+      }
+      return false;
+    },
+    removeIfSandbox: async ({ id, sandboxId, spriteInstanceId }) => {
+      for (const [k, row] of rows) {
+        if (row.id === id) {
+          if (row.sandboxId !== sandboxId || (row.spriteInstanceId ?? null) !== (spriteInstanceId ?? null)) return false;
+          rows.delete(k);
+          // CONFIRMED kill: the trigger's rescued pointer is dropped with the row.
+          reclaims.delete(sandboxId);
+          return true;
+        }
+      }
+      return false;
+    },
+    removeIfSandboxToReclaim: async ({ id, sandboxId, spriteInstanceId }) => {
+      for (const [k, row] of rows) {
+        if (row.id === id) {
+          if (row.sandboxId !== sandboxId || (row.spriteInstanceId ?? null) !== (spriteInstanceId ?? null)) return false;
+          rows.delete(k);
+          // UNCONFIRMED kill: the AFTER-DELETE trigger enqueues the pointer, and
+          // (unlike removeIfSandbox) it is LEFT for the reconciler.
+          reclaims.set(sandboxId, spriteInstanceId ?? null);
+          return true;
+        }
+      }
+      return false;
+    },
+    removeIfUnprovisioned: async ({ id }) => {
+      for (const [k, row] of rows) {
+        if (row.id === id) {
+          if (row.sandboxId !== null) return false; // only while still unprovisioned
+          rows.delete(k);
+          return true;
+        }
+      }
+      return false;
+    },
+    enqueueReclaim: async ({ sandboxId, spriteInstanceId }) => {
+      reclaims.set(sandboxId, spriteInstanceId ?? null);
+    },
     remove: async (scope, name) => {
       rows.delete(key(scope, name));
     },
   };
-  return { store, rows };
+  return { store, rows, reclaims };
 }
 
 function makeHost(over: Partial<MachineHost> = {}): MachineHost {
@@ -194,6 +291,7 @@ function makeLegacyRow(overrides: Partial<MachineAgentTerminalRecord> = {}): Mac
     agentType: 'pagespace-cli',
     command: null,
     streamSessionId: null,
+    ...SPRITE_COLUMN_DEFAULTS,
     coldTail: null,
     coldTailAt: null,
     coldTailHasOutput: false,
@@ -441,6 +539,39 @@ describe('spawnAgentTerminal — project scope', () => {
     const row = [...rows.values()][0];
     expect(row).toMatchObject({ scope: 'project', projectName: PROJECT_NAME, machineBranchId: null });
   });
+
+  it('should persist machineProjectId = the RESOLVED project id (the ON DELETE cascade FK, migration 0230)', async () => {
+    const { store, rows } = makeStore();
+    const deps = makeDeps({
+      store,
+      projectStore: makeProjectLookup({ [`${TERMINAL_ID}\0${PROJECT_NAME}`]: { id: 'proj-xyz', path: PROJECT_PATH } }),
+    });
+    const result = await spawnAgentTerminal({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      name: 'cli',
+      agentType: 'shell',
+      actor,
+      deps,
+    });
+    expect(result).toMatchObject({ ok: true });
+    expect([...rows.values()][0].machineProjectId).toBe('proj-xyz');
+  });
+
+  it('given the project cannot be resolved, should fail project_not_found and reserve NO null-FK row', async () => {
+    const { store, rows } = makeStore();
+    const deps = makeDeps({ store, projectStore: makeProjectLookup() }); // empty lookup
+    const result = await spawnAgentTerminal({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      name: 'cli',
+      agentType: 'shell',
+      actor,
+      deps,
+    });
+    expect(result).toEqual({ ok: false, reason: 'project_not_found' });
+    expect(rows.size).toBe(0);
+  });
 });
 
 describe('spawnAgentTerminal — machine scope', () => {
@@ -457,6 +588,8 @@ describe('spawnAgentTerminal — machine scope', () => {
     expect(result).toMatchObject({ ok: true, agentType: 'shell', resumed: false });
     const row = [...rows.values()][0];
     expect(row).toMatchObject({ scope: 'machine', machineId: TERMINAL_ID, projectName: null, machineBranchId: null });
+    // Machine scope has no owning project — the cascade FK stays null.
+    expect(row.machineProjectId).toBeNull();
   });
 
   it('given a bare shell agentType, should reserve it (the plain shell IS a machine-scope agent terminal, not a separate concept)', async () => {
@@ -641,7 +774,8 @@ describe('resolveAgentTerminalRow', () => {
 describe('spawnAgentTerminal — lazy project promotion trigger', () => {
   /** A project lookup whose row can be PROMOTED mid-test, exactly as promoteProject's CAS would. */
   function makePromotableProject() {
-    const row: { path: string; sandboxId: string | null; spriteTornDownAt: Date | null } = {
+    const row: { id: string; path: string; sandboxId: string | null; spriteTornDownAt: Date | null } = {
+      id: 'project-1',
       path: PROJECT_PATH,
       sandboxId: null,
       spriteTornDownAt: null,
@@ -1193,6 +1327,101 @@ describe('resolveAgentTerminalById — level-agnostic (PurePoint Attach{agent_id
   });
 });
 
+/**
+ * A restored Machine leaves its terminal rows present with `spriteTornDownAt`
+ * stamped (their Sprites were destroyed on trash). The read-only resolve/attach
+ * path must NEVER route such a torn-down row onto a SHARED machine/project Sprite
+ * (isolation) or its own already-destroyed branch Sprite (dead pointer) — it must
+ * REJECT so a re-spawn reprovisions a fresh isolated Sprite. Only a GENUINE legacy
+ * row (both sandboxId AND spriteTornDownAt null) keeps the shared fallback.
+ */
+describe('resolveLocationForRow — a torn-down session never shares a Sprite (isolation)', () => {
+  function acquireSpy() {
+    const acquireCalls: string[] = [];
+    const machineSandbox = makeMachineSandbox({
+      acquire: async (machineId) => {
+        acquireCalls.push(machineId);
+        return { ok: true, sandboxId: MACHINE_SANDBOX_ID };
+      },
+    });
+    return { acquireCalls, machineSandbox };
+  }
+
+  it('MACHINE-scope torn-down row: rejects session_torn_down WITHOUT acquiring the shared machine Sprite', async () => {
+    const { acquireCalls, machineSandbox } = acquireSpy();
+    const row = makeLegacyRow({ id: 'agt-td-m', scope: 'machine', name: 'cli', agentType: 'shell', sandboxId: 'sbx-dead', spriteTornDownAt: NOW });
+    const { store } = makeStore([row]);
+    const deps = makeDeps({ store, machineSandbox });
+
+    const result = await resolveAgentTerminalById({ agentTerminalId: 'agt-td-m', deps });
+
+    expect(result).toEqual({ ok: false, reason: 'session_torn_down' });
+    expect(acquireCalls).toEqual([]); // never touched the shared Sprite
+  });
+
+  it('PROJECT-scope torn-down row: rejects session_torn_down WITHOUT resolving a shared/promoted project Sprite', async () => {
+    const { acquireCalls, machineSandbox } = acquireSpy();
+    const row = makeLegacyRow({
+      id: 'agt-td-p', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null,
+      name: 'cli', agentType: 'shell', sandboxId: 'sbx-dead', spriteTornDownAt: NOW,
+    });
+    const { store } = makeStore([row]);
+    // A promoted project sits under this name — resolving it would be the isolation breach.
+    const projectStore = makeProjectLookup({ [`${TERMINAL_ID}\0${PROJECT_NAME}`]: { id: 'proj-1', path: PROJECT_PATH, sandboxId: 'sbx-project', spriteTornDownAt: null } });
+    const deps = makeDeps({ store, machineSandbox, projectStore });
+
+    const result = await resolveAgentTerminalById({ agentTerminalId: 'agt-td-p', deps });
+
+    expect(result).toEqual({ ok: false, reason: 'session_torn_down' });
+    expect(acquireCalls).toEqual([]);
+  });
+
+  it('BRANCH-scope torn-down row: rejects session_torn_down WITHOUT resolving the (also-destroyed) branch Sprite', async () => {
+    const branchFindByIdCalls: string[] = [];
+    const row = makeLegacyRow({
+      id: 'agt-td-b', scope: 'branch', projectName: PROJECT_NAME, machineBranchId: BRANCH_ID,
+      name: 'cli', agentType: 'shell', sandboxId: 'sbx-dead', spriteTornDownAt: NOW,
+    });
+    const { store } = makeStore([row]);
+    const deps = makeDeps({
+      store,
+      branchStore: {
+        ...defaultBranchLookup,
+        findById: async (id) => { branchFindByIdCalls.push(id); return defaultBranchLookup.findById(id); },
+      },
+    });
+
+    const result = await resolveAgentTerminalById({ agentTerminalId: 'agt-td-b', deps });
+
+    expect(result).toEqual({ ok: false, reason: 'session_torn_down' });
+    expect(branchFindByIdCalls).toEqual([]); // never resolved the dead branch Sprite
+  });
+
+  it('GENUINE legacy row (sandboxId AND spriteTornDownAt both null): still uses the shared machine-Sprite fallback (backward compat)', async () => {
+    const { acquireCalls, machineSandbox } = acquireSpy();
+    const row = makeLegacyRow({ id: 'agt-legacy', scope: 'machine', name: 'cli', agentType: 'shell', sandboxId: null, spriteTornDownAt: null });
+    const { store } = makeStore([row]);
+    const deps = makeDeps({ store, machineSandbox });
+
+    const result = await resolveAgentTerminalById({ agentTerminalId: 'agt-legacy', deps });
+
+    expect(result).toMatchObject({ ok: true, sandboxId: MACHINE_SANDBOX_ID, cwd: SANDBOX_ROOT, ownSprite: false });
+    expect(acquireCalls).toEqual([TERMINAL_ID]); // shared fallback unchanged
+  });
+
+  it('LIVE own-Sprite row (sandboxId set, spriteTornDownAt null): resolves straight to its OWN Sprite (unchanged)', async () => {
+    const { acquireCalls, machineSandbox } = acquireSpy();
+    const row = makeLegacyRow({ id: 'agt-live', scope: 'machine', name: 'cli', agentType: 'shell', sandboxId: 'sbx-own', spriteTornDownAt: null });
+    const { store } = makeStore([row]);
+    const deps = makeDeps({ store, machineSandbox });
+
+    const result = await resolveAgentTerminalById({ agentTerminalId: 'agt-live', deps });
+
+    expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-own', ownSprite: true });
+    expect(acquireCalls).toEqual([]); // its own Sprite — never the shared one
+  });
+});
+
 describe('listAgentTerminals', () => {
   it('given two agent terminals spawned in one branch, should list both without leaking the project/machine-scoped ones', async () => {
     const { store } = makeStore();
@@ -1340,6 +1569,7 @@ describe('killAgentTerminal', () => {
         agentType: 'shell',
         command: null,
         streamSessionId: 'sess-abc',
+        ...SPRITE_COLUMN_DEFAULTS,
         coldTail: null,
         coldTailAt: null,
         coldTailHasOutput: false,
@@ -1382,6 +1612,7 @@ describe('killAgentTerminal', () => {
         agentType: 'shell',
         command: null,
         streamSessionId: 'sess-proj',
+        ...SPRITE_COLUMN_DEFAULTS,
         coldTail: null,
         coldTailAt: null,
         coldTailHasOutput: false,
@@ -1422,6 +1653,7 @@ describe('killAgentTerminal', () => {
         agentType: 'shell',
         command: null,
         streamSessionId: 'sess-machine',
+        ...SPRITE_COLUMN_DEFAULTS,
         coldTail: null,
         coldTailAt: null,
         coldTailHasOutput: false,
@@ -1463,6 +1695,7 @@ describe('killAgentTerminal', () => {
         agentType: 'shell',
         command: null,
         streamSessionId: 'sess-abc',
+        ...SPRITE_COLUMN_DEFAULTS,
         coldTail: null,
         coldTailAt: null,
         coldTailHasOutput: false,
@@ -1496,6 +1729,7 @@ describe('killAgentTerminal', () => {
         agentType: 'shell',
         command: null,
         streamSessionId: 'sess-dangling',
+        ...SPRITE_COLUMN_DEFAULTS,
         coldTail: null,
         coldTailAt: null,
         coldTailHasOutput: false,
@@ -1529,6 +1763,7 @@ describe('killAgentTerminal', () => {
         agentType: 'shell',
         command: null,
         streamSessionId: 'sess-abc',
+        ...SPRITE_COLUMN_DEFAULTS,
         coldTail: null,
         coldTailAt: null,
         coldTailHasOutput: false,
@@ -1569,6 +1804,7 @@ describe('killAgentTerminal', () => {
         agentType: 'shell',
         command: null,
         streamSessionId: 'sess-abc',
+        ...SPRITE_COLUMN_DEFAULTS,
         coldTail: null,
         coldTailAt: null,
         coldTailHasOutput: false,
@@ -1772,7 +2008,8 @@ describe('findStrandedLiveSessions', () => {
 
 describe('spawnAgentTerminal — live sessions block promotion (F10)', () => {
   function promotableProject() {
-    const row: { path: string; sandboxId: string | null; spriteTornDownAt: Date | null } = {
+    const row: { id: string; path: string; sandboxId: string | null; spriteTornDownAt: Date | null } = {
+      id: 'project-1',
       path: PROJECT_PATH,
       sandboxId: null,
       spriteTornDownAt: null,
@@ -1792,6 +2029,7 @@ describe('spawnAgentTerminal — live sessions block promotion (F10)', () => {
       machineId: TERMINAL_ID,
       scope: 'project',
       projectName: PROJECT_NAME,
+      machineProjectId: null,
       machineBranchId: null,
       name: 'build',
       agentType: 'shell',
@@ -1835,6 +2073,7 @@ describe('spawnAgentTerminal — live sessions block promotion (F10)', () => {
       machineId: TERMINAL_ID,
       scope: 'project',
       projectName: PROJECT_NAME,
+      machineProjectId: null,
       machineBranchId: null,
       name: 'notes',
       agentType: 'claude',
@@ -1876,7 +2115,8 @@ describe('spawnAgentTerminal — live sessions block promotion (F10)', () => {
  */
 describe('spawnAgentTerminal — promotion gate consults real PTY liveness', () => {
   async function projectWithLaunchedRow(streamSessionId: string) {
-    const row: { path: string; sandboxId: string | null; spriteTornDownAt: Date | null } = {
+    const row: { id: string; path: string; sandboxId: string | null; spriteTornDownAt: Date | null } = {
+      id: 'project-1',
       path: PROJECT_PATH,
       sandboxId: null,
       spriteTornDownAt: null,
@@ -1890,6 +2130,7 @@ describe('spawnAgentTerminal — promotion gate consults real PTY liveness', () 
       machineId: TERMINAL_ID,
       scope: 'project',
       projectName: PROJECT_NAME,
+      machineProjectId: null,
       machineBranchId: null,
       name: 'build',
       agentType: 'shell',
@@ -1975,5 +2216,1110 @@ describe('spawnAgentTerminal — promotion gate consults real PTY liveness', () 
     });
 
     expect(spawned).toMatchObject({ ok: false, reason: 'live_sessions_block_promotion' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sessions-per-location: spawn-time per-session Sprite provisioning (leaf 3.3)
+// ---------------------------------------------------------------------------
+
+const SPRITE_SECRET = 'test-secret-at-least-32-chars-long-xxxxx';
+const SESSION_SANDBOX_ID = 'sprite-session-1';
+const SESSION_INSTANCE_ID = 'inst-session-1';
+const ROOT_MACHINE_SANDBOX_ID = 'sprite-root-1';
+
+const provisionActor: MachineActorContext = {
+  userId: 'user-1',
+  tenantId: 'tenant-1',
+  actorEmail: 'user-1@example.com',
+  tier: 'free',
+};
+
+/** A session Sprite handle that records the housekeeping execs + file writes the credential copy makes. */
+function makeSessionHandle(over: Partial<MachineHandle> = {}) {
+  const execCalls: string[][] = [];
+  const writes: string[] = [];
+  const handle = makeHandle({
+    machineId: SESSION_SANDBOX_ID,
+    spriteInstanceId: SESSION_INSTANCE_ID,
+    exec: async (args) => {
+      execCalls.push([args.cmd, ...(args.args ?? [])]);
+      return { success: true, exitCode: 0, stdout: '', stderr: '' };
+    },
+    writeFiles: async (files) => {
+      for (const f of files) writes.push(f.path);
+    },
+    ...over,
+  });
+  return { handle, execCalls, writes };
+}
+
+/** A root Machine Sprite that hands back a Claude credential for the copy to propagate. */
+function makeRootHandleWithCredential() {
+  return makeHandle({
+    machineId: ROOT_MACHINE_SANDBOX_ID,
+    readFile: async ({ path }) => (path.endsWith('.credentials.json') ? Buffer.from('{"token":"x"}') : null),
+  });
+}
+
+function makeSpriteProvision(
+  store: MachineAgentTerminalStore,
+  over: Partial<AgentTerminalSpriteProvisionDeps & { resolveActor: (u: string) => Promise<MachineActorContext> }> = {},
+  provisioned?: ReturnType<typeof makeSessionHandle>,
+) {
+  const session = provisioned ?? makeSessionHandle();
+  const provisionCalls: string[] = [];
+  const attachCalls: string[] = [];
+  const enqueuedReclaims: Array<{ sandboxId: string; spriteInstanceId: string | null }> = [];
+  const measuredCalls: Array<{ machineAgentTerminalId: string; machinePageId: string }> = [];
+  const killed: Array<{ machineId: string; expectedInstanceId?: string | null }> = [];
+  const deps: AgentTerminalSpriteProvisionDeps & { resolveActor: (u: string) => Promise<MachineActorContext> } = {
+    isEnabled: () => true,
+    now: () => NOW,
+    host: {
+      provision: async (args) => {
+        provisionCalls.push(args.name);
+        return session.handle;
+      },
+      // Default: the session's OWN Sprite is LIVE (attach hands back its handle);
+      // any other name has vanished. Override in a test to simulate a vanish.
+      attach: async ({ machineId }) => {
+        attachCalls.push(machineId);
+        return machineId === session.handle.machineId ? session.handle : null;
+      },
+      kill: async (args) => {
+        killed.push({ machineId: args.machineId, expectedInstanceId: args.expectedInstanceId });
+      },
+    },
+    substrate: { kind: 'sprite' },
+    options: {} as AgentTerminalSpriteProvisionDeps['options'],
+    secret: SPRITE_SECRET,
+    checkFullEgressEnablement: async () => ({ ok: true }),
+    resolveGitHubToken: async () => null,
+    resolveRootMachineHandle: async () => makeRootHandleWithCredential(),
+    resolveProjectRepoUrl: async () => 'https://github.com/acme/repo.git',
+    resolveBranchName: async () => BRANCH_NAME,
+    updateSpriteIdentity: async (input) => store.updateSpriteIdentity(input),
+    reloadRow: async (id) => {
+      const row = await store.findById(id);
+      return row ? { sandboxId: row.sandboxId, spriteInstanceId: row.spriteInstanceId } : null;
+    },
+    // Authorized by default; override to exercise the code-execution gate.
+    authorize: async () => ({ ok: true }),
+    resolveDriveId: async () => 'drive-1',
+    enqueueReclaim: async ({ sandboxId, spriteInstanceId }) => {
+      enqueuedReclaims.push({ sandboxId, spriteInstanceId });
+    },
+    measureAgentTerminalStorage: async ({ machineAgentTerminalId, machinePageId }) => {
+      measuredCalls.push({ machineAgentTerminalId, machinePageId });
+    },
+    quota: { acquireSlot: () => true, releaseSlot: () => {} } as AgentTerminalSpriteProvisionDeps['quota'],
+    buildEnv: () => ({}),
+    audit: async () => {},
+    resolveActor: async () => provisionActor,
+    ...over,
+  };
+  return { deps, provisionCalls, attachCalls, enqueuedReclaims, measuredCalls, killed, session };
+}
+
+describe('spawnAgentTerminal — per-session Sprite provisioning', () => {
+  it('given a machine-scope spawn with provisioning wired, should provision its OWN Sprite under the derived key and record it on the row', async () => {
+    const { store, rows } = makeStore();
+    const { deps: provision, provisionCalls } = makeSpriteProvision(store);
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+    expect(result.ok).toBe(true);
+
+    const row = [...rows.values()][0];
+    const expectedKey = deriveAgentTerminalSessionSpriteKey({
+      tenantId: provisionActor.tenantId,
+      machineId: TERMINAL_ID,
+      terminalId: row.id,
+      secret: SPRITE_SECRET,
+    });
+    expect(provisionCalls).toEqual([expectedKey]);
+    expect(row.sandboxId).toBe(SESSION_SANDBOX_ID);
+    expect(row.spriteInstanceId).toBe(SESSION_INSTANCE_ID);
+    expect(row.sessionKey).toBe(expectedKey);
+  });
+
+  it('should MEASURE the session Sprite storage after provision (billed to the owning machine page)', async () => {
+    const { store, rows } = makeStore();
+    const { deps: provision, measuredCalls } = makeSpriteProvision(store);
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+
+    const row = [...rows.values()][0];
+    expect(measuredCalls).toEqual([{ machineAgentTerminalId: row.id, machinePageId: TERMINAL_ID }]);
+  });
+
+  it('should copy the Claude credential FROM the owning Machine root Sprite onto the session Sprite (invariant 1)', async () => {
+    const { store } = makeStore();
+    const session = makeSessionHandle();
+    const { deps: provision } = makeSpriteProvision(store, {}, session);
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+    // The credential copy wrote a temp file onto the session Sprite (then mv'd it).
+    expect(session.writes.some((p) => p.includes('.credentials.json'))).toBe(true);
+  });
+
+  // FINDING AA: a fresh session that can't be isolated must FAIL, not silently
+  // share. An egress-refused provision fails the spawn and removes the reserved
+  // row (no null-sandboxId row for resolveLocationForRow to route onto a shared
+  // Sprite).
+  it('given the egress gate is closed, should FAIL the spawn (provision_failed) and REMOVE the reserved row', async () => {
+    const { store, rows } = makeStore();
+    const { deps: provision, provisionCalls } = makeSpriteProvision(store, {
+      checkFullEgressEnablement: async () => ({ ok: false, reason: 'code_execution_disabled' }),
+    });
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+    expect(result).toMatchObject({ ok: false, reason: 'provision_failed' });
+    expect(provisionCalls).toEqual([]);
+    expect(rows.size).toBe(0); // no lingering shared row
+  });
+
+  // FINDING P (SECURITY) + AA: the centralized code-execution gate runs BEFORE any
+  // Sprite is provisioned — an actor denied by canRunCode creates no billable VM
+  // AND no lingering row; the spawn fails with a distinct `unauthorized` (403).
+  it('given canRunCode DENIES the actor, should FAIL with unauthorized — no Sprite, no row', async () => {
+    const { store, rows } = makeStore();
+    const { deps: provision, provisionCalls, killed } = makeSpriteProvision(store, {
+      authorize: async () => ({ ok: false, reason: 'insufficient_role' }),
+    });
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+    expect(result).toMatchObject({ ok: false, reason: 'unauthorized' });
+    expect(provisionCalls).toEqual([]); // NO host.provision — no billable VM created
+    expect(killed).toEqual([]);
+    expect(rows.size).toBe(0); // no lingering shared row either
+  });
+
+  it('given canRunCode denies BUT the actor is authorized on retry, should provision (authz runs before every provision)', async () => {
+    // Sanity: the default (authorized) path still provisions — the gate is not
+    // a blanket disable.
+    const { store, rows } = makeStore();
+    const { deps: provision, provisionCalls } = makeSpriteProvision(store); // authorize: ok by default
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+    expect(provisionCalls.length).toBe(1);
+    expect([...rows.values()][0].sandboxId).toBe(SESSION_SANDBOX_ID);
+  });
+
+  // FINDING U: a soft-trashed Machine must reserve/provision NOTHING — the access
+  // check doesn't exclude trashed pages, so this gate stops a billable Sprite (and
+  // an unreclaimable row) from being created under an already-deleted Machine.
+  it('given the owning Machine page is soft-trashed, should deny with machine_trashed — no row, no host.provision', async () => {
+    const { store, rows } = makeStore();
+    const { deps: provision, provisionCalls } = makeSpriteProvision(store);
+    const deps = makeDeps({ store, spriteProvision: provision, isMachineTrashed: async () => true });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+    expect(result).toEqual({ ok: false, reason: 'machine_trashed' });
+    expect(provisionCalls).toEqual([]); // no Sprite created under a deleted Machine
+    expect(rows.size).toBe(0); // no reservation row either
+  });
+
+  it('given a chat-surface agent type (pagespace), should never provision a Sprite (no PTY to run)', async () => {
+    const { store, rows } = makeStore();
+    const { deps: provision, provisionCalls } = makeSpriteProvision(store);
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'agent', agentType: 'pagespace', actor, deps });
+    expect(provisionCalls).toEqual([]);
+    expect([...rows.values()][0].sandboxId).toBeNull();
+  });
+
+  it('given an already-provisioned row (resume), should NOT re-provision (reattach happens in the resolve path)', async () => {
+    const { store, rows } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-x',
+        name: 'cli',
+        agentType: 'shell',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+        sessionKey: 'pgs-agt-existing',
+      }),
+    ]);
+    const { deps: provision, provisionCalls } = makeSpriteProvision(store);
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+    expect(result).toMatchObject({ ok: true, resumed: true });
+    expect(provisionCalls).toEqual([]);
+    expect(rows.size).toBe(1);
+  });
+
+  it('given no provisioning deps wired, should reserve the row without a Sprite (pre-per-session behavior preserved)', async () => {
+    const { store, rows } = makeStore();
+    const deps = makeDeps({ store }); // no spriteProvision
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+    expect(result.ok).toBe(true);
+    expect([...rows.values()][0].sandboxId).toBeNull();
+  });
+
+  // FINDING AA: provisioning returns { ok: false } (here, the persist fence /
+  // clone / etc.) → the spawn FAILS and the reserved row is REMOVED, so
+  // resolveLocationForRow never gets a null-sandboxId row to share.
+  it('given provisioning returns ok:false, should FAIL the spawn (provision_failed) and REMOVE the row — no shared fallback', async () => {
+    const { store, rows } = makeStore();
+    const { deps: provision, killed } = makeSpriteProvision(store, {
+      updateSpriteIdentity: async () => false, // e.g. the liveness CAS fenced the write
+    });
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+    expect(result).toMatchObject({ ok: false, reason: 'provision_failed' });
+    expect(rows.size).toBe(0); // the reserved row is gone — nothing to share
+    // The Sprite it provisioned before the fence was killed (no orphan).
+    expect(killed).toEqual([{ machineId: SESSION_SANDBOX_ID, expectedInstanceId: SESSION_INSTANCE_ID }]);
+  });
+
+  // FINDING AA: provisioning THROWS → same (fail + remove the row).
+  it('given provisioning THROWS, should FAIL the spawn and REMOVE the row', async () => {
+    const { store, rows } = makeStore();
+    const { deps: provision } = makeSpriteProvision(store, {
+      resolveActor: async () => { throw new Error('actor lookup blew up'); },
+    });
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+    expect(result).toMatchObject({ ok: false, reason: 'provision_failed' });
+    expect(rows.size).toBe(0);
+  });
+
+  // FINDING 4: a stale non-null pointer to a VANISHED Sprite must be reprovisioned.
+  it('given an existing row whose Sprite VANISHED (attach → null), should reprovision under the same key (clearing the stale pointer)', async () => {
+    const { store, rows } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-vanish',
+        name: 'cli',
+        agentType: 'shell',
+        sandboxId: 'sprite-old-gone',
+        spriteInstanceId: 'inst-old-gone',
+        sessionKey: 'pgs-agt-vanish',
+      }),
+    ]);
+    // attach probes 'sprite-old-gone' → not the session handle's id → null (vanished).
+    const { deps: provision, provisionCalls, attachCalls } = makeSpriteProvision(store);
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+    expect(result).toMatchObject({ ok: true, resumed: true });
+    expect(attachCalls).toContain('sprite-old-gone'); // it PROBED the stale pointer
+    expect(provisionCalls).toEqual(['pgs-agt-vanish']); // and reprovisioned under the same key
+    // The stale pointer was overwritten with the fresh Sprite via the CAS.
+    expect([...rows.values()][0].sandboxId).toBe(SESSION_SANDBOX_ID);
+  });
+
+  it('given the control plane is unreachable during the probe (attach throws), should NOT reprovision blind', async () => {
+    const { store, rows } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-blip',
+        name: 'cli',
+        agentType: 'shell',
+        sandboxId: 'sprite-maybe-alive',
+        spriteInstanceId: 'inst-maybe',
+        sessionKey: 'pgs-agt-blip',
+      }),
+    ]);
+    const base = makeSpriteProvision(store);
+    const provision = {
+      ...base.deps,
+      host: { ...base.deps.host, attach: async () => { throw new Error('control plane down'); } },
+    };
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+    expect(result).toMatchObject({ ok: true, resumed: true });
+    expect(base.provisionCalls).toEqual([]); // did NOT duplicate a possibly-live VM
+    expect([...rows.values()][0].sandboxId).toBe('sprite-maybe-alive'); // pointer untouched
+  });
+
+  // FINDING GG: an attach-resume must ADOPT the attached handle's instance when
+  // the row still carries a STALE one (a replacement provisioned under the same
+  // name whose identity never persisted), so later teardown/outbox target the
+  // LIVE VM rather than the dead one.
+  it('given attach returns a handle whose instance DIFFERS from the row, should ADOPT the live instance before resuming', async () => {
+    const { store, rows } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-stale',
+        name: 'cli',
+        agentType: 'shell',
+        sandboxId: SESSION_SANDBOX_ID,
+        // The row records a STALE instance — the persisted-but-never-recorded
+        // replacement gap. The live attach (default: session handle) carries the
+        // real instance SESSION_INSTANCE_ID.
+        spriteInstanceId: 'inst-stale-predecessor',
+        sessionKey: 'pgs-agt-stale',
+      }),
+    ]);
+    const identityWrites: Array<{ previousSandboxId: string | null; spriteInstanceId: string | null }> = [];
+    const base = makeSpriteProvision(store);
+    const provision = {
+      ...base.deps,
+      updateSpriteIdentity: async (input: Parameters<typeof base.deps.updateSpriteIdentity>[0]) => {
+        identityWrites.push({ previousSandboxId: input.previousSandboxId, spriteInstanceId: input.spriteInstanceId });
+        return base.deps.updateSpriteIdentity(input);
+      },
+    };
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+
+    expect(result).toMatchObject({ ok: true, resumed: true });
+    expect(base.provisionCalls).toEqual([]); // never provisioned a NEW VM — the live one was adopted
+    // The adopt CAS ran with the row's current sandbox as `previousSandboxId` and
+    // wrote the attached (live) instance.
+    expect(identityWrites).toEqual([{ previousSandboxId: SESSION_SANDBOX_ID, spriteInstanceId: SESSION_INSTANCE_ID }]);
+    // The row now reflects the LIVE instance — a later teardown targets it, not the stale predecessor.
+    expect([...rows.values()][0].spriteInstanceId).toBe(SESSION_INSTANCE_ID);
+  });
+
+  it('given attach returns a handle whose instance MATCHES the row, should resume WITHOUT any identity write', async () => {
+    const { store, rows } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-match',
+        name: 'cli',
+        agentType: 'shell',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID, // already the live instance
+        sessionKey: 'pgs-agt-match',
+      }),
+    ]);
+    const identityWrites: unknown[] = [];
+    const base = makeSpriteProvision(store);
+    const provision = {
+      ...base.deps,
+      updateSpriteIdentity: async (input: Parameters<typeof base.deps.updateSpriteIdentity>[0]) => {
+        identityWrites.push(input);
+        return base.deps.updateSpriteIdentity(input);
+      },
+    };
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+
+    expect(result).toMatchObject({ ok: true, resumed: true });
+    expect(identityWrites).toEqual([]); // instance already matched — no adopt CAS
+    expect(base.provisionCalls).toEqual([]);
+    expect([...rows.values()][0].spriteInstanceId).toBe(SESSION_INSTANCE_ID);
+  });
+
+  // FINDING HH: reprovision-of-UNUSABLE failures must PROPAGATE on POST, not report
+  // a false 200 resume that only surfaces the error later at realtime attach.
+  it('given a TORN-DOWN row whose reprovision is UNAUTHORIZED, should FAIL the resume with unauthorized (403)', async () => {
+    const { store } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-td-auth',
+        name: 'cli',
+        agentType: 'shell',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+        spriteTornDownAt: NOW, // torn down — the resolve path rejects it; only a reprovision can save it
+        sessionKey: 'pgs-agt-td-auth',
+      }),
+    ]);
+    const { deps: provision } = makeSpriteProvision(store, { authorize: async () => ({ ok: false, reason: 'insufficient_role' }) });
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+
+    expect(result).toMatchObject({ ok: false, reason: 'unauthorized' });
+  });
+
+  it('given a TORN-DOWN row whose reprovision FAILS to provision, should FAIL the resume with provision_failed (500)', async () => {
+    const { store } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-td-prov',
+        name: 'cli',
+        agentType: 'shell',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+        spriteTornDownAt: NOW,
+        sessionKey: 'pgs-agt-td-prov',
+      }),
+    ]);
+    const base = makeSpriteProvision(store);
+    const provision = {
+      ...base.deps,
+      host: { ...base.deps.host, provision: async () => { throw new Error('provider out of capacity'); } },
+    };
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+
+    expect(result).toMatchObject({ ok: false, reason: 'provision_failed' });
+  });
+
+  it('given a VANISHED row (attach → null) whose reprovision FAILS, should FAIL the resume (not a false 200)', async () => {
+    const { store } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-vanish-fail',
+        name: 'cli',
+        agentType: 'shell',
+        sandboxId: 'sprite-gone', // attach returns null (vanished) → reprovision path
+        spriteInstanceId: 'inst-gone',
+        sessionKey: 'pgs-agt-vanish-fail',
+      }),
+    ]);
+    const base = makeSpriteProvision(store);
+    const provision = {
+      ...base.deps,
+      host: { ...base.deps.host, provision: async () => { throw new Error('provider down'); } },
+    };
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+
+    expect(result).toMatchObject({ ok: false, reason: 'provision_failed' });
+  });
+
+  it('given a GENUINE LEGACY row (no sandboxId, not torn down) whose heal fails, should STILL resume 200 (shared fallback serves it)', async () => {
+    const { store, rows } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-legacy-heal',
+        name: 'cli',
+        agentType: 'shell',
+        sandboxId: null, // genuine legacy — never provisioned; shared fallback still serves it
+        spriteInstanceId: null,
+        spriteTornDownAt: null,
+        sessionKey: null,
+      }),
+    ]);
+    const base = makeSpriteProvision(store);
+    const provision = {
+      ...base.deps,
+      host: { ...base.deps.host, provision: async () => { throw new Error('provider down'); } },
+    };
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+
+    // Best-effort heal: the failure is swallowed, the row stays, resume is 200.
+    expect(result).toMatchObject({ ok: true, resumed: true });
+    expect([...rows.values()][0].sandboxId).toBeNull();
+  });
+
+  it('given a LIVE resumable row (attach hits, instance matches) with a failing provisioner, should resume 200 (provisioner never consulted)', async () => {
+    const { store } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-live-ok',
+        name: 'cli',
+        agentType: 'shell',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+        sessionKey: 'pgs-agt-live-ok',
+      }),
+    ]);
+    const base = makeSpriteProvision(store);
+    const provision = {
+      ...base.deps,
+      host: { ...base.deps.host, provision: async () => { throw new Error('should never be called for a live resume'); } },
+    };
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+
+    expect(result).toMatchObject({ ok: true, resumed: true });
+    expect(base.provisionCalls).toEqual([]);
+  });
+});
+
+describe('provisionAgentTerminalSprite — race + persistence safety (findings 1 & 2)', () => {
+  const machineRow = {
+    id: 'agent-terminal-1',
+    machineId: TERMINAL_ID,
+    projectName: null,
+    machineBranchId: null,
+    sessionKey: null,
+    sandboxId: null,
+    egressPolicyToken: null,
+  } as const;
+
+  // FINDING 1 + Q: a genuine winner recorded OUR generation (same instance) — the
+  // shared name-keyed VM — so it must NOT be killed.
+  it('given the CAS loses to a winner that recorded OUR SAME instance, should NOT kill it and should resume against the winner', async () => {
+    const { store } = makeStore();
+    const { deps, killed } = makeSpriteProvision(store, {
+      updateSpriteIdentity: async () => false, // we lost the race
+      // The winner recorded the exact VM our handle holds — same name AND instance.
+      reloadRow: async () => ({ sandboxId: SESSION_SANDBOX_ID, spriteInstanceId: SESSION_INSTANCE_ID }),
+    });
+
+    const result = await provisionAgentTerminalSprite({ row: machineRow, actor: provisionActor, deps });
+    expect(result).toEqual({ ok: true, sandboxId: SESSION_SANDBOX_ID, resumed: true });
+    expect(killed).toEqual([]); // the winner's live, referenced VM was left alone
+  });
+
+  // FINDING Q: healing a vanished Sprite reprovisions under the SAME deterministic
+  // NAME with a NEW instance; if that reprovision fails before recording the
+  // replacement, the row still holds the OLD STALE instance. A name-only check
+  // would mistake it for a winner and falsely resume against a checkout that may
+  // not exist. The instance mismatch must reject it.
+  it('given the row holds a STALE pre-reprovision instance (vanished-heal failed), should treat OUR replacement as unreferenced and kill it — never falsely resume', async () => {
+    const { store } = makeStore();
+    const { deps, killed } = makeSpriteProvision(store, {
+      updateSpriteIdentity: async () => false, // our replacement never recorded
+      // Same reused name, but the OLD (vanished) instance — NOT our fresh generation.
+      reloadRow: async () => ({ sandboxId: SESSION_SANDBOX_ID, spriteInstanceId: 'inst-stale-old' }),
+    });
+
+    const result = await provisionAgentTerminalSprite({ row: machineRow, actor: provisionActor, deps });
+    expect(result).toMatchObject({ ok: false, reason: 'race_lost' }); // not a winner for our generation
+    // Our fresh replacement is unreferenced → killed, identity-guarded.
+    expect(killed).toEqual([{ machineId: SESSION_SANDBOX_ID, expectedInstanceId: SESSION_INSTANCE_ID }]);
+  });
+
+  // FINDING 2: a persistence THROW after provision must not leak the Sprite.
+  it('given updateSpriteIdentity THROWS (transient DB error), should kill the provisioned Sprite and report persist_failed', async () => {
+    const { store } = makeStore();
+    const { deps, killed } = makeSpriteProvision(store, {
+      updateSpriteIdentity: async () => { throw new Error('deadlock detected'); },
+    });
+
+    const result = await provisionAgentTerminalSprite({ row: machineRow, actor: provisionActor, deps });
+    expect(result).toMatchObject({ ok: false, reason: 'persist_failed' });
+    // The VM never outlives the failed persist — it would bill forever with a null row pointer.
+    expect(killed).toEqual([{ machineId: SESSION_SANDBOX_ID, expectedInstanceId: SESSION_INSTANCE_ID }]);
+  });
+
+  // FINDING 2 (shared-winner variant): a persist THROW where a concurrent winner
+  // recorded OUR SAME shared Sprite (or our own write committed and only the
+  // response threw) must NOT kill it.
+  it('given persist THROWS but a winner recorded OUR SAME shared Sprite, should NOT kill it and resume against the winner', async () => {
+    const row = makeLegacyRow({ id: 'agt-persist-shared', name: 'cli', agentType: 'shell', scope: 'machine' });
+    const { store } = makeStore([row]);
+    const { deps, killed } = makeSpriteProvision(store, {
+      updateSpriteIdentity: async (input) => {
+        // Our write appears to fail, but the row now points at our SAME shared VM.
+        await store.updateSpriteIdentity({ ...input, sandboxId: SESSION_SANDBOX_ID, spriteInstanceId: SESSION_INSTANCE_ID });
+        throw new Error('connection reset after commit');
+      },
+    });
+
+    const result = await provisionAgentTerminalSprite({ row, actor: provisionActor, deps });
+    expect(result).toEqual({ ok: true, sandboxId: SESSION_SANDBOX_ID, resumed: true });
+    expect(killed).toEqual([]);
+  });
+
+  // The collision reconcile is a SINGLE immediate reload (branch model) — no
+  // polling, no wait dep — so it never holds the awaited POST request for
+  // clone-scale time. A winner already present on that one read (recording OUR
+  // generation) is resumed against.
+  it('given a winner already present on the single reload (OUR instance), should resume against it and NOT kill', async () => {
+    const { store } = makeStore();
+    let reloads = 0;
+    const { deps, killed } = makeSpriteProvision(store, {
+      updateSpriteIdentity: async () => { throw new Error('db blip'); },
+      reloadRow: async () => {
+        reloads += 1;
+        return { sandboxId: SESSION_SANDBOX_ID, spriteInstanceId: SESSION_INSTANCE_ID };
+      },
+    });
+
+    const result = await provisionAgentTerminalSprite({ row: machineRow, actor: provisionActor, deps });
+    expect(result).toEqual({ ok: true, sandboxId: SESSION_SANDBOX_ID, resumed: true });
+    expect(killed).toEqual([]); // the live, referenced winner was never destroyed
+    expect(reloads).toBe(1); // exactly ONE reload — no polling, request-safe
+  });
+
+  it('given no winner on the single reload, should kill immediately (one reload, no wait) — no clone-scale hold', async () => {
+    const { store } = makeStore();
+    let reloads = 0;
+    const { deps, killed, enqueuedReclaims } = makeSpriteProvision(store, {
+      updateSpriteIdentity: async () => { throw new Error('db blip'); },
+      reloadRow: async () => {
+        reloads += 1;
+        return { sandboxId: null, spriteInstanceId: null };
+      },
+    });
+
+    const result = await provisionAgentTerminalSprite({ row: machineRow, actor: provisionActor, deps });
+    expect(result).toMatchObject({ ok: false, reason: 'persist_failed' });
+    // Confirmed kill (default host.kill resolves) → nothing enqueued.
+    expect(killed).toEqual([{ machineId: SESSION_SANDBOX_ID, expectedInstanceId: SESSION_INSTANCE_ID }]);
+    expect(enqueuedReclaims).toEqual([]);
+    expect(reloads).toBe(1); // exactly ONE reload — no clone-scale poll
+  });
+
+  // FINDING Y: when the cleanup kill CANNOT be confirmed, the handle must be
+  // enqueued to the reclaim outbox — the row has a NULL sandboxId, so nothing
+  // else could ever find the leaked VM.
+  it('given the cleanup kill FAILS unconfirmed, should ENQUEUE the handle to the reclaim outbox', async () => {
+    const { store } = makeStore();
+    const base = makeSpriteProvision(store, {
+      updateSpriteIdentity: async () => { throw new Error('db down'); },
+      reloadRow: async () => ({ sandboxId: null, spriteInstanceId: null }), // no winner
+    });
+    const deps = {
+      ...base.deps,
+      host: { ...base.deps.host, kill: async () => { throw new Error('control plane unreachable'); } },
+    };
+
+    const result = await provisionAgentTerminalSprite({ row: machineRow, actor: provisionActor, deps });
+    expect(result).toMatchObject({ ok: false, reason: 'persist_failed' });
+    // The (maybe still-live) VM is rescued for the reconciler's tier-A.
+    expect(base.enqueuedReclaims).toEqual([{ sandboxId: SESSION_SANDBOX_ID, spriteInstanceId: SESSION_INSTANCE_ID }]);
+  });
+
+  it('given the cleanup kill throws MachineSpriteReplacedError (target already gone), should NOT enqueue', async () => {
+    const { store } = makeStore();
+    const base = makeSpriteProvision(store, {
+      updateSpriteIdentity: async () => { throw new Error('db down'); },
+      reloadRow: async () => ({ sandboxId: null, spriteInstanceId: null }),
+    });
+    const deps = {
+      ...base.deps,
+      host: {
+        ...base.deps.host,
+        kill: async () => { throw new MachineSpriteReplacedError(SESSION_SANDBOX_ID, SESSION_INSTANCE_ID, 'inst-newcomer'); },
+      },
+    };
+
+    const result = await provisionAgentTerminalSprite({ row: machineRow, actor: provisionActor, deps });
+    expect(result).toMatchObject({ ok: false, reason: 'persist_failed' });
+    // Our target is confirmed gone (a replacement holds the name) — nothing to reclaim.
+    expect(base.enqueuedReclaims).toEqual([]);
+  });
+
+  // FINDINGS BB/CC: the identity-persist CAS is FUSED with a liveness fence — it
+  // writes only if the owning Machine is not trashed AND (for a project row) the
+  // project still exists. When the spawn races trash/removal and reaches the
+  // persist AFTER teardown, that fused CAS affects no rows (modelled here as
+  // updateSpriteIdentity → false). provisionAgentTerminalSprite must then KILL the
+  // handle rather than leave a persisted orphan the reconciler can't find.
+  it('given the liveness CAS fences the persist (machine trashed / project gone), should kill the handle and leave NO orphan', async () => {
+    const { store } = makeStore();
+    const { deps, killed } = makeSpriteProvision(store, {
+      updateSpriteIdentity: async () => false, // fused CAS matched 0 rows — resource gone
+      reloadRow: async () => ({ sandboxId: null, spriteInstanceId: null }), // nothing persisted our generation
+    });
+
+    const result = await provisionAgentTerminalSprite({ row: machineRow, actor: provisionActor, deps });
+    expect(result).toMatchObject({ ok: false, reason: 'race_lost' });
+    // The provisioned VM is destroyed — never persisted, so nothing else could find it.
+    expect(killed).toEqual([{ machineId: SESSION_SANDBOX_ID, expectedInstanceId: SESSION_INSTANCE_ID }]);
+  });
+
+  it('given the liveness CAS fences the persist AND the kill is unconfirmed, should ENQUEUE the handle to the outbox', async () => {
+    const { store } = makeStore();
+    const base = makeSpriteProvision(store, {
+      updateSpriteIdentity: async () => false,
+      reloadRow: async () => ({ sandboxId: null, spriteInstanceId: null }),
+    });
+    const deps = {
+      ...base.deps,
+      host: { ...base.deps.host, kill: async () => { throw new Error('control plane unreachable'); } },
+    };
+
+    const result = await provisionAgentTerminalSprite({ row: machineRow, actor: provisionActor, deps });
+    expect(result).toMatchObject({ ok: false, reason: 'race_lost' });
+    expect(base.enqueuedReclaims).toEqual([{ sandboxId: SESSION_SANDBOX_ID, spriteInstanceId: SESSION_INSTANCE_ID }]);
+  });
+});
+
+// The kill-site CLASS: `host.provision` is name-keyed, so a concurrent provision
+// of the SAME row can hand both callers the SAME physical Sprite. EVERY
+// safeKillSprite that fires after a successful provision — a failed clone (either
+// scope), a failed/lost persist — must reconcile-before-kill so it never destroys
+// a shared winner's live VM. These cover the clone sites Codex named.
+describe('provisionAgentTerminalSprite — clone-failure is a provisioning collision (kill-site class)', () => {
+  /**
+   * A session Sprite whose git `clone` fails; `onClone` runs the moment it does
+   * (to simulate a concurrent winner). `stderr` defaults to a GENERIC failure that
+   * does NOT match the precise dest-exists signal (so the kill-site tests below
+   * exercise the ordinary reconcile-then-kill path); pass the real git
+   * "already exists and is not an empty directory" message to exercise the
+   * concurrent-collision mitigation.
+   */
+  function cloneFailingSession(onClone?: () => Promise<void>, stderr = 'fatal: unable to access repository (exit 128)') {
+    return makeSessionHandle({
+      exec: async (args) => {
+        if (args.cmd === 'git' && args.args?.[0] === 'clone') {
+          if (onClone) await onClone();
+          return { success: true, exitCode: 128, stdout: '', stderr };
+        }
+        return { success: true, exitCode: 0, stdout: '', stderr: '' };
+      },
+    });
+  }
+
+  const DEST_EXISTS_STDERR = "fatal: destination path '/workspace/repo' already exists and is not an empty directory.";
+
+  it('given a BRANCH clone fails because a concurrent winner already committed our SAME shared Sprite, should NOT kill it and resume against the winner', async () => {
+    const branchRow = makeLegacyRow({ id: 'agt-branch', name: 'cli', agentType: 'shell', scope: 'branch', projectName: PROJECT_NAME, machineBranchId: BRANCH_ID });
+    const { store } = makeStore([branchRow]);
+    const session = cloneFailingSession(async () => {
+      // The winner recorded THIS SAME (name-keyed) Sprite as the row's — which is
+      // exactly why our redundant clone failed ("destination already exists").
+      await store.updateSpriteIdentity({
+        id: 'agt-branch',
+        previousSandboxId: null,
+        sessionKey: 'pgs-agt-branch-winner',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+        egressPolicyToken: null,
+        now: NOW,
+      });
+    });
+    const { deps, killed } = makeSpriteProvision(store, {}, session);
+
+    const result = await provisionAgentTerminalSprite({ row: branchRow, actor: provisionActor, deps });
+    expect(result).toEqual({ ok: true, sandboxId: SESSION_SANDBOX_ID, resumed: true });
+    // The shared Sprite must NOT be killed — that would destroy the winner's live VM.
+    expect(killed).toEqual([]);
+  });
+
+  it('given a PROJECT clone fails because a concurrent winner already committed our SAME shared Sprite, should NOT kill it and resume against the winner', async () => {
+    const projectRow = makeLegacyRow({ id: 'agt-project', name: 'cli', agentType: 'shell', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null });
+    const { store } = makeStore([projectRow]);
+    const session = cloneFailingSession(async () => {
+      await store.updateSpriteIdentity({
+        id: 'agt-project',
+        previousSandboxId: null,
+        sessionKey: 'pgs-agt-project-winner',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+        egressPolicyToken: null,
+        now: NOW,
+      });
+    });
+    const { deps, killed } = makeSpriteProvision(store, {}, session);
+
+    const result = await provisionAgentTerminalSprite({ row: projectRow, actor: provisionActor, deps });
+    expect(result).toEqual({ ok: true, sandboxId: SESSION_SANDBOX_ID, resumed: true });
+    expect(killed).toEqual([]);
+  });
+
+  it('given a BRANCH clone fails with NO competing winner, should kill our own redundant Sprite and report clone_failed', async () => {
+    const branchRow = makeLegacyRow({ id: 'agt-branch-solo', name: 'cli', agentType: 'shell', scope: 'branch', projectName: PROJECT_NAME, machineBranchId: BRANCH_ID });
+    const { store } = makeStore([branchRow]);
+    const session = cloneFailingSession(); // no winner recorded
+    const { deps, killed } = makeSpriteProvision(store, {}, session);
+
+    const result = await provisionAgentTerminalSprite({ row: branchRow, actor: provisionActor, deps });
+    expect(result).toMatchObject({ ok: false, reason: 'clone_failed' });
+    // Nothing else references this Sprite — it must be killed, identity-guarded.
+    expect(killed).toEqual([{ machineId: SESSION_SANDBOX_ID, expectedInstanceId: SESSION_INSTANCE_ID }]);
+  });
+
+  it('given a PROJECT clone fails with NO competing winner, should kill our own redundant Sprite and report clone_failed', async () => {
+    const projectRow = makeLegacyRow({ id: 'agt-project-solo', name: 'cli', agentType: 'shell', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null });
+    const { store } = makeStore([projectRow]);
+    const session = cloneFailingSession();
+    const { deps, killed } = makeSpriteProvision(store, {}, session);
+
+    const result = await provisionAgentTerminalSprite({ row: projectRow, actor: provisionActor, deps });
+    expect(result).toMatchObject({ ok: false, reason: 'clone_failed' });
+    expect(killed).toEqual([{ machineId: SESSION_SANDBOX_ID, expectedInstanceId: SESSION_INSTANCE_ID }]);
+  });
+
+  // THE TARGETED MITIGATION: the loser's clone fails with git's specific
+  // dest-exists error BECAUSE a concurrent winner populated the checkout in the
+  // SHARED name-keyed Sprite, but the winner has NOT persisted its identity yet —
+  // the single reload sees sandboxId:null. The old code KILLED the shared Sprite
+  // here (destroying the winner's live VM). It must now stay a BENIGN collision.
+  it('given a PROJECT clone fails with the DEST-EXISTS signal and NO winner persisted yet, should NOT kill the shared Sprite (benign clone_collision)', async () => {
+    const projectRow = makeLegacyRow({ id: 'agt-p-collide', name: 'cli', agentType: 'shell', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null });
+    const { store } = makeStore([projectRow]);
+    const session = cloneFailingSession(undefined, DEST_EXISTS_STDERR); // dest-exists, but no winner recorded
+    const { deps, killed, enqueuedReclaims } = makeSpriteProvision(store, {}, session);
+
+    const result = await provisionAgentTerminalSprite({ row: projectRow, actor: provisionActor, deps });
+
+    expect(result).toMatchObject({ ok: false, reason: 'clone_collision' });
+    // The winner still owns and is cloning into the shared Sprite — it must survive.
+    expect(killed).toEqual([]);
+    expect(enqueuedReclaims).toEqual([]); // and NOT enqueued (the reconciler would kill it later otherwise)
+  });
+
+  it('given a BRANCH clone fails with the DEST-EXISTS signal and NO winner persisted yet, should NOT kill the shared Sprite (benign clone_collision)', async () => {
+    const branchRow = makeLegacyRow({ id: 'agt-b-collide', name: 'cli', agentType: 'shell', scope: 'branch', projectName: PROJECT_NAME, machineBranchId: BRANCH_ID });
+    const { store } = makeStore([branchRow]);
+    const session = cloneFailingSession(undefined, DEST_EXISTS_STDERR);
+    const { deps, killed, enqueuedReclaims } = makeSpriteProvision(store, {}, session);
+
+    const result = await provisionAgentTerminalSprite({ row: branchRow, actor: provisionActor, deps });
+
+    expect(result).toMatchObject({ ok: false, reason: 'clone_collision' });
+    expect(killed).toEqual([]);
+    expect(enqueuedReclaims).toEqual([]);
+  });
+
+  it('given a DEST-EXISTS clone failure AND the winner HAS persisted a matching instance, should resume against it (not kill)', async () => {
+    const projectRow = makeLegacyRow({ id: 'agt-p-collide-win', name: 'cli', agentType: 'shell', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null });
+    const { store } = makeStore([projectRow]);
+    const session = cloneFailingSession(async () => {
+      await store.updateSpriteIdentity({
+        id: 'agt-p-collide-win', previousSandboxId: null, sessionKey: 'pgs-winner',
+        sandboxId: SESSION_SANDBOX_ID, spriteInstanceId: SESSION_INSTANCE_ID, egressPolicyToken: null, now: NOW,
+      });
+    }, DEST_EXISTS_STDERR);
+    const { deps, killed } = makeSpriteProvision(store, {}, session);
+
+    const result = await provisionAgentTerminalSprite({ row: projectRow, actor: provisionActor, deps });
+
+    expect(result).toEqual({ ok: true, sandboxId: SESSION_SANDBOX_ID, resumed: true });
+    expect(killed).toEqual([]);
+  });
+
+  // At the spawn level: the loser's POST must succeed benignly (the row converges
+  // to the winner's Sprite) rather than fail or delete the row — deleting it would
+  // strand the winner's persist CAS.
+  it('given a resume whose reprovision hits a DEST-EXISTS collision, the spawn succeeds benignly and never kills the shared Sprite', async () => {
+    // A genuine legacy project-scope row (no own Sprite yet) → the resume path
+    // reprovisions, and the clone loses to a concurrent winner (dest-exists).
+    const { store } = makeStore([
+      makeLegacyRow({
+        id: 'agt-spawn-collide', name: 'cli', agentType: 'shell',
+        scope: 'project', projectName: PROJECT_NAME, machineBranchId: null,
+        sandboxId: null, spriteTornDownAt: null, sessionKey: null,
+      }),
+    ]);
+    const session = cloneFailingSession(undefined, DEST_EXISTS_STDERR);
+    const { deps: provision, killed } = makeSpriteProvision(store, {}, session);
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, name: 'cli', agentType: 'shell', actor, deps });
+
+    expect(result).toMatchObject({ ok: true, resumed: true }); // benign — winner owns the shared Sprite
+    expect(killed).toEqual([]); // shared Sprite never killed
+    expect(await store.findById('agt-spawn-collide')).not.toBeNull(); // row kept for the winner's CAS
+  });
+
+  // Precision guard: a NON-dest clone error (no winner) still kills, so the
+  // mitigation cannot be tripped by an unrelated clone failure.
+  it('given a NON-dest clone error with no winner, should STILL kill + report clone_failed (mitigation is precise)', async () => {
+    const projectRow = makeLegacyRow({ id: 'agt-p-neterr', name: 'cli', agentType: 'shell', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null });
+    const { store } = makeStore([projectRow]);
+    const session = cloneFailingSession(undefined, 'fatal: could not read from remote repository');
+    const { deps, killed } = makeSpriteProvision(store, {}, session);
+
+    const result = await provisionAgentTerminalSprite({ row: projectRow, actor: provisionActor, deps });
+
+    expect(result).toMatchObject({ ok: false, reason: 'clone_failed' });
+    expect(killed).toEqual([{ machineId: SESSION_SANDBOX_ID, expectedInstanceId: SESSION_INSTANCE_ID }]);
+  });
+});
+
+describe('resolveAgentTerminal — per-session Sprite resolution (sessions-per-location)', () => {
+  it('given a machine-scope row with its OWN sandboxId, should resolve to that Sprite at SANDBOX_ROOT with ownSprite:true (never the shared machine Sprite)', async () => {
+    const acquireCalls: string[] = [];
+    const { store } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-own-m',
+        name: 'cli',
+        agentType: 'shell',
+        scope: 'machine',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+      }),
+    ]);
+    const deps = makeDeps({
+      store,
+      machineSandbox: makeMachineSandbox({
+        acquire: async (id) => {
+          acquireCalls.push(id);
+          return { ok: true, sandboxId: MACHINE_SANDBOX_ID };
+        },
+      }),
+    });
+
+    const result = await resolveAgentTerminalById({ agentTerminalId: 'agent-terminal-own-m', deps });
+    expect(result).toMatchObject({ ok: true, sandboxId: SESSION_SANDBOX_ID, cwd: SANDBOX_ROOT, ownSprite: true });
+    expect(acquireCalls).toEqual([]); // the shared machine Sprite was never acquired
+  });
+
+  it('given a project-scope row with its OWN sandboxId, should resolve to that Sprite at PROJECT_REPO_PATH', async () => {
+    const { store } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-own-p',
+        name: 'cli',
+        agentType: 'shell',
+        scope: 'project',
+        projectName: PROJECT_NAME,
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+      }),
+    ]);
+    const deps = makeDeps({ store });
+    const result = await resolveAgentTerminalById({ agentTerminalId: 'agent-terminal-own-p', deps });
+    expect(result).toMatchObject({ ok: true, sandboxId: SESSION_SANDBOX_ID, cwd: PROJECT_REPO_PATH, ownSprite: true });
+  });
+
+  it('given a torn-down row, should REJECT (session_torn_down) rather than share the machine Sprite — a re-spawn reprovisions', async () => {
+    const acquireCalls: string[] = [];
+    const { store } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-torn',
+        name: 'cli',
+        agentType: 'shell',
+        scope: 'machine',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+        spriteTornDownAt: NOW,
+      }),
+    ]);
+    const deps = makeDeps({
+      store,
+      machineSandbox: makeMachineSandbox({
+        acquire: async (id) => {
+          acquireCalls.push(id);
+          return { ok: true, sandboxId: MACHINE_SANDBOX_ID };
+        },
+      }),
+    });
+    const result = await resolveAgentTerminalById({ agentTerminalId: 'agent-terminal-torn', deps });
+    // Torn-down = its own Sprite is destroyed. Sharing the machine Sprite would break
+    // per-session isolation, so the read-only resolve path rejects; a re-spawn (POST)
+    // reprovisions a fresh isolated Sprite and clears the teardown stamp.
+    expect(result).toEqual({ ok: false, reason: 'session_torn_down' });
+    expect(acquireCalls).toEqual([]); // never fell back to the shared machine Sprite
+  });
+});
+
+describe('killAgentTerminal — per-session Sprite teardown (sessions-per-location)', () => {
+  it('given a row with its OWN Sprite, should DESTROY that Sprite (identity-guarded) and CAS-remove the row', async () => {
+    const killed: Array<{ machineId: string; expectedInstanceId?: string | null }> = [];
+    const { store, rows } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-own-k',
+        name: 'cli',
+        agentType: 'shell',
+        scope: 'machine',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+        streamSessionId: 'sess-1',
+      }),
+    ]);
+    const deps: AgentTerminalsDeps = makeDeps({
+      store,
+      host: makeHost({
+        kill: async (args) => {
+          killed.push(args);
+        },
+      }),
+    });
+
+    const result = await killAgentTerminalById({ agentTerminalId: 'agent-terminal-own-k', deps });
+    expect(result).toEqual({ ok: true });
+    expect(killed).toEqual([{ machineId: SESSION_SANDBOX_ID, expectedInstanceId: SESSION_INSTANCE_ID }]);
+    expect(rows.size).toBe(0);
+  });
+
+  it('given a spawned-but-never-connected session (streamSessionId null) with its OWN Sprite, should STILL destroy the Sprite (no unreferenced billing VM)', async () => {
+    const killed: string[] = [];
+    const { store, rows } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-own-nc',
+        name: 'cli',
+        agentType: 'shell',
+        scope: 'machine',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+        streamSessionId: null,
+      }),
+    ]);
+    const deps: AgentTerminalsDeps = makeDeps({
+      store,
+      host: makeHost({ kill: async (args) => { killed.push(args.machineId); } }),
+    });
+
+    const result = await killAgentTerminalById({ agentTerminalId: 'agent-terminal-own-nc', deps });
+    expect(result).toEqual({ ok: true });
+    expect(killed).toEqual([SESSION_SANDBOX_ID]);
+    expect(rows.size).toBe(0);
+  });
+
+  it('given the Sprite kill fails, should keep the row (so a retry / the reconciler can find it)', async () => {
+    const { store, rows } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-own-fail',
+        name: 'cli',
+        agentType: 'shell',
+        scope: 'machine',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+      }),
+    ]);
+    const deps: AgentTerminalsDeps = makeDeps({
+      store,
+      host: makeHost({ kill: async () => { throw new Error('control plane down'); } }),
+    });
+
+    const result = await killAgentTerminalById({ agentTerminalId: 'agent-terminal-own-fail', deps });
+    expect(result).toEqual({ ok: false, reason: 'error' });
+    expect(rows.size).toBe(1);
+  });
+
+  it('given a concurrent re-spawn wrote a REPLACEMENT Sprite, the CAS-remove should NOT delete the row (protects the live VM)', async () => {
+    const { store, rows } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-own-cas',
+        name: 'cli',
+        agentType: 'shell',
+        scope: 'machine',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+      }),
+    ]);
+    const deps: AgentTerminalsDeps = makeDeps({
+      store,
+      host: makeHost({
+        kill: async () => {
+          // Simulate a racer re-provisioning a replacement into the row between
+          // our kill and the CAS-remove.
+          await store.updateSpriteIdentity({
+            id: 'agent-terminal-own-cas',
+            previousSandboxId: SESSION_SANDBOX_ID,
+            sessionKey: 'pgs-agt-new',
+            sandboxId: 'sprite-session-2',
+            spriteInstanceId: 'inst-session-2',
+            egressPolicyToken: null,
+            now: NOW,
+          });
+        },
+      }),
+    });
+
+    const result = await killAgentTerminalById({ agentTerminalId: 'agent-terminal-own-cas', deps });
+    expect(result).toEqual({ ok: true });
+    // The replacement's pointer survives — CAS refused to delete it.
+    expect(rows.size).toBe(1);
+    expect([...rows.values()][0].sandboxId).toBe('sprite-session-2');
+  });
+});
+
+describe('failed-provision cleanup deletes by id, not name (finding FF)', () => {
+  it('a concurrent same-name recreate (different row id) is NOT deleted by the original failed cleanup', async () => {
+    // The original spawn reserved 'agt-orig' then failed provisioning; meanwhile a
+    // concurrent request deleted it and recreated the SAME name as a NEW row
+    // 'agt-new'. The original's cleanup targets its OWN id, so 'agt-new' survives
+    // (a by-(scope,name) delete would have wrongly removed it).
+    const newRow = makeLegacyRow({ id: 'agt-new', name: 'cli', agentType: 'shell', scope: 'machine' }); // null sandboxId, same name
+    const { store } = makeStore([newRow]);
+
+    const removed = await store.removeIfUnprovisioned({ id: 'agt-orig' }); // original id no longer present
+    expect(removed).toBe(false);
+    expect(await store.findById('agt-new')).not.toBeNull(); // the new caller's row survives
+  });
+
+  it('removeIfUnprovisioned deletes the reserved row only while it is still unprovisioned', async () => {
+    const unprov = makeLegacyRow({ id: 'agt-u', name: 'cli', agentType: 'shell', scope: 'machine' }); // null sandboxId
+    const prov = makeLegacyRow({ id: 'agt-v', name: 'other', agentType: 'shell', scope: 'machine', sandboxId: 'sbx-v', spriteInstanceId: 'inst-v' });
+    const { store } = makeStore([unprov, prov]);
+
+    expect(await store.removeIfUnprovisioned({ id: 'agt-u' })).toBe(true); // unprovisioned → removed
+    expect(await store.findById('agt-u')).toBeNull();
+    expect(await store.removeIfUnprovisioned({ id: 'agt-v' })).toBe(false); // has a live Sprite → kept
+    expect(await store.findById('agt-v')).not.toBeNull();
   });
 });
