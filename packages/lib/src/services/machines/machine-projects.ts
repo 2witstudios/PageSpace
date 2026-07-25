@@ -133,26 +133,6 @@ export interface MachineProjectsDeps {
     sandboxId: string;
     spriteInstanceId: string | null;
   }) => Promise<{ ok: boolean }>;
-  /**
-   * Prepare teardown of the project's agent-terminal Sprites (both PROJECT- and
-   * BRANCH-scoped — finding DD) on removal.
-   *
-   * A project-scoped `machine_agent_terminals` row links to this project only by
-   * `projectName` TEXT (no FK); a branch-scoped row's branch links to the project
-   * the same way, so a `machine_projects` delete cascades to NEITHER (the branch
-   * FK cascade never fires because the `machine_branches` rows aren't deleted).
-   * Without this, removing a project strands those sessions' live, billed Sprites.
-   *
-   * TWO-PHASE so the teardown targets THIS project generation (finding EE): called
-   * BEFORE the project row is deleted, it SNAPSHOTS the current live terminal rows
-   * (by id + generation) and returns a closure that tears them down BY ID. The
-   * caller runs the closure AFTER deleting the project row (so the project is
-   * non-spawnable), and a same-name replacement re-added after the delete is never
-   * in the snapshot, so its terminals are never touched. Best-effort and optional
-   * (older wiring skips it); production binds it to `snapshotProjectAgentTerminalSprites`
-   * + `teardownAgentTerminalSpriteSnapshot` (agent-terminal-sprites.ts).
-   */
-  prepareProjectSessionTeardown?: (input: { machineId: string; projectName: string }) => Promise<() => Promise<void>>;
 }
 
 function buildGitRunDeps(machineId: string, deps: MachineProjectsDeps): GitSandboxRunDeps {
@@ -332,27 +312,24 @@ export async function removeProject({
   const existing = await deps.store.findByName(machineId, name);
   if (!existing) return { ok: false, reason: 'not_found' };
 
-  // FINDING EE: SNAPSHOT this project's live agent-terminal Sprites (project- AND
-  // branch-scoped — finding DD) NOW, BEFORE the project row is deleted. The
-  // snapshot captures each row's id + generation, so the teardown below acts on
-  // THESE SPECIFIC rows — a same-name replacement project (only addable AFTER the
-  // delete) is never in the snapshot, so a post-delete name re-query's ABA (killing
-  // the replacement's terminals) cannot happen. Best-effort: a snapshot failure
-  // must not block the delete.
-  let runSessionTeardown: (() => Promise<void>) | null = null;
-  if (deps.prepareProjectSessionTeardown) {
-    runSessionTeardown = await deps.prepareProjectSessionTeardown({ machineId, projectName: name }).catch(() => null);
-  }
-
-  // FINDING V: DELETE the project row FIRST — before the (slow) session teardown
-  // and filesystem cleanup below. Once the row is gone a concurrent project-scoped
-  // spawn can no longer RESOLVE this project (`spawnAgentTerminal` →
-  // `resolveScopeKey` returns `project_not_found`), so no NEW session can be
-  // provisioned for it after this point. By id, not name: a by-name delete could
-  // race a concurrent remove-then-re-add of this name and delete the NEW row. The
-  // row's own AFTER-DELETE trigger rescues its promoted Sprite pointer into the
-  // reclaim outbox, so the kill below is a best-effort fast-path, not the only
-  // reclaim path.
+  // DELETE the project row (finding V: FIRST — before the slow filesystem cleanup
+  // below). Once the row is gone a concurrent project-scoped spawn can no longer
+  // RESOLVE this project (`spawnAgentTerminal` → `resolveScopeKey` returns
+  // `project_not_found`), so no NEW session can be provisioned for it. By id, not
+  // name: a by-name delete could race a concurrent remove-then-re-add of this name
+  // and delete the NEW row.
+  //
+  // The delete CASCADES (migration 0230's `machineProjectId` FK, ON DELETE cascade)
+  // to every project- AND branch-scoped `machine_agent_terminals` row and every
+  // `machine_branches` row of this project (which in turn cascades to its
+  // branch-scoped terminals via `machineBranchId`). Each cascaded row's OWN
+  // AFTER-DELETE reclaim trigger (0229 for terminals, 0209 for branches) rescues its
+  // live Sprite pointer into the `machine_sprite_reclaims` outbox, and the project
+  // row's own trigger (0219) rescues its promoted Sprite. The orphan-reconcile cron
+  // drains the outbox and destroys those VMs. This replaces the former manual
+  // snapshot/enumeration teardown (dissolving findings DD/EE/CC/V's spawn-vs-teardown
+  // and same-name-ABA races — the FK targets rows BY ID, so a same-name replacement
+  // project added after this delete is a different id the cascade never touches).
   try {
     await deps.store.remove(machineId, existing.id);
   } catch {
@@ -360,10 +337,12 @@ export async function removeProject({
   }
 
   // A PROMOTED project's Sprite is a real billing microVM. Best-effort
-  // identity-guarded kill to stop the meter now rather than wait for the reclaim
-  // cron (the AFTER-DELETE trigger already enqueued its pointer above, so a
-  // failure here is retried). Skipped for a torn-down row: `sandboxId` is a NAME
-  // reused across re-creates, and re-killing it could destroy a replacement VM.
+  // identity-guarded fast-kill to stop the meter NOW rather than wait for the
+  // reclaim cron (the AFTER-DELETE trigger already enqueued its pointer above, so a
+  // failure here is retried by the cron). Only this project's OWN promoted Sprite —
+  // the cascaded session/branch Sprites are reclaimed exclusively through the
+  // outbox. Skipped for a torn-down row: `sandboxId` is a NAME reused across
+  // re-creates, and re-killing it could destroy a replacement VM.
   if (existing.sandboxId && !existing.spriteTornDownAt && deps.killSprite) {
     try {
       await deps.killSprite({
@@ -372,17 +351,6 @@ export async function removeProject({
       });
     } catch {
       // Best-effort; the delete trigger's outbox pointer covers this Sprite.
-    }
-  }
-
-  // Tear down the SNAPSHOTTED session Sprites BY ID (the project is non-spawnable
-  // now). Best-effort (per-row isolated inside the closure).
-  if (runSessionTeardown) {
-    try {
-      await runSessionTeardown();
-    } catch {
-      // Best-effort — any un-torn-down session Sprite is reclaimed when the owning
-      // machine is itself torn down or purged.
     }
   }
 

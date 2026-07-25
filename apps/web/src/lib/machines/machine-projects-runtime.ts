@@ -45,12 +45,6 @@ import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { createDbMachineProjectStore } from '@pagespace/lib/services/machines/machine-projects-store';
-import { createDbMachineAgentTerminalStore } from '@pagespace/lib/services/machines/agent-terminals-store';
-import { createDbMachineBranchStore } from '@pagespace/lib/services/machines/machine-branches-store';
-import {
-  snapshotProjectAgentTerminalSprites,
-  teardownAgentTerminalSpriteSnapshot,
-} from '@pagespace/lib/services/machines/agent-terminal-sprites';
 import type { MachineActorContext, MachineProjectsDeps, MachineAcquireResult } from '@pagespace/lib/services/machines/machine-projects';
 import type { PromoteProjectDeps } from '@pagespace/lib/services/machines/machine-project-promotion';
 import { buildMachineBranchesDeps } from './machine-branches-runtime';
@@ -99,18 +93,6 @@ let machineProjectStorePromise: ReturnType<typeof createDbMachineProjectStore> |
 function getMachineProjectStore() {
   machineProjectStorePromise ??= createDbMachineProjectStore();
   return machineProjectStorePromise;
-}
-
-let machineAgentTerminalStorePromise: ReturnType<typeof createDbMachineAgentTerminalStore> | null = null;
-function getMachineAgentTerminalStore() {
-  machineAgentTerminalStorePromise ??= createDbMachineAgentTerminalStore();
-  return machineAgentTerminalStorePromise;
-}
-
-let machineBranchStorePromise: ReturnType<typeof createDbMachineBranchStore> | null = null;
-function getMachineBranchStore() {
-  machineBranchStorePromise ??= createDbMachineBranchStore();
-  return machineBranchStorePromise;
 }
 
 /**
@@ -250,28 +232,12 @@ export function buildMachineProjectsDeps({ actorUserId }: { actorUserId: string 
     // orphan reconciler retries. A replaced instance means our target is already
     // gone, which is the outcome we wanted.
     killSprite: killSpriteIdentityGuarded,
-    // Tear down the project's agent-terminal Sprites on removal — PROJECT-scoped
-    // AND BRANCH-scoped (finding DD); neither cascades from a machine_projects
-    // delete (both link to the project by projectName TEXT). Two-phase (finding
-    // EE): SNAPSHOT the live rows by id BEFORE the project delete, then the caller
-    // runs the returned closure to kill + CAS-delete them by id AFTER the delete —
-    // so a same-name replacement added post-delete is never in the snapshot.
-    prepareProjectSessionTeardown: async ({ machineId, projectName }) => {
-      const agentTerminalStore = await getMachineAgentTerminalStore();
-      const snapshot = await snapshotProjectAgentTerminalSprites({
-        machineId,
-        projectName,
-        deps: {
-          store: agentTerminalStore,
-          listProjectBranchIds: async (m, p) => (await (await getMachineBranchStore()).list(m, p)).map((b) => b.id),
-        },
-      });
-      return () =>
-        teardownAgentTerminalSpriteSnapshot({
-          snapshot,
-          deps: { store: agentTerminalStore, killSprite: killSpriteIdentityGuarded },
-        });
-    },
+    // The project's agent-terminal + branch Sprites are reclaimed automatically:
+    // deleting the machine_projects row CASCADES (migration 0230's machineProjectId
+    // FK) to every project- and branch-scoped machine_agent_terminals row and every
+    // machine_branches row, and each cascaded row's own AFTER-DELETE reclaim trigger
+    // (0229/0209) rescues its Sprite pointer into the outbox for the orphan
+    // reconciler to drain. No manual snapshot/enumeration teardown is needed.
   };
 }
 
