@@ -69,9 +69,9 @@ export interface MachineActorContext {
   tier: SubscriptionTier;
 }
 
-/** The minimal slice of the Projects store Branches needs — just enough to resolve a project's `repoUrl`. */
+/** The minimal slice of the Projects store Branches needs — the project's `id` (for the machineProjectId cascade FK) and `repoUrl` (to clone). */
 export interface MachineBranchProjectLookup {
-  findByName(machineId: string, name: string): Promise<{ repoUrl: string } | null>;
+  findByName(machineId: string, name: string): Promise<{ id: string; repoUrl: string } | null>;
 }
 
 export interface MachineBranchesDeps {
@@ -709,6 +709,10 @@ export async function spawnBranch({
       ownerId: actor.userId,
       machineId,
       projectName,
+      // The owning project's id — the ON DELETE cascade that reclaims this branch
+      // (and its branch-scoped terminals) when the project is removed. `project`
+      // was resolved above (project_not_found already returned if absent).
+      machineProjectId: project.id,
       branchName,
       sessionKey,
       sandboxId: handle.machineId,

@@ -29,6 +29,7 @@ function makeRow(overrides: Partial<MachineAgentTerminalRecord> = {}): MachineAg
     machineId: MACHINE_ID,
     scope: 'machine',
     projectName: null,
+    machineProjectId: null,
     machineBranchId: null,
     name: 'pagespace-agent',
     agentType: 'pagespace',

@@ -83,7 +83,7 @@ export interface AgentTerminalProjectLookup {
   findByName(
     machineId: string,
     name: string,
-  ): Promise<{ path: string; sandboxId?: string | null; spriteTornDownAt?: Date | null } | null>;
+  ): Promise<{ id: string; path: string; sandboxId?: string | null; spriteTornDownAt?: Date | null } | null>;
 }
 
 /**
@@ -614,6 +614,19 @@ export async function spawnAgentTerminal({
     return { ok: true, id: existing.id, agentType: resolvedType, resumed: true };
   }
 
+  // Resolve the owning project's id for the machineProjectId FK — the ON DELETE
+  // cascade that reclaims this session's Sprite when its project is removed. Set
+  // for project- AND branch-scope (a branch always belongs to a project); NULL for
+  // machine scope. A project that can't be resolved fails the spawn rather than
+  // inserting a null-FK project row that the cascade would never reach.
+  let machineProjectId: string | null = null;
+  if (scope.scopeKey.projectName !== null) {
+    if (!deps.projectStore) return { ok: false, reason: 'scope_unsupported' };
+    const project = await deps.projectStore.findByName(scope.scopeKey.machineId, scope.scopeKey.projectName);
+    if (!project) return { ok: false, reason: 'project_not_found' };
+    machineProjectId = project.id;
+  }
+
   let row: MachineAgentTerminalRecord;
   try {
     row = await deps.store.create({
@@ -621,6 +634,7 @@ export async function spawnAgentTerminal({
       machineId: scope.scopeKey.machineId,
       scope: deriveAgentTerminalScope(scope.scopeKey),
       projectName: scope.scopeKey.projectName,
+      machineProjectId,
       machineBranchId: scope.scopeKey.machineBranchId,
       name,
       agentType: resolvedType,

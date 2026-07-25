@@ -43,6 +43,7 @@ const actor = { userId: 'user-1' };
 
 /** The per-session Sprite identity columns default to NULL on an unprovisioned row (sessions-per-location). */
 const SPRITE_COLUMN_DEFAULTS = {
+  machineProjectId: null,
   sessionKey: null,
   sandboxId: null,
   spriteInstanceId: null,
@@ -51,7 +52,7 @@ const SPRITE_COLUMN_DEFAULTS = {
   spriteTornDownAt: null,
 } satisfies Pick<
   MachineAgentTerminalRecord,
-  'sessionKey' | 'sandboxId' | 'spriteInstanceId' | 'egressPolicyToken' | 'teardownRequestedAt' | 'spriteTornDownAt'
+  'machineProjectId' | 'sessionKey' | 'sandboxId' | 'spriteInstanceId' | 'egressPolicyToken' | 'teardownRequestedAt' | 'spriteTornDownAt'
 >;
 
 function makeBranchLookup(rows: Record<string, { id: string; sandboxId: string }> = {}): AgentTerminalBranchLookup {
@@ -69,10 +70,16 @@ const defaultBranchLookup = makeBranchLookup({
 });
 
 function makeProjectLookup(
-  rows: Record<string, { path: string; sandboxId?: string | null; spriteTornDownAt?: Date | null }> = {},
+  rows: Record<string, { id?: string; path: string; sandboxId?: string | null; spriteTornDownAt?: Date | null }> = {},
 ): AgentTerminalProjectLookup {
   return {
-    findByName: async (machineId, name) => rows[`${machineId}\0${name}`] ?? null,
+    findByName: async (machineId, name) => {
+      const row = rows[`${machineId}\0${name}`];
+      if (!row) return null;
+      // Default a stable id derived from the key so spawn's machineProjectId FK
+      // resolves; individual tests can pin `id` when they assert on it.
+      return { id: row.id ?? `project-${machineId}\0${name}`, ...row };
+    },
   };
 }
 
@@ -125,6 +132,7 @@ function makeStore(seed: MachineAgentTerminalRecord[] = []) {
         command: input.command,
         streamSessionId: null,
         ...SPRITE_COLUMN_DEFAULTS,
+        machineProjectId: input.machineProjectId,
         coldTail: null,
         coldTailAt: null,
         coldTailHasOutput: false,
@@ -734,7 +742,8 @@ describe('resolveAgentTerminalRow', () => {
 describe('spawnAgentTerminal — lazy project promotion trigger', () => {
   /** A project lookup whose row can be PROMOTED mid-test, exactly as promoteProject's CAS would. */
   function makePromotableProject() {
-    const row: { path: string; sandboxId: string | null; spriteTornDownAt: Date | null } = {
+    const row: { id: string; path: string; sandboxId: string | null; spriteTornDownAt: Date | null } = {
+      id: 'project-1',
       path: PROJECT_PATH,
       sandboxId: null,
       spriteTornDownAt: null,
@@ -1872,7 +1881,8 @@ describe('findStrandedLiveSessions', () => {
 
 describe('spawnAgentTerminal — live sessions block promotion (F10)', () => {
   function promotableProject() {
-    const row: { path: string; sandboxId: string | null; spriteTornDownAt: Date | null } = {
+    const row: { id: string; path: string; sandboxId: string | null; spriteTornDownAt: Date | null } = {
+      id: 'project-1',
       path: PROJECT_PATH,
       sandboxId: null,
       spriteTornDownAt: null,
@@ -1892,6 +1902,7 @@ describe('spawnAgentTerminal — live sessions block promotion (F10)', () => {
       machineId: TERMINAL_ID,
       scope: 'project',
       projectName: PROJECT_NAME,
+      machineProjectId: null,
       machineBranchId: null,
       name: 'build',
       agentType: 'shell',
@@ -1935,6 +1946,7 @@ describe('spawnAgentTerminal — live sessions block promotion (F10)', () => {
       machineId: TERMINAL_ID,
       scope: 'project',
       projectName: PROJECT_NAME,
+      machineProjectId: null,
       machineBranchId: null,
       name: 'notes',
       agentType: 'claude',
@@ -1976,7 +1988,8 @@ describe('spawnAgentTerminal — live sessions block promotion (F10)', () => {
  */
 describe('spawnAgentTerminal — promotion gate consults real PTY liveness', () => {
   async function projectWithLaunchedRow(streamSessionId: string) {
-    const row: { path: string; sandboxId: string | null; spriteTornDownAt: Date | null } = {
+    const row: { id: string; path: string; sandboxId: string | null; spriteTornDownAt: Date | null } = {
+      id: 'project-1',
       path: PROJECT_PATH,
       sandboxId: null,
       spriteTornDownAt: null,
@@ -1990,6 +2003,7 @@ describe('spawnAgentTerminal — promotion gate consults real PTY liveness', () 
       machineId: TERMINAL_ID,
       scope: 'project',
       projectName: PROJECT_NAME,
+      machineProjectId: null,
       machineBranchId: null,
       name: 'build',
       agentType: 'shell',

@@ -19,6 +19,8 @@ export interface MachineAgentTerminalRecord {
   machineId: string;
   scope: AgentTerminalScope;
   projectName: string | null;
+  /** FK to the owning `machine_projects` row (project/branch scope; NULL for machine scope) — the ON DELETE cascade that reclaims this session's Sprite when its project is removed. */
+  machineProjectId: string | null;
   machineBranchId: string | null;
   name: string;
   agentType: string;
@@ -54,6 +56,8 @@ export interface NewMachineAgentTerminalInput {
   machineId: string;
   scope: AgentTerminalScope;
   projectName: string | null;
+  /** FK to the owning project row (project/branch scope; NULL for machine scope). */
+  machineProjectId: string | null;
   machineBranchId: string | null;
   name: string;
   agentType: string;
@@ -299,6 +303,7 @@ export async function createDbMachineAgentTerminalStore(): Promise<MachineAgentT
           machineId: input.machineId,
           scope: input.scope,
           projectName: input.projectName,
+          machineProjectId: input.machineProjectId,
           machineBranchId: input.machineBranchId,
           name: input.name,
           agentType: input.agentType,

@@ -40,6 +40,8 @@ export interface NewMachineBranchInput {
   ownerId: string;
   machineId: string;
   projectName: string;
+  /** FK to the owning `machine_projects` row — the ON DELETE cascade that reclaims this branch's Sprite (and its branch-scoped terminals) when its project is removed. */
+  machineProjectId: string | null;
   branchName: string;
   sessionKey: string;
   sandboxId: string;
@@ -201,6 +203,7 @@ export async function createDbMachineBranchStore(): Promise<MachineBranchStore> 
           ownerId: input.ownerId,
           machineId: input.machineId,
           projectName: input.projectName,
+          machineProjectId: input.machineProjectId,
           branchName: input.branchName,
           sessionKey: input.sessionKey,
           sandboxId: input.sandboxId,

@@ -105,7 +105,7 @@ function makeStore(seed: MachineBranchRecord[] = []) {
 
 function makeProjectStore(repoUrl: string | null = REPO_URL): MachineBranchProjectLookup {
   return {
-    findByName: async () => (repoUrl ? { repoUrl } : null),
+    findByName: async () => (repoUrl ? { id: 'project-1', repoUrl } : null),
   };
 }
 
@@ -322,7 +322,7 @@ describe('spawnBranch', () => {
       projectStore: {
         findByName: async (_machineId: string, name: string) => {
           lookedUp.push(name);
-          return name === 'my-cool-feature' ? { repoUrl: REPO_URL } : null;
+          return name === 'my-cool-feature' ? { id: 'project-1', repoUrl: REPO_URL } : null;
         },
       },
     });
@@ -403,6 +403,7 @@ describe('spawnBranch', () => {
           ownerId: 'other-user',
           machineId: TERMINAL_ID,
           projectName: PROJECT_NAME,
+          machineProjectId: 'project-1',
           branchName: 'main',
           sessionKey: deriveBranchSessionKey({
             tenantId: actor.tenantId,
@@ -441,6 +442,7 @@ describe('spawnBranch', () => {
           ownerId: 'other-user',
           machineId: TERMINAL_ID,
           projectName: PROJECT_NAME,
+          machineProjectId: 'project-1',
           branchName: 'main',
           sessionKey: deriveBranchSessionKey({
             tenantId: actor.tenantId,

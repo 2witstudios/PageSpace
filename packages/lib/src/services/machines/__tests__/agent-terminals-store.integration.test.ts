@@ -77,7 +77,7 @@ describe('createDbMachineAgentTerminalStore().updateSpriteIdentity — liveness 
     const store = await createDbMachineAgentTerminalStore();
     const { userId, machineId } = await seedMachine(false);
     const row = await store.create({
-      ownerId: userId, machineId, scope: 'machine', projectName: null, machineBranchId: null,
+      ownerId: userId, machineId, scope: 'machine', projectName: null, machineProjectId: null, machineBranchId: null,
       name: 'cli', agentType: 'shell', command: null, now: new Date(),
     });
 
@@ -92,7 +92,7 @@ describe('createDbMachineAgentTerminalStore().updateSpriteIdentity — liveness 
     const store = await createDbMachineAgentTerminalStore();
     const { userId, machineId } = await seedMachine(true); // soft-trashed
     const row = await store.create({
-      ownerId: userId, machineId, scope: 'machine', projectName: null, machineBranchId: null,
+      ownerId: userId, machineId, scope: 'machine', projectName: null, machineProjectId: null, machineBranchId: null,
       name: 'cli', agentType: 'shell', command: null, now: new Date(),
     });
 
@@ -107,7 +107,7 @@ describe('createDbMachineAgentTerminalStore().updateSpriteIdentity — liveness 
     const store = await createDbMachineAgentTerminalStore();
     const { userId, machineId } = await seedMachine(false);
     const row = await store.create({
-      ownerId: userId, machineId, scope: 'machine', projectName: null, machineBranchId: null,
+      ownerId: userId, machineId, scope: 'machine', projectName: null, machineProjectId: null, machineBranchId: null,
       name: 'cli', agentType: 'shell', command: null, now: new Date(),
     });
     // The trash lands after the row is reserved but before the persist.
@@ -125,7 +125,7 @@ describe('createDbMachineAgentTerminalStore().updateSpriteIdentity — liveness 
     const { userId, machineId } = await seedMachine(false);
     await insertProject(userId, machineId);
     const row = await store.create({
-      ownerId: userId, machineId, scope: 'project', projectName: PROJECT_NAME, machineBranchId: null,
+      ownerId: userId, machineId, scope: 'project', projectName: PROJECT_NAME, machineProjectId: null, machineBranchId: null,
       name: 'cli', agentType: 'shell', command: null, now: new Date(),
     });
 
@@ -141,7 +141,7 @@ describe('createDbMachineAgentTerminalStore().updateSpriteIdentity — liveness 
     const { userId, machineId } = await seedMachine(false);
     await insertProject(userId, machineId);
     const row = await store.create({
-      ownerId: userId, machineId, scope: 'project', projectName: PROJECT_NAME, machineBranchId: null,
+      ownerId: userId, machineId, scope: 'project', projectName: PROJECT_NAME, machineProjectId: null, machineBranchId: null,
       name: 'cli', agentType: 'shell', command: null, now: new Date(),
     });
     // The project is removed (finding V deletes it first) while this spawn is mid-clone.
