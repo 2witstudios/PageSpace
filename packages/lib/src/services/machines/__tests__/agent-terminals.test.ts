@@ -2213,7 +2213,11 @@ describe('spawnAgentTerminal — per-session Sprite provisioning', () => {
     expect(session.writes.some((p) => p.includes('.credentials.json'))).toBe(true);
   });
 
-  it('given the egress gate is closed, should NOT provision a Sprite and leave the row unprovisioned (spawn still succeeds via fallback)', async () => {
+  // FINDING AA: a fresh session that can't be isolated must FAIL, not silently
+  // share. An egress-refused provision fails the spawn and removes the reserved
+  // row (no null-sandboxId row for resolveLocationForRow to route onto a shared
+  // Sprite).
+  it('given the egress gate is closed, should FAIL the spawn (provision_failed) and REMOVE the reserved row', async () => {
     const { store, rows } = makeStore();
     const { deps: provision, provisionCalls } = makeSpriteProvision(store, {
       checkFullEgressEnablement: async () => ({ ok: false, reason: 'code_execution_disabled' }),
@@ -2221,15 +2225,15 @@ describe('spawnAgentTerminal — per-session Sprite provisioning', () => {
     const deps = makeDeps({ store, spriteProvision: provision });
 
     const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
-    expect(result.ok).toBe(true); // reservation is not failed by a provisioning refusal
+    expect(result).toMatchObject({ ok: false, reason: 'provision_failed' });
     expect(provisionCalls).toEqual([]);
-    expect([...rows.values()][0].sandboxId).toBeNull();
+    expect(rows.size).toBe(0); // no lingering shared row
   });
 
-  // FINDING P (SECURITY): the centralized code-execution gate must run BEFORE any
-  // Sprite is provisioned — an actor denied by canRunCode (e.g. an editor who
-  // lacks the owner/admin drive role) must never create a billable VM.
-  it('given canRunCode DENIES the actor, should NOT provision a Sprite and leave the row unprovisioned', async () => {
+  // FINDING P (SECURITY) + AA: the centralized code-execution gate runs BEFORE any
+  // Sprite is provisioned — an actor denied by canRunCode creates no billable VM
+  // AND no lingering row; the spawn fails with a distinct `unauthorized` (403).
+  it('given canRunCode DENIES the actor, should FAIL with unauthorized — no Sprite, no row', async () => {
     const { store, rows } = makeStore();
     const { deps: provision, provisionCalls, killed } = makeSpriteProvision(store, {
       authorize: async () => ({ ok: false, reason: 'insufficient_role' }),
@@ -2237,10 +2241,10 @@ describe('spawnAgentTerminal — per-session Sprite provisioning', () => {
     const deps = makeDeps({ store, spriteProvision: provision });
 
     const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
-    expect(result.ok).toBe(true); // the row reservation is not failed by an authz denial
+    expect(result).toMatchObject({ ok: false, reason: 'unauthorized' });
     expect(provisionCalls).toEqual([]); // NO host.provision — no billable VM created
     expect(killed).toEqual([]);
-    expect([...rows.values()][0].sandboxId).toBeNull(); // row stays unprovisioned; the attach path re-checks
+    expect(rows.size).toBe(0); // no lingering shared row either
   });
 
   it('given canRunCode denies BUT the actor is authorized on retry, should provision (authz runs before every provision)', async () => {
@@ -2306,6 +2310,36 @@ describe('spawnAgentTerminal — per-session Sprite provisioning', () => {
     const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
     expect(result.ok).toBe(true);
     expect([...rows.values()][0].sandboxId).toBeNull();
+  });
+
+  // FINDING AA: provisioning returns { ok: false } (here, the persist fence /
+  // clone / etc.) → the spawn FAILS and the reserved row is REMOVED, so
+  // resolveLocationForRow never gets a null-sandboxId row to share.
+  it('given provisioning returns ok:false, should FAIL the spawn (provision_failed) and REMOVE the row — no shared fallback', async () => {
+    const { store, rows } = makeStore();
+    const { deps: provision, killed } = makeSpriteProvision(store, {
+      updateSpriteIdentity: async () => false, // e.g. the liveness CAS fenced the write
+    });
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+    expect(result).toMatchObject({ ok: false, reason: 'provision_failed' });
+    expect(rows.size).toBe(0); // the reserved row is gone — nothing to share
+    // The Sprite it provisioned before the fence was killed (no orphan).
+    expect(killed).toEqual([{ machineId: SESSION_SANDBOX_ID, expectedInstanceId: SESSION_INSTANCE_ID }]);
+  });
+
+  // FINDING AA: provisioning THROWS → same (fail + remove the row).
+  it('given provisioning THROWS, should FAIL the spawn and REMOVE the row', async () => {
+    const { store, rows } = makeStore();
+    const { deps: provision } = makeSpriteProvision(store, {
+      resolveActor: async () => { throw new Error('actor lookup blew up'); },
+    });
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+    expect(result).toMatchObject({ ok: false, reason: 'provision_failed' });
+    expect(rows.size).toBe(0);
   });
 
   // FINDING 4: a stale non-null pointer to a VANISHED Sprite must be reprovisioned.
@@ -2512,6 +2546,41 @@ describe('provisionAgentTerminalSprite — race + persistence safety (findings 1
     expect(result).toMatchObject({ ok: false, reason: 'persist_failed' });
     // Our target is confirmed gone (a replacement holds the name) — nothing to reclaim.
     expect(base.enqueuedReclaims).toEqual([]);
+  });
+
+  // FINDINGS BB/CC: the identity-persist CAS is FUSED with a liveness fence — it
+  // writes only if the owning Machine is not trashed AND (for a project row) the
+  // project still exists. When the spawn races trash/removal and reaches the
+  // persist AFTER teardown, that fused CAS affects no rows (modelled here as
+  // updateSpriteIdentity → false). provisionAgentTerminalSprite must then KILL the
+  // handle rather than leave a persisted orphan the reconciler can't find.
+  it('given the liveness CAS fences the persist (machine trashed / project gone), should kill the handle and leave NO orphan', async () => {
+    const { store } = makeStore();
+    const { deps, killed } = makeSpriteProvision(store, {
+      updateSpriteIdentity: async () => false, // fused CAS matched 0 rows — resource gone
+      reloadRow: async () => ({ sandboxId: null, spriteInstanceId: null }), // nothing persisted our generation
+    });
+
+    const result = await provisionAgentTerminalSprite({ row: machineRow, actor: provisionActor, deps });
+    expect(result).toMatchObject({ ok: false, reason: 'race_lost' });
+    // The provisioned VM is destroyed — never persisted, so nothing else could find it.
+    expect(killed).toEqual([{ machineId: SESSION_SANDBOX_ID, expectedInstanceId: SESSION_INSTANCE_ID }]);
+  });
+
+  it('given the liveness CAS fences the persist AND the kill is unconfirmed, should ENQUEUE the handle to the outbox', async () => {
+    const { store } = makeStore();
+    const base = makeSpriteProvision(store, {
+      updateSpriteIdentity: async () => false,
+      reloadRow: async () => ({ sandboxId: null, spriteInstanceId: null }),
+    });
+    const deps = {
+      ...base.deps,
+      host: { ...base.deps.host, kill: async () => { throw new Error('control plane unreachable'); } },
+    };
+
+    const result = await provisionAgentTerminalSprite({ row: machineRow, actor: provisionActor, deps });
+    expect(result).toMatchObject({ ok: false, reason: 'race_lost' });
+    expect(base.enqueuedReclaims).toEqual([{ sandboxId: SESSION_SANDBOX_ID, spriteInstanceId: SESSION_INSTANCE_ID }]);
   });
 });
 

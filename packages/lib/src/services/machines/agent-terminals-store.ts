@@ -228,13 +228,21 @@ export { isUniqueViolation };
  * the DB module graph.
  */
 export async function createDbMachineAgentTerminalStore(): Promise<MachineAgentTerminalStore> {
-  const [{ db }, { eq, and, or, lt, isNull, eqOrIsNull, sql }, { machineAgentTerminals }, { machineSpriteReclaims }] =
-    await Promise.all([
-      import('@pagespace/db/db'),
-      import('@pagespace/db/operators'),
-      import('@pagespace/db/schema/machine-agent-terminals'),
-      import('@pagespace/db/schema/machine-sprite-reclaims'),
-    ]);
+  const [
+    { db },
+    { eq, ne, and, or, lt, isNull, eqOrIsNull, exists, sql },
+    { machineAgentTerminals },
+    { machineSpriteReclaims },
+    { pages },
+    { machineProjects },
+  ] = await Promise.all([
+    import('@pagespace/db/db'),
+    import('@pagespace/db/operators'),
+    import('@pagespace/db/schema/machine-agent-terminals'),
+    import('@pagespace/db/schema/machine-sprite-reclaims'),
+    import('@pagespace/db/schema/core'),
+    import('@pagespace/db/schema/machine-projects'),
+  ]);
 
   // Coalescing equality: a NULL scope column (machine/project scope) must
   // match other NULLs, not just itself — plain `eq` never matches NULL in SQL.
@@ -316,9 +324,47 @@ export async function createDbMachineAgentTerminalStore(): Promise<MachineAgentT
       const updated = await db
         .update(machineAgentTerminals)
         .set(revivedAgentTerminalColumns({ sessionKey, sandboxId, spriteInstanceId, egressPolicyToken, now }))
-        // CAS on the CURRENT sandboxId: null for a first provision, the vanished
-        // name for a re-provision. `eqOrIsNull` matches the null case.
-        .where(and(eq(machineAgentTerminals.id, id), eqOrIsNull(machineAgentTerminals.sandboxId, previousSandboxId)))
+        .where(
+          and(
+            eq(machineAgentTerminals.id, id),
+            // CAS on the CURRENT sandboxId: null for a first provision, the vanished
+            // name for a re-provision. `eqOrIsNull` matches the null case.
+            eqOrIsNull(machineAgentTerminals.sandboxId, previousSandboxId),
+            // LIVENESS FENCE (findings BB/CC), FUSED into the CAS so it is ATOMIC
+            // with the identity write: only persist a live Sprite pointer if the
+            // owning resource STILL exists at this instant. A spawn that raced a
+            // machine trash or a project removal and reaches here AFTER teardown
+            // enumerated is fenced out (0 rows), and `provisionAgentTerminalSprite`
+            // then kills/enqueues the handle instead of leaving a persisted orphan
+            // the reconciler could never discover (its `teardownRequestedAt` would
+            // stay null). A persist that lands BEFORE the trash/removal is caught by
+            // the enumeration that runs after it (teardownOneMachine / removeProject).
+            //
+            // (1) the owning Machine page is NOT soft-trashed:
+            exists(
+              db
+                .select({ one: sql`1` })
+                .from(pages)
+                .where(and(eq(pages.id, machineAgentTerminals.machineId), eq(pages.isTrashed, false))),
+            ),
+            // (2) a PROJECT-scoped row's project row still exists (the link is only
+            // `projectName` TEXT, so a project delete never cascades to it):
+            or(
+              ne(machineAgentTerminals.scope, 'project'),
+              exists(
+                db
+                  .select({ one: sql`1` })
+                  .from(machineProjects)
+                  .where(
+                    and(
+                      eq(machineProjects.machineId, machineAgentTerminals.machineId),
+                      eq(machineProjects.name, machineAgentTerminals.projectName),
+                    ),
+                  ),
+              ),
+            ),
+          ),
+        )
         .returning({ id: machineAgentTerminals.id });
       return updated.length > 0;
     },

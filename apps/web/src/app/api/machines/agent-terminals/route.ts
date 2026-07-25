@@ -69,6 +69,11 @@ const SPAWN_DENIAL_STATUS: Record<string, number> = {
   // The owning Machine has been trashed — it is gone from the user's view, so a
   // spawn against it is a 404 (finding U).
   machine_trashed: 404,
+  // A fresh session could not get its OWN isolated Sprite (finding AA) — a
+  // server-side provisioning failure.
+  provision_failed: 500,
+  // The actor is not authorized to run code (finding P/AA).
+  unauthorized: 403,
   error: 500,
 };
 

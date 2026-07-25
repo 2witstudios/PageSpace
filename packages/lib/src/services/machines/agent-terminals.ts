@@ -337,6 +337,20 @@ export type SpawnAgentTerminalDenialReason =
   | 'name_in_use'
   /** The owning Machine page is soft-trashed — no session may be reserved or provisioned under a deleted Machine (finding U). */
   | 'machine_trashed'
+  /**
+   * A freshly-reserved session could not get its OWN isolated Sprite (clone /
+   * provisioning / persistence failure). Deliberately a FAILED spawn rather than a
+   * silent success on the shared Sprite: isolation is the guarantee (finding AA).
+   * `detail` carries the underlying provisioning reason. The reserved row is
+   * deleted, so a retry starts clean.
+   */
+  | 'provision_failed'
+  /**
+   * The actor is not authorized to run code (centralized `canRunCode` denied —
+   * finding P). Surfaced distinctly from `provision_failed` for a 403; like it,
+   * the freshly reserved row is deleted (never a lingering shared row).
+   */
+  | 'unauthorized'
   | 'error';
 
 /**
@@ -393,24 +407,33 @@ export type SpawnAgentTerminalResult =
  * after the row is reserved (the row id is the Sprite-key fold, so the row must
  * exist first).
  *
- * BEST-EFFORT to the spawn: a wired-but-failing provision is swallowed rather
- * than failing the reservation. The row keeps its NULL `sandboxId`, which
- * `resolveLocationForRow` resolves via the shared-Sprite fallback, and the next
- * spawn re-provisions — the session is never left unusable, and
- * `provisionAgentTerminalSprite` already kills any VM it provisioned before a
- * later step failed, so nothing is left billing unreferenced.
+ * Returns whether provisioning succeeded, so the caller can enforce the isolation
+ * guarantee (finding AA): a FRESHLY-reserved session must get its OWN Sprite or
+ * the spawn FAILS — never a silent success with a null `sandboxId` that
+ * `resolveLocationForRow` would route onto the shared machine/branch/project
+ * Sprite, letting supposedly-isolated sessions clobber each other's files.
+ *
+ * `{ ok: true }` covers BOTH "provisioned" AND "provisioning not attempted":
+ *   - provisioning unwired (a legacy consumer / test) — a legacy row, not a
+ *     failed isolation, so the pre-feature shared-Sprite behaviour stays;
+ *   - a chat-surface agent type that never opens a PTY;
+ *   - a row already pointing at a live Sprite (probe hits), or a probe the
+ *     control plane couldn't answer (leave it; the resolve path retries).
+ * `{ ok: false }` means provisioning WAS attempted for this row and failed
+ * (returned `{ ok: false }` or threw) — the caller decides what to do (a fresh
+ * reservation deletes the row and fails; a resume of a pre-existing row leaves it).
  */
 async function maybeProvisionSprite(
   row: MachineAgentTerminalRecord,
   userId: string,
   deps: Pick<SpawnAgentTerminalDeps, 'spriteProvision'>,
-): Promise<void> {
+): Promise<{ ok: true } | { ok: false; reason: 'unauthorized' | 'provision_failed'; detail?: string }> {
   const provision = deps.spriteProvision;
-  if (!provision) return;
+  if (!provision) return { ok: true }; // not attempted — legacy/unwired, keep shared-Sprite behaviour
   // Only PTY-launching agent types get a Sprite; a chat-surface row (e.g.
   // `pagespace`) never opens a PTY, so provisioning one for it would be a
   // billing VM nothing ever attaches to.
-  if (!isAgentRuntimeType(row.agentType) || !isPtyAgentType(row.agentType)) return;
+  if (!isAgentRuntimeType(row.agentType) || !isPtyAgentType(row.agentType)) return { ok: true };
 
   // FINDING 4: a row pointing at a Sprite we still BELIEVE is live is not proof
   // the VM still exists — a provider can destroy it out from under us. PROBE it
@@ -428,9 +451,9 @@ async function maybeProvisionSprite(
       // Control plane unreachable — we cannot tell whether the VM is alive, so
       // we must NOT reprovision blind (that could duplicate a live VM on a
       // transient blip). Leave the pointer as-is; the resolve path retries.
-      return;
+      return { ok: true };
     }
-    if (handle) return; // Live — reattach happens in the resolve path.
+    if (handle) return { ok: true }; // Live — reattach happens in the resolve path.
     // Vanished — fall through to reprovision under the same key. The CAS in
     // `provisionAgentTerminalSprite` uses `previousSandboxId = row.sandboxId`
     // (the stale pointer), so it overwrites it rather than racing a phantom.
@@ -438,10 +461,19 @@ async function maybeProvisionSprite(
 
   try {
     const actor = await provision.resolveActor(userId);
-    await provisionAgentTerminalSprite({ row, actor, deps: provision });
-  } catch {
-    // Best-effort — see doc comment. A resolver/provision failure must never
-    // fail the reservation; the fallback resolution keeps the session usable.
+    const result = await provisionAgentTerminalSprite({ row, actor, deps: provision });
+    if (result.ok) return { ok: true };
+    // A code-execution POLICY denial (finding P) is surfaced distinctly so the
+    // spawn returns a 403 rather than a generic 500 — but the row is still
+    // removed by the caller (never a lingering shared row). Every OTHER failure
+    // (clone / provision / persist / egress / liveness fence) is a genuine
+    // provisioning failure.
+    if (result.reason === 'unauthorized') return { ok: false, reason: 'unauthorized', detail: result.detail };
+    return { ok: false, reason: 'provision_failed', detail: result.detail ?? result.reason };
+  } catch (error) {
+    // `provisionAgentTerminalSprite` already killed/enqueued any VM it created
+    // before the throw (killUnreferencedOrEnqueue); we just report the failure.
+    return { ok: false, reason: 'provision_failed', detail: error instanceof Error ? error.message : String(error) };
   }
 }
 
@@ -574,14 +606,17 @@ export async function spawnAgentTerminal({
   const existing = await deps.store.findByName(scope.scopeKey, name);
   if (existing) {
     if (existing.agentType !== resolvedType) return { ok: false, reason: 'name_in_use' };
-    // Heal a legacy/prior-failed row that never got its own Sprite; a no-op once
-    // it points at a live one.
+    // Heal a legacy/pre-existing row that never got its own Sprite; a no-op once
+    // it points at a live one. Best-effort on a RESUME: the row already existed
+    // and was resumable, so a heal-failure leaves it as-is (a legacy shared row —
+    // never a null row THIS spawn freshly reserved, which the fresh path deletes).
     await maybeProvisionSprite(existing, actor.userId, deps);
     return { ok: true, id: existing.id, agentType: resolvedType, resumed: true };
   }
 
+  let row: MachineAgentTerminalRecord;
   try {
-    const row = await deps.store.create({
+    row = await deps.store.create({
       ownerId: actor.userId,
       machineId: scope.scopeKey.machineId,
       scope: deriveAgentTerminalScope(scope.scopeKey),
@@ -592,8 +627,6 @@ export async function spawnAgentTerminal({
       command: command ?? null,
       now: deps.now(),
     });
-    await maybeProvisionSprite(row, actor.userId, deps);
-    return { ok: true, id: row.id, agentType: resolvedType, resumed: false };
   } catch (error) {
     if (isUniqueViolation(error)) {
       // Lost a race against a concurrent spawn of the same name.
@@ -606,6 +639,19 @@ export async function spawnAgentTerminal({
     }
     return { ok: false, reason: 'error' };
   }
+
+  // FINDING AA: this FRESH reservation must get its OWN Sprite or the spawn FAILS
+  // — isolation is the guarantee (own Sprite or error, never a silent shared
+  // fallback). On a wired-but-failed provision, DELETE the reserved row so no
+  // null-`sandboxId` row lingers for `resolveLocationForRow` to route onto a
+  // shared Sprite, and surface the failure. (When provisioning is unwired the
+  // result is `{ ok: true }`, so the legacy shared-Sprite path is unchanged.)
+  const provisioned = await maybeProvisionSprite(row, actor.userId, deps);
+  if (!provisioned.ok) {
+    await deps.store.remove({ machineId: row.machineId, projectName: row.projectName, machineBranchId: row.machineBranchId }, row.name);
+    return { ok: false, reason: provisioned.reason, detail: provisioned.detail };
+  }
+  return { ok: true, id: row.id, agentType: resolvedType, resumed: false };
 }
 
 export type ResolveAgentTerminalResult =
