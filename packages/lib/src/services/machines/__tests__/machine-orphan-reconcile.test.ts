@@ -11,6 +11,7 @@ function makeDeps(over: Partial<ReconcileOrphanSpritesDeps> = {}): {
   releasedSessions: string[];
   stampedBranches: string[];
   stampedProjects: string[];
+  stampedAgentTerminals: string[];
   releasedReclaims: string[];
   notedFailures: string[];
 } {
@@ -18,6 +19,7 @@ function makeDeps(over: Partial<ReconcileOrphanSpritesDeps> = {}): {
   const releasedSessions: string[] = [];
   const stampedBranches: string[] = [];
   const stampedProjects: string[] = [];
+  const stampedAgentTerminals: string[] = [];
   const releasedReclaims: string[] = [];
   const notedFailures: string[] = [];
   const deps: ReconcileOrphanSpritesDeps = {
@@ -39,6 +41,10 @@ function makeDeps(over: Partial<ReconcileOrphanSpritesDeps> = {}): {
       stampedProjects.push(id);
       return true;
     },
+    markAgentTerminalTornDown: async ({ id }) => {
+      stampedAgentTerminals.push(id);
+      return true;
+    },
     releaseReclaim: async (sandboxId) => {
       releasedReclaims.push(sandboxId);
     },
@@ -47,7 +53,16 @@ function makeDeps(over: Partial<ReconcileOrphanSpritesDeps> = {}): {
     },
     ...over,
   };
-  return { deps, killed, releasedSessions, stampedBranches, stampedProjects, releasedReclaims, notedFailures };
+  return {
+    deps,
+    killed,
+    releasedSessions,
+    stampedBranches,
+    stampedProjects,
+    stampedAgentTerminals,
+    releasedReclaims,
+    notedFailures,
+  };
 }
 
 const sessionRow: OrphanRow = {
@@ -173,6 +188,48 @@ describe('reconcileOrphanSprites', () => {
     expect(killed).toEqual(['pgs-sbx-3']);
     expect(stampedProjects).toEqual(['project-1']);
     expect(stampedBranches).toEqual([]);
+  });
+
+  it('kills an orphaned per-session AGENT-TERMINAL Sprite and STAMPS its row rather than deleting it', async () => {
+    // Sessions-per-location: a per-session Sprite whose teardownOneMachine kill
+    // failed under a soft trash is retried here (the AFTER DELETE trigger never
+    // fired for a trash). Same row-outlives-Sprite contract as branch/project.
+    const agentTerminalRow: OrphanRow = {
+      kind: 'agent-terminal',
+      pageId: 'machine-4',
+      id: 'agt-1',
+      sandboxId: 'pgs-sbx-4',
+      spriteInstanceId: 'inst-4',
+    };
+    const { deps, killed, stampedAgentTerminals, stampedBranches, stampedProjects } = makeDeps({
+      listOrphanCandidates: async () => ({ rows: [agentTerminalRow], capped: false }),
+    });
+
+    const result = await reconcileOrphanSprites(deps);
+
+    expect(result).toEqual({ processed: 1, capped: false, torndown: 1, skipped: 0, failed: 0 });
+    expect(killed).toEqual(['pgs-sbx-4']);
+    expect(stampedAgentTerminals).toEqual(['agt-1']);
+    expect(stampedBranches).toEqual([]);
+    expect(stampedProjects).toEqual([]);
+  });
+
+  it('counts an agent-terminal CAS lost to a concurrent re-spawn as skipped, not torn down', async () => {
+    const agentTerminalRow: OrphanRow = {
+      kind: 'agent-terminal',
+      pageId: 'machine-4',
+      id: 'agt-1',
+      sandboxId: 'pgs-sbx-4',
+      spriteInstanceId: 'inst-4',
+    };
+    const { deps } = makeDeps({
+      listOrphanCandidates: async () => ({ rows: [agentTerminalRow], capped: false }),
+      markAgentTerminalTornDown: async () => false,
+    });
+
+    const result = await reconcileOrphanSprites(deps);
+
+    expect(result).toEqual({ processed: 1, capped: false, torndown: 0, skipped: 1, failed: 0 });
   });
 
   it('counts a project CAS lost to a concurrent re-promotion as skipped, not torn down', async () => {

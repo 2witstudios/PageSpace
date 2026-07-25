@@ -36,6 +36,7 @@ import { drives, pages } from '@pagespace/db/schema/core';
 import { machineSessions } from '@pagespace/db/schema/machine-sessions';
 import { machineBranches } from '@pagespace/db/schema/machine-branches';
 import { machineProjects } from '@pagespace/db/schema/machine-projects';
+import { machineAgentTerminals } from '@pagespace/db/schema/machine-agent-terminals';
 import { machineSpriteReclaims } from '@pagespace/db/schema/machine-sprite-reclaims';
 import { reconcileOrphanSprites } from '@pagespace/lib/services/machines/machine-orphan-reconcile';
 import { defaultReconcileOrphanSpritesDeps as deps } from '../machine-orphan-reconcile-runtime';
@@ -55,9 +56,11 @@ const OUR_SANDBOXES = [
   'sbx-pending-session',
   'sbx-pending-branch',
   'sbx-pending-project',
+  'sbx-pending-agent',
   'sbx-soft-session',
   'sbx-soft-branch',
   'sbx-soft-project',
+  'sbx-soft-agent',
   'sbx-live-session',
   'sbx-already-dead',
 ];
@@ -65,6 +68,7 @@ const OUR_SANDBOXES = [
 let dbAvailable = false;
 
 async function cleanup() {
+  await db.delete(machineAgentTerminals).where(inArray(machineAgentTerminals.machineId, ALL_PAGES));
   await db.delete(machineProjects).where(inArray(machineProjects.machineId, ALL_PAGES));
   await db.delete(machineBranches).where(inArray(machineBranches.machineId, ALL_PAGES));
   await db.delete(machineSessions).where(inArray(machineSessions.pageId, ALL_PAGES));
@@ -127,6 +131,20 @@ async function seed() {
     teardownRequestedAt: new Date(),
   });
 
+  // A per-session agent terminal whose deleteMachine kill also failed — same tier
+  // as the pending branch/project, fourth tracking table (sessions-per-location).
+  await db.insert(machineAgentTerminals).values({
+    ownerId: USER_ID,
+    machineId: TEARDOWN_PENDING,
+    scope: 'machine',
+    name: 'pending-cli',
+    agentType: 'shell',
+    sessionKey: `${TEARDOWN_PENDING}-agent-key`,
+    sandboxId: 'sbx-pending-agent',
+    spriteInstanceId: 'inst-pending-agent',
+    teardownRequestedAt: new Date(),
+  });
+
   // Trashed from the page tree — NO teardown requested. Reversible.
   await db.insert(machineSessions).values({
     sessionKey: `${SOFT_TRASHED}-key`,
@@ -141,6 +159,18 @@ async function seed() {
     branchName: 'wip',
     sessionKey: `${SOFT_TRASHED}-branch-key`,
     sandboxId: 'sbx-soft-branch',
+  });
+  // A per-session agent terminal on a merely-trashed Machine — no intent, so it
+  // must NOT be a candidate (its Sprite hibernates; a restore hands the disk back).
+  await db.insert(machineAgentTerminals).values({
+    ownerId: USER_ID,
+    machineId: SOFT_TRASHED,
+    scope: 'machine',
+    name: 'soft-cli',
+    agentType: 'shell',
+    sessionKey: `${SOFT_TRASHED}-agent-key`,
+    sandboxId: 'sbx-soft-agent',
+    spriteInstanceId: 'inst-soft-agent',
   });
 
   // A promoted project merely trashed (no intent) plus an UNPROMOTED one —
@@ -208,9 +238,10 @@ describe('the reclaim outbox — a Sprite pointer must survive EVERY way its pag
     // tracking table would drop them SILENTLY, and every test below would still
     // pass — while production quietly went back to stranding billing VMs.
     const rows = await db.execute(
-      sql`SELECT tgname FROM pg_trigger WHERE tgname IN ('machine_sessions_sprite_reclaim', 'machine_branches_sprite_reclaim', 'machine_projects_sprite_reclaim')`,
+      sql`SELECT tgname FROM pg_trigger WHERE tgname IN ('machine_sessions_sprite_reclaim', 'machine_branches_sprite_reclaim', 'machine_projects_sprite_reclaim', 'machine_agent_terminals_sprite_reclaim')`,
     );
     expect(rows.rows.map((row) => row.tgname).sort()).toEqual([
+      'machine_agent_terminals_sprite_reclaim',
       'machine_branches_sprite_reclaim',
       'machine_projects_sprite_reclaim',
       'machine_sessions_sprite_reclaim',
@@ -225,6 +256,7 @@ describe('the reclaim outbox — a Sprite pointer must survive EVERY way its pag
     // The tracking rows are gone (FK cascade) — that is the bug this exists to
     // survive. The pointers outlived them.
     expect(await rescuedSandboxIds()).toEqual([
+      'sbx-pending-agent',
       'sbx-pending-branch',
       'sbx-pending-project',
       'sbx-pending-session',
@@ -237,7 +269,7 @@ describe('the reclaim outbox — a Sprite pointer must survive EVERY way its pag
     await db.delete(drives).where(eq(drives.id, DRIVE_ID));
 
     expect(await rescuedSandboxIds()).toEqual(
-      ['sbx-live-session', 'sbx-pending-branch', 'sbx-pending-project', 'sbx-pending-session', 'sbx-soft-branch', 'sbx-soft-project', 'sbx-soft-session'].sort(),
+      ['sbx-live-session', 'sbx-pending-agent', 'sbx-pending-branch', 'sbx-pending-project', 'sbx-pending-session', 'sbx-soft-agent', 'sbx-soft-branch', 'sbx-soft-project', 'sbx-soft-session'].sort(),
     );
   });
 
@@ -248,7 +280,7 @@ describe('the reclaim outbox — a Sprite pointer must survive EVERY way its pag
     await db.delete(users).where(eq(users.id, USER_ID));
 
     expect(await rescuedSandboxIds()).toEqual(
-      ['sbx-live-session', 'sbx-pending-branch', 'sbx-pending-project', 'sbx-pending-session', 'sbx-soft-branch', 'sbx-soft-project', 'sbx-soft-session'].sort(),
+      ['sbx-live-session', 'sbx-pending-agent', 'sbx-pending-branch', 'sbx-pending-project', 'sbx-pending-session', 'sbx-soft-agent', 'sbx-soft-branch', 'sbx-soft-project', 'sbx-soft-session'].sort(),
     );
   });
 
@@ -292,9 +324,11 @@ describe('defaultReconcileOrphanSpritesDeps.listOrphanCandidates', () => {
     expect(sandboxIds).toContain('sbx-pending-session'); // teardown requested, kill failed
     expect(sandboxIds).toContain('sbx-pending-branch');
     expect(sandboxIds).toContain('sbx-pending-project'); // third tracking table, same tier
+    expect(sandboxIds).toContain('sbx-pending-agent'); // fourth tracking table, same tier
     expect(sandboxIds).not.toContain('sbx-soft-session'); // just trashed — hands off
     expect(sandboxIds).not.toContain('sbx-soft-branch');
     expect(sandboxIds).not.toContain('sbx-soft-project');
+    expect(sandboxIds).not.toContain('sbx-soft-agent');
     expect(sandboxIds).not.toContain('sbx-live-session'); // not trashed at all
   });
 
@@ -309,6 +343,7 @@ describe('defaultReconcileOrphanSpritesDeps.listOrphanCandidates', () => {
     // page is actually destroyed, nothing else points at its Sprite.
     expect(reclaims).toContain('sbx-soft-session');
     expect(reclaims).toContain('sbx-soft-branch');
+    expect(reclaims).toContain('sbx-soft-agent');
   });
 });
 
