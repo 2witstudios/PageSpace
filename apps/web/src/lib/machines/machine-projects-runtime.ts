@@ -45,6 +45,8 @@ import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { createDbMachineProjectStore } from '@pagespace/lib/services/machines/machine-projects-store';
+import { createDbMachineAgentTerminalStore } from '@pagespace/lib/services/machines/agent-terminals-store';
+import { teardownProjectAgentTerminalSprites } from '@pagespace/lib/services/machines/agent-terminal-sprites';
 import type { MachineActorContext, MachineProjectsDeps, MachineAcquireResult } from '@pagespace/lib/services/machines/machine-projects';
 import type { PromoteProjectDeps } from '@pagespace/lib/services/machines/machine-project-promotion';
 import { buildMachineBranchesDeps } from './machine-branches-runtime';
@@ -93,6 +95,38 @@ let machineProjectStorePromise: ReturnType<typeof createDbMachineProjectStore> |
 function getMachineProjectStore() {
   machineProjectStorePromise ??= createDbMachineProjectStore();
   return machineProjectStorePromise;
+}
+
+let machineAgentTerminalStorePromise: ReturnType<typeof createDbMachineAgentTerminalStore> | null = null;
+function getMachineAgentTerminalStore() {
+  machineAgentTerminalStorePromise ??= createDbMachineAgentTerminalStore();
+  return machineAgentTerminalStorePromise;
+}
+
+/**
+ * Identity-guarded, best-effort kill of a Sprite by (sandboxId, instance).
+ * `ok: true` = confirmed gone (killed, or a replacement already took the name);
+ * `ok: false` = genuine failure, may still be alive. Shared by `removeProject`'s
+ * own-Sprite kill and its project-scoped agent-terminal teardown.
+ */
+async function killSpriteIdentityGuarded({
+  sandboxId,
+  spriteInstanceId,
+}: {
+  sandboxId: string;
+  spriteInstanceId: string | null;
+}): Promise<{ ok: boolean }> {
+  const [{ getMachineHostForBranches }, { MachineSpriteReplacedError }] = await Promise.all([
+    import('./machine-branches-runtime'),
+    import('@pagespace/lib/services/sandbox/machine-host'),
+  ]);
+  try {
+    const host = await getMachineHostForBranches();
+    await host.kill({ machineId: sandboxId, expectedInstanceId: spriteInstanceId ?? undefined });
+    return { ok: true };
+  } catch (error) {
+    return { ok: error instanceof MachineSpriteReplacedError };
+  }
 }
 
 export async function resolveMachineActorContext(userId: string): Promise<MachineActorContext> {
@@ -201,22 +235,24 @@ export function buildMachineProjectsDeps({ actorUserId }: { actorUserId: string 
     },
     buildEnv: defaultBuildEnv,
     audit: (input) => writeCodeExecutionAudit({ input }),
-    killSprite: async ({ sandboxId, spriteInstanceId }) => {
-      // Identity-guarded, best-effort: a failure is fine — the machine_projects
-      // AFTER DELETE trigger rescues the pointer into the reclaim outbox and
-      // the orphan reconciler retries. A replaced instance means our target is
-      // already gone, which is the outcome we wanted.
-      const [{ getMachineHostForBranches }, { MachineSpriteReplacedError }] = await Promise.all([
-        import('./machine-branches-runtime'),
-        import('@pagespace/lib/services/sandbox/machine-host'),
-      ]);
-      try {
-        const host = await getMachineHostForBranches();
-        await host.kill({ machineId: sandboxId, expectedInstanceId: spriteInstanceId ?? undefined });
-        return { ok: true };
-      } catch (error) {
-        return { ok: error instanceof MachineSpriteReplacedError };
-      }
+    // Identity-guarded, best-effort: a failure is fine — the machine_projects
+    // AFTER DELETE trigger rescues the pointer into the reclaim outbox and the
+    // orphan reconciler retries. A replaced instance means our target is already
+    // gone, which is the outcome we wanted.
+    killSprite: killSpriteIdentityGuarded,
+    // Tear down the project's PROJECT-SCOPED agent-terminal Sprites on removal —
+    // they link to this project only by projectName TEXT (no FK cascade), so the
+    // project delete never reaches them. Reuses the same identity-guarded kill,
+    // then CAS-deletes each session row (generation-safe; prevents stale resume).
+    teardownProjectSessions: async ({ machineId, projectName }) => {
+      await teardownProjectAgentTerminalSprites({
+        machineId,
+        projectName,
+        deps: {
+          store: await getMachineAgentTerminalStore(),
+          killSprite: killSpriteIdentityGuarded,
+        },
+      });
     },
   };
 }

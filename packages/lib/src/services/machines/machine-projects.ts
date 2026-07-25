@@ -133,6 +133,19 @@ export interface MachineProjectsDeps {
     sandboxId: string;
     spriteInstanceId: string | null;
   }) => Promise<{ ok: boolean }>;
+  /**
+   * Tear down the project's PROJECT-SCOPED agent-terminal Sprites on removal.
+   *
+   * A project-scoped `machine_agent_terminals` row links to this project only by
+   * `projectName` TEXT (no FK), so — unlike a branch-scoped row, whose
+   * `machineBranchId` FK cascades and whose Sprite pointer the AFTER-DELETE
+   * reclaim trigger then rescues — deleting the `machine_projects` row does NOT
+   * cascade to it. Without this seam, removing a project strands those sessions'
+   * live, billed Sprites and lets a recreated same-name project resume a stale
+   * terminal. Best-effort and optional (older wiring skips it); production binds
+   * it to `teardownProjectAgentTerminalSprites` (agent-terminal-sprites.ts).
+   */
+  teardownProjectSessions?: (input: { machineId: string; projectName: string }) => Promise<void>;
 }
 
 function buildGitRunDeps(machineId: string, deps: MachineProjectsDeps): GitSandboxRunDeps {
@@ -327,6 +340,22 @@ export async function removeProject({
       });
     } catch {
       // Best-effort; the delete trigger's outbox pointer covers this Sprite.
+    }
+  }
+
+  // Tear down the project's PROJECT-SCOPED agent-terminal Sprites too. They have
+  // their OWN Sprites but link to this project only by `projectName` TEXT (no FK),
+  // so deleting the project row below never cascades to them — leaving live,
+  // billed VMs stranded and letting a recreated same-name project resume a stale
+  // session. Best-effort (per-row isolated inside the seam), before the row goes.
+  if (deps.teardownProjectSessions) {
+    try {
+      await deps.teardownProjectSessions({ machineId, projectName: name });
+    } catch {
+      // Best-effort — the seam isolates per-row failures; a total failure here
+      // still lets the project delete proceed (its own machine_projects delete is
+      // what the user asked for). Any un-torn-down session Sprite is reclaimed
+      // when the owning machine is itself torn down or purged.
     }
   }
 

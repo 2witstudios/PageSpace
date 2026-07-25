@@ -39,7 +39,7 @@ import {
   type SpriteCloneDeps,
 } from './machine-branches';
 import { deriveAgentTerminalSessionSpriteKey } from './agent-terminal-sprite-session';
-import type { MachineAgentTerminalRecord } from './agent-terminals-store';
+import type { MachineAgentTerminalRecord, MachineAgentTerminalStore } from './agent-terminals-store';
 
 export type { MachineActorContext };
 
@@ -296,4 +296,68 @@ export async function provisionAgentTerminalSprite({
   }
 
   return { ok: true, sandboxId: handle.machineId, resumed: false };
+}
+
+/** The store slice `teardownProjectAgentTerminalSprites` needs — enumerate a scope's rows and CAS-delete one. */
+export interface TeardownProjectAgentTerminalsDeps {
+  store: Pick<MachineAgentTerminalStore, 'list' | 'removeIfSandbox'>;
+  /**
+   * Identity-guarded kill of a session's OWN Sprite. `ok: true` means the target
+   * is CONFIRMED gone (killed, or a replacement already took its name); `ok:
+   * false` means a genuine failure where it may still be alive. Same shape/
+   * contract as `removeProject`'s `killSprite` (machine-projects.ts).
+   */
+  killSprite: (input: { sandboxId: string; spriteInstanceId: string | null }) => Promise<{ ok: boolean }>;
+}
+
+/**
+ * Tear down the OWN Sprites of a project's PROJECT-SCOPED agent terminals when
+ * the project is removed.
+ *
+ * A project-scoped `machine_agent_terminals` row links to its project only by
+ * `projectName` TEXT (no FK), so — unlike a BRANCH-scoped row, whose
+ * `machineBranchId` FK cascades on branch deletion and whose Sprite pointer the
+ * AFTER-DELETE reclaim trigger then rescues — it does NOT cascade when the
+ * `machine_projects` row is deleted. Without this, removing a project strands its
+ * sessions' live, billed Sprites, and a recreated same-name project could resume
+ * a stale terminal row against its old checkout.
+ *
+ * Mirrors `removeProject`'s own-Sprite teardown and `killOwnSprite`: an
+ * identity-guarded kill (via `killSprite`, best-effort), then a CAS delete
+ * (`removeIfSandbox`) that BOTH prevents a stale resume (the row is gone) AND is
+ * generation-safe — a row whose Sprite was re-provisioned since we listed it
+ * fails the CAS, so its live replacement is left untouched. A genuine kill
+ * failure leaves the row for a later machine teardown/purge to reclaim
+ * (`teardownOneMachine` enumerates every live-Sprite session), the same contract
+ * as `killOwnSprite`. Per-row isolated: one unreachable Sprite never skips the rest.
+ */
+export async function teardownProjectAgentTerminalSprites({
+  machineId,
+  projectName,
+  deps,
+}: {
+  machineId: string;
+  projectName: string;
+  deps: TeardownProjectAgentTerminalsDeps;
+}): Promise<void> {
+  const rows = await deps.store.list({ machineId, projectName, machineBranchId: null });
+  for (const row of rows) {
+    // Only rows with a live Sprite of their OWN: a legacy/unprovisioned row has
+    // nothing to kill, a torn-down one is already gone.
+    if (!row.sandboxId || row.spriteTornDownAt) continue;
+    try {
+      const killed = await deps.killSprite({ sandboxId: row.sandboxId, spriteInstanceId: row.spriteInstanceId });
+      if (killed.ok) {
+        await deps.store.removeIfSandbox({
+          id: row.id,
+          sandboxId: row.sandboxId,
+          spriteInstanceId: row.spriteInstanceId,
+        });
+      }
+      // else: genuine kill failure — leave the row (its Sprite may still be alive);
+      // a later machine teardown/purge reclaims it.
+    } catch {
+      // Per-row best-effort — one unreachable Sprite must not skip the rest.
+    }
+  }
 }

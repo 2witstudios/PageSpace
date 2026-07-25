@@ -518,6 +518,39 @@ describe('removeProject', () => {
     expect(await store.findByName(TERMINAL_ID, 'my-repo')).toBeNull();
   });
 
+  it('should tear down the project\'s per-session agent-terminal Sprites (they link by projectName TEXT, so no FK cascade rescues them)', async () => {
+    const existing = makeRecord();
+    const teardownCalls: Array<{ machineId: string; projectName: string }> = [];
+    const { deps, store } = makeDeps(
+      {
+        teardownProjectSessions: async (input) => {
+          teardownCalls.push(input);
+        },
+      },
+      [existing],
+    );
+
+    const result = await removeProject({ machineId: TERMINAL_ID, name: 'my-repo', deps });
+
+    expect(result).toEqual({ ok: true });
+    // The CANONICAL project name is passed, so the seam finds every scope='project' row.
+    expect(teardownCalls).toEqual([{ machineId: TERMINAL_ID, projectName: 'my-repo' }]);
+    expect(await store.findByName(TERMINAL_ID, 'my-repo')).toBeNull();
+  });
+
+  it('given the agent-terminal teardown seam THROWS, should still remove the project row (best-effort)', async () => {
+    const existing = makeRecord();
+    const { deps, store } = makeDeps(
+      { teardownProjectSessions: async () => { throw new Error('sprite host down'); } },
+      [existing],
+    );
+
+    const result = await removeProject({ machineId: TERMINAL_ID, name: 'my-repo', deps });
+
+    expect(result).toEqual({ ok: true });
+    expect(await store.findByName(TERMINAL_ID, 'my-repo')).toBeNull();
+  });
+
   it('given the promoted Sprite kill FAILS, should still remove the row — the delete trigger rescues the pointer', async () => {
     const promoted = makeRecord({
       sessionKey: 'sess-key-1',

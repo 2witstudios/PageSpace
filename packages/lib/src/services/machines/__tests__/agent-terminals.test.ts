@@ -16,7 +16,11 @@ import {
   type AgentTerminalMachineSandbox,
 } from '../agent-terminals';
 import type { MachineAgentTerminalStore, MachineAgentTerminalRecord, AgentTerminalScopeKey } from '../agent-terminals-store';
-import { provisionAgentTerminalSprite, type AgentTerminalSpriteProvisionDeps } from '../agent-terminal-sprites';
+import {
+  provisionAgentTerminalSprite,
+  teardownProjectAgentTerminalSprites,
+  type AgentTerminalSpriteProvisionDeps,
+} from '../agent-terminal-sprites';
 import type { MachineActorContext } from '../machine-branches';
 import { deriveAgentTerminalSessionSpriteKey } from '../agent-terminal-sprite-session';
 import { type MachineHost, type MachineHandle } from '../../sandbox/machine-host';
@@ -2624,5 +2628,97 @@ describe('killAgentTerminal — per-session Sprite teardown (sessions-per-locati
     // The replacement's pointer survives — CAS refused to delete it.
     expect(rows.size).toBe(1);
     expect([...rows.values()][0].sandboxId).toBe('sprite-session-2');
+  });
+});
+
+describe('teardownProjectAgentTerminalSprites — project removal tears down project-scoped session Sprites', () => {
+  const PROJECT_SCOPE = { machineId: TERMINAL_ID, projectName: PROJECT_NAME, machineBranchId: null };
+
+  it('kills each live project-scoped session Sprite and CAS-removes its row (no stale resume for a recreated same-name project)', async () => {
+    const live = makeLegacyRow({
+      id: 'agt-p1', name: 'cli', agentType: 'shell',
+      scope: 'project', projectName: PROJECT_NAME, machineBranchId: null,
+      sandboxId: 'sbx-p1', spriteInstanceId: 'inst-p1',
+    });
+    const { store, rows } = makeStore([live]);
+    const killed: Array<{ sandboxId: string; spriteInstanceId: string | null }> = [];
+
+    await teardownProjectAgentTerminalSprites({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      deps: { store, killSprite: async (input) => { killed.push(input); return { ok: true }; } },
+    });
+
+    expect(killed).toEqual([{ sandboxId: 'sbx-p1', spriteInstanceId: 'inst-p1' }]);
+    // Row removed → a recreated same-name project can't resume this stale session.
+    expect(await store.findByName(PROJECT_SCOPE, 'cli')).toBeNull();
+    expect(rows.size).toBe(0);
+  });
+
+  it('given the kill FAILS, keeps the row (its Sprite may still be alive; a later machine teardown/purge reclaims it)', async () => {
+    const live = makeLegacyRow({
+      id: 'agt-p2', name: 'cli', agentType: 'shell',
+      scope: 'project', projectName: PROJECT_NAME, machineBranchId: null,
+      sandboxId: 'sbx-p2', spriteInstanceId: 'inst-p2',
+    });
+    const { store } = makeStore([live]);
+
+    await teardownProjectAgentTerminalSprites({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      deps: { store, killSprite: async () => ({ ok: false }) },
+    });
+
+    expect(await store.findByName(PROJECT_SCOPE, 'cli')).not.toBeNull();
+  });
+
+  it('never touches machine- or branch-scoped sessions, nor legacy/torn-down project rows', async () => {
+    const machineRow = makeLegacyRow({ id: 'agt-m', name: 'm', agentType: 'shell', scope: 'machine' });
+    const branchRow = makeLegacyRow({
+      id: 'agt-b', name: 'b', agentType: 'shell',
+      scope: 'branch', projectName: PROJECT_NAME, machineBranchId: BRANCH_ID,
+      sandboxId: 'sbx-b', spriteInstanceId: 'inst-b',
+    });
+    const legacyProject = makeLegacyRow({ id: 'agt-legacy', name: 'legacy', agentType: 'shell', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null }); // sandboxId null
+    const tornProject = makeLegacyRow({
+      id: 'agt-torn', name: 'torn', agentType: 'shell',
+      scope: 'project', projectName: PROJECT_NAME, machineBranchId: null,
+      sandboxId: 'sbx-torn', spriteInstanceId: 'inst-torn', spriteTornDownAt: NOW,
+    });
+    const { store } = makeStore([machineRow, branchRow, legacyProject, tornProject]);
+    const killed: unknown[] = [];
+
+    await teardownProjectAgentTerminalSprites({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      deps: { store, killSprite: async (i) => { killed.push(i); return { ok: true }; } },
+    });
+
+    expect(killed).toEqual([]); // nothing eligible
+    expect(await store.findById('agt-m')).not.toBeNull();
+    expect(await store.findById('agt-b')).not.toBeNull();
+    expect(await store.findById('agt-legacy')).not.toBeNull();
+    expect(await store.findById('agt-torn')).not.toBeNull();
+  });
+
+  it('isolates a per-row failure — one unreachable Sprite does not skip the others', async () => {
+    const a = makeLegacyRow({ id: 'agt-a', name: 'a', agentType: 'shell', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null, sandboxId: 'sbx-a', spriteInstanceId: 'inst-a' });
+    const b = makeLegacyRow({ id: 'agt-bb', name: 'bb', agentType: 'shell', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null, sandboxId: 'sbx-bb', spriteInstanceId: 'inst-bb' });
+    const { store } = makeStore([a, b]);
+
+    await teardownProjectAgentTerminalSprites({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      deps: {
+        store,
+        killSprite: async ({ sandboxId }) => {
+          if (sandboxId === 'sbx-a') throw new Error('unreachable');
+          return { ok: true };
+        },
+      },
+    });
+
+    expect(await store.findById('agt-a')).not.toBeNull(); // the failing one is left
+    expect(await store.findById('agt-bb')).toBeNull(); // the other is torn down
   });
 });
