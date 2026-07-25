@@ -539,6 +539,39 @@ describe('spawnAgentTerminal — project scope', () => {
     const row = [...rows.values()][0];
     expect(row).toMatchObject({ scope: 'project', projectName: PROJECT_NAME, machineBranchId: null });
   });
+
+  it('should persist machineProjectId = the RESOLVED project id (the ON DELETE cascade FK, migration 0230)', async () => {
+    const { store, rows } = makeStore();
+    const deps = makeDeps({
+      store,
+      projectStore: makeProjectLookup({ [`${TERMINAL_ID}\0${PROJECT_NAME}`]: { id: 'proj-xyz', path: PROJECT_PATH } }),
+    });
+    const result = await spawnAgentTerminal({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      name: 'cli',
+      agentType: 'shell',
+      actor,
+      deps,
+    });
+    expect(result).toMatchObject({ ok: true });
+    expect([...rows.values()][0].machineProjectId).toBe('proj-xyz');
+  });
+
+  it('given the project cannot be resolved, should fail project_not_found and reserve NO null-FK row', async () => {
+    const { store, rows } = makeStore();
+    const deps = makeDeps({ store, projectStore: makeProjectLookup() }); // empty lookup
+    const result = await spawnAgentTerminal({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      name: 'cli',
+      agentType: 'shell',
+      actor,
+      deps,
+    });
+    expect(result).toEqual({ ok: false, reason: 'project_not_found' });
+    expect(rows.size).toBe(0);
+  });
 });
 
 describe('spawnAgentTerminal — machine scope', () => {
@@ -555,6 +588,8 @@ describe('spawnAgentTerminal — machine scope', () => {
     expect(result).toMatchObject({ ok: true, agentType: 'shell', resumed: false });
     const row = [...rows.values()][0];
     expect(row).toMatchObject({ scope: 'machine', machineId: TERMINAL_ID, projectName: null, machineBranchId: null });
+    // Machine scope has no owning project — the cascade FK stays null.
+    expect(row.machineProjectId).toBeNull();
   });
 
   it('given a bare shell agentType, should reserve it (the plain shell IS a machine-scope agent terminal, not a separate concept)', async () => {

@@ -18,6 +18,8 @@ import { eq, sql } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { machineProjects } from '@pagespace/db/schema/machine-projects';
 import { machineAgentTerminals } from '@pagespace/db/schema/machine-agent-terminals';
+import { machineBranches } from '@pagespace/db/schema/machine-branches';
+import { machineSpriteReclaims } from '@pagespace/db/schema/machine-sprite-reclaims';
 import { factories } from '@pagespace/db/test/factories';
 import { createDbMachineAgentTerminalStore } from '../agent-terminals-store';
 
@@ -151,5 +153,95 @@ describe('createDbMachineAgentTerminalStore().updateSpriteIdentity — liveness 
 
     expect(ok).toBe(false); // fenced — no stale project-scoped Sprite the project delete can't find
     expect(await readSandboxId(row.id)).toBeNull();
+  });
+});
+
+/**
+ * Project-removal FK cascade (migration 0230) — the mechanism that REPLACED the
+ * former manual snapshot/enumeration teardown. Deleting a `machine_projects` row
+ * must cascade to its project- AND branch-scoped `machine_agent_terminals` rows
+ * and its `machine_branches` rows, and each cascaded row's OWN AFTER-DELETE reclaim
+ * trigger (0229 terminals, 0209 branches, 0219 the project itself) must rescue its
+ * live Sprite pointer into the `machine_sprite_reclaims` outbox. Only verifiable
+ * against Postgres (real FK + real triggers).
+ */
+describe('project removal cascades to sessions/branches and reclaims every Sprite (migration 0230)', () => {
+  async function reclaimIds(): Promise<Set<string>> {
+    const rows = await db.select({ sandboxId: machineSpriteReclaims.sandboxId }).from(machineSpriteReclaims);
+    return new Set(rows.map((r) => r.sandboxId));
+  }
+
+  async function insertProjectRow(ownerId: string, machineId: string, sandboxId: string | null) {
+    const id = createId();
+    await db.insert(machineProjects).values({
+      id, ownerId, machineId, name: PROJECT_NAME,
+      repoUrl: 'https://github.com/o/r.git', path: `/workspace/projects/${PROJECT_NAME}`,
+      sandboxId, spriteInstanceId: sandboxId ? `inst-${sandboxId}` : null,
+    });
+    return id;
+  }
+
+  it('deletes the project → cascades to its terminals + branch, reclaiming every Sprite; a same-name re-create is untouched', async () => {
+    if (!dbAvailable) return;
+    const { userId, machineId } = await seedMachine(false);
+    // A promoted project (its own Sprite) with a full session tree beneath it.
+    const projectId = await insertProjectRow(userId, machineId, 'sbx-project');
+
+    const branchId = createId();
+    await db.insert(machineBranches).values({
+      id: branchId, ownerId: userId, machineId, projectName: PROJECT_NAME, machineProjectId: projectId,
+      branchName: 'feature', sessionKey: `bk-${branchId}`,
+      sandboxId: 'sbx-branch', spriteInstanceId: 'inst-branch', updatedAt: new Date(),
+    });
+
+    const projectTermId = createId();
+    const branchTermId = createId();
+    await db.insert(machineAgentTerminals).values([
+      {
+        id: projectTermId, ownerId: userId, machineId, scope: 'project', projectName: PROJECT_NAME,
+        machineProjectId: projectId, machineBranchId: null, name: 'proj-cli', agentType: 'shell',
+        sessionKey: `sk-${projectTermId}`, sandboxId: 'sbx-proj-term', spriteInstanceId: 'inst-proj-term',
+        updatedAt: new Date(),
+      },
+      {
+        id: branchTermId, ownerId: userId, machineId, scope: 'branch', projectName: PROJECT_NAME,
+        machineProjectId: projectId, machineBranchId: branchId, name: 'branch-cli', agentType: 'shell',
+        sessionKey: `sk-${branchTermId}`, sandboxId: 'sbx-branch-term', spriteInstanceId: 'inst-branch-term',
+        updatedAt: new Date(),
+      },
+    ]);
+
+    // Delete ONLY the project row — the FK cascade + triggers must do the rest.
+    await db.delete(machineProjects).where(eq(machineProjects.id, projectId));
+
+    // Both terminal rows and the branch row are gone (cascaded).
+    expect(await readSandboxId(projectTermId)).toBeNull();
+    expect(await readSandboxId(branchTermId)).toBeNull();
+    const [gone] = await db.select({ id: machineAgentTerminals.id }).from(machineAgentTerminals).where(eq(machineAgentTerminals.id, projectTermId)).limit(1);
+    expect(gone).toBeUndefined();
+    const [branchGone] = await db.select({ id: machineBranches.id }).from(machineBranches).where(eq(machineBranches.id, branchId)).limit(1);
+    expect(branchGone).toBeUndefined();
+
+    // Every live Sprite pointer was rescued into the reclaim outbox — the project's
+    // own (0219), the branch's (0209), and BOTH terminals' (0229).
+    const reclaimed = await reclaimIds();
+    expect(reclaimed.has('sbx-project')).toBe(true);
+    expect(reclaimed.has('sbx-branch')).toBe(true);
+    expect(reclaimed.has('sbx-proj-term')).toBe(true);
+    expect(reclaimed.has('sbx-branch-term')).toBe(true);
+
+    // A same-name project re-created AFTER the delete is a DIFFERENT id, so the
+    // cascade never touched it: its session survives.
+    const newProjectId = await insertProjectRow(userId, machineId, null);
+    expect(newProjectId).not.toBe(projectId);
+    const survivorId = createId();
+    await db.insert(machineAgentTerminals).values({
+      id: survivorId, ownerId: userId, machineId, scope: 'project', projectName: PROJECT_NAME,
+      machineProjectId: newProjectId, machineBranchId: null, name: 'proj-cli', agentType: 'shell',
+      sessionKey: `sk-${survivorId}`, sandboxId: 'sbx-survivor', spriteInstanceId: 'inst-survivor',
+      updatedAt: new Date(),
+    });
+    expect(await readSandboxId(survivorId)).toBe('sbx-survivor');
+    expect((await reclaimIds()).has('sbx-survivor')).toBe(false);
   });
 });
