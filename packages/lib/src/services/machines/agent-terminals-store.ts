@@ -390,7 +390,14 @@ export async function createDbMachineAgentTerminalStore(): Promise<MachineAgentT
         .values({ sandboxId, spriteInstanceId })
         .onConflictDoUpdate({
           target: machineSpriteReclaims.sandboxId,
-          set: { spriteInstanceId: sql`coalesce(${machineSpriteReclaims.spriteInstanceId}, excluded."spriteInstanceId")` },
+          // Prefer the INCOMING instance — a newer generation took this
+          // deterministic name, so the outbox pointer must chase the VM that is
+          // actually alive now, not the one a stale row remembers. Matches the
+          // 0229 AFTER-DELETE trigger's `COALESCE(EXCLUDED, existing)` exactly;
+          // the reverse order would let the reconciler kill the old (already
+          // gone) instance, treat MachineSpriteReplacedError as done, drop the
+          // row, and leave the live replacement billing untracked.
+          set: { spriteInstanceId: sql`coalesce(excluded."spriteInstanceId", ${machineSpriteReclaims.spriteInstanceId})` },
         });
     },
 
