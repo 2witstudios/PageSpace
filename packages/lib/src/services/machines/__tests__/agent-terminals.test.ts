@@ -18,8 +18,10 @@ import {
 import type { MachineAgentTerminalStore, MachineAgentTerminalRecord, AgentTerminalScopeKey } from '../agent-terminals-store';
 import {
   provisionAgentTerminalSprite,
-  teardownProjectAgentTerminalSprites,
+  snapshotProjectAgentTerminalSprites,
+  teardownAgentTerminalSpriteSnapshot,
   type AgentTerminalSpriteProvisionDeps,
+  type AgentTerminalSpriteRef,
 } from '../agent-terminal-sprites';
 import type { MachineActorContext } from '../machine-branches';
 import { deriveAgentTerminalSessionSpriteKey } from '../agent-terminal-sprite-session';
@@ -199,6 +201,16 @@ function makeStore(seed: MachineAgentTerminalRecord[] = []) {
           // UNCONFIRMED kill: the AFTER-DELETE trigger enqueues the pointer, and
           // (unlike removeIfSandbox) it is LEFT for the reconciler.
           reclaims.set(sandboxId, spriteInstanceId ?? null);
+          return true;
+        }
+      }
+      return false;
+    },
+    removeIfUnprovisioned: async ({ id }) => {
+      for (const [k, row] of rows) {
+        if (row.id === id) {
+          if (row.sandboxId !== null) return false; // only while still unprovisioned
+          rows.delete(k);
           return true;
         }
       }
@@ -2857,111 +2869,118 @@ describe('killAgentTerminal — per-session Sprite teardown (sessions-per-locati
   });
 });
 
-describe('teardownProjectAgentTerminalSprites — project removal tears down project-scoped session Sprites', () => {
-  const PROJECT_SCOPE = { machineId: TERMINAL_ID, projectName: PROJECT_NAME, machineBranchId: null };
-
-  it('kills each live project-scoped session Sprite and CAS-removes its row (no stale resume for a recreated same-name project)', async () => {
-    const live = makeLegacyRow({
-      id: 'agt-p1', name: 'cli', agentType: 'shell',
-      scope: 'project', projectName: PROJECT_NAME, machineBranchId: null,
-      sandboxId: 'sbx-p1', spriteInstanceId: 'inst-p1',
+describe('snapshotProjectAgentTerminalSprites — captures project- AND branch-scoped live Sprites (findings DD/EE)', () => {
+  it('snapshots project-scoped AND branch-scoped live rows (finding DD), skipping machine-scoped, legacy, and torn-down rows', async () => {
+    const projectRow = makeLegacyRow({
+      id: 'agt-p', name: 'cli', agentType: 'shell', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null,
+      sandboxId: 'sbx-p', spriteInstanceId: 'inst-p',
     });
-    const { store, rows } = makeStore([live]);
-    const killed: Array<{ sandboxId: string; spriteInstanceId: string | null }> = [];
-
-    await teardownProjectAgentTerminalSprites({
-      machineId: TERMINAL_ID,
-      projectName: PROJECT_NAME,
-      deps: { store, killSprite: async (input) => { killed.push(input); return { ok: true }; } },
-    });
-
-    expect(killed).toEqual([{ sandboxId: 'sbx-p1', spriteInstanceId: 'inst-p1' }]);
-    // Row removed → a recreated same-name project can't resume this stale session.
-    expect(await store.findByName(PROJECT_SCOPE, 'cli')).toBeNull();
-    expect(rows.size).toBe(0);
-  });
-
-  // FINDING Z: an UNCONFIRMED kill must STILL delete the row (no stale resume) and
-  // ROUTE THE POINTER THROUGH THE OUTBOX (the AFTER-DELETE trigger enqueues it,
-  // and removeIfSandboxToReclaim leaves it) so the reconciler retries — because
-  // this is a live machine page (no teardownRequestedAt), the tracking-row
-  // reconciler would otherwise never find it.
-  it('given the kill FAILS, still removes the row and rescues its pointer to the reclaim outbox', async () => {
-    const live = makeLegacyRow({
-      id: 'agt-p2', name: 'cli', agentType: 'shell',
-      scope: 'project', projectName: PROJECT_NAME, machineBranchId: null,
-      sandboxId: 'sbx-p2', spriteInstanceId: 'inst-p2',
-    });
-    const { store, reclaims } = makeStore([live]);
-
-    await teardownProjectAgentTerminalSprites({
-      machineId: TERMINAL_ID,
-      projectName: PROJECT_NAME,
-      deps: { store, killSprite: async () => ({ ok: false }) },
-    });
-
-    // Row removed → no stale resume for a recreated same-name project.
-    expect(await store.findByName(PROJECT_SCOPE, 'cli')).toBeNull();
-    // Pointer LEFT in the outbox for the reconciler to retry the kill.
-    expect(reclaims.get('sbx-p2')).toBe('inst-p2');
-  });
-
-  it('given the kill SUCCEEDS, removes the row and DROPS the redundant reclaim pointer', async () => {
-    const live = makeLegacyRow({
-      id: 'agt-p3', name: 'cli', agentType: 'shell',
-      scope: 'project', projectName: PROJECT_NAME, machineBranchId: null,
-      sandboxId: 'sbx-p3', spriteInstanceId: 'inst-p3',
-    });
-    const { store, reclaims } = makeStore([live]);
-
-    await teardownProjectAgentTerminalSprites({
-      machineId: TERMINAL_ID,
-      projectName: PROJECT_NAME,
-      deps: { store, killSprite: async () => ({ ok: true }) },
-    });
-
-    expect(await store.findByName(PROJECT_SCOPE, 'cli')).toBeNull();
-    // Confirmed dead → no reclaim pointer left behind.
-    expect(reclaims.has('sbx-p3')).toBe(false);
-  });
-
-  it('never touches machine- or branch-scoped sessions, nor legacy/torn-down project rows', async () => {
-    const machineRow = makeLegacyRow({ id: 'agt-m', name: 'm', agentType: 'shell', scope: 'machine' });
+    // A BRANCH-scoped terminal of one of the project's branches — the bug DD fixes.
     const branchRow = makeLegacyRow({
-      id: 'agt-b', name: 'b', agentType: 'shell',
-      scope: 'branch', projectName: PROJECT_NAME, machineBranchId: BRANCH_ID,
+      id: 'agt-b', name: 'cli', agentType: 'shell', scope: 'branch', projectName: PROJECT_NAME, machineBranchId: BRANCH_ID,
       sandboxId: 'sbx-b', spriteInstanceId: 'inst-b',
     });
-    const legacyProject = makeLegacyRow({ id: 'agt-legacy', name: 'legacy', agentType: 'shell', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null }); // sandboxId null
+    const machineRow = makeLegacyRow({ id: 'agt-m', name: 'm', agentType: 'shell', scope: 'machine' });
+    const legacyProject = makeLegacyRow({ id: 'agt-legacy', name: 'legacy', agentType: 'shell', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null }); // null sandboxId
     const tornProject = makeLegacyRow({
-      id: 'agt-torn', name: 'torn', agentType: 'shell',
-      scope: 'project', projectName: PROJECT_NAME, machineBranchId: null,
+      id: 'agt-torn', name: 'torn', agentType: 'shell', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null,
       sandboxId: 'sbx-torn', spriteInstanceId: 'inst-torn', spriteTornDownAt: NOW,
     });
-    const { store } = makeStore([machineRow, branchRow, legacyProject, tornProject]);
-    const killed: unknown[] = [];
+    const { store } = makeStore([projectRow, branchRow, machineRow, legacyProject, tornProject]);
 
-    await teardownProjectAgentTerminalSprites({
+    const snapshot = await snapshotProjectAgentTerminalSprites({
       machineId: TERMINAL_ID,
       projectName: PROJECT_NAME,
+      deps: { store, listProjectBranchIds: async () => [BRANCH_ID] },
+    });
+
+    expect(snapshot).toEqual(
+      expect.arrayContaining([
+        { id: 'agt-p', sandboxId: 'sbx-p', spriteInstanceId: 'inst-p' },
+        { id: 'agt-b', sandboxId: 'sbx-b', spriteInstanceId: 'inst-b' }, // branch-scoped captured (DD)
+      ]),
+    );
+    expect(snapshot).toHaveLength(2); // machine / legacy / torn excluded
+  });
+});
+
+describe('teardownAgentTerminalSpriteSnapshot — tears down a pre-delete snapshot BY ID (findings Z/EE)', () => {
+  const PROJECT_SCOPE = { machineId: TERMINAL_ID, projectName: PROJECT_NAME, machineBranchId: null };
+
+  it('given the kill SUCCEEDS, kills the Sprite, CAS-removes the row, and DROPS the redundant reclaim pointer', async () => {
+    const live = makeLegacyRow({ id: 'agt-p3', name: 'cli', agentType: 'shell', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null, sandboxId: 'sbx-p3', spriteInstanceId: 'inst-p3' });
+    const { store, reclaims } = makeStore([live]);
+    const killed: Array<{ sandboxId: string; spriteInstanceId: string | null }> = [];
+    const snapshot: AgentTerminalSpriteRef[] = [{ id: 'agt-p3', sandboxId: 'sbx-p3', spriteInstanceId: 'inst-p3' }];
+
+    await teardownAgentTerminalSpriteSnapshot({
+      snapshot,
       deps: { store, killSprite: async (i) => { killed.push(i); return { ok: true }; } },
     });
 
-    expect(killed).toEqual([]); // nothing eligible
-    expect(await store.findById('agt-m')).not.toBeNull();
-    expect(await store.findById('agt-b')).not.toBeNull();
-    expect(await store.findById('agt-legacy')).not.toBeNull();
-    expect(await store.findById('agt-torn')).not.toBeNull();
+    expect(killed).toEqual([{ sandboxId: 'sbx-p3', spriteInstanceId: 'inst-p3' }]);
+    expect(await store.findByName(PROJECT_SCOPE, 'cli')).toBeNull();
+    expect(reclaims.has('sbx-p3')).toBe(false); // confirmed dead → no pointer left
+  });
+
+  // FINDING Z: an UNCONFIRMED kill must STILL delete the row and LEAVE the pointer
+  // the trigger enqueues (removeIfSandboxToReclaim) so the reconciler retries.
+  it('given the kill FAILS, still removes the row and rescues its pointer to the reclaim outbox', async () => {
+    const live = makeLegacyRow({ id: 'agt-p2', name: 'cli', agentType: 'shell', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null, sandboxId: 'sbx-p2', spriteInstanceId: 'inst-p2' });
+    const { store, reclaims } = makeStore([live]);
+    const snapshot: AgentTerminalSpriteRef[] = [{ id: 'agt-p2', sandboxId: 'sbx-p2', spriteInstanceId: 'inst-p2' }];
+
+    await teardownAgentTerminalSpriteSnapshot({ snapshot, deps: { store, killSprite: async () => ({ ok: false }) } });
+
+    expect(await store.findByName(PROJECT_SCOPE, 'cli')).toBeNull();
+    expect(reclaims.get('sbx-p2')).toBe('inst-p2');
+  });
+
+  // FINDING EE: teardown targets the SNAPSHOT by id, so a same-name replacement
+  // project's terminal (a DIFFERENT row, NOT in the snapshot) is never touched —
+  // unlike the old name-only re-query, which would have killed it.
+  it('given a same-name replacement terminal exists at teardown time, should NOT touch it (only snapshotted rows)', async () => {
+    const oldRow = makeLegacyRow({ id: 'agt-old', name: 'cli', agentType: 'shell', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null, sandboxId: 'sbx-old', spriteInstanceId: 'inst-old' });
+    // The replacement project's DIFFERENT terminal (different id + name), live, present at teardown time.
+    const replacement = makeLegacyRow({ id: 'agt-new', name: 'build', agentType: 'shell', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null, sandboxId: 'sbx-new', spriteInstanceId: 'inst-new' });
+    const { store } = makeStore([oldRow, replacement]);
+    const killed: string[] = [];
+    // The snapshot was taken BEFORE the replacement — it contains only the old row.
+    const snapshot: AgentTerminalSpriteRef[] = [{ id: 'agt-old', sandboxId: 'sbx-old', spriteInstanceId: 'inst-old' }];
+
+    await teardownAgentTerminalSpriteSnapshot({
+      snapshot,
+      deps: { store, killSprite: async ({ sandboxId }) => { killed.push(sandboxId); return { ok: true }; } },
+    });
+
+    expect(killed).toEqual(['sbx-old']); // only the snapshotted (old) Sprite
+    expect(await store.findById('agt-old')).toBeNull(); // old torn down
+    expect(await store.findById('agt-new')).not.toBeNull(); // replacement's terminal untouched
+  });
+
+  it('is generation-guarded: a snapshotted row re-provisioned since the snapshot (new instance) is NOT deleted', async () => {
+    // The row now holds a DIFFERENT instance than the snapshot captured (a live
+    // re-provision) — the CAS must not delete it.
+    const reprovisioned = makeLegacyRow({ id: 'agt-g', name: 'cli', agentType: 'shell', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null, sandboxId: 'sbx-g', spriteInstanceId: 'inst-NEW' });
+    const { store } = makeStore([reprovisioned]);
+    const snapshot: AgentTerminalSpriteRef[] = [{ id: 'agt-g', sandboxId: 'sbx-g', spriteInstanceId: 'inst-OLD' }];
+
+    await teardownAgentTerminalSpriteSnapshot({ snapshot, deps: { store, killSprite: async () => ({ ok: true }) } });
+
+    expect(await store.findById('agt-g')).not.toBeNull(); // CAS no-op — live replacement kept
   });
 
   it('isolates a per-row failure — one unreachable Sprite does not skip the others', async () => {
     const a = makeLegacyRow({ id: 'agt-a', name: 'a', agentType: 'shell', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null, sandboxId: 'sbx-a', spriteInstanceId: 'inst-a' });
     const b = makeLegacyRow({ id: 'agt-bb', name: 'bb', agentType: 'shell', scope: 'project', projectName: PROJECT_NAME, machineBranchId: null, sandboxId: 'sbx-bb', spriteInstanceId: 'inst-bb' });
     const { store } = makeStore([a, b]);
+    const snapshot: AgentTerminalSpriteRef[] = [
+      { id: 'agt-a', sandboxId: 'sbx-a', spriteInstanceId: 'inst-a' },
+      { id: 'agt-bb', sandboxId: 'sbx-bb', spriteInstanceId: 'inst-bb' },
+    ];
 
-    await teardownProjectAgentTerminalSprites({
-      machineId: TERMINAL_ID,
-      projectName: PROJECT_NAME,
+    await teardownAgentTerminalSpriteSnapshot({
+      snapshot,
       deps: {
         store,
         killSprite: async ({ sandboxId }) => {
@@ -2973,5 +2992,31 @@ describe('teardownProjectAgentTerminalSprites — project removal tears down pro
 
     expect(await store.findById('agt-a')).not.toBeNull(); // the failing one is left
     expect(await store.findById('agt-bb')).toBeNull(); // the other is torn down
+  });
+});
+
+describe('failed-provision cleanup deletes by id, not name (finding FF)', () => {
+  it('a concurrent same-name recreate (different row id) is NOT deleted by the original failed cleanup', async () => {
+    // The original spawn reserved 'agt-orig' then failed provisioning; meanwhile a
+    // concurrent request deleted it and recreated the SAME name as a NEW row
+    // 'agt-new'. The original's cleanup targets its OWN id, so 'agt-new' survives
+    // (a by-(scope,name) delete would have wrongly removed it).
+    const newRow = makeLegacyRow({ id: 'agt-new', name: 'cli', agentType: 'shell', scope: 'machine' }); // null sandboxId, same name
+    const { store } = makeStore([newRow]);
+
+    const removed = await store.removeIfUnprovisioned({ id: 'agt-orig' }); // original id no longer present
+    expect(removed).toBe(false);
+    expect(await store.findById('agt-new')).not.toBeNull(); // the new caller's row survives
+  });
+
+  it('removeIfUnprovisioned deletes the reserved row only while it is still unprovisioned', async () => {
+    const unprov = makeLegacyRow({ id: 'agt-u', name: 'cli', agentType: 'shell', scope: 'machine' }); // null sandboxId
+    const prov = makeLegacyRow({ id: 'agt-v', name: 'other', agentType: 'shell', scope: 'machine', sandboxId: 'sbx-v', spriteInstanceId: 'inst-v' });
+    const { store } = makeStore([unprov, prov]);
+
+    expect(await store.removeIfUnprovisioned({ id: 'agt-u' })).toBe(true); // unprovisioned → removed
+    expect(await store.findById('agt-u')).toBeNull();
+    expect(await store.removeIfUnprovisioned({ id: 'agt-v' })).toBe(false); // has a live Sprite → kept
+    expect(await store.findById('agt-v')).not.toBeNull();
   });
 });

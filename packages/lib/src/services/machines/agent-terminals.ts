@@ -648,7 +648,12 @@ export async function spawnAgentTerminal({
   // result is `{ ok: true }`, so the legacy shared-Sprite path is unchanged.)
   const provisioned = await maybeProvisionSprite(row, actor.userId, deps);
   if (!provisioned.ok) {
-    await deps.store.remove({ machineId: row.machineId, projectName: row.projectName, machineBranchId: row.machineBranchId }, row.name);
+    // FINDING FF: delete the reservation by the ORIGINAL row id (only while still
+    // unprovisioned) — never by (scope, name). Between reserving this row and
+    // reaching here, a concurrent request could have deleted our still-null row
+    // and recreated the SAME name as a DIFFERENT row; a name delete would then
+    // drop that new caller's row (and strand its Sprite via the reclaim trigger).
+    await deps.store.removeIfUnprovisioned({ id: row.id });
     return { ok: false, reason: provisioned.reason, detail: provisioned.detail };
   }
   return { ok: true, id: row.id, agentType: resolvedType, resumed: false };

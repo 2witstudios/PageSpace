@@ -519,19 +519,20 @@ describe('removeProject', () => {
     expect(await store.findByName(TERMINAL_ID, 'my-repo')).toBeNull();
   });
 
-  // FINDING V: the project row must be gone BEFORE the agent-terminal teardown
-  // enumeration runs, so a concurrent project-scoped spawn can no longer resolve
-  // the project and slip a new session past the enumeration.
-  it('should delete the project row BEFORE enumerating agent-terminal sessions (no late-spawn race)', async () => {
+  // FINDINGS V + EE: the session teardown SNAPSHOTS before the project delete
+  // (pinning THIS project generation so a same-name replacement is never caught),
+  // and RUNS the teardown after the delete (project non-spawnable).
+  it('should snapshot sessions BEFORE deleting the project, and run the teardown AFTER', async () => {
     const existing = makeRecord();
-    let projectResolvableAtTeardown: boolean | null = null;
+    let projectPresentAtSnapshot: boolean | null = null;
+    let projectPresentAtTeardown: boolean | null = null;
     const { deps, store } = makeDeps(
       {
-        teardownProjectSessions: async ({ machineId, projectName }) => {
-          // By the time we enumerate, a concurrent spawn must already fail to
-          // resolve the project (it is deleted) — otherwise it could create a
-          // session this enumeration would miss.
-          projectResolvableAtTeardown = (await store.findByName(machineId, projectName)) !== null;
+        prepareProjectSessionTeardown: async ({ machineId, projectName }) => {
+          projectPresentAtSnapshot = (await store.findByName(machineId, projectName)) !== null;
+          return async () => {
+            projectPresentAtTeardown = (await store.findByName(machineId, projectName)) !== null;
+          };
         },
       },
       [existing],
@@ -540,16 +541,19 @@ describe('removeProject', () => {
     const result = await removeProject({ machineId: TERMINAL_ID, name: 'my-repo', deps });
 
     expect(result).toEqual({ ok: true });
-    expect(projectResolvableAtTeardown).toBe(false); // deleted first — non-spawnable during teardown
+    expect(projectPresentAtSnapshot).toBe(true); // snapshot before delete (EE: pins this generation)
+    expect(projectPresentAtTeardown).toBe(false); // teardown after delete (V: non-spawnable)
   });
 
-  it('should tear down the project\'s per-session agent-terminal Sprites (they link by projectName TEXT, so no FK cascade rescues them)', async () => {
+  it('should prepare + run the session teardown with the CANONICAL project name', async () => {
     const existing = makeRecord();
-    const teardownCalls: Array<{ machineId: string; projectName: string }> = [];
+    const prepareCalls: Array<{ machineId: string; projectName: string }> = [];
+    let teardownRan = false;
     const { deps, store } = makeDeps(
       {
-        teardownProjectSessions: async (input) => {
-          teardownCalls.push(input);
+        prepareProjectSessionTeardown: async (input) => {
+          prepareCalls.push(input);
+          return async () => { teardownRan = true; };
         },
       },
       [existing],
@@ -558,15 +562,28 @@ describe('removeProject', () => {
     const result = await removeProject({ machineId: TERMINAL_ID, name: 'my-repo', deps });
 
     expect(result).toEqual({ ok: true });
-    // The CANONICAL project name is passed, so the seam finds every scope='project' row.
-    expect(teardownCalls).toEqual([{ machineId: TERMINAL_ID, projectName: 'my-repo' }]);
+    expect(prepareCalls).toEqual([{ machineId: TERMINAL_ID, projectName: 'my-repo' }]);
+    expect(teardownRan).toBe(true);
     expect(await store.findByName(TERMINAL_ID, 'my-repo')).toBeNull();
   });
 
-  it('given the agent-terminal teardown seam THROWS, should still remove the project row (best-effort)', async () => {
+  it('given the session teardown THROWS, should still remove the project row (best-effort)', async () => {
     const existing = makeRecord();
     const { deps, store } = makeDeps(
-      { teardownProjectSessions: async () => { throw new Error('sprite host down'); } },
+      { prepareProjectSessionTeardown: async () => async () => { throw new Error('sprite host down'); } },
+      [existing],
+    );
+
+    const result = await removeProject({ machineId: TERMINAL_ID, name: 'my-repo', deps });
+
+    expect(result).toEqual({ ok: true });
+    expect(await store.findByName(TERMINAL_ID, 'my-repo')).toBeNull();
+  });
+
+  it('given the teardown SNAPSHOT (prepare) THROWS, should still remove the project row (best-effort)', async () => {
+    const existing = makeRecord();
+    const { deps, store } = makeDeps(
+      { prepareProjectSessionTeardown: async () => { throw new Error('snapshot query failed'); } },
       [existing],
     );
 

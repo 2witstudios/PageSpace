@@ -378,9 +378,73 @@ export async function provisionAgentTerminalSprite({
   return { ok: true, sandboxId: handle.machineId, resumed: false };
 }
 
-/** The store slice `teardownProjectAgentTerminalSprites` needs — enumerate a scope's rows and CAS-delete one (dropping or rescuing the reclaim pointer). */
-export interface TeardownProjectAgentTerminalsDeps {
-  store: Pick<MachineAgentTerminalStore, 'list' | 'removeIfSandbox' | 'removeIfSandboxToReclaim'>;
+/** A snapshotted agent-terminal Sprite to tear down — the row id plus its exact generation, so the teardown CAS acts only on THIS row's THIS Sprite. */
+export interface AgentTerminalSpriteRef {
+  id: string;
+  sandboxId: string;
+  spriteInstanceId: string | null;
+}
+
+/** The store slice `snapshotProjectAgentTerminalSprites` needs — enumerate a scope's rows. */
+export interface SnapshotProjectAgentTerminalsDeps {
+  store: Pick<MachineAgentTerminalStore, 'list'>;
+  /**
+   * The `machine_branches` row ids belonging to (machineId, projectName) —
+   * needed because a removed project's branch rows do NOT cascade-delete (the
+   * project link is only `projectName` TEXT), so their branch-scoped terminal
+   * Sprites must be reclaimed as part of project removal too (finding DD).
+   */
+  listProjectBranchIds: (machineId: string, projectName: string) => Promise<string[]>;
+}
+
+/**
+ * SNAPSHOT the agent-terminal rows with a live OWN Sprite under a project —
+ * PROJECT-scoped AND BRANCH-scoped (findings DD/EE) — capturing each row's id and
+ * exact generation (`sandboxId`/`spriteInstanceId`) so a later teardown can act
+ * on THESE SPECIFIC rows by id.
+ *
+ * Taken BEFORE the `machine_projects` row is deleted, which pins the teardown to
+ * THIS project generation: a same-name replacement project can only be re-added
+ * AFTER the delete, so its later terminals are never in this snapshot and are
+ * never touched (finding EE — the ABA a post-delete name re-query would hit).
+ *
+ * DD: neither a project-scoped row (linked to the project only by `projectName`
+ * TEXT) nor a branch-scoped row (whose branch links to the project only by
+ * `projectName` TEXT, so the project delete never cascades to `machine_branches`,
+ * so its `machineBranchId` FK cascade never fires) is reclaimed by the project
+ * delete. Both are captured here.
+ */
+export async function snapshotProjectAgentTerminalSprites({
+  machineId,
+  projectName,
+  deps,
+}: {
+  machineId: string;
+  projectName: string;
+  deps: SnapshotProjectAgentTerminalsDeps;
+}): Promise<AgentTerminalSpriteRef[]> {
+  const refs: AgentTerminalSpriteRef[] = [];
+  const collect = (rows: Awaited<ReturnType<MachineAgentTerminalStore['list']>>): void => {
+    for (const row of rows) {
+      // Only rows with a live Sprite of their OWN: a legacy/unprovisioned row has
+      // nothing to kill, a torn-down one is already gone.
+      if (!row.sandboxId || row.spriteTornDownAt) continue;
+      refs.push({ id: row.id, sandboxId: row.sandboxId, spriteInstanceId: row.spriteInstanceId });
+    }
+  };
+  // Project-scoped sessions.
+  collect(await deps.store.list({ machineId, projectName, machineBranchId: null }));
+  // Branch-scoped sessions of EACH of the project's branches (finding DD).
+  const branchIds = await deps.listProjectBranchIds(machineId, projectName);
+  for (const machineBranchId of branchIds) {
+    collect(await deps.store.list({ machineId, projectName, machineBranchId }));
+  }
+  return refs;
+}
+
+/** The store slice `teardownAgentTerminalSpriteSnapshot` needs — CAS-delete a snapshotted row (dropping or rescuing the reclaim pointer). */
+export interface TeardownAgentTerminalSnapshotDeps {
+  store: Pick<MachineAgentTerminalStore, 'removeIfSandbox' | 'removeIfSandboxToReclaim'>;
   /**
    * Identity-guarded kill of a session's OWN Sprite. `ok: true` means the target
    * is CONFIRMED gone (killed, or a replacement already took its name); `ok:
@@ -391,64 +455,42 @@ export interface TeardownProjectAgentTerminalsDeps {
 }
 
 /**
- * Tear down the OWN Sprites of a project's PROJECT-SCOPED agent terminals when
- * the project is removed.
+ * Tear down a SNAPSHOT of agent-terminal Sprites BY ID — kill each and CAS-delete
+ * its row. Run AFTER the `machine_projects` row is deleted (so the project is
+ * non-spawnable), targeting the pre-delete snapshot rather than a post-delete
+ * name re-query (finding EE).
  *
- * A project-scoped `machine_agent_terminals` row links to its project only by
- * `projectName` TEXT (no FK), so — unlike a BRANCH-scoped row, whose
- * `machineBranchId` FK cascades on branch deletion and whose Sprite pointer the
- * AFTER-DELETE reclaim trigger then rescues — it does NOT cascade when the
- * `machine_projects` row is deleted. Without this, removing a project strands its
- * sessions' live, billed Sprites, and a recreated same-name project could resume
- * a stale terminal row against its old checkout.
+ * The CAS delete is generation-guarded on (id, sandboxId, instance): a
+ * snapshotted row that was re-provisioned since the snapshot fails the CAS, so
+ * its live replacement is left untouched. And a same-name replacement project's
+ * terminals are DIFFERENT rows never present in the snapshot, so they are never
+ * killed.
  *
- * Mirrors `removeProject`'s own-Sprite teardown and `killOwnSprite`: an
- * identity-guarded kill (via `killSprite`, best-effort), then a CAS delete that
- * BOTH prevents a stale resume (the row is gone) AND is generation-safe — a row
- * whose Sprite was re-provisioned since we listed it fails the CAS, so its live
- * replacement is left untouched.
- *
- * The row is deleted whether the kill SUCCEEDED or FAILED (finding Z): the
- * project row is being deleted with no page trash, so `teardownRequestedAt` is
- * never set and the orphan reconciler's tracking-row arm would NOT retry a
- * survivor — leaving a failed kill's live Sprite billing forever AND letting a
- * recreated same-name project resume it. Deleting the row instead routes reclaim
- * through the outbox: on a CONFIRMED kill, `removeIfSandbox` drops the redundant
- * pointer; on an UNCONFIRMED kill, `removeIfSandboxToReclaim` LEAVES the pointer
- * the AFTER-DELETE trigger (0229) enqueues, so tier-A of the reconciler retries
- * the kill. Only a row we could not even attempt (no `sandboxId` / already torn
- * down) is skipped. Per-row isolated: one unreachable Sprite never skips the rest.
+ * The row is deleted whether the kill SUCCEEDED or FAILED (finding Z): the project
+ * delete sets no `teardownRequestedAt`, so the reconciler's tracking-row arm would
+ * not retry a survivor. Deleting routes reclaim through the outbox — on a CONFIRMED
+ * kill `removeIfSandbox` drops the redundant pointer; on an UNCONFIRMED kill
+ * `removeIfSandboxToReclaim` leaves the pointer the AFTER-DELETE trigger enqueues,
+ * so tier-A of the reconciler retries. Per-row isolated: one unreachable Sprite
+ * never skips the rest (a THROW leaves the row for a later machine teardown/purge).
  */
-export async function teardownProjectAgentTerminalSprites({
-  machineId,
-  projectName,
+export async function teardownAgentTerminalSpriteSnapshot({
+  snapshot,
   deps,
 }: {
-  machineId: string;
-  projectName: string;
-  deps: TeardownProjectAgentTerminalsDeps;
+  snapshot: readonly AgentTerminalSpriteRef[];
+  deps: TeardownAgentTerminalSnapshotDeps;
 }): Promise<void> {
-  const rows = await deps.store.list({ machineId, projectName, machineBranchId: null });
-  for (const row of rows) {
-    // Only rows with a live Sprite of their OWN: a legacy/unprovisioned row has
-    // nothing to kill, a torn-down one is already gone.
-    if (!row.sandboxId || row.spriteTornDownAt) continue;
-    const { id, sandboxId, spriteInstanceId } = row;
+  for (const { id, sandboxId, spriteInstanceId } of snapshot) {
     try {
       const killed = await deps.killSprite({ sandboxId, spriteInstanceId });
       if (killed.ok) {
-        // Confirmed dead → CAS-delete and DROP the redundant reclaim pointer.
         await deps.store.removeIfSandbox({ id, sandboxId, spriteInstanceId });
       } else {
-        // Unconfirmed → CAS-delete but KEEP the pointer the trigger enqueues, so
-        // the reconciler retries the (maybe still live) Sprite. Prevents the
-        // stale-resume either way (the row is gone).
         await deps.store.removeIfSandboxToReclaim({ id, sandboxId, spriteInstanceId });
       }
     } catch {
-      // Per-row best-effort — one unreachable Sprite must not skip the rest. The
-      // row survives here (a throw is not a definitive kill outcome); a later
-      // machine teardown/purge reclaims it.
+      // Per-row best-effort — one unreachable Sprite must not skip the rest.
     }
   }
 }

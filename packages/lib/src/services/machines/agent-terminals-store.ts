@@ -169,6 +169,19 @@ export interface MachineAgentTerminalStore {
    */
   removeIfSandboxToReclaim(input: { id: string; sandboxId: string; spriteInstanceId: string | null }): Promise<boolean>;
   /**
+   * Delete a reservation row BY ID, but ONLY while it is still unprovisioned
+   * (`sandboxId IS NULL`) — the failed-fresh-provision cleanup (finding FF).
+   *
+   * Never a name-keyed delete: a name is reusable, so between this spawn
+   * reserving its row and reaching cleanup, a concurrent request can delete the
+   * still-unprovisioned row and recreate the SAME name as a DIFFERENT row — a
+   * name delete would then remove that new caller's row (and, once it provisions,
+   * strand its live Sprite via the reclaim trigger). Keying on the ORIGINAL id
+   * touches only the row this spawn reserved; the `sandboxId IS NULL` guard means
+   * a row that somehow acquired a live Sprite is never dropped.
+   */
+  removeIfUnprovisioned(input: { id: string }): Promise<boolean>;
+  /**
    * Enqueue a Sprite pointer directly into the reclaim outbox
    * (`machine_sprite_reclaims`) — for a Sprite that was PROVISIONED but never
    * recorded on any row (its row still has a NULL `sandboxId`), so neither an
@@ -424,6 +437,19 @@ export async function createDbMachineAgentTerminalStore(): Promise<MachineAgentT
             eqOrIsNull(machineAgentTerminals.spriteInstanceId, spriteInstanceId),
           ),
         )
+        .returning({ id: machineAgentTerminals.id });
+      return deleted.length > 0;
+    },
+
+    async removeIfUnprovisioned({ id }) {
+      // Delete the reserved row by its ORIGINAL id, ONLY while still
+      // unprovisioned — never by the reusable (scope, name). A null sandboxId
+      // means no AFTER-DELETE reclaim pointer is enqueued (the 0229 trigger
+      // fires only for a non-null sandboxId), so this cleanly drops the failed
+      // reservation without touching the reclaim outbox.
+      const deleted = await db
+        .delete(machineAgentTerminals)
+        .where(and(eq(machineAgentTerminals.id, id), isNull(machineAgentTerminals.sandboxId)))
         .returning({ id: machineAgentTerminals.id });
       return deleted.length > 0;
     },

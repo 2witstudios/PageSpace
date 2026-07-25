@@ -137,6 +137,7 @@ function buildBaseDeps(): Pick<SpawnAgentTerminalDeps & KillAgentTerminalDeps, '
       stampSpriteTornDown: async (input) => (await getMachineAgentTerminalStore()).stampSpriteTornDown(input),
       removeIfSandbox: async (input) => (await getMachineAgentTerminalStore()).removeIfSandbox(input),
       removeIfSandboxToReclaim: async (input) => (await getMachineAgentTerminalStore()).removeIfSandboxToReclaim(input),
+      removeIfUnprovisioned: async (input) => (await getMachineAgentTerminalStore()).removeIfUnprovisioned(input),
       enqueueReclaim: async (input) => (await getMachineAgentTerminalStore()).enqueueReclaim(input),
       remove: async (scope, name) => (await getMachineAgentTerminalStore()).remove(scope, name),
     },
