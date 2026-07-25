@@ -226,6 +226,82 @@ async function reconcileBeforeKill({
 }
 
 /**
+ * FINDING GG. Reconcile a RESUME whose live probe (`host.attach`) handed back a
+ * Sprite under the row's deterministic name — the attach-resume twin of the CAS
+ * this module's provision path already runs.
+ *
+ * A replacement can be provisioned under the SAME name while the row still records
+ * the OLD `spriteInstanceId` (the provisioner died before `updateSpriteIdentity`
+ * persisted the new one). Then the PTY attaches fine, but every LATER teardown
+ * passes the row's STALE expected instance: the kill misses (a
+ * `MachineSpriteReplacedError` reads as "already gone"), the hard-delete outbox
+ * entry records the stale instance too, and the live replacement bills forever,
+ * untracked. So before treating the row as resumed we must ADOPT the attached
+ * handle's actual instance onto the row.
+ *
+ * - Instance already MATCHES the row → a plain resume, nothing to persist.
+ * - Instance DIFFERS → CAS the attached identity onto the row (same liveness-fenced
+ *   `updateSpriteIdentity` + revived columns the provision path uses; `sandboxId`
+ *   is unchanged — only the instance is adopted). On success, resume against the
+ *   now-correct row.
+ * - The CAS is FENCED (machine trashed / project row gone) or THROWS → do NOT resume
+ *   on a stale identity. Route the attached handle through `reconcileBeforeKill`:
+ *   if a concurrent resume already adopted OUR exact instance it resumes (the VM is
+ *   referenced and live); otherwise the attached VM is unreferenced and is
+ *   killed/enqueued so it cannot bill untracked.
+ */
+export async function reconcileResumedSpriteInstance({
+  row,
+  handle,
+  deps,
+}: {
+  row: Pick<MachineAgentTerminalRecord, 'id' | 'sessionKey' | 'sandboxId' | 'spriteInstanceId' | 'egressPolicyToken'>;
+  handle: MachineHandle;
+  deps: Pick<AgentTerminalSpriteProvisionDeps, 'updateSpriteIdentity' | 'reloadRow' | 'host' | 'enqueueReclaim' | 'now'>;
+}): Promise<{ ok: true } | { ok: false; detail?: string }> {
+  const attachedInstance = handle.spriteInstanceId ?? null;
+  if (attachedInstance === (row.spriteInstanceId ?? null)) {
+    return { ok: true }; // the row already reflects the live instance — plain resume
+  }
+
+  // The session key folds the row id and is deterministic, so it is UNCHANGED
+  // across the replacement — a row that carries a `sandboxId` always carries its
+  // key too. If it is somehow absent we cannot CAS an identity, so we must not
+  // resume on the stale one: reconcile the attached handle instead.
+  if (row.sessionKey === null) {
+    const outcome = await reconcileBeforeKill({ deps, row, handle });
+    return outcome.kind === 'resumed' ? { ok: true } : { ok: false, detail: 'missing_session_key' };
+  }
+
+  let recorded: boolean;
+  try {
+    recorded = await deps.updateSpriteIdentity({
+      id: row.id,
+      previousSandboxId: row.sandboxId,
+      sessionKey: row.sessionKey,
+      sandboxId: handle.machineId,
+      spriteInstanceId: attachedInstance,
+      egressPolicyToken: handle.egressPolicyToken ?? row.egressPolicyToken ?? null,
+      now: deps.now(),
+    });
+  } catch (error) {
+    const outcome = await reconcileBeforeKill({ deps, row, handle });
+    return outcome.kind === 'resumed'
+      ? { ok: true }
+      : { ok: false, detail: error instanceof Error ? error.message : String(error) };
+  }
+  if (!recorded) {
+    // Fenced (owning page trashed / project gone) OR lost to a concurrent adopt.
+    // `reconcileBeforeKill` tells the two apart: a winner that recorded OUR exact
+    // instance means the VM is referenced and live (resume); otherwise it is
+    // unreferenced and gets killed/enqueued.
+    const outcome = await reconcileBeforeKill({ deps, row, handle });
+    return outcome.kind === 'resumed' ? { ok: true } : { ok: false, detail: 'sprite_identity_fenced' };
+  }
+  return { ok: true };
+}
+
+/**
  * Provision (or resume) this session's OWN Sprite and record it on the row.
  * Idempotent by the row's own id: the Sprite key folds the row id, so a
  * re-provision of a vanished Sprite lands on the same name. Caller passes a row

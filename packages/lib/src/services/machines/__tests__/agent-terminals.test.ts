@@ -2542,6 +2542,195 @@ describe('spawnAgentTerminal — per-session Sprite provisioning', () => {
     expect(base.provisionCalls).toEqual([]); // did NOT duplicate a possibly-live VM
     expect([...rows.values()][0].sandboxId).toBe('sprite-maybe-alive'); // pointer untouched
   });
+
+  // FINDING GG: an attach-resume must ADOPT the attached handle's instance when
+  // the row still carries a STALE one (a replacement provisioned under the same
+  // name whose identity never persisted), so later teardown/outbox target the
+  // LIVE VM rather than the dead one.
+  it('given attach returns a handle whose instance DIFFERS from the row, should ADOPT the live instance before resuming', async () => {
+    const { store, rows } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-stale',
+        name: 'cli',
+        agentType: 'shell',
+        sandboxId: SESSION_SANDBOX_ID,
+        // The row records a STALE instance — the persisted-but-never-recorded
+        // replacement gap. The live attach (default: session handle) carries the
+        // real instance SESSION_INSTANCE_ID.
+        spriteInstanceId: 'inst-stale-predecessor',
+        sessionKey: 'pgs-agt-stale',
+      }),
+    ]);
+    const identityWrites: Array<{ previousSandboxId: string | null; spriteInstanceId: string | null }> = [];
+    const base = makeSpriteProvision(store);
+    const provision = {
+      ...base.deps,
+      updateSpriteIdentity: async (input: Parameters<typeof base.deps.updateSpriteIdentity>[0]) => {
+        identityWrites.push({ previousSandboxId: input.previousSandboxId, spriteInstanceId: input.spriteInstanceId });
+        return base.deps.updateSpriteIdentity(input);
+      },
+    };
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+
+    expect(result).toMatchObject({ ok: true, resumed: true });
+    expect(base.provisionCalls).toEqual([]); // never provisioned a NEW VM — the live one was adopted
+    // The adopt CAS ran with the row's current sandbox as `previousSandboxId` and
+    // wrote the attached (live) instance.
+    expect(identityWrites).toEqual([{ previousSandboxId: SESSION_SANDBOX_ID, spriteInstanceId: SESSION_INSTANCE_ID }]);
+    // The row now reflects the LIVE instance — a later teardown targets it, not the stale predecessor.
+    expect([...rows.values()][0].spriteInstanceId).toBe(SESSION_INSTANCE_ID);
+  });
+
+  it('given attach returns a handle whose instance MATCHES the row, should resume WITHOUT any identity write', async () => {
+    const { store, rows } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-match',
+        name: 'cli',
+        agentType: 'shell',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID, // already the live instance
+        sessionKey: 'pgs-agt-match',
+      }),
+    ]);
+    const identityWrites: unknown[] = [];
+    const base = makeSpriteProvision(store);
+    const provision = {
+      ...base.deps,
+      updateSpriteIdentity: async (input: Parameters<typeof base.deps.updateSpriteIdentity>[0]) => {
+        identityWrites.push(input);
+        return base.deps.updateSpriteIdentity(input);
+      },
+    };
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+
+    expect(result).toMatchObject({ ok: true, resumed: true });
+    expect(identityWrites).toEqual([]); // instance already matched — no adopt CAS
+    expect(base.provisionCalls).toEqual([]);
+    expect([...rows.values()][0].spriteInstanceId).toBe(SESSION_INSTANCE_ID);
+  });
+
+  // FINDING HH: reprovision-of-UNUSABLE failures must PROPAGATE on POST, not report
+  // a false 200 resume that only surfaces the error later at realtime attach.
+  it('given a TORN-DOWN row whose reprovision is UNAUTHORIZED, should FAIL the resume with unauthorized (403)', async () => {
+    const { store } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-td-auth',
+        name: 'cli',
+        agentType: 'shell',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+        spriteTornDownAt: NOW, // torn down — the resolve path rejects it; only a reprovision can save it
+        sessionKey: 'pgs-agt-td-auth',
+      }),
+    ]);
+    const { deps: provision } = makeSpriteProvision(store, { authorize: async () => ({ ok: false, reason: 'insufficient_role' }) });
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+
+    expect(result).toMatchObject({ ok: false, reason: 'unauthorized' });
+  });
+
+  it('given a TORN-DOWN row whose reprovision FAILS to provision, should FAIL the resume with provision_failed (500)', async () => {
+    const { store } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-td-prov',
+        name: 'cli',
+        agentType: 'shell',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+        spriteTornDownAt: NOW,
+        sessionKey: 'pgs-agt-td-prov',
+      }),
+    ]);
+    const base = makeSpriteProvision(store);
+    const provision = {
+      ...base.deps,
+      host: { ...base.deps.host, provision: async () => { throw new Error('provider out of capacity'); } },
+    };
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+
+    expect(result).toMatchObject({ ok: false, reason: 'provision_failed' });
+  });
+
+  it('given a VANISHED row (attach → null) whose reprovision FAILS, should FAIL the resume (not a false 200)', async () => {
+    const { store } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-vanish-fail',
+        name: 'cli',
+        agentType: 'shell',
+        sandboxId: 'sprite-gone', // attach returns null (vanished) → reprovision path
+        spriteInstanceId: 'inst-gone',
+        sessionKey: 'pgs-agt-vanish-fail',
+      }),
+    ]);
+    const base = makeSpriteProvision(store);
+    const provision = {
+      ...base.deps,
+      host: { ...base.deps.host, provision: async () => { throw new Error('provider down'); } },
+    };
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+
+    expect(result).toMatchObject({ ok: false, reason: 'provision_failed' });
+  });
+
+  it('given a GENUINE LEGACY row (no sandboxId, not torn down) whose heal fails, should STILL resume 200 (shared fallback serves it)', async () => {
+    const { store, rows } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-legacy-heal',
+        name: 'cli',
+        agentType: 'shell',
+        sandboxId: null, // genuine legacy — never provisioned; shared fallback still serves it
+        spriteInstanceId: null,
+        spriteTornDownAt: null,
+        sessionKey: null,
+      }),
+    ]);
+    const base = makeSpriteProvision(store);
+    const provision = {
+      ...base.deps,
+      host: { ...base.deps.host, provision: async () => { throw new Error('provider down'); } },
+    };
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+
+    // Best-effort heal: the failure is swallowed, the row stays, resume is 200.
+    expect(result).toMatchObject({ ok: true, resumed: true });
+    expect([...rows.values()][0].sandboxId).toBeNull();
+  });
+
+  it('given a LIVE resumable row (attach hits, instance matches) with a failing provisioner, should resume 200 (provisioner never consulted)', async () => {
+    const { store } = makeStore([
+      makeLegacyRow({
+        id: 'agent-terminal-live-ok',
+        name: 'cli',
+        agentType: 'shell',
+        sandboxId: SESSION_SANDBOX_ID,
+        spriteInstanceId: SESSION_INSTANCE_ID,
+        sessionKey: 'pgs-agt-live-ok',
+      }),
+    ]);
+    const base = makeSpriteProvision(store);
+    const provision = {
+      ...base.deps,
+      host: { ...base.deps.host, provision: async () => { throw new Error('should never be called for a live resume'); } },
+    };
+    const deps = makeDeps({ store, spriteProvision: provision });
+
+    const result = await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'shell', actor, deps });
+
+    expect(result).toMatchObject({ ok: true, resumed: true });
+    expect(base.provisionCalls).toEqual([]);
+  });
 });
 
 describe('provisionAgentTerminalSprite — race + persistence safety (findings 1 & 2)', () => {

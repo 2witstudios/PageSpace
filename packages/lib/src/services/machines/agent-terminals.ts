@@ -42,6 +42,7 @@ import { BRANCH_REPO_PATH, type MachineActorContext } from './machine-branches';
 import { PROJECT_REPO_PATH, isPromotedProject } from './machine-project-promotion';
 import {
   provisionAgentTerminalSprite,
+  reconcileResumedSpriteInstance,
   type AgentTerminalSpriteProvisionDeps,
 } from './agent-terminal-sprites';
 import {
@@ -446,17 +447,27 @@ export type SpawnAgentTerminalResult =
  *   - provisioning unwired (a legacy consumer / test) — a legacy row, not a
  *     failed isolation, so the pre-feature shared-Sprite behaviour stays;
  *   - a chat-surface agent type that never opens a PTY;
- *   - a row already pointing at a live Sprite (probe hits), or a probe the
- *     control plane couldn't answer (leave it; the resolve path retries).
+ *   - a row already pointing at a live Sprite (probe hits, instance reconciled
+ *     per finding GG), or a probe the control plane couldn't answer (leave it;
+ *     the resolve path retries).
  * `{ ok: false }` means provisioning WAS attempted for this row and failed
- * (returned `{ ok: false }` or threw) — the caller decides what to do (a fresh
- * reservation deletes the row and fails; a resume of a pre-existing row leaves it).
+ * (returned `{ ok: false }` or threw). `reprovisionOfUnusable` tells the caller
+ * whether the row is still SERVABLE without its own Sprite: `false` for a genuine
+ * legacy row (the shared fallback still serves it — a resume heal stays 200);
+ * `true` for a torn-down or vanished row (the resolve path rejects/dead-points it),
+ * so a resume must PROPAGATE the failure (finding HH) exactly as a fresh
+ * reservation does (finding AA). The fresh-reservation caller ignores the field
+ * (it always fails + deletes the row).
  */
+type MaybeProvisionResult =
+  | { ok: true }
+  | { ok: false; reason: 'unauthorized' | 'provision_failed'; detail?: string; reprovisionOfUnusable: boolean };
+
 async function maybeProvisionSprite(
   row: MachineAgentTerminalRecord,
   userId: string,
   deps: Pick<SpawnAgentTerminalDeps, 'spriteProvision'>,
-): Promise<{ ok: true } | { ok: false; reason: 'unauthorized' | 'provision_failed'; detail?: string }> {
+): Promise<MaybeProvisionResult> {
   const provision = deps.spriteProvision;
   if (!provision) return { ok: true }; // not attempted — legacy/unwired, keep shared-Sprite behaviour
   // Only PTY-launching agent types get a Sprite; a chat-surface row (e.g.
@@ -482,12 +493,33 @@ async function maybeProvisionSprite(
       // transient blip). Leave the pointer as-is; the resolve path retries.
       return { ok: true };
     }
-    if (handle) return { ok: true }; // Live — reattach happens in the resolve path.
+    if (handle) {
+      // FINDING GG: the attached handle may be a REPLACEMENT provisioned under
+      // the same deterministic name whose identity never persisted, leaving the
+      // row on a STALE instance. Adopt the live instance BEFORE resuming, so
+      // later teardown/outbox target the VM that is actually alive. A clean
+      // adoption (or an already-matching instance) resumes; an adoption that
+      // can't land leaves the row unusable, so it propagates like a reprovision
+      // failure (finding HH).
+      const reconciled = await reconcileResumedSpriteInstance({ row, handle, deps: provision });
+      if (reconciled.ok) return { ok: true };
+      return { ok: false, reason: 'provision_failed', detail: reconciled.detail, reprovisionOfUnusable: true };
+    }
     // Vanished — fall through to reprovision under the same key. The CAS in
     // `provisionAgentTerminalSprite` uses `previousSandboxId = row.sandboxId`
     // (the stale pointer), so it overwrites it rather than racing a phantom.
   }
 
+  // FINDING HH: whether a reprovision FAILURE must PROPAGATE to the caller (403/
+  // 500) or stay a best-effort heal depends on whether the row is still SERVABLE
+  // WITHOUT its own Sprite. A genuine LEGACY row (no `sandboxId`, not torn down)
+  // resolves via the shared-Sprite fallback, so healing it is best-effort — a
+  // failure leaves it usable. A TORN-DOWN row (`spriteTornDownAt` set — the
+  // resolve path now rejects it) or a VANISHED row (had a `sandboxId` whose probe
+  // came back gone — a dead pointer) is UNSERVABLE, so its reprovision failure is
+  // fatal exactly like a fresh reservation's (finding AA): the caller must surface
+  // it, not report a false 200 resume that only fails later at realtime attach.
+  const reprovisionOfUnusable = row.sandboxId !== null || row.spriteTornDownAt !== null;
   try {
     const actor = await provision.resolveActor(userId);
     const result = await provisionAgentTerminalSprite({ row, actor, deps: provision });
@@ -497,12 +529,12 @@ async function maybeProvisionSprite(
     // removed by the caller (never a lingering shared row). Every OTHER failure
     // (clone / provision / persist / egress / liveness fence) is a genuine
     // provisioning failure.
-    if (result.reason === 'unauthorized') return { ok: false, reason: 'unauthorized', detail: result.detail };
-    return { ok: false, reason: 'provision_failed', detail: result.detail ?? result.reason };
+    if (result.reason === 'unauthorized') return { ok: false, reason: 'unauthorized', detail: result.detail, reprovisionOfUnusable };
+    return { ok: false, reason: 'provision_failed', detail: result.detail ?? result.reason, reprovisionOfUnusable };
   } catch (error) {
     // `provisionAgentTerminalSprite` already killed/enqueued any VM it created
     // before the throw (killUnreferencedOrEnqueue); we just report the failure.
-    return { ok: false, reason: 'provision_failed', detail: error instanceof Error ? error.message : String(error) };
+    return { ok: false, reason: 'provision_failed', detail: error instanceof Error ? error.message : String(error), reprovisionOfUnusable };
   }
 }
 
@@ -635,11 +667,19 @@ export async function spawnAgentTerminal({
   const existing = await deps.store.findByName(scope.scopeKey, name);
   if (existing) {
     if (existing.agentType !== resolvedType) return { ok: false, reason: 'name_in_use' };
-    // Heal a legacy/pre-existing row that never got its own Sprite; a no-op once
-    // it points at a live one. Best-effort on a RESUME: the row already existed
-    // and was resumable, so a heal-failure leaves it as-is (a legacy shared row —
-    // never a null row THIS spawn freshly reserved, which the fresh path deletes).
-    await maybeProvisionSprite(existing, actor.userId, deps);
+    // Heal a legacy/pre-existing row (finding GG reconciles a live-attach's
+    // instance; a vanished/torn-down row reprovisions). A genuine LEGACY row stays
+    // best-effort — it is still served by the shared fallback, so a heal failure
+    // leaves it as-is. But an UNUSABLE row (torn-down/vanished — the resolve path
+    // now rejects/dead-points it) whose reprovision FAILS must PROPAGATE (finding
+    // HH): surface the actionable 403/500 instead of a false 200 resume that only
+    // fails later at realtime attach. The row is LEFT in place (unlike a fresh
+    // reservation the fresh path deletes) — it is resumable config; a retry
+    // re-attempts the reprovision.
+    const healed = await maybeProvisionSprite(existing, actor.userId, deps);
+    if (!healed.ok && healed.reprovisionOfUnusable) {
+      return { ok: false, reason: healed.reason, detail: healed.detail };
+    }
     return { ok: true, id: existing.id, agentType: resolvedType, resumed: true };
   }
 
@@ -675,7 +715,13 @@ export async function spawnAgentTerminal({
       // Lost a race against a concurrent spawn of the same name.
       const reconciled = await deps.store.findByName(scope.scopeKey, name);
       if (reconciled && reconciled.agentType === resolvedType) {
-        await maybeProvisionSprite(reconciled, actor.userId, deps);
+        // Same resume contract as the `existing` path above (finding HH): an
+        // unusable row whose reprovision fails propagates; a live/legacy resume
+        // stays 200.
+        const healed = await maybeProvisionSprite(reconciled, actor.userId, deps);
+        if (!healed.ok && healed.reprovisionOfUnusable) {
+          return { ok: false, reason: healed.reason, detail: healed.detail };
+        }
         return { ok: true, id: reconciled.id, agentType: resolvedType, resumed: true };
       }
       if (reconciled) return { ok: false, reason: 'name_in_use' };
