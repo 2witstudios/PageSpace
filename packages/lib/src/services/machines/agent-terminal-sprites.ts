@@ -22,11 +22,14 @@
  * the spawn: a provisioning failure leaves the row with a NULL `sandboxId`,
  * which `resolveLocationForRow` resolves via the pre-per-session shared-Sprite
  * fallback and a later spawn re-provisions — the session is never left broken,
- * and no billing VM is ever left unreferenced (every failure after a successful
- * provision kills the Sprite via `safeKillSprite`).
+ * and no billing VM is ever left unreferenced: every failure after a successful
+ * provision routes through `reconcileBeforeKill`, which waits (bounded) for a
+ * concurrent winner before killing, and rescues the Sprite into the reclaim
+ * outbox when its cleanup kill cannot be confirmed.
  */
 
 import type { MachineHandle, MachineHost, MachineSubstrateSpec } from '../sandbox/machine-host';
+import { MachineSpriteReplacedError } from '../sandbox/machine-host';
 import type { SandboxCreateOptions } from '../sandbox/sandbox-options';
 import type { FullEgressEnablement } from '../sandbox/containment';
 import { PROJECT_REPO_PATH } from '../sandbox/sandbox-paths';
@@ -34,7 +37,6 @@ import {
   cloneAndCheckoutBranch,
   cloneRepoInto,
   propagateClaudeCredential,
-  safeKillSprite,
   type MachineActorContext,
   type SpriteCloneDeps,
 } from './machine-branches';
@@ -64,6 +66,20 @@ export interface AgentTerminalSpriteProvisionDeps extends SpriteCloneDeps {
    * kill the very VM the winner just recorded.
    */
   reloadRow: (id: string) => Promise<{ sandboxId: string | null } | null>;
+  /**
+   * Pause, injected so `reconcileBeforeKill`'s bounded winner-poll is testable
+   * against a fake clock (no real sleeps) — mirrors `PromoteProjectDeps.wait` /
+   * `awaitPromotionWinner` (machine-project-promotion.ts).
+   */
+  wait: (ms: number) => Promise<void>;
+  /**
+   * Enqueue a Sprite pointer into the reclaim outbox (`machine_sprite_reclaims`).
+   * The provisioning failure path uses it when a cleanup kill CANNOT be confirmed:
+   * the row still has a NULL `sandboxId` (the identity was never persisted), so
+   * neither the AFTER-DELETE trigger nor the tracking-row reconciler could ever
+   * discover the live, billed VM — the outbox is its only reclaim path.
+   */
+  enqueueReclaim: (input: { sandboxId: string; spriteInstanceId: string | null }) => Promise<void>;
   /** The provider-neutral Sprite lifecycle seam. */
   host: MachineHost;
   substrate: MachineSubstrateSpec;
@@ -109,54 +125,115 @@ export type ProvisionAgentTerminalSpriteResult =
       detail?: string;
     };
 
+/** How many EXTRA reloads `awaitProvisionWinner` makes after its first, and the pause between them — mirrors `PROMOTION_RACE_POLLS`/`_MS` (machine-project-promotion.ts). */
+const AGENT_TERMINAL_RACE_POLLS = 3;
+const AGENT_TERMINAL_RACE_POLL_MS = 250;
+
+/**
+ * Bounded wait for a concurrent WINNER to persist its identity onto this row —
+ * the agent-terminal twin of `awaitPromotionWinner` (machine-project-promotion.ts).
+ *
+ * `MachineHost.provision` is name-keyed, so two first spawns of the same row can
+ * hold the SAME physical Sprite; one clone can fail (the other already created
+ * the checkout) WHILE the successful caller has not yet run its persisting CAS. A
+ * single immediate reload would then see no winner and wrongly conclude the
+ * shared Sprite is unreferenced. So we re-read a bounded number of times (first
+ * read immediate, then `deps.wait` between the rest) and only give up once no
+ * winner has appeared — never longer, since a user-facing spawn is held open.
+ */
+async function awaitProvisionWinner(
+  deps: Pick<AgentTerminalSpriteProvisionDeps, 'reloadRow' | 'wait'>,
+  rowId: string,
+): Promise<{ sandboxId: string } | null> {
+  for (let attempt = 0; attempt <= AGENT_TERMINAL_RACE_POLLS; attempt += 1) {
+    const row = await deps.reloadRow(rowId).catch(() => null);
+    if (row?.sandboxId) return { sandboxId: row.sandboxId };
+    if (attempt < AGENT_TERMINAL_RACE_POLLS) await deps.wait(AGENT_TERMINAL_RACE_POLL_MS);
+  }
+  return null;
+}
+
+/**
+ * Destroy a Sprite we hold that is genuinely unreferenced (no winner recorded it)
+ * — and, when the kill CANNOT be confirmed, RESCUE its pointer into the reclaim
+ * outbox (finding Y).
+ *
+ * The provisioning row still has a NULL `sandboxId` at every call site here (the
+ * identity was never persisted, or a re-provision cleared it), so unlike a killed
+ * branch/project row there is NO AFTER-DELETE trigger and NO tracking-row
+ * reconciler that could ever find this VM. A fire-and-forget kill that swallows
+ * its error would therefore leak a billed VM forever on any provider hiccup. So:
+ * kill and check the outcome; a genuine failure enqueues the handle for the
+ * orphan reconciler's tier-A to retry. A confirmed kill (or a `MachineSpriteReplacedError`,
+ * meaning a replacement already took the name — our target is already gone) needs
+ * no enqueue.
+ */
+async function killUnreferencedOrEnqueue(
+  deps: Pick<AgentTerminalSpriteProvisionDeps, 'host' | 'enqueueReclaim'>,
+  handle: MachineHandle,
+): Promise<void> {
+  try {
+    await deps.host.kill({ machineId: handle.machineId, expectedInstanceId: handle.spriteInstanceId });
+    return; // confirmed dead
+  } catch (error) {
+    // A different VM holds this name now → our target is already gone; the
+    // newcomer has its OWN row and must not be enqueued.
+    if (error instanceof MachineSpriteReplacedError) return;
+    // Unconfirmed kill: the VM may still be alive and billing, and nothing else
+    // points at it. Enqueue it so the reconciler retries. Best-effort itself —
+    // if even the enqueue fails there is nothing more we can do here.
+    await deps
+      .enqueueReclaim({ sandboxId: handle.machineId, spriteInstanceId: handle.spriteInstanceId ?? null })
+      .catch(() => {
+        /* best-effort: the outbox insert failed too; the provisioning failure is still reported. */
+      });
+  }
+}
+
 /**
  * Reconcile against the persisted row BEFORE killing a Sprite we hold, at ANY
  * post-provision failure site (a failed clone, a failed/lost persist).
  *
  * `MachineHost.provision` is name-keyed on the row's deterministic session key,
  * so a concurrent provision of the SAME row can hand BOTH callers the SAME
- * physical Sprite. Every `safeKillSprite(handle)` that fires after a successful
- * provision is therefore unsafe on its own: if a concurrent WINNER already
- * recorded that shared Sprite on the row, `safeKillSprite` — which passes our
- * `spriteInstanceId`, the SAME instance the winner recorded — would DESTROY the
- * winner's live, referenced VM, leaving the row pointing at a dead Sprite.
+ * physical Sprite. Killing "ours" — passing the same `spriteInstanceId` the
+ * winner recorded — would DESTROY the winner's live, referenced VM, leaving the
+ * row pointing at a dead Sprite. So: wait (bounded) for the persisted winner. If
+ * the row points at a live Sprite, the session is usable and ours must NOT be
+ * destroyed — resume against it. Only a genuinely unreferenced Sprite (no winner
+ * after the bounded wait, or a different-named VM recorded under this row) is
+ * killed — via `killUnreferencedOrEnqueue`, which rescues it to the outbox if the
+ * kill cannot be confirmed.
  *
- * So: reload the persisted winner first. If the row now points at a live Sprite,
- * the session is usable and ours must NOT be destroyed — the caller resumes
- * against it (`kind: 'resumed'`). Only a genuinely unreferenced Sprite — no
- * winner pointer at all, or a different-named VM recorded under this row (a
- * theoretical case, since the name is deterministic per row) — is killed
- * (`kind: 'killed'`), after which the caller reports its own specific failure.
- *
- * This is the single reconcile-before-kill the CAS-loss path introduced (finding
- * 1), lifted so every kill site shares it (the whole class Codex flagged: branch
- * clone-fail, project clone-fail, and the persist-throw path all had the same
- * bug).
+ * This is the single reconcile-before-kill the CAS-loss path introduced, lifted
+ * so every kill site shares it (branch clone-fail, project clone-fail, and the
+ * persist-throw path all route through it).
  */
 async function reconcileBeforeKill({
   deps,
   row,
   handle,
 }: {
-  deps: Pick<AgentTerminalSpriteProvisionDeps, 'reloadRow' | 'host'>;
+  deps: Pick<AgentTerminalSpriteProvisionDeps, 'reloadRow' | 'wait' | 'host' | 'enqueueReclaim'>;
   row: Pick<MachineAgentTerminalRecord, 'id'>;
   handle: MachineHandle;
 }): Promise<{ kind: 'resumed'; sandboxId: string } | { kind: 'killed' }> {
-  const winner = await deps.reloadRow(row.id);
+  const winner = await awaitProvisionWinner(deps, row.id);
   if (winner?.sandboxId) {
     if (winner.sandboxId !== handle.machineId) {
       // A genuinely distinct VM is recorded under this row — ours is redundant
-      // and unreferenced, so it is safe to destroy.
-      await safeKillSprite(deps.host, handle);
+      // and unreferenced, so it is safe to destroy (rescued to the outbox on an
+      // unconfirmed kill).
+      await killUnreferencedOrEnqueue(deps, handle);
     }
     // else: the winner recorded the very (shared, name-keyed) Sprite we hold —
     // it is LIVE and REFERENCED; must NOT kill. Either way the row points at a
     // live Sprite, so the session is usable — resume against it.
     return { kind: 'resumed', sandboxId: winner.sandboxId };
   }
-  // No winner pointer to reconcile against — ours is the only (unreferenced)
-  // candidate, and it failed. Kill it rather than leak a billing VM.
-  await safeKillSprite(deps.host, handle);
+  // No winner after the bounded wait — ours is the only (unreferenced) candidate,
+  // and it failed. Kill it (or rescue it to the outbox) rather than leak a VM.
+  await killUnreferencedOrEnqueue(deps, handle);
   return { kind: 'killed' };
 }
 
@@ -298,9 +375,9 @@ export async function provisionAgentTerminalSprite({
   return { ok: true, sandboxId: handle.machineId, resumed: false };
 }
 
-/** The store slice `teardownProjectAgentTerminalSprites` needs — enumerate a scope's rows and CAS-delete one. */
+/** The store slice `teardownProjectAgentTerminalSprites` needs — enumerate a scope's rows and CAS-delete one (dropping or rescuing the reclaim pointer). */
 export interface TeardownProjectAgentTerminalsDeps {
-  store: Pick<MachineAgentTerminalStore, 'list' | 'removeIfSandbox'>;
+  store: Pick<MachineAgentTerminalStore, 'list' | 'removeIfSandbox' | 'removeIfSandboxToReclaim'>;
   /**
    * Identity-guarded kill of a session's OWN Sprite. `ok: true` means the target
    * is CONFIRMED gone (killed, or a replacement already took its name); `ok:
@@ -323,13 +400,21 @@ export interface TeardownProjectAgentTerminalsDeps {
  * a stale terminal row against its old checkout.
  *
  * Mirrors `removeProject`'s own-Sprite teardown and `killOwnSprite`: an
- * identity-guarded kill (via `killSprite`, best-effort), then a CAS delete
- * (`removeIfSandbox`) that BOTH prevents a stale resume (the row is gone) AND is
- * generation-safe — a row whose Sprite was re-provisioned since we listed it
- * fails the CAS, so its live replacement is left untouched. A genuine kill
- * failure leaves the row for a later machine teardown/purge to reclaim
- * (`teardownOneMachine` enumerates every live-Sprite session), the same contract
- * as `killOwnSprite`. Per-row isolated: one unreachable Sprite never skips the rest.
+ * identity-guarded kill (via `killSprite`, best-effort), then a CAS delete that
+ * BOTH prevents a stale resume (the row is gone) AND is generation-safe — a row
+ * whose Sprite was re-provisioned since we listed it fails the CAS, so its live
+ * replacement is left untouched.
+ *
+ * The row is deleted whether the kill SUCCEEDED or FAILED (finding Z): the
+ * project row is being deleted with no page trash, so `teardownRequestedAt` is
+ * never set and the orphan reconciler's tracking-row arm would NOT retry a
+ * survivor — leaving a failed kill's live Sprite billing forever AND letting a
+ * recreated same-name project resume it. Deleting the row instead routes reclaim
+ * through the outbox: on a CONFIRMED kill, `removeIfSandbox` drops the redundant
+ * pointer; on an UNCONFIRMED kill, `removeIfSandboxToReclaim` LEAVES the pointer
+ * the AFTER-DELETE trigger (0229) enqueues, so tier-A of the reconciler retries
+ * the kill. Only a row we could not even attempt (no `sandboxId` / already torn
+ * down) is skipped. Per-row isolated: one unreachable Sprite never skips the rest.
  */
 export async function teardownProjectAgentTerminalSprites({
   machineId,
@@ -345,19 +430,22 @@ export async function teardownProjectAgentTerminalSprites({
     // Only rows with a live Sprite of their OWN: a legacy/unprovisioned row has
     // nothing to kill, a torn-down one is already gone.
     if (!row.sandboxId || row.spriteTornDownAt) continue;
+    const { id, sandboxId, spriteInstanceId } = row;
     try {
-      const killed = await deps.killSprite({ sandboxId: row.sandboxId, spriteInstanceId: row.spriteInstanceId });
+      const killed = await deps.killSprite({ sandboxId, spriteInstanceId });
       if (killed.ok) {
-        await deps.store.removeIfSandbox({
-          id: row.id,
-          sandboxId: row.sandboxId,
-          spriteInstanceId: row.spriteInstanceId,
-        });
+        // Confirmed dead → CAS-delete and DROP the redundant reclaim pointer.
+        await deps.store.removeIfSandbox({ id, sandboxId, spriteInstanceId });
+      } else {
+        // Unconfirmed → CAS-delete but KEEP the pointer the trigger enqueues, so
+        // the reconciler retries the (maybe still live) Sprite. Prevents the
+        // stale-resume either way (the row is gone).
+        await deps.store.removeIfSandboxToReclaim({ id, sandboxId, spriteInstanceId });
       }
-      // else: genuine kill failure — leave the row (its Sprite may still be alive);
-      // a later machine teardown/purge reclaims it.
     } catch {
-      // Per-row best-effort — one unreachable Sprite must not skip the rest.
+      // Per-row best-effort — one unreachable Sprite must not skip the rest. The
+      // row survives here (a throw is not a definitive kill outcome); a later
+      // machine teardown/purge reclaims it.
     }
   }
 }

@@ -136,6 +136,8 @@ function buildBaseDeps(): Pick<SpawnAgentTerminalDeps & KillAgentTerminalDeps, '
       updateSpriteIdentity: async (input) => (await getMachineAgentTerminalStore()).updateSpriteIdentity(input),
       stampSpriteTornDown: async (input) => (await getMachineAgentTerminalStore()).stampSpriteTornDown(input),
       removeIfSandbox: async (input) => (await getMachineAgentTerminalStore()).removeIfSandbox(input),
+      removeIfSandboxToReclaim: async (input) => (await getMachineAgentTerminalStore()).removeIfSandboxToReclaim(input),
+      enqueueReclaim: async (input) => (await getMachineAgentTerminalStore()).enqueueReclaim(input),
       remove: async (scope, name) => (await getMachineAgentTerminalStore()).remove(scope, name),
     },
   };
@@ -280,6 +282,12 @@ function buildSpriteProvisionDeps(): NonNullable<SpawnAgentTerminalDeps['spriteP
       const row = await (await getMachineAgentTerminalStore()).findById(id);
       return row ? { sandboxId: row.sandboxId } : null;
     },
+    // Bounded winner-poll clock for reconcileBeforeKill (see awaitProvisionWinner).
+    wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    // Rescue a provisioned-but-never-persisted Sprite into the reclaim outbox when
+    // its cleanup kill cannot be confirmed — the row's sandboxId is NULL, so the
+    // trigger/tracking-row reconciler could never find it.
+    enqueueReclaim: async (input) => (await getMachineAgentTerminalStore()).enqueueReclaim(input),
     quota: {
       acquireSlot: acquireCodeExecutionSlot,
       releaseSlot: releaseCodeExecutionSlot,

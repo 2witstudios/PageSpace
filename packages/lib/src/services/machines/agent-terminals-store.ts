@@ -155,6 +155,28 @@ export interface MachineAgentTerminalStore {
    * pointer with the row (the Sprite is already confirmed dead).
    */
   removeIfSandbox(input: { id: string; sandboxId: string; spriteInstanceId: string | null }): Promise<boolean>;
+  /**
+   * Compare-and-swap removal that RESCUES the Sprite pointer instead of dropping
+   * it — the twin of `removeIfSandbox` for an UNCONFIRMED kill.
+   *
+   * Deletes the row ONLY if it still points at (`sandboxId`, `spriteInstanceId`),
+   * exactly like `removeIfSandbox`, so a concurrent re-spawn's live replacement is
+   * never stranded. But it does NOT drop the reclaim-outbox pointer the
+   * AFTER-DELETE trigger enqueues as the row goes — so a Sprite whose kill could
+   * NOT be confirmed is left for the orphan reconciler's tier-A to retry, rather
+   * than billing forever. Use `removeIfSandbox` when the kill IS confirmed (drop
+   * the redundant pointer); use this when it is not (keep it).
+   */
+  removeIfSandboxToReclaim(input: { id: string; sandboxId: string; spriteInstanceId: string | null }): Promise<boolean>;
+  /**
+   * Enqueue a Sprite pointer directly into the reclaim outbox
+   * (`machine_sprite_reclaims`) — for a Sprite that was PROVISIONED but never
+   * recorded on any row (its row still has a NULL `sandboxId`), so neither an
+   * AFTER-DELETE trigger nor the tracking-row reconciler could ever find it. The
+   * provisioning failure path uses this when a cleanup kill cannot be confirmed.
+   * Idempotent (ON CONFLICT), mirroring the trigger's own insert.
+   */
+  enqueueReclaim(input: { sandboxId: string; spriteInstanceId: string | null }): Promise<void>;
   remove(scope: AgentTerminalScopeKey, name: string): Promise<void>;
 }
 
@@ -206,7 +228,7 @@ export { isUniqueViolation };
  * the DB module graph.
  */
 export async function createDbMachineAgentTerminalStore(): Promise<MachineAgentTerminalStore> {
-  const [{ db }, { eq, and, or, lt, isNull, eqOrIsNull }, { machineAgentTerminals }, { machineSpriteReclaims }] =
+  const [{ db }, { eq, and, or, lt, isNull, eqOrIsNull, sql }, { machineAgentTerminals }, { machineSpriteReclaims }] =
     await Promise.all([
       import('@pagespace/db/db'),
       import('@pagespace/db/operators'),
@@ -339,6 +361,37 @@ export async function createDbMachineAgentTerminalStore(): Promise<MachineAgentT
         await tx.delete(machineSpriteReclaims).where(eq(machineSpriteReclaims.sandboxId, sandboxId));
         return true;
       });
+    },
+
+    async removeIfSandboxToReclaim({ id, sandboxId, spriteInstanceId }) {
+      // Same CAS delete as `removeIfSandbox`, but WITHOUT dropping the reclaim
+      // pointer: the AFTER-DELETE trigger enqueues this row's (sandboxId,
+      // spriteInstanceId) into `machine_sprite_reclaims` as the row goes, and we
+      // LEAVE it there so the orphan reconciler's tier-A retries the kill — for a
+      // Sprite whose kill could not be confirmed. No transaction/reclaim-drop.
+      const deleted = await db
+        .delete(machineAgentTerminals)
+        .where(
+          and(
+            eq(machineAgentTerminals.id, id),
+            eq(machineAgentTerminals.sandboxId, sandboxId),
+            eqOrIsNull(machineAgentTerminals.spriteInstanceId, spriteInstanceId),
+          ),
+        )
+        .returning({ id: machineAgentTerminals.id });
+      return deleted.length > 0;
+    },
+
+    async enqueueReclaim({ sandboxId, spriteInstanceId }) {
+      // Mirror the AFTER-DELETE trigger's own insert (0209/0229): idempotent on
+      // the sandboxId PK, chasing the newest instance on conflict.
+      await db
+        .insert(machineSpriteReclaims)
+        .values({ sandboxId, spriteInstanceId })
+        .onConflictDoUpdate({
+          target: machineSpriteReclaims.sandboxId,
+          set: { spriteInstanceId: sql`coalesce(${machineSpriteReclaims.spriteInstanceId}, excluded."spriteInstanceId")` },
+        });
     },
 
     async remove(scope, name) {

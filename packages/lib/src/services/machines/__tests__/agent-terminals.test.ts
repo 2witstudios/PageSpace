@@ -23,7 +23,7 @@ import {
 } from '../agent-terminal-sprites';
 import type { MachineActorContext } from '../machine-branches';
 import { deriveAgentTerminalSessionSpriteKey } from '../agent-terminal-sprite-session';
-import { type MachineHost, type MachineHandle } from '../../sandbox/machine-host';
+import { MachineSpriteReplacedError, type MachineHost, type MachineHandle } from '../../sandbox/machine-host';
 import { SANDBOX_ROOT } from '../../sandbox/sandbox-paths';
 import { BRANCH_REPO_PATH } from '../machine-branches';
 import { PROJECT_REPO_PATH } from '../machine-project-promotion';
@@ -95,6 +95,8 @@ function sameScope(a: AgentTerminalScopeKey, b: AgentTerminalScopeKey): boolean 
 
 function makeStore(seed: MachineAgentTerminalRecord[] = []) {
   const rows = new Map<string, MachineAgentTerminalRecord>();
+  // Models the machine_sprite_reclaims outbox: sandboxId -> spriteInstanceId.
+  const reclaims = new Map<string, string | null>();
   const key = (scope: AgentTerminalScopeKey, name: string) =>
     `${scope.machineId}\0${scope.projectName ?? ''}\0${scope.machineBranchId ?? ''}\0${name}`;
   for (const row of seed) rows.set(key(scopeKeyOf(row), row.name), row);
@@ -182,16 +184,34 @@ function makeStore(seed: MachineAgentTerminalRecord[] = []) {
         if (row.id === id) {
           if (row.sandboxId !== sandboxId || (row.spriteInstanceId ?? null) !== (spriteInstanceId ?? null)) return false;
           rows.delete(k);
+          // CONFIRMED kill: the trigger's rescued pointer is dropped with the row.
+          reclaims.delete(sandboxId);
           return true;
         }
       }
       return false;
     },
+    removeIfSandboxToReclaim: async ({ id, sandboxId, spriteInstanceId }) => {
+      for (const [k, row] of rows) {
+        if (row.id === id) {
+          if (row.sandboxId !== sandboxId || (row.spriteInstanceId ?? null) !== (spriteInstanceId ?? null)) return false;
+          rows.delete(k);
+          // UNCONFIRMED kill: the AFTER-DELETE trigger enqueues the pointer, and
+          // (unlike removeIfSandbox) it is LEFT for the reconciler.
+          reclaims.set(sandboxId, spriteInstanceId ?? null);
+          return true;
+        }
+      }
+      return false;
+    },
+    enqueueReclaim: async ({ sandboxId, spriteInstanceId }) => {
+      reclaims.set(sandboxId, spriteInstanceId ?? null);
+    },
     remove: async (scope, name) => {
       rows.delete(key(scope, name));
     },
   };
-  return { store, rows };
+  return { store, rows, reclaims };
 }
 
 function makeHost(over: Partial<MachineHost> = {}): MachineHost {
@@ -2097,6 +2117,8 @@ function makeSpriteProvision(
   const session = provisioned ?? makeSessionHandle();
   const provisionCalls: string[] = [];
   const attachCalls: string[] = [];
+  const waitCalls: number[] = [];
+  const enqueuedReclaims: Array<{ sandboxId: string; spriteInstanceId: string | null }> = [];
   const measuredCalls: Array<{ machineAgentTerminalId: string; machinePageId: string }> = [];
   const killed: Array<{ machineId: string; expectedInstanceId?: string | null }> = [];
   const deps: AgentTerminalSpriteProvisionDeps & { resolveActor: (u: string) => Promise<MachineActorContext> } = {
@@ -2130,6 +2152,11 @@ function makeSpriteProvision(
       const row = await store.findById(id);
       return row ? { sandboxId: row.sandboxId } : null;
     },
+    // Deterministic clock: record the pauses, never actually sleep.
+    wait: async (ms) => { waitCalls.push(ms); },
+    enqueueReclaim: async ({ sandboxId, spriteInstanceId }) => {
+      enqueuedReclaims.push({ sandboxId, spriteInstanceId });
+    },
     measureAgentTerminalStorage: async ({ machineAgentTerminalId, machinePageId }) => {
       measuredCalls.push({ machineAgentTerminalId, machinePageId });
     },
@@ -2139,7 +2166,7 @@ function makeSpriteProvision(
     resolveActor: async () => provisionActor,
     ...over,
   };
-  return { deps, provisionCalls, attachCalls, measuredCalls, killed, session };
+  return { deps, provisionCalls, attachCalls, waitCalls, enqueuedReclaims, measuredCalls, killed, session };
 }
 
 describe('spawnAgentTerminal — per-session Sprite provisioning', () => {
@@ -2355,6 +2382,83 @@ describe('provisionAgentTerminalSprite — race + persistence safety (findings 1
     const result = await provisionAgentTerminalSprite({ row, actor: provisionActor, deps });
     expect(result).toEqual({ ok: true, sandboxId: SESSION_SANDBOX_ID, resumed: true });
     expect(killed).toEqual([]);
+  });
+
+  // FINDING X: a winner that persists DURING the bounded wait (a first read saw
+  // none) must be found — not killed as unreferenced.
+  it('given no winner on the FIRST reload but one appears DURING the bounded wait, should resume against it and NOT kill', async () => {
+    const { store } = makeStore();
+    let reloads = 0;
+    const { deps, killed, waitCalls } = makeSpriteProvision(store, {
+      updateSpriteIdentity: async () => { throw new Error('db blip'); },
+      reloadRow: async () => {
+        reloads += 1;
+        // The concurrent winner persists our SAME shared Sprite only after the
+        // first (immediate) read has already come back empty.
+        return reloads >= 2 ? { sandboxId: SESSION_SANDBOX_ID } : { sandboxId: null };
+      },
+    });
+
+    const result = await provisionAgentTerminalSprite({ row: machineRow, actor: provisionActor, deps });
+    expect(result).toEqual({ ok: true, sandboxId: SESSION_SANDBOX_ID, resumed: true });
+    expect(killed).toEqual([]); // the live, referenced winner was never destroyed
+    expect(waitCalls.length).toBeGreaterThan(0); // it actually waited (deterministic clock)
+  });
+
+  it('given no winner across ALL bounded polls, should give up and kill (still no leak)', async () => {
+    const { store } = makeStore();
+    const { deps, killed, waitCalls, enqueuedReclaims } = makeSpriteProvision(store, {
+      updateSpriteIdentity: async () => { throw new Error('db blip'); },
+      reloadRow: async () => ({ sandboxId: null }), // never a winner
+    });
+
+    const result = await provisionAgentTerminalSprite({ row: machineRow, actor: provisionActor, deps });
+    expect(result).toMatchObject({ ok: false, reason: 'persist_failed' });
+    // Confirmed kill (default host.kill resolves) → nothing enqueued.
+    expect(killed).toEqual([{ machineId: SESSION_SANDBOX_ID, expectedInstanceId: SESSION_INSTANCE_ID }]);
+    expect(enqueuedReclaims).toEqual([]);
+    // It exhausted the bounded poll before giving up.
+    expect(waitCalls.length).toBe(3);
+  });
+
+  // FINDING Y: when the cleanup kill CANNOT be confirmed, the handle must be
+  // enqueued to the reclaim outbox — the row has a NULL sandboxId, so nothing
+  // else could ever find the leaked VM.
+  it('given the cleanup kill FAILS unconfirmed, should ENQUEUE the handle to the reclaim outbox', async () => {
+    const { store } = makeStore();
+    const base = makeSpriteProvision(store, {
+      updateSpriteIdentity: async () => { throw new Error('db down'); },
+      reloadRow: async () => ({ sandboxId: null }), // no winner
+    });
+    const deps = {
+      ...base.deps,
+      host: { ...base.deps.host, kill: async () => { throw new Error('control plane unreachable'); } },
+    };
+
+    const result = await provisionAgentTerminalSprite({ row: machineRow, actor: provisionActor, deps });
+    expect(result).toMatchObject({ ok: false, reason: 'persist_failed' });
+    // The (maybe still-live) VM is rescued for the reconciler's tier-A.
+    expect(base.enqueuedReclaims).toEqual([{ sandboxId: SESSION_SANDBOX_ID, spriteInstanceId: SESSION_INSTANCE_ID }]);
+  });
+
+  it('given the cleanup kill throws MachineSpriteReplacedError (target already gone), should NOT enqueue', async () => {
+    const { store } = makeStore();
+    const base = makeSpriteProvision(store, {
+      updateSpriteIdentity: async () => { throw new Error('db down'); },
+      reloadRow: async () => ({ sandboxId: null }),
+    });
+    const deps = {
+      ...base.deps,
+      host: {
+        ...base.deps.host,
+        kill: async () => { throw new MachineSpriteReplacedError(SESSION_SANDBOX_ID, SESSION_INSTANCE_ID, 'inst-newcomer'); },
+      },
+    };
+
+    const result = await provisionAgentTerminalSprite({ row: machineRow, actor: provisionActor, deps });
+    expect(result).toMatchObject({ ok: false, reason: 'persist_failed' });
+    // Our target is confirmed gone (a replacement holds the name) — nothing to reclaim.
+    expect(base.enqueuedReclaims).toEqual([]);
   });
 });
 
@@ -2655,13 +2759,18 @@ describe('teardownProjectAgentTerminalSprites — project removal tears down pro
     expect(rows.size).toBe(0);
   });
 
-  it('given the kill FAILS, keeps the row (its Sprite may still be alive; a later machine teardown/purge reclaims it)', async () => {
+  // FINDING Z: an UNCONFIRMED kill must STILL delete the row (no stale resume) and
+  // ROUTE THE POINTER THROUGH THE OUTBOX (the AFTER-DELETE trigger enqueues it,
+  // and removeIfSandboxToReclaim leaves it) so the reconciler retries — because
+  // this is a live machine page (no teardownRequestedAt), the tracking-row
+  // reconciler would otherwise never find it.
+  it('given the kill FAILS, still removes the row and rescues its pointer to the reclaim outbox', async () => {
     const live = makeLegacyRow({
       id: 'agt-p2', name: 'cli', agentType: 'shell',
       scope: 'project', projectName: PROJECT_NAME, machineBranchId: null,
       sandboxId: 'sbx-p2', spriteInstanceId: 'inst-p2',
     });
-    const { store } = makeStore([live]);
+    const { store, reclaims } = makeStore([live]);
 
     await teardownProjectAgentTerminalSprites({
       machineId: TERMINAL_ID,
@@ -2669,7 +2778,29 @@ describe('teardownProjectAgentTerminalSprites — project removal tears down pro
       deps: { store, killSprite: async () => ({ ok: false }) },
     });
 
-    expect(await store.findByName(PROJECT_SCOPE, 'cli')).not.toBeNull();
+    // Row removed → no stale resume for a recreated same-name project.
+    expect(await store.findByName(PROJECT_SCOPE, 'cli')).toBeNull();
+    // Pointer LEFT in the outbox for the reconciler to retry the kill.
+    expect(reclaims.get('sbx-p2')).toBe('inst-p2');
+  });
+
+  it('given the kill SUCCEEDS, removes the row and DROPS the redundant reclaim pointer', async () => {
+    const live = makeLegacyRow({
+      id: 'agt-p3', name: 'cli', agentType: 'shell',
+      scope: 'project', projectName: PROJECT_NAME, machineBranchId: null,
+      sandboxId: 'sbx-p3', spriteInstanceId: 'inst-p3',
+    });
+    const { store, reclaims } = makeStore([live]);
+
+    await teardownProjectAgentTerminalSprites({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      deps: { store, killSprite: async () => ({ ok: true }) },
+    });
+
+    expect(await store.findByName(PROJECT_SCOPE, 'cli')).toBeNull();
+    // Confirmed dead → no reclaim pointer left behind.
+    expect(reclaims.has('sbx-p3')).toBe(false);
   });
 
   it('never touches machine- or branch-scoped sessions, nor legacy/torn-down project rows', async () => {
