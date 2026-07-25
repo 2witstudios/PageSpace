@@ -30,25 +30,30 @@ export interface AskUserAnsweringApi {
  * Shared answer plumbing for the ask_user interactive question tool.
  *
  * A question is only answerable when its part sits on the conversation's
- * LAST message (addToolOutput only patches the last message) and the chat is
- * idle — otherwise it renders read-only (historical, mid-stream, or a later
- * message already exists).
+ * LAST message (addToolOutput only patches the last message) and the part is
+ * still pending input. We intentionally do NOT gate on transport status here:
+ * status is surface-local and can be stale/non-conversation-scoped on complex
+ * surfaces (machines/sidebar mode switches), which can incorrectly lock a
+ * valid ask_user card behind disabled options.
  */
+export function getAnswerableAskUserToolCallIds(messages: UIMessage[]): ReadonlySet<string> {
+  const ids = new Set<string>();
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== 'assistant' || !last.parts) return ids;
+
+  for (const part of last.parts) {
+    if (part.type !== ASK_USER_PART_TYPE) continue;
+    const p = part as { toolCallId: string; state?: string };
+    if (p.state === 'input-available') ids.add(p.toolCallId);
+  }
+
+  return ids;
+}
+
 export function useAskUserAnswering(params: UseAskUserAnsweringParams): AskUserAnsweringApi {
-  const { messages, status, addToolResult, wrapSend, buildBody } = params;
+  const { messages, addToolResult, wrapSend, buildBody } = params;
 
-  const answerableToolCallIds = useMemo(() => {
-    const ids = new Set<string>();
-    const last = messages[messages.length - 1];
-    if (!last || last.role !== 'assistant' || status !== 'ready' || !last.parts) return ids;
-
-    for (const part of last.parts) {
-      if (part.type !== ASK_USER_PART_TYPE) continue;
-      const p = part as { toolCallId: string; state?: string };
-      if (p.state === 'input-available') ids.add(p.toolCallId);
-    }
-    return ids;
-  }, [messages, status]);
+  const answerableToolCallIds = useMemo(() => getAnswerableAskUserToolCallIds(messages), [messages]);
 
   const submitAnswers = useCallback(
     (toolCallId: string, output: AskUserOutput) => {
