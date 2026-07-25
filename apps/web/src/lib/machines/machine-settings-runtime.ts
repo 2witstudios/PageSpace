@@ -427,16 +427,31 @@ async function teardownOneMachine(machineId: string): Promise<void> {
         ),
       );
   }
-  if (agentTerminalRows.length > 0) {
-    await db
+  // GENERATION-GUARDED intent stamp (per row, CAS on sandboxId+instance) — NOT a
+  // bulk id-only update. A concurrent re-provision can replace this row's Sprite
+  // (new sandboxId/spriteInstanceId, and `revivedAgentTerminalColumns` clears
+  // teardownRequestedAt) between our select and this write. A bulk id-only stamp
+  // would ARM that fresh, LIVE replacement for reconciliation — and the
+  // instance-guarded kill/stamp below would then no-op against the old instance,
+  // leaving the row stamped-for-teardown while pointing at a live VM the
+  // reconciler would later destroy. CASing on the ORIGINALLY-SELECTED generation
+  // means a row whose Sprite changed under us simply is NOT armed (and is fenced
+  // out of the kill loop below). Only rows we actually armed are torn down.
+  const armedAgentTerminalRows: typeof agentTerminalRows = [];
+  for (const terminal of agentTerminalRows) {
+    if (!terminal.sandboxId) continue;
+    const armed = await db
       .update(machineAgentTerminals)
       .set({ teardownRequestedAt })
       .where(
-        inArray(
-          machineAgentTerminals.id,
-          agentTerminalRows.map((terminal) => terminal.id),
+        and(
+          eq(machineAgentTerminals.id, terminal.id),
+          eq(machineAgentTerminals.sandboxId, terminal.sandboxId),
+          eqOrIsNull(machineAgentTerminals.spriteInstanceId, terminal.spriteInstanceId),
         ),
-      );
+      )
+      .returning({ id: machineAgentTerminals.id });
+    if (armed.length > 0) armedAgentTerminalRows.push(terminal);
   }
 
   const host = await getMachineHostForBranches();
@@ -511,7 +526,10 @@ async function teardownOneMachine(machineId: string): Promise<void> {
   // row here — the page-delete cascade below drops it, and its AFTER-DELETE
   // reclaim trigger only fires for an UNSTAMPED sandboxId, so stamping now means
   // the cascade won't redundantly re-enqueue an already-dead VM).
-  for (const terminal of agentTerminalRows) {
+  // Only rows we ARMED above (their generation was still the one we selected).
+  // A row whose Sprite was re-provisioned between select and stamp was fenced out
+  // — its fresh, live VM must never be killed here.
+  for (const terminal of armedAgentTerminalRows) {
     if (!terminal.sandboxId) continue;
     try {
       // Identity-guarded: the kill is name-keyed and names are reused.
