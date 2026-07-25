@@ -55,6 +55,15 @@ export interface AgentTerminalSpriteProvisionDeps extends SpriteCloneDeps {
     egressPolicyToken: string | null;
     now: Date;
   }) => Promise<boolean>;
+  /**
+   * Re-read the row's persisted Sprite pointer, to RECONCILE a lost provisioning
+   * race against the winner BEFORE killing — the agent-terminal twin of
+   * `reconcileProvisionCollision` (machine-branches.ts). `MachineHost.provision`
+   * is name-keyed, so two concurrent provisions of the same unprovisioned row
+   * (same derived key) can hold the SAME physical Sprite; the CAS loser must not
+   * kill the very VM the winner just recorded.
+   */
+  reloadRow: (id: string) => Promise<{ sandboxId: string | null } | null>;
   /** The provider-neutral Sprite lifecycle seam. */
   host: MachineHost;
   substrate: MachineSubstrateSpec;
@@ -73,7 +82,18 @@ export interface AgentTerminalSpriteProvisionDeps extends SpriteCloneDeps {
 
 export type ProvisionAgentTerminalSpriteResult =
   | { ok: true; sandboxId: string; resumed: boolean }
-  | { ok: false; reason: 'egress_denied' | 'project_not_found' | 'branch_not_found' | 'provision_failed' | 'clone_failed' | 'race_lost'; detail?: string };
+  | {
+      ok: false;
+      reason:
+        | 'egress_denied'
+        | 'project_not_found'
+        | 'branch_not_found'
+        | 'provision_failed'
+        | 'clone_failed'
+        | 'persist_failed'
+        | 'race_lost';
+      detail?: string;
+    };
 
 /**
  * Provision (or resume) this session's OWN Sprite and record it on the row.
@@ -152,20 +172,47 @@ export async function provisionAgentTerminalSprite({
 
   // Persist the identity FIRST (before the credential copy), under a CAS on the
   // row's CURRENT sandboxId — so a concurrent provision of the same
-  // unprovisioned row cannot both win. The loser kills its now-redundant Sprite.
-  const recorded = await deps.updateSpriteIdentity({
-    id: row.id,
-    previousSandboxId: row.sandboxId,
-    sessionKey,
-    sandboxId: handle.machineId,
-    spriteInstanceId: handle.spriteInstanceId ?? null,
-    egressPolicyToken: handle.egressPolicyToken ?? null,
-    now: deps.now(),
-  });
+  // unprovisioned row cannot both win.
+  let recorded: boolean;
+  try {
+    recorded = await deps.updateSpriteIdentity({
+      id: row.id,
+      previousSandboxId: row.sandboxId,
+      sessionKey,
+      sandboxId: handle.machineId,
+      spriteInstanceId: handle.spriteInstanceId ?? null,
+      egressPolicyToken: handle.egressPolicyToken ?? null,
+      now: deps.now(),
+    });
+  } catch (error) {
+    // FINDING 2: a transient DB error here would otherwise escape (swallowed by
+    // `maybeProvisionSprite`) leaving the Sprite ALIVE with a NULL row pointer —
+    // billing forever, and invisible to the reclaim trigger (which needs a
+    // non-null sandboxId). Kill the VM we just provisioned before reporting the
+    // failure; the row keeps its null pointer and a later spawn re-provisions.
+    await safeKillSprite(deps.host, handle);
+    return { ok: false, reason: 'persist_failed', detail: error instanceof Error ? error.message : String(error) };
+  }
   if (!recorded) {
-    // Another provision recorded a Sprite for this row first. Ours is redundant.
-    // If the winner shares our exact (name-keyed) Sprite, killing by instance id
-    // would be a no-op guard; if it is a different VM, ours must die.
+    // FINDING 1: another provision recorded a Sprite for this row first, so our
+    // CAS lost. `provision` is name-keyed, so the winner may hold our EXACT
+    // physical Sprite — and `safeKillSprite` passes our `spriteInstanceId`, which
+    // for a shared name-keyed VM is the SAME instance the winner recorded, so a
+    // blind kill would DESTROY the winner's live, referenced Sprite. Reconcile
+    // against the persisted winner first (mirrors `reconcileProvisionCollision`):
+    // only kill when the winner recorded a genuinely DIFFERENT VM.
+    const winner = await deps.reloadRow(row.id);
+    if (winner?.sandboxId) {
+      if (winner.sandboxId !== handle.machineId) {
+        // A genuinely distinct VM won the row — ours is redundant and unreferenced.
+        await safeKillSprite(deps.host, handle);
+      }
+      // else: the winner recorded the very (shared, name-keyed) Sprite we hold —
+      // it is LIVE and REFERENCED; must NOT kill. Resume against it.
+      return { ok: true, sandboxId: winner.sandboxId, resumed: true };
+    }
+    // No winner pointer to reconcile against (unexpected after a CAS-loss) —
+    // best-effort kill ours rather than leak it.
     await safeKillSprite(deps.host, handle);
     return { ok: false, reason: 'race_lost' };
   }

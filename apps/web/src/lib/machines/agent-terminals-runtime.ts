@@ -275,6 +275,10 @@ function buildSpriteProvisionDeps(): NonNullable<SpawnAgentTerminalDeps['spriteP
     resolveBranchName: async (machineBranchId) =>
       (await (await getMachineBranchStore()).findById(machineBranchId))?.branchName ?? null,
     updateSpriteIdentity: async (input) => (await getMachineAgentTerminalStore()).updateSpriteIdentity(input),
+    reloadRow: async (id) => {
+      const row = await (await getMachineAgentTerminalStore()).findById(id);
+      return row ? { sandboxId: row.sandboxId } : null;
+    },
     quota: {
       acquireSlot: acquireCodeExecutionSlot,
       releaseSlot: releaseCodeExecutionSlot,

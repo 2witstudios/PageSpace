@@ -394,13 +394,35 @@ async function maybeProvisionSprite(
 ): Promise<void> {
   const provision = deps.spriteProvision;
   if (!provision) return;
-  // A row already pointing at a live Sprite is reattached to by the resolve
-  // path — never re-provisioned here (that would orphan the live VM).
-  if (row.sandboxId && !row.spriteTornDownAt) return;
   // Only PTY-launching agent types get a Sprite; a chat-surface row (e.g.
   // `pagespace`) never opens a PTY, so provisioning one for it would be a
   // billing VM nothing ever attaches to.
   if (!isAgentRuntimeType(row.agentType) || !isPtyAgentType(row.agentType)) return;
+
+  // FINDING 4: a row pointing at a Sprite we still BELIEVE is live is not proof
+  // the VM still exists — a provider can destroy it out from under us. PROBE it
+  // with `host.attach` (mirrors spawnBranch's vanished-Sprite path): a live
+  // handle means reattach (the resolve path opens the PTY), a null means the VM
+  // vanished and we must fall through to reprovision under the SAME key,
+  // overwriting the stale pointer via the CAS. Without the probe, a destroyed
+  // Sprite would make `getSprite` fail in the realtime bridge on every later
+  // connect, and every re-spawn would false-succeed forever.
+  if (row.sandboxId && !row.spriteTornDownAt) {
+    let handle: MachineHandle | null;
+    try {
+      handle = await provision.host.attach({ machineId: row.sandboxId });
+    } catch {
+      // Control plane unreachable — we cannot tell whether the VM is alive, so
+      // we must NOT reprovision blind (that could duplicate a live VM on a
+      // transient blip). Leave the pointer as-is; the resolve path retries.
+      return;
+    }
+    if (handle) return; // Live — reattach happens in the resolve path.
+    // Vanished — fall through to reprovision under the same key. The CAS in
+    // `provisionAgentTerminalSprite` uses `previousSandboxId = row.sandboxId`
+    // (the stale pointer), so it overwrites it rather than racing a phantom.
+  }
+
   try {
     const actor = await provision.resolveActor(userId);
     await provisionAgentTerminalSprite({ row, actor, deps: provision });
