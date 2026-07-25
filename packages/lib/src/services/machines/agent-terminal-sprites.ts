@@ -33,7 +33,6 @@ import { MachineSpriteReplacedError } from '../sandbox/machine-host';
 import type { SandboxCreateOptions } from '../sandbox/sandbox-options';
 import type { FullEgressEnablement } from '../sandbox/containment';
 import type { CanRunCodeInput, CanRunCodeResult } from '../sandbox/can-run-code';
-import { SANDBOX_TIMEOUT_MS } from '../sandbox/execution-policy';
 import { PROJECT_REPO_PATH } from '../sandbox/sandbox-paths';
 import {
   cloneAndCheckoutBranch,
@@ -71,12 +70,6 @@ export interface AgentTerminalSpriteProvisionDeps extends SpriteCloneDeps {
    * see `reconcileBeforeKill`.
    */
   reloadRow: (id: string) => Promise<{ sandboxId: string | null; spriteInstanceId: string | null } | null>;
-  /**
-   * Pause, injected so `reconcileBeforeKill`'s bounded winner-poll is testable
-   * against a fake clock (no real sleeps) — mirrors `PromoteProjectDeps.wait` /
-   * `awaitPromotionWinner` (machine-project-promotion.ts).
-   */
-  wait: (ms: number) => Promise<void>;
   /**
    * Enqueue a Sprite pointer into the reclaim outbox (`machine_sprite_reclaims`).
    * The provisioning failure path uses it when a cleanup kill CANNOT be confirmed:
@@ -145,72 +138,6 @@ export type ProvisionAgentTerminalSpriteResult =
     };
 
 /**
- * Poll interval and total deadline for `reconcileBeforeKill`'s collision
- * winner-wait.
- *
- * This is a BACKGROUND reconcile — `maybeProvisionSprite` swallows the result and
- * never blocks the user-facing spawn — so it can wait FAR longer than any UX
- * budget, and it MUST: the wait has to OUTLAST a concurrent winner's CLONE. When
- * two spawns of the same row share a name-keyed Sprite, the loser's redundant
- * clone fails almost immediately ("destination already exists" — the winner
- * already created the checkout), but the WINNER's clone runs up to
- * `SANDBOX_TIMEOUT_MS` before it reaches `updateSpriteIdentity` and records its
- * generation. The old sub-second deadline (3 × 250ms = 750ms) was far shorter
- * than a clone, so the fast-failer gave up and KILLED the shared Sprite while the
- * winner was still cloning — failing both provisions, or leaving a persisted
- * pointer to a killed VM. So the deadline is the clone timeout PLUS a margin for
- * the winner's checkout + identity write, polled at a few-second interval.
- *
- * NOT a DB advisory lock across the clone (that would hold a lock across a
- * multi-second external clone — worse). A false-kill despite this is still
- * recoverable (the next spawn re-provisions), and a genuine no-winner kill that
- * cannot be confirmed is rescued to the outbox (finding Y) — but this deadline
- * removes the common clone-scale false-kill entirely.
- */
-const AGENT_TERMINAL_RACE_POLL_MS = 3_000;
-/** Clone timeout + a margin for the winner's checkout + identity write. */
-const AGENT_TERMINAL_RACE_DEADLINE_MS = SANDBOX_TIMEOUT_MS + 30_000;
-/** EXTRA reloads after the first — enough that the total wait (`× AGENT_TERMINAL_RACE_POLL_MS`) covers the deadline. Exported for the tests to assert the extended budget. */
-export const AGENT_TERMINAL_RACE_POLLS = Math.ceil(AGENT_TERMINAL_RACE_DEADLINE_MS / AGENT_TERMINAL_RACE_POLL_MS);
-
-/**
- * Bounded wait for a concurrent WINNER that recorded OUR GENERATION onto this row
- * — the agent-terminal twin of `awaitPromotionWinner` (machine-project-promotion.ts).
- *
- * `MachineHost.provision` is name-keyed, so two first spawns of the same row can
- * hold the SAME physical Sprite; one clone can fail (the other already created
- * the checkout) WHILE the successful caller has not yet run its persisting CAS. A
- * single immediate reload would then see no winner and wrongly conclude the
- * shared Sprite is unreferenced. So we re-read a bounded number of times (first
- * read immediate, then `deps.wait` between the rest).
- *
- * A row counts as a WINNER only when its `spriteInstanceId` MATCHES `ourInstance`
- * (both non-null) — the generation of the handle WE hold (finding Q). In the true
- * concurrent race both callers share the SAME name-keyed physical VM, so same
- * instance ⇒ genuine shared winner. But when HEALING a vanished Sprite the row
- * already carries a non-null `sandboxId` (the reused deterministic name) with the
- * OLD, STALE instance; a reprovision whose clone/persist failed before recording
- * the replacement would otherwise make a name-only check mistake that stale
- * pointer for a winner and falsely resume against a checkout that may not exist.
- * Matching on the instance rejects it. A null `ourInstance` can never be proven a
- * winner — fail closed (never match).
- */
-async function awaitProvisionWinner(
-  deps: Pick<AgentTerminalSpriteProvisionDeps, 'reloadRow' | 'wait'>,
-  rowId: string,
-  ourInstance: string | null,
-): Promise<{ sandboxId: string } | null> {
-  for (let attempt = 0; attempt <= AGENT_TERMINAL_RACE_POLLS; attempt += 1) {
-    const row = await deps.reloadRow(rowId).catch(() => null);
-    if (row?.sandboxId && ourInstance !== null && row.spriteInstanceId === ourInstance) {
-      return { sandboxId: row.sandboxId };
-    }
-    if (attempt < AGENT_TERMINAL_RACE_POLLS) await deps.wait(AGENT_TERMINAL_RACE_POLL_MS);
-  }
-  return null;
-}
-
-/**
  * Destroy a Sprite we hold that is genuinely unreferenced (no winner recorded it)
  * — and, when the kill CANNOT be confirmed, RESCUE its pointer into the reclaim
  * outbox (finding Y).
@@ -251,34 +178,44 @@ async function killUnreferencedOrEnqueue(
  * Reconcile against the persisted row BEFORE killing a Sprite we hold, at ANY
  * post-provision failure site (a failed clone, a failed/lost persist).
  *
+ * A SINGLE immediate reload — no polling, no wait — exactly like the proven
+ * branch path (`reconcileProvisionCollision`, machine-branches.ts). This runs
+ * INSIDE the awaited spawn (`maybeProvisionSprite` ← `spawnAgentTerminal` ← the
+ * POST request), so it MUST stay request-cheap: a bounded wait for a
+ * still-cloning winner would hold the request for clone-scale time and blow the
+ * HTTP budget. The rare concurrent-identical-spawn race — where a winner sharing
+ * our name-keyed Sprite has not yet recorded its identity when we read — is
+ * accepted, and is strictly safer here than for branches: an unconfirmed kill of
+ * a shared Sprite is rescued to the reclaim outbox (finding Y), and a
+ * subsequently-vanished pointer self-heals on the next spawn.
+ *
  * `MachineHost.provision` is name-keyed on the row's deterministic session key,
  * so a concurrent provision of the SAME row can hand BOTH callers the SAME
- * physical Sprite. Killing "ours" — passing the same `spriteInstanceId` the
- * winner recorded — would DESTROY the winner's live, referenced VM. So: wait
- * (bounded) for a winner that recorded OUR GENERATION (same `spriteInstanceId` —
- * see `awaitProvisionWinner`). If one exists, the row points at the very live VM
- * we hold — resume, do NOT kill. Otherwise (no winner, or the row holds only a
- * STALE pre-reprovision instance) our Sprite is unreferenced for this generation
- * — kill it via `killUnreferencedOrEnqueue`, which rescues it to the outbox if
- * the kill cannot be confirmed.
+ * physical Sprite. A row is a WINNER only when its `spriteInstanceId` MATCHES the
+ * instance of the handle WE hold (both non-null — finding Q): the true race
+ * shares one physical VM ⇒ same instance ⇒ resume, do NOT kill. A different or
+ * absent instance — including a vanished-heal row still carrying its OLD, STALE
+ * instance under the reused name — is NOT our generation, so ours is unreferenced
+ * and is killed via `killUnreferencedOrEnqueue` (which enqueues it to the outbox
+ * on an unconfirmed kill).
  *
- * This is the single reconcile-before-kill the CAS-loss path introduced, lifted
- * so every kill site shares it (branch clone-fail, project clone-fail, and the
- * persist-throw path all route through it).
+ * The single reconcile-before-kill the CAS-loss path introduced, lifted so every
+ * kill site shares it (branch clone-fail, project clone-fail, persist-throw).
  */
 async function reconcileBeforeKill({
   deps,
   row,
   handle,
 }: {
-  deps: Pick<AgentTerminalSpriteProvisionDeps, 'reloadRow' | 'wait' | 'host' | 'enqueueReclaim'>;
+  deps: Pick<AgentTerminalSpriteProvisionDeps, 'reloadRow' | 'host' | 'enqueueReclaim'>;
   row: Pick<MachineAgentTerminalRecord, 'id'>;
   handle: MachineHandle;
 }): Promise<{ kind: 'resumed'; sandboxId: string } | { kind: 'killed' }> {
-  const winner = await awaitProvisionWinner(deps, row.id, handle.spriteInstanceId ?? null);
-  if (winner) {
-    // The row records OUR instance — it is the live, referenced VM we hold (a
-    // genuine shared winner). Must NOT kill; resume against it.
+  const winner = await deps.reloadRow(row.id).catch(() => null);
+  const ourInstance = handle.spriteInstanceId ?? null;
+  if (winner?.sandboxId && ourInstance !== null && winner.spriteInstanceId === ourInstance) {
+    // The row records OUR instance — the live, referenced VM we hold (a genuine
+    // shared winner). Must NOT kill; resume against it.
     return { kind: 'resumed', sandboxId: winner.sandboxId };
   }
   // No row records our generation — no winner, or only a STALE pre-reprovision

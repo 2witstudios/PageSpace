@@ -290,8 +290,6 @@ function buildSpriteProvisionDeps(): NonNullable<SpawnAgentTerminalDeps['spriteP
       const page = await db.query.pages.findFirst({ where: eq(pages.id, machineId), columns: { driveId: true } });
       return page?.driveId ?? null;
     },
-    // Bounded winner-poll clock for reconcileBeforeKill (see awaitProvisionWinner).
-    wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     // Rescue a provisioned-but-never-persisted Sprite into the reclaim outbox when
     // its cleanup kill cannot be confirmed — the row's sandboxId is NULL, so the
     // trigger/tracking-row reconciler could never find it.

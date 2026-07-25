@@ -19,7 +19,6 @@ import type { MachineAgentTerminalStore, MachineAgentTerminalRecord, AgentTermin
 import {
   provisionAgentTerminalSprite,
   teardownProjectAgentTerminalSprites,
-  AGENT_TERMINAL_RACE_POLLS,
   type AgentTerminalSpriteProvisionDeps,
 } from '../agent-terminal-sprites';
 import type { MachineActorContext } from '../machine-branches';
@@ -2118,7 +2117,6 @@ function makeSpriteProvision(
   const session = provisioned ?? makeSessionHandle();
   const provisionCalls: string[] = [];
   const attachCalls: string[] = [];
-  const waitCalls: number[] = [];
   const enqueuedReclaims: Array<{ sandboxId: string; spriteInstanceId: string | null }> = [];
   const measuredCalls: Array<{ machineAgentTerminalId: string; machinePageId: string }> = [];
   const killed: Array<{ machineId: string; expectedInstanceId?: string | null }> = [];
@@ -2156,8 +2154,6 @@ function makeSpriteProvision(
     // Authorized by default; override to exercise the code-execution gate.
     authorize: async () => ({ ok: true }),
     resolveDriveId: async () => 'drive-1',
-    // Deterministic clock: record the pauses, never actually sleep.
-    wait: async (ms) => { waitCalls.push(ms); },
     enqueueReclaim: async ({ sandboxId, spriteInstanceId }) => {
       enqueuedReclaims.push({ sandboxId, spriteInstanceId });
     },
@@ -2170,7 +2166,7 @@ function makeSpriteProvision(
     resolveActor: async () => provisionActor,
     ...over,
   };
-  return { deps, provisionCalls, attachCalls, waitCalls, enqueuedReclaims, measuredCalls, killed, session };
+  return { deps, provisionCalls, attachCalls, enqueuedReclaims, measuredCalls, killed, session };
 }
 
 describe('spawnAgentTerminal — per-session Sprite provisioning', () => {
@@ -2424,58 +2420,36 @@ describe('provisionAgentTerminalSprite — race + persistence safety (findings 1
     expect(killed).toEqual([]);
   });
 
-  // FINDING X: a winner that persists DURING the bounded wait (a first read saw
-  // none) must be found — not killed as unreferenced.
-  it('given no winner on the FIRST reload but one appears DURING the bounded wait, should resume against it and NOT kill', async () => {
+  // The collision reconcile is a SINGLE immediate reload (branch model) — no
+  // polling, no wait dep — so it never holds the awaited POST request for
+  // clone-scale time. A winner already present on that one read (recording OUR
+  // generation) is resumed against.
+  it('given a winner already present on the single reload (OUR instance), should resume against it and NOT kill', async () => {
     const { store } = makeStore();
     let reloads = 0;
-    const { deps, killed, waitCalls } = makeSpriteProvision(store, {
+    const { deps, killed } = makeSpriteProvision(store, {
       updateSpriteIdentity: async () => { throw new Error('db blip'); },
       reloadRow: async () => {
         reloads += 1;
-        // The concurrent winner persists our SAME shared Sprite (same instance)
-        // only after the first (immediate) read has already come back empty.
-        return reloads >= 2
-          ? { sandboxId: SESSION_SANDBOX_ID, spriteInstanceId: SESSION_INSTANCE_ID }
-          : { sandboxId: null, spriteInstanceId: null };
+        return { sandboxId: SESSION_SANDBOX_ID, spriteInstanceId: SESSION_INSTANCE_ID };
       },
     });
 
     const result = await provisionAgentTerminalSprite({ row: machineRow, actor: provisionActor, deps });
     expect(result).toEqual({ ok: true, sandboxId: SESSION_SANDBOX_ID, resumed: true });
     expect(killed).toEqual([]); // the live, referenced winner was never destroyed
-    expect(waitCalls.length).toBeGreaterThan(0); // it actually waited (deterministic clock)
+    expect(reloads).toBe(1); // exactly ONE reload — no polling, request-safe
   });
 
-  // A winner whose clone runs LONGER than the OLD 750ms deadline (3 × 250ms) must
-  // still be found — the wait now spans clone scale, so a fast-failing racer no
-  // longer kills the shared Sprite while the winner is still cloning.
-  it('given a winner that persists only AFTER the old 750ms deadline (still cloning), should wait for it and resume — never kill the shared Sprite', async () => {
+  it('given no winner on the single reload, should kill immediately (one reload, no wait) — no clone-scale hold', async () => {
     const { store } = makeStore();
     let reloads = 0;
-    const { deps, killed, waitCalls } = makeSpriteProvision(store, {
+    const { deps, killed, enqueuedReclaims } = makeSpriteProvision(store, {
       updateSpriteIdentity: async () => { throw new Error('db blip'); },
       reloadRow: async () => {
         reloads += 1;
-        // The winner's clone is still running past the old 3-poll deadline; it
-        // records its (SAME) generation only on the 10th read.
-        return reloads >= 10
-          ? { sandboxId: SESSION_SANDBOX_ID, spriteInstanceId: SESSION_INSTANCE_ID }
-          : { sandboxId: null, spriteInstanceId: null };
+        return { sandboxId: null, spriteInstanceId: null };
       },
-    });
-
-    const result = await provisionAgentTerminalSprite({ row: machineRow, actor: provisionActor, deps });
-    expect(result).toEqual({ ok: true, sandboxId: SESSION_SANDBOX_ID, resumed: true });
-    expect(killed).toEqual([]); // the shared Sprite the winner is cloning into was NOT killed
-    expect(waitCalls.length).toBeGreaterThan(3); // it waited well past the old 750ms deadline
-  });
-
-  it('given no winner across the FULL clone-scale window, should give up and kill only after the extended deadline (still no leak)', async () => {
-    const { store } = makeStore();
-    const { deps, killed, waitCalls, enqueuedReclaims } = makeSpriteProvision(store, {
-      updateSpriteIdentity: async () => { throw new Error('db blip'); },
-      reloadRow: async () => ({ sandboxId: null, spriteInstanceId: null }), // never a winner
     });
 
     const result = await provisionAgentTerminalSprite({ row: machineRow, actor: provisionActor, deps });
@@ -2483,9 +2457,7 @@ describe('provisionAgentTerminalSprite — race + persistence safety (findings 1
     // Confirmed kill (default host.kill resolves) → nothing enqueued.
     expect(killed).toEqual([{ machineId: SESSION_SANDBOX_ID, expectedInstanceId: SESSION_INSTANCE_ID }]);
     expect(enqueuedReclaims).toEqual([]);
-    // It exhausted the FULL clone-scale poll budget before giving up — not 750ms.
-    expect(waitCalls.length).toBe(AGENT_TERMINAL_RACE_POLLS);
-    expect(AGENT_TERMINAL_RACE_POLLS).toBeGreaterThan(3);
+    expect(reloads).toBe(1); // exactly ONE reload — no clone-scale poll
   });
 
   // FINDING Y: when the cleanup kill CANNOT be confirmed, the handle must be
