@@ -38,6 +38,24 @@ export function splitToolsForExposure(
 }
 
 /**
+ * The catalog tool_search is allowed to return.
+ *
+ * Always-upfront tools are omitted. They are already handed to the model with full
+ * schemas and are deliberately NOT in execute_tool's dispatch map, so surfacing them
+ * here would invite a dead-end `execute_tool({tool_name: 'generate_image'})` —
+ * TOOL_DISCOVERY_PROMPT instructs the model to run anything it discovers that way.
+ * Core tools stay searchable: they are directly callable, so a lookup is harmless.
+ */
+export function selectToolSearchCatalog(
+  tools: ToolSet,
+  alwaysUpfront: ReadonlySet<string> = new Set(),
+): ToolSet {
+  return Object.fromEntries(
+    Object.entries(tools).filter(([name]) => !alwaysUpfront.has(name))
+  ) as ToolSet;
+}
+
+/**
  * Decide how an agent's tools are presented to the model.
  *
  * - `upfront` (default): every tool is handed to the model with its full schema.
@@ -69,9 +87,7 @@ export function applyToolExposureMode(
 
   // Tools forced upfront (e.g. the web_search runtime override) are excluded from
   // both the deferral split and the searchable catalog.
-  const deferrable = Object.fromEntries(
-    Object.entries(tools).filter(([name]) => !alwaysUpfront.has(name))
-  ) as ToolSet;
+  const deferrable = selectToolSearchCatalog(tools, alwaysUpfront);
 
   const nonCoreTools = Object.fromEntries(
     Object.entries(deferrable).filter(([name]) => !CORE_TOOL_NAMES.has(name))

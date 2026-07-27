@@ -53,7 +53,7 @@ import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree
 import { getModelCapabilities, DEFAULT_IMAGE_MODEL } from '@/lib/ai/core/model-capabilities';
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName, sanitizeToolNamesForProvider } from '@/lib/ai/core/mcp-tool-converter';
 import { getUserPersonalization, getUserTimezone } from '@/lib/ai/core/personalization-utils';
-import { splitToolsForExposure } from '@/lib/ai/tools/tool-exposure';
+import { splitToolsForExposure, selectToolSearchCatalog } from '@/lib/ai/tools/tool-exposure';
 import { createExecuteTool } from '@/lib/ai/tools/execute-tool';
 import { db } from '@pagespace/db/db'
 import { eq, and, desc, gt, lt, ne } from '@pagespace/db/operators'
@@ -874,7 +874,7 @@ MENTION PROCESSING:
 
     let finalTools: ToolSet = {
       ...coreTools,
-      tool_search: createToolSearchTool(filteredAllTools),
+      tool_search: createToolSearchTool(selectToolSearchCatalog(filteredAllTools, ALWAYS_UPFRONT_TOOLS)),
       execute_tool: createExecuteTool(nonCoreTools),
     };
 

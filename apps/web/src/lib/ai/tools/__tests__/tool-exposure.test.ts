@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import type { Tool, ToolSet } from 'ai';
-import { applyToolExposureMode, splitToolsForExposure } from '../tool-exposure';
+import { applyToolExposureMode, splitToolsForExposure, selectToolSearchCatalog } from '../tool-exposure';
 import { CORE_TOOL_NAMES } from '../../core/stub-tools';
 
 // A minimal but real tool definition (matches the AI SDK Tool shape closely enough
@@ -97,6 +97,71 @@ describe('splitToolsForExposure', () => {
     const nonCoreNames = Object.keys(nonCoreTools);
     expect(coreNames.filter((n) => nonCoreNames.includes(n))).toEqual([]);
     expect([...coreNames, ...nonCoreNames].sort()).toEqual(Object.keys(tools).sort());
+  });
+});
+
+describe('selectToolSearchCatalog', () => {
+  it('omits always-upfront tools so they are never discovered as execute_tool targets', () => {
+    // TOOL_DISCOVERY_PROMPT tells the model to run anything it discovers via
+    // execute_tool. An always-upfront tool is NOT in execute_tool's dispatch map,
+    // so leaving it in the searchable catalog invites a dead-end call — the same
+    // "advertised but not callable" failure this module exists to prevent.
+    const tools: ToolSet = {
+      read_page: makeTool('Read a page'), // core
+      generate_image: makeTool('Generate an image'), // always-upfront
+      web_search: makeTool('Search the web'), // always-upfront
+      list_agents: makeTool('List agents'), // non-core
+    } as ToolSet;
+
+    const catalog = selectToolSearchCatalog(tools, new Set(['web_search', 'generate_image']));
+
+    expect(Object.keys(catalog).sort()).toEqual(['list_agents', 'read_page']);
+  });
+
+  it('keeps core tools searchable (they carry schemas the model may still want)', () => {
+    const tools: ToolSet = {
+      read_page: makeTool('Read a page'),
+      list_agents: makeTool('List agents'),
+    } as ToolSet;
+
+    expect(Object.keys(selectToolSearchCatalog(tools, new Set(['web_search'])))).toEqual([
+      'read_page',
+      'list_agents',
+    ]);
+  });
+
+  it('returns the full set for an empty or omitted alwaysUpfront', () => {
+    const tools = sampleTools();
+
+    expect(Object.keys(selectToolSearchCatalog(tools, new Set()))).toEqual(Object.keys(tools));
+    expect(Object.keys(selectToolSearchCatalog(tools))).toEqual(Object.keys(tools));
+  });
+
+  it('returns an empty catalog for an empty tool set', () => {
+    expect(selectToolSearchCatalog({} as ToolSet, new Set(['web_search']))).toEqual({});
+  });
+
+  it('never surfaces a tool that is absent from the execute_tool dispatch map', () => {
+    // Ties the two halves together: everything left in the catalog must be either a
+    // core tool (callable directly) or present in nonCoreTools (callable via
+    // execute_tool). Nothing may be discoverable yet unreachable.
+    const tools: ToolSet = {
+      read_page: makeTool('Read a page'),
+      generate_image: makeTool('Generate an image'),
+      list_agents: makeTool('List agents'),
+    } as ToolSet;
+    const alwaysUpfront = new Set(['generate_image']);
+
+    const { coreTools, nonCoreTools } = splitToolsForExposure(tools, alwaysUpfront);
+    const catalog = selectToolSearchCatalog(tools, alwaysUpfront);
+
+    for (const name of Object.keys(catalog)) {
+      const reachable = CORE_TOOL_NAMES.has(name) || name in nonCoreTools;
+      expect(reachable, `${name} is searchable but unreachable`).toBe(true);
+    }
+    // generate_image stays reachable — directly, as a top-level tool.
+    expect(coreTools.generate_image).toBeDefined();
+    expect(catalog.generate_image).toBeUndefined();
   });
 });
 
