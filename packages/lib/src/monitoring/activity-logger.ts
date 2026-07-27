@@ -14,9 +14,9 @@ import { createId } from '@paralleldrive/cuid2';
 import { createHash, randomBytes } from 'crypto';
 import { desc, isNotNull, sql } from 'drizzle-orm';
 import { stableStringify } from '../utils/stable-stringify';
-import { isPageIdForeignKeyError } from './activity-log-errors';
 import { classifyProcessing } from '../compliance/art30/classify-processing';
 import { decryptField } from '../encryption/field-crypto';
+import { isPageIdForeignKeyError } from './activity-log-errors';
 
 /**
  * Advisory lock key for serializing activity log hash chain writes.

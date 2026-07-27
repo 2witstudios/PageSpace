@@ -14,7 +14,8 @@ const PAGE_ID_CONSTRAINT = 'activity_logs_pageId_pages_id_fk';
 /**
  * How many `.cause` links to follow. Drizzle wraps the driver error exactly
  * one level deep ("Failed query: …" with the pg error under `.cause`); a small
- * fixed budget absorbs any extra wrapping without walking an unbounded chain.
+ * fixed budget absorbs any extra wrapping without walking an unbounded chain,
+ * and bounds cyclic `cause` chains without needing to track visited links.
  */
 const MAX_CAUSE_DEPTH = 5;
 
@@ -49,15 +50,11 @@ function isPageIdFkLink(fields: PgErrorFields): boolean {
  * Walks up to {@link MAX_CAUSE_DEPTH} cause links and tolerates cyclic chains.
  */
 export function isPageIdForeignKeyError(error: unknown): boolean {
-  const seen = new Set<object>();
   let current: unknown = error;
 
   for (let depth = 0; depth <= MAX_CAUSE_DEPTH; depth++) {
     const fields = asPgErrorFields(current);
     if (!fields) return false;
-    if (seen.has(fields as object)) return false;
-    seen.add(fields as object);
-
     if (isPageIdFkLink(fields)) return true;
     current = fields.cause;
   }

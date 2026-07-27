@@ -269,6 +269,18 @@ describe('pickConversationTable', () => {
     });
   });
 
+  it('routes global conversations with no pageId to the messages table', () => {
+    assert({
+      given: "conversationType 'global' with no pageId (how global-assistant message activities are logged)",
+      should: 'select messages and mark isGlobal',
+      actual: (() => {
+        const r = pickConversationTable({ conversationType: 'global', hasPageId: false });
+        return { isChannel: r.isChannel, isGlobal: r.isGlobal, label: r.label, isGlobalTable: r.table === messages };
+      })(),
+      expected: { isChannel: false, isGlobal: true, label: 'global', isGlobalTable: true },
+    });
+  });
+
   it('treats a missing pageId as global', () => {
     assert({
       given: 'no conversationType and no pageId',
