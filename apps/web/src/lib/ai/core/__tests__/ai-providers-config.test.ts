@@ -6,6 +6,8 @@ import {
   FREE_TIER_MODELS,
   DEFAULT_PROVIDER,
   DEFAULT_MODEL,
+  BACKGROUND_LIGHT_MODEL,
+  BACKGROUND_HEAVY_MODEL,
   isModelAllowedForTier,
   getBackendProvider,
   getDefaultModel,
@@ -55,19 +57,28 @@ describe('ai-providers-config', () => {
     });
 
     it('uses full OpenRouter model ids as keys for cloud vendors', () => {
-      expect(AI_PROVIDERS.openai.models).toHaveProperty('openai/gpt-5.3-chat');
-      expect(AI_PROVIDERS.anthropic.models).toHaveProperty('anthropic/claude-haiku-4.5');
+      expect(AI_PROVIDERS.openai.models).toHaveProperty('openai/gpt-5.6-sol');
+      expect(AI_PROVIDERS.anthropic.models).toHaveProperty('anthropic/claude-opus-5');
+      expect(AI_PROVIDERS.google.models).toHaveProperty('google/gemini-3.6-flash');
+      expect(AI_PROVIDERS.xai.models).toHaveProperty('x-ai/grok-4.5');
+      expect(AI_PROVIDERS.moonshot.models).toHaveProperty('moonshotai/kimi-k3');
+      expect(AI_PROVIDERS.meta.models).toHaveProperty('meta/muse-spark-1.1');
       expect(AI_PROVIDERS.minimax.models).toHaveProperty('minimax/minimax-m3');
+    });
+
+    it('does not offer model ids delisted by OpenRouter', () => {
+      expect(AI_PROVIDERS.anthropic.models).not.toHaveProperty('anthropic/claude-3.5-haiku');
+      expect(AI_PROVIDERS.anthropic.models).not.toHaveProperty('anthropic/claude-opus-4.6-fast');
     });
   });
 
   describe('FREE_TIER_MODELS', () => {
     it('contains the curated free allowlist', () => {
-      expect(FREE_TIER_MODELS.has('openai/gpt-5.3-chat')).toBe(true);
+      expect(FREE_TIER_MODELS.has('openai/gpt-5.6-luna')).toBe(true);
       expect(FREE_TIER_MODELS.has('openai/gpt-5.4-nano')).toBe(true);
       expect(FREE_TIER_MODELS.has('openai/gpt-5.4-mini')).toBe(true);
       expect(FREE_TIER_MODELS.has('anthropic/claude-haiku-4.5')).toBe(true);
-      expect(FREE_TIER_MODELS.has('google/gemini-3.5-flash')).toBe(true);
+      expect(FREE_TIER_MODELS.has('google/gemini-3.5-flash-lite')).toBe(true);
     });
 
     it('does NOT contain frontier models', () => {
@@ -88,6 +99,13 @@ describe('ai-providers-config', () => {
       expect(FREE_TIER_MODELS.has(DEFAULT_MODEL)).toBe(true);
       expect(AI_PROVIDERS[DEFAULT_PROVIDER as keyof typeof AI_PROVIDERS].models)
         .toHaveProperty(DEFAULT_MODEL);
+    });
+  });
+
+  describe('background model defaults', () => {
+    it('uses current OpenRouter models for light and heavy jobs', () => {
+      expect(BACKGROUND_LIGHT_MODEL).toBe('google/gemini-3.5-flash-lite');
+      expect(BACKGROUND_HEAVY_MODEL).toBe('anthropic/claude-sonnet-5');
     });
   });
 
@@ -188,7 +206,7 @@ describe('ai-providers-config', () => {
 
   describe('getDefaultModel', () => {
     it('returns the first model of a vendor', () => {
-      expect(getDefaultModel('openai')).toBe('openai/gpt-5.5-pro');
+      expect(getDefaultModel('openai')).toBe('openai/gpt-5.6-sol-pro');
     });
 
     it('returns DEFAULT_MODEL for an unknown provider', () => {
@@ -238,9 +256,9 @@ describe('ai-providers-config', () => {
 
   describe('getModelDisplayName / getUserFacingModelName', () => {
     it('returns the real model display name', () => {
-      expect(getModelDisplayName('openai', 'openai/gpt-5.3-chat')).toBe('GPT-5.3 Chat');
-      expect(getUserFacingModelName('openai', 'openai/gpt-5.3-chat')).toBe('GPT-5.3 Chat');
-      expect(getUserFacingModelName('anthropic', 'anthropic/claude-haiku-4.5')).toBe('Claude Haiku 4.5');
+      expect(getModelDisplayName('openai', 'openai/gpt-5.6-luna')).toBe('GPT-5.6 Luna');
+      expect(getUserFacingModelName('openai', 'openai/gpt-5.6-luna')).toBe('GPT-5.6 Luna');
+      expect(getUserFacingModelName('anthropic', 'anthropic/claude-opus-5')).toBe('Claude Opus 5');
     });
 
     it('falls back to the raw model id for unknown models', () => {

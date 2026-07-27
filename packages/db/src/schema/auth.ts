@@ -28,7 +28,7 @@ export const users = pgTable('users', {
   role: userRole('role').default('user').notNull(),
   adminRoleVersion: integer('adminRoleVersion').default(0).notNull(),
   currentAiProvider: text('currentAiProvider').default('openai').notNull(),
-  currentAiModel: text('currentAiModel').default('openai/gpt-5.3-chat').notNull(),
+  currentAiModel: text('currentAiModel').default('openai/gpt-5.6-luna').notNull(),
   // Chosen OpenRouter image-generation model (null = none configured → tool uses the
   // system default). Deliberately separate from currentAiModel: image generation is a
   // tool, not the chat model, and is never shown in the model selector.

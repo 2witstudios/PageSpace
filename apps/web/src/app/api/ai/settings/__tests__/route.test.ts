@@ -261,7 +261,7 @@ describe('AI settings route', () => {
       const body = await response.json();
 
       expect(body.currentProvider).toBe('openai');
-      expect(body.currentModel).toBe('openai/gpt-5.3-chat');
+      expect(body.currentModel).toBe('openai/gpt-5.6-luna');
       expect(body.userSubscriptionTier).toBe('free');
     });
 

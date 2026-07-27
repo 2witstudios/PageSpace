@@ -23,8 +23,8 @@ export const OPENROUTER_CACHE_TTL_SECONDS = 300;
 export const TIMESTAMP_BUCKET_MS = OPENROUTER_CACHE_TTL_SECONDS * 1000;
 
 /**
- * Default provider/model for new users and any unset fallback. OpenAI's GPT-5.3
- * Chat (via OpenRouter) is the product default and a member of the free allowlist.
+ * Default provider/model for new users and any unset fallback. OpenAI's GPT-5.6
+ * Luna (via OpenRouter) is the product default and a member of the free allowlist.
  * Sourced from @pagespace/lib so apps (e.g. admin onboarding seed data) that can't
  * import this web module stay in lockstep with the web defaults.
  */
@@ -37,8 +37,8 @@ export const DEFAULT_MODEL = DEFAULT_AI_MODEL;
  * workflows) that previously used the `standard`/`pro` PageSpace aliases. These are
  * concrete OpenRouter IDs so the jobs no longer depend on the removed alias layer.
  */
-export const BACKGROUND_LIGHT_MODEL = 'anthropic/claude-haiku-4.5';
-export const BACKGROUND_HEAVY_MODEL = 'anthropic/claude-sonnet-4.6';
+export const BACKGROUND_LIGHT_MODEL = 'google/gemini-3.5-flash-lite';
+export const BACKGROUND_HEAVY_MODEL = 'anthropic/claude-sonnet-5';
 
 /**
  * Providers restricted to admin users. These require a separate subscription
@@ -54,10 +54,12 @@ export const ADMIN_ONLY_PROVIDERS = new Set<string>(['glm']);
  * this curated set of cheaper models. `DEFAULT_MODEL` must be a member.
  */
 export const FREE_TIER_MODELS = new Set<string>([
+  'openai/gpt-5.6-luna',
   'openai/gpt-5.3-chat',
   'openai/gpt-5.4-nano',
   'openai/gpt-5.4-mini',
   'anthropic/claude-haiku-4.5',
+  'google/gemini-3.5-flash-lite',
   'google/gemini-3.5-flash',
   'google/gemini-3.1-flash-lite',
   'google/gemini-3-flash-preview',
@@ -78,6 +80,12 @@ export const AI_PROVIDERS = {
   openai: {
     name: 'OpenAI',
     models: {
+      'openai/gpt-5.6-sol-pro': 'GPT-5.6 Sol Pro',
+      'openai/gpt-5.6-sol': 'GPT-5.6 Sol',
+      'openai/gpt-5.6-terra-pro': 'GPT-5.6 Terra Pro',
+      'openai/gpt-5.6-terra': 'GPT-5.6 Terra',
+      'openai/gpt-5.6-luna-pro': 'GPT-5.6 Luna Pro',
+      'openai/gpt-5.6-luna': 'GPT-5.6 Luna',
       'openai/gpt-5.5-pro': 'GPT-5.5 Pro',
       'openai/gpt-5.5': 'GPT-5.5',
       'openai/gpt-5.4-pro': 'GPT-5.4 Pro',
@@ -116,12 +124,15 @@ export const AI_PROVIDERS = {
   anthropic: {
     name: 'Anthropic',
     models: {
+      'anthropic/claude-opus-5': 'Claude Opus 5',
+      'anthropic/claude-opus-5-fast': 'Claude Opus 5 Fast',
+      'anthropic/claude-sonnet-5': 'Claude Sonnet 5',
+      'anthropic/claude-fable-5': 'Claude Fable 5',
       'anthropic/claude-opus-4.8': 'Claude Opus 4.8',
       'anthropic/claude-opus-4.8-fast': 'Claude Opus 4.8 Fast',
       'anthropic/claude-opus-4.7': 'Claude Opus 4.7',
       'anthropic/claude-opus-4.7-fast': 'Claude Opus 4.7 Fast',
       'anthropic/claude-opus-4.6': 'Claude Opus 4.6',
-      'anthropic/claude-opus-4.6-fast': 'Claude Opus 4.6 Fast',
       'anthropic/claude-sonnet-4.6': 'Claude Sonnet 4.6',
       'anthropic/claude-opus-4.5': 'Claude Opus 4.5',
       'anthropic/claude-sonnet-4.5': 'Claude Sonnet 4.5',
@@ -129,14 +140,18 @@ export const AI_PROVIDERS = {
       'anthropic/claude-opus-4.1': 'Claude Opus 4.1',
       'anthropic/claude-opus-4': 'Claude Opus 4',
       'anthropic/claude-sonnet-4': 'Claude Sonnet 4',
-      'anthropic/claude-3.5-haiku': 'Claude 3.5 Haiku',
       'anthropic/claude-3-haiku': 'Claude 3 Haiku',
     },
   },
   google: {
     name: 'Google',
     models: {
+      'google/gemini-3.6-flash': 'Gemini 3.6 Flash',
+      'google/gemini-3.5-flash-lite': 'Gemini 3.5 Flash Lite',
       'google/gemini-3.5-flash': 'Gemini 3.5 Flash',
+      'google/gemini-3.1-flash-lite-image': 'Gemini 3.1 Flash Lite Image',
+      'google/gemini-3.1-flash-image': 'Gemini 3.1 Flash Image',
+      'google/gemini-3-pro-image': 'Gemini 3 Pro Image',
       'google/gemini-3.1-pro-preview': 'Gemini 3.1 Pro (Preview)',
       'google/gemini-3.1-pro-preview-customtools': 'Gemini 3.1 Pro Custom Tools (Preview)',
       'google/gemini-3.1-flash-lite': 'Gemini 3.1 Flash Lite',
@@ -153,6 +168,7 @@ export const AI_PROVIDERS = {
   xai: {
     name: 'xAI (Grok)',
     models: {
+      'x-ai/grok-4.5': 'Grok 4.5',
       'x-ai/grok-4.3': 'Grok 4.3',
       'x-ai/grok-4.20': 'Grok 4.20',
       'x-ai/grok-4.20-multi-agent': 'Grok 4.20 Multi-Agent',
@@ -172,6 +188,7 @@ export const AI_PROVIDERS = {
   qwen: {
     name: 'Qwen',
     models: {
+      'qwen/qwen3.7-plus': 'Qwen3.7 Plus',
       'qwen/qwen3.7-max': 'Qwen3.7 Max',
       'qwen/qwen3.6-max-preview': 'Qwen3.6 Max (Preview)',
       'qwen/qwen3.6-plus': 'Qwen3.6 Plus',
@@ -207,6 +224,8 @@ export const AI_PROVIDERS = {
   moonshot: {
     name: 'Moonshot AI',
     models: {
+      'moonshotai/kimi-k3': 'Kimi K3',
+      'moonshotai/kimi-k2.7-code': 'Kimi K2.7 Code',
       'moonshotai/kimi-k2.6': 'Kimi K2.6',
       'moonshotai/kimi-k2-thinking': 'Kimi K2 Thinking',
       'moonshotai/kimi-k2': 'Kimi K2',
@@ -223,8 +242,9 @@ export const AI_PROVIDERS = {
     },
   },
   meta: {
-    name: 'Meta (Llama)',
+    name: 'Meta',
     models: {
+      'meta/muse-spark-1.1': 'Muse Spark 1.1',
       'meta-llama/llama-4-maverick': 'Llama 4 Maverick',
       'meta-llama/llama-4-scout': 'Llama 4 Scout',
       'meta-llama/llama-3.3-70b-instruct': 'Llama 3.3 70B',
@@ -261,6 +281,7 @@ export const AI_PROVIDERS = {
     // normally. Distinct from the admin-only `glm` provider below, which routes
     // directly to the Z.ai Coder Plan endpoint and is exempt from billing.
     models: {
+      'z-ai/glm-5.2':      'GLM-5.2',
       'z-ai/glm-5.1':      'GLM-5.1',
       'z-ai/glm-5-turbo':  'GLM-5 Turbo',
       'z-ai/glm-5':        'GLM-5',
