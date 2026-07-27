@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import type { Tool, ToolSet } from 'ai';
-import { applyToolExposureMode } from '../tool-exposure';
+import { applyToolExposureMode, splitToolsForExposure } from '../tool-exposure';
+import { CORE_TOOL_NAMES } from '../../core/stub-tools';
 
 // A minimal but real tool definition (matches the AI SDK Tool shape closely enough
 // for the catalog/dispatch logic under test).
@@ -22,6 +23,82 @@ function sampleTools(): ToolSet {
     create_calendar_event: makeTool('Create a calendar event'), // non-core
   } as ToolSet;
 }
+
+describe('splitToolsForExposure', () => {
+  it('keeps always-upfront tools alongside core tools, deferring only the rest', () => {
+    // The Global Assistant bug: generate_image/web_search were advertised by name in
+    // the system prompt but only ever reachable via execute_tool, so a direct call
+    // was rejected as an unknown tool. They must land in coreTools.
+    const tools: ToolSet = {
+      generate_image: makeTool('Generate an image'),
+      web_search: makeTool('Search the web'),
+      read_page: makeTool('Read a page'), // core
+      list_agents: makeTool('List agents'), // non-core
+    } as ToolSet;
+
+    const { coreTools, nonCoreTools } = splitToolsForExposure(
+      tools,
+      new Set(['web_search', 'generate_image'])
+    );
+
+    expect(Object.keys(coreTools).sort()).toEqual(['generate_image', 'read_page', 'web_search']);
+    expect(Object.keys(nonCoreTools)).toEqual(['list_agents']);
+    // The tool values are passed through untouched.
+    expect(coreTools.generate_image).toBe(tools.generate_image);
+    expect(nonCoreTools.list_agents).toBe(tools.list_agents);
+  });
+
+  it('falls back to CORE_TOOL_NAMES-only behaviour for an empty or omitted alwaysUpfront', () => {
+    const tools = sampleTools();
+    const expectedCore = Object.keys(tools).filter((n) => CORE_TOOL_NAMES.has(n));
+    const expectedNonCore = Object.keys(tools).filter((n) => !CORE_TOOL_NAMES.has(n));
+
+    const withEmptySet = splitToolsForExposure(tools, new Set());
+    const withDefault = splitToolsForExposure(tools);
+
+    for (const result of [withEmptySet, withDefault]) {
+      expect(Object.keys(result.coreTools)).toEqual(expectedCore);
+      expect(Object.keys(result.nonCoreTools)).toEqual(expectedNonCore);
+    }
+    // The defaulted-argument call is byte-identical to the explicit empty-set call.
+    expect(Object.keys(withDefault.coreTools)).toEqual(Object.keys(withEmptySet.coreTools));
+    expect(Object.keys(withDefault.nonCoreTools)).toEqual(Object.keys(withEmptySet.nonCoreTools));
+  });
+
+  it('returns two empty objects for an empty tool set', () => {
+    const { coreTools, nonCoreTools } = splitToolsForExposure({} as ToolSet, new Set(['web_search']));
+
+    expect(coreTools).toEqual({});
+    expect(nonCoreTools).toEqual({});
+  });
+
+  it('does not duplicate or drop a tool that is both core and always-upfront', () => {
+    const tools: ToolSet = {
+      read_page: makeTool('Read a page'), // core AND named in alwaysUpfront
+      list_agents: makeTool('List agents'), // non-core
+    } as ToolSet;
+
+    const { coreTools, nonCoreTools } = splitToolsForExposure(tools, new Set(['read_page']));
+
+    expect(Object.keys(coreTools)).toEqual(['read_page']);
+    expect(Object.keys(nonCoreTools)).toEqual(['list_agents']);
+  });
+
+  it('never places the same tool in both halves', () => {
+    const tools: ToolSet = {
+      read_page: makeTool('Read a page'),
+      web_search: makeTool('Search the web'),
+      list_agents: makeTool('List agents'),
+    } as ToolSet;
+
+    const { coreTools, nonCoreTools } = splitToolsForExposure(tools, new Set(['web_search']));
+
+    const coreNames = Object.keys(coreTools);
+    const nonCoreNames = Object.keys(nonCoreTools);
+    expect(coreNames.filter((n) => nonCoreNames.includes(n))).toEqual([]);
+    expect([...coreNames, ...nonCoreNames].sort()).toEqual(Object.keys(tools).sort());
+  });
+});
 
 describe('applyToolExposureMode', () => {
   describe('upfront mode', () => {

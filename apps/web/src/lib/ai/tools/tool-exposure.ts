@@ -7,6 +7,37 @@ import { createExecuteTool } from './execute-tool';
 export type ToolExposureMode = 'upfront' | 'search';
 
 /**
+ * Split a tool set into the tools handed to the model with full schemas ("core")
+ * and the tools deferred behind execute_tool ("non-core").
+ *
+ * A tool is upfront when it is a core page/drive tool OR is named in
+ * `alwaysUpfront`. The latter covers runtime-toggled tools (`web_search`,
+ * `generate_image`) which are added independently of an agent's saved allowlist:
+ * deferring them behind execute_tool makes them uncallable while their names are
+ * still advertised in the system prompt, so the model calls them directly and the
+ * AI SDK rejects them as unknown tools.
+ *
+ * Pure: no prompt assembly, no tool construction. Key order within each half
+ * follows the input's key order.
+ */
+export function splitToolsForExposure(
+  tools: ToolSet,
+  alwaysUpfront: ReadonlySet<string> = new Set(),
+): { coreTools: ToolSet; nonCoreTools: ToolSet } {
+  const isUpfront = (name: string) => CORE_TOOL_NAMES.has(name) || alwaysUpfront.has(name);
+
+  const coreTools = Object.fromEntries(
+    Object.entries(tools).filter(([name]) => isUpfront(name))
+  ) as ToolSet;
+
+  const nonCoreTools = Object.fromEntries(
+    Object.entries(tools).filter(([name]) => !isUpfront(name))
+  ) as ToolSet;
+
+  return { coreTools, nonCoreTools };
+}
+
+/**
  * Decide how an agent's tools are presented to the model.
  *
  * - `upfront` (default): every tool is handed to the model with its full schema.
