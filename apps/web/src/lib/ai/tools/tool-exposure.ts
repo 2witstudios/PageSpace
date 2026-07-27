@@ -7,6 +7,25 @@ import { createExecuteTool } from './execute-tool';
 export type ToolExposureMode = 'upfront' | 'search';
 
 /**
+ * Tools added by runtime composer toggles rather than by an agent's saved allowlist,
+ * which therefore must stay directly callable instead of being deferred behind
+ * execute_tool. Both routes that expose the composer toggles share this set so a new
+ * toggle cannot be wired into one and silently forgotten in the other.
+ *
+ * They break in different ways if deferred, which is why both routes need them upfront:
+ * - Page chat (`api/ai/chat`) passes the agent's saved `enabledTools` to execute_tool,
+ *   so a toggled-on tool absent from that allowlist is rejected at dispatch.
+ * - Global Assistant (`api/ai/global/[id]/messages`) sets no allowlist, but advertises
+ *   deferred tools by name in the system prompt without sending their schemas, so the
+ *   model calls them directly and the AI SDK rejects them as unknown tools.
+ *
+ * NOTE: the web-search toggle also gates `web_fetch` (see WEB_SEARCH_TOOLS in
+ * core/tool-filtering.ts), which is deliberately NOT listed here — see the PR
+ * discussion; promoting it changes page-chat behaviour and belongs in its own change.
+ */
+export const ALWAYS_UPFRONT_TOOLS: ReadonlySet<string> = new Set(['web_search', 'generate_image']);
+
+/**
  * Split a tool set into the tools handed to the model with full schemas ("core")
  * and the tools deferred behind execute_tool ("non-core").
  *
@@ -38,15 +57,17 @@ export function splitToolsForExposure(
 }
 
 /**
- * The catalog tool_search is allowed to return.
+ * Drop the always-upfront tools from a tool set, preserving key order.
  *
- * Always-upfront tools are omitted. They are already handed to the model with full
- * schemas and are deliberately NOT in execute_tool's dispatch map, so surfacing them
- * here would invite a dead-end `execute_tool({tool_name: 'generate_image'})` —
- * TOOL_DISCOVERY_PROMPT instructs the model to run anything it discovers that way.
- * Core tools stay searchable: they are directly callable, so a lookup is harmless.
+ * Used for both halves of the exposure decision: the set eligible for deferral, and
+ * the catalog tool_search may return. An always-upfront tool must appear in neither —
+ * it is already served with a full schema and is deliberately absent from
+ * execute_tool's dispatch map, so surfacing it in the catalog would invite a dead-end
+ * `execute_tool({tool_name: 'generate_image'})`; TOOL_DISCOVERY_PROMPT instructs the
+ * model to run anything it discovers that way. Core tools stay searchable: they are
+ * directly callable, so a lookup is harmless.
  */
-export function selectToolSearchCatalog(
+export function excludeAlwaysUpfront(
   tools: ToolSet,
   alwaysUpfront: ReadonlySet<string> = new Set(),
 ): ToolSet {
@@ -87,11 +108,11 @@ export function applyToolExposureMode(
 
   // Tools forced upfront (e.g. the web_search runtime override) are excluded from
   // both the deferral split and the searchable catalog.
-  const deferrable = selectToolSearchCatalog(tools, alwaysUpfront);
+  const deferrable = excludeAlwaysUpfront(tools, alwaysUpfront);
 
-  const nonCoreTools = Object.fromEntries(
-    Object.entries(deferrable).filter(([name]) => !CORE_TOOL_NAMES.has(name))
-  ) as ToolSet;
+  // Same predicate as the split's non-core half — derived from it so the rule for
+  // "what gets deferred" is defined in exactly one place.
+  const { nonCoreTools } = splitToolsForExposure(tools, alwaysUpfront);
 
   if (Object.keys(nonCoreTools).length === 0) {
     return { tools, toolDiscoveryPrompt: '' };

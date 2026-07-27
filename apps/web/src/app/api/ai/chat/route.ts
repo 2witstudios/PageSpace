@@ -81,7 +81,7 @@ import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
 import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName, sanitizeToolNamesForProvider } from '@/lib/ai/core/mcp-tool-converter';
 import { getUserPersonalization } from '@/lib/ai/core/personalization-utils';
-import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
+import { applyToolExposureMode, ALWAYS_UPFRONT_TOOLS } from '@/lib/ai/tools/tool-exposure';
 import {
   buildVolatileTurnContext,
   appendTurnContextToLastUserMessage,
@@ -90,11 +90,6 @@ import {
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
 import { getAgentMemoryContext, buildAgentMemorySection } from '@/lib/ai/core/agent-memory';
 
-// Runtime-toggled tools that must stay directly callable even in search mode.
-// Runtime-override tools: added independently of the agent's saved allowlist, so they
-// must stay directly callable in 'search' exposure mode — routing them through
-// execute_tool would hit that tool's allowlist check and be rejected.
-const ALWAYS_UPFRONT_TOOLS = new Set(['web_search', 'generate_image']);
 import { db } from '@pagespace/db/db'
 import { eq, and, ne } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'

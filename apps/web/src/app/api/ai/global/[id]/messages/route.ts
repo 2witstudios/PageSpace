@@ -53,7 +53,7 @@ import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree
 import { getModelCapabilities, DEFAULT_IMAGE_MODEL } from '@/lib/ai/core/model-capabilities';
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName, sanitizeToolNamesForProvider } from '@/lib/ai/core/mcp-tool-converter';
 import { getUserPersonalization, getUserTimezone } from '@/lib/ai/core/personalization-utils';
-import { splitToolsForExposure, selectToolSearchCatalog } from '@/lib/ai/tools/tool-exposure';
+import { splitToolsForExposure, excludeAlwaysUpfront, ALWAYS_UPFRONT_TOOLS } from '@/lib/ai/tools/tool-exposure';
 import { createExecuteTool } from '@/lib/ai/tools/execute-tool';
 import { db } from '@pagespace/db/db'
 import { eq, and, desc, gt, lt, ne } from '@pagespace/db/operators'
@@ -97,13 +97,6 @@ export const maxDuration = 300;
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
-
-// Runtime-toggled tools that must stay directly callable rather than being deferred
-// behind execute_tool. Mirrors ALWAYS_UPFRONT_TOOLS in apps/web/src/app/api/ai/chat/route.ts
-// — see the rationale comment there (Step 5, above applyToolExposureMode): these tools
-// are added by composer toggles independently of the saved allowlist, so routing them
-// through execute_tool trips its allowlist check. Keep the two lists in sync.
-const ALWAYS_UPFRONT_TOOLS = new Set(['web_search', 'generate_image']);
 
 /**
  * GET - Get all messages for a conversation
@@ -874,7 +867,7 @@ MENTION PROCESSING:
 
     let finalTools: ToolSet = {
       ...coreTools,
-      tool_search: createToolSearchTool(selectToolSearchCatalog(filteredAllTools, ALWAYS_UPFRONT_TOOLS)),
+      tool_search: createToolSearchTool(excludeAlwaysUpfront(filteredAllTools, ALWAYS_UPFRONT_TOOLS)),
       execute_tool: createExecuteTool(nonCoreTools),
     };
 

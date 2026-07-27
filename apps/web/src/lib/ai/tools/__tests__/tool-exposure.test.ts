@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import type { Tool, ToolSet } from 'ai';
-import { applyToolExposureMode, splitToolsForExposure, selectToolSearchCatalog } from '../tool-exposure';
+import {
+  applyToolExposureMode,
+  splitToolsForExposure,
+  excludeAlwaysUpfront,
+  ALWAYS_UPFRONT_TOOLS,
+} from '../tool-exposure';
 import { CORE_TOOL_NAMES } from '../../core/stub-tools';
 
 // A minimal but real tool definition (matches the AI SDK Tool shape closely enough
@@ -23,6 +28,31 @@ function sampleTools(): ToolSet {
     create_calendar_event: makeTool('Create a calendar event'), // non-core
   } as ToolSet;
 }
+
+describe('ALWAYS_UPFRONT_TOOLS', () => {
+  it('covers exactly the composer-toggled tools both AI routes share', () => {
+    // One shared set, imported by api/ai/chat and api/ai/global/[id]/messages, so a new
+    // composer toggle cannot be wired into one route and forgotten in the other.
+    // web_fetch is knowingly excluded — see the constant's doc comment.
+    expect([...ALWAYS_UPFRONT_TOOLS].sort()).toEqual(['generate_image', 'web_search']);
+  });
+
+  it('promotes its members past the core-only split', () => {
+    const tools: ToolSet = {
+      read_page: makeTool('Read a page'),
+      generate_image: makeTool('Generate an image'),
+      web_search: makeTool('Search the web'),
+      list_agents: makeTool('List agents'),
+    } as ToolSet;
+
+    const { coreTools, nonCoreTools } = splitToolsForExposure(tools, ALWAYS_UPFRONT_TOOLS);
+
+    for (const name of ALWAYS_UPFRONT_TOOLS) {
+      expect(coreTools[name], `${name} must be directly callable`).toBeDefined();
+      expect(nonCoreTools[name]).toBeUndefined();
+    }
+  });
+});
 
 describe('splitToolsForExposure', () => {
   it('keeps always-upfront tools alongside core tools, deferring only the rest', () => {
@@ -60,9 +90,6 @@ describe('splitToolsForExposure', () => {
       expect(Object.keys(result.coreTools)).toEqual(expectedCore);
       expect(Object.keys(result.nonCoreTools)).toEqual(expectedNonCore);
     }
-    // The defaulted-argument call is byte-identical to the explicit empty-set call.
-    expect(Object.keys(withDefault.coreTools)).toEqual(Object.keys(withEmptySet.coreTools));
-    expect(Object.keys(withDefault.nonCoreTools)).toEqual(Object.keys(withEmptySet.nonCoreTools));
   });
 
   it('returns two empty objects for an empty tool set', () => {
@@ -100,7 +127,7 @@ describe('splitToolsForExposure', () => {
   });
 });
 
-describe('selectToolSearchCatalog', () => {
+describe('excludeAlwaysUpfront', () => {
   it('omits always-upfront tools so they are never discovered as execute_tool targets', () => {
     // TOOL_DISCOVERY_PROMPT tells the model to run anything it discovers via
     // execute_tool. An always-upfront tool is NOT in execute_tool's dispatch map,
@@ -113,32 +140,20 @@ describe('selectToolSearchCatalog', () => {
       list_agents: makeTool('List agents'), // non-core
     } as ToolSet;
 
-    const catalog = selectToolSearchCatalog(tools, new Set(['web_search', 'generate_image']));
+    const catalog = excludeAlwaysUpfront(tools, new Set(['web_search', 'generate_image']));
 
     expect(Object.keys(catalog).sort()).toEqual(['list_agents', 'read_page']);
-  });
-
-  it('keeps core tools searchable (they carry schemas the model may still want)', () => {
-    const tools: ToolSet = {
-      read_page: makeTool('Read a page'),
-      list_agents: makeTool('List agents'),
-    } as ToolSet;
-
-    expect(Object.keys(selectToolSearchCatalog(tools, new Set(['web_search'])))).toEqual([
-      'read_page',
-      'list_agents',
-    ]);
   });
 
   it('returns the full set for an empty or omitted alwaysUpfront', () => {
     const tools = sampleTools();
 
-    expect(Object.keys(selectToolSearchCatalog(tools, new Set()))).toEqual(Object.keys(tools));
-    expect(Object.keys(selectToolSearchCatalog(tools))).toEqual(Object.keys(tools));
+    expect(Object.keys(excludeAlwaysUpfront(tools, new Set()))).toEqual(Object.keys(tools));
+    expect(Object.keys(excludeAlwaysUpfront(tools))).toEqual(Object.keys(tools));
   });
 
   it('returns an empty catalog for an empty tool set', () => {
-    expect(selectToolSearchCatalog({} as ToolSet, new Set(['web_search']))).toEqual({});
+    expect(excludeAlwaysUpfront({} as ToolSet, new Set(['web_search']))).toEqual({});
   });
 
   it('never surfaces a tool that is absent from the execute_tool dispatch map', () => {
@@ -153,7 +168,7 @@ describe('selectToolSearchCatalog', () => {
     const alwaysUpfront = new Set(['generate_image']);
 
     const { coreTools, nonCoreTools } = splitToolsForExposure(tools, alwaysUpfront);
-    const catalog = selectToolSearchCatalog(tools, alwaysUpfront);
+    const catalog = excludeAlwaysUpfront(tools, alwaysUpfront);
 
     for (const name of Object.keys(catalog)) {
       const reachable = CORE_TOOL_NAMES.has(name) || name in nonCoreTools;
