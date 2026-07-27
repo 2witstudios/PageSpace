@@ -14,6 +14,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { createHash, randomBytes } from 'crypto';
 import { desc, isNotNull, sql } from 'drizzle-orm';
 import { stableStringify } from '../utils/stable-stringify';
+import { isPageIdForeignKeyError } from './activity-log-errors';
 import { classifyProcessing } from '../compliance/art30/classify-processing';
 import { decryptField } from '../encryption/field-crypto';
 
@@ -562,17 +563,10 @@ export async function logActivity(input: ActivityLogInput): Promise<void> {
   try {
     await insertActivityLog(input.pageId);
   } catch (error) {
-    // Check for FK constraint violation on pageId (page was deleted during async logging)
-    const pgError = error as { code?: string; constraint?: string; detail?: string };
-    const isPageIdFkError =
-      error instanceof Error &&
-      pgError.code === '23503' &&
-      (
-        pgError.constraint === 'activity_logs_pageId_pages_id_fk' ||
-        (typeof pgError.detail === 'string' && pgError.detail.includes('pageId'))
-      );
-
-    if (isPageIdFkError && input.pageId) {
+    // Check for FK constraint violation on pageId (page was deleted during async logging).
+    // Drizzle wraps the driver error, so the pg fields live under `.cause` - see
+    // isPageIdForeignKeyError.
+    if (isPageIdForeignKeyError(error) && input.pageId) {
       // Retry without pageId - the page was deleted but we still want to log the activity
       try {
         await insertActivityLog(undefined);
@@ -1146,7 +1140,7 @@ export function logMessageActivity(
   operation: 'create' | 'message_update' | 'message_delete',
   message: {
     id: string;
-    pageId: string;
+    pageId: string | null; // null for conversations that aren't page-backed (global assistant)
     driveId: string | null; // null for user-level conversations (global assistant)
     conversationType: 'ai_chat' | 'global' | 'channel';
   },
@@ -1169,7 +1163,7 @@ export function logMessageActivity(
     resourceType: 'message',
     resourceId: message.id,
     driveId: message.driveId,
-    pageId: message.pageId,
+    pageId: message.pageId ?? undefined,
     previousValues: options?.previousContent ? { content: options.previousContent } : undefined,
     newValues: options?.newContent ? { content: options.newContent } : undefined,
     isAiGenerated: options?.isAiGenerated ?? false,

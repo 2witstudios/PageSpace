@@ -320,7 +320,7 @@ describe('PATCH /api/ai/global/[id]/messages/[messageId]', () => {
         'message_update',
         expect.objectContaining({
           id: mockMessageId,
-          pageId: mockConversationId,
+          pageId: null,
           driveId: null,
           conversationType: 'global',
         }),
@@ -534,7 +534,7 @@ describe('DELETE /api/ai/global/[id]/messages/[messageId]', () => {
         'message_delete',
         expect.objectContaining({
           id: mockMessageId,
-          pageId: mockConversationId,
+          pageId: null,
           driveId: null,
           conversationType: 'global',
         }),
