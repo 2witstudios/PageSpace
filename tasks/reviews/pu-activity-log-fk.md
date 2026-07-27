@@ -11,7 +11,10 @@ wrapper error, so it never fired in production.
 
 Gates run locally, all green:
 - `bun run typecheck` ✅ 16/16 · `bun run lint` ✅ 14/14 · `bun x knip` ✅ (no new findings)
-- `bun run test:unit` (with test DB, `TZ=UTC`) — lib **9227 pass / 0 fail**, web **15704 pass / 0 fail**, exit 0
+- `bun run test:unit` (with test DB, `TZ=UTC`) — lib **9230 pass / 0 fail**, web **15704 pass / 0 fail**, exit 0
+- Post-review addition: `activity-logger-fk-retry.integration.test.ts` provokes a real 23503 against
+  real Postgres so the retry is proven end to end rather than against a hand-built error. Verified as a
+  true regression test — restoring the old guard drops the audit row (`expected undefined to be defined`).
 - `activity-log-errors.ts` at **100% branch coverage** (v8)
 - CI: all checks green on the head commit
 
