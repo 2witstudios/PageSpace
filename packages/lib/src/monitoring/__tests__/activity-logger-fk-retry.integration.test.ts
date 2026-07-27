@@ -33,13 +33,27 @@ beforeAll(async () => {
   }
 });
 
-/** Read back the single row a test wrote, keyed by its unique resourceId. */
-async function readRowByResourceId(resourceId: string) {
-  return db.query.activityLogs.findFirst({ where: eq(activityLogs.resourceId, resourceId) });
+/**
+ * Read back the single row a test wrote, keyed by its unique resourceId.
+ *
+ * Activity logging is fire-and-forget, so the write may still be in flight when
+ * the caller returns. Poll rather than sleeping a fixed interval: a macrotask
+ * yield does not wait on a database round-trip, and a fixed sleep long enough
+ * to be safe on CI would be dead time on every run.
+ *
+ * Returns undefined once the budget is exhausted so the "row is absent" case
+ * stays assertable — it just costs the full budget to prove.
+ */
+async function readRowByResourceId(resourceId: string, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const row = await db.query.activityLogs.findFirst({
+      where: eq(activityLogs.resourceId, resourceId),
+    });
+    if (row || Date.now() >= deadline) return row;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
 }
-
-/** Let the fire-and-forget logging settle before asserting on the database. */
-const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe('activity-log pageId FK retry (Postgres)', () => {
   it('persists the row against a real page, keeping the pageId', async () => {
@@ -59,7 +73,6 @@ describe('activity-log pageId FK retry (Postgres)', () => {
       driveId: drive.id,
       pageId: page.id,
     });
-    await flush();
 
     const row = await readRowByResourceId(resourceId);
     expect(row?.pageId).toBe(page.id);
@@ -85,7 +98,6 @@ describe('activity-log pageId FK retry (Postgres)', () => {
       driveId: drive.id,
       pageId: createId(),
     });
-    await flush();
 
     const row = await readRowByResourceId(resourceId);
     // Before the fix this row did not exist at all: the FK guard never matched
@@ -111,7 +123,6 @@ describe('activity-log pageId FK retry (Postgres)', () => {
       { actorEmail: user.email },
       { previousContent: 'deleted text', aiConversationId: conversationId }
     );
-    await flush();
 
     const row = await readRowByResourceId(messageId);
     expect(row).toBeDefined();
