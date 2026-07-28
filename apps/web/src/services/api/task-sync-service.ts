@@ -134,12 +134,13 @@ async function normalizeStatusForList(
 ): Promise<void> {
   const { item, taskListId } = params
 
-  // Fast path: one indexed lookup on the (taskListId, slug) unique key. A slug match
-  // alone is NOT proof the status still means what it meant — slugs come from
+  // Fast path: one indexed lookup on the (taskListId, slug) unique key.
+  //
+  // A slug match is not proof the status means the same thing — slugs come from
   // slugify(name) and each list picks its own group, so "Review" can be `done` in one
-  // list and `in_progress` in another. Carrying such a status over unchanged leaves the
-  // row's group disagreeing with its own completedAt, which is the same incoherence a
-  // missing slug produces: ticked-but-counted-incomplete, or the reverse.
+  // list and `in_progress` in another, leaving the row's group at odds with its own
+  // completedAt. That is knowingly tolerated; see below for why neither field may be
+  // rewritten to reconcile it.
   const alreadyValid = await tx.query.taskStatusConfigs.findFirst({
     where: and(
       eq(taskStatusConfigs.taskListId, taskListId),
@@ -347,9 +348,14 @@ async function reconcileTaskTriggerWorkflows(
   targetDriveId: string,
 ): Promise<void> {
   const byAgent = new Map<string, string[]>()
+  const instructionPageByWorkflow = new Map<string, string>()
   for (const batch of chunk(taskItemIds, SCRUB_CHUNK_SIZE)) {
     const rows = await tx
-      .select({ workflowId: taskTriggers.workflowId, agentPageId: workflows.agentPageId })
+      .select({
+        workflowId: taskTriggers.workflowId,
+        agentPageId: workflows.agentPageId,
+        instructionPageId: workflows.instructionPageId,
+      })
       .from(taskTriggers)
       .innerJoin(workflows, eq(workflows.id, taskTriggers.workflowId))
       .where(inArray(taskTriggers.taskItemId, batch))
@@ -357,6 +363,7 @@ async function reconcileTaskTriggerWorkflows(
       const list = byAgent.get(row.agentPageId) ?? []
       list.push(row.workflowId)
       byAgent.set(row.agentPageId, list)
+      if (row.instructionPageId) instructionPageByWorkflow.set(row.workflowId, row.instructionPageId)
     }
   }
   if (byAgent.size === 0) return
@@ -377,6 +384,28 @@ async function reconcileTaskTriggerWorkflows(
   for (const batch of chunk(surviving, SCRUB_CHUNK_SIZE)) {
     await tx.update(workflows).set({ driveId: targetDriveId }).where(inArray(workflows.id, batch))
   }
+
+  // contextPageIds need no repair: executeWorkflow re-filters them by the run's driveId,
+  // so repointing above already turns a left-behind page into a dropped one.
+  // instructionPageId gets no such backstop — loadInstructionPage gates only on the
+  // workflow CREATOR's membership, and that creator is a source-drive user, so a runbook
+  // left behind would keep being read and its content persisted into a destination-drive
+  // agent page for every viewer there. Cleared when its page did not travel.
+  const survivingWithInstruction = surviving.filter((id) => instructionPageByWorkflow.has(id))
+  if (survivingWithInstruction.length === 0) return
+
+  const instructionPageIds = [
+    ...new Set(survivingWithInstruction.map((id) => instructionPageByWorkflow.get(id)!)),
+  ]
+  const strandedInstructionPages = new Set(
+    await resolvePagesOutsideDrive(tx, instructionPageIds, targetDriveId),
+  )
+  const workflowsToClear = survivingWithInstruction.filter((id) =>
+    strandedInstructionPages.has(instructionPageByWorkflow.get(id)!),
+  )
+  for (const batch of chunk(workflowsToClear, SCRUB_CHUNK_SIZE)) {
+    await tx.update(workflows).set({ instructionPageId: null }).where(inArray(workflows.id, batch))
+  }
 }
 
 /** Same, addressed by page rather than task-item id (the remove branch has no id yet). */
@@ -389,23 +418,26 @@ async function deleteTaskTriggerWorkflowsForPages(tx: Tx, pageIds: string[]): Pr
   await deleteTaskTriggerWorkflows(tx, rows.map((row) => row.id))
 }
 
-/** The subset of `agentPageIds` whose pages do NOT live in `driveId`. */
-async function resolveAgentsOutsideDrive(
+/** The subset of `pageIds` that do NOT live in `driveId` — i.e. did not travel. */
+async function resolvePagesOutsideDrive(
   tx: Tx,
-  agentPageIds: string[],
+  pageIds: string[],
   driveId: string,
 ): Promise<string[]> {
-  if (agentPageIds.length === 0) return []
+  if (pageIds.length === 0) return []
   const inDrive = new Set<string>()
-  for (const batch of chunk(agentPageIds, SCRUB_CHUNK_SIZE)) {
+  for (const batch of chunk(pageIds, SCRUB_CHUNK_SIZE)) {
     const rows = await tx
       .select({ id: pages.id })
       .from(pages)
       .where(and(inArray(pages.id, batch), eq(pages.driveId, driveId)))
     for (const row of rows) inDrive.add(row.id)
   }
-  return agentPageIds.filter((id) => !inDrive.has(id))
+  return pageIds.filter((id) => !inDrive.has(id))
 }
+
+/** Agent pages that stayed behind. Same question, named for its caller. */
+const resolveAgentsOutsideDrive = resolvePagesOutsideDrive
 
 async function addTaskItemUnderParent(
   tx: Tx,

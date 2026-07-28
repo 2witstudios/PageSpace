@@ -15,7 +15,7 @@ vi.mock('@pagespace/db/schema/task-triggers', () => ({
   taskTriggers: { taskItemId: 'taskTriggers.taskItemId', workflowId: 'taskTriggers.workflowId' },
 }));
 vi.mock('@pagespace/db/schema/workflows', () => ({
-  workflows: { id: 'workflows.id', driveId: 'workflows.driveId', agentPageId: 'workflows.agentPageId' },
+  workflows: { id: 'workflows.id', driveId: 'workflows.driveId', agentPageId: 'workflows.agentPageId', instructionPageId: 'workflows.instructionPageId' },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ['eq', a, b]),
@@ -67,6 +67,9 @@ function makeTx(config: {
   scrubWorkflowIds?: string[];
   /** Agent each trigger workflow runs, which is set independently of the assignee. */
   triggerAgentByWorkflow?: Record<string, string>;
+  /** Runbook page each trigger workflow reads, and pages that travelled to the target. */
+  instructionPageByWorkflow?: Record<string, string>;
+  pagesInTargetDrive?: string[];
   /** task_items ids the remove branch's pre-delete trigger sweep should find. */
   removeBranchTaskItemIds?: string[];
   /** Agent page referenced by each found task item, and agents already in the target drive. */
@@ -86,6 +89,8 @@ function makeTx(config: {
     scrubTaskItemIds = [],
     scrubWorkflowIds = [],
     triggerAgentByWorkflow = {},
+    instructionPageByWorkflow = {},
+    pagesInTargetDrive = [],
     removeBranchTaskItemIds = [],
     scrubAgentIdByItem = {},
     scrubAssigneeAgentIds = [],
@@ -132,12 +137,14 @@ function makeTx(config: {
           ? scrubTaskItemIds.map((id) => ({ id, assigneeAgentId: scrubAgentIdByItem[id] ?? null }))
         : shape === 'taskAssignees.agentPageId' ? scrubAssigneeAgentIds.map((agentPageId) => ({ agentPageId }))
         : shape === 'taskTriggers.workflowId' ? scrubWorkflowIds.map((workflowId) => ({ workflowId }))
-        : shape === 'taskTriggers.workflowId,workflows.agentPageId'
+        : shape === 'taskTriggers.workflowId,workflows.agentPageId,workflows.instructionPageId'
           ? scrubWorkflowIds.map((workflowId) => ({
               workflowId,
               agentPageId: triggerAgentByWorkflow[workflowId] ?? 'agent-left-behind',
+              instructionPageId: instructionPageByWorkflow[workflowId] ?? null,
             }))
-        : shape === 'pages.id' ? agentsInTargetDrive.map((id) => ({ id }))
+        : shape === 'pages.id'
+          ? [...agentsInTargetDrive, ...pagesInTargetDrive].map((id) => ({ id }))
         : shape === 'taskItems.id' ? removeBranchTaskItemIds.map((id) => ({ id }))
         : null;
       if (result === null) return selectChain;
@@ -577,9 +584,63 @@ describe('scrubDriveScopedTaskAssociations', () => {
     expect(deletedTables).not.toContain('workflows');
     // driveId is stamped at creation and never rewritten, so a spared workflow must be
     // repointed or it executes against the drive the task just left.
-    expect(workflowDriveUpdates).toEqual([
-      expect.objectContaining({ vals: { driveId: 'drive-target' } }),
-    ]);
+    expect(workflowDriveUpdates).toHaveLength(1);
+    expect(workflowDriveUpdates[0]).toMatchObject({ vals: { driveId: 'drive-target' } });
+    // The predicate must name the workflow, not (say) its agent — an UPDATE matching
+    // zero rows would otherwise pass, exactly as it did on the delete side.
+    expect(JSON.stringify((workflowDriveUpdates[0] as { cond: unknown }).cond)).toContain('wf-1');
+  });
+
+  // The partition was only ever exercised one branch at a time; a swap would fail both
+  // single-branch tests but this pins them running together.
+  it('deletes the stale workflow and repoints the surviving one in the same move', async () => {
+    const { tx, deletedTables, workflowDriveUpdates } = makeTx({
+      scrubTaskItemIds: ['item-1'],
+      scrubWorkflowIds: ['wf-stale', 'wf-ok'],
+      triggerAgentByWorkflow: { 'wf-stale': 'agent-left-behind', 'wf-ok': 'agent-came-along' },
+      agentsInTargetDrive: ['agent-came-along'],
+    });
+
+    await scrubDriveScopedTaskAssociations(tx as never, { pageIds: ['p1'], targetDriveId: 'drive-target' });
+
+    expect(deletedTables).toContain('workflows');
+    expect(JSON.stringify(workflowDriveUpdates)).toContain('wf-ok');
+    expect(JSON.stringify(workflowDriveUpdates)).not.toContain('wf-stale');
+  });
+
+  // contextPageIds are re-filtered by driveId at fire time; instructionPageId is not —
+  // loadInstructionPage gates only on the workflow creator's membership, and that
+  // creator is a source-drive user. A runbook left behind would keep being read and its
+  // content persisted into a destination-drive agent page.
+  it('clears an instruction page that stayed behind on a surviving workflow', async () => {
+    const { tx, workflowDriveUpdates } = makeTx({
+      scrubTaskItemIds: ['item-1'],
+      scrubWorkflowIds: ['wf-ok'],
+      triggerAgentByWorkflow: { 'wf-ok': 'agent-came-along' },
+      agentsInTargetDrive: ['agent-came-along'],
+      instructionPageByWorkflow: { 'wf-ok': 'runbook-left-behind' },
+    });
+
+    await scrubDriveScopedTaskAssociations(tx as never, { pageIds: ['p1'], targetDriveId: 'drive-target' });
+
+    expect(workflowDriveUpdates).toContainEqual(
+      expect.objectContaining({ vals: { instructionPageId: null } }),
+    );
+  });
+
+  it('keeps an instruction page that travelled with the task', async () => {
+    const { tx, workflowDriveUpdates } = makeTx({
+      scrubTaskItemIds: ['item-1'],
+      scrubWorkflowIds: ['wf-ok'],
+      triggerAgentByWorkflow: { 'wf-ok': 'agent-came-along' },
+      agentsInTargetDrive: ['agent-came-along'],
+      instructionPageByWorkflow: { 'wf-ok': 'runbook-came-along' },
+      pagesInTargetDrive: ['runbook-came-along'],
+    });
+
+    await scrubDriveScopedTaskAssociations(tx as never, { pageIds: ['p1'], targetDriveId: 'drive-target' });
+
+    expect(JSON.stringify(workflowDriveUpdates)).not.toContain('instructionPageId');
   });
 
   // A trigger's agent comes from workflows.agentPageId, set independently of any task
