@@ -25,7 +25,11 @@
  * - Works across multiple server instances (Postgres is the source of truth)
  * - Progressive blocking for repeated violations (computed at call time)
  * - Graceful fallback to in-memory in development when DB is unreachable
- * - Fail-closed in production: deny with Retry-After when DB is unreachable
+ * - Degraded-but-enforcing in production: when the DB is unreachable, each
+ *   instance enforces a CONSERVATIVE in-memory limit (half the configured
+ *   threshold) so a DB outage neither becomes a total platform outage
+ *   (fail-closed shared fate) nor a rate-limit bypass (fail-open). Only if
+ *   the in-memory check itself fails does the request fail closed.
  *
  * @see packages/lib/src/auth/rate-limit-utils.ts for the in-memory-only version
  */
@@ -214,6 +218,58 @@ function failClosedResponse(config: RateLimitConfig): RateLimitResult {
   };
 }
 
+/**
+ * Conservative per-instance threshold used while Postgres is unreachable in
+ * production. Half the configured limit (floor 1): the in-memory fallback is
+ * per-instance, so with N instances an attacker spraying evenly could reach
+ * N × this value — halving claws back headroom against that multiplier while
+ * still letting legitimate users through. Never exceeds the configured limit
+ * (a degenerate configured 0 stays 0).
+ */
+export function conservativeFallbackMaxAttempts(maxAttempts: number): number {
+  return Math.min(maxAttempts, Math.max(1, Math.floor(maxAttempts / 2)));
+}
+
+/**
+ * Same window/block semantics as the caller's config, with only maxAttempts
+ * reduced to the conservative per-instance threshold.
+ */
+export function conservativeFallbackConfig(config: RateLimitConfig): RateLimitConfig {
+  return { ...config, maxAttempts: conservativeFallbackMaxAttempts(config.maxAttempts) };
+}
+
+/**
+ * Production fallback when Postgres is unreachable: enforce the conservative
+ * in-memory limit instead of denying every request (a fail-closed check that
+ * shares fate with the primary DB turns a DB stall into a total platform
+ * outage). Limits stay at or below configured — never fail open. If the
+ * in-memory check itself throws, we genuinely cannot limit, so fail closed.
+ *
+ * `memCheck` is injectable for tests; production callers use the default.
+ */
+export function conservativeFallbackCheck(
+  identifier: string,
+  config: RateLimitConfig,
+  memCheck: (identifier: string, config: RateLimitConfig) => RateLimitResult = inMemoryCheckRateLimit,
+): RateLimitResult {
+  const safeId = String(identifier ?? '').slice(0, 20);
+  const logId = safeId.length >= 20 ? `${safeId}...` : safeId;
+
+  try {
+    const result = memCheck(identifier, conservativeFallbackConfig(config));
+    loggers.api.warn(
+      'RATE_LIMIT_PG_FALLBACK: Postgres unavailable in production - enforcing conservative per-instance in-memory limit',
+      { identifier: logId, allowed: result.allowed },
+    );
+    return result;
+  } catch {
+    loggers.api.error('Postgres unavailable in production - DENYING request (fail-closed)', {
+      identifier: logId,
+    });
+    return failClosedResponse(config);
+  }
+}
+
 // Bucket-aligned window_start for the current time.
 function currentWindowStart(windowMs: number, now: number = Date.now()): Date {
   return new Date(Math.floor(now / windowMs) * windowMs);
@@ -335,12 +391,12 @@ export async function checkDistributedRateLimit(
       error: error instanceof Error ? error.message : String(error),
     });
 
+    // Re-arm the mode log so recovery ("Distributed rate limiting enabled")
+    // is visible in logs after an outage.
+    postgresAvailableLogged = false;
+
     if (process.env.NODE_ENV === 'production') {
-      const safeId = String(identifier ?? '').slice(0, 20);
-      loggers.api.error('Postgres unavailable in production - DENYING request (fail-closed)', {
-        identifier: safeId.length >= 20 ? `${safeId}...` : safeId,
-      });
-      return failClosedResponse(config);
+      return conservativeFallbackCheck(identifier, config);
     }
 
     return inMemoryCheckRateLimit(identifier, config);
@@ -364,8 +420,10 @@ export async function resetDistributedRateLimit(identifier: string): Promise<voi
 
 /**
  * Get rate limit status without incrementing.
- * In production, fails closed (reports blocked) when DB is unavailable to avoid
- * returning potentially stale in-memory status in distributed deployments.
+ * In production, when the DB is unavailable this reports the same conservative
+ * per-instance in-memory state the check path enforces during the outage, so
+ * status and enforcement agree; it fails closed (reports blocked) only if the
+ * in-memory read itself throws.
  */
 export async function getDistributedRateLimitStatus(
   identifier: string,
@@ -422,11 +480,15 @@ export async function getDistributedRateLimitStatus(
     };
   } catch {
     if (process.env.NODE_ENV === 'production') {
-      return {
-        blocked: true,
-        retryAfter: Math.ceil(config.windowMs / 1000),
-        attemptsRemaining: 0,
-      };
+      try {
+        return inMemoryGetRateLimitStatus(identifier, conservativeFallbackConfig(config));
+      } catch {
+        return {
+          blocked: true,
+          retryAfter: Math.ceil(config.windowMs / 1000),
+          attemptsRemaining: 0,
+        };
+      }
     }
 
     return inMemoryGetRateLimitStatus(identifier, config);
