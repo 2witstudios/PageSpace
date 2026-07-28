@@ -62,6 +62,31 @@
       "import": "./dist/ai/global-channel-id.js",
       "require": "./dist/ai/global-channel-id.js"
     },
+    "./agent-sessions/contract": {
+      "types": "./dist/agent-sessions/contract.d.ts",
+      "import": "./dist/agent-sessions/contract.js",
+      "require": "./dist/agent-sessions/contract.js"
+    },
+    "./agent-sessions/session-sprite-key": {
+      "types": "./dist/agent-sessions/session-sprite-key.d.ts",
+      "import": "./dist/agent-sessions/session-sprite-key.js",
+      "require": "./dist/agent-sessions/session-sprite-key.js"
+    },
+    "./agent-sessions/plan-session-lifecycle": {
+      "types": "./dist/agent-sessions/plan-session-lifecycle.d.ts",
+      "import": "./dist/agent-sessions/plan-session-lifecycle.js",
+      "require": "./dist/agent-sessions/plan-session-lifecycle.js"
+    },
+    "./agent-sessions/decide-session-access": {
+      "types": "./dist/agent-sessions/decide-session-access.d.ts",
+      "import": "./dist/agent-sessions/decide-session-access.js",
+      "require": "./dist/agent-sessions/decide-session-access.js"
+    },
+    "./agent-sessions/plan-spawn-session": {
+      "types": "./dist/agent-sessions/plan-spawn-session.d.ts",
+      "import": "./dist/agent-sessions/plan-spawn-session.js",
+      "require": "./dist/agent-sessions/plan-spawn-session.js"
+    },
     "./ai/model-defaults": {
       "types": "./dist/ai/model-defaults.d.ts",
       "import": "./dist/ai/model-defaults.js",
