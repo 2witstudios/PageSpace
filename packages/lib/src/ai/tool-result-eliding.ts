@@ -64,6 +64,19 @@ export interface ElisionOptions {
   elidableTools: Set<string>;
   /** Set of tool names that write content — their results are never elided. */
   writeTools: Set<string>;
+  /**
+   * Tool names whose MOST RECENT call per distinct serialized input is never
+   * elided, regardless of the boundary. Built for load_skill: the newest
+   * load of each skill is its active instructions and must survive
+   * (agentskills.io: protect active skill content from pruning); older loads
+   * of the same skill decay to stubs like any stale read.
+   *
+   * Byte-stability caveat: a protected old call flips to elidable only when
+   * a NEWER call with the same input appears later in the transcript — a
+   * rare, forward-only byte change in replayed history, the same class as a
+   * chunk-boundary advance.
+   */
+  protectMostRecentByArgs?: ReadonlySet<string>;
 }
 
 // ─── Elidable tool list (canonical; apps/web passes this set) ─────────────────
@@ -83,6 +96,12 @@ export const DEFAULT_ELIDABLE_TOOLS: ReadonlySet<string> = new Set([
   'get_activity',
   'web_search',
   'list_calendar_events',
+  // Skill bodies are deterministic re-fetchable reads — the stub's "call
+  // load_skill again with the same arguments" promise is exactly true. The
+  // most recent load per skill is protected via protectMostRecentByArgs
+  // (see ElisionOptions): the Agent Skills standard requires ACTIVE skill
+  // instructions to survive pruning; only superseded loads decay.
+  'load_skill',
   // execute_tool intentionally excluded: in search-exposure mode it can dispatch write
   // operations (task/calendar/trash mutations) whose results must not be re-played.
 ]);
@@ -179,6 +198,38 @@ function isToolOutputPart(part: ElisionMessagePart): boolean {
  * survives `convertToModelMessages`. Write-tool results are never elided.
  * Outputs below `minOutputChars` are never elided. Pure: never mutates.
  */
+/** The tool name a part refers to, in either message dialect. */
+function partToolName(part: ElisionMessagePart): string {
+  return part.toolName ?? part.type.replace(/^tool-/, '');
+}
+
+/**
+ * For each protected tool, locate the LAST call per distinct serialized
+ * input across the whole transcript. Returns identity keys
+ * (`messageIndex:partIndex`) of the parts that must not be elided.
+ */
+function computeProtectedParts(
+  messages: ElisionMessage[],
+  protectedTools: ReadonlySet<string>,
+): Set<string> {
+  if (protectedTools.size === 0) return new Set();
+
+  // toolName + serialized input → identity of the latest matching part.
+  const latestByInput = new Map<string, string>();
+  messages.forEach((msg, msgIdx) => {
+    if (msg.role !== 'assistant' || !msg.parts) return;
+    msg.parts.forEach((part, partIdx) => {
+      if (!isToolOutputPart(part)) return;
+      const toolName = partToolName(part);
+      if (!protectedTools.has(toolName)) return;
+      const input = part.input ?? part.args;
+      latestByInput.set(`${toolName}:${JSON.stringify(input) ?? ''}`, `${msgIdx}:${partIdx}`);
+    });
+  });
+
+  return new Set(latestByInput.values());
+}
+
 export function elideStaleToolOutputs(
   messages: ElisionMessage[],
   opts: ElisionOptions,
@@ -187,9 +238,14 @@ export function elideStaleToolOutputs(
 
   if (elisionBoundaryTurnIndex <= 0) return messages;
 
+  const protectedParts = computeProtectedParts(
+    messages,
+    opts.protectMostRecentByArgs ?? new Set(),
+  );
+
   let assistantTurnsSeen = 0;
 
-  return messages.map((msg): ElisionMessage => {
+  return messages.map((msg, msgIdx): ElisionMessage => {
     if (msg.role !== 'assistant') return msg;
 
     const thisTurnIndex = assistantTurnsSeen;
@@ -201,17 +257,20 @@ export function elideStaleToolOutputs(
     if (!msg.parts || msg.parts.length === 0) return msg;
 
     let didElide = false;
-    const newParts = msg.parts.map((part): ElisionMessagePart => {
+    const newParts = msg.parts.map((part, partIdx): ElisionMessagePart => {
       if (!isToolOutputPart(part)) return part;
 
       // UIMessage parts carry the tool name in `type` as 'tool-{name}' when toolName is absent
-      const toolName = part.toolName ?? part.type.replace(/^tool-/, '');
+      const toolName = partToolName(part);
 
       // Never elide write-tool results
       if (writeTools.has(toolName)) return part;
 
       // Only elide tools in the elidable set
       if (!elidableTools.has(toolName)) return part;
+
+      // The newest call per input of a protected tool is active content
+      if (protectedParts.has(`${msgIdx}:${partIdx}`)) return part;
 
       // Size guard
       if (outputCharLength(part) < minOutputChars) return part;

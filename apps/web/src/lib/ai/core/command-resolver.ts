@@ -28,6 +28,7 @@ import {
 } from '@pagespace/lib/commands/command-core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { loadAvailableCommands } from '@/lib/commands/available-commands';
+import { getSkillBody } from '@/lib/ai/skills/skill-bodies';
 import {
   findActiveCommandTokens,
   type CommandExecutionPlan,
@@ -122,10 +123,11 @@ export async function planCommandExecutions(
 }
 
 function skip(
-  token: ParsedCommandToken,
+  commandId: string,
+  label: string,
   reason: 'page_trashed' | 'no_access' | 'not_found' | 'disabled'
 ): CommandExecutionPlan {
-  return { kind: 'skip', commandId: token.commandId, label: token.label, reason };
+  return { kind: 'skip', commandId, label, reason };
 }
 
 async function resolveToken(
@@ -134,16 +136,36 @@ async function resolveToken(
   context: CommandResolutionContext
 ): Promise<CommandExecutionPlan> {
   if (token.commandId.startsWith(BUILTIN_ID_PREFIX)) {
-    return resolveBuiltin(token, senderId, context);
+    const trigger = token.commandId.slice(BUILTIN_ID_PREFIX.length);
+    return resolveBuiltinInjection(trigger, senderId, context, token.label);
   }
 
+  return resolveCommandInjectionById(token.commandId, senderId, token.label);
+}
+
+/**
+ * Resolve a user/drive command BY ID into an execution plan, applying the
+ * full hostile-input pipeline: shape validation, sender-usability gate
+ * (personal = owner only, drive = members only, both indistinguishable from
+ * not_found), enabled check, entry-page trash check, use-time
+ * canUserViewPage, serialization, and the viewable-children manifest.
+ *
+ * Shared by the chip path (resolveToken) and the model path (load_skill) so
+ * both loads are permission-identical by construction. `label` is the chip's
+ * display label; tool-initiated loads default it to the command id.
+ */
+export async function resolveCommandInjectionById(
+  commandId: string,
+  senderId: string,
+  label: string = commandId
+): Promise<CommandExecutionPlan> {
   // Shape-validate the hostile id before any DB operation.
-  if (!COMMAND_ID_PATTERN.test(token.commandId)) {
-    return skip(token, 'not_found');
+  if (!COMMAND_ID_PATTERN.test(commandId)) {
+    return skip(commandId, label, 'not_found');
   }
 
   const command = await db.query.commands.findFirst({
-    where: eq(commands.id, token.commandId),
+    where: eq(commands.id, commandId),
     with: {
       entryPage: {
         columns: {
@@ -158,28 +180,28 @@ async function resolveToken(
     },
   });
 
-  if (!command) return skip(token, 'not_found');
+  if (!command) return skip(commandId, label, 'not_found');
 
   // Usability gate first: a command the sender can't use must be
   // indistinguishable from a nonexistent one (no state probing).
   if (command.userId) {
-    if (command.userId !== senderId) return skip(token, 'not_found');
+    if (command.userId !== senderId) return skip(commandId, label, 'not_found');
   } else if (command.driveId) {
     const isMember = await isUserDriveMember(senderId, command.driveId);
-    if (!isMember) return skip(token, 'not_found');
+    if (!isMember) return skip(commandId, label, 'not_found');
   } else {
     // Scope invariant violated (DB check constraint should prevent this).
-    return skip(token, 'not_found');
+    return skip(commandId, label, 'not_found');
   }
 
-  if (!command.enabled) return skip(token, 'disabled');
+  if (!command.enabled) return skip(commandId, label, 'disabled');
 
   const entryPage = command.entryPage;
-  if (!entryPage || entryPage.isTrashed) return skip(token, 'page_trashed');
+  if (!entryPage || entryPage.isTrashed) return skip(commandId, label, 'page_trashed');
 
   // Cross-drive / stale references are re-permission-checked on every use.
   const canView = await canUserViewPage(senderId, entryPage.id);
-  if (!canView) return skip(token, 'no_access');
+  if (!canView) return skip(commandId, label, 'no_access');
 
   const serializedContent = isTextSerializablePageType(entryPage.type)
     ? serializePageContentForAI(entryPage)
@@ -192,7 +214,7 @@ async function resolveToken(
     injection: {
       commandId: command.id,
       trigger: command.trigger,
-      label: token.label,
+      label,
       scope: command.userId ? 'user' : 'drive',
       description: command.description,
       entryPage: {
@@ -207,29 +229,38 @@ async function resolveToken(
 }
 
 /**
- * Built-ins have no entry page — their instruction is the description, plus
- * an optional dynamic section the registry declares as a pure function of
- * injected data. The data loading happens HERE (registry stays pure): for
- * /help that is the sender's precedence-resolved command list. A loading
- * failure degrades to the static description, never the request.
+ * Built-ins have no entry page — their instruction is either a code-shipped
+ * skill body (kind: 'skill') or the description plus an optional dynamic
+ * section the registry declares as a pure function of injected data. The
+ * data loading happens HERE (registry stays pure): for /help that is the
+ * sender's precedence-resolved command list. A loading failure degrades to
+ * the static description, never the request.
+ *
+ * Exported so the model path (load_skill) resolves built-ins through the
+ * same function as the chip path. `label` defaults to the trigger for
+ * tool-initiated loads.
  */
-async function resolveBuiltin(
-  token: ParsedCommandToken,
+export async function resolveBuiltinInjection(
+  trigger: string,
   senderId: string,
-  context: CommandResolutionContext
+  context: CommandResolutionContext,
+  label: string = trigger
 ): Promise<CommandExecutionPlan> {
-  const trigger = token.commandId.slice(BUILTIN_ID_PREFIX.length);
+  const commandId = `${BUILTIN_ID_PREFIX}${trigger}`;
   const builtin = BUILTIN_COMMANDS.find((command) => command.trigger === trigger);
-  if (!builtin) return skip(token, 'not_found');
+  if (!builtin) return skip(commandId, label, 'not_found');
 
-  const dynamicContent = await loadBuiltinDynamicSection(builtin, senderId, context);
+  const dynamicContent =
+    builtin.kind === 'skill'
+      ? (getSkillBody(builtin.trigger) ?? undefined)
+      : await loadBuiltinDynamicSection(builtin, senderId, context);
 
   return {
     kind: 'inject',
     injection: {
-      commandId: token.commandId,
+      commandId,
       trigger: builtin.trigger,
-      label: token.label,
+      label,
       scope: 'builtin',
       description: builtin.description,
       entryPage: null,

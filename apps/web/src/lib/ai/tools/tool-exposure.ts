@@ -1,6 +1,7 @@
 import type { ToolSet } from 'ai';
 import { CORE_TOOL_NAMES } from '../core/stub-tools';
 import { TOOL_DISCOVERY_PROMPT, buildNonCoreToolNamesPrompt } from '../core/system-prompt';
+import type { SkillSearchEntry } from '../core/skill-catalog';
 import { createToolSearchTool } from './tool-search-tool';
 import { createExecuteTool } from './execute-tool';
 
@@ -112,6 +113,7 @@ export function applyToolExposureMode(
   tools: ToolSet,
   mode: ToolExposureMode,
   alwaysUpfront: ReadonlySet<string> = new Set(),
+  searchableSkills: readonly SkillSearchEntry[] = [],
 ): { tools: ToolSet; toolDiscoveryPrompt: string } {
   if (mode !== 'search') {
     return { tools, toolDiscoveryPrompt: '' };
@@ -139,7 +141,7 @@ export function applyToolExposureMode(
   const searchTools: ToolSet = {
     ...coreTools,
     ...upfrontOverrides,
-    tool_search: createToolSearchTool(deferrable),
+    tool_search: createToolSearchTool(deferrable, searchableSkills),
     execute_tool: createExecuteTool(nonCoreTools),
   };
 

@@ -20,7 +20,14 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 
 import { db } from '@pagespace/db/db';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
+import { BUILTIN_COMMANDS } from '@pagespace/lib/commands/command-core';
 import { loadAvailableCommands } from '../available-commands';
+
+// Expectations derive from the registry so adding a built-in (e.g. a new
+// skill) doesn't rewrite this file — these tests are about DB-command
+// merging/suppression, not the registry's contents.
+const BUILTIN_TRIGGERS = BUILTIN_COMMANDS.map((c) => c.trigger);
+const withBuiltins = (...triggers: string[]) => [...BUILTIN_TRIGGERS, ...triggers].sort();
 
 const mockFindMany = db.query.commands.findMany as unknown as Mock;
 const mockBatchPermissions = vi.mocked(getBatchPagePermissions);
@@ -79,7 +86,7 @@ describe('loadAvailableCommands', () => {
 
     const { winners } = await loadAvailableCommands(USER_ID, null);
 
-    expect(winners.map((w) => w.trigger).sort()).toEqual(['help', 'release-checklist']);
+    expect(winners.map((w) => w.trigger).sort()).toEqual(withBuiltins('release-checklist'));
     expect(winners.find((w) => w.trigger === 'help')).toMatchObject({
       id: 'builtin:help',
       scope: 'builtin',
@@ -100,7 +107,7 @@ describe('loadAvailableCommands', () => {
 
     const { winners } = await loadAvailableCommands(USER_ID, DRIVE_ID);
 
-    expect(winners.map((w) => w.trigger).sort()).toEqual(['help', 'mine', 'ours']);
+    expect(winners.map((w) => w.trigger).sort()).toEqual(withBuiltins('mine', 'ours'));
     expect(winners.find((w) => w.trigger === 'ours')).toMatchObject({
       scope: 'drive',
       driveId: DRIVE_ID,
@@ -119,7 +126,7 @@ describe('loadAvailableCommands', () => {
 
     const { winners } = await loadAvailableCommands(USER_ID, DRIVE_ID);
 
-    expect(winners.map((w) => w.trigger).sort()).toEqual(['help', 'live']);
+    expect(winners.map((w) => w.trigger).sort()).toEqual(withBuiltins('live'));
   });
 
   it('suppresses drive commands whose entry page moved to another drive', async () => {
@@ -132,7 +139,7 @@ describe('loadAvailableCommands', () => {
 
     const { winners } = await loadAvailableCommands(USER_ID, DRIVE_ID);
 
-    expect(winners.map((w) => w.trigger).sort()).toEqual(['help', 'stayed']);
+    expect(winners.map((w) => w.trigger).sort()).toEqual(withBuiltins('stayed'));
   });
 
   it('suppresses commands whose entry page the user cannot view (execution-time predicate)', async () => {
@@ -145,7 +152,7 @@ describe('loadAvailableCommands', () => {
 
     const { winners } = await loadAvailableCommands(USER_ID, DRIVE_ID);
 
-    expect(winners.map((w) => w.trigger).sort()).toEqual(['drive-visible', 'help', 'visible']);
+    expect(winners.map((w) => w.trigger).sort()).toEqual(withBuiltins('drive-visible', 'visible'));
     // ONE batched check with the requesting user's identity covers both scopes
     expect(mockBatchPermissions).toHaveBeenCalledTimes(1);
     expect(mockBatchPermissions).toHaveBeenCalledWith(
@@ -156,7 +163,7 @@ describe('loadAvailableCommands', () => {
 
   it('skips the permission query entirely when only built-ins are available', async () => {
     const { winners } = await loadAvailableCommands(USER_ID, null);
-    expect(winners.map((w) => w.trigger)).toEqual(['help']);
+    expect(winners.map((w) => w.trigger).sort()).toEqual(withBuiltins());
     expect(mockBatchPermissions).not.toHaveBeenCalled();
   });
 

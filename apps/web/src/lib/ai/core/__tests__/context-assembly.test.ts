@@ -130,6 +130,65 @@ describe('prepareHistoryForModel — summary detection', () => {
   });
 });
 
+describe('prepareHistoryForModel — skill loads lost to compaction', () => {
+  function skillLoadMsg(id: string, name: string): UIMessage {
+    return {
+      id,
+      role: 'assistant',
+      parts: [
+        {
+          type: 'tool-load_skill',
+          toolCallId: `call-${id}`,
+          input: { name },
+          output: `<skill_instructions name="${name}">…</skill_instructions>`,
+          state: 'output-available',
+        },
+      ],
+    } as unknown as UIMessage;
+  }
+
+  it('appends a re-load pointer for skills whose loads were compacted away', async () => {
+    const history = [
+      userMsg('u0', 'build a sheet'),
+      skillLoadMsg('a0', 'spreadsheets'),
+      ...pairs(4),
+    ];
+    // Compaction cut the load_skill turn: summary + tail without it.
+    mockPrepare.mockResolvedValue({
+      messages: [summaryMsg(), ...pairs(4)] as never,
+      scheduleCompaction: vi.fn(),
+      pendingCompaction: null,
+    });
+
+    const result = await prepareHistoryForModel({ history, ...baseParams });
+
+    expect(result.summaryText).toContain('"spreadsheets"');
+    expect(result.summaryText).toContain('load_skill');
+  });
+
+  it('does not append a pointer when the load survives in the tail', async () => {
+    const tail = [skillLoadMsg('a9', 'spreadsheets'), ...pairs(2)];
+    mockPrepare.mockResolvedValue({
+      messages: [summaryMsg(), ...tail] as never,
+      scheduleCompaction: vi.fn(),
+      pendingCompaction: null,
+    });
+
+    const result = await prepareHistoryForModel({
+      history: [userMsg('u0', 'q'), skillLoadMsg('a9', 'spreadsheets'), ...pairs(2)],
+      ...baseParams,
+    });
+
+    expect(result.summaryText).not.toContain('load_skill');
+  });
+
+  it('does not touch summaryText when there is no summary', async () => {
+    const history = [userMsg('u0', 'q'), skillLoadMsg('a0', 'spreadsheets')];
+    const result = await prepareHistoryForModel({ history, ...baseParams });
+    expect(result.summaryText).toBe('');
+  });
+});
+
 describe('prepareHistoryForModel — elision/compaction coincidence', () => {
   it('elides stale outputs on the tail even when a summary exists', async () => {
     // 20 assistant turns: chunkSize=8, keepLastTurns=4 → boundary = floor(20/8)*8 - 4 = 12.

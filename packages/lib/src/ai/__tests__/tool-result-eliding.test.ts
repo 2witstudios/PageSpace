@@ -306,4 +306,113 @@ describe('DEFAULT_ELIDABLE_TOOLS', () => {
     expect(DEFAULT_ELIDABLE_TOOLS.has('regex_search')).toBe(true);
     expect(DEFAULT_ELIDABLE_TOOLS.has('web_search')).toBe(true);
   });
+
+  it('includes load_skill (deterministic re-fetchable skill bodies)', () => {
+    expect(DEFAULT_ELIDABLE_TOOLS.has('load_skill')).toBe(true);
+  });
+});
+
+describe('protectMostRecentByArgs (MRU skill-load protection)', () => {
+  const SKILL_ELIDABLE = new Set(['load_skill', 'read_page']);
+  const opts = (boundary: number): ElisionOptions => ({
+    elisionBoundaryTurnIndex: boundary,
+    minOutputChars: 100,
+    elidableTools: SKILL_ELIDABLE,
+    writeTools: WRITE_TOOLS,
+    protectMostRecentByArgs: new Set(['load_skill']),
+  });
+
+  const skillLoad = (callId: string, name: string, body: string) =>
+    makeMsg('assistant', [
+      toolCallPart(callId, 'load_skill', { name }),
+      { type: 'tool-result', toolCallId: callId, toolName: 'load_skill', args: { name }, result: body },
+    ]);
+
+  it('protects the only load of a skill even past the boundary', () => {
+    const msgs: ElisionMessage[] = [
+      makeMsg('user', [textPart('q1')]),
+      skillLoad('c1', 'spreadsheets', 's'.repeat(2000)),
+      makeMsg('user', [textPart('q2')]),
+      makeMsg('assistant', [textPart('a2')]),
+      makeMsg('user', [textPart('q3')]),
+      makeMsg('assistant', [textPart('a3')]),
+    ];
+    const result = elideStaleToolOutputs(msgs, opts(2));
+    const part = result[1].parts?.find((p) => p.type === 'tool-result');
+    expect(part?.result).toBe('s'.repeat(2000));
+  });
+
+  it('elides an older load of the SAME skill when a newer one exists', () => {
+    const msgs: ElisionMessage[] = [
+      makeMsg('user', [textPart('q1')]),
+      skillLoad('c1', 'spreadsheets', 'old'.repeat(700)),
+      makeMsg('user', [textPart('q2')]),
+      skillLoad('c2', 'spreadsheets', 'new'.repeat(700)),
+      makeMsg('user', [textPart('q3')]),
+      makeMsg('assistant', [textPart('a3')]),
+      makeMsg('user', [textPart('q4')]),
+      makeMsg('assistant', [textPart('a4')]),
+    ];
+    const result = elideStaleToolOutputs(msgs, opts(3));
+    const oldPart = result[1].parts?.find((p) => p.type === 'tool-result');
+    const newPart = result[3].parts?.find((p) => p.type === 'tool-result');
+    expect(oldPart?.result).toContain('elided');
+    expect(newPart?.result).toBe('new'.repeat(700));
+  });
+
+  it('protects the newest load of EACH distinct skill independently', () => {
+    const msgs: ElisionMessage[] = [
+      makeMsg('user', [textPart('q1')]),
+      skillLoad('c1', 'spreadsheets', 'sheet'.repeat(400)),
+      makeMsg('user', [textPart('q2')]),
+      skillLoad('c2', 'canvas-websites', 'canvas'.repeat(400)),
+      makeMsg('user', [textPart('q3')]),
+      makeMsg('assistant', [textPart('a3')]),
+      makeMsg('user', [textPart('q4')]),
+      makeMsg('assistant', [textPart('a4')]),
+    ];
+    const result = elideStaleToolOutputs(msgs, opts(3));
+    expect(result[1].parts?.find((p) => p.type === 'tool-result')?.result).toBe(
+      'sheet'.repeat(400)
+    );
+    expect(result[3].parts?.find((p) => p.type === 'tool-result')?.result).toBe(
+      'canvas'.repeat(400)
+    );
+  });
+
+  it('does not protect unlisted tools (read_page still elides normally)', () => {
+    const msgs: ElisionMessage[] = [
+      makeMsg('user', [textPart('q1')]),
+      makeMsg('assistant', [
+        toolCallPart('c1', 'read_page', { pageId: 'p1' }),
+        toolResultPart('c1', 'read_page', 'r'.repeat(2000)),
+      ]),
+      makeMsg('user', [textPart('q2')]),
+      makeMsg('assistant', [textPart('a2')]),
+      makeMsg('user', [textPart('q3')]),
+      makeMsg('assistant', [textPart('a3')]),
+    ];
+    const result = elideStaleToolOutputs(msgs, opts(2));
+    expect(result[1].parts?.find((p) => p.type === 'tool-result')?.result).toContain('elided');
+  });
+
+  it('output is unchanged when protectMostRecentByArgs is absent (back-compat)', () => {
+    const msgs: ElisionMessage[] = [
+      makeMsg('user', [textPart('q1')]),
+      skillLoad('c1', 'spreadsheets', 's'.repeat(2000)),
+      makeMsg('user', [textPart('q2')]),
+      makeMsg('assistant', [textPart('a2')]),
+      makeMsg('user', [textPart('q3')]),
+      makeMsg('assistant', [textPart('a3')]),
+    ];
+    const withoutProtection = elideStaleToolOutputs(msgs, {
+      elisionBoundaryTurnIndex: 2,
+      minOutputChars: 100,
+      elidableTools: SKILL_ELIDABLE,
+      writeTools: WRITE_TOOLS,
+    });
+    expect(
+      withoutProtection[1].parts?.find((p) => p.type === 'tool-result')?.result
+    ).toContain('elided');
+  });
 });
