@@ -8,6 +8,17 @@ vi.mock('@pagespace/db/db', () => ({
     },
     select: vi.fn(),
     selectDistinct: vi.fn(),
+    transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) =>
+      fn({
+        insert: () => ({
+          values: () => ({
+            returning: async () => [
+              { id: 'drive-new', name: 'Test Drive', slug: 'test-drive', drivePrompt: null },
+            ],
+          }),
+        }),
+      }),
+    ),
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
@@ -240,6 +251,26 @@ describe('drive-tools', () => {
       await expect(
         driveTools.create_drive.execute!({ name: '' }, context)
       ).rejects.toThrow('Drive name is required');
+    });
+
+    // create_page parks the agent in the drive it wrote to; create_drive must do
+    // the same, or a "make me a workspace and put these pages in it" turn either
+    // throws ("no workspace is currently in view") from the dashboard or, worse,
+    // quietly fills whichever workspace the user happened to be standing in.
+    it('parks the agent in the workspace it just created', async () => {
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      const result = await driveTools.create_drive.execute!({ name: 'Test Drive' }, context) as
+        { success: boolean };
+
+      expect(result.success).toBe(true);
+      expect(context.experimental_context.currentWorkingDrive).toEqual({
+        id: 'drive-new',
+        name: 'Test Drive',
+      });
     });
 
     it('does not block a plain user (non-agent) call at the agent gate', async () => {

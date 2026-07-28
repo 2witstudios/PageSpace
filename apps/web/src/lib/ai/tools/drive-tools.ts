@@ -209,6 +209,16 @@ export const driveTools = {
           name: newDrive.name,
         }, await getAiContextWithActor(context as ToolExecutionContext));
 
+        // Creating a workspace shifts the agent's focus into it for the rest of
+        // this turn — the same mutate-in-place pattern create_page uses for
+        // currentWorkingPage. Without this, a "create a workspace, then put these
+        // pages in it" turn either throws ("no workspace is currently in view")
+        // or, worse, silently fills the workspace the user happened to be in.
+        const rawContext = context as ToolExecutionContext | undefined;
+        if (rawContext) {
+          rawContext.currentWorkingDrive = { id: newDrive.id, name: newDrive.name };
+        }
+
         const contextMessage = driveContext ? ` with initial context (${driveContext.length} chars)` : '';
 
         return {

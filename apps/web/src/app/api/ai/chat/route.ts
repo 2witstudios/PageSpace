@@ -114,7 +114,8 @@ import {
 } from '@/lib/ai/core/stream-abort-registry';
 import { runAgentWithRetry, AGENT_MAX_STEPS, isRunAborted, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
 import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
-import { locationContextToPageContext } from '@/lib/ai/shared/buildPageContext';
+import { locationContextToPageContext, pageContextToLocationContext } from '@/lib/ai/shared/buildPageContext';
+import type { LocationContext } from '@/lib/ai/shared/chat-types';
 import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
@@ -326,6 +327,15 @@ export async function POST(request: Request) {
     const pageContext = contextRef
       ? locationContextToPageContext(resolvedLocation)
       : legacyPageContext;
+
+    // ONE normalized location for this turn, feeding both the model prompt and
+    // the tool context. PageContext can't represent a drive-level location (it
+    // requires a page), so deriving the prompt from it alone left the model told
+    // "operating from the dashboard" on /dashboard/<drive>/<section> while tools
+    // defaulted `driveId` to that very drive.
+    const turnLocation: LocationContext | null = contextRef
+      ? resolvedLocation
+      : pageContextToLocationContext(legacyPageContext);
 
     const mcpScopeError = await checkMCPPageScope(authResult, chatId);
     if (mcpScopeError) {
@@ -1197,18 +1207,10 @@ export async function POST(request: Request) {
       systemPrompt += buildInlineInstructions(allowedToolNames);
     }
 
-    const locationPrompt = buildLocationTurnPrompt(pageContext ? {
-      currentPage: {
-        title: pageContext.pageTitle,
-        type: pageContext.pageType,
-        path: pageContext.pagePath,
-      },
-      currentDrive: pageContext.driveId ? {
-        id: pageContext.driveId,
-        name: pageContext.driveName,
-        slug: pageContext.driveSlug,
-      } : undefined,
-      breadcrumbs: pageContext.breadcrumbs,
+    const locationPrompt = buildLocationTurnPrompt(turnLocation ? {
+      currentPage: turnLocation.currentPage,
+      currentDrive: turnLocation.currentDrive,
+      breadcrumbs: turnLocation.breadcrumbs,
     } : undefined);
 
     // Cross-drive membership context applies uniformly regardless of whether
@@ -1543,27 +1545,12 @@ export async function POST(request: Request) {
                 aiProvider: currentProvider,
                 aiModel: currentModel,
                 conversationId,
-                locationContext: pageContext ? {
-                  currentPage: {
-                    id: pageContext.pageId,
-                    title: pageContext.pageTitle,
-                    type: pageContext.pageType,
-                    path: pageContext.pagePath,
-                  },
-                  currentDrive: pageContext.driveId ? {
-                    id: pageContext.driveId,
-                    name: pageContext.driveName,
-                    slug: pageContext.driveSlug,
-                  } : undefined,
-                  breadcrumbs: pageContext.breadcrumbs,
-                } : resolvedLocation?.currentDrive ? {
-                  // Drive-level route (a workspace is in view but no page):
-                  // PageContext can't represent that shape, so tools would
-                  // otherwise see no location at all and `driveId` defaulting
-                  // would be dead on this route.
-                  currentPage: undefined,
-                  currentDrive: resolvedLocation.currentDrive,
-                  breadcrumbs: resolvedLocation.breadcrumbs,
+                // Same normalized location the model prompt was built from, so
+                // the two can never disagree about which workspace is in view.
+                locationContext: turnLocation ? {
+                  currentPage: turnLocation.currentPage ?? undefined,
+                  currentDrive: turnLocation.currentDrive ?? undefined,
+                  breadcrumbs: turnLocation.breadcrumbs,
                 } : undefined,
                 // Turn-start snapshot of the agent's working page — tools that
                 // shift focus (e.g. create_page) mutate this in place so later

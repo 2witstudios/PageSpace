@@ -127,9 +127,10 @@ describe('generate_image destination', () => {
     expect(createImageFilePage).toHaveBeenCalledWith(
       expect.objectContaining({ targetDriveId: undefined, targetParentId: undefined }),
     );
-    expect(res.savedTo).toBe('home_gallery');
+    expect(res.savedTo).toBe('home_no_location');
     // The relocate hint is what closes the loop for the model.
     expect(res.nextSteps?.[0]).toContain('move_page');
+    expect(res.nextSteps?.[0]).toContain('no workspace was in view');
   });
 
   it('degrades to the Home gallery when the drive in view is view-only', async () => {
@@ -138,7 +139,24 @@ describe('generate_image destination', () => {
 
     const res = (await run({ prompt: 'a diagram' }, admin(inDrive('drive-readonly')))) as { savedTo: string };
 
-    expect(res.savedTo).toBe('home_gallery');
+    expect(res.savedTo).toBe('home_unwritable_location');
+  });
+
+  // The two Home outcomes must stay distinguishable: reporting "no workspace was
+  // in view" when the real cause was a read-only workspace makes the assistant
+  // explain the wrong thing, and buries a permissions problem under a
+  // navigation one that navigating cannot fix.
+  it('reports a read-only workspace as the reason, not an absent one', async () => {
+    okGeneration();
+    canActorEditPage.mockResolvedValue(false);
+
+    const res = (await run({ prompt: 'a diagram' }, admin(inDrive('drive-readonly')))) as
+      { savedTo: string; nextSteps?: string[]; summary: string };
+
+    expect(res.nextSteps?.[0]).toContain('read-only');
+    expect(res.nextSteps?.[0]).not.toContain('no workspace was in view');
+    // Both Home outcomes still tell the user where the file actually is.
+    expect(res.summary).toContain('Home workspace gallery');
   });
 
   // An explicitly named destination must fail loudly rather than silently

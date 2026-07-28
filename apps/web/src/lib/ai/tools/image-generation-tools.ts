@@ -46,7 +46,18 @@ function titleFromPrompt(prompt: string): string {
 interface ImageTarget {
   targetDriveId?: string;
   targetParentId?: string;
-  savedTo: 'requested' | 'current_drive' | 'home_gallery';
+  /**
+   * Why the image landed where it did. The two Home outcomes are kept DISTINCT
+   * on purpose: telling the model "no workspace was in view" when the real
+   * reason was a read-only current workspace makes it explain the wrong thing
+   * to the user, and hides a permissions problem behind a navigation one.
+   */
+  savedTo: 'requested' | 'current_drive' | 'home_no_location' | 'home_unwritable_location';
+}
+
+/** Both Home outcomes, for the branches that only care that it went Home. */
+function isHomeGallery(savedTo: ImageTarget['savedTo']): boolean {
+  return savedTo === 'home_no_location' || savedTo === 'home_unwritable_location';
 }
 
 /**
@@ -92,10 +103,13 @@ async function resolveImageTarget(
   }
 
   const defaultDriveId = resolveDefaultDriveId(context);
-  if (defaultDriveId && (await canActorEditPage(context, defaultDriveId))) {
+  if (!defaultDriveId) {
+    return { ok: true, target: { savedTo: 'home_no_location' } };
+  }
+  if (await canActorEditPage(context, defaultDriveId)) {
     return { ok: true, target: { targetDriveId: defaultDriveId, savedTo: 'current_drive' } };
   }
-  return { ok: true, target: { savedTo: 'home_gallery' } };
+  return { ok: true, target: { savedTo: 'home_unwritable_location' } };
 }
 
 export const imageGenerationTools = {
@@ -349,16 +363,20 @@ restricted to app administrators.`,
         title,
         mediaType: image.mediaType,
         prompt,
-        summary:
-          target.savedTo === 'home_gallery'
-            ? `Generated an image for "${title}" and saved it to the user's Home workspace gallery.`
-            : `Generated an image for "${title}" and saved it to this workspace.`,
+        summary: isHomeGallery(target.savedTo)
+          ? `Generated an image for "${title}" and saved it to the user's Home workspace gallery.`
+          : `Generated an image for "${title}" and saved it to this workspace.`,
         // The Home fallback is where generated images used to get stranded — say so
         // at the moment it happens, so the model can offer to relocate rather than
-        // leaving the user to discover the file in the wrong workspace later.
-        ...(target.savedTo === 'home_gallery' && {
+        // leaving the user to discover the file in the wrong workspace later. The
+        // reason is reported accurately: "you can't write there" is a different
+        // problem from "I didn't know where you were", and only one of them is
+        // fixed by navigating somewhere first.
+        ...(isHomeGallery(target.savedTo) && {
           nextSteps: [
-            "This image was saved to the user's Home workspace because no workspace was in view. If it belongs elsewhere, call move_page with targetDriveId to relocate it.",
+            target.savedTo === 'home_no_location'
+              ? "This image was saved to the user's Home workspace because no workspace was in view. If it belongs elsewhere, call move_page with targetDriveId to relocate it."
+              : "This image was saved to the user's Home workspace because the workspace in view is read-only for this user. Ask where it should go, or call move_page with targetDriveId for a workspace they can edit.",
           ],
         }),
       };
