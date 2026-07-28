@@ -400,7 +400,8 @@ export function isPgUnavailabilityError(error: unknown): boolean {
         sawServerSqlstate = true;
       }
     }
-    current = current.cause;
+    // Error.cause is untyped under this package's typecheck lib target.
+    current = (current as Error & { cause?: unknown }).cause;
   }
   return !sawServerSqlstate;
 }
