@@ -120,6 +120,7 @@ function makeTx(config: {
   const scrubSelects: unknown[][] = [];
   const deletedTables: string[] = [];
   const deleteConditions: Array<{ table: string; cond: unknown }> = [];
+  const statusConfigProbes: Array<{ taskListId: string; slug: string }> = [];
   const workflowDriveUpdates: unknown[] = [];
 
   const tx = {
@@ -194,8 +195,13 @@ function makeTx(config: {
           : undefined;
       }) },
       taskStatusConfigs: {
-        findFirst: vi.fn(async () =>
-          destinationStatusConfigs.find((c) => c.slug === existingItemStatus)),
+        // where: ['and', ['eq','taskStatusConfigs.taskListId', id], ['eq','taskStatusConfigs.slug', slug]]
+        findFirst: vi.fn(async (args: { where: unknown[] }) => {
+          const listCond = args.where?.[1] as unknown[];
+          const slugCond = args.where?.[2] as unknown[];
+          statusConfigProbes.push({ taskListId: listCond?.[2] as string, slug: slugCond?.[2] as string });
+          return destinationStatusConfigs.find((c) => c.slug === slugCond?.[2]);
+        }),
         findMany: vi.fn(async () => destinationStatusConfigs),
       },
       pages: { findFirst: vi.fn(async () => (lastPosition === null ? undefined : { position: lastPosition })) },
@@ -211,7 +217,7 @@ function makeTx(config: {
     })),
   };
 
-  return { tx, taskItemInserts, taskListInserts, taskStatusConfigInserts, deletedPageIds, taskItemUpdates, deletedTables, scrubSelects, deleteConditions, workflowDriveUpdates };
+  return { tx, taskItemInserts, taskListInserts, taskStatusConfigInserts, deletedPageIds, taskItemUpdates, deletedTables, scrubSelects, deleteConditions, workflowDriveUpdates, statusConfigProbes };
 }
 
 describe('seedDefaultTaskStatusConfigs', () => {
@@ -458,6 +464,17 @@ describe('syncTaskItemOnMove', () => {
     });
     await syncTaskItemOnMove(tx as never, { movedPageId: 'list', movedPageType: 'TASK_LIST', oldParentId: 'old', newParentId: 'new', userId: 'u' });
     expect(taskItemUpdates).toHaveLength(0);
+  });
+
+  it('probes the destination list for the task\'s own slug, not a hardcoded one', async () => {
+    const { tx, statusConfigProbes } = makeTx({
+      pageTypes: { old: 'TASK_LIST', new: 'TASK_LIST' },
+      existingItems: new Set(['list']),
+      existingItemStatus: 'review',
+      destinationStatusConfigs: [{ slug: 'review', group: 'todo', position: 0 }],
+    });
+    await syncTaskItemOnMove(tx as never, { movedPageId: 'list', movedPageType: 'TASK_LIST', oldParentId: 'old', newParentId: 'new', userId: 'u' });
+    expect(statusConfigProbes).toEqual([{ taskListId: 'tasklist-1', slug: 'review' }]);
   });
 
   // A list whose owner deleted 'pending' (permitted, via migrateToSlug) would otherwise

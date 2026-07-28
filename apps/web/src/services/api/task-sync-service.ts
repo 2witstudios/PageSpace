@@ -273,7 +273,8 @@ export async function scrubDriveScopedTaskAssociations(
   // An agent that travelled WITH the task is not stale — moving a project folder that
   // contains both a task list and the agent it assigns work to must not silently drop
   // the assignment. Only agents left behind in the old drive are scrubbed.
-  const staleAgentIds = await resolveAgentsOutsideDrive(tx, [...agentPageIds], targetDriveId)
+  const residency: DriveResidency = new Map()
+  const staleAgentIds = await resolveAgentsOutsideDrive(tx, [...agentPageIds], targetDriveId, residency)
 
   // Trigger staleness is resolved SEPARATELY from assignment staleness. A trigger's
   // agent comes from workflows.agentPageId, which PUT /api/tasks/:id/triggers sets
@@ -283,7 +284,7 @@ export async function scrubDriveScopedTaskAssociations(
   // pointing at a source-drive agent, which is the leak this whole function exists to
   // stop. Workflows whose agent came along are repointed at the new drive instead of
   // being deleted, since their driveId is stamped once at creation and never rewritten.
-  await reconcileTaskTriggerWorkflows(tx, taskItemIds, targetDriveId)
+  await reconcileTaskTriggerWorkflows(tx, taskItemIds, targetDriveId, residency)
 
   if (staleAgentIds.length === 0) return
 
@@ -346,6 +347,7 @@ async function reconcileTaskTriggerWorkflows(
   tx: Tx,
   taskItemIds: string[],
   targetDriveId: string,
+  residency: DriveResidency = new Map(),
 ): Promise<void> {
   const byAgent = new Map<string, string[]>()
   const instructionPageByWorkflow = new Map<string, string>()
@@ -369,7 +371,7 @@ async function reconcileTaskTriggerWorkflows(
   if (byAgent.size === 0) return
 
   const staleTriggerAgents = new Set(
-    await resolveAgentsOutsideDrive(tx, [...byAgent.keys()], targetDriveId),
+    await resolveAgentsOutsideDrive(tx, [...byAgent.keys()], targetDriveId, residency),
   )
 
   const doomed: string[] = []
@@ -398,7 +400,7 @@ async function reconcileTaskTriggerWorkflows(
     ...new Set(survivingWithInstruction.map((id) => instructionPageByWorkflow.get(id)!)),
   ]
   const strandedInstructionPages = new Set(
-    await resolvePagesOutsideDrive(tx, instructionPageIds, targetDriveId),
+    await resolvePagesOutsideDrive(tx, instructionPageIds, targetDriveId, residency),
   )
   const workflowsToClear = survivingWithInstruction.filter((id) =>
     strandedInstructionPages.has(instructionPageByWorkflow.get(id)!),
@@ -418,22 +420,30 @@ async function deleteTaskTriggerWorkflowsForPages(tx: Tx, pageIds: string[]): Pr
   await deleteTaskTriggerWorkflows(tx, rows.map((row) => row.id))
 }
 
+/**
+ * pageId -> "did this page end up in the target drive". Shared across one scrub so the
+ * assignee agents and the trigger agents — usually the same pages — are looked up once.
+ */
+type DriveResidency = Map<string, boolean>
+
 /** The subset of `pageIds` that do NOT live in `driveId` — i.e. did not travel. */
 async function resolvePagesOutsideDrive(
   tx: Tx,
   pageIds: string[],
   driveId: string,
+  residency: DriveResidency = new Map(),
 ): Promise<string[]> {
   if (pageIds.length === 0) return []
-  const inDrive = new Set<string>()
-  for (const batch of chunk(pageIds, SCRUB_CHUNK_SIZE)) {
+  const unresolved = [...new Set(pageIds.filter((id) => !residency.has(id)))]
+  for (const batch of chunk(unresolved, SCRUB_CHUNK_SIZE)) {
     const rows = await tx
       .select({ id: pages.id })
       .from(pages)
       .where(and(inArray(pages.id, batch), eq(pages.driveId, driveId)))
-    for (const row of rows) inDrive.add(row.id)
+    const found = new Set(rows.map((row) => row.id))
+    for (const id of batch) residency.set(id, found.has(id))
   }
-  return pageIds.filter((id) => !inDrive.has(id))
+  return pageIds.filter((id) => !residency.get(id))
 }
 
 /** Agent pages that stayed behind. Same question, named for its caller. */
