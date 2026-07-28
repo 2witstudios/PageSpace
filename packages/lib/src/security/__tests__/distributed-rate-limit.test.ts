@@ -495,6 +495,41 @@ describe('distributed-rate-limit', () => {
           }
         });
 
+        it('a stale success from before the circuit opened does not close it', async () => {
+          // Two requests are in flight together while the circuit is closed.
+          // The failing one opens the circuit; the SLOWER success from the
+          // same batch must not clear the fresh cooldown — intermittent
+          // stalls produce exactly this interleaving, and a stale success
+          // would re-expose Postgres to the full request stream instead of
+          // the single half-open probe.
+          let resolveSlow!: (rows: { count: number }[]) => void;
+          const slowRows = new Promise<{ count: number }[]>((r) => {
+            resolveSlow = r;
+          });
+          insertMock
+            .mockImplementationOnce(() => ({
+              values: () => ({
+                onConflictDoUpdate: () => ({ returning: () => slowRows }),
+              }),
+            }))
+            .mockImplementationOnce(() => {
+              throw drizzleWrappedPgError();
+            });
+
+          const slowCheck = checkDistributedRateLimit('stale-a', testConfig); // in flight
+          const failed = await checkDistributedRateLimit('stale-b', testConfig); // opens circuit
+          expect(failed.allowed).toBe(true); // served by the fallback
+
+          resolveSlow([{ count: 1 }]);
+          const slow = await slowCheck; // stale success lands after the open
+          expect(slow.allowed).toBe(true);
+
+          // The circuit must still be open: the next request short-circuits.
+          const probes = insertMock.mock.calls.length;
+          await checkDistributedRateLimit('stale-c', testConfig);
+          expect(insertMock.mock.calls.length).toBe(probes);
+        });
+
         it('re-probes once after the cooldown and re-opens on continued failure', async () => {
           const t0 = 10_000_000;
           const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(t0);
