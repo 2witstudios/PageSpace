@@ -6,9 +6,12 @@ import {
   FREE_TIER_MODELS,
   DEFAULT_PROVIDER,
   DEFAULT_MODEL,
+  BACKGROUND_LIGHT_PROVIDER,
   BACKGROUND_LIGHT_MODEL,
+  BACKGROUND_HEAVY_PROVIDER,
   BACKGROUND_HEAVY_MODEL,
   isModelAllowedForTier,
+  isValidModel,
   getBackendProvider,
   getDefaultModel,
   getModelDisplayName,
@@ -106,6 +109,26 @@ describe('ai-providers-config', () => {
     it('uses current OpenRouter models for light and heavy jobs', () => {
       expect(BACKGROUND_LIGHT_MODEL).toBe('google/gemini-3.5-flash-lite');
       expect(BACKGROUND_HEAVY_MODEL).toBe('anthropic/claude-sonnet-5');
+    });
+
+    // A background (provider, model) pair that isn't a catalog entry is not an error:
+    // resolveProviderModel silently substitutes the user-facing default, so the job
+    // keeps working while quietly running a different — usually pricier — model. Only
+    // this invariant catches a model swap that forgot to move its provider with it.
+    it('pairs each background model with the provider that owns it', () => {
+      expect(isValidModel(BACKGROUND_LIGHT_PROVIDER, BACKGROUND_LIGHT_MODEL)).toBe(true);
+      expect(isValidModel(BACKGROUND_HEAVY_PROVIDER, BACKGROUND_HEAVY_MODEL)).toBe(true);
+    });
+
+    it('resolves each background pair to itself rather than the default', () => {
+      expect(resolveProviderModel(BACKGROUND_LIGHT_PROVIDER, BACKGROUND_LIGHT_MODEL)).toEqual({
+        provider: BACKGROUND_LIGHT_PROVIDER,
+        model: BACKGROUND_LIGHT_MODEL,
+      });
+      expect(resolveProviderModel(BACKGROUND_HEAVY_PROVIDER, BACKGROUND_HEAVY_MODEL)).toEqual({
+        provider: BACKGROUND_HEAVY_PROVIDER,
+        model: BACKGROUND_HEAVY_MODEL,
+      });
     });
   });
 

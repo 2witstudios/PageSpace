@@ -3,7 +3,7 @@ import { generateText } from 'ai';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { buildTimestampSystemPrompt, getUserTimeOfDay, getStartOfTodayInTimezone, isValidTimezone, normalizeTimezone, formatDateInTimezone } from '@/lib/ai/core/timestamp-utils';
-import { BACKGROUND_LIGHT_MODEL } from '@/lib/ai/core/ai-providers-config';
+import { BACKGROUND_LIGHT_PROVIDER, BACKGROUND_LIGHT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { db } from '@pagespace/db/db'
 import { eq, and, or, lt, gte, ne, desc, inArray, isNotNull, isNull } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
@@ -716,7 +716,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
 
     // Get AI provider
     const providerResult = await createAIProvider(userId, {
-      selectedProvider: 'anthropic',
+      selectedProvider: BACKGROUND_LIGHT_PROVIDER,
       selectedModel: BACKGROUND_LIGHT_MODEL,
     });
 

@@ -33,11 +33,21 @@ export const DEFAULT_PROVIDER = DEFAULT_AI_PROVIDER;
 export const DEFAULT_MODEL = DEFAULT_AI_MODEL;
 
 /**
- * Server-side model defaults for background AI jobs (pulse, memory, onboarding,
- * workflows) that previously used the `standard`/`pro` PageSpace aliases. These are
- * concrete OpenRouter IDs so the jobs no longer depend on the removed alias layer.
+ * Server-side (provider, model) defaults for background AI jobs (pulse, memory,
+ * onboarding, workflows) that previously used the `standard`/`pro` PageSpace aliases.
+ * These are concrete OpenRouter IDs so the jobs no longer depend on the removed alias
+ * layer.
+ *
+ * Provider and model are an ATOMIC PAIR — always change both together, and always pass
+ * the paired provider constant at the call site rather than a hardcoded vendor string.
+ * `resolveProviderModel` substitutes the user-facing default for any pair that isn't in
+ * the catalog, so a mismatched pair doesn't error: the background job silently runs the
+ * (more expensive) default model instead. `background pairs are valid catalog entries`
+ * in the config test guards this.
  */
+export const BACKGROUND_LIGHT_PROVIDER = 'google';
 export const BACKGROUND_LIGHT_MODEL = 'google/gemini-3.5-flash-lite';
+export const BACKGROUND_HEAVY_PROVIDER = 'anthropic';
 export const BACKGROUND_HEAVY_MODEL = 'anthropic/claude-sonnet-5';
 
 /**

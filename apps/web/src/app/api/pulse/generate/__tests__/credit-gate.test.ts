@@ -60,6 +60,7 @@ vi.mock('@/lib/ai/core/provider-factory', () => ({
   isProviderError: vi.fn().mockReturnValue(false),
 }));
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
+  BACKGROUND_LIGHT_PROVIDER: 'openai',
   BACKGROUND_LIGHT_MODEL: 'openai/gpt-5.4-mini',
 }));
 vi.mock('@/lib/ai/core/timestamp-utils', () => ({

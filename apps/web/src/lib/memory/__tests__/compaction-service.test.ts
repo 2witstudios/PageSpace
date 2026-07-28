@@ -43,6 +43,7 @@ vi.mock('@/lib/ai/core/provider-factory', () => ({
   isProviderError: (result: unknown) => result !== null && typeof result === 'object' && 'error' in result,
 }));
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
+  BACKGROUND_HEAVY_PROVIDER: 'anthropic',
   BACKGROUND_HEAVY_MODEL: 'anthropic/claude-sonnet-5',
 }));
 
