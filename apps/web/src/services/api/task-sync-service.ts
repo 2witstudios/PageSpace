@@ -1,7 +1,9 @@
 import { db } from '@pagespace/db/db'
-import { eq, and, asc, inArray } from '@pagespace/db/operators'
+import { eq, and, asc, inArray, isNotNull } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
-import { taskLists, taskItems, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks'
+import { taskLists, taskItems, taskAssignees, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks'
+import { taskTriggers } from '@pagespace/db/schema/task-triggers'
+import { workflows } from '@pagespace/db/schema/workflows'
 import {
   TASK_LIST_TYPE,
   shouldHaveTaskItem,
@@ -137,13 +139,101 @@ async function normalizeStatusForList(
   // A list with no configs at all has no vocabulary to conform to.
   if (configs.length === 0) return
 
-  const wantedGroup = item.completedAt ? 'done' : 'todo'
-  const replacement = configs.find((config) => config.group === wantedGroup) ?? configs[0]
+  // Never fall back across the done boundary. PUT /tasks/statuses validates each
+  // config's group but does not guarantee a list retains one of each, so a plain
+  // `?? configs[0]` could drop an unfinished task onto a done-group slug (ticked and
+  // struck through while every completedAt-based count still calls it incomplete) or
+  // the reverse. Completed work stays in a done slug or, failing that, the last one;
+  // unfinished work stays in any non-done slug.
+  const replacement = item.completedAt
+    ? (configs.find((config) => config.group === 'done') ?? configs[configs.length - 1])
+    : (configs.find((config) => config.group === 'todo')
+        ?? configs.find((config) => config.group !== 'done')
+        ?? configs[0])
 
   await tx
     .update(taskItems)
     .set({ status: replacement.slug })
     .where(eq(taskItems.id, item.id))
+}
+
+/**
+ * The slug a brand-new task should start in for THIS list. Defaults to 'pending' only
+ * when the list still defines it; a list whose owner deleted that status (permitted via
+ * migrateToSlug) gets its own first todo-group slug instead, so the seed can never be a
+ * status its own list does not define.
+ */
+async function resolveSeedStatus(tx: Tx, taskListId: string): Promise<string> {
+  const defaultSlug = DEFAULT_TASK_STATUSES[0].slug
+  const hasDefault = await tx.query.taskStatusConfigs.findFirst({
+    where: and(
+      eq(taskStatusConfigs.taskListId, taskListId),
+      eq(taskStatusConfigs.slug, defaultSlug),
+    ),
+  })
+  if (hasDefault) return defaultSlug
+
+  const configs = await tx.query.taskStatusConfigs.findMany({
+    where: eq(taskStatusConfigs.taskListId, taskListId),
+    orderBy: [asc(taskStatusConfigs.position)],
+    limit: STATUS_CONFIG_REMAP_LIMIT,
+  })
+  const seed = configs.find((config) => config.group === 'todo')
+    ?? configs.find((config) => config.group !== 'done')
+    ?? configs[0]
+  return seed?.slug ?? defaultSlug
+}
+
+/**
+ * Drop the associations on a task row that are scoped to the drive it just LEFT.
+ *
+ * A cross-drive move preserves the row — priority, dueDate, metadata and human
+ * assignees are all drive-independent — but three things are not, and the task write
+ * paths actively refuse to create them across a boundary:
+ *   • `assigneeAgentId` and `task_assignees.agentPageId` name agent pages in the old
+ *     drive; left in place, a drive-A agent's title renders to every drive-B viewer and
+ *     cannot be edited away, because a PATCH re-sending that agent id now 400s.
+ *   • `task_triggers` link the task to `workflows`, which carry their own NOT NULL
+ *     driveId; a drive-B member completing the task would otherwise fire a drive-A
+ *     agent run seeded with drive-B content.
+ *
+ * The workflows rows are deleted FIRST and by explicit id: `task_triggers.taskItemId`
+ * cascades from `task_items`, so any approach that removes triggers first leaves the
+ * workflows behind, orphaned and unreachable (the hazard task-trigger-helpers'
+ * disableTaskTriggers documents). Everything runs in the caller's transaction, so a
+ * failed move takes the scrub with it.
+ */
+export async function scrubDriveScopedTaskAssociations(
+  tx: Tx,
+  params: { pageIds: string[] },
+): Promise<void> {
+  const { pageIds } = params
+  if (pageIds.length === 0) return
+
+  const rows = await tx
+    .select({ id: taskItems.id })
+    .from(taskItems)
+    .where(inArray(taskItems.pageId, pageIds))
+  if (rows.length === 0) return
+  const taskItemIds = rows.map((row) => row.id)
+
+  const triggerRows = await tx
+    .select({ workflowId: taskTriggers.workflowId })
+    .from(taskTriggers)
+    .where(inArray(taskTriggers.taskItemId, taskItemIds))
+  if (triggerRows.length > 0) {
+    // Deleting the workflow cascades its task_triggers rows away.
+    await tx.delete(workflows).where(inArray(workflows.id, triggerRows.map((r) => r.workflowId)))
+  }
+
+  await tx
+    .delete(taskAssignees)
+    .where(and(inArray(taskAssignees.taskId, taskItemIds), isNotNull(taskAssignees.agentPageId)))
+
+  await tx
+    .update(taskItems)
+    .set({ assigneeAgentId: null })
+    .where(inArray(taskItems.id, taskItemIds))
 }
 
 async function addTaskItemUnderParent(
@@ -166,7 +256,7 @@ async function addTaskItemUnderParent(
   // can both pass the findFirst check above, and task_items.pageId is unique — without
   // this a second insert would 500 the read. The findFirst stays as a cheap fast path.
   await tx.insert(taskItems).values(
-    buildTaskItemInsert({ pageId, userId }),
+    buildTaskItemInsert({ pageId, userId, status: await resolveSeedStatus(tx, taskList.id) }),
   ).onConflictDoNothing({ target: taskItems.pageId })
 }
 
@@ -202,11 +292,9 @@ export async function syncTaskItemOnMove(
     oldParentId: string | null;
     newParentId: string | null;
     userId: string;
-    /** True when the move crosses a drive boundary — see resolveTaskItemSyncAction. */
-    crossDrive?: boolean;
   }
 ): Promise<void> {
-  const { movedPageId, movedPageType, oldParentId, newParentId, userId, crossDrive } = params
+  const { movedPageId, movedPageType, oldParentId, newParentId, userId } = params
 
   // Cheap guards before any parent lookups.
   if (movedPageType !== TASK_LIST_TYPE || oldParentId === newParentId) return
@@ -220,7 +308,6 @@ export async function syncTaskItemOnMove(
     newParentId,
     oldParentType,
     newParentType,
-    crossDrive,
   })
 
   if (action.shouldRemove) {

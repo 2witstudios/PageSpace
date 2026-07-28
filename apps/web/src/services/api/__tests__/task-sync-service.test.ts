@@ -4,16 +4,24 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'pages.id', parentId: 'pages.parentId', isTrashed: 'pages.isTrashed', position: 'pages.position', type: 'pages.type' } }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
   taskLists: { pageId: 'taskLists.pageId' },
-  taskItems: { pageId: 'taskItems.pageId' },
+  taskItems: { pageId: 'taskItems.pageId', id: 'taskItems.id' },
+  taskAssignees: { taskId: 'taskAssignees.taskId', agentPageId: 'taskAssignees.agentPageId' },
   taskStatusConfigs: {},
   DEFAULT_TASK_STATUSES: [
     { slug: 'pending', name: 'To Do', color: 'c', group: 'todo', position: 0 },
   ],
 }));
+vi.mock('@pagespace/db/schema/task-triggers', () => ({
+  taskTriggers: { taskItemId: 'taskTriggers.taskItemId', workflowId: 'taskTriggers.workflowId' },
+}));
+vi.mock('@pagespace/db/schema/workflows', () => ({
+  workflows: { id: 'workflows.id' },
+}));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ['eq', a, b]),
   and: vi.fn((...c) => ['and', ...c]),
   asc: vi.fn((c) => ['asc', c]),
+  isNotNull: vi.fn((c) => ['isNotNull', c]),
   desc: vi.fn((c) => ['desc', c]),
   inArray: vi.fn((c, v) => ['inArray', c, v]),
 }));
@@ -27,6 +35,7 @@ import {
   seedDefaultTaskStatusConfigs,
   syncTaskItemOnMove,
   backfillMissingTaskItems,
+  scrubDriveScopedTaskAssociations,
 } from '../task-sync-service';
 
 /**
@@ -42,6 +51,9 @@ function makeTx(config: {
   existingItems?: Set<string>;
   existingTaskList?: boolean;
   lastPosition?: number | null;
+  /** task_items ids the scrub should find, and the workflow ids their triggers name. */
+  scrubTaskItemIds?: string[];
+  scrubWorkflowIds?: string[];
   /** Status carried by the preserved task_items row, and the destination's vocabulary. */
   existingItemStatus?: string;
   existingItemCompletedAt?: Date | null;
@@ -52,6 +64,8 @@ function makeTx(config: {
     existingItems = new Set<string>(),
     existingTaskList = true,
     lastPosition = null,
+    scrubTaskItemIds = [],
+    scrubWorkflowIds = [],
     existingItemStatus = 'pending',
     existingItemCompletedAt = null,
     destinationStatusConfigs = [],
@@ -74,9 +88,37 @@ function makeTx(config: {
     },
   };
 
+  const scrubSelects: unknown[][] = [];
+  const deletedTables: string[] = [];
+  // The scrub issues three selects in order: task_items by pageId, then task_triggers.
+  const scrubSelectResults = [
+    scrubTaskItemIds.map((id) => ({ id })),
+    scrubWorkflowIds.map((workflowId) => ({ workflowId })),
+  ];
+  let scrubSelectCall = 0;
+
   const tx = {
-    select: vi.fn(() => selectChain),
-    delete: vi.fn(() => ({ where: (cond: unknown[]) => { deletedPageIds.push(cond?.[2] as string); return Promise.resolve(); } })),
+    select: vi.fn((projection?: Record<string, unknown>) => {
+      // getPageType selects { type }; the scrub selects { id } / { workflowId }.
+      if (projection && !('type' in projection)) {
+        return {
+          from: () => ({
+            where: (cond: unknown[]) => {
+              scrubSelects.push(cond);
+              return Promise.resolve(scrubSelectResults[scrubSelectCall++] ?? []);
+            },
+          }),
+        };
+      }
+      return selectChain;
+    }),
+    delete: vi.fn((table: { pageId?: string; taskId?: string; id?: string }) => ({
+      where: (cond: unknown[]) => {
+        deletedTables.push(table?.taskId ? 'taskAssignees' : table?.id ? 'workflows' : 'taskItems');
+        deletedPageIds.push(cond?.[2] as string);
+        return Promise.resolve();
+      },
+    })),
     insert: vi.fn((table: { pageId?: string }) => ({
       values: (vals: Record<string, unknown> | Record<string, unknown>[]) => {
         const isTaskItems = table?.pageId === 'taskItems.pageId';
@@ -107,7 +149,7 @@ function makeTx(config: {
     })),
   };
 
-  return { tx, taskItemInserts, taskListInserts, taskStatusConfigInserts, deletedPageIds, taskItemUpdates };
+  return { tx, taskItemInserts, taskListInserts, taskStatusConfigInserts, deletedPageIds, taskItemUpdates, deletedTables, scrubSelects };
 }
 
 describe('seedDefaultTaskStatusConfigs', () => {
@@ -299,14 +341,49 @@ describe('syncTaskItemOnMove', () => {
     expect(taskItemUpdates).toHaveLength(0);
   });
 
-  // Cross-drive resets instead of preserving, so nothing survives to normalize.
-  it('removes rather than preserves on a cross-drive list-to-list move', async () => {
-    const { tx, deletedPageIds } = makeTx({
+  // PUT /tasks/statuses validates each config's group but never guarantees a list keeps
+  // one of each, so a naive `?? configs[0]` could drop an unfinished task onto a done
+  // slug — ticked and struck through while every completedAt-based count still calls it
+  // incomplete.
+  it('never remaps an unfinished task onto a done-group status', async () => {
+    const { tx, taskItemUpdates } = makeTx({
       pageTypes: { old: 'TASK_LIST', new: 'TASK_LIST' },
       existingItems: new Set(['list']),
+      existingItemStatus: 'foreign',
+      destinationStatusConfigs: [
+        { slug: 'shipped', group: 'done', position: 0 },
+        { slug: 'doing', group: 'in_progress', position: 1 },
+      ],
     });
-    await syncTaskItemOnMove(tx as never, { movedPageId: 'list', movedPageType: 'TASK_LIST', oldParentId: 'old', newParentId: 'new', userId: 'u', crossDrive: true });
-    expect(deletedPageIds).toEqual(['list']);
+    await syncTaskItemOnMove(tx as never, { movedPageId: 'list', movedPageType: 'TASK_LIST', oldParentId: 'old', newParentId: 'new', userId: 'u' });
+    expect(taskItemUpdates).toEqual([{ status: 'doing' }]);
+  });
+
+  it('keeps a completed task in a done status even when the list has no todo group', async () => {
+    const { tx, taskItemUpdates } = makeTx({
+      pageTypes: { old: 'TASK_LIST', new: 'TASK_LIST' },
+      existingItems: new Set(['list']),
+      existingItemStatus: 'foreign',
+      existingItemCompletedAt: new Date('2026-01-01'),
+      destinationStatusConfigs: [
+        { slug: 'doing', group: 'in_progress', position: 0 },
+        { slug: 'shipped', group: 'done', position: 1 },
+      ],
+    });
+    await syncTaskItemOnMove(tx as never, { movedPageId: 'list', movedPageType: 'TASK_LIST', oldParentId: 'old', newParentId: 'new', userId: 'u' });
+    expect(taskItemUpdates).toEqual([{ status: 'shipped' }]);
+  });
+
+  // A list whose owner deleted 'pending' (permitted, via migrateToSlug) would otherwise
+  // get a brand-new task seeded with a status it does not define — the very defect
+  // normalizeStatusForList exists to prevent, reintroduced on the insert path.
+  it('seeds a new task with a status the destination list actually defines', async () => {
+    const { tx, taskItemInserts } = makeTx({
+      pageTypes: { old: 'FOLDER', new: 'TASK_LIST' },
+      destinationStatusConfigs: [{ slug: 'backlog', group: 'todo', position: 0 }],
+    });
+    await syncTaskItemOnMove(tx as never, { movedPageId: 'list', movedPageType: 'TASK_LIST', oldParentId: 'old', newParentId: 'new', userId: 'u' });
+    expect(taskItemInserts[0]).toMatchObject({ status: 'backlog' });
   });
 
   // ...while the destination list is still seeded, which is why shouldAdd stays true.
@@ -332,6 +409,52 @@ describe('syncTaskItemOnMove', () => {
     await syncTaskItemOnMove(tx as never, { movedPageId: 'list', movedPageType: 'TASK_LIST', oldParentId: null, newParentId: 'new', userId: 'u' });
     expect(deletedPageIds).toHaveLength(0);
     expect(taskItemInserts).toHaveLength(1);
+  });
+});
+
+describe('scrubDriveScopedTaskAssociations', () => {
+  it('no-ops on an empty page list without touching the database', async () => {
+    const { tx, deletedTables } = makeTx();
+    await scrubDriveScopedTaskAssociations(tx as never, { pageIds: [] });
+    expect(tx.select).not.toHaveBeenCalled();
+    expect(deletedTables).toHaveLength(0);
+  });
+
+  it('no-ops when none of the moved pages are tasks', async () => {
+    const { tx, deletedTables } = makeTx({ scrubTaskItemIds: [] });
+    await scrubDriveScopedTaskAssociations(tx as never, { pageIds: ['p1', 'p2'] });
+    expect(deletedTables).toHaveLength(0);
+  });
+
+  // The ordering that matters: task_triggers.taskItemId cascades from task_items, so
+  // anything that removes triggers before reading them leaves the workflows rows
+  // orphaned and unreachable — the hazard disableTaskTriggers documents.
+  it('deletes the linked workflows by id, letting the cascade take the triggers', async () => {
+    const { tx, deletedTables } = makeTx({
+      scrubTaskItemIds: ['item-1'],
+      scrubWorkflowIds: ['wf-1', 'wf-2'],
+    });
+
+    await scrubDriveScopedTaskAssociations(tx as never, { pageIds: ['p1'] });
+
+    expect(deletedTables).toEqual(['workflows', 'taskAssignees']);
+  });
+
+  it('clears the agent assignee and drops agent assignee rows', async () => {
+    const { tx, taskItemUpdates, deletedTables } = makeTx({ scrubTaskItemIds: ['item-1'] });
+
+    await scrubDriveScopedTaskAssociations(tx as never, { pageIds: ['p1'] });
+
+    expect(taskItemUpdates).toEqual([{ assigneeAgentId: null }]);
+    expect(deletedTables).toContain('taskAssignees');
+  });
+
+  // Human assignees, priority, dueDate and metadata are not drive-scoped, so the
+  // scrub must not be a blanket row reset.
+  it('does not delete the task_items rows themselves', async () => {
+    const { tx, deletedTables } = makeTx({ scrubTaskItemIds: ['item-1'] });
+    await scrubDriveScopedTaskAssociations(tx as never, { pageIds: ['p1'] });
+    expect(deletedTables).not.toContain('taskItems');
   });
 });
 

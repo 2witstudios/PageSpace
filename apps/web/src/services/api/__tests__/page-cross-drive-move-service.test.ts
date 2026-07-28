@@ -30,6 +30,7 @@ vi.mock('@pagespace/lib/monitoring/change-group', () => ({
 
 vi.mock('@/services/api/task-sync-service', () => ({
   syncTaskItemOnMove: vi.fn().mockResolvedValue(undefined),
+  scrubDriveScopedTaskAssociations: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@pagespace/db/db', () => {
@@ -87,6 +88,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 import { movePagesToDrive, MAX_SUBTREE_DEPTH } from '../page-cross-drive-move-service';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { scrubDriveScopedTaskAssociations } from '@/services/api/task-sync-service';
 // @ts-expect-error - accessing test-only export
 import { db, __test__ as dbTest } from '@pagespace/db/db';
 
@@ -377,6 +379,35 @@ describe('movePagesToDrive', () => {
 
       const walkArgs = txQueryPagesFindMany.mock.calls[0][0];
       expect(JSON.stringify(walkArgs)).not.toContain('isTrashed');
+    });
+  });
+
+  describe('drive-scoped task associations', () => {
+    // Nothing previously asserted this wiring, so removing the call would have
+    // reverted the behavior with the suite still green.
+    it('scrubs the moved roots AND every cascaded descendant', async () => {
+      txQueryPagesFindMany
+        .mockResolvedValueOnce([{ id: 'child-1' }])
+        .mockResolvedValueOnce([{ id: 'grandchild-1' }])
+        .mockResolvedValue([]);
+
+      await run();
+
+      expect(scrubDriveScopedTaskAssociations).toHaveBeenCalledWith(
+        expect.anything(),
+        { pageIds: ['page-1', 'child-1', 'grandchild-1'] },
+      );
+    });
+
+    // A same-drive bulk-move never crosses a boundary, so nothing is drive-stale.
+    it('does not scrub when the page already lives in the target drive', async () => {
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([
+        sourcePage({ driveId: TARGET_DRIVE }),
+      ] as never);
+
+      await run();
+
+      expect(scrubDriveScopedTaskAssociations).not.toHaveBeenCalled();
     });
   });
 

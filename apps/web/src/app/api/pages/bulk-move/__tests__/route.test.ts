@@ -116,6 +116,9 @@ vi.mock('@pagespace/db/schema/members', () => ({
 
 vi.mock('@/services/api/task-sync-service', () => ({
   syncTaskItemOnMove: vi.fn().mockResolvedValue(undefined),
+  // The move service now also scrubs drive-scoped task associations (agent
+  // assignees, workflow triggers) for the moved roots and their descendants.
+  scrubDriveScopedTaskAssociations: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@/lib/canvas/publish-page', () => ({

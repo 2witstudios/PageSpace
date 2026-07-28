@@ -27,7 +27,7 @@ import { pages, drives } from '@pagespace/db/schema/core';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
-import { syncTaskItemOnMove } from '@/services/api/task-sync-service';
+import { syncTaskItemOnMove, scrubDriveScopedTaskAssociations } from '@/services/api/task-sync-service';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -143,10 +143,10 @@ async function cascadeDriveIdToDescendants(
   tx: Tx,
   rootIds: string[],
   newDriveId: string,
-): Promise<number> {
+): Promise<string[]> {
   const visited = new Set(rootIds);
   let frontier = rootIds;
-  let total = 0;
+  const moved: string[] = [];
 
   for (let depth = 0; frontier.length > 0; depth++) {
     // eslint-disable-next-line no-restricted-syntax -- level-wise tree walk, bounded by MAX_SUBTREE_DEPTH; a LIMIT would silently drop descendants and split the subtree across drives
@@ -173,11 +173,11 @@ async function cascadeDriveIdToDescendants(
 
     next.forEach((id) => visited.add(id));
     await tx.update(pages).set({ driveId: newDriveId }).where(inArray(pages.id, next));
-    total += next.length;
+    moved.push(...next);
     frontier = next;
   }
 
-  return total;
+  return moved;
 }
 
 export async function movePagesToDrive(
@@ -306,9 +306,6 @@ export async function movePagesToDrive(
           oldParentId: page.parentId,
           newParentId: targetParentId,
           userId,
-          // A task's assignees, triggers and status vocabulary are all drive-scoped,
-          // so the row is reset rather than carried over a drive boundary.
-          crossDrive: page.driveId !== targetDriveId,
         });
 
         moved.push({
@@ -323,7 +320,17 @@ export async function movePagesToDrive(
       }
 
       if (cascadeRoots.length > 0) {
-        descendantCount = await cascadeDriveIdToDescendants(tx, cascadeRoots, targetDriveId);
+        const movedDescendants = await cascadeDriveIdToDescendants(tx, cascadeRoots, targetDriveId);
+        descendantCount = movedDescendants.length;
+
+        // The roots' membership change is handled by syncTaskItemOnMove above, but a
+        // descendant's parentId never changes, so no membership event fires for it even
+        // though its drive just did. Both need their drive-scoped task associations
+        // dropped, or an agent assignee / workflow trigger from the old drive survives
+        // the boundary.
+        await scrubDriveScopedTaskAssociations(tx, {
+          pageIds: [...cascadeRoots, ...movedDescendants],
+        });
       }
 
       // A drive's home page must live in that drive. Clearing here (after the

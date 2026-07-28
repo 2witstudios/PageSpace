@@ -46,12 +46,11 @@ export interface TaskItemSyncAction {
  * configs) and a genuinely missing row is still backfilled — addTaskItemUnderParent
  * returns early when a row already exists, which is what preserves it.
  *
- * A CROSS-DRIVE move still removes, because the things the row points at are all
- * drive-scoped: `assigneeAgentId` / `task_assignees.agentPageId` reference agent
- * pages that the task write paths refuse to accept from another drive, and
- * `task_triggers` cascade from the row into drive-scoped workflows. Carrying those
- * across a drive boundary would preserve references the product forbids creating —
- * e.g. a drive-A agent's title rendered to every drive-B viewer of the task.
+ * A CROSS-DRIVE move preserves the row too, but the caller must first scrub what IS
+ * drive-scoped — see scrubDriveScopedTaskAssociations. Deleting the row instead would
+ * throw away priority, dueDate and metadata, none of which are drive-scoped, and would
+ * only cover the moved ROOTS: a descendant's parentId never changes, so no membership
+ * event fires for it even though its drive did change.
  */
 export const resolveTaskItemSyncAction = (input: {
   movedPageType: string;
@@ -59,8 +58,6 @@ export const resolveTaskItemSyncAction = (input: {
   newParentId: string | null;
   oldParentType: string | null | undefined;
   newParentType: string | null | undefined;
-  /** True when the move crosses a drive boundary; see the note above. */
-  crossDrive?: boolean;
 }): TaskItemSyncAction => {
   if (input.movedPageType !== TASK_LIST_TYPE || input.oldParentId === input.newParentId) {
     return { shouldRemove: false, shouldAdd: false };
@@ -68,7 +65,7 @@ export const resolveTaskItemSyncAction = (input: {
   const landsInTaskList = input.newParentId !== null && input.newParentType === TASK_LIST_TYPE;
   const leavesTaskList = input.oldParentId !== null && input.oldParentType === TASK_LIST_TYPE;
   return {
-    shouldRemove: leavesTaskList && (!landsInTaskList || input.crossDrive === true),
+    shouldRemove: leavesTaskList && !landsInTaskList,
     shouldAdd: landsInTaskList,
   };
 };
@@ -76,7 +73,7 @@ export const resolveTaskItemSyncAction = (input: {
 export interface TaskItemInsert {
   readonly userId: string;
   readonly pageId: string;
-  readonly status: 'pending';
+  readonly status: string;
   readonly priority: 'medium';
 }
 
@@ -89,10 +86,18 @@ export interface TaskItemInsert {
 export const buildTaskItemInsert = (input: {
   pageId: string;
   userId: string;
+  /**
+   * Slug to seed. Defaults to 'pending' — the first of DEFAULT_TASK_STATUSES — but a
+   * list whose owner deleted that status (permitted, via migrateToSlug) does not define
+   * it, and a hardcoded seed would create exactly the orphaned-status row that
+   * normalizeStatusForList exists to prevent. Callers that know the destination's
+   * vocabulary pass its default instead.
+   */
+  status?: string;
 }): TaskItemInsert => ({
   userId: input.userId,
   pageId: input.pageId,
-  status: 'pending',
+  status: input.status ?? 'pending',
   priority: 'medium',
 });
 
