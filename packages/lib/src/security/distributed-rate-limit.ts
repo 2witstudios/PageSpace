@@ -29,7 +29,9 @@
  *   instance enforces a CONSERVATIVE in-memory limit (half the configured
  *   threshold) so a DB outage neither becomes a total platform outage
  *   (fail-closed shared fate) nor a rate-limit bypass (fail-open). Only if
- *   the in-memory check itself fails does the request fail closed.
+ *   the in-memory check itself fails does the request fail closed. The
+ *   in-memory store is bounded (per-entry expiry sweep + hard identifier cap)
+ *   so an identifier flood during the outage cannot OOM the process.
  *
  * @see packages/lib/src/auth/rate-limit-utils.ts for the in-memory-only version
  */
@@ -65,27 +67,53 @@ interface InMemoryAttempt {
   firstAttempt: number;
   lastAttempt: number;
   blockedUntil?: number;
+  /** When this entry is dead weight: end of its window or of any active block. */
+  expiresAt: number;
 }
 
 const inMemoryAttempts = new Map<string, InMemoryAttempt>();
 let cleanupIntervalId: ReturnType<typeof setInterval> | null = null;
 
 /**
+ * Hard cap on distinct identifiers tracked in memory (~250 bytes/entry →
+ * ~12 MB worst case). The store is production-reachable during a Postgres
+ * outage, where an attacker can spray arbitrary identifiers (emails, client
+ * IDs) at unauthenticated endpoints; without a cap that turns the DB incident
+ * into an application OOM. When full, the oldest-inserted entry is evicted
+ * (FIFO): resetting a stale counter early slightly loosens limiting under an
+ * active identifier flood, but identifier rotation already defeats
+ * per-identifier limits, whereas unbounded growth defeats the availability
+ * goal of the fallback itself.
+ */
+export const MAX_IN_MEMORY_ATTEMPT_ENTRIES = 50_000;
+
+/**
+ * Delete entries whose window AND any block have fully elapsed. Never evicts
+ * an actively blocked entry — that would reset its counter and void the block.
+ * Exported for tests; production runs it on the cleanup interval.
+ */
+export function sweepExpiredInMemoryAttempts(now: number = Date.now()): number {
+  let evicted = 0;
+  for (const [key, attempt] of inMemoryAttempts.entries()) {
+    if (now >= attempt.expiresAt) {
+      inMemoryAttempts.delete(key);
+      evicted++;
+    }
+  }
+  return evicted;
+}
+
+/**
  * Start the cleanup interval for in-memory rate limiting.
- * Uses 25-hour cutoff to match longest rate limit window (EXPORT_DATA 24h) with buffer.
+ * Evicts by per-entry expiry (window/block end), so a 1-minute API bucket is
+ * reclaimed in minutes while the 24h EXPORT_DATA bucket still survives its
+ * full window.
  */
 function startCleanupInterval(): void {
   if (cleanupIntervalId) return;
 
   cleanupIntervalId = setInterval(() => {
-    const now = Date.now();
-    const cutoff = now - 25 * 60 * 60 * 1000;
-
-    for (const [key, attempt] of inMemoryAttempts.entries()) {
-      if (attempt.lastAttempt < cutoff) {
-        inMemoryAttempts.delete(key);
-      }
-    }
+    sweepExpiredInMemoryAttempts();
   }, 5 * 60 * 1000);
 }
 
@@ -115,7 +143,20 @@ function inMemoryCheckRateLimit(
   let attempt = inMemoryAttempts.get(identifier);
 
   if (!attempt) {
-    attempt = { count: 1, firstAttempt: now, lastAttempt: now };
+    if (inMemoryAttempts.size >= MAX_IN_MEMORY_ATTEMPT_ENTRIES) {
+      // Map iteration is insertion-ordered; drop the oldest entry to admit
+      // the new one (see MAX_IN_MEMORY_ATTEMPT_ENTRIES for the trade-off).
+      const oldest = inMemoryAttempts.keys().next();
+      if (!oldest.done) {
+        inMemoryAttempts.delete(oldest.value);
+      }
+    }
+    attempt = {
+      count: 1,
+      firstAttempt: now,
+      lastAttempt: now,
+      expiresAt: now + config.windowMs,
+    };
     inMemoryAttempts.set(identifier, attempt);
     return { allowed: true, attemptsRemaining: config.maxAttempts - 1 };
   }
@@ -127,18 +168,14 @@ function inMemoryCheckRateLimit(
     };
   }
 
-  if (attempt.blockedUntil && now >= attempt.blockedUntil) {
+  if (
+    (attempt.blockedUntil && now >= attempt.blockedUntil) ||
+    now - attempt.firstAttempt > config.windowMs
+  ) {
     attempt.count = 1;
     attempt.firstAttempt = now;
     attempt.lastAttempt = now;
-    delete attempt.blockedUntil;
-    return { allowed: true, attemptsRemaining: config.maxAttempts - 1 };
-  }
-
-  if (now - attempt.firstAttempt > config.windowMs) {
-    attempt.count = 1;
-    attempt.firstAttempt = now;
-    attempt.lastAttempt = now;
+    attempt.expiresAt = now + config.windowMs;
     delete attempt.blockedUntil;
     return { allowed: true, attemptsRemaining: config.maxAttempts - 1 };
   }
@@ -164,6 +201,7 @@ function inMemoryCheckRateLimit(
   }
 
   attempt.blockedUntil = now + blockDuration;
+  attempt.expiresAt = Math.max(attempt.expiresAt, attempt.blockedUntil);
 
   return {
     allowed: false,
