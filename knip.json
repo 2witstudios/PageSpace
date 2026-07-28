@@ -179,6 +179,11 @@
     },
     "packages/lib": {
       "entry": [
+        "src/agent-sessions/contract.ts",
+        "src/agent-sessions/decide-session-access.ts",
+        "src/agent-sessions/plan-session-lifecycle.ts",
+        "src/agent-sessions/plan-spawn-session.ts",
+        "src/agent-sessions/session-sprite-key.ts",
         "src/ai/context-window.ts",
         "src/ai/global-channel-id.ts",
         "src/ai/model-defaults.ts",
