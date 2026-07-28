@@ -26,7 +26,8 @@ const EMPTY: UserCommandCatalog = { catalogPrompt: '', searchEntries: [] };
 
 export async function loadUserCommandCatalog(
   userId: string,
-  requestedDriveId: string | null
+  requestedDriveId: string | null,
+  availableTools?: readonly string[]
 ): Promise<UserCommandCatalog> {
   try {
     const driveId =
@@ -35,7 +36,7 @@ export async function loadUserCommandCatalog(
         : null;
     const { winners } = await loadAvailableCommands(userId, driveId);
     return {
-      catalogPrompt: buildUserCommandCatalog(winners),
+      catalogPrompt: buildUserCommandCatalog(winners, undefined, availableTools),
       searchEntries: commandsToSearchEntries(winners),
     };
   } catch (error) {

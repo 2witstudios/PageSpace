@@ -9,7 +9,7 @@ export const CANVAS_WEBSITES_SKILL_BODY = `You are building on a CANVAS page: ra
 ## What a Canvas page is
 
 - The page content IS the HTML. A shared renderer wraps it in a generated document — doctype, \`<head>\` (charset, viewport, title, CSP), a baseline reset (\`html,body{margin:0;padding:0}\`), then your markup inside a real \`<body>\`. The in-app iframe and the published page render from the same document, so what you see in-app is what publishes.
-- Write a body FRAGMENT, not a full document. If you write your own \`<html>\`/\`<head>\`/\`<body>\`, the wrapper is unwrapped: only the body content and any \`<style>\` blocks survive. SEO/OG meta from a hand-written \`<head>\` is honored at publish time (see Publishing), but in-app everything else in that head is discarded.
+- Write a body FRAGMENT, not a full document. If you write a full document with an \`<html>\` tag, it is unwrapped: only the body content and any \`<style>\` blocks survive. The unwrap triggers ONLY on an \`<html>\` tag — a bare \`<head>\`/\`<body>\` pair without \`<html>\` is NOT unwrapped, and those tags land verbatim inside the rendered body. So: either a plain fragment (preferred) or a complete \`<html>\` document, never a partial shell. SEO/OG meta from a hand-written head is honored at publish time (see Publishing), but in-app everything else in that head is discarded.
 - \`<style>\` blocks anywhere in your HTML are extracted, sanitized, and hoisted into the generated \`<head>\`, after the baseline reset — your \`html\`/\`body\` rules still win.
 - \`<script>\` tags are preserved verbatim and execute. Isolation is by origin (the sandbox), not by a script sanitizer — write real interactive JS freely, but inline only (see the sandbox rules).
 - Because only the UA margin is reset, full-bleed layouts work: a \`min-height:100vh\` section reaches the edges with no 8px gap.
@@ -23,7 +23,7 @@ In-app, the canvas renders in an iframe with \`sandbox="allow-scripts allow-popu
 - No DOM access to the parent app; the only channel is \`postMessage\` (used by the theme bridge below).
 - In-app, a \`<base target="_blank">\` is injected: every link without an explicit \`target\` opens in a new browser tab. Published pages have no base tag — links navigate normally.
 
-Both contexts also carry this CSP: \`default-src 'none'; img-src data: https:; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'unsafe-inline'; object-src 'none'; base-uri 'none'; form-action 'none'\` (form-action/connect-src widen only on published pages with wired forms). In practice:
+Both contexts also carry this CSP: \`default-src 'none'; img-src data: https:; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'unsafe-inline'; object-src 'none'; base-uri 'none'; form-action 'none'\` (on PUBLISHED pages, form-action/connect-src are widened to the PageSpace app origin unconditionally — wired forms or not; the in-app preview never widens). In practice:
 
 - Inline \`<script>\` runs; \`<script src="https://cdn...">\` is BLOCKED (\`script-src\` has no https: source). No CDN frameworks — write vanilla JS.
 - External stylesheets are blocked EXCEPT Google Fonts: a \`<link>\` to \`fonts.googleapis.com\` plus font files from \`fonts.gstatic.com\` are explicitly allowlisted.
@@ -71,16 +71,24 @@ For an uploaded file (a FILE page) — image, PDF, anything — reference it as:
 <img src="/dashboard/{driveId}/{filePageId}/view" alt="...">
 \`\`\`
 
-Never use \`/api/files/...\` URLs. The \`/dashboard/{driveId}/{pageId}/view\` form is the one convention that works everywhere:
+Never use \`/api/files/...\` URLs. The \`/dashboard/{driveId}/{pageId}/view\` form is the one convention to use — it works in \`<img>\`/\`<a>\` everywhere, with one CSS caveat:
 
-- In-app, the app shell detects these refs and swaps them for tokenized URLs the sandboxed iframe (which has no session) can actually load.
+- In-app, the app shell detects these refs and swaps them for tokenized URLs the sandboxed iframe (which has no session) can actually load — so \`<img src>\` and \`<a href>\` work in the preview.
 - At publish, each referenced file is copied to a public CDN and the URL rewritten to it. The CDN host is also allowlisted through the CSS sanitizer, so a published CSS \`background-image: url(/dashboard/.../view)\` survives.
+- CSS is the caveat: IN-APP, no host is allowlisted through the CSS sanitizer, so a CSS \`url()\` using a \`/view\` ref is stripped to \`url("")\` — the background renders BLANK in the preview and appears only on the published page. That blank preview is EXPECTED; do not "fix" it by swapping in a different URL. Publish to verify, or use an \`<img>\` (works in both contexts) when the preview matters.
 - The same \`/view\` URL also works as a plain \`<a href>\` link to the file.
 - Anything you embed this way becomes PUBLIC when the page is published — don't embed files that shouldn't be.
 
 ## Forms (waitlist, contact, signup)
 
-For any form that should collect submissions, call the \`provision_form_target\` tool FIRST, with the target Sheet page id and an ordered field list (\`name\`, \`label\`, \`type\`, \`required\`). It writes the Sheet's header row and returns \`formHtml\` — embed it into the canvas VERBATIM.
+For any form that should collect submissions, call the \`provision_form_target\` tool FIRST, with the target Sheet page id (\`sheetPageId\`), an ordered field list (\`fields\`), and — when you know which canvas the form will live on — \`canvasPageId\` (optional, but pass it: it lets the Forms settings tab find and manage this form later). It writes the Sheet's header row and returns \`formHtml\` — embed it into the canvas VERBATIM.
+
+Field-list constraints (validated strictly; violations reject the call):
+
+- 1 to 20 fields, each \`{ name, label, type, required }\`.
+- \`type\` is exactly one of \`text\`, \`email\`, \`textarea\`, \`checkbox\` — there is NO number/tel/select/date/radio/file. For anything else, use \`text\` and state the expected format in the label (e.g. "Phone number", "Team size (1-10 / 11-50 / 50+)").
+- \`name\` must match \`^[a-zA-Z0-9_-]+$\` (max 100 chars), be unique across the fields, and must not be \`__proto__\`, \`constructor\`, or \`prototype\`. It becomes the input's \`name\` attribute and the submitted JSON key.
+- \`label\` becomes the Sheet's header-row column label.
 
 - Do NOT modify the hidden honeypot input (\`_hp\`) or the \`fetch()\`-based submit script inside \`formHtml\`. The honeypot is deliberately off-screen via inline styles; a filled honeypot silently drops the submission. The fetch submit avoids navigating to a raw JSON response.
 - The embedded submit token is safe to publish — it authorizes ONLY appending rows to that one Sheet, nothing else.
@@ -105,7 +113,7 @@ A published drive is one site on one subdomain: the drive's home page at \`/\`, 
 
 Publishing renders the canvas to a standalone HTML artifact served at \`https://<subdomain>.pagespace.site/<path>\`:
 
-- The subdomain belongs to the drive (allocated from the drive slug, or explicitly chosen). The path is slugified from the page title unless overridden. The drive home page is also served at the site root.
+- The subdomain belongs to the drive and, once allocated, is always reused. On the drive's FIRST publish it is allocated from the drive slug (or an explicitly passed candidate) — and when that value is taken, reserved, or malformed it is auto-renamed to a unique variant (\`acme\` → \`acme-2\`) rather than erroring. After allocation, a subdomain passed with a publish is ignored. The path is slugified from the page title unless overridden. The drive home page is also served at the site root.
 - The published head gets full SEO/social treatment: canonical URL, meta description (derived from the page's first text when not set), robots (default \`index, follow\`; a noindex option exists), Open Graph, Twitter Card, and JSON-LD tags.
 - You can control that meta from the canvas itself: a \`<title>\`, \`<meta name="description">\`, \`<meta property="og:title|og:description|og:image">\`, or \`<link rel="icon">\` you write in the HTML is extracted at publish and hoisted into the head, winning over UI-set fallbacks.
 - The artifact is a snapshot rendered at publish time — republish after content edits to update the live site.
@@ -118,4 +126,5 @@ Publishing renders the canvas to a standalone HTML artifact served at \`https://
 - DON'T use \`/api/files/...\` for file embeds — always \`/dashboard/{driveId}/{filePageId}/view\`.
 - DON'T write full \`<html>\` documents expecting the head to render in-app; write fragments and let publish-time extraction handle meta.
 - DON'T put external URLs in CSS \`url()\` — they are stripped; use \`data:\` URIs or \`<img>\` elements.
+- DON'T mistake a blank in-app CSS background using a \`/view\` file ref for a bug — CSS \`url()\` file refs render only on the published page.
 - DON'T edit provisioned \`formHtml\`, and DON'T leave links pointing at pages that won't be published.`;

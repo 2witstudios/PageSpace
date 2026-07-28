@@ -71,10 +71,10 @@ beforeEach(() => {
 });
 
 describe('load_skill', () => {
-  it('throws without authentication context', async () => {
-    await expect(execute({ name: 'spreadsheets' }, {})).rejects.toThrow(
-      'User authentication required'
-    );
+  it('soft-degrades without authentication context (a load never fails the turn)', async () => {
+    const result = await execute({ name: 'spreadsheets' }, {});
+    expect(result).toContain('failed');
+    expect(result).toContain('no authenticated user');
   });
 
   it('rejects malformed names before any lookup (hostile-input shape gate)', async () => {
@@ -104,19 +104,20 @@ describe('load_skill', () => {
     expect(result).toContain('load_skill("spreadsheets")');
   });
 
-  it('denies an ineligible builtin skill (agent lacks every required tool)', async () => {
+  it('loads a builtin skill regardless of the allowlist (requiredTools gates discovery, not load)', async () => {
     mockLoadAvailableCommands.mockResolvedValue({
       winners: [builtinWinner('spreadsheets')],
       shadowed: [],
     });
+    mockResolveBuiltin.mockResolvedValue(injectPlan('spreadsheets', 'body'));
 
     const result = await execute(
       { name: 'spreadsheets' },
       { experimental_context: { ...baseContext, enabledTools: ['read_page'] } }
     );
 
-    expect(result).toContain('not available here');
-    expect(mockResolveBuiltin).not.toHaveBeenCalled();
+    expect(result).toContain('<skill_instructions');
+    expect(mockResolveBuiltin).toHaveBeenCalled();
   });
 
   it('treats an unrestricted agent (no enabledTools allowlist) as eligible', async () => {

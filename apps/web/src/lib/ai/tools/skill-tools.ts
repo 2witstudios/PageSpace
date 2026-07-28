@@ -17,11 +17,7 @@
 
 import { tool } from 'ai';
 import { z } from 'zod';
-import {
-  BUILTIN_SKILLS,
-  COMMAND_TRIGGER_PATTERN,
-  isSkillEligible,
-} from '@pagespace/lib/commands/command-core';
+import { COMMAND_TRIGGER_PATTERN } from '@pagespace/lib/commands/command-core';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { loadAvailableCommands } from '@/lib/commands/available-commands';
@@ -39,7 +35,7 @@ import type { ToolExecutionContext } from '../core/types';
 const skillLogger = loggers.ai.child({ module: 'skill-tools' });
 
 const unavailable = (name: string) =>
-  `No skill or command named "${name}" is available here. Check the skills list or list_commands for what exists.`;
+  `No skill or command named "${name}" is available here. Check the SKILLS and AVAILABLE COMMANDS listings for what exists.`;
 
 function planToResult(plan: CommandExecutionPlan, name: string): string {
   if (plan.kind === 'skip') {
@@ -66,7 +62,8 @@ export const skillTools = {
     execute: async ({ name }, { experimental_context: context }) => {
       const ctx = context as ToolExecutionContext | undefined;
       const userId = ctx?.userId;
-      if (!userId) throw new Error('User authentication required');
+      // Soft-degrade (never throw): a load must not be able to fail the turn.
+      if (!userId) return `Loading "${name}" failed: no authenticated user in this context.`;
 
       // Shape-validate the hostile name before any lookup.
       if (!COMMAND_TRIGGER_PATTERN.test(name)) return unavailable(name);
@@ -91,10 +88,12 @@ export const skillTools = {
         skillLogger.info('load_skill invoked', { skill: name, scope: winner.scope });
 
         if (winner.scope === 'builtin') {
-          const definition = BUILTIN_SKILLS.find((skill) => skill.trigger === name);
-          if (definition && !isSkillEligible(definition, ctx?.enabledTools ?? undefined)) {
-            return `The "${name}" skill applies to tools this agent does not have, so it is not available here.`;
-          }
+          // requiredTools gates DISCOVERY (the catalog), never load-by-name:
+          // a read-only or narrowly-allowlisted agent that asks for a skill
+          // explicitly gets it — the body is knowledge, and refusing here
+          // would contradict prompt pointers that survive tool filtering
+          // (same model as Claude Code's name-only skills and pi's
+          // read-any-skill-file loading).
           const plan = await resolveBuiltinInjection(name, userId, { driveId });
           return planToResult(plan, name);
         }

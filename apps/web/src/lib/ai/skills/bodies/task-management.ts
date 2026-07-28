@@ -13,11 +13,11 @@ You are working with tasks on TASK_LIST pages. This skill covers the data model,
 - That linked child page holds the task's **description and its sub-tasks**. Its title is kept in sync with the task title (the page is the single source of truth for the title — renaming via \`update_task\` writes through to the page).
 - Because each task's linked page is itself a TASK_LIST page, **tasks nest to any depth**: to add a sub-task, call \`create_task\` with \`pageId\` set to the parent task's linked page id.
 - **Never trash or delete a task's linked page directly.** Use \`delete_task\`, which trashes the linked page and hard-deletes the task row together (and disables any attached triggers). Deleting the page alone strands the task row and its triggers.
-- Every task has **two ids**: the task id (\`taskId\` — what \`update_task\`, \`delete_task\`, \`reorder_task\`, and \`set_task_trigger\` take) and the linked page id (\`pageId\` — what \`create_task\` takes as the destination for sub-tasks). Tool responses return both; do not confuse them.
+- Every task has **two ids**: the task id (\`taskId\` — what \`update_task\`, \`delete_task\`, \`reorder_task\`, and \`set_task_trigger\` take) and the linked page id (\`pageId\` — what \`create_task\` takes as the destination for sub-tasks). Tool responses return both (\`read_page\` names the linked page id \`linkedPageId\`); do not confuse them.
 
 ## Read before you mutate
 
-Always \`read_page\` the TASK_LIST page before creating or updating tasks. It returns the existing tasks (with their taskIds and pageIds), the list structure, and \`availableStatuses\` — the status slugs valid on this list. Mutating blind risks duplicate tasks, invalid status slugs, and clobbering structure the user already set up.
+Always \`read_page\` the TASK_LIST page before creating or updating tasks. It returns the existing tasks (with their taskIds and each task's linked page id as \`linkedPageId\`), the list structure, and \`availableStatuses\` — the status slugs valid on this list. Reading also seeds the default status configs on a fresh list, which is what makes status validation and done-group behavior reliable (see Statuses). Mutating blind risks duplicate tasks, invalid status slugs, and clobbering structure the user already set up.
 
 ## The tools
 
@@ -33,9 +33,9 @@ Create, update, delete, and reorder are separate verbs — none of them infers a
 
 ## Statuses
 
-- Each task list has its own status configuration. Defaults, auto-created on first use: \`pending\` (To Do), \`in_progress\`, \`blocked\`, \`completed\` (Done).
+- Each task list has its own status configuration. Defaults — \`pending\` (To Do), \`in_progress\`, \`blocked\`, \`completed\` (Done) — are seeded when the list is created via \`create_page\` or first read via \`read_page\`.
 - Every status slug belongs to a **semantic group** — \`todo\`, \`in_progress\`, or \`done\` — and the group, not the slug name, controls behavior. Any status in the \`done\` group marks the task completed (sets \`completedAt\`); moving to a non-done status clears it. Note \`blocked\` is in the \`in_progress\` group.
-- Status values are validated: passing a slug not configured on the list fails with the valid slugs listed. Use an existing slug from \`availableStatuses\` whenever one fits.
+- Status values are validated **when the list has status configs** (any list you have read or created normally does): passing a slug not configured on the list fails with the valid slugs listed. A list lazily created by \`create_task\` alone has no configs yet — there, any slug is accepted unvalidated and only the literal \`completed\` slug marks a task done. This is why the read-before-mutate rule matters: reading seeds the defaults and restores validation. Use an existing slug from \`availableStatuses\` whenever one fits.
 - To add a new status (e.g. "In Review"), call \`create_task_status\` **before** using it in \`create_task\`/\`update_task\`. The slug is auto-generated from the name ("In Review" → \`in_review\`) and returned to you; a duplicate slug on the same list is rejected. You need edit permission on the list. Only create a status when no existing one fits.
 - List rollup is automatic: when every task on a list reaches a done-group status the list itself is marked completed; a task entering an in-progress-group status moves a pending list to in_progress. Don't manage list status by hand.
 
@@ -54,10 +54,11 @@ Completing a task (from a not-completed state) also cancels any pending due-date
 ## Assignees
 
 - Tasks can be assigned to **users and AI agents** (agents are AI_CHAT pages), including multiple of each at once.
-- Preferred: the \`assigneeIds\` array — each entry \`{ "type": "user" | "agent", "id": "..." }\`. Passing the array is a **full replace** of all assignees; pass \`[]\` to clear everyone. Legacy \`assigneeId\` (user) / \`assigneeAgentId\` (agent) set a single assignee; \`null\` unassigns.
-- An assigned agent must be an AI_CHAT page **in the same drive** as the task list; anything else is rejected.
-- Assigning a task to an agent puts it on that agent's workload: the agent (you included) sees it via \`get_assigned_tasks\`. Assignment alone does not run the agent — to make an agent act at a time or on completion, attach a trigger (below). Agents may assign tasks to themselves or to other agents to coordinate work.
-- \`get_assigned_tasks\` defaults to the current agent when you run in agent context; filter by \`agentId\`, \`status\`, or \`driveId\`. Completed tasks are **excluded by default** — pass \`includeCompleted: true\` to see them. Results are grouped by status group (todo / in_progress / done).
+- The \`assigneeIds\` array — each entry \`{ "type": "user" | "agent", "id": "..." }\` — is a **full replace** of all assignees; pass \`[]\` to clear everyone. Legacy \`assigneeId\` (user) / \`assigneeAgentId\` (agent) set a single assignee; \`null\` unassigns.
+- Validation is uneven: the legacy \`assigneeAgentId\` field is checked (must be an AI_CHAT page in the same drive as the task list), but \`assigneeIds\` entries are **not validated beyond the id existing** — a wrong-type or cross-drive page id is accepted silently. Double-check ids you put in the array yourself.
+- **Workload visibility caveat:** \`get_assigned_tasks\` reads only the legacy single-agent column, and when you pass \`assigneeIds\`, only the **first** agent entry lands there. Extra agent entries are stored but invisible to \`get_assigned_tasks\`. For workload assignment an agent will actually see, give each task **one agent** — as the only (or first) agent entry in \`assigneeIds\`, or via \`assigneeAgentId\`.
+- Assignment alone does not run the agent — to make an agent act at a time or on completion, attach a trigger (below). Agents may assign tasks to themselves or to other agents to coordinate work.
+- \`get_assigned_tasks\` defaults to the current agent when you run in agent context; filter by \`agentId\`, \`status\`, or \`driveId\`. Completed tasks are **excluded by default** — pass \`includeCompleted: true\` to see them. The \`tasks\` array is flat (list order); the \`summary.byGroup\` counts are grouped by status group (todo / in_progress / done).
 
 ## Due dates
 
@@ -77,7 +78,7 @@ Task triggers schedule an AI agent to run off a task. Two trigger types:
 Trigger payload:
 
 - \`agentPageId\` (required) — the AI_CHAT page to execute; must be in the same drive as the task list and not trashed.
-- \`prompt\` (max 10,000 chars) or \`instructionPageId\` — **at least one is required**; the instructions the agent receives when it runs.
+- \`prompt\` (max 10,000 chars) or \`instructionPageId\` — **at least one is required**; the instructions the agent receives when it runs. \`set_task_trigger\` errors if both are missing, but the \`agentTrigger\` shortcut silently drops an empty payload — no trigger is created and no error is returned, so always include one of the two.
 - \`contextPageIds\` — up to 10 page ids included as reference context; all must be in the same drive and not trashed.
 
 Constraints: the task list must be drive-based, and you need edit access to it. \`delete_task_trigger\` (taskId + triggerType) disables a trigger and is idempotent — safe to call even if none exists.
@@ -102,5 +103,5 @@ The \`note\` field on \`create_task\`/\`update_task\` records a short annotation
 - **Don't** mix up taskId and pageId — mutation tools take taskId; \`create_task\` and \`create_task_status\` take the TASK_LIST pageId.
 - Empty or whitespace-only titles are rejected on create and rename.
 - "Linked page was modified concurrently" means a revision conflict — re-read and retry the mutation once; it is not a permission error.
-- Agent assignees and trigger agents must live in the same drive as the task list; cross-drive references are rejected.
+- Trigger agents must live in the same drive as the task list; cross-drive references are rejected. Agent assignees should too, but only the legacy \`assigneeAgentId\` field enforces it — \`assigneeIds\` entries are your responsibility.
 `;

@@ -174,13 +174,32 @@ describe('buildInlineInstructions — full tool set', () => {
 });
 
 describe('buildInlineInstructions — skill-aware slimming', () => {
-  it('slims PAGE TYPES to skill pointers when load_skill is present', () => {
-    const result = buildInlineInstructions(['load_skill', 'create_task']);
+  const ALL_SKILL_TOOLS = [
+    'load_skill',
+    'create_page',
+    'replace_lines',
+    'insert_content',
+    'edit_sheet_cells',
+    'create_task',
+    'update_task',
+  ];
+
+  it('slims PAGE TYPES to skill pointers when load_skill and the skills are eligible', () => {
+    const result = buildInlineInstructions(ALL_SKILL_TOOLS);
     expect(result).toContain('Load the canvas-websites skill');
     expect(result).toContain('Load the writing-documents skill');
     expect(result).toContain('load the spreadsheets skill');
     // The deep canvas conventions moved into the skill body
     expect(result).not.toContain('provision_form_target');
+  });
+
+  it('slims per bullet: an ineligible skill keeps its FULL bullet', () => {
+    // Sheets eligible; canvas/writing not (no create_page/replace_lines).
+    const result = buildInlineInstructions(['load_skill', 'edit_sheet_cells', 'read_page']);
+    expect(result).toContain('load the spreadsheets skill');
+    // Canvas bullet stays full — pointer would target a skill the catalog omits
+    expect(result).toContain('provision_form_target');
+    expect(result).not.toContain('Load the canvas-websites skill');
   });
 
   it('keeps the full PAGE TYPES fallback when load_skill is absent', () => {
@@ -196,15 +215,15 @@ describe('buildInlineInstructions — skill-aware slimming', () => {
   });
 
   it('slims TASK MANAGEMENT but keeps the predictably-wrong bullets', () => {
-    const result = buildInlineInstructions(['load_skill', 'create_task']);
+    const result = buildInlineInstructions(ALL_SKILL_TOOLS);
     expect(result).toContain('Read the task list with read_page before any mutations');
     expect(result).toContain("a parent can't complete while direct subtasks remain open");
     expect(result).toContain('Load the task-management skill');
     expect(result).not.toContain('only call create_task_status when no existing status fits');
   });
 
-  it('buildGlobalAssistantInstructions slims with tools and stays full without', () => {
-    expect(buildGlobalAssistantInstructions(['load_skill'])).toContain(
+  it('buildGlobalAssistantInstructions slims with eligible tools and stays full without', () => {
+    expect(buildGlobalAssistantInstructions(['load_skill', 'create_task'])).toContain(
       'Load the task-management skill'
     );
     expect(buildGlobalAssistantInstructions()).toContain('provision_form_target');

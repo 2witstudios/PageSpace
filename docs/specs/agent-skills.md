@@ -23,6 +23,13 @@ chip invocation, precedence resolution (`builtin > user > drive`), and
 `RESERVED_TRIGGERS` all consume one registry by construction. User/drive
 commands are model-loadable through the same path without any migration.
 
+Namespace note: the four skill triggers are newly claimed built-in names.
+`RESERVED_TRIGGERS` blocks NEW user/drive commands with those names, and any
+pre-existing command named `canvas-websites` / `spreadsheets` /
+`task-management` / `writing-documents` becomes permanently shadowed
+(builtin wins precedence; the picker shows the dimmed shadow row). Run the
+pre-ship collision query from the PR before deploying.
+
 ## Architecture (three tiers, per the Agent Skills open standard)
 
 **Tier 1 — metadata catalog.**
@@ -57,7 +64,20 @@ mid-stream injection channel; append-only, prefix-cache-safe) wrapped in
 default, so the framing is load-bearing. Same 60k truncation contract and
 listed-not-loaded child manifest as chip injection
 (`buildSkillLoadResult`, command-processor.ts). Failures degrade to soft
-error strings; a load can never fail the turn.
+error strings (including missing auth context); a load can never fail the
+turn.
+
+**Discovery vs. load.** `requiredTools` gates DISCOVERY only (catalog
+listing, slim prompt pointers, search corpus) — never load-by-name. An agent
+that explicitly asks for a skill gets it regardless of its allowlist: the
+body is knowledge, and refusing would contradict prompt pointers that
+survive tool filtering. The same stance applies to chip invocation: a
+`/spreadsheets` chip injects the body even for an agent without
+`edit_sheet_cells` (the user asked; the model sees tool rejections it can
+report rather than a silent skip). Chip injections are **turn-volatile** —
+they ride the volatile turn context and are absent from later turns'
+history; the injected block therefore ends with a `load_skill("trigger")`
+re-load pointer, the chip-path twin of the elision stub.
 
 **Tier 3 — resources.** The entry page's direct children are listed, never
 bulk-loaded; the model reads them with `read_page` on demand (already
@@ -124,9 +144,9 @@ completions) — adding their catalogs is additive follow-up.
 
 1. The system prompt stays byte-identical across turns; every dynamic
    injection is an append (volatile block or tool result), never a splice.
-2. Skill/command descriptions rendered into any prompt pass
-   `clipDescription` — they are user-authored data, and the sanitization is
-   a security property.
+2. USER-AUTHORED command descriptions rendered into any prompt pass
+   `clipDescription` — the sanitization is a security property. (Built-in
+   skill descriptions are code-shipped and render raw by design.)
 3. The chip path and `load_skill` resolve through the same permission
    functions; a load the picker wouldn't offer must be indistinguishable
    from not_found.

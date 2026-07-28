@@ -854,7 +854,8 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
     const eligibleSkills = listEligibleSkills(availableToolNames);
     const userCommandCatalog = await loadUserCommandCatalog(
       userId,
-      locationContext?.currentDrive?.id ?? null
+      locationContext?.currentDrive?.id ?? null,
+      availableToolNames
     );
     const skillCatalogPrompt = buildBuiltinSkillCatalog(availableToolNames);
 

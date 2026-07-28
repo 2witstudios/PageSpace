@@ -78,8 +78,8 @@ These 43 functions (46 names counting the aliases AVG, CONCATENATE, and POW) are
 
 | Function | Signature | Notes |
 |---|---|---|
-| IF | \`IF(cond, then, [else])\` | else defaults to empty string |
-| IFERROR | \`IFERROR(expr, fallback)\` | The only error handler; evaluates fallback lazily |
+| IF | \`IF(cond, then, [else])\` | else defaults to empty string. **All three arguments evaluate eagerly — IF does NOT short-circuit**, so \`=IF(B2=0, "", A2/B2)\` still errors when B2 is 0. Use IFERROR to guard, not IF |
+| IFERROR | \`IFERROR(expr, fallback)\` | The only lazy function and the only working error guard |
 | AND | \`AND(v1, ...)\` | |
 | OR | \`OR(v1, ...)\` | |
 | NOT | \`NOT(v)\` | |
@@ -100,7 +100,7 @@ These 43 functions (46 names counting the aliases AVG, CONCATENATE, and POW) are
 | RIGHT | \`RIGHT(text, [n])\` | n defaults to 1 |
 | MID | \`MID(text, start, count)\` | start is 1-indexed |
 | SUBSTITUTE | \`SUBSTITUTE(text, old, new, [instance])\` | Replaces all occurrences unless instance given |
-| REPT | \`REPT(text, times)\` | times capped at 10000 |
+| REPT | \`REPT(text, times)\` | times over 10000 is an error (not clamped) |
 | FIND | \`FIND(needle, haystack, [start])\` | Case-sensitive; returns 1-indexed position; **errors** when not found (wrap in IFERROR) |
 | SEARCH | \`SEARCH(needle, haystack, [start])\` | Like FIND but case-insensitive |
 
@@ -114,16 +114,13 @@ These 43 functions (46 names counting the aliases AVG, CONCATENATE, and POW) are
 | MONTH | \`MONTH(dateText)\` | 1-12 |
 | DAY | \`DAY(dateText)\` | |
 
-Dates are plain strings — there are no date serial numbers and no date arithmetic (no DATE, DATEDIF, EDATE, or subtracting dates).
+Dates are plain strings — there are no date serial numbers and no date arithmetic (no DATE, DATEDIF, EDATE, or subtracting dates). Caveat: YEAR/MONTH/DAY parse a bare "YYYY-MM-DD" as UTC midnight but extract with local time, so in negative-UTC-offset environments the result can be off by one day/month near boundaries — don't rely on them for exact date boundaries.
 
 ### Error values
 
-There are exactly two error displays — no Excel-style \`#DIV/0!\`, \`#N/A\`, \`#REF!\`, or \`#VALUE!\`:
+Every failed cell **displays** \`#ERROR\` — there are no Excel-style \`#DIV/0!\`, \`#N/A\`, \`#REF!\`, or \`#VALUE!\` displays, and circular references also render as \`#ERROR\` in the grid. The distinction lives in the stored data: read the page and each errored cell carries \`error = { type = "EVAL_ERROR" | "CIRCULAR_REF", message = "..." }\` with the exact failure message (for a cycle, the details list the cell and its direct precedents). Causes include: unsupported function, non-numeric operand, division by zero, FIND miss, invalid date, unavailable cross-page reference, circular reference.
 
-- \`#ERROR\` — the formula failed to parse or evaluate (unsupported function, non-numeric operand, division by zero, FIND miss, invalid date, unavailable cross-page reference, ...).
-- \`#CYCLE\` — circular reference; the cycle members are recorded in the stored error details.
-
-An errored cell's value is empty, so any formula referencing it errors too — errors propagate through dependents. When you see an error: read the page — each errored cell carries a stored \`error = { type = "EVAL_ERROR" | "CIRCULAR_REF", message = "..." }\` with the exact failure message. Fix the offending cell with \`edit_sheet_cells\` (usually: replace an unsupported function, quote text properly, or break the cycle). \`IFERROR(expr, fallback)\` is the only in-formula way to absorb an expected error.
+An errored cell's value is empty, so any formula referencing it errors too — errors propagate through dependents. Fix the offending cell with \`edit_sheet_cells\` (usually: replace an unsupported function, quote text properly, or break the cycle). \`IFERROR(expr, fallback)\` is the only in-formula way to absorb an expected error (remember IF does not short-circuit). One edge: a non-finite result (e.g. \`=2^2000\`) displays \`#ERROR\` but stores no \`error\` object and serializes its value as 0.
 
 ## Cross-sheet references
 

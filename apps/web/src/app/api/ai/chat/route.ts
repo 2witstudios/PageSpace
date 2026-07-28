@@ -991,7 +991,7 @@ export async function POST(request: Request) {
     const eligibleSkills = listEligibleSkills(allowedToolNames);
     const userCommandCatalog =
       eligibleSkills.length > 0 || allowedToolNames.includes('load_skill')
-        ? await loadUserCommandCatalog(userId!, page.driveId ?? null)
+        ? await loadUserCommandCatalog(userId!, page.driveId ?? null, allowedToolNames)
         : { catalogPrompt: '', searchEntries: [] };
     const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS, [
       ...eligibleSkills,

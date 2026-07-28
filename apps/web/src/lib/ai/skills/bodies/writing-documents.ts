@@ -16,7 +16,7 @@ Every text page is one of:
 - **DOCUMENT, markdown mode** (\`contentMode: 'markdown'\`) — raw markdown text, stored and edited exactly as written, with natural line structure.
 - **CODE** — raw plain-text source with syntax highlighting. Treated exactly like markdown mode for editing: no HTML processing, natural lines.
 
-\`read_page\` and every edit-tool result report the page's \`type\` and \`contentMode\` — check them before writing, and match the page's format. Writing markdown syntax into an html-mode DOCUMENT (or HTML tags into a markdown/CODE page) produces literal garbage, not formatting.
+\`read_page\` and \`replace_lines\` results report the page's \`type\` and \`contentMode\` (\`insert_content\` results do not — check *before* inserting, not after). Match the page's format: writing markdown syntax into an html-mode DOCUMENT (or HTML tags into a markdown/CODE page) produces literal garbage, not formatting.
 
 ### Choosing contentMode at create_page
 
@@ -29,9 +29,9 @@ Never try to "convert" a page by writing the other syntax into it; create a new 
 
 ## What read_page shows you
 
-\`read_page\` returns content with each line prefixed \`N→\` (1-based), plus \`totalLines\`, and supports \`lineStart\`/\`lineEnd\` ranges.
+\`read_page\` returns content with each line prefixed \`N→\` (1-based), plus \`totalLines\`, and supports \`lineStart\`/\`lineEnd\` ranges. Like the edit tools, it also **requires a \`title\` field** (the page's title, display-only context) alongside the optional \`pageId\`.
 
-For html-mode DOCUMENTs, the stored HTML is first normalized by an **additive-only** line-breaker: a newline is added after each opening block tag, before each closing block tag, and between adjacent block tags (\`p\`, \`h1\`–\`h6\`, \`ul\`/\`ol\`/\`li\`, \`table\`/\`tr\`/\`td\`/\`th\`/\`thead\`/\`tbody\`, \`blockquote\`, \`pre\`, \`div\`, and similar). No characters are ever removed or changed. So a paragraph reads as three lines:
+For html-mode DOCUMENTs, the stored HTML is first normalized by an **additive** line-breaker: a newline is added after each opening block tag, before each closing block tag, and between adjacent block tags (\`p\`, \`h1\`–\`h6\`, \`ul\`/\`ol\`/\`li\`, \`table\`/\`tr\`/\`td\`/\`th\`/\`thead\`/\`tbody\`, \`blockquote\`, \`pre\`, \`div\`, and similar). Text content is never removed or changed — the one exception is whitespace *between* adjacent block tags, which is collapsed to the newline. So a paragraph reads as three lines:
 
 \`\`\`
 12→<p>
@@ -41,18 +41,18 @@ For html-mode DOCUMENTs, the stored HTML is first normalized by an **additive-on
 
 **The line numbers you see are the exact lines \`replace_lines\` and \`insert_content\` operate on** — the edit tools normalize with the same function before splitting into lines. CODE and markdown-mode pages skip normalization entirely; their line numbers are the file's natural lines.
 
-CHANNEL, TASK_LIST, and FILE pages return structured data (transcripts, tasks, file metadata) rather than editable text — they are not targets for these editing tools.
+CHANNEL and TASK_LIST pages return structured data (transcripts, tasks) rather than editable text; FILE pages return their extracted text as numbered lines plus a \`fileMetadata\` block, but are read-only. None of these are targets for the editing tools.
 
 ## The read → edit workflow
 
 1. **Always read before writing.** Never edit from memory of an earlier read.
 2. Make your edit with \`replace_lines\` or \`insert_content\`.
-3. **Line numbers shift after every edit.** An insert or a replacement with a different line count renumbers everything below it. Re-read the page (a \`lineStart\`/\`lineEnd\` range around the edit area is enough) before any further line-based edit. The edit result's \`newContent\` and \`newLineCount\` can also tell you the new layout, but when in doubt, re-read.
+3. **Line numbers shift after every edit.** An insert or a replacement with a different line count renumbers everything below it. Re-read the page (a \`lineStart\`/\`lineEnd\` range around the edit area is enough) before any further line-based edit. The edit result's \`newContent\` (and, from \`replace_lines\`, \`newLineCount\`) can also tell you the new layout, but when in doubt, re-read.
 4. Verify the result: edit tools return \`oldContent\`/\`newContent\` so you can confirm the change landed where intended.
 
 ### replace_lines — precise range edits
 
-\`replace_lines\` replaces an inclusive, 1-based range \`startLine\`–\`endLine\` (\`endLine\` defaults to \`startLine\`) with \`content\`. Omit \`pageId\` to edit the page currently in view.
+\`replace_lines\` replaces an inclusive, 1-based range \`startLine\`–\`endLine\` (\`endLine\` defaults to \`startLine\`) with \`content\`. It also **requires a \`title\` field** (display-only). Omit \`pageId\` to edit the page currently in view.
 
 - \`content\` may contain newlines — a multi-line string becomes multiple lines.
 - **Empty-string \`content\` deletes the range entirely** (reported as \`changeType: 'deletion'\`); it does not leave a blank line.
@@ -63,7 +63,7 @@ Use it for: rewriting a section, fixing specific lines, deleting content, any ed
 
 ### insert_content — anchored insertion, no line math
 
-\`insert_content\` inserts \`content\` as new line(s) immediately \`before\` or \`after\` the **first line containing the \`anchor\` substring**. Omit \`pageId\` to edit the page currently in view.
+\`insert_content\` inserts \`content\` as new line(s) immediately \`before\` or \`after\` the **first line containing the \`anchor\` substring**. It also **requires a \`title\` field** (display-only). Omit \`pageId\` to edit the page currently in view.
 
 - Pick a distinctive anchor — a heading's text, a unique phrase — remembering that only the *first* matching line wins.
 - On html-mode pages the insertion point snaps to the block boundary: \`after\` skips past the closing tags following the anchor line, \`before\` backs up before the opening tags preceding it. So anchoring on a heading's text and inserting \`after\` places your content *after the complete heading element*, not inside it — exactly what you want for "add a section under this heading".
@@ -100,16 +100,21 @@ Rules of thumb:
 
 ## Mentions in content
 
-Mentions use the syntax \`@[Label](id:type)\` with four types:
+There are two mention representations, and which one works depends on the surface.
 
-- \`@[Page Title](pageId:page)\` — links to a page. When a user @mentions a page at you, read it with \`read_page\` before responding.
-- \`@[Name](userId:user)\` — notifies that specific user.
-- \`@[Role Name](roleId:role)\` — notifies all drive members holding that role.
-- \`@[everyone](driveId:everyone)\` — notifies all drive members; the id is the **driveId** (take it from your LOCATION context if present, otherwise resolve via \`list_drives\` or the resource you're working on).
+**In html-mode DOCUMENT content, write the editor's HTML mention elements** — these are what the rich editor produces and what document mention extraction parses:
 
-Notification mechanics: the mention author is never notified, and notifications only reach users who can actually view the page — mentioning someone does not grant access. Use user/role/everyone mentions when your content should actively notify people; use page mentions for cross-references.
+- Page link: \`<a class="mention" data-mention-type="page" data-page-id="PAGE_ID">@Page Title</a>\`
+- Everyone: \`<span class="mention" data-mention-type="everyone" data-drive-id="DRIVE_ID">@everyone</span>\` — notifies the drive's owner and members; take the driveId from your LOCATION context if present, otherwise resolve via \`list_drives\`.
+- Role: \`<span class="mention" data-mention-type="role" data-role-id="ROLE_ID" data-drive-id="DRIVE_ID">@Role Name</span>\` — notifies drive members holding that role.
 
-In html-mode DOCUMENT content, editor-created mentions persist as anchor/span elements (\`<a class="mention" data-mention-type="page" data-page-id="...">@Label</a>\`, \`<span data-mention-type="everyone">\`/\`<span data-mention-type="role" data-role-id="...">\`). When editing around them, **preserve these elements verbatim** — rewriting them as plain text destroys the link.
+When editing around existing mention elements, **preserve them verbatim** — rewriting them as plain text destroys the link.
+
+**The \`@[Label](id:type)\` syntax belongs to chat and channel messages** (types: \`(pageId:page)\`, \`(userId:user)\`, \`(roleId:role)\`, \`(driveId:everyone)\`). Message surfaces render it as a chip and notify. When a user @mentions a page at you in a message, read it with \`read_page\` before responding.
+
+In documents that syntax is only a **fallback**: it is parsed solely when the page contains no HTML mention markers at all — one existing mention element switches extraction to HTML-only and every \`@[..](..)\` in the page is ignored. In html-mode documents it also renders to readers as literal text, not a chip. So in documents, write the HTML elements. There is no working HTML form for a **user** mention in documents; if you need to notify a specific user reliably, do it from a chat/channel message rather than document content. Mention extraction skips \`<pre>\`/\`<code>\` regions, so literal syntax examples are never parsed as real mentions.
+
+Notification mechanics: the mention author is never notified, and only **newly added** mentions notify (re-saving the same mention does not). On chat/channel surfaces recipients are filtered to users who can view the page; on document saves they are **not** — a role/everyone mention in a page some drive members cannot view still notifies them, so mention deliberately. Mentioning someone never grants access. Use page mentions for cross-references.
 
 ## Structure conventions for long-form writing
 
@@ -127,5 +132,6 @@ In html-mode DOCUMENT content, editor-created mentions persist as anchor/span el
 - **Partial-block replacement** — replacing the text line but not its enclosing tags (or vice versa), leaving unbalanced HTML.
 - **Assuming insert_content succeeded** — it returns \`inserted: false\` (not an error) when the anchor isn't found.
 - **Forgetting empty content deletes** — \`replace_lines\` with \`content: ""\` removes the lines; to blank a line instead, replace it with a single space or an empty block.
+- **Markdown mention syntax in documents** — \`@[..](..)\` is ignored the moment the page contains any HTML mention element, and renders as literal text in html mode; write the HTML mention elements instead.
 - **Wrong tool for the page type** — SHEET pages need \`edit_sheet_cells\`; FILE pages are read-only; CHANNEL/TASK_LIST are managed through their own tools, not line edits.
 `;

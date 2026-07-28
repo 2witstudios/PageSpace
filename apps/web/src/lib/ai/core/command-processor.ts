@@ -164,6 +164,15 @@ export function buildCommandSystemPrompt(injection: CommandInjection): string {
     );
   }
 
+  // Chip injections ride the volatile turn context — they exist only for
+  // the request that carried the chip and are absent from later turns'
+  // history. The re-load pointer keeps multi-turn work restorable, exactly
+  // like the elision stub on the load_skill path.
+  lines.push(
+    '',
+    `These instructions apply to this turn only. If later turns continue this work and they are no longer in context, call load_skill("${injection.trigger}") to restore them.`
+  );
+
   return lines.join('\n') + '\n';
 }
 

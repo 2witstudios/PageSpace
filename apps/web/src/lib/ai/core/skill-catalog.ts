@@ -82,7 +82,8 @@ const COMMAND_CATALOG_HEADER = [
 function renderCommandList(
   commands: readonly CommandSummary[],
   clip: number | null,
-  omitted: number
+  omitted: number,
+  canListCommands: boolean
 ): string {
   const lines = [
     ...COMMAND_CATALOG_HEADER,
@@ -93,7 +94,14 @@ function renderCommandList(
     ),
   ];
   if (omitted > 0) {
-    lines.push(`(${omitted} more not listed — use list_commands to see all.)`);
+    // Only point at list_commands when the agent can actually reach it — it
+    // is a non-core tool an allowlist may exclude, and a pointer to an
+    // uncallable tool is a dead end.
+    lines.push(
+      canListCommands
+        ? `(${omitted} more not listed — use list_commands to see all.)`
+        : `(${omitted} more not listed.)`
+    );
   }
   return lines.join('\n');
 }
@@ -104,19 +112,25 @@ function renderCommandList(
  * `charBudget`: 200-char descriptions → 80-char → names only → capped name
  * list with an omission note. Returns '' when the user has no commands —
  * the zero-command majority pays zero standing tokens.
+ *
+ * `availableTools` (same sentinel semantics as listEligibleSkills) controls
+ * whether the omission note may reference list_commands.
  */
 export function buildUserCommandCatalog(
   commands: readonly CommandSummary[],
-  charBudget: number = COMMAND_CATALOG_CHAR_BUDGET
+  charBudget: number = COMMAND_CATALOG_CHAR_BUDGET,
+  availableTools?: readonly string[]
 ): string {
   const listable = commands.filter((command) => command.scope !== 'builtin');
   if (listable.length === 0) return '';
 
+  const canListCommands =
+    availableTools === undefined || availableTools.includes('list_commands');
   const capped = listable.slice(0, HELP_COMMAND_LIST_LIMIT);
   const omitted = listable.length - capped.length;
 
   for (const clip of [COMMAND_CATALOG_FULL_CLIP, COMMAND_CATALOG_SHORT_CLIP, null]) {
-    const rendered = renderCommandList(capped, clip, omitted);
+    const rendered = renderCommandList(capped, clip, omitted, canListCommands);
     if (rendered.length <= charBudget) return rendered;
   }
 
@@ -126,10 +140,15 @@ export function buildUserCommandCatalog(
   let count = capped.length;
   while (count > 1) {
     count -= 1;
-    const rendered = renderCommandList(capped.slice(0, count), null, listable.length - count);
+    const rendered = renderCommandList(
+      capped.slice(0, count),
+      null,
+      listable.length - count,
+      canListCommands
+    );
     if (rendered.length <= charBudget) return rendered;
   }
-  return renderCommandList(capped.slice(0, 1), null, listable.length - 1);
+  return renderCommandList(capped.slice(0, 1), null, listable.length - 1, canListCommands);
 }
 
 /**
