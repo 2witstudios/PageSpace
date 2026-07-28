@@ -679,6 +679,70 @@ describe('distributed-rate-limit', () => {
       }
     });
 
+    it('does not evict an actively blocked entry to admit new identifiers', async () => {
+      // maxAttempts 2 → conservative threshold 1; second check trips a long block.
+      const config: RateLimitConfig = {
+        maxAttempts: 2,
+        windowMs: 60_000,
+        blockDurationMs: 600_000,
+      };
+      await checkDistributedRateLimit('evict-victim', config);
+      const blocked = await checkDistributedRateLimit('evict-victim', config);
+      expect(blocked.allowed).toBe(false);
+
+      // The blocked entry is the oldest in the map. Flooding past the cap must
+      // not evict it — otherwise an attacker could flush their own block by
+      // spraying fresh identifiers.
+      for (let i = 0; i < MAX_IN_MEMORY_ATTEMPT_ENTRIES; i++) {
+        await checkDistributedRateLimit(`evict-flood:${i}`, config);
+      }
+
+      const still = await checkDistributedRateLimit('evict-victim', config);
+      expect(still.allowed).toBe(false);
+    }, 30_000);
+
+    it('denies everything when configured maxAttempts is 0, even in the fallback', async () => {
+      // PG-up semantics for maxAttempts 0 are "always deny" (count 1 > 0); the
+      // fallback must never be looser than the configured limit.
+      const config: RateLimitConfig = { maxAttempts: 0, windowMs: 60_000 };
+      const result = await checkDistributedRateLimit('zero-config', config);
+      expect(result.allowed).toBe(false);
+    });
+
+    it('re-arms the cleanup sweep when traffic resumes after shutdown', async () => {
+      vi.useFakeTimers();
+      try {
+        shutdownRateLimiting();
+        await checkDistributedRateLimit('rearm', { maxAttempts: 5, windowMs: 50 });
+        // One interval tick later the expired entry must already be gone —
+        // i.e. the insert re-armed the sweep the shutdown had cleared.
+        vi.advanceTimersByTime(5 * 60 * 1000 + 1);
+        expect(sweepExpiredInMemoryAttempts(Date.now())).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('characterizes bounded overage across a flapping outage (accepted trade-off)', async () => {
+      // Distributed and in-memory counters are disjoint by design: warming the
+      // in-memory map on every successful PG check would churn the capped store
+      // for all traffic. Worst case when PG flaps mid-window is configured +
+      // conservative threshold (~1.5x) per instance — bounded, and strictly
+      // tighter than the pre-fallback alternative of an unbounded bypass.
+      const config: RateLimitConfig = { maxAttempts: 5, windowMs: 60_000 };
+      mockInsertReturning(5);
+      const atLimit = await checkDistributedRateLimit('flap', config);
+      expect(atLimit.allowed).toBe(true);
+
+      mockInsertThrows(drizzleWrappedPgError());
+      const r1 = await checkDistributedRateLimit('flap', config);
+      const r2 = await checkDistributedRateLimit('flap', config);
+      const r3 = await checkDistributedRateLimit('flap', config);
+      expect(r1.allowed).toBe(true);
+      expect(r2.allowed).toBe(true);
+      expect(r3.allowed).toBe(false);
+    });
+
     it('caps distinct tracked identifiers, evicting oldest-first under identifier flood', async () => {
       const config: RateLimitConfig = { maxAttempts: 4, windowMs: 60_000 };
 
