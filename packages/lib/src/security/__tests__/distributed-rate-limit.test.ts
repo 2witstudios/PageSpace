@@ -565,20 +565,41 @@ describe('distributed-rate-limit', () => {
       await expect(resetDistributedRateLimit('fail-reset')).resolves.toBeUndefined();
     });
 
-    it('skips the Postgres delete while the outage cooldown is active', async () => {
+    it('attempts the Postgres delete even while the outage cooldown is active', async () => {
+      // Resets REFUND a consumed limit (e.g. EXPORT_DATA's 1-per-24h after a
+      // failed export). Skipping the delete while the circuit is open would
+      // leave the Postgres row intact and 429 the caller for the rest of the
+      // window once Postgres recovers. Resets are low-volume, so they are
+      // deliberately not breaker-gated.
       process.env.NODE_ENV = 'production';
       mockInsertThrows(drizzleWrappedPgError());
       const config: RateLimitConfig = { maxAttempts: 5, windowMs: 60_000 };
       await checkDistributedRateLimit('reset-breaker', config); // opens circuit
 
       deleteMock.mockClear();
+      mockDeleteResolves();
       await resetDistributedRateLimit('reset-breaker');
-      expect(deleteMock).not.toHaveBeenCalled();
+      expect(deleteMock).toHaveBeenCalled();
 
-      // The in-memory side was still cleared: next check starts a fresh
-      // conservative window (first of 2 → 1 remaining).
+      // The in-memory side was also cleared: next fallback check starts a
+      // fresh conservative window (first of 2 → 1 remaining).
       const after = await checkDistributedRateLimit('reset-breaker', config);
       expect(after.attemptsRemaining).toBe(1);
+    });
+
+    it('a successful reset delete closes the circuit as evidence of recovery', async () => {
+      process.env.NODE_ENV = 'production';
+      mockInsertThrows(drizzleWrappedPgError());
+      const config: RateLimitConfig = { maxAttempts: 5, windowMs: 60_000 };
+      await checkDistributedRateLimit('reset-recovery', config); // opens circuit
+
+      mockDeleteResolves();
+      await resetDistributedRateLimit('reset-recovery'); // delete succeeds → PG is back
+
+      mockInsertReturning(1);
+      const next = await checkDistributedRateLimit('reset-recovery-2', config);
+      expect(next.allowed).toBe(true);
+      expect(next.attemptsRemaining).toBe(4); // distributed path, not fallback
     });
   });
 
