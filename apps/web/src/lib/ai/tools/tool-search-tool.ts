@@ -11,6 +11,15 @@ import type { SkillSearchEntry } from '../core/skill-catalog';
  * caller also advertises load_skill; with the default empty list the output
  * stays byte-identical to the tools-only behavior.
  */
+/**
+ * Cap on skill/command entries per search result. The skill corpus includes
+ * user/drive commands, which are unbounded per drive — without a cap a broad
+ * keyword (or a degenerate empty query, which `includes('')` matches for
+ * every entry) could append an arbitrarily large tool result and blow the
+ * next request's context, defeating the deliberately-capped catalog.
+ */
+const MAX_SKILL_MATCHES = 10;
+
 export function createToolSearchTool(
   fullTools: ToolSet,
   skills: readonly SkillSearchEntry[] = []
@@ -26,6 +35,12 @@ export function createToolSearchTool(
       ),
     }),
     execute: async ({ query }: { query: string }) => {
+      // An empty/whitespace query matches everything via includes('') —
+      // reject it instead of dumping the whole corpus into the context.
+      if (!query.trim()) {
+        return { tools: [], error: 'Provide a search keyword or "select:name1,name2".' };
+      }
+
       const matches = resolveMatches(fullTools, query);
       const result = Object.entries(matches).map(([name, t]) => ({
         name,
@@ -33,14 +48,19 @@ export function createToolSearchTool(
         inputSchema: z.toJSONSchema(t.inputSchema as z.ZodType),
       }));
 
-      const skillMatches = resolveSkillMatches(skills, query).map((skill) => ({
+      const allSkillMatches = resolveSkillMatches(skills, query);
+      const skillMatches = allSkillMatches.slice(0, MAX_SKILL_MATCHES).map((skill) => ({
         ...skill,
         usage: `load_skill("${skill.name}")`,
       }));
+      const omittedSkills = allSkillMatches.length - skillMatches.length;
 
       return {
         tools: result,
         ...(skillMatches.length > 0 ? { skills: skillMatches } : {}),
+        ...(omittedSkills > 0
+          ? { note: `${omittedSkills} more skill/command matches omitted — use a more specific keyword.` }
+          : {}),
       };
     },
   };

@@ -186,4 +186,35 @@ describe('createToolSearchTool', () => {
       expected: false,
     });
   });
+
+  it('rejects empty/whitespace queries instead of dumping the whole corpus', async () => {
+    const t = createToolSearchTool(registry, skillCorpus);
+    const empty = (await t.execute!({ query: '' }, {} as never)) as ToolSearchResult & {
+      error?: string;
+    };
+    const blank = (await t.execute!({ query: '   ' }, {} as never)) as ToolSearchResult;
+    assert({
+      given: 'an empty query (includes("") would match every entry)',
+      should: 'return no tools, no skills, and an error hint',
+      actual: [empty.tools.length, 'skills' in empty, typeof empty.error, blank.tools.length],
+      expected: [0, false, 'string', 0],
+    });
+  });
+
+  it('caps skill matches and reports the omission count', async () => {
+    const bigCorpus = Array.from({ length: 25 }, (_, i) => ({
+      name: `standup-${String(i).padStart(2, '0')}`,
+      description: 'Prepares standup notes.',
+    }));
+    const t = createToolSearchTool(registry, bigCorpus);
+    const result = (await t.execute!({ query: 'standup' }, {} as never)) as ToolSearchResult & {
+      note?: string;
+    };
+    assert({
+      given: '25 matching skills with a cap of 10',
+      should: 'return 10 matches and an omission note for the other 15',
+      actual: [result.skills?.length, result.note?.includes('15 more')],
+      expected: [10, true],
+    });
+  });
 });
