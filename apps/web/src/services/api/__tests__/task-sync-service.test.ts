@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'pages.id', parentId: 'pages.parentId', isTrashed: 'pages.isTrashed', position: 'pages.position', type: 'pages.type' } }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
   taskLists: { pageId: 'taskLists.pageId' },
-  taskItems: { pageId: 'taskItems.pageId', id: 'taskItems.id' },
+  taskItems: { pageId: 'taskItems.pageId', id: 'taskItems.id', assigneeAgentId: 'taskItems.assigneeAgentId', completedAt: 'taskItems.completedAt' },
   taskAssignees: { taskId: 'taskAssignees.taskId', agentPageId: 'taskAssignees.agentPageId' },
   taskStatusConfigs: {},
   DEFAULT_TASK_STATUSES: [
@@ -15,7 +15,7 @@ vi.mock('@pagespace/db/schema/task-triggers', () => ({
   taskTriggers: { taskItemId: 'taskTriggers.taskItemId', workflowId: 'taskTriggers.workflowId' },
 }));
 vi.mock('@pagespace/db/schema/workflows', () => ({
-  workflows: { id: 'workflows.id' },
+  workflows: { id: 'workflows.id', driveId: 'workflows.driveId', agentPageId: 'workflows.agentPageId' },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ['eq', a, b]),
@@ -65,6 +65,8 @@ function makeTx(config: {
   /** task_items ids the scrub should find, and the workflow ids their triggers name. */
   scrubTaskItemIds?: string[];
   scrubWorkflowIds?: string[];
+  /** task_items ids the remove branch's pre-delete trigger sweep should find. */
+  removeBranchTaskItemIds?: string[];
   /** Agent page referenced by each found task item, and agents already in the target drive. */
   scrubAgentIdByItem?: Record<string, string>;
   scrubAssigneeAgentIds?: string[];
@@ -81,6 +83,7 @@ function makeTx(config: {
     lastPosition = null,
     scrubTaskItemIds = [],
     scrubWorkflowIds = [],
+    removeBranchTaskItemIds = [],
     scrubAgentIdByItem = {},
     scrubAssigneeAgentIds = [],
     agentsInTargetDrive = [],
@@ -113,13 +116,19 @@ function makeTx(config: {
     // Dispatch on the PROJECTION SHAPE, not call order: order-based dispatch would let
     // two swapped selects — or a query against the wrong column — pass unnoticed.
     select: vi.fn((projection?: Record<string, unknown>) => {
-      const keys = projection ? Object.keys(projection).sort().join(',') : '';
+      // Keyed on the projection's VALUES, which are the table-qualified column names in
+      // these mocks. Keying on the key NAMES collided: { id: taskItems.id } and
+      // { id: pages.id } are both 'id', so a task_items-by-page lookup was
+      // indistinguishable from a pages-by-drive one and wiring them to each other
+      // passed silently.
+      const shape = projection ? Object.values(projection).sort().join(',') : '';
       const result =
-        keys === 'assigneeAgentId,id'
+        shape === 'taskItems.assigneeAgentId,taskItems.id'
           ? scrubTaskItemIds.map((id) => ({ id, assigneeAgentId: scrubAgentIdByItem[id] ?? null }))
-        : keys === 'agentPageId' ? scrubAssigneeAgentIds.map((agentPageId) => ({ agentPageId }))
-        : keys === 'workflowId' ? scrubWorkflowIds.map((workflowId) => ({ workflowId }))
-        : keys === 'id' ? agentsInTargetDrive.map((id) => ({ id }))
+        : shape === 'taskAssignees.agentPageId' ? scrubAssigneeAgentIds.map((agentPageId) => ({ agentPageId }))
+        : shape === 'taskTriggers.workflowId' ? scrubWorkflowIds.map((workflowId) => ({ workflowId }))
+        : shape === 'pages.id' ? agentsInTargetDrive.map((id) => ({ id }))
+        : shape === 'taskItems.id' ? removeBranchTaskItemIds.map((id) => ({ id }))
         : null;
       if (result === null) return selectChain;
       return {
@@ -406,7 +415,7 @@ describe('syncTaskItemOnMove', () => {
   // from slugify(name) and each list picks its own group, so "Review" can be `done` in
   // one list and `in_progress` in another. Carrying it over unchanged leaves the row's
   // group disagreeing with its own completedAt.
-  it('remaps a slug the destination defines in the WRONG group for a completed task', async () => {
+  it('reconciles completedAt (not the status) when the destination defines the slug in another group', async () => {
     const { tx, taskItemUpdates } = makeTx({
       pageTypes: { old: 'TASK_LIST', new: 'TASK_LIST' },
       existingItems: new Set(['list']),
@@ -418,10 +427,11 @@ describe('syncTaskItemOnMove', () => {
       ],
     });
     await syncTaskItemOnMove(tx as never, { movedPageId: 'list', movedPageType: 'TASK_LIST', oldParentId: 'old', newParentId: 'new', userId: 'u' });
-    expect(taskItemUpdates).toEqual([{ status: 'shipped' }]);
+    // The status the user chose survives; the derived stamp is what gets corrected.
+    expect(taskItemUpdates).toEqual([{ completedAt: null }]);
   });
 
-  it('remaps a slug the destination defines as done for an UNfinished task', async () => {
+  it('stamps completedAt when the destination defines the slug as done', async () => {
     const { tx, taskItemUpdates } = makeTx({
       pageTypes: { old: 'TASK_LIST', new: 'TASK_LIST' },
       existingItems: new Set(['list']),
@@ -432,7 +442,9 @@ describe('syncTaskItemOnMove', () => {
       ],
     });
     await syncTaskItemOnMove(tx as never, { movedPageId: 'list', movedPageType: 'TASK_LIST', oldParentId: 'old', newParentId: 'new', userId: 'u' });
-    expect(taskItemUpdates).toEqual([{ status: 'todo' }]);
+    expect(taskItemUpdates).toHaveLength(1);
+    expect((taskItemUpdates[0] as { completedAt: Date }).completedAt).toBeInstanceOf(Date);
+    expect(taskItemUpdates[0]).not.toHaveProperty('status');
   });
 
   // A list whose owner deleted 'pending' (permitted, via migrateToSlug) would otherwise
@@ -456,6 +468,20 @@ describe('syncTaskItemOnMove', () => {
     });
     await syncTaskItemOnMove(tx as never, { movedPageId: 'list', movedPageType: 'TASK_LIST', oldParentId: 'old', newParentId: 'new', userId: 'u' });
     expect(taskListInserts).toHaveLength(1);
+  });
+
+  // The remove branch must clear the trigger workflows BEFORE deleting the row:
+  // task_triggers.taskItemId cascades from task_items, so the other order strands them.
+  it('deletes trigger workflows before deleting the row it is removing', async () => {
+    const { tx, deletedTables } = makeTx({
+      pageTypes: { old: 'TASK_LIST', new: 'FOLDER' },
+      removeBranchTaskItemIds: ['item-1'],
+      scrubWorkflowIds: ['wf-1'],
+    });
+
+    await syncTaskItemOnMove(tx as never, { movedPageId: 'list', movedPageType: 'TASK_LIST', oldParentId: 'old', newParentId: 'new', userId: 'u' });
+
+    expect(deletedTables).toEqual(['workflows', 'taskItems']);
   });
 
   it('only removes when moving out of a TASK_LIST into a non-TASK_LIST', async () => {
@@ -527,6 +553,33 @@ describe('scrubDriveScopedTaskAssociations', () => {
 
     expect(taskItemUpdates).toHaveLength(0);
     expect(deletedTables).not.toContain('taskAssignees');
+  });
+
+  // Finding: workflows.driveId is stamped at creation and never rewritten, so testing it
+  // deleted EVERY surviving trigger. Staleness is the agent's, not the drive column's.
+  it('spares the trigger workflow when its agent moved along with the task', async () => {
+    const { tx, deletedTables } = makeTx({
+      scrubTaskItemIds: ['item-1'],
+      scrubWorkflowIds: ['wf-1'],
+      scrubAgentIdByItem: { 'item-1': 'agent-came-along' },
+      agentsInTargetDrive: ['agent-came-along'],
+    });
+
+    await scrubDriveScopedTaskAssociations(tx as never, { pageIds: ['p1'], targetDriveId: 'drive-target' });
+
+    expect(deletedTables).not.toContain('workflows');
+  });
+
+  it('deletes the trigger workflow when its agent stayed behind', async () => {
+    const { tx, deletedTables } = makeTx({
+      scrubTaskItemIds: ['item-1'],
+      scrubWorkflowIds: ['wf-1'],
+      scrubAgentIdByItem: { 'item-1': 'agent-left-behind' },
+    });
+
+    await scrubDriveScopedTaskAssociations(tx as never, { pageIds: ['p1'], targetDriveId: 'drive-target' });
+
+    expect(deletedTables).toContain('workflows');
   });
 
   // Human assignees, priority, dueDate and metadata are not drive-scoped, so the

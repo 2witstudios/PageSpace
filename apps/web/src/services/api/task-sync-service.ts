@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db'
-import { eq, ne, and, asc, inArray, isNotNull } from '@pagespace/db/operators'
+import { eq, and, asc, inArray, isNotNull } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskAssignees, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks'
 import { taskTriggers } from '@pagespace/db/schema/task-triggers'
@@ -132,8 +132,11 @@ function isGroupConsistentWithCompletion(group: string, completedAt: Date | null
  * queries, and (when the slug was a done one) shows unticked while `completedAt` still
  * counts it complete in the parent's progress.
  *
- * Re-mapping uses `completedAt`, which lives on the row itself and is list-independent,
- * so a finished task stays finished and an unfinished one stays actionable.
+ * Two different repairs, depending on which side is wrong. When the destination DOES
+ * define the slug, the status stands and any disagreement with `completedAt` is fixed
+ * on `completedAt` — the derived field. Only when the slug is absent entirely is the
+ * status itself remapped, and then `completedAt` is the intent signal, so a finished
+ * task stays finished and an unfinished one stays actionable.
  */
 async function normalizeStatusForList(
   tx: Tx,
@@ -153,7 +156,21 @@ async function normalizeStatusForList(
       eq(taskStatusConfigs.slug, item.status),
     ),
   })
-  if (alreadyValid && isGroupConsistentWithCompletion(alreadyValid.group, item.completedAt)) return
+  if (alreadyValid) {
+    // The slug is meaningful in this list, so the status stands. If completedAt
+    // disagrees with the config's group, completedAt is the field that drifted: it is
+    // DERIVED — the task PATCH route stamps and clears it from the group — whereas the
+    // status is what the user last chose and sees. Regrouping a status in place, or
+    // deleting one with migrateToSlug, both leave exactly this divergence behind
+    // entirely within one list, so reconciling it must not rewrite the user's choice.
+    if (!isGroupConsistentWithCompletion(alreadyValid.group, item.completedAt)) {
+      await tx
+        .update(taskItems)
+        .set({ completedAt: alreadyValid.group === 'done' ? new Date() : null })
+        .where(eq(taskItems.id, item.id))
+    }
+    return
+  }
 
   const configs = await tx.query.taskStatusConfigs.findMany({
     where: eq(taskStatusConfigs.taskListId, taskListId),
@@ -270,9 +287,12 @@ export async function scrubDriveScopedTaskAssociations(
   // the assignment. Only agents left behind in the old drive are scrubbed.
   const staleAgentIds = await resolveAgentsOutsideDrive(tx, [...agentPageIds], targetDriveId)
 
-  await deleteTaskTriggerWorkflows(tx, taskItemIds, { exceptInDriveId: targetDriveId })
-
+  // A trigger is stale for the same reason its assignment is: the AGENT it runs stayed
+  // behind. Testing workflows.driveId instead would delete every surviving trigger,
+  // because that column is stamped once at creation and never rewritten — after a move
+  // it always names the source drive.
   if (staleAgentIds.length === 0) return
+  await deleteTaskTriggerWorkflows(tx, taskItemIds, { onlyForAgentIds: staleAgentIds })
 
   for (const batch of chunk(taskItemIds, SCRUB_CHUNK_SIZE)) {
     await tx
@@ -302,8 +322,11 @@ export async function scrubDriveScopedTaskAssociations(
 async function deleteTaskTriggerWorkflows(
   tx: Tx,
   taskItemIds: string[],
-  options?: { exceptInDriveId?: string },
+  options?: { onlyForAgentIds?: string[] },
 ): Promise<void> {
+  const agentIds = options?.onlyForAgentIds
+  if (agentIds && agentIds.length === 0) return
+
   for (const batch of chunk(taskItemIds, SCRUB_CHUNK_SIZE)) {
     const triggerRows = await tx
       .select({ workflowId: taskTriggers.workflowId })
@@ -312,11 +335,13 @@ async function deleteTaskTriggerWorkflows(
     if (triggerRows.length === 0) continue
     const workflowIds = triggerRows.map((row) => row.workflowId)
     for (const wfBatch of chunk(workflowIds, SCRUB_CHUNK_SIZE)) {
-      await tx.delete(workflows).where(
-        options?.exceptInDriveId
-          ? and(inArray(workflows.id, wfBatch), ne(workflows.driveId, options.exceptInDriveId))
-          : inArray(workflows.id, wfBatch),
-      )
+      for (const agentBatch of agentIds ? chunk(agentIds, SCRUB_CHUNK_SIZE) : [null]) {
+        await tx.delete(workflows).where(
+          agentBatch
+            ? and(inArray(workflows.id, wfBatch), inArray(workflows.agentPageId, agentBatch))
+            : inArray(workflows.id, wfBatch),
+        )
+      }
     }
   }
 }
