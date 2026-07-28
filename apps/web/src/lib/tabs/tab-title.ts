@@ -72,6 +72,20 @@ const GLOBAL_DASHBOARD_ROUTES = ['tasks', 'activity', 'storage', 'trash', 'conne
 // Drive-specific special routes
 const DRIVE_SPECIAL_ROUTES = ['tasks', 'activity', 'members', 'settings', 'trash', 'calendar', 'channels', 'files', 'workflows'] as const;
 
+/**
+ * Whether a parsed route is scoped to ONE drive at the drive level — the bare
+ * `/dashboard/[driveId]` AND every `/dashboard/[driveId]/<section>` sub-route
+ * (tasks, members, settings, files, channels, workflows, calendar, trash,
+ * activity). All of them already carry `driveId`; consumers asking "which
+ * workspace is the user standing in" must not special-case only `'drive'`.
+ *
+ * Prefix-matched so a `drive-*` PathType added later is covered the day it
+ * lands. `'dashboard-drives'` (the global drive LIST) and `'page'` (a page
+ * INSIDE a drive, which callers handle separately) deliberately don't match.
+ */
+export const isDriveScopedPath = (parsed: ParsedPath): boolean =>
+  !!parsed.driveId && (parsed.type === 'drive' || parsed.type.startsWith('drive-'));
+
 export const parseTabPath = (path: string): ParsedPath => {
   const segments = path.split('/').filter(Boolean);
 

@@ -183,6 +183,78 @@ describe('page-read-tools', () => {
       expect(result).toMatchObject({ success: false });
     });
 
+    // driveId used to be required, which pushed the model into guessing a
+    // workspace whenever it didn't have one in its arguments.
+    describe('resolving an omitted driveId', () => {
+      const contextInDrive = (driveId: string) => ({
+        toolCallId: '1',
+        messages: [],
+        experimental_context: {
+          userId: 'user-123',
+          locationContext: { currentDrive: { id: driveId, name: 'Work', slug: 'work' } },
+        } as ToolExecutionContext,
+      });
+
+      const allowDrive = () => {
+        mockGetUserDriveAccess.mockResolvedValue(true as unknown as never);
+        mockGetUserAccessiblePagesInDrive.mockResolvedValue([] as unknown as never);
+        (mockDb.selectDistinct as ReturnType<typeof vi.fn>).mockReturnValue({
+          from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+        });
+      };
+
+      // The echo matters: a defaulted scope that looked in the wrong workspace
+      // returns an empty list, and an empty list reads as "it doesn't exist"
+      // unless the model can see where we actually looked.
+      it('lists the workspace in view and echoes the scope it used', async () => {
+        allowDrive();
+
+        const result = await pageReadTools.list_pages.execute!(
+          {},
+          contextInDrive('drive-loc')
+        ) as Record<string, unknown>;
+
+        expect(result).toMatchObject({
+          success: true,
+          driveId: 'drive-loc',
+          scopeSource: 'current_location',
+        });
+      });
+
+      it('marks an explicitly supplied driveId as an explicit scope', async () => {
+        allowDrive();
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId: 'drive-explicit' },
+          contextInDrive('drive-loc')
+        ) as Record<string, unknown>;
+
+        expect(result).toMatchObject({ driveId: 'drive-explicit', scopeSource: 'explicit' });
+      });
+
+      it('asks rather than guessing when no workspace is in view', async () => {
+        allowDrive();
+
+        await expect(
+          pageReadTools.list_pages.execute!({}, createAuthContext())
+        ).rejects.toThrow('no workspace is currently in view');
+      });
+
+      // Defaulting must not widen reach.
+      it('still denies a defaulted drive the actor cannot access', async () => {
+        mockGetUserDriveAccess.mockResolvedValue(false as unknown as never);
+
+        const result = await pageReadTools.list_pages.execute!(
+          {},
+          contextInDrive('drive-forbidden')
+        ) as Record<string, unknown>;
+
+        expect(result.success).toBe(false);
+        // driveSlug is absent on a defaulted scope — the message must not say "undefined".
+        expect(result.error).toContain('drive-forbidden');
+      });
+    });
+
     describe('ls-mode navigation (new behavior)', () => {
       const driveSlug = 'my-drive';
       const driveId = 'drive-1';

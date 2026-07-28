@@ -15,6 +15,9 @@ import { DEFAULT_IMAGE_MODEL } from '../core/model-capabilities';
 import { generateImageBytes, ImageGenerationError } from '../core/image-generation';
 import { isImageGenerationAllowed } from '../core/image-gen-access';
 import { createImageFilePage, ImageStorageQuotaError } from '@/lib/upload/create-file-page';
+import { pageRepository } from '@pagespace/lib/repositories/page-repository';
+import { canActorEditPage } from './actor-permissions';
+import { resolveDefaultDriveId } from './drive-context-defaults';
 
 const imageLogger = loggers.ai.child({ module: 'image-generation-tools' });
 
@@ -40,12 +43,69 @@ function titleFromPrompt(prompt: string): string {
   return trimmed.length > 60 ? `${trimmed.slice(0, 57)}…` : trimmed || 'Generated image';
 }
 
+interface ImageTarget {
+  targetDriveId?: string;
+  targetParentId?: string;
+  savedTo: 'requested' | 'current_drive' | 'home_gallery';
+}
+
+/**
+ * Decide where a generated image is filed, and authorize it.
+ *
+ * Explicit targets HARD-FAIL when the actor can't edit them: silently redirecting a
+ * named workspace to the Home gallery is exactly the surprise this tool used to
+ * produce. An IMPLICIT default (nothing named, so we inferred the workspace in view)
+ * degrades to the Home gallery instead — the user never scoped the request, so a
+ * view-only current drive shouldn't fail it.
+ *
+ * Deliberately called BEFORE the credit hold and the provider round-trip: a denial
+ * then costs nothing. Checking after generation would land permission failures in the
+ * `store_failed` path — billed, unsaved, and indistinguishable from an S3 outage.
+ */
+async function resolveImageTarget(
+  context: ToolExecutionContext,
+  args: { driveId?: string; parentId?: string },
+): Promise<{ ok: true; target: ImageTarget } | { ok: false; error: string }> {
+  if (args.parentId) {
+    const parent = await pageRepository.findById(args.parentId);
+    if (!parent || parent.isTrashed) {
+      return { ok: false, error: `Page "${args.parentId}" was not found.` };
+    }
+    if (args.driveId && parent.driveId !== args.driveId) {
+      return { ok: false, error: `Page "${args.parentId}" is not in drive "${args.driveId}".` };
+    }
+    if (!(await canActorEditPage(context, args.parentId))) {
+      return { ok: false, error: 'Insufficient permissions to save an image in that location.' };
+    }
+    return {
+      ok: true,
+      target: { targetDriveId: parent.driveId, targetParentId: args.parentId, savedTo: 'requested' },
+    };
+  }
+
+  if (args.driveId) {
+    // Same convention as create_page's root path: the drive is the parent of root pages.
+    if (!(await canActorEditPage(context, args.driveId))) {
+      return { ok: false, error: 'Insufficient permissions to save an image in that workspace.' };
+    }
+    return { ok: true, target: { targetDriveId: args.driveId, savedTo: 'requested' } };
+  }
+
+  const defaultDriveId = resolveDefaultDriveId(context);
+  if (defaultDriveId && (await canActorEditPage(context, defaultDriveId))) {
+    return { ok: true, target: { targetDriveId: defaultDriveId, savedTo: 'current_drive' } };
+  }
+  return { ok: true, target: { savedTo: 'home_gallery' } };
+}
+
 export const imageGenerationTools = {
   generate_image: tool({
     description: `Generate an image from a text prompt using the user's configured image model.
-The image is saved to the user's drive (a "Generated Images" folder in their Home drive by default)
-and shown inline in the conversation. Use this when the user asks you to create, draw, generate, or
-illustrate an image, logo, diagram, or picture. Currently restricted to app administrators.`,
+The image is saved into the workspace the user is currently in (a "Generated Images" folder at that
+drive's root), or into driveId/parentId when you pass them; it falls back to the user's Home drive
+only when no workspace is in view. It is shown inline in the conversation. Use this when the user
+asks you to create, draw, generate, or illustrate an image, logo, diagram, or picture. Currently
+restricted to app administrators.`,
     inputSchema: z.object({
       prompt: z
         .string()
@@ -55,9 +115,17 @@ illustrate an image, logo, diagram, or picture. Currently restricted to app admi
         .enum(['1:1', '16:9', '9:16', '4:3', '3:4'])
         .optional()
         .describe('Optional aspect ratio hint (default square). Some models may ignore it.'),
+      driveId: z
+        .string()
+        .optional()
+        .describe('Drive to save the image into. Omit to use the workspace currently in view; the image lands in that drive\'s "Generated Images" folder.'),
+      parentId: z
+        .string()
+        .optional()
+        .describe('Exact page or folder to save the image under (must be inside driveId). Omit to use the drive\'s "Generated Images" folder.'),
     }),
     execute: async (
-      { prompt, aspectRatio },
+      { prompt, aspectRatio, driveId, parentId },
       { experimental_context: rawContext },
     ) => {
       const context = rawContext as ToolExecutionContext | undefined;
@@ -81,6 +149,15 @@ illustrate an image, logo, diagram, or picture. Currently restricted to app admi
           error: 'Image generation is currently restricted to app administrators.',
         };
       }
+
+      // Resolve + authorize the destination BEFORE reserving credits or calling the
+      // provider, so a permission failure costs nothing and can never be confused with
+      // a storage failure after a billable generation.
+      const targetResult = await resolveImageTarget(context as ToolExecutionContext, { driveId, parentId });
+      if (!targetResult.ok) {
+        return { success: false, error: targetResult.error };
+      }
+      const target = targetResult.target;
 
       const model = context?.imageGenerationModel || DEFAULT_IMAGE_MODEL;
 
@@ -225,6 +302,8 @@ illustrate an image, logo, diagram, or picture. Currently restricted to app admi
           mimeType: image.mediaType,
           title,
           prompt,
+          targetDriveId: target.targetDriveId,
+          targetParentId: target.targetParentId,
         });
       } catch (error) {
         // The image WAS generated (and billed) — settle the spend rather than release,
@@ -264,11 +343,24 @@ illustrate an image, logo, diagram, or picture. Currently restricted to app admi
         success: true,
         pageId: created.pageId,
         driveId: created.driveId,
+        parentId: created.parentId,
+        savedTo: target.savedTo,
         viewUrl: `/api/files/${created.pageId}/view`,
         title,
         mediaType: image.mediaType,
         prompt,
-        summary: `Generated an image for "${title}" and saved it to the drive.`,
+        summary:
+          target.savedTo === 'home_gallery'
+            ? `Generated an image for "${title}" and saved it to the user's Home workspace gallery.`
+            : `Generated an image for "${title}" and saved it to this workspace.`,
+        // The Home fallback is where generated images used to get stranded — say so
+        // at the moment it happens, so the model can offer to relocate rather than
+        // leaving the user to discover the file in the wrong workspace later.
+        ...(target.savedTo === 'home_gallery' && {
+          nextSteps: [
+            "This image was saved to the user's Home workspace because no workspace was in view. If it belongs elsewhere, call move_page with targetDriveId to relocate it.",
+          ],
+        }),
       };
     },
   }),

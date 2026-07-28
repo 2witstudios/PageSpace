@@ -311,8 +311,8 @@ export async function POST(request: Request) {
     // the legacy client-computed pageContext only for old clients that never sent a
     // contextRef at all. Deferred until after the required-field checks above so an
     // invalid request (no messages/chatId) fails fast without an extra DB round-trip.
-    const pageContext = contextRef
-      ? locationContextToPageContext(await resolveRequestContext(authResult, contextRef, (denied) => {
+    const resolvedLocation = contextRef
+      ? await resolveRequestContext(authResult, contextRef, (denied) => {
           auditRequest(request, {
             eventType: 'authz.access.denied',
             userId,
@@ -321,7 +321,10 @@ export async function POST(request: Request) {
             details: { reason: 'context_ref_denied', method: 'POST', chatId },
             riskScore: 0.3,
           });
-        }))
+        })
+      : null;
+    const pageContext = contextRef
+      ? locationContextToPageContext(resolvedLocation)
       : legacyPageContext;
 
     const mcpScopeError = await checkMCPPageScope(authResult, chatId);
@@ -1553,6 +1556,14 @@ export async function POST(request: Request) {
                     slug: pageContext.driveSlug,
                   } : undefined,
                   breadcrumbs: pageContext.breadcrumbs,
+                } : resolvedLocation?.currentDrive ? {
+                  // Drive-level route (a workspace is in view but no page):
+                  // PageContext can't represent that shape, so tools would
+                  // otherwise see no location at all and `driveId` defaulting
+                  // would be dead on this route.
+                  currentPage: undefined,
+                  currentDrive: resolvedLocation.currentDrive,
+                  breadcrumbs: resolvedLocation.breadcrumbs,
                 } : undefined,
                 // Turn-start snapshot of the agent's working page — tools that
                 // shift focus (e.g. create_page) mutate this in place so later

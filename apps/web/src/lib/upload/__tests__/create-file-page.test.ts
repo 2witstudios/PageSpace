@@ -174,6 +174,50 @@ describe('createImageFilePage (shell, all seams injected)', () => {
     });
   });
 
+  // targetDriveId alone used to mean "that drive's ROOT". It now means "that
+  // drive's Generated Images folder", so an image filed into a work drive lands
+  // somewhere just as tidy as one filed into Home.
+  it('routes a drive-only target through the gallery resolver for THAT drive', async () => {
+    const resolveGalleryParent = vi.fn(async () => ({ driveId: 'driveX', parentId: 'galleryX' }));
+    const out = await createImageFilePage(
+      { userId: 'u', buffer: buf, mimeType: 'image/png', title: 't', targetDriveId: 'driveX' },
+      {
+        putObject: async () => undefined,
+        resolveGalleryParent,
+        getNextPosition: async () => 1,
+        persist: async () => ({ fileWasInserted: true }),
+        checkQuota: okQuota,
+        chargeStorage: async () => {},
+      },
+    );
+    assert({
+      given: 'a target drive with no parent',
+      should: "resolve that drive's gallery folder",
+      actual: {
+        driveId: out.driveId,
+        parentId: out.parentId,
+        galleryArgs: resolveGalleryParent.mock.calls[0],
+      },
+      expected: { driveId: 'driveX', parentId: 'galleryX', galleryArgs: ['u', 'driveX'] },
+    });
+  });
+
+  it('rejects a parent with no drive, rather than guessing which drive it is in', async () => {
+    await expect(
+      createImageFilePage(
+        { userId: 'u', buffer: buf, mimeType: 'image/png', title: 't', targetParentId: 'pageY' },
+        {
+          putObject: async () => undefined,
+          resolveGalleryParent: async () => ({ driveId: 'home1', parentId: 'gallery1' }),
+          getNextPosition: async () => 1,
+          persist: async () => ({ fileWasInserted: true }),
+          checkQuota: okQuota,
+          chargeStorage: async () => {},
+        },
+      ),
+    ).rejects.toThrow('targetDriveId is required when targetParentId is provided');
+  });
+
   it('exposes the gallery folder name', () => {
     expect(GENERATED_IMAGES_FOLDER).toBe('Generated Images');
   });

@@ -789,9 +789,9 @@ SMART EXPLORATION RULES:
    - Default scope: current drive/location (see LOCATION context) is your primary workspace
    - Only explore OTHER drives when explicitly mentioned
    - When user says "here" or "this", they mean current context
-   - If LOCATION context shows no drive, you're in the dashboard — use list_drives when you need to work across multiple workspaces; always check existing drives before suggesting new drive creation
+   - If LOCATION context shows no drive, you're in the dashboard — use list_drives when you need to work across multiple workspaces; always check existing drives before suggesting new drive creation — never fall back to the Home drive as a guess
 3. Efficient exploration pattern:
-   - FIRST: list_pages with driveId on current drive (if in a drive)
+   - FIRST: list_pages on the current drive — omit driveId and it uses the drive in your LOCATION context
    - THEN: read specific pages as needed
    - ONLY IF NEEDED: explore other drives/workspaces
 4. Proactive assistance:
