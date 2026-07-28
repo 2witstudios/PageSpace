@@ -155,7 +155,7 @@ export async function GET(request: Request) {
     // in the drive universe (7,703 full rows for the 2026-07-28 OOM victim).
     // Enrichment data (titles, drive ids, status configs) is fetched later, for
     // only the task lists represented in the response page.
-    const taskListPageIds: string[] = [];
+    let taskListPageIds: string[] = [];
     let taskListCursor: string | undefined;
     for (;;) {
       const chunk = await db.query.pages.findMany({
@@ -171,17 +171,18 @@ export async function GET(request: Request) {
       });
       if (chunk.length === 0) break;
       taskListCursor = chunk[chunk.length - 1].id;
-
-      let chunkIds = chunk.map(p => p.id);
-      // Scoped tokens see only the task lists their own role grants view on —
-      // custom roles can restrict visibility per page, not just per drive.
-      if (isScopedMCPAuth(auth)) {
-        const pagePerms = await getPrincipalBatchPagePermissions(auth, chunkIds);
-        chunkIds = chunkIds.filter(id => pagePerms.get(id)?.canView);
-      }
-      taskListPageIds.push(...chunkIds);
-
+      taskListPageIds.push(...chunk.map(p => p.id));
       if (chunk.length < TASK_LIST_PAGE_CHUNK) break;
+    }
+
+    // Scoped tokens see only the task lists their own role grants view on —
+    // custom roles can restrict visibility per page, not just per drive. One
+    // batch call over all fetched ids: the helper enumerates the token's
+    // accessible pages per allowed drive on every invocation, so filtering per
+    // fetch-chunk would rescan the drive universe once per chunk.
+    if (isScopedMCPAuth(auth) && taskListPageIds.length > 0) {
+      const pagePerms = await getPrincipalBatchPagePermissions(auth, taskListPageIds);
+      taskListPageIds = taskListPageIds.filter(id => pagePerms.get(id)?.canView);
     }
 
     if (taskListPageIds.length === 0) {
@@ -351,30 +352,22 @@ export async function GET(request: Request) {
         });
       }
 
-      // One bounded fetch of the child task pages (same membership as the old
-      // per-list subqueries: parentId = list, type TASK_LIST, not trashed),
-      // partitioned back onto the slug groups as plain id arrays.
-      const includableListPageIds = slugGroups.flatMap(g => g.listPageIds);
-      const childTaskPages = await db
-        .select({ id: pages.id, parentId: pages.parentId })
-        .from(pages)
-        .where(and(
-          inArray(pages.parentId, includableListPageIds),
-          eq(pages.type, 'TASK_LIST'),
-          eq(pages.isTrashed, false),
-        ));
-      const childIdsByListPageId = new Map<string, string[]>();
-      for (const child of childTaskPages) {
-        if (!child.parentId) continue;
-        const existing = childIdsByListPageId.get(child.parentId);
-        if (existing) existing.push(child.id);
-        else childIdsByListPageId.set(child.parentId, [child.id]);
-      }
-
-      // A group whose lists have no children keeps its condition: inArray with an
-      // empty array renders as SQL `false`, matching the old empty-subquery result.
+      // One membership subquery per DISTINCT slug set (typically ~2) keeps the
+      // child-task-page relation in SQL. Same membership as the old per-list
+      // subqueries: parentId in the group's lists, type TASK_LIST, not trashed.
+      // Materializing child ids app-side would scale bind parameters with the
+      // number of TASKS (not lists) and can exceed Postgres's 65,535-parameter
+      // cap; per-LIST subqueries (the old shape) put thousands of subplans in
+      // one statement. Per-set subqueries avoid both.
       const perSlugSetConditions = slugGroups.map(group => and(
-        inArray(taskItems.pageId, group.listPageIds.flatMap(id => childIdsByListPageId.get(id) ?? [])),
+        inArray(taskItems.pageId, db
+          .select({ id: pages.id })
+          .from(pages)
+          .where(and(
+            inArray(pages.parentId, group.listPageIds),
+            eq(pages.type, 'TASK_LIST'),
+            eq(pages.isTrashed, false),
+          ))),
         inArray(taskItems.status, group.slugs),
       ));
 

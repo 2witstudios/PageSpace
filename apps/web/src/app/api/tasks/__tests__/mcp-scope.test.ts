@@ -280,7 +280,7 @@ describe('GET /api/tasks - MCP drive scope + app-member RBAC enforcement', () =>
       expect(filteredIdCalls.length).toBeGreaterThan(0);
     });
 
-    it('filters every fetched chunk of task lists through per-page permissions', async () => {
+    it('filters all fetched task-list chunks through ONE batch permission call', async () => {
       const auth = mockMCPAuth(mockUserId, [driveA]);
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(auth);
       vi.mocked(getPrincipalDriveIds).mockResolvedValue([driveA]);
@@ -300,11 +300,14 @@ describe('GET /api/tasks - MCP drive scope + app-member RBAC enforcement', () =>
       const request = createRequest({ context: 'user' });
       await GET(request);
 
+      // One call over the accumulated ids — the permission helper enumerates
+      // the token's accessible pages per drive on EVERY invocation, so calling
+      // it per fetch-chunk would rescan the drive universe once per chunk.
       const permCalls = vi.mocked(getPrincipalBatchPagePermissions).mock.calls;
-      expect(permCalls).toHaveLength(2);
+      expect(permCalls).toHaveLength(1);
       const chunkLimit = (vi.mocked(db.query.pages.findMany).mock.calls[0][0] as { limit: number }).limit;
-      expect(permCalls[0][1]).toHaveLength(chunkLimit);
-      expect(permCalls[1][1]).toEqual(['chunk2_only']);
+      expect(permCalls[0][1]).toHaveLength(chunkLimit + 1);
+      expect(permCalls[0][1]).toContain('chunk2_only');
     });
 
     it('does not run per-page filtering for session auth', async () => {

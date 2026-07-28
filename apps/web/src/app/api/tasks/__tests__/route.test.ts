@@ -562,25 +562,22 @@ describe('GET /api/tasks', () => {
   });
 
   describe('statusGroup filter construction (OOM hardening)', () => {
-    const pageIdInArrayCalls = () =>
+    const materializedPageIdCalls = () =>
       vi.mocked(inArray).mock.calls.filter(
         ([col, values]) => col === taskItems.pageId && Array.isArray(values)
       );
     const statusInArrayCalls = () =>
       vi.mocked(inArray).mock.calls.filter(([col]) => col === taskItems.status);
+    const parentIdInArrayCalls = () =>
+      vi.mocked(inArray).mock.calls.filter(
+        ([col, values]) => col === pages.parentId && Array.isArray(values)
+      );
 
-    it('collapses default-config task lists into one condition with a plain child-id array', async () => {
+    it('collapses default-config task lists into one condition with a per-set membership subquery', async () => {
       vi.mocked(db.query.pages.findMany).mockResolvedValue([
         createPageFixture({ id: 'page_a', driveId: 'drive_1', title: 'List A' }),
         createPageFixture({ id: 'page_b', driveId: 'drive_1', title: 'List B' }),
       ]);
-      mockDbSelect({
-        childPages: [
-          { id: 'child_a1', parentId: 'page_a' },
-          { id: 'child_a2', parentId: 'page_a' },
-          { id: 'child_b1', parentId: 'page_b' },
-        ],
-      });
 
       const request = new Request('https://example.com/api/tasks?context=user&statusGroup=active');
       const response = await GET(request);
@@ -589,11 +586,15 @@ describe('GET /api/tasks', () => {
       // One merged group — NOT one condition per task list.
       expect(or).toHaveBeenCalledTimes(1);
       expect(vi.mocked(or).mock.calls[0]).toHaveLength(1);
-      // The condition carries a plain id array, never a db.select subquery.
-      expect(pageIdInArrayCalls()).toHaveLength(1);
-      expect(pageIdInArrayCalls()[0][1]).toEqual(['child_a1', 'child_a2', 'child_b1']);
       expect(statusInArrayCalls()).toHaveLength(1);
       expect(statusInArrayCalls()[0][1]).toEqual(['blocked', 'in_progress', 'pending']);
+      // Membership stays in SQL: the subquery scopes parentId to the group's
+      // LIST ids; child task-page ids are never expanded into bind parameters.
+      expect(parentIdInArrayCalls().map(([, values]) => values)).toEqual([
+        ['page_a', 'page_b'], // validTaskPageSubquery (all accessible lists)
+        ['page_a', 'page_b'], // the single slug group's membership subquery
+      ]);
+      expect(materializedPageIdCalls()).toHaveLength(0);
     });
 
     it('emits one condition per DISTINCT slug set for mixed custom/default configs', async () => {
@@ -607,11 +608,6 @@ describe('GET /api/tasks', () => {
           { listPageId: 'page_a', slug: 'open', group: 'todo' },
           { listPageId: 'page_b', slug: 'open', group: 'todo' },
         ],
-        childPages: [
-          { id: 'child_a1', parentId: 'page_a' },
-          { id: 'child_b1', parentId: 'page_b' },
-          { id: 'child_c1', parentId: 'page_c' },
-        ],
       });
 
       const request = new Request('https://example.com/api/tasks?context=user&statusGroup=active');
@@ -621,22 +617,27 @@ describe('GET /api/tasks', () => {
       // Two distinct slug sets: {open} (lists a+b) and the defaults (list c).
       expect(or).toHaveBeenCalledTimes(1);
       expect(vi.mocked(or).mock.calls[0]).toHaveLength(2);
-      expect(pageIdInArrayCalls().map(([, values]) => values)).toEqual([
-        ['child_a1', 'child_b1'],
-        ['child_c1'],
-      ]);
       expect(statusInArrayCalls().map(([, values]) => values)).toEqual([
         ['open'],
         ['blocked', 'in_progress', 'pending'],
       ]);
+      expect(parentIdInArrayCalls().map(([, values]) => values)).toEqual([
+        ['page_a', 'page_b', 'page_c'], // validTaskPageSubquery (all accessible lists)
+        ['page_a', 'page_b'],           // {open} group's membership subquery
+        ['page_c'],                     // default group's membership subquery
+      ]);
+      expect(materializedPageIdCalls()).toHaveLength(0);
     });
 
-    it('fetches the child task-list pages exactly once (no per-list subqueries)', async () => {
+    it('never materializes child task-page ids app-side', async () => {
       vi.mocked(db.query.pages.findMany).mockResolvedValue([
         createPageFixture({ id: 'page_a', driveId: 'drive_1', title: 'List A' }),
         createPageFixture({ id: 'page_b', driveId: 'drive_1', title: 'List B' }),
       ]);
 
+      // Capture any select that would fetch child rows ({ id, parentId }) —
+      // expanding those into IN parameters scales with task count and can
+      // exceed Postgres's 65,535 bind-parameter cap.
       const childSelections: Array<Record<string, unknown> | undefined> = [];
       vi.mocked(db.select).mockImplementation(((selection?: Record<string, unknown>) => {
         if (selection && 'parentId' in selection) childSelections.push(selection);
@@ -650,7 +651,8 @@ describe('GET /api/tasks', () => {
       const request = new Request('https://example.com/api/tasks?context=user&statusGroup=active');
       await GET(request);
 
-      expect(childSelections).toHaveLength(1);
+      expect(childSelections).toHaveLength(0);
+      expect(materializedPageIdCalls()).toHaveLength(0);
     });
 
     it('short-circuits to an empty result when no task list yields slugs for the group', async () => {
