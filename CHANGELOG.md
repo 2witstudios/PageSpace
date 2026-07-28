@@ -7,6 +7,16 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **A database outage no longer takes the whole platform down with it** — when Postgres
+  became unreachable (as in the recent OOM stalls), the rate limiter denied every request
+  platform-wide, turning a database incident into a total outage. Production now degrades to
+  a conservative per-instance in-memory limit at half the configured threshold: legitimate
+  users keep working, attackers face a *stricter* limit than usual, and nothing ever fails
+  open. A 30-second circuit breaker stops requests from waiting on the stalled database
+  (a single probe rechecks it each cooldown), the fallback's memory is hard-capped so an
+  identifier flood can't exhaust the process, and distributed enforcement resumes
+  automatically the moment Postgres recovers.
+
 - **A machine-bound agent addressing its own project's default checkout as `branch: "main"`/`"master"` is no longer silently denied** —
   a bound conversation's `target` only ever resolved against explicitly created branch worktrees, so a model reasoning in ordinary
   git terms (where "main" means "my own checkout") got refused with a generic scope error even when addressing itself. The system
