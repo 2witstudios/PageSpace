@@ -57,7 +57,7 @@ const PAGE_TYPES_WITH_SKILLS = `PAGE TYPES:
 // `undefined` availableTools (the include-all sentinel used by the admin
 // prompt viewer) keeps the FULL text — the complete preview must show
 // everything an agent without skills would get.
-export function buildPageTypes(availableTools?: string[]): string {
+function buildPageTypes(availableTools?: string[]): string {
   return availableTools !== undefined && hasAny(availableTools, ['load_skill'])
     ? PAGE_TYPES_WITH_SKILLS
     : PAGE_TYPES_FULL;
@@ -74,7 +74,7 @@ const TASK_MANAGEMENT_WITH_SKILLS = `TASK MANAGEMENT:
 • Tasks nest to any depth; a parent can't complete while direct subtasks remain open
 • Load the task-management skill for statuses, assignees, triggers, and completion semantics`;
 
-export function buildTaskManagement(availableTools?: string[]): string {
+function buildTaskManagement(availableTools?: string[]): string {
   return availableTools !== undefined && hasAny(availableTools, ['load_skill'])
     ? TASK_MANAGEMENT_WITH_SKILLS
     : TASK_MANAGEMENT_FULL;
