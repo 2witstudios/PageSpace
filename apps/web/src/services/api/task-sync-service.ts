@@ -112,15 +112,6 @@ function chunk<T>(items: T[], size: number): T[][] {
 }
 
 /**
- * Whether a status group agrees with the row's own completion stamp. `completedAt` is
- * the one completion signal that travels with the row and does not depend on any list's
- * vocabulary, so it is the arbiter when the two could disagree.
- */
-function isGroupConsistentWithCompletion(group: string, completedAt: Date | null): boolean {
-  return completedAt ? group === 'done' : group !== 'done'
-}
-
-/**
  * Keep a PRESERVED task row's status inside its new list's vocabulary.
  *
  * `task_items.status` is a bare slug with no foreign key; its meaning comes from the
@@ -132,11 +123,10 @@ function isGroupConsistentWithCompletion(group: string, completedAt: Date | null
  * queries, and (when the slug was a done one) shows unticked while `completedAt` still
  * counts it complete in the parent's progress.
  *
- * Two different repairs, depending on which side is wrong. When the destination DOES
- * define the slug, the status stands and any disagreement with `completedAt` is fixed
- * on `completedAt` — the derived field. Only when the slug is absent entirely is the
- * status itself remapped, and then `completedAt` is the intent signal, so a finished
- * task stays finished and an unfinished one stays actionable.
+ * Only the genuinely broken case is repaired: a slug the destination does not define at
+ * all. `completedAt` is the intent signal for the replacement, so a finished task stays
+ * finished and an unfinished one stays actionable. A slug the list DOES define is left
+ * untouched — see the note at the short-circuit for why neither field may be rewritten.
  */
 async function normalizeStatusForList(
   tx: Tx,
@@ -156,21 +146,18 @@ async function normalizeStatusForList(
       eq(taskStatusConfigs.slug, item.status),
     ),
   })
-  if (alreadyValid) {
-    // The slug is meaningful in this list, so the status stands. If completedAt
-    // disagrees with the config's group, completedAt is the field that drifted: it is
-    // DERIVED — the task PATCH route stamps and clears it from the group — whereas the
-    // status is what the user last chose and sees. Regrouping a status in place, or
-    // deleting one with migrateToSlug, both leave exactly this divergence behind
-    // entirely within one list, so reconciling it must not rewrite the user's choice.
-    if (!isGroupConsistentWithCompletion(alreadyValid.group, item.completedAt)) {
-      await tx
-        .update(taskItems)
-        .set({ completedAt: alreadyValid.group === 'done' ? new Date() : null })
-        .where(eq(taskItems.id, item.id))
-    }
-    return
-  }
+  // A defined slug is left completely alone, even when its group disagrees with
+  // completedAt. Both available "repairs" are worse than the disagreement:
+  //   • rewriting `status` reverses a deliberate regroup — the owner who moved "Review"
+  //     out of the done group would find every such task flung back into Done;
+  //   • rewriting `completedAt` fabricates a completion time (bypassing the sub-task
+  //     guard that makes PATCH return 422, and permanently disabling the task's
+  //     due-date trigger) or destroys a real one that nothing else records.
+  // The disagreement is not new or move-specific either: PUT /tasks/statuses regroups a
+  // config in place and DELETE+migrateToSlug re-points tasks, both leaving it inside a
+  // single list. The product already tolerates it there, so a move must not pay for it
+  // with the user's data.
+  if (alreadyValid) return
 
   const configs = await tx.query.taskStatusConfigs.findMany({
     where: eq(taskStatusConfigs.taskListId, taskListId),
@@ -287,12 +274,17 @@ export async function scrubDriveScopedTaskAssociations(
   // the assignment. Only agents left behind in the old drive are scrubbed.
   const staleAgentIds = await resolveAgentsOutsideDrive(tx, [...agentPageIds], targetDriveId)
 
-  // A trigger is stale for the same reason its assignment is: the AGENT it runs stayed
-  // behind. Testing workflows.driveId instead would delete every surviving trigger,
-  // because that column is stamped once at creation and never rewritten — after a move
-  // it always names the source drive.
+  // Trigger staleness is resolved SEPARATELY from assignment staleness. A trigger's
+  // agent comes from workflows.agentPageId, which PUT /api/tasks/:id/triggers sets
+  // without touching task_items.assigneeAgentId — a task can carry a trigger and no
+  // assignee at all, or a trigger naming a different agent than its assignee. Keying
+  // the sweep off the assignee set let exactly those workflows survive a move, still
+  // pointing at a source-drive agent, which is the leak this whole function exists to
+  // stop. Workflows whose agent came along are repointed at the new drive instead of
+  // being deleted, since their driveId is stamped once at creation and never rewritten.
+  await reconcileTaskTriggerWorkflows(tx, taskItemIds, targetDriveId)
+
   if (staleAgentIds.length === 0) return
-  await deleteTaskTriggerWorkflows(tx, taskItemIds, { onlyForAgentIds: staleAgentIds })
 
   for (const batch of chunk(taskItemIds, SCRUB_CHUNK_SIZE)) {
     await tx
@@ -319,30 +311,71 @@ export async function scrubDriveScopedTaskAssociations(
  * (taskItemId, triggerType) unique constraint enforces it), so deleting by id cannot
  * affect another task.
  */
-async function deleteTaskTriggerWorkflows(
-  tx: Tx,
-  taskItemIds: string[],
-  options?: { onlyForAgentIds?: string[] },
-): Promise<void> {
-  const agentIds = options?.onlyForAgentIds
-  if (agentIds && agentIds.length === 0) return
+async function deleteTaskTriggerWorkflows(tx: Tx, taskItemIds: string[]): Promise<void> {
+  for (const wfBatch of chunk(await collectTriggerWorkflowIds(tx, taskItemIds), SCRUB_CHUNK_SIZE)) {
+    await tx.delete(workflows).where(inArray(workflows.id, wfBatch))
+  }
+}
 
+/** The workflow ids backing these tasks' triggers. */
+async function collectTriggerWorkflowIds(tx: Tx, taskItemIds: string[]): Promise<string[]> {
+  const workflowIds: string[] = []
   for (const batch of chunk(taskItemIds, SCRUB_CHUNK_SIZE)) {
-    const triggerRows = await tx
+    const rows = await tx
       .select({ workflowId: taskTriggers.workflowId })
       .from(taskTriggers)
       .where(inArray(taskTriggers.taskItemId, batch))
-    if (triggerRows.length === 0) continue
-    const workflowIds = triggerRows.map((row) => row.workflowId)
-    for (const wfBatch of chunk(workflowIds, SCRUB_CHUNK_SIZE)) {
-      for (const agentBatch of agentIds ? chunk(agentIds, SCRUB_CHUNK_SIZE) : [null]) {
-        await tx.delete(workflows).where(
-          agentBatch
-            ? and(inArray(workflows.id, wfBatch), inArray(workflows.agentPageId, agentBatch))
-            : inArray(workflows.id, wfBatch),
-        )
-      }
+    for (const row of rows) workflowIds.push(row.workflowId)
+  }
+  return workflowIds
+}
+
+/**
+ * Bring these tasks' trigger workflows into line with the drive they now live in.
+ *
+ * A trigger's agent is `workflows.agentPageId`, set by the triggers route independently
+ * of any task assignee, so its staleness must be resolved on its own terms. A workflow
+ * whose agent stayed behind is deleted; one whose agent travelled along is still valid
+ * and is instead REPOINTED at the new drive — `workflows.driveId` is stamped once at
+ * creation and never rewritten, so leaving it would have the workflow execute against
+ * the old drive, filtering its own context pages out by driveId and telling the agent to
+ * create work back in the drive it left.
+ */
+async function reconcileTaskTriggerWorkflows(
+  tx: Tx,
+  taskItemIds: string[],
+  targetDriveId: string,
+): Promise<void> {
+  const byAgent = new Map<string, string[]>()
+  for (const batch of chunk(taskItemIds, SCRUB_CHUNK_SIZE)) {
+    const rows = await tx
+      .select({ workflowId: taskTriggers.workflowId, agentPageId: workflows.agentPageId })
+      .from(taskTriggers)
+      .innerJoin(workflows, eq(workflows.id, taskTriggers.workflowId))
+      .where(inArray(taskTriggers.taskItemId, batch))
+    for (const row of rows) {
+      const list = byAgent.get(row.agentPageId) ?? []
+      list.push(row.workflowId)
+      byAgent.set(row.agentPageId, list)
     }
+  }
+  if (byAgent.size === 0) return
+
+  const staleTriggerAgents = new Set(
+    await resolveAgentsOutsideDrive(tx, [...byAgent.keys()], targetDriveId),
+  )
+
+  const doomed: string[] = []
+  const surviving: string[] = []
+  for (const [agentPageId, workflowIds] of byAgent) {
+    ;(staleTriggerAgents.has(agentPageId) ? doomed : surviving).push(...workflowIds)
+  }
+
+  for (const batch of chunk(doomed, SCRUB_CHUNK_SIZE)) {
+    await tx.delete(workflows).where(inArray(workflows.id, batch))
+  }
+  for (const batch of chunk(surviving, SCRUB_CHUNK_SIZE)) {
+    await tx.update(workflows).set({ driveId: targetDriveId }).where(inArray(workflows.id, batch))
   }
 }
 

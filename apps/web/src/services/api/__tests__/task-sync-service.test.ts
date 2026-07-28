@@ -65,6 +65,8 @@ function makeTx(config: {
   /** task_items ids the scrub should find, and the workflow ids their triggers name. */
   scrubTaskItemIds?: string[];
   scrubWorkflowIds?: string[];
+  /** Agent each trigger workflow runs, which is set independently of the assignee. */
+  triggerAgentByWorkflow?: Record<string, string>;
   /** task_items ids the remove branch's pre-delete trigger sweep should find. */
   removeBranchTaskItemIds?: string[];
   /** Agent page referenced by each found task item, and agents already in the target drive. */
@@ -83,6 +85,7 @@ function makeTx(config: {
     lastPosition = null,
     scrubTaskItemIds = [],
     scrubWorkflowIds = [],
+    triggerAgentByWorkflow = {},
     removeBranchTaskItemIds = [],
     scrubAgentIdByItem = {},
     scrubAssigneeAgentIds = [],
@@ -111,6 +114,8 @@ function makeTx(config: {
 
   const scrubSelects: unknown[][] = [];
   const deletedTables: string[] = [];
+  const deleteConditions: Array<{ table: string; cond: unknown }> = [];
+  const workflowDriveUpdates: unknown[] = [];
 
   const tx = {
     // Dispatch on the PROJECTION SHAPE, not call order: order-based dispatch would let
@@ -127,18 +132,22 @@ function makeTx(config: {
           ? scrubTaskItemIds.map((id) => ({ id, assigneeAgentId: scrubAgentIdByItem[id] ?? null }))
         : shape === 'taskAssignees.agentPageId' ? scrubAssigneeAgentIds.map((agentPageId) => ({ agentPageId }))
         : shape === 'taskTriggers.workflowId' ? scrubWorkflowIds.map((workflowId) => ({ workflowId }))
+        : shape === 'taskTriggers.workflowId,workflows.agentPageId'
+          ? scrubWorkflowIds.map((workflowId) => ({
+              workflowId,
+              agentPageId: triggerAgentByWorkflow[workflowId] ?? 'agent-left-behind',
+            }))
         : shape === 'pages.id' ? agentsInTargetDrive.map((id) => ({ id }))
         : shape === 'taskItems.id' ? removeBranchTaskItemIds.map((id) => ({ id }))
         : null;
       if (result === null) return selectChain;
-      return {
-        from: () => ({
-          where: (cond: unknown[]) => {
-            scrubSelects.push(cond);
-            return Promise.resolve(result);
-          },
-        }),
+      const terminal = {
+        where: (cond: unknown[]) => {
+          scrubSelects.push(cond);
+          return Promise.resolve(result);
+        },
       };
+      return { from: () => ({ ...terminal, innerJoin: () => terminal }) };
     }),
     // Label by the table's OWN identity, not by which keys it happens to expose —
     // taskItems and workflows both carry `id`, and keying off that silently labelled
@@ -152,6 +161,9 @@ function makeTx(config: {
           : table === schemaTables.taskItems ? 'taskItems'
           : 'unknown';
         deletedTables.push(label);
+        // Captured so an assertion can check WHICH rows a delete targeted; discarding
+        // it let "deletes the stale workflow" pass even against a zero-row predicate.
+        deleteConditions.push({ table: label, cond });
         deletedPageIds.push(cond?.[2] as string);
         return Promise.resolve();
       },
@@ -181,12 +193,18 @@ function makeTx(config: {
       },
       pages: { findFirst: vi.fn(async () => (lastPosition === null ? undefined : { position: lastPosition })) },
     },
-    update: vi.fn(() => ({
-      set: (vals: Record<string, unknown>) => ({ where: () => { taskItemUpdates.push(vals); return Promise.resolve(); } }),
+    update: vi.fn((table: Record<string, string>) => ({
+      set: (vals: Record<string, unknown>) => ({
+        where: (cond: unknown) => {
+          if (table === schemaTables.workflows) workflowDriveUpdates.push({ vals, cond });
+          else taskItemUpdates.push(vals);
+          return Promise.resolve();
+        },
+      }),
     })),
   };
 
-  return { tx, taskItemInserts, taskListInserts, taskStatusConfigInserts, deletedPageIds, taskItemUpdates, deletedTables, scrubSelects };
+  return { tx, taskItemInserts, taskListInserts, taskStatusConfigInserts, deletedPageIds, taskItemUpdates, deletedTables, scrubSelects, deleteConditions, workflowDriveUpdates };
 }
 
 describe('seedDefaultTaskStatusConfigs', () => {
@@ -415,7 +433,12 @@ describe('syncTaskItemOnMove', () => {
   // from slugify(name) and each list picks its own group, so "Review" can be `done` in
   // one list and `in_progress` in another. Carrying it over unchanged leaves the row's
   // group disagreeing with its own completedAt.
-  it('reconciles completedAt (not the status) when the destination defines the slug in another group', async () => {
+  // A slug the destination DOES define is left completely alone, even when its group
+  // disagrees with completedAt. Rewriting the status would reverse a deliberate regroup;
+  // rewriting completedAt would fabricate a completion time (bypassing the sub-task guard
+  // and disabling the due-date trigger) or destroy a real one nothing else records. The
+  // disagreement is already reachable inside a single list, so a move must not pay for it.
+  it('leaves a defined slug untouched even when its group disagrees with completedAt', async () => {
     const { tx, taskItemUpdates } = makeTx({
       pageTypes: { old: 'TASK_LIST', new: 'TASK_LIST' },
       existingItems: new Set(['list']),
@@ -427,24 +450,7 @@ describe('syncTaskItemOnMove', () => {
       ],
     });
     await syncTaskItemOnMove(tx as never, { movedPageId: 'list', movedPageType: 'TASK_LIST', oldParentId: 'old', newParentId: 'new', userId: 'u' });
-    // The status the user chose survives; the derived stamp is what gets corrected.
-    expect(taskItemUpdates).toEqual([{ completedAt: null }]);
-  });
-
-  it('stamps completedAt when the destination defines the slug as done', async () => {
-    const { tx, taskItemUpdates } = makeTx({
-      pageTypes: { old: 'TASK_LIST', new: 'TASK_LIST' },
-      existingItems: new Set(['list']),
-      existingItemStatus: 'review',
-      destinationStatusConfigs: [
-        { slug: 'review', group: 'done', position: 0 },
-        { slug: 'todo', group: 'todo', position: 1 },
-      ],
-    });
-    await syncTaskItemOnMove(tx as never, { movedPageId: 'list', movedPageType: 'TASK_LIST', oldParentId: 'old', newParentId: 'new', userId: 'u' });
-    expect(taskItemUpdates).toHaveLength(1);
-    expect((taskItemUpdates[0] as { completedAt: Date }).completedAt).toBeInstanceOf(Date);
-    expect(taskItemUpdates[0]).not.toHaveProperty('status');
+    expect(taskItemUpdates).toHaveLength(0);
   });
 
   // A list whose owner deleted 'pending' (permitted, via migrateToSlug) would otherwise
@@ -557,10 +563,11 @@ describe('scrubDriveScopedTaskAssociations', () => {
 
   // Finding: workflows.driveId is stamped at creation and never rewritten, so testing it
   // deleted EVERY surviving trigger. Staleness is the agent's, not the drive column's.
-  it('spares the trigger workflow when its agent moved along with the task', async () => {
-    const { tx, deletedTables } = makeTx({
+  it('spares and repoints the trigger workflow when its agent moved along', async () => {
+    const { tx, deletedTables, workflowDriveUpdates } = makeTx({
       scrubTaskItemIds: ['item-1'],
       scrubWorkflowIds: ['wf-1'],
+      triggerAgentByWorkflow: { 'wf-1': 'agent-came-along' },
       scrubAgentIdByItem: { 'item-1': 'agent-came-along' },
       agentsInTargetDrive: ['agent-came-along'],
     });
@@ -568,18 +575,42 @@ describe('scrubDriveScopedTaskAssociations', () => {
     await scrubDriveScopedTaskAssociations(tx as never, { pageIds: ['p1'], targetDriveId: 'drive-target' });
 
     expect(deletedTables).not.toContain('workflows');
+    // driveId is stamped at creation and never rewritten, so a spared workflow must be
+    // repointed or it executes against the drive the task just left.
+    expect(workflowDriveUpdates).toEqual([
+      expect.objectContaining({ vals: { driveId: 'drive-target' } }),
+    ]);
   });
 
-  it('deletes the trigger workflow when its agent stayed behind', async () => {
+  // A trigger's agent comes from workflows.agentPageId, set independently of any task
+  // assignee — keying the sweep off the assignee set let these survive a move.
+  it('deletes a stale trigger workflow even when the task has NO agent assignee', async () => {
     const { tx, deletedTables } = makeTx({
       scrubTaskItemIds: ['item-1'],
       scrubWorkflowIds: ['wf-1'],
+      triggerAgentByWorkflow: { 'wf-1': 'agent-left-behind' },
+    });
+
+    await scrubDriveScopedTaskAssociations(tx as never, { pageIds: ['p1'], targetDriveId: 'drive-target' });
+
+    expect(deletedTables).toContain('workflows');
+  });
+
+  it('deletes the trigger workflow when its agent stayed behind', async () => {
+    const { tx, deletedTables, deleteConditions } = makeTx({
+      scrubTaskItemIds: ['item-1'],
+      scrubWorkflowIds: ['wf-1'],
+      triggerAgentByWorkflow: { 'wf-1': 'agent-left-behind' },
       scrubAgentIdByItem: { 'item-1': 'agent-left-behind' },
     });
 
     await scrubDriveScopedTaskAssociations(tx as never, { pageIds: ['p1'], targetDriveId: 'drive-target' });
 
     expect(deletedTables).toContain('workflows');
+    // The predicate must actually name the doomed workflow — discarding it let this
+    // assertion pass against a delete that matched nothing.
+    const wfDelete = deleteConditions.find((d) => d.table === 'workflows');
+    expect(JSON.stringify(wfDelete?.cond)).toContain('wf-1');
   });
 
   // Human assignees, priority, dueDate and metadata are not drive-scoped, so the
