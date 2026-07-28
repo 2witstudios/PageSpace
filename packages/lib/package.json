@@ -782,6 +782,56 @@
       "import": "./dist/services/machines/machine-orphan-reconcile.js",
       "require": "./dist/services/machines/machine-orphan-reconcile.js"
     },
+    "./services/agent-sessions/agent-session-access": {
+      "types": "./dist/services/agent-sessions/agent-session-access.d.ts",
+      "import": "./dist/services/agent-sessions/agent-session-access.js",
+      "require": "./dist/services/agent-sessions/agent-session-access.js"
+    },
+    "./services/agent-sessions/agent-session-sprite": {
+      "types": "./dist/services/agent-sessions/agent-session-sprite.d.ts",
+      "import": "./dist/services/agent-sessions/agent-session-sprite.js",
+      "require": "./dist/services/agent-sessions/agent-session-sprite.js"
+    },
+    "./services/agent-sessions/agent-sessions": {
+      "types": "./dist/services/agent-sessions/agent-sessions.d.ts",
+      "import": "./dist/services/agent-sessions/agent-sessions.js",
+      "require": "./dist/services/agent-sessions/agent-sessions.js"
+    },
+    "./services/agent-sessions/agent-sessions-store": {
+      "types": "./dist/services/agent-sessions/agent-sessions-store.d.ts",
+      "import": "./dist/services/agent-sessions/agent-sessions-store.js",
+      "require": "./dist/services/agent-sessions/agent-sessions-store.js"
+    },
+    "./services/agent-sessions/session-scrollback": {
+      "types": "./dist/services/agent-sessions/session-scrollback.d.ts",
+      "import": "./dist/services/agent-sessions/session-scrollback.js",
+      "require": "./dist/services/agent-sessions/session-scrollback.js"
+    },
+    "./services/agent-sessions/session-shells": {
+      "types": "./dist/services/agent-sessions/session-shells.d.ts",
+      "import": "./dist/services/agent-sessions/session-shells.js",
+      "require": "./dist/services/agent-sessions/session-shells.js"
+    },
+    "./services/agent-sessions/session-shells-store": {
+      "types": "./dist/services/agent-sessions/session-shells-store.d.ts",
+      "import": "./dist/services/agent-sessions/session-shells-store.js",
+      "require": "./dist/services/agent-sessions/session-shells-store.js"
+    },
+    "./services/agent-sessions/session-status": {
+      "types": "./dist/services/agent-sessions/session-status.d.ts",
+      "import": "./dist/services/agent-sessions/session-status.js",
+      "require": "./dist/services/agent-sessions/session-status.js"
+    },
+    "./services/agent-sessions/shell-types": {
+      "types": "./dist/services/agent-sessions/shell-types.d.ts",
+      "import": "./dist/services/agent-sessions/shell-types.js",
+      "require": "./dist/services/agent-sessions/shell-types.js"
+    },
+    "./services/sandbox/sprite-orphan-reconcile": {
+      "types": "./dist/services/sandbox/sprite-orphan-reconcile.d.ts",
+      "import": "./dist/services/sandbox/sprite-orphan-reconcile.js",
+      "require": "./dist/services/sandbox/sprite-orphan-reconcile.js"
+    },
     "./services/machines/machine-list": {
       "types": "./dist/services/machines/machine-list.d.ts",
       "import": "./dist/services/machines/machine-list.js",
