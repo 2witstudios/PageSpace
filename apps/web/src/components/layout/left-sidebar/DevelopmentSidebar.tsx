@@ -21,7 +21,7 @@ import { useMachineTabStore } from '@/stores/machine-workspace/useMachineTabStor
 import { parseSelectedMachineId, buildMachineHref } from '@/lib/development/development-route';
 import MachineTree, { type MachineTreeNode } from '@/components/layout/middle-content/page-views/machine/workspace/MachineTree';
 import WorkspaceLeaves, { WorkspaceNodeExtras } from '@/components/layout/middle-content/page-views/machine/workspace/WorkspaceLeaves';
-import { SidebarLoading, SidebarNotice } from '@/components/layout/middle-content/page-views/machine/tabs/tab-states';
+import { SidebarLoading, SidebarNotice } from './sidebar-states';
 import { useMachineWorkspaceSync } from '@/hooks/useMachineWorkspaceSync';
 
 /**
