@@ -249,10 +249,16 @@ function inMemoryCheckRateLimit(
     };
   }
 
-  if (
-    (attempt.blockedUntil && now >= attempt.blockedUntil) ||
-    now - attempt.firstAttempt > config.windowMs
-  ) {
+  // An expired block only lifts the block — the window counter persists. A
+  // full reset here would let a config with blockDurationMs < windowMs (e.g.
+  // OAUTH_DEVICE_POLL: 5min window, 1min block) hand out a fresh allowance
+  // every block period, compounding past even the configured per-window
+  // limit. Postgres-side buckets likewise outlive any block.
+  if (attempt.blockedUntil && now >= attempt.blockedUntil) {
+    delete attempt.blockedUntil;
+  }
+
+  if (now - attempt.firstAttempt > config.windowMs) {
     attempt.count = 1;
     attempt.firstAttempt = now;
     attempt.lastAttempt = now;
