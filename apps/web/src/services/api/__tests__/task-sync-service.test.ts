@@ -13,6 +13,7 @@ vi.mock('@pagespace/db/schema/tasks', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ['eq', a, b]),
   and: vi.fn((...c) => ['and', ...c]),
+  asc: vi.fn((c) => ['asc', c]),
   desc: vi.fn((c) => ['desc', c]),
   inArray: vi.fn((c, v) => ['inArray', c, v]),
 }));
@@ -41,13 +42,22 @@ function makeTx(config: {
   existingItems?: Set<string>;
   existingTaskList?: boolean;
   lastPosition?: number | null;
+  /** Status carried by the preserved task_items row, and the destination's vocabulary. */
+  existingItemStatus?: string;
+  existingItemCompletedAt?: Date | null;
+  destinationStatusConfigs?: Array<{ slug: string; group: string; position: number }>;
 } = {}) {
   const {
     pageTypes = {},
     existingItems = new Set<string>(),
     existingTaskList = true,
     lastPosition = null,
+    existingItemStatus = 'pending',
+    existingItemCompletedAt = null,
+    destinationStatusConfigs = [],
   } = config;
+
+  const taskItemUpdates: Array<Record<string, unknown>> = [];
 
   const taskItemInserts: Array<Record<string, unknown>> = [];
   const taskListInserts: Array<Record<string, unknown>> = [];
@@ -81,13 +91,23 @@ function makeTx(config: {
       taskLists: { findFirst: vi.fn(async () => (existingTaskList ? { id: 'tasklist-1' } : undefined)) },
       taskItems: { findFirst: vi.fn(async (args: { where: unknown[] }) => {
         const id = args.where?.[2] as string;
-        return existingItems.has(id) ? { id: 'item-1', pageId: id } : undefined;
+        return existingItems.has(id)
+          ? { id: 'item-1', pageId: id, status: existingItemStatus, completedAt: existingItemCompletedAt }
+          : undefined;
       }) },
+      taskStatusConfigs: {
+        findFirst: vi.fn(async () =>
+          destinationStatusConfigs.find((c) => c.slug === existingItemStatus)),
+        findMany: vi.fn(async () => destinationStatusConfigs),
+      },
       pages: { findFirst: vi.fn(async () => (lastPosition === null ? undefined : { position: lastPosition })) },
     },
+    update: vi.fn(() => ({
+      set: (vals: Record<string, unknown>) => ({ where: () => { taskItemUpdates.push(vals); return Promise.resolve(); } }),
+    })),
   };
 
-  return { tx, taskItemInserts, taskListInserts, taskStatusConfigInserts, deletedPageIds };
+  return { tx, taskItemInserts, taskListInserts, taskStatusConfigInserts, deletedPageIds, taskItemUpdates };
 }
 
 describe('seedDefaultTaskStatusConfigs', () => {
@@ -231,6 +251,62 @@ describe('syncTaskItemOnMove', () => {
     await syncTaskItemOnMove(tx as never, { movedPageId: 'list', movedPageType: 'TASK_LIST', oldParentId: 'old', newParentId: 'new', userId: 'u' });
     expect(deletedPageIds).toHaveLength(0);
     expect(taskItemInserts).toHaveLength(0);
+  });
+
+  // task_items.status is a bare slug resolved against the OWNING list's configs, so a
+  // preserved row can arrive carrying a status its new list does not define. Left alone
+  // it lands in the board's first column regardless of meaning, renders its raw slug,
+  // and drops out of status-filtered queries.
+  it('remaps a status the destination list does not define', async () => {
+    const { tx, taskItemUpdates } = makeTx({
+      pageTypes: { old: 'TASK_LIST', new: 'TASK_LIST' },
+      existingItems: new Set(['list']),
+      existingItemStatus: 'in_review',
+      destinationStatusConfigs: [
+        { slug: 'pending', group: 'todo', position: 0 },
+        { slug: 'done', group: 'done', position: 1 },
+      ],
+    });
+    await syncTaskItemOnMove(tx as never, { movedPageId: 'list', movedPageType: 'TASK_LIST', oldParentId: 'old', newParentId: 'new', userId: 'u' });
+    expect(taskItemUpdates).toEqual([{ status: 'pending' }]);
+  });
+
+  // completedAt lives on the row and is list-independent, so a finished task stays
+  // finished — otherwise the checkbox and the parent's progress count disagree.
+  it('remaps a completed task into the destination\'s done group', async () => {
+    const { tx, taskItemUpdates } = makeTx({
+      pageTypes: { old: 'TASK_LIST', new: 'TASK_LIST' },
+      existingItems: new Set(['list']),
+      existingItemStatus: 'shipped',
+      existingItemCompletedAt: new Date('2026-01-01'),
+      destinationStatusConfigs: [
+        { slug: 'pending', group: 'todo', position: 0 },
+        { slug: 'complete', group: 'done', position: 1 },
+      ],
+    });
+    await syncTaskItemOnMove(tx as never, { movedPageId: 'list', movedPageType: 'TASK_LIST', oldParentId: 'old', newParentId: 'new', userId: 'u' });
+    expect(taskItemUpdates).toEqual([{ status: 'complete' }]);
+  });
+
+  it('leaves a status the destination already defines untouched', async () => {
+    const { tx, taskItemUpdates } = makeTx({
+      pageTypes: { old: 'TASK_LIST', new: 'TASK_LIST' },
+      existingItems: new Set(['list']),
+      existingItemStatus: 'pending',
+      destinationStatusConfigs: [{ slug: 'pending', group: 'todo', position: 0 }],
+    });
+    await syncTaskItemOnMove(tx as never, { movedPageId: 'list', movedPageType: 'TASK_LIST', oldParentId: 'old', newParentId: 'new', userId: 'u' });
+    expect(taskItemUpdates).toHaveLength(0);
+  });
+
+  // Cross-drive resets instead of preserving, so nothing survives to normalize.
+  it('removes rather than preserves on a cross-drive list-to-list move', async () => {
+    const { tx, deletedPageIds } = makeTx({
+      pageTypes: { old: 'TASK_LIST', new: 'TASK_LIST' },
+      existingItems: new Set(['list']),
+    });
+    await syncTaskItemOnMove(tx as never, { movedPageId: 'list', movedPageType: 'TASK_LIST', oldParentId: 'old', newParentId: 'new', userId: 'u', crossDrive: true });
+    expect(deletedPageIds).toEqual(['list']);
   });
 
   // ...while the destination list is still seeded, which is why shouldAdd stays true.

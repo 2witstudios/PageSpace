@@ -306,6 +306,9 @@ export async function movePagesToDrive(
           oldParentId: page.parentId,
           newParentId: targetParentId,
           userId,
+          // A task's assignees, triggers and status vocabulary are all drive-scoped,
+          // so the row is reset rather than carried over a drive boundary.
+          crossDrive: page.driveId !== targetDriveId,
         });
 
         moved.push({

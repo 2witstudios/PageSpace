@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db'
-import { eq, inArray } from '@pagespace/db/operators'
+import { eq, and, asc, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks'
 import {
@@ -90,18 +90,77 @@ export async function ensureTaskListForPage(
  * Idempotent — does nothing if the row already exists. Ensures the parent's
  * `task_lists` row and default status configs exist first.
  */
+/**
+ * Upper bound on the status vocabulary scanned when remapping. Lists carry 4 defaults
+ * and a handful of custom statuses; the cap exists to satisfy the unbounded-findMany
+ * rule, and overshooting it could only cost a remap to a different valid slug.
+ */
+const STATUS_CONFIG_REMAP_LIMIT = 200
+
+/**
+ * Keep a PRESERVED task row's status inside its new list's vocabulary.
+ *
+ * `task_items.status` is a bare slug with no foreign key; its meaning comes from the
+ * owning list's `task_status_configs`, unique per (taskListId, slug). Every write path
+ * enforces that — POST/PATCH reject an unknown slug, and deleting a config demands a
+ * migrateToSlug — so a move is the only way to produce a task whose status its list
+ * does not define. Left alone, such a task falls into the board's first column
+ * regardless of meaning, renders its raw slug as a badge, drops out of status-filtered
+ * queries, and (when the slug was a done one) shows unticked while `completedAt` still
+ * counts it complete in the parent's progress.
+ *
+ * Re-mapping uses `completedAt`, which lives on the row itself and is list-independent,
+ * so a finished task stays finished and an unfinished one stays actionable.
+ */
+async function normalizeStatusForList(
+  tx: Tx,
+  params: { item: { id: string; status: string; completedAt: Date | null }; taskListId: string },
+): Promise<void> {
+  const { item, taskListId } = params
+
+  // Fast path: one indexed lookup on the (taskListId, slug) unique key. The status is
+  // valid for its new list in every case except the one this function exists for, so
+  // the full vocabulary is only fetched when a remap is actually needed.
+  const alreadyValid = await tx.query.taskStatusConfigs.findFirst({
+    where: and(
+      eq(taskStatusConfigs.taskListId, taskListId),
+      eq(taskStatusConfigs.slug, item.status),
+    ),
+  })
+  if (alreadyValid) return
+
+  const configs = await tx.query.taskStatusConfigs.findMany({
+    where: eq(taskStatusConfigs.taskListId, taskListId),
+    orderBy: [asc(taskStatusConfigs.position)],
+    limit: STATUS_CONFIG_REMAP_LIMIT,
+  })
+  // A list with no configs at all has no vocabulary to conform to.
+  if (configs.length === 0) return
+
+  const wantedGroup = item.completedAt ? 'done' : 'todo'
+  const replacement = configs.find((config) => config.group === wantedGroup) ?? configs[0]
+
+  await tx
+    .update(taskItems)
+    .set({ status: replacement.slug })
+    .where(eq(taskItems.id, item.id))
+}
+
 async function addTaskItemUnderParent(
   tx: Tx,
   params: { pageId: string; parentId: string; userId: string },
 ): Promise<void> {
   const { pageId, parentId, userId } = params
 
-  await ensureTaskListForPage(tx, { pageId: parentId, title: 'Task List', userId })
+  const taskList = await ensureTaskListForPage(tx, { pageId: parentId, title: 'Task List', userId })
 
   const existing = await tx.query.taskItems.findFirst({
     where: eq(taskItems.pageId, pageId),
   })
-  if (existing) return
+  if (existing) {
+    await normalizeStatusForList(tx, { item: existing, taskListId: taskList.id })
+    return
+  }
 
   // ON CONFLICT DO NOTHING guards the self-heal race: concurrent GETs on a legacy list
   // can both pass the findFirst check above, and task_items.pageId is unique — without
@@ -143,9 +202,11 @@ export async function syncTaskItemOnMove(
     oldParentId: string | null;
     newParentId: string | null;
     userId: string;
+    /** True when the move crosses a drive boundary — see resolveTaskItemSyncAction. */
+    crossDrive?: boolean;
   }
 ): Promise<void> {
-  const { movedPageId, movedPageType, oldParentId, newParentId, userId } = params
+  const { movedPageId, movedPageType, oldParentId, newParentId, userId, crossDrive } = params
 
   // Cheap guards before any parent lookups.
   if (movedPageType !== TASK_LIST_TYPE || oldParentId === newParentId) return
@@ -159,6 +220,7 @@ export async function syncTaskItemOnMove(
     newParentId,
     oldParentType,
     newParentType,
+    crossDrive,
   })
 
   if (action.shouldRemove) {

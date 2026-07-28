@@ -64,6 +64,21 @@ describe('resolveTaskItemSyncAction', () => {
     expect(resolveTaskItemSyncAction(base).shouldAdd).toBe(true);
   });
 
+  // Preservation is a WITHIN-DRIVE rule. Everything the row points at is drive-scoped
+  // — agent assignees the task write paths refuse from another drive, and task_triggers
+  // cascading into drive-scoped workflows — so carrying it across a boundary would keep
+  // references the product forbids creating.
+  it('still removes on a cross-drive list-to-list move', () => {
+    expect(resolveTaskItemSyncAction({ ...base, crossDrive: true })).toEqual({
+      shouldRemove: true,
+      shouldAdd: true,
+    });
+  });
+
+  it('treats an absent crossDrive flag as a same-drive move', () => {
+    expect(resolveTaskItemSyncAction({ ...base, crossDrive: undefined }).shouldRemove).toBe(false);
+  });
+
   it('only adds when moving from a non-TASK_LIST parent into a TASK_LIST parent', () => {
     expect(
       resolveTaskItemSyncAction({ ...base, oldParentType: 'FOLDER' }),
