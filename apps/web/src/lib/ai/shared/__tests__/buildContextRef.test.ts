@@ -66,4 +66,56 @@ describe('buildContextRef', () => {
       routeType: 'other',
     });
   });
+
+  // A user sitting on /dashboard/<id>/tasks is plainly inside a workspace. These
+  // sub-routes used to fall through to routeType 'other', which resolved to a
+  // null location server-side — so the assistant was told "operating from the
+  // dashboard" and guessed a drive (usually Home) for anything it created.
+  describe('drive sub-routes keep the workspace in context', () => {
+    const SUB_ROUTES = [
+      'tasks', 'activity', 'members', 'settings',
+      'trash', 'calendar', 'channels', 'files', 'workflows',
+    ];
+
+    it.each(SUB_ROUTES)('given /dashboard/drive-1/%s, should return routeType drive with the driveId', (section) => {
+      expect(buildContextRef(`/dashboard/drive-1/${section}`, DRIVES)).toEqual({
+        routeType: 'drive',
+        driveId: 'drive-1',
+      });
+    });
+
+    it('given a members sub-route (invite), should still return routeType drive', () => {
+      expect(buildContextRef('/dashboard/drive-1/members/invite', DRIVES)).toEqual({
+        routeType: 'drive',
+        driveId: 'drive-1',
+      });
+    });
+
+    it('given a members sub-route (single user), should still return routeType drive', () => {
+      expect(buildContextRef('/dashboard/drive-1/members/user-9', DRIVES)).toEqual({
+        routeType: 'drive',
+        driveId: 'drive-1',
+      });
+    });
+
+    // The known-drives trim applies on sub-routes exactly as on the bare route.
+    it('given a sub-route of an unrecognized drive, should return routeType drive with no driveId', () => {
+      expect(buildContextRef('/dashboard/unknown-drive/settings', DRIVES)).toEqual({
+        routeType: 'drive',
+        driveId: undefined,
+      });
+    });
+  });
+
+  describe('routes that are NOT drive-scoped stay routeType other', () => {
+    it.each([
+      ['the global drive list', '/dashboard/drives'],
+      ['global tasks', '/dashboard/tasks'],
+      ['global calendar', '/dashboard/calendar'],
+      ['global storage', '/dashboard/storage'],
+      ['account settings', '/account'],
+    ])('given %s, should return routeType other', (_label, path) => {
+      expect(buildContextRef(path, DRIVES)).toEqual({ routeType: 'other' });
+    });
+  });
 });

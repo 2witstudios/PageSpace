@@ -5,6 +5,7 @@ import { eq, and, ne, sql, inArray, asc } from '@pagespace/db/operators'
 import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
 import { getActorAccessiblePagesInDrive, canActorAccessDrive } from './actor-permissions';
 import type { ToolExecutionContext } from '../core/types';
+import { resolveDriveScope } from './drive-context-defaults';
 import { PageType } from '@pagespace/lib/utils/enums';
 
 export const searchTools = {
@@ -14,17 +15,19 @@ export const searchTools = {
   regex_search: tool({
     description: 'Search page content and conversation messages using regular expression patterns. Searches both documents and conversations by default. Returns matches with IDs, titles, and context for reference. Also use to recover earlier tool results or conversation context that has been condensed or elided from the active context window.',
     inputSchema: z.object({
-      driveId: z.string().describe('The unique ID of the drive to search in'),
+      driveId: z.string().optional().describe('The unique ID of the drive to search in. Omit to search the workspace currently in view (see LOCATION context).'),
       pattern: z.string().describe('Regular expression pattern to search for (e.g., "TODO.*urgent", "\\d{4}-\\d{2}-\\d{2}", "deprecated.*API")'),
       searchIn: z.enum(['content', 'title', 'both']).default('content').describe('Where to search: content only, title only, or both'),
       maxResults: z.number().optional().default(50).describe('Maximum number of results to return'),
       contentTypes: z.array(z.enum(['documents', 'conversations'])).optional().default(['documents', 'conversations']).describe('What content to search: documents, conversations, or both'),
     }),
-    execute: async ({ driveId, pattern, searchIn, maxResults = 50, contentTypes = ['documents', 'conversations'] }, { experimental_context: context }) => {
+    execute: async ({ driveId: driveIdArg, pattern, searchIn, maxResults = 50, contentTypes = ['documents', 'conversations'] }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
       }
+
+      const { driveId, scopeSource } = resolveDriveScope(driveIdArg, context as ToolExecutionContext);
 
       try {
         // Validate regex pattern to prevent ReDoS attacks
@@ -312,6 +315,8 @@ export const searchTools = {
         return {
           success: true,
           driveSlug: drive.slug,
+          searchedDrive: { id: driveId, name: drive.name },
+          scopeSource,
           pattern,
           searchIn,
           contentTypes,
@@ -354,7 +359,7 @@ export const searchTools = {
   glob_search: tool({
     description: 'Find pages using glob-style patterns for titles and paths. Useful for discovering structural patterns like "README*", "*/meeting-notes/*", or "**/*.test".',
     inputSchema: z.object({
-      driveId: z.string().describe('The unique ID of the drive to search in'),
+      driveId: z.string().optional().describe('The unique ID of the drive to search in. Omit to search the workspace currently in view (see LOCATION context).'),
       pattern: z.string().describe('Glob pattern to match page titles/paths (e.g., "**/README*", "docs/**/*.md", "meeting-*")'),
       // Derived from the canonical PageType enum: a hand-written list here
       // omitted FILE and MACHINE, so agents filtering for those page types
@@ -362,11 +367,13 @@ export const searchTools = {
       includeTypes: z.array(z.enum(PageType)).optional().describe('Filter by page types'),
       maxResults: z.number().optional().default(100).describe('Maximum number of results to return'),
     }),
-    execute: async ({ driveId, pattern, includeTypes, maxResults = 100 }, { experimental_context: context }) => {
+    execute: async ({ driveId: driveIdArg, pattern, includeTypes, maxResults = 100 }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
       }
+
+      const { driveId, scopeSource } = resolveDriveScope(driveIdArg, context as ToolExecutionContext);
 
       try {
         if (!await canActorAccessDrive(context as ToolExecutionContext, driveId)) {
@@ -472,6 +479,8 @@ export const searchTools = {
         return {
           success: true,
           driveSlug: drive.slug,
+          searchedDrive: { id: driveId, name: drive.name },
+          scopeSource,
           pattern,
           results,
           totalResults: results.length,

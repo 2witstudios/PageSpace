@@ -99,6 +99,10 @@ export async function resolveLocationContext(
       }
 
       // A whole drive — use the drive name from the store.
+      // NOTE: deliberately narrower than isDriveScopedPath (tab-title.ts), which
+      // also treats /dashboard/<drive>/<section> as drive-scoped. This legacy
+      // path is superseded by contextRef for the AI routes; widening it here
+      // would change the composer's own drive scoping, so it is left alone.
       case 'drive': {
         currentDrive = resolveDrive(parsed.driveId, drives);
         label = currentDrive?.name ?? null;

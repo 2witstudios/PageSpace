@@ -18,6 +18,7 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
     getAgentAccessLevel: vi.fn(),
     hasAgentDriveMembership: vi.fn(),
+    hasAgentDriveAdminRole: vi.fn(),
     getAgentAccessiblePagesInDrive: vi.fn(),
 }));
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
@@ -105,7 +106,9 @@ vi.mock('@pagespace/lib/repositories/drive-repository', () => ({
 }));
 
 vi.mock('@/services/api/page-mutation-service', () => ({
-  applyPageMutation: vi.fn().mockResolvedValue(undefined),
+  // Real applyPageMutation resolves to a result object carrying deferredTrigger,
+  // which callers passing their own tx must fire after commit.
+  applyPageMutation: vi.fn().mockResolvedValue({ deferredTrigger: undefined }),
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -126,6 +129,19 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
 
 vi.mock('@/services/api/task-sync-service', () => ({
   ensureTaskListForPage: vi.fn().mockResolvedValue({ id: 'tasklist-1' }),
+  syncTaskItemOnMove: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@pagespace/lib/pages/circular-reference-guard', () => ({
+  validatePageMove: vi.fn().mockResolvedValue({ valid: true }),
+}));
+
+vi.mock('@/services/api/page-cross-drive-move-service', () => ({
+  movePagesToDrive: vi.fn(),
+}));
+
+vi.mock('@/lib/canvas/publish-page', () => ({
+  syncPublishedHomeRoot: vi.fn(),
 }));
 
 // resolveActingAgentId (internal to actor-permissions.ts) queries the acting
@@ -134,7 +150,10 @@ vi.mock('@/services/api/task-sync-service', () => ({
 // interceptable by mocking the module's exports. AI_CHAT: these agent fixtures
 // are real agent pages, so they keep the agent-scoped path.
 vi.mock('@pagespace/db/db', () => ({
-  db: { select: () => ({ from: () => ({ where: () => Promise.resolve([{ type: 'AI_CHAT', userScopedAccess: false }]) }) }) },
+  db: {
+    select: () => ({ from: () => ({ where: () => Promise.resolve([{ type: 'AI_CHAT', userScopedAccess: false }]) }) }),
+    transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn({})),
+  },
 }));
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -142,27 +161,56 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 
 import { pageWriteTools } from '../page-write-tools';
-import { ensureTaskListForPage } from '@/services/api/task-sync-service';
+import { ensureTaskListForPage, syncTaskItemOnMove } from '@/services/api/task-sync-service';
 import { canUserEditPage, canUserDeletePage } from '@pagespace/lib/permissions/permissions';
-import { getAgentAccessLevel } from '@pagespace/lib/permissions/agent-permissions';
+import { getAgentAccessLevel, hasAgentDriveMembership, hasAgentDriveAdminRole } from '@pagespace/lib/permissions/agent-permissions';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { driveRepository } from '@pagespace/lib/repositories/drive-repository';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
+import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
+import { movePagesToDrive } from '@/services/api/page-cross-drive-move-service';
+import { broadcastPageEvent } from '@/lib/websocket';
 import type { ToolExecutionContext } from '../../core/types';
 
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
 const mockCanUserDeletePage = vi.mocked(canUserDeletePage);
 const mockGetAgentAccessLevel = vi.mocked(getAgentAccessLevel);
+const mockHasAgentDriveMembership = vi.mocked(hasAgentDriveMembership);
+const mockHasAgentDriveAdminRole = vi.mocked(hasAgentDriveAdminRole);
 const mockPageRepo = vi.mocked(pageRepository);
 const mockDriveRepo = vi.mocked(driveRepository);
 const mockApplyPageMutation = vi.mocked(applyPageMutation);
 const mockEnsureTaskListForPage = vi.mocked(ensureTaskListForPage);
+const mockSyncTaskItemOnMove = vi.mocked(syncTaskItemOnMove);
 const mockCheckDriveAccess = vi.mocked(checkDriveAccess);
+const mockValidatePageMove = vi.mocked(validatePageMove);
+const mockMovePagesToDrive = vi.mocked(movePagesToDrive);
+const mockBroadcastPageEvent = vi.mocked(broadcastPageEvent);
 
 const ownerAccess = { isOwner: true, isAdmin: true, isMember: true, drive: null };
 const adminAccess = { isOwner: false, isAdmin: true, isMember: true, drive: null };
 const deniedAccess = { isOwner: false, isAdmin: false, isMember: true, drive: null };
+
+// ── Cross-drive move fixtures ───────────────────────────────────────────
+const SOURCE_DRIVE = 'drive-1';
+const TARGET_DRIVE = 'drive-2';
+const HOME_DRIVE = 'drive-home';
+
+const sourcePageRow = (
+  overrides: Partial<{ id: string; title: string; driveId: string; parentId: string | null }> = {},
+) => ({
+  id: 'page-1', title: 'Test Page', type: 'DOCUMENT' as const,
+  content: '', contentMode: 'html' as const,
+  driveId: SOURCE_DRIVE, parentId: null as string | null, position: 1,
+  isTrashed: false, trashedAt: null, revision: 1, stateHash: null,
+  ...overrides,
+});
+
+const crossDriveContext = (userId: string) => ({
+  toolCallId: '1', messages: [],
+  experimental_context: { userId } as ToolExecutionContext,
+});
 
 describe('page-write-tools', () => {
   beforeEach(() => {
@@ -400,6 +448,102 @@ describe('page-write-tools', () => {
           context
         )
       ).rejects.toThrow('User authentication required');
+    });
+
+    // The bug this fixes: driveId used to be REQUIRED with no fallback, so a
+    // model with no drive in its arguments guessed one — usually the user's Home
+    // drive — and the page was created in the wrong workspace.
+    describe('resolving an omitted driveId', () => {
+      const setupCreate = () => {
+        mockDriveRepo.findByIdBasic.mockResolvedValue({ id: 'drive-loc', ownerId: 'owner-999' });
+        mockCanUserEditPage.mockResolvedValue(true);
+        mockPageRepo.getNextPosition.mockResolvedValue(1);
+        mockPageRepo.create.mockResolvedValue({ id: 'new-page-1', title: 'New Page', type: 'DOCUMENT' } as never);
+      };
+
+      const contextInDrive = (driveId: string) => ({
+        toolCallId: '1', messages: [],
+        experimental_context: {
+          userId: 'user-123',
+          locationContext: { currentDrive: { id: driveId, name: 'Work', slug: 'work' } },
+        } as ToolExecutionContext,
+      });
+
+      it('uses the workspace currently in view', async () => {
+        setupCreate();
+
+        await pageWriteTools.create_page.execute!(
+          { title: 'New Page', type: 'DOCUMENT' },
+          contextInDrive('drive-loc')
+        );
+
+        expect(mockDriveRepo.findByIdBasic).toHaveBeenCalledWith('drive-loc');
+      });
+
+      // An explicit parent names the drive unambiguously; a location-derived
+      // guess must never override it.
+      it("prefers the parent's drive over the drive in view", async () => {
+        setupCreate();
+        mockDriveRepo.findByIdBasic.mockResolvedValue({ id: 'drive-of-parent', ownerId: 'owner-999' });
+        mockPageRepo.findById.mockResolvedValue(sourcePageRow({ id: 'parent-1', driveId: 'drive-of-parent' }));
+        mockPageRepo.existsInDrive.mockResolvedValue(true);
+
+        await pageWriteTools.create_page.execute!(
+          { title: 'New Page', type: 'DOCUMENT', parentId: 'parent-1' },
+          contextInDrive('drive-loc')
+        );
+
+        expect(mockDriveRepo.findByIdBasic).toHaveBeenCalledWith('drive-of-parent');
+      });
+
+      it('asks rather than guessing when no workspace is in view', async () => {
+        setupCreate();
+
+        await expect(
+          pageWriteTools.create_page.execute!(
+            { title: 'New Page', type: 'DOCUMENT' },
+            { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext }
+          )
+        ).rejects.toThrow('no workspace is currently in view');
+      });
+
+      it('still honors an explicit driveId over the drive in view', async () => {
+        setupCreate();
+        mockDriveRepo.findByIdBasic.mockResolvedValue({ id: 'drive-explicit', ownerId: 'owner-999' });
+
+        await pageWriteTools.create_page.execute!(
+          { driveId: 'drive-explicit', title: 'New Page', type: 'DOCUMENT' },
+          contextInDrive('drive-loc')
+        );
+
+        expect(mockDriveRepo.findByIdBasic).toHaveBeenCalledWith('drive-explicit');
+      });
+
+      // Defaulting must not widen authority: the resolved drive goes through the
+      // same canActorEditPage gate an explicit one does.
+      it('still denies a defaulted drive the actor cannot write to', async () => {
+        setupCreate();
+        mockCanUserEditPage.mockResolvedValue(false);
+
+        await expect(
+          pageWriteTools.create_page.execute!(
+            { title: 'New Page', type: 'DOCUMENT' },
+            contextInDrive('drive-loc')
+          )
+        ).rejects.toThrow('Insufficient permissions to create pages in this drive');
+      });
+
+      it('parks the agent in the drive it just wrote to for the rest of the turn', async () => {
+        setupCreate();
+        const context = contextInDrive('drive-loc');
+
+        await pageWriteTools.create_page.execute!(
+          { title: 'New Page', type: 'DOCUMENT' },
+          context
+        );
+
+        expect(context.experimental_context.currentWorkingDrive).toEqual({ id: 'drive-loc' });
+      });
     });
 
     it('throws error when drive not found', async () => {
@@ -1329,6 +1473,333 @@ describe('page-write-tools', () => {
       expect(mockApplyPageMutation).toHaveBeenCalledWith(
         expect.objectContaining({ pageId: 'page-1', operation: 'move' })
       );
+    });
+
+    // Every other move path in the codebase syncs task_items; this one did not,
+    // so after the cross-drive work landed the SAME tool kept the row correct
+    // only when the move happened to cross a drive boundary.
+    it('syncs the task_items row on a same-drive move, like every other move path', async () => {
+      mockPageRepo.findById.mockResolvedValue(sourcePageRow({ id: 'page-1', parentId: 'old-parent' }));
+      mockCheckDriveAccess.mockResolvedValue(adminAccess);
+      mockPageRepo.existsInDrive.mockResolvedValue(true);
+      mockValidatePageMove.mockResolvedValue({ valid: true });
+
+      await pageWriteTools.move_page.execute!(
+        { title: 'Test Page', pageId: 'page-1', newParentId: 'new-parent', position: 1 },
+        crossDriveContext('admin-user')
+      );
+
+      expect(mockSyncTaskItemOnMove).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          movedPageId: 'page-1',
+          oldParentId: 'old-parent',
+          newParentId: 'new-parent',
+          userId: 'admin-user',
+        }),
+      );
+    });
+
+    // Cycle guard was missing on this path entirely: /api/pages/reorder and
+    // /api/pages/bulk-move both run validatePageMove, the AI tool did not, so an
+    // agent could reparent a page under its own descendant.
+    it('refuses a same-drive move that would create a circular reference', async () => {
+      mockPageRepo.findById.mockResolvedValue(sourcePageRow());
+      mockCheckDriveAccess.mockResolvedValue(adminAccess);
+      mockPageRepo.existsInDrive.mockResolvedValue(true);
+      mockValidatePageMove.mockResolvedValue({
+        valid: false,
+        error: 'Cannot set parent: would create circular reference in page tree',
+      });
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'admin-user' } as ToolExecutionContext,
+      };
+
+      await expect(
+        pageWriteTools.move_page.execute!(
+          { title: 'Test Page', pageId: 'page-1', newParentId: 'descendant-1', position: 1 },
+          context
+        )
+      ).rejects.toThrow('circular reference');
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── Cross-drive moves ─────────────────────────────────────────────────
+  //
+  // The reason this path exists: content the assistant files in the user's Home
+  // drive (generated images, drafts, plans) was previously unreachable from any
+  // other workspace, because move_page could not cross a drive boundary.
+  describe('move_page across drives', () => {
+    beforeEach(() => {
+      mockPageRepo.findById.mockResolvedValue(sourcePageRow());
+      mockDriveRepo.findById.mockImplementation(async (id: string) =>
+        ({ id, name: id === TARGET_DRIVE ? 'Work' : 'Home', slug: id }) as never
+      );
+      // Faithful stand-in for the service: same authorization ORDER as the real
+      // implementation (covered by page-cross-drive-move-service.test.ts), so
+      // these tests exercise the tool's authorizer wiring for real.
+      mockMovePagesToDrive.mockImplementation((async (params: Parameters<typeof movePagesToDrive>[0]) => {
+        if (!(await params.authorize.isDriveInScope(params.targetDriveId))) {
+          return { success: false, code: 'TARGET_DRIVE_OUT_OF_SCOPE', status: 403,
+            message: 'This token does not have access to the target drive' };
+        }
+        if (!(await params.authorize.canAdministerDrive(params.targetDriveId))) {
+          return { success: false, code: 'TARGET_DRIVE_FORBIDDEN', status: 403,
+            message: 'You do not have permission to move pages to this drive' };
+        }
+        for (const id of params.pageIds) {
+          if (!(await params.authorize.canEditPage(id))) {
+            return { success: false, code: 'SOURCE_PAGE_FORBIDDEN', status: 403,
+              message: `You do not have permission to move page: ${id}` };
+          }
+        }
+        return {
+          success: true,
+          moved: [{ id: 'page-1', title: 'Test Page', type: 'DOCUMENT',
+            previousDriveId: SOURCE_DRIVE, previousParentId: null, position: 7 }],
+          descendantCount: 2,
+          affectedDriveIds: [params.targetDriveId, SOURCE_DRIVE],
+          clearedHomePageDriveIds: [],
+        };
+      }) as never);
+    });
+
+    it('does not take the cross-drive path when targetDriveId is omitted', async () => {
+      mockCheckDriveAccess.mockResolvedValue(adminAccess);
+
+      await pageWriteTools.move_page.execute!(
+        { title: 'Test Page', pageId: 'page-1', position: 1 },
+        crossDriveContext('admin-user')
+      );
+
+      expect(mockMovePagesToDrive).not.toHaveBeenCalled();
+      expect(mockApplyPageMutation).toHaveBeenCalled();
+    });
+
+    // A model that helpfully echoes back the CURRENT workspace id must not
+    // thereby swap which authorization bar applies.
+    it('takes the same-drive path when targetDriveId equals the current drive', async () => {
+      mockCheckDriveAccess.mockResolvedValue(adminAccess);
+
+      await pageWriteTools.move_page.execute!(
+        { title: 'Test Page', pageId: 'page-1', targetDriveId: SOURCE_DRIVE, position: 1 },
+        crossDriveContext('admin-user')
+      );
+
+      expect(mockMovePagesToDrive).not.toHaveBeenCalled();
+      expect(mockCheckDriveAccess).toHaveBeenCalledWith(SOURCE_DRIVE, 'admin-user');
+    });
+
+    it('denies when the actor cannot administer the DESTINATION drive', async () => {
+      mockCheckDriveAccess.mockImplementation(async (driveId: string) =>
+        driveId === TARGET_DRIVE ? deniedAccess : adminAccess
+      );
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      await expect(
+        pageWriteTools.move_page.execute!(
+          { title: 'Test Page', pageId: 'page-1', targetDriveId: TARGET_DRIVE, position: 1 },
+          crossDriveContext('user-1')
+        )
+      ).rejects.toThrow('You do not have permission to move pages to this drive');
+    });
+
+    it('denies when the actor cannot edit the source page', async () => {
+      mockCheckDriveAccess.mockResolvedValue(adminAccess);
+      mockCanUserEditPage.mockResolvedValue(false);
+
+      await expect(
+        pageWriteTools.move_page.execute!(
+          { title: 'Test Page', pageId: 'page-1', targetDriveId: TARGET_DRIVE, position: 1 },
+          crossDriveContext('user-1')
+        )
+      ).rejects.toThrow('You do not have permission to move page');
+    });
+
+    // THE ACCEPTED AUTHORITY DELTA, pinned deliberately. Before this change
+    // move_page required owner/admin on the page's own drive for any move. The
+    // cross-drive bar mirrors /api/pages/bulk-move instead: edit on the page plus
+    // admin on the DESTINATION. So a user who is merely an editor in the source
+    // drive can now move a page out of it. That is parity with what the Move
+    // dialog already allows — not an escalation beyond the user's own reach.
+    it('allows an editor in the source drive who administers the destination', async () => {
+      mockCheckDriveAccess.mockImplementation(async (driveId: string) =>
+        driveId === TARGET_DRIVE ? adminAccess : deniedAccess
+      );
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const result = await pageWriteTools.move_page.execute!(
+        { title: 'Test Page', pageId: 'page-1', targetDriveId: TARGET_DRIVE, position: 1 },
+        crossDriveContext('editor-user')
+      ) as { success: boolean; crossDrive: boolean };
+
+      expect(result.success).toBe(true);
+      expect(result.crossDrive).toBe(true);
+      expect(mockMovePagesToDrive).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pageIds: ['page-1'],
+          targetDriveId: TARGET_DRIVE,
+          targetParentId: null,
+        })
+      );
+    });
+
+    // The Home drive is an exfiltration boundary for rename/trash/share/publish
+    // (drive-guards), never for move. Moving generated images and drafts OUT of
+    // Home is the whole point — this pins that decision against a future "helpful"
+    // Home guard.
+    it('moves out of the Home drive without special-casing it', async () => {
+      mockPageRepo.findById.mockResolvedValue(sourcePageRow({ driveId: HOME_DRIVE }));
+      mockCheckDriveAccess.mockResolvedValue(adminAccess);
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const result = await pageWriteTools.move_page.execute!(
+        { title: 'Generated image', pageId: 'page-1', targetDriveId: TARGET_DRIVE, position: 1 },
+        crossDriveContext('owner-user')
+      ) as { success: boolean };
+
+      expect(result.success).toBe(true);
+      expect(mockMovePagesToDrive).toHaveBeenCalled();
+    });
+
+    const agentContext = () => ({
+      toolCallId: '1', messages: [],
+      experimental_context: {
+        userId: 'user-1',
+        chatSource: { type: 'page' as const, agentPageId: 'agent-1' },
+      } as ToolExecutionContext,
+    });
+
+    it('denies an agent actor without membership in the destination drive', async () => {
+      mockGetAgentAccessLevel.mockResolvedValue({ canView: true, canEdit: true, canShare: false, canDelete: false });
+      mockHasAgentDriveAdminRole.mockResolvedValue(false);
+
+      await expect(
+        pageWriteTools.move_page.execute!(
+          { title: 'Test Page', pageId: 'page-1', targetDriveId: TARGET_DRIVE, position: 1 },
+          agentContext()
+        )
+      ).rejects.toThrow('You do not have permission to move pages to this drive');
+    });
+
+    // The destination bar is OWNER/ADMIN, not "has a membership row". Agent
+    // authority is normally resolved via hasAgentDriveMembership, which ignores
+    // `role` entirely — using it here would let a plain MEMBER agent pull a whole
+    // subtree into a drive that bulk-move guards with OWNER/ADMIN for humans.
+    it('denies an agent that is only a MEMBER of the destination drive', async () => {
+      mockGetAgentAccessLevel.mockResolvedValue({ canView: true, canEdit: true, canShare: false, canDelete: false });
+      mockHasAgentDriveMembership.mockResolvedValue(true);   // a row exists...
+      mockHasAgentDriveAdminRole.mockResolvedValue(false);   // ...but it is not OWNER/ADMIN
+
+      await expect(
+        pageWriteTools.move_page.execute!(
+          { title: 'Test Page', pageId: 'page-1', targetDriveId: TARGET_DRIVE, position: 1 },
+          agentContext()
+        )
+      ).rejects.toThrow('You do not have permission to move pages to this drive');
+    });
+
+    it('allows an agent that administers the destination drive', async () => {
+      mockGetAgentAccessLevel.mockResolvedValue({ canView: true, canEdit: true, canShare: false, canDelete: false });
+      mockHasAgentDriveAdminRole.mockResolvedValue(true);
+
+      const result = await pageWriteTools.move_page.execute!(
+        { title: 'Test Page', pageId: 'page-1', targetDriveId: TARGET_DRIVE, position: 1 },
+        agentContext()
+      ) as { success: boolean };
+
+      expect(result.success).toBe(true);
+    });
+
+    it('denies a scoped MCP caller whose token cannot reach the destination drive', async () => {
+      mockCheckDriveAccess.mockResolvedValue(adminAccess);
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      await expect(
+        pageWriteTools.move_page.execute!(
+          { title: 'Test Page', pageId: 'page-1', targetDriveId: TARGET_DRIVE, position: 1 },
+          {
+            toolCallId: '1', messages: [],
+            experimental_context: {
+              userId: 'user-1',
+              mcpAllowedDriveIds: [SOURCE_DRIVE],
+            } as ToolExecutionContext,
+          }
+        )
+      ).rejects.toThrow('does not have access to the target drive');
+    });
+
+    it('reports the new location, the previous one, and the subtree size', async () => {
+      mockCheckDriveAccess.mockResolvedValue(adminAccess);
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const result = await pageWriteTools.move_page.execute!(
+        { title: 'Test Page', pageId: 'page-1', targetDriveId: TARGET_DRIVE, position: 1 },
+        crossDriveContext('owner-user')
+      ) as Record<string, unknown>;
+
+      expect(result).toMatchObject({
+        crossDrive: true,
+        driveId: TARGET_DRIVE,
+        driveName: 'Work',
+        previousDriveId: SOURCE_DRIVE,
+        previousDriveName: 'Home',
+        movedDescendants: 2,
+        position: 7,
+      });
+      expect(result.message).toContain('2 nested pages');
+      expect(result.message).toContain('"Home"');
+      expect(result.message).toContain('"Work"');
+    });
+
+    // Broadcasting only to the destination leaves a ghost row in the source
+    // drive's sidebar until the next full refresh.
+    it('broadcasts to the source drive as well as the destination', async () => {
+      mockCheckDriveAccess.mockResolvedValue(adminAccess);
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      await pageWriteTools.move_page.execute!(
+        { title: 'Test Page', pageId: 'page-1', targetDriveId: TARGET_DRIVE, position: 1 },
+        crossDriveContext('owner-user')
+      );
+
+      expect(mockBroadcastPageEvent).toHaveBeenCalledTimes(2);
+    });
+
+    // parentId and newParentTitle are independently optional; keying the message
+    // off the title alone reported "at the top level" while the same result
+    // carried a parentId.
+    it('names the destination folder even when no parent title was supplied', async () => {
+      mockCheckDriveAccess.mockResolvedValue(adminAccess);
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const result = await pageWriteTools.move_page.execute!(
+        { title: 'Test Page', pageId: 'page-1', targetDriveId: TARGET_DRIVE, newParentId: 'folder-x', position: 1 },
+        crossDriveContext('owner-user')
+      ) as { parentId: string; message: string };
+
+      expect(result.parentId).toBe('folder-x');
+      expect(result.message).not.toContain('at the top level');
+      expect(result.message).toContain('destination folder');
+    });
+
+    it('surfaces a service failure through the tool error envelope', async () => {
+      mockCheckDriveAccess.mockResolvedValue(adminAccess);
+      mockCanUserEditPage.mockResolvedValue(true);
+      mockMovePagesToDrive.mockResolvedValue({
+        success: false, code: 'TARGET_PARENT_NOT_FOUND', status: 404,
+        message: 'Target folder not found',
+      } as never);
+
+      await expect(
+        pageWriteTools.move_page.execute!(
+          { title: 'Test Page', pageId: 'page-1', targetDriveId: TARGET_DRIVE, newParentId: 'nope', position: 1 },
+          crossDriveContext('owner-user')
+        )
+      ).rejects.toThrow('Failed to move page "Test Page": Target folder not found');
     });
   });
 
