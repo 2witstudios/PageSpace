@@ -312,21 +312,41 @@ let postgresAvailableLogged = false;
 // connection/statement timeouts (seconds each) before falling back — adding
 // user-facing latency and piling more work onto the struggling database.
 // While the circuit is open, request paths skip Postgres entirely and use the
-// conservative in-memory fallback; once the cooldown elapses, the next request
-// probes Postgres (half-open) and either closes the circuit or re-opens it.
+// conservative in-memory fallback; once the cooldown elapses, exactly ONE
+// request claims the half-open probe (the claim is atomic — single-threaded
+// event loop) and either closes the circuit or re-opens it. Concurrent
+// requests during the probe stay on the fallback, so an expiring cooldown
+// cannot stampede the stalled pool every 30 seconds.
 const PG_PROBE_COOLDOWN_MS = 30_000;
 let pgUnhealthyUntil = 0;
+let pgProbeInFlight = false;
 
-function pgCircuitOpen(now: number): boolean {
-  return process.env.NODE_ENV === 'production' && now < pgUnhealthyUntil;
+/**
+ * Gate for every request-path Postgres attempt. Returns true when the caller
+ * may touch the database — either the circuit is closed, or the caller just
+ * claimed the single half-open probe. A claimant MUST end its attempt in
+ * closePgCircuit() (success) or openPgCircuit() (failure); both release the
+ * claim.
+ */
+function pgGateAllowsDb(now: number): boolean {
+  if (process.env.NODE_ENV !== 'production' || pgUnhealthyUntil === 0) {
+    return true;
+  }
+  if (now < pgUnhealthyUntil || pgProbeInFlight) {
+    return false;
+  }
+  pgProbeInFlight = true;
+  return true;
 }
 
 function openPgCircuit(now: number): void {
   pgUnhealthyUntil = now + PG_PROBE_COOLDOWN_MS;
+  pgProbeInFlight = false;
 }
 
 function closePgCircuit(): void {
   pgUnhealthyUntil = 0;
+  pgProbeInFlight = false;
 }
 
 // Fail-closed response when DB is unavailable in production.
@@ -438,7 +458,7 @@ export async function checkDistributedRateLimit(
 ): Promise<RateLimitResult> {
   const now = Date.now();
 
-  if (pgCircuitOpen(now)) {
+  if (!pgGateAllowsDb(now)) {
     return conservativeFallbackCheck(identifier, config);
   }
 
@@ -534,9 +554,10 @@ export async function checkDistributedRateLimit(
  * Reset rate limit for an identifier (e.g., after successful auth).
  */
 export async function resetDistributedRateLimit(identifier: string): Promise<void> {
-  if (!pgCircuitOpen(Date.now())) {
+  if (pgGateAllowsDb(Date.now())) {
     try {
       await db.delete(rateLimitBuckets).where(eq(rateLimitBuckets.key, identifier));
+      closePgCircuit();
     } catch (error) {
       loggers.api.debug('Postgres rate limit reset failed', {
         error: error instanceof Error ? error.message : String(error),
@@ -561,7 +582,7 @@ export async function getDistributedRateLimitStatus(
 ): Promise<{ blocked: boolean; retryAfter?: number; attemptsRemaining?: number }> {
   const now = Date.now();
 
-  if (pgCircuitOpen(now)) {
+  if (!pgGateAllowsDb(now)) {
     return conservativeFallbackStatus(identifier, config);
   }
 
@@ -586,6 +607,7 @@ export async function getDistributedRateLimitStatus(
         .limit(1),
     ]);
 
+    closePgCircuit();
     const currCount = currRows[0]?.count ?? 0;
     const prevCount = prevRows[0]?.count ?? 0;
     const effectiveCount = computeEffectiveCount(
@@ -656,7 +678,7 @@ function conservativeFallbackStatus(
 export async function countAuthFailure(identifier: string, windowMs: number): Promise<number> {
   const now = Date.now();
 
-  if (pgCircuitOpen(now)) {
+  if (!pgGateAllowsDb(now)) {
     return 0;
   }
 
@@ -673,6 +695,7 @@ export async function countAuthFailure(identifier: string, windowMs: number): Pr
         set: { count: sql`${rateLimitBuckets.count} + 1` },
       })
       .returning({ count: rateLimitBuckets.count });
+    closePgCircuit();
     return rows[0]?.count ?? 0;
   } catch (error) {
     loggers.api.warn('countAuthFailure failed', {
