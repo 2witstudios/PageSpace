@@ -30,8 +30,10 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn((...args) => args),
+  asc: vi.fn(),
   desc: vi.fn(),
   count: vi.fn(),
+  gt: vi.fn(),
   gte: vi.fn(),
   lt: vi.fn(),
   lte: vi.fn(),
@@ -106,6 +108,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { inArray, isNull, or, sql } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
 import { taskItems } from '@pagespace/db/schema/tasks';
 
 // ============================================================================
@@ -228,6 +231,37 @@ const createTaskFixture = (overrides: Partial<{
   page: overrides.page ?? { id: 'page_task', title: overrides.title ?? 'Test Task', isTrashed: false, parentId: 'page_tasklist' },
 });
 
+// Route db.select shapes, distinguished by their selection keys:
+// { total }                   → pagination count
+// { ..., color, ... }         → full status configs for represented lists
+// { listPageId, slug, group } → custom status configs for the statusGroup filter
+// { id, parentId }            → child task pages (statusGroup filter)
+// { id, driveId, title }      → represented task-list pages (enrichment)
+interface SelectFixtures {
+  listPages?: unknown[];
+  fullConfigs?: unknown[];
+  slimConfigs?: unknown[];
+  childPages?: unknown[];
+  countRows?: unknown[];
+}
+
+const mockDbSelect = (fixtures: SelectFixtures) => {
+  vi.mocked(db.select).mockImplementation(((selection?: Record<string, unknown>) => {
+    const rows =
+      selection && 'total' in selection ? (fixtures.countRows ?? []) :
+      selection && 'color' in selection ? (fixtures.fullConfigs ?? []) :
+      selection && 'slug' in selection ? (fixtures.slimConfigs ?? []) :
+      selection && 'parentId' in selection ? (fixtures.childPages ?? []) :
+      selection && 'driveId' in selection ? (fixtures.listPages ?? []) :
+      [];
+    const chain: Record<string, unknown> = {};
+    chain.from = vi.fn(() => chain);
+    chain.innerJoin = vi.fn(() => chain);
+    chain.where = vi.fn().mockResolvedValue(rows);
+    return chain;
+  }) as any);
+};
+
 // ============================================================================
 // GET /api/tasks - Contract Tests
 // ============================================================================
@@ -242,12 +276,8 @@ describe('GET /api/tasks', () => {
     vi.mocked(getDriveIdsForUser).mockResolvedValue(['drive_1']);
     vi.mocked(isUserDriveMember).mockResolvedValue(true);
 
-    // Default: no trashed pages
-    vi.mocked(db.select).mockReturnValue({
-      from: vi.fn().mockReturnValue({
-        where: vi.fn().mockResolvedValue([]),
-      }),
-    } as any);
+    // Default: every select shape resolves empty
+    mockDbSelect({});
 
     // Default: no task list pages, no status configs
     vi.mocked(db.query.pages.findMany).mockResolvedValue([]);
@@ -368,12 +398,12 @@ describe('GET /api/tasks', () => {
       vi.mocked(db.query.pages.findMany).mockResolvedValue([
         createPageFixture({ id: 'page_tasklist', driveId: 'drive_1', title: 'My Task List' }),
       ]);
-      vi.mocked(db.query.taskLists.findMany).mockResolvedValue([
-        createTaskListFixture({ id: 'tasklist_1', pageId: 'page_tasklist' }),
-      ]);
       vi.mocked(db.query.taskItems.findMany).mockResolvedValue([
         createTaskFixture({ id: 'task_1' }),
       ]);
+      mockDbSelect({
+        listPages: [{ id: 'page_tasklist', driveId: 'drive_1', title: 'My Task List' }],
+      });
 
       const request = new Request('https://example.com/api/tasks?context=user');
       const response = await GET(request);
@@ -424,15 +454,11 @@ describe('GET /api/tasks', () => {
         createTaskFixture({ id: 'task_1' }),
       ]);
 
-      // Mock count query to return more than returned tasks.
-      // Use mockResolvedValue (not Once) because db.select is called multiple times
-      // (validTaskPageSubquery + count query) and we need the terminal .where() to
-      // always return data, not just on the first call.
-      vi.mocked(db.select).mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue([{ total: 10 }]),
-        }),
-      } as any);
+      // Count query reports more rows than the returned page of tasks.
+      mockDbSelect({
+        countRows: [{ total: 10 }],
+        listPages: [{ id: 'page_tasklist', driveId: 'drive_1', title: 'Tasks' }],
+      });
 
       const request = new Request('https://example.com/api/tasks?context=user&limit=1');
       const response = await GET(request);
@@ -536,18 +562,6 @@ describe('GET /api/tasks', () => {
   });
 
   describe('statusGroup filter construction (OOM hardening)', () => {
-    // Route db.select shapes: the child-page fetch selects { id, parentId };
-    // everything else (valid-page subquery, search subquery, count) does not.
-    const mockSelectWithChildPages = (childRows: Array<{ id: string; parentId: string }>) => {
-      vi.mocked(db.select).mockImplementation(((selection?: Record<string, unknown>) => ({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue(
-            selection && 'parentId' in selection ? childRows : []
-          ),
-        }),
-      })) as any);
-    };
-
     const pageIdInArrayCalls = () =>
       vi.mocked(inArray).mock.calls.filter(
         ([col, values]) => col === taskItems.pageId && Array.isArray(values)
@@ -560,12 +574,13 @@ describe('GET /api/tasks', () => {
         createPageFixture({ id: 'page_a', driveId: 'drive_1', title: 'List A' }),
         createPageFixture({ id: 'page_b', driveId: 'drive_1', title: 'List B' }),
       ]);
-      vi.mocked(db.query.taskLists.findMany).mockResolvedValue([]);
-      mockSelectWithChildPages([
-        { id: 'child_a1', parentId: 'page_a' },
-        { id: 'child_a2', parentId: 'page_a' },
-        { id: 'child_b1', parentId: 'page_b' },
-      ]);
+      mockDbSelect({
+        childPages: [
+          { id: 'child_a1', parentId: 'page_a' },
+          { id: 'child_a2', parentId: 'page_a' },
+          { id: 'child_b1', parentId: 'page_b' },
+        ],
+      });
 
       const request = new Request('https://example.com/api/tasks?context=user&statusGroup=active');
       const response = await GET(request);
@@ -587,19 +602,17 @@ describe('GET /api/tasks', () => {
         createPageFixture({ id: 'page_b', driveId: 'drive_1', title: 'List B' }),
         createPageFixture({ id: 'page_c', driveId: 'drive_1', title: 'List C' }),
       ]);
-      vi.mocked(db.query.taskLists.findMany).mockResolvedValue([
-        createTaskListFixture({ id: 'tl_a', pageId: 'page_a' }),
-        createTaskListFixture({ id: 'tl_b', pageId: 'page_b' }),
-      ]);
-      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([
-        { id: 'cfg_a', taskListId: 'tl_a', name: 'Open', slug: 'open', color: 'c', group: 'todo', position: 0, createdAt: new Date(), updatedAt: new Date() },
-        { id: 'cfg_b', taskListId: 'tl_b', name: 'Open', slug: 'open', color: 'c', group: 'todo', position: 0, createdAt: new Date(), updatedAt: new Date() },
-      ] as any);
-      mockSelectWithChildPages([
-        { id: 'child_a1', parentId: 'page_a' },
-        { id: 'child_b1', parentId: 'page_b' },
-        { id: 'child_c1', parentId: 'page_c' },
-      ]);
+      mockDbSelect({
+        slimConfigs: [
+          { listPageId: 'page_a', slug: 'open', group: 'todo' },
+          { listPageId: 'page_b', slug: 'open', group: 'todo' },
+        ],
+        childPages: [
+          { id: 'child_a1', parentId: 'page_a' },
+          { id: 'child_b1', parentId: 'page_b' },
+          { id: 'child_c1', parentId: 'page_c' },
+        ],
+      });
 
       const request = new Request('https://example.com/api/tasks?context=user&statusGroup=active');
       const response = await GET(request);
@@ -623,14 +636,15 @@ describe('GET /api/tasks', () => {
         createPageFixture({ id: 'page_a', driveId: 'drive_1', title: 'List A' }),
         createPageFixture({ id: 'page_b', driveId: 'drive_1', title: 'List B' }),
       ]);
-      vi.mocked(db.query.taskLists.findMany).mockResolvedValue([]);
 
       const childSelections: Array<Record<string, unknown> | undefined> = [];
       vi.mocked(db.select).mockImplementation(((selection?: Record<string, unknown>) => {
         if (selection && 'parentId' in selection) childSelections.push(selection);
-        return {
-          from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
-        };
+        const chain: Record<string, unknown> = {};
+        chain.from = vi.fn(() => chain);
+        chain.innerJoin = vi.fn(() => chain);
+        chain.where = vi.fn().mockResolvedValue([]);
+        return chain;
       }) as any);
 
       const request = new Request('https://example.com/api/tasks?context=user&statusGroup=active');
@@ -643,13 +657,10 @@ describe('GET /api/tasks', () => {
       vi.mocked(db.query.pages.findMany).mockResolvedValue([
         createPageFixture({ id: 'page_a', driveId: 'drive_1', title: 'List A' }),
       ]);
-      vi.mocked(db.query.taskLists.findMany).mockResolvedValue([
-        createTaskListFixture({ id: 'tl_a', pageId: 'page_a' }),
-      ]);
       // Custom config has only done-group statuses — nothing matches 'active'.
-      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([
-        { id: 'cfg_a', taskListId: 'tl_a', name: 'Shipped', slug: 'shipped', color: 'c', group: 'done', position: 0, createdAt: new Date(), updatedAt: new Date() },
-      ] as any);
+      mockDbSelect({
+        slimConfigs: [{ listPageId: 'page_a', slug: 'shipped', group: 'done' }],
+      });
 
       const request = new Request('https://example.com/api/tasks?context=user&statusGroup=active');
       const response = await GET(request);
@@ -676,6 +687,75 @@ describe('GET /api/tasks', () => {
 
       // The query should be called (isTrashed=false filter is baked into the validTaskPageSubquery)
       expect(db.query.taskItems.findMany).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('bounded task-list expansion (OOM hardening)', () => {
+    it('fetches task-list pages in bounded chunks, never one unbounded findMany', async () => {
+      let call = 0;
+      vi.mocked(db.query.pages.findMany).mockImplementation((async (opts?: { limit?: number }) => {
+        call++;
+        const limit = opts?.limit;
+        if (!limit) return []; // an unbounded call gets nothing — the assertions below flag it
+        if (call === 1) {
+          return Array.from({ length: limit }, (_, i) => ({ id: `list_${String(i).padStart(5, '0')}` }));
+        }
+        return [{ id: 'list_final' }];
+      }) as any);
+
+      const request = new Request('https://example.com/api/tasks?context=user');
+      const response = await GET(request);
+
+      expect(response.status).toBe(200);
+      const findManyCalls = vi.mocked(db.query.pages.findMany).mock.calls;
+      expect(findManyCalls.length).toBeGreaterThanOrEqual(2);
+      for (const [opts] of findManyCalls) {
+        expect((opts as { limit?: number } | undefined)?.limit).toBeGreaterThan(0);
+      }
+      // All chunks' ids reach the task-membership filter (parentId IN <ids>).
+      const chunkLimit = (findManyCalls[0][0] as { limit: number }).limit;
+      const membershipCall = vi.mocked(inArray).mock.calls.find(
+        ([col, values]) => col === pages.parentId && Array.isArray(values) && values.length === chunkLimit + 1
+      );
+      expect(membershipCall).toBeDefined();
+    });
+
+    it('loads status configs via a join for only the task lists represented in the response', async () => {
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([
+        createPageFixture({ id: 'page_tasklist', driveId: 'drive_1', title: 'My Task List' }),
+      ]);
+      vi.mocked(db.query.taskItems.findMany).mockResolvedValue([
+        createTaskFixture({ id: 'task_1', status: 'open' as never }),
+      ]);
+      mockDbSelect({
+        listPages: [{ id: 'page_tasklist', driveId: 'drive_1', title: 'My Task List' }],
+        fullConfigs: [{
+          listPageId: 'page_tasklist', id: 'cfg_1', taskListId: 'tl_1',
+          name: 'Open', slug: 'open', color: 'c', group: 'todo', position: 0,
+        }],
+      });
+
+      const request = new Request('https://example.com/api/tasks?context=user');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.tasks[0]).toMatchObject({
+        id: 'task_1',
+        driveId: 'drive_1',
+        taskListPageId: 'page_tasklist',
+        statusGroup: 'todo',
+        statusLabel: 'Open',
+      });
+      expect(body.statusConfigsByTaskList).toEqual({
+        page_tasklist: [{
+          id: 'cfg_1', taskListId: 'tl_1', name: 'Open',
+          slug: 'open', color: 'c', group: 'todo', position: 0,
+        }],
+      });
+      // The old unbounded lookups are gone entirely.
+      expect(db.query.taskLists.findMany).not.toHaveBeenCalled();
+      expect(db.query.taskStatusConfigs.findMany).not.toHaveBeenCalled();
     });
   });
 

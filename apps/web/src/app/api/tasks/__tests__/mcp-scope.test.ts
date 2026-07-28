@@ -32,8 +32,10 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn((...args: any[]) => args),
+  asc: vi.fn(),
   desc: vi.fn(),
   count: vi.fn(),
+  gt: vi.fn(),
   gte: vi.fn(),
   lt: vi.fn(),
   lte: vi.fn(),
@@ -94,6 +96,7 @@ import {
   getPrincipalBatchPagePermissions,
 } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
+import { inArray } from '@pagespace/db/operators';
 
 // ============================================================================
 // Test Fixtures
@@ -263,7 +266,6 @@ describe('GET /api/tasks - MCP drive scope + app-member RBAC enforcement', () =>
         ])
       );
 
-      vi.mocked(db.query.taskLists.findMany).mockResolvedValue([] as any);
       vi.mocked(db.query.taskItems.findMany).mockResolvedValue([] as any);
 
       const request = createRequest({ context: 'user' });
@@ -271,8 +273,38 @@ describe('GET /api/tasks - MCP drive scope + app-member RBAC enforcement', () =>
 
       expect(getPrincipalBatchPagePermissions).toHaveBeenCalledWith(auth, ['list_visible', 'list_hidden']);
       expect(response.status).toBe(200);
-      // taskLists config lookup runs on the FILTERED set — only the visible list.
-      expect(db.query.taskLists.findMany).toHaveBeenCalled();
+      // Task membership filtering runs on the FILTERED set — only the visible list.
+      const filteredIdCalls = vi.mocked(inArray).mock.calls.filter(
+        ([, values]) => Array.isArray(values) && values.length === 1 && values[0] === 'list_visible'
+      );
+      expect(filteredIdCalls.length).toBeGreaterThan(0);
+    });
+
+    it('filters every fetched chunk of task lists through per-page permissions', async () => {
+      const auth = mockMCPAuth(mockUserId, [driveA]);
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(auth);
+      vi.mocked(getPrincipalDriveIds).mockResolvedValue([driveA]);
+
+      let call = 0;
+      vi.mocked(db.query.pages.findMany).mockImplementation((async (opts?: { limit?: number }) => {
+        call++;
+        const limit = opts?.limit;
+        if (!limit) return [];
+        if (call === 1) {
+          return Array.from({ length: limit }, (_, i) => ({ id: `chunk1_${String(i).padStart(5, '0')}` }));
+        }
+        return [{ id: 'chunk2_only' }];
+      }) as any);
+      vi.mocked(db.query.taskItems.findMany).mockResolvedValue([] as any);
+
+      const request = createRequest({ context: 'user' });
+      await GET(request);
+
+      const permCalls = vi.mocked(getPrincipalBatchPagePermissions).mock.calls;
+      expect(permCalls).toHaveLength(2);
+      const chunkLimit = (vi.mocked(db.query.pages.findMany).mock.calls[0][0] as { limit: number }).limit;
+      expect(permCalls[0][1]).toHaveLength(chunkLimit);
+      expect(permCalls[1][1]).toEqual(['chunk2_only']);
     });
 
     it('does not run per-page filtering for session auth', async () => {

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { db } from '@pagespace/db/db'
-import { eq, and, desc, count, gte, lt, lte, inArray, or, isNull, not, sql } from '@pagespace/db/operators'
+import { eq, and, asc, desc, count, gt, gte, lt, lte, inArray, or, isNull, not, sql } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskItems, taskLists, taskStatusConfigs } from '@pagespace/db/schema/tasks';
 import { DEFAULT_STATUS_CONFIG, type TaskStatusGroup } from '@/lib/task-status-config';
@@ -21,6 +21,10 @@ import {
 import { decryptTaskUserRelations } from '@/lib/tasks/decrypt-task-relations';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+
+// Page size for the cursor-paged task-list expansion. Keeps each query (and
+// each scoped-token permission batch) bounded regardless of drive-universe size.
+const TASK_LIST_PAGE_CHUNK = 500;
 
 // Query parameter schema
 const querySchema = z.object({
@@ -146,25 +150,41 @@ export async function GET(request: Request) {
       });
     }
 
-    // First, get all task list pages in the accessible drives
-    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
-    let taskListPages = await db.query.pages.findMany({
-      where: and(
-        eq(pages.type, 'TASK_LIST'),
-        eq(pages.isTrashed, false),
-        inArray(pages.driveId, driveIds)
-      ),
-      columns: { id: true, driveId: true, title: true },
-    });
+    // Expand the principal's task lists as bounded, cursor-paged, id-only
+    // chunks — the old single unbounded findMany materialized every task list
+    // in the drive universe (7,703 full rows for the 2026-07-28 OOM victim).
+    // Enrichment data (titles, drive ids, status configs) is fetched later, for
+    // only the task lists represented in the response page.
+    const taskListPageIds: string[] = [];
+    let taskListCursor: string | undefined;
+    for (;;) {
+      const chunk = await db.query.pages.findMany({
+        where: and(
+          eq(pages.type, 'TASK_LIST'),
+          eq(pages.isTrashed, false),
+          inArray(pages.driveId, driveIds),
+          taskListCursor ? gt(pages.id, taskListCursor) : undefined,
+        ),
+        columns: { id: true },
+        orderBy: [asc(pages.id)],
+        limit: TASK_LIST_PAGE_CHUNK,
+      });
+      if (chunk.length === 0) break;
+      taskListCursor = chunk[chunk.length - 1].id;
 
-    // Scoped tokens see only the task lists their own role grants view on —
-    // custom roles can restrict visibility per page, not just per drive.
-    if (isScopedMCPAuth(auth)) {
-      const pagePerms = await getPrincipalBatchPagePermissions(auth, taskListPages.map(p => p.id));
-      taskListPages = taskListPages.filter(p => pagePerms.get(p.id)?.canView);
+      let chunkIds = chunk.map(p => p.id);
+      // Scoped tokens see only the task lists their own role grants view on —
+      // custom roles can restrict visibility per page, not just per drive.
+      if (isScopedMCPAuth(auth)) {
+        const pagePerms = await getPrincipalBatchPagePermissions(auth, chunkIds);
+        chunkIds = chunkIds.filter(id => pagePerms.get(id)?.canView);
+      }
+      taskListPageIds.push(...chunkIds);
+
+      if (chunk.length < TASK_LIST_PAGE_CHUNK) break;
     }
 
-    if (taskListPages.length === 0) {
+    if (taskListPageIds.length === 0) {
       return NextResponse.json({
         tasks: [],
         pagination: {
@@ -174,43 +194,6 @@ export async function GET(request: Request) {
           hasMore: false,
         },
       });
-    }
-
-    const taskListPageIds = taskListPages.map(p => p.id);
-
-    // Map taskListPageId → page info for enriching results
-    const taskListPageMap = new Map<string, { id: string; driveId: string; title: string }>();
-    for (const page of taskListPages) {
-      taskListPageMap.set(page.id, page);
-    }
-
-    // Get task lists for status config lookup only (task membership is now via pages.parentId)
-    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
-    const taskListsForConfigs = await db.query.taskLists.findMany({
-      where: inArray(taskLists.pageId, taskListPageIds),
-      columns: { id: true, pageId: true },
-    });
-    const taskListIdToPageId = new Map(
-      taskListsForConfigs
-        .filter((tl): tl is typeof tl & { pageId: string } => tl.pageId !== null)
-        .map(tl => [tl.id, tl.pageId])
-    );
-
-    // Fetch status configs, keyed by the task list PAGE ID (not the taskList row ID)
-    const statusConfigRows = taskListsForConfigs.length > 0
-      // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
-      ? await db.query.taskStatusConfigs.findMany({
-          where: inArray(taskStatusConfigs.taskListId, taskListsForConfigs.map(tl => tl.id)),
-        })
-      : [];
-
-    const taskListStatusMap = new Map<string, typeof statusConfigRows>();
-    for (const config of statusConfigRows) {
-      const listPageId = taskListIdToPageId.get(config.taskListId);
-      if (!listPageId) continue;
-      const existing = taskListStatusMap.get(listPageId) || [];
-      existing.push(config);
-      taskListStatusMap.set(listPageId, existing);
     }
 
     // Subquery: task pages that are non-trashed TASK_LIST children of accessible list pages
@@ -323,18 +306,6 @@ export async function GET(request: Request) {
       }
     }
 
-    // Serialize status configs keyed by the task list PAGE ID
-    const serializedStatusConfigsByTaskList: Record<string, Array<{
-      id: string; taskListId: string; name: string;
-      slug: string; color: string; group: TaskStatusGroup; position: number;
-    }>> = {};
-    for (const [listPageId, configs] of taskListStatusMap) {
-      serializedStatusConfigsByTaskList[listPageId] = configs.map(c => ({
-        id: c.id, taskListId: c.taskListId, name: c.name,
-        slug: c.slug, color: c.color, group: c.group, position: c.position,
-      }));
-    }
-
     // Group-level status filter. Convert the requested group into DISTINCT
     // allowed-slug sets (custom configs first, defaults if none) and build an OR
     // of one (pageId IN plain-id-array, status IN slugs) condition per set —
@@ -342,16 +313,35 @@ export async function GET(request: Request) {
     // correlated subquery, is what OOM-killed Postgres on 2026-07-28 for a
     // principal with 7,703 task lists.
     if (params.statusGroup && params.statusGroup !== 'all') {
+      // Custom configs only — lists without rows fall back to defaults in the
+      // grouping helper, so this stays proportional to customized lists.
+      const customConfigRows = await db
+        .select({
+          listPageId: taskLists.pageId,
+          slug: taskStatusConfigs.slug,
+          group: taskStatusConfigs.group,
+        })
+        .from(taskStatusConfigs)
+        .innerJoin(taskLists, eq(taskStatusConfigs.taskListId, taskLists.id))
+        .where(inArray(taskLists.pageId, taskListPageIds));
+      const configsByListPageId = new Map<string, { slug: string; group: TaskStatusGroup }[]>();
+      for (const { listPageId, ...config } of customConfigRows) {
+        if (!listPageId) continue;
+        const existing = configsByListPageId.get(listPageId);
+        if (existing) existing.push(config);
+        else configsByListPageId.set(listPageId, [config]);
+      }
+
       const slugGroups = groupTaskListsByAllowedStatusSlugs(
         taskListPageIds,
-        taskListStatusMap,
+        configsByListPageId,
         params.statusGroup,
       );
 
       if (slugGroups.length === 0) {
         return NextResponse.json({
           tasks: [],
-          statusConfigsByTaskList: serializedStatusConfigsByTaskList,
+          statusConfigsByTaskList: {},
           pagination: {
             total: 0,
             limit: params.limit,
@@ -422,6 +412,51 @@ export async function GET(request: Request) {
     });
 
     const decryptedTasks = await decryptTaskUserRelations(tasks);
+
+    // Enrichment data (list page info + status configs) covers only the task
+    // lists represented in this page of results, keyed by the task list PAGE ID.
+    const representedListPageIds = [...new Set(
+      decryptedTasks
+        .map(task => task.page?.parentId)
+        .filter((id): id is string => !!id)
+    )];
+
+    const representedListPages = representedListPageIds.length > 0
+      ? await db
+          .select({ id: pages.id, driveId: pages.driveId, title: pages.title })
+          .from(pages)
+          .where(inArray(pages.id, representedListPageIds))
+      : [];
+    const taskListPageMap = new Map(representedListPages.map(p => [p.id, p]));
+
+    const representedConfigRows = representedListPageIds.length > 0
+      ? await db
+          .select({
+            listPageId: taskLists.pageId,
+            id: taskStatusConfigs.id,
+            taskListId: taskStatusConfigs.taskListId,
+            name: taskStatusConfigs.name,
+            slug: taskStatusConfigs.slug,
+            color: taskStatusConfigs.color,
+            group: taskStatusConfigs.group,
+            position: taskStatusConfigs.position,
+          })
+          .from(taskStatusConfigs)
+          .innerJoin(taskLists, eq(taskStatusConfigs.taskListId, taskLists.id))
+          .where(inArray(taskLists.pageId, representedListPageIds))
+      : [];
+
+    const taskListStatusMap = new Map<string, Array<{
+      id: string; taskListId: string; name: string;
+      slug: string; color: string; group: TaskStatusGroup; position: number;
+    }>>();
+    for (const { listPageId, ...config } of representedConfigRows) {
+      if (!listPageId) continue;
+      const existing = taskListStatusMap.get(listPageId);
+      if (existing) existing.push(config);
+      else taskListStatusMap.set(listPageId, [config]);
+    }
+    const serializedStatusConfigsByTaskList = Object.fromEntries(taskListStatusMap);
 
     // Enrich tasks with drive, task list page info, and status metadata
     // Filter out orphaned tasks where parent list is not accessible
