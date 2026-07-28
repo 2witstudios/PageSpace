@@ -46,9 +46,23 @@ import {
   getDistributedRateLimitStatus,
   initializeDistributedRateLimiting,
   shutdownRateLimiting,
+  conservativeFallbackMaxAttempts,
+  conservativeFallbackConfig,
+  conservativeFallbackCheck,
   DISTRIBUTED_RATE_LIMITS,
   type RateLimitConfig,
 } from '../distributed-rate-limit';
+
+// Drizzle wraps driver errors: the pg fields (code, etc.) live on error.cause,
+// not the top-level error. Throw the wrapper shape the real code sees so tests
+// don't pass against a convenient flat error the production path never gets.
+function drizzleWrappedPgError(pgMessage = 'connection refused'): Error {
+  const cause = Object.assign(new Error(pgMessage), { code: 'ECONNREFUSED' });
+  return Object.assign(
+    new Error('Failed query: insert into "rate_limit_buckets" ...'),
+    { cause },
+  );
+}
 
 // Build a chainable mock for db.insert(...).values(...).onConflictDoUpdate(...).returning()
 function mockInsertReturning(count: number) {
@@ -274,34 +288,75 @@ describe('distributed-rate-limit', () => {
         expect(blocked.retryAfter).toBeGreaterThan(0);
       });
 
-      it('denies requests in production when DB unavailable (fail-closed)', async () => {
-        process.env.NODE_ENV = 'production';
-        mockInsertThrows(new Error('DB down'));
+      // testConfig.maxAttempts is 5 → conservative fallback threshold is
+      // floor(5/2) = 2 per instance.
+      describe('in production (conservative in-memory fallback)', () => {
+        beforeEach(() => {
+          process.env.NODE_ENV = 'production';
+          mockInsertThrows(drizzleWrappedPgError());
+        });
 
-        const { loggers } = await import('../../logging/logger-config');
-        const result = await checkDistributedRateLimit('prod-fallback', testConfig);
+        it('allows initial requests instead of denying everything', async () => {
+          const result = await checkDistributedRateLimit('prod-fallback', testConfig);
 
-        expect(result.allowed).toBe(false);
-        expect(result.retryAfter).toBe(60);
-        expect(result.attemptsRemaining).toBe(0);
-        expect(loggers.api.error).toHaveBeenCalledWith(
-          'Postgres unavailable in production - DENYING request (fail-closed)',
-          expect.any(Object)
-        );
-      });
+          expect(result.allowed).toBe(true);
+          expect(result.attemptsRemaining).toBe(1);
+        });
 
-      it('truncates long identifiers in the fail-closed log (safety)', async () => {
-        process.env.NODE_ENV = 'production';
-        mockInsertThrows(new Error('DB down'));
+        it('denies requests past the conservative threshold', async () => {
+          await checkDistributedRateLimit('prod-threshold', testConfig);
+          await checkDistributedRateLimit('prod-threshold', testConfig);
+          const blocked = await checkDistributedRateLimit('prod-threshold', testConfig);
 
-        const { loggers } = await import('../../logging/logger-config');
-        const longId = 'x'.repeat(50);
-        await checkDistributedRateLimit(longId, testConfig);
+          expect(blocked.allowed).toBe(false);
+          expect(blocked.retryAfter).toBeGreaterThan(0);
+        });
 
-        expect(loggers.api.error).toHaveBeenCalledWith(
-          'Postgres unavailable in production - DENYING request (fail-closed)',
-          expect.objectContaining({ identifier: expect.stringContaining('...') })
-        );
+        it('logs a WARN with the RATE_LIMIT_PG_FALLBACK marker and truncated identifier', async () => {
+          const { loggers } = await import('../../logging/logger-config');
+          const longId = 'x'.repeat(50);
+          await checkDistributedRateLimit(longId, testConfig);
+
+          expect(loggers.api.warn).toHaveBeenCalledWith(
+            expect.stringContaining('RATE_LIMIT_PG_FALLBACK'),
+            expect.objectContaining({ identifier: expect.stringContaining('...') })
+          );
+          expect(loggers.api.error).not.toHaveBeenCalled();
+        });
+
+        it('preserves window semantics: fallback counts expire after windowMs', async () => {
+          // maxAttempts 2 → conservative threshold 1.
+          const config: RateLimitConfig = { maxAttempts: 2, windowMs: 50 };
+
+          await checkDistributedRateLimit('prod-expiry', config);
+          const blocked = await checkDistributedRateLimit('prod-expiry', config);
+          expect(blocked.allowed).toBe(false);
+
+          await new Promise((resolve) => setTimeout(resolve, 100));
+
+          const afterExpiry = await checkDistributedRateLimit('prod-expiry', config);
+          expect(afterExpiry.allowed).toBe(true);
+        });
+
+        it('resumes distributed enforcement after Postgres recovers, ignoring fallback counts', async () => {
+          const { loggers } = await import('../../logging/logger-config');
+
+          // Exhaust the conservative in-memory threshold during the outage.
+          await checkDistributedRateLimit('prod-recovery', testConfig);
+          await checkDistributedRateLimit('prod-recovery', testConfig);
+          const blocked = await checkDistributedRateLimit('prod-recovery', testConfig);
+          expect(blocked.allowed).toBe(false);
+
+          // Postgres comes back: the distributed count (1) is authoritative and
+          // the in-memory outage counts must not bleed into the decision.
+          mockInsertReturning(1);
+          const recovered = await checkDistributedRateLimit('prod-recovery', testConfig);
+          expect(recovered.allowed).toBe(true);
+          expect(recovered.attemptsRemaining).toBe(4);
+          expect(loggers.api.info).toHaveBeenCalledWith(
+            'Distributed rate limiting enabled (Postgres)'
+          );
+        });
       });
     });
   });
@@ -358,13 +413,27 @@ describe('distributed-rate-limit', () => {
       expect(status.attemptsRemaining).toBe(5);
     });
 
-    it('reports blocked in production when DB unavailable (fail-closed)', async () => {
+    it('reports conservative in-memory status in production when DB unavailable', async () => {
       process.env.NODE_ENV = 'production';
-      mockSelectThrows(new Error('DB down'));
+      mockSelectThrows(drizzleWrappedPgError());
 
+      // No attempts recorded → not blocked; remaining reflects the conservative
+      // threshold (floor(5/2) = 2), not the configured 5.
       const status = await getDistributedRateLimitStatus('prod-status', testConfig);
+      expect(status.blocked).toBe(false);
+      expect(status.attemptsRemaining).toBe(2);
+    });
+
+    it('reports blocked in production once fallback attempts reach the conservative threshold', async () => {
+      process.env.NODE_ENV = 'production';
+      mockInsertThrows(drizzleWrappedPgError());
+      mockSelectThrows(drizzleWrappedPgError());
+
+      await checkDistributedRateLimit('prod-status-blocked', testConfig);
+      await checkDistributedRateLimit('prod-status-blocked', testConfig);
+
+      const status = await getDistributedRateLimitStatus('prod-status-blocked', testConfig);
       expect(status.blocked).toBe(true);
-      expect(status.retryAfter).toBe(60);
       expect(status.attemptsRemaining).toBe(0);
     });
 
@@ -555,6 +624,74 @@ describe('distributed-rate-limit', () => {
 
       const afterExpiry = await checkDistributedRateLimit('expiry-test', config);
       expect(afterExpiry.allowed).toBe(true);
+    });
+  });
+
+  describe('conservativeFallbackMaxAttempts (pure)', () => {
+    it('halves the configured limit, rounding down', () => {
+      expect(conservativeFallbackMaxAttempts(5)).toBe(2);
+      expect(conservativeFallbackMaxAttempts(100)).toBe(50);
+    });
+
+    it('floors at 1 so legitimate users are never denied outright', () => {
+      expect(conservativeFallbackMaxAttempts(1)).toBe(1);
+      expect(conservativeFallbackMaxAttempts(2)).toBe(1);
+      expect(conservativeFallbackMaxAttempts(3)).toBe(1);
+    });
+
+    it('never exceeds the configured limit, even at degenerate values', () => {
+      expect(conservativeFallbackMaxAttempts(0)).toBe(0);
+    });
+  });
+
+  describe('conservativeFallbackConfig (pure)', () => {
+    it('reduces only maxAttempts, preserving window and block semantics', () => {
+      const config: RateLimitConfig = {
+        maxAttempts: 10,
+        windowMs: 60_000,
+        blockDurationMs: 30_000,
+        progressiveDelay: true,
+      };
+
+      expect(conservativeFallbackConfig(config)).toEqual({
+        maxAttempts: 5,
+        windowMs: 60_000,
+        blockDurationMs: 30_000,
+        progressiveDelay: true,
+      });
+    });
+  });
+
+  describe('conservativeFallbackCheck', () => {
+    const config: RateLimitConfig = { maxAttempts: 5, windowMs: 60_000 };
+
+    it('enforces the conservative threshold via the injected checker', () => {
+      const memCheck = vi.fn().mockReturnValue({ allowed: true, attemptsRemaining: 1 });
+
+      const result = conservativeFallbackCheck('inject-key', config, memCheck);
+
+      expect(memCheck).toHaveBeenCalledWith('inject-key', {
+        maxAttempts: 2,
+        windowMs: 60_000,
+      });
+      expect(result.allowed).toBe(true);
+    });
+
+    it('fails closed (never open) when the in-memory check itself throws', async () => {
+      const { loggers } = await import('../../logging/logger-config');
+      const memCheck = vi.fn(() => {
+        throw new Error('map corrupted');
+      });
+
+      const result = conservativeFallbackCheck('broken-key', config, memCheck);
+
+      expect(result.allowed).toBe(false);
+      expect(result.retryAfter).toBe(60);
+      expect(result.attemptsRemaining).toBe(0);
+      expect(loggers.api.error).toHaveBeenCalledWith(
+        'Postgres unavailable in production - DENYING request (fail-closed)',
+        expect.any(Object)
+      );
     });
   });
 });
