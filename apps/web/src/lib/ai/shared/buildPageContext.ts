@@ -27,7 +27,11 @@ export function pageContextToLocationContext(
   // Structural, not `PageContext`: the legacy client-supplied shape carries an
   // OPTIONAL driveId, and this adapter exists precisely to serve that caller.
   page:
-    | (Omit<PageContext, 'driveId' | 'driveSlug'> & { driveId?: string; driveSlug?: string })
+    | (Omit<PageContext, 'driveId' | 'driveSlug' | 'driveName'> & {
+        driveId?: string;
+        driveName?: string;
+        driveSlug?: string;
+      })
     | null
     | undefined,
 ): LocationContext | null {
@@ -39,8 +43,18 @@ export function pageContextToLocationContext(
       type: page.pageType,
       path: page.pagePath,
     },
+    // Every drive field is optional at runtime: this is the LEGACY client-supplied
+    // payload, so the compiler's view of it is a claim, not a guarantee. An
+    // unguarded name reaches buildLocationTurnPrompt, which prints it verbatim —
+    // the model would be told it is in a workspace called "undefined" by the very
+    // function added to keep prompt and tools consistent. Falling back through
+    // slug to id keeps the line identifying rather than merely non-broken.
     currentDrive: page.driveId
-      ? { id: page.driveId, name: page.driveName, slug: page.driveSlug ?? '' }
+      ? {
+          id: page.driveId,
+          name: page.driveName || page.driveSlug || page.driveId,
+          slug: page.driveSlug ?? '',
+        }
       : null,
     breadcrumbs: page.breadcrumbs,
   };

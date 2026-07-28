@@ -50,6 +50,21 @@ describe('pageContextToLocationContext', () => {
     expect(result?.currentPage?.id).toBe('page-1');
   });
 
+  // The legacy client payload is untrusted: TypeScript's view of it is a claim.
+  // An unguarded name would be printed verbatim into the turn prompt, telling the
+  // model it is in a workspace called "undefined".
+  it('never yields an undefined drive name, falling back through slug to id', () => {
+    const noName = pageContextToLocationContext({ ...PAGE, driveName: undefined as unknown as string });
+    expect(noName?.currentDrive?.name).toBe('engineering');
+
+    const noNameOrSlug = pageContextToLocationContext({
+      ...PAGE,
+      driveName: undefined as unknown as string,
+      driveSlug: undefined,
+    });
+    expect(noNameOrSlug?.currentDrive?.name).toBe('drive-1');
+  });
+
   it('round-trips through locationContextToPageContext without losing location', () => {
     const round = locationContextToPageContext(pageContextToLocationContext(PAGE));
     expect(round).toMatchObject({
