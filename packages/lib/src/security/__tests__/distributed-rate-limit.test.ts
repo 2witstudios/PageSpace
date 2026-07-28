@@ -363,6 +363,14 @@ describe('distributed-rate-limit', () => {
             expect(loggers.api.info).toHaveBeenCalledWith(
               'Distributed rate limiting enabled (Postgres)'
             );
+
+            // The successful probe fully closed the circuit (and released any
+            // half-open claim): the next request still goes to Postgres.
+            const probes = insertMock.mock.calls.length;
+            mockInsertReturning(2);
+            const next = await checkDistributedRateLimit('prod-recovery', testConfig);
+            expect(next.allowed).toBe(true);
+            expect(insertMock.mock.calls.length).toBe(probes + 1);
           } finally {
             nowSpy.mockRestore();
           }
@@ -380,6 +388,47 @@ describe('distributed-rate-limit', () => {
           expect(insertMock.mock.calls.length).toBe(probesAfterOpen);
           expect(second.allowed).toBe(true);
           expect(other.allowed).toBe(true);
+        });
+
+        it('serializes the half-open probe: concurrent requests do not stampede Postgres', async () => {
+          const t0 = 10_000_000;
+          const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(t0);
+          try {
+            await checkDistributedRateLimit('herd', testConfig); // opens circuit
+
+            nowSpy.mockReturnValue(t0 + 31_000);
+            // Async-rejecting insert models the OOM-stalled pool: the probe
+            // hangs on its await instead of failing synchronously, so the
+            // other concurrent requests arrive while it is still in flight.
+            insertMock.mockImplementation(() => ({
+              values: () => ({
+                onConflictDoUpdate: () => ({
+                  returning: () => Promise.reject(drizzleWrappedPgError()),
+                }),
+              }),
+            }));
+            const probesBefore = insertMock.mock.calls.length;
+            const results = await Promise.all([
+              checkDistributedRateLimit('herd', testConfig),
+              checkDistributedRateLimit('herd', testConfig),
+              checkDistributedRateLimit('herd', testConfig),
+            ]);
+
+            // Exactly ONE request performed the half-open probe; the rest were
+            // served by the fallback without touching the stalled pool.
+            expect(insertMock.mock.calls.length).toBe(probesBefore + 1);
+            for (const r of results) {
+              expect(typeof r.allowed).toBe('boolean');
+            }
+
+            // The failed probe released its claim: after another cooldown the
+            // next request probes again rather than deadlocking on the flag.
+            nowSpy.mockReturnValue(t0 + 62_000);
+            await checkDistributedRateLimit('herd', testConfig);
+            expect(insertMock.mock.calls.length).toBe(probesBefore + 2);
+          } finally {
+            nowSpy.mockRestore();
+          }
         });
 
         it('re-probes once after the cooldown and re-opens on continued failure', async () => {
