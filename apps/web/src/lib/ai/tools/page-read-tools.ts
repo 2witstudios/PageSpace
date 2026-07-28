@@ -18,7 +18,7 @@ import { toModelOutputForReadPage, buildVisualContentMetadata } from './read-pag
 import { ensureTaskListForPage, seedDefaultTaskStatusConfigs } from '@/services/api/task-sync-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { resolveOrThrowPageId } from './page-context-defaults';
-import { resolveOrThrowDriveId } from './drive-context-defaults';
+import { resolveDriveScope } from './drive-context-defaults';
 
 const pageReadLogger = loggers.ai.child({ module: 'page-read-tools' });
 
@@ -56,11 +56,7 @@ export const pageReadTools = {
         throw new Error('User authentication required');
       }
 
-      const driveId = resolveOrThrowDriveId(driveIdArg, context as ToolExecutionContext);
-      // Echoed in the result: a defaulted scope that silently searched the wrong
-      // workspace returns an empty list, and an empty list reads as "the content
-      // doesn't exist" unless the model can see where we actually looked.
-      const scopeSource = driveIdArg ? 'explicit' : 'current_location';
+      const { driveId, scopeSource } = resolveDriveScope(driveIdArg, context as ToolExecutionContext);
 
       const normalizedParentId = parentId ? parentId : undefined;
 

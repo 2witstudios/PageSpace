@@ -5,7 +5,7 @@ import { eq, and, ne, sql, inArray, asc } from '@pagespace/db/operators'
 import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
 import { getActorAccessiblePagesInDrive, canActorAccessDrive } from './actor-permissions';
 import type { ToolExecutionContext } from '../core/types';
-import { resolveOrThrowDriveId } from './drive-context-defaults';
+import { resolveDriveScope } from './drive-context-defaults';
 import { PageType } from '@pagespace/lib/utils/enums';
 
 export const searchTools = {
@@ -27,11 +27,7 @@ export const searchTools = {
         throw new Error('User authentication required');
       }
 
-      const driveId = resolveOrThrowDriveId(driveIdArg, context as ToolExecutionContext);
-      // A defaulted scope that searched the wrong workspace returns zero hits,
-      // and zero hits read as "it doesn't exist" unless the model can see where
-      // we actually looked.
-      const scopeSource = driveIdArg ? 'explicit' : 'current_location';
+      const { driveId, scopeSource } = resolveDriveScope(driveIdArg, context as ToolExecutionContext);
 
       try {
         // Validate regex pattern to prevent ReDoS attacks
@@ -319,7 +315,7 @@ export const searchTools = {
         return {
           success: true,
           driveSlug: drive.slug,
-          searchedDrive: { id: driveId, slug: drive?.slug, name: drive?.name },
+          searchedDrive: { id: driveId, name: drive.name },
           scopeSource,
           pattern,
           searchIn,
@@ -377,8 +373,7 @@ export const searchTools = {
         throw new Error('User authentication required');
       }
 
-      const driveId = resolveOrThrowDriveId(driveIdArg, context as ToolExecutionContext);
-      const scopeSource = driveIdArg ? 'explicit' : 'current_location';
+      const { driveId, scopeSource } = resolveDriveScope(driveIdArg, context as ToolExecutionContext);
 
       try {
         if (!await canActorAccessDrive(context as ToolExecutionContext, driveId)) {
@@ -484,7 +479,7 @@ export const searchTools = {
         return {
           success: true,
           driveSlug: drive.slug,
-          searchedDrive: { id: driveId, slug: drive?.slug, name: drive?.name },
+          searchedDrive: { id: driveId, name: drive.name },
           scopeSource,
           pattern,
           results,

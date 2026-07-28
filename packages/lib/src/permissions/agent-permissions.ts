@@ -80,12 +80,8 @@ export async function hasAgentDriveMembership(agentPageId: string, driveId: stri
  * agent clears a bar the same operation denies to a human.
  */
 export async function hasAgentDriveAdminRole(agentPageId: string, driveId: string): Promise<boolean> {
-  const [row] = await db
-    .select({ role: driveAgentMembers.role })
-    .from(driveAgentMembers)
-    .where(and(eq(driveAgentMembers.agentPageId, agentPageId), eq(driveAgentMembers.driveId, driveId)))
-    .limit(1);
-  return row?.role === 'OWNER' || row?.role === 'ADMIN';
+  const membership = await fetchAgentMembership(agentPageId, driveId);
+  return membership?.role === 'OWNER' || membership?.role === 'ADMIN';
 }
 
 export async function getAgentAccessiblePagesInDrive(

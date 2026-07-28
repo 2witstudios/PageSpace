@@ -1555,11 +1555,13 @@ export async function POST(request: Request) {
                 // Turn-start snapshot of the agent's working page — tools that
                 // shift focus (e.g. create_page) mutate this in place so later
                 // tool calls in the same turn track the agent's own actions
-                // rather than staying pinned to the turn-start snapshot.
-                currentWorkingPage: pageContext ? {
-                  id: pageContext.pageId,
-                  title: pageContext.pageTitle,
-                  type: pageContext.pageType,
+                // rather than staying pinned to the turn-start snapshot. Derived
+                // from the same turnLocation as everything else above, so there
+                // is exactly one answer to "where is the user" in this route.
+                currentWorkingPage: turnLocation?.currentPage ? {
+                  id: turnLocation.currentPage.id,
+                  title: turnLocation.currentPage.title,
+                  type: turnLocation.currentPage.type,
                 } : undefined,
                 modelCapabilities: modelCapabilitiesForTools,
                 isAdmin: isAdminUser,
@@ -1797,9 +1799,12 @@ export async function POST(request: Request) {
               conversationId, // Use actual conversation ID instead of pageId
               messageId,
               pageId: chatId,
-              // Empty string (no drive in view) must read as "no drive", not a
-              // literal '' driveId — matches the truthy-guards used elsewhere
-              // in this file for the same pageContext.driveId field.
+              // Deliberately still pageContext, NOT turnLocation: usage is
+              // attributed to the drive of the PAGE in view, and turnLocation
+              // also carries a drive on drive-level routes where no page is
+              // open. Switching would start attributing spend to a drive this
+              // metric never counted. The `|| undefined` keeps an empty-string
+              // driveId reading as "no drive".
               driveId: pageContext?.driveId || undefined,
               // 'exhausted' = retry shell gave up (failure); clean/terminal = a real
               // completion. Cost still settles regardless (the provider charged us).

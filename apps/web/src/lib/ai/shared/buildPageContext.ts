@@ -13,12 +13,6 @@ export type PageContext = {
 };
 
 /**
- * Adapt the sidebar's nested `LocationContext` (currentPage/currentDrive) to
- * the flat `PageContext` shape `/api/ai/chat` actually reads. Returns
- * undefined when there's no current page — matches `pageContext`'s existing
- * optionality server-side.
- */
-/**
  * Inverse of `locationContextToPageContext`, for the one caller that still
  * receives a flat `PageContext` first: legacy clients that send no `contextRef`.
  *
@@ -52,6 +46,12 @@ export function pageContextToLocationContext(
   };
 }
 
+/**
+ * Adapt the sidebar's nested `LocationContext` (currentPage/currentDrive) to
+ * the flat `PageContext` shape `/api/ai/chat` actually reads. Returns
+ * undefined when there's no current page — matches `pageContext`'s existing
+ * optionality server-side.
+ */
 export function locationContextToPageContext(loc: LocationContext | null | undefined): PageContext | undefined {
   const page = loc?.currentPage;
   if (!page) return undefined;

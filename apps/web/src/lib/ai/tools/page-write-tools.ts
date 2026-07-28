@@ -753,13 +753,18 @@ export const pageWriteTools = {
         throw new Error('User authentication required');
       }
 
-      // Resolve the destination drive PARENT-FIRST: an explicit parentId names
-      // the drive unambiguously and must beat any location-derived guess. Only
-      // when neither the model nor a parent supplies one do we fall back to the
-      // workspace in view. The permission gate below is unchanged either way, so
-      // a defaulted drive is authorized exactly like an explicit one.
-      const parentDriveId = parentId ? (await pageRepository.findById(parentId))?.driveId : undefined;
-      const driveId = resolveOrThrowDriveId(driveIdArg ?? parentDriveId, rawContext);
+      // Destination precedence: explicit driveId > the parent's own drive > the
+      // workspace in view. A named parent pins the drive unambiguously, so it
+      // must beat a location-derived guess; only with neither do we fall back to
+      // wherever the user is standing. The permission gate below is unchanged
+      // either way, so a defaulted drive is authorized exactly like an explicit
+      // one.
+      //
+      // The parent row is fetched ONCE here and re-used for the in-drive check
+      // below — `existsInDrive` would have asked the database the same question
+      // a second time, and tautologically so whenever driveId came from it.
+      const parent = parentId ? await pageRepository.findById(parentId) : null;
+      const driveId = resolveOrThrowDriveId(driveIdArg ?? parent?.driveId, rawContext);
 
       try {
         // Get the drive via repository seam
@@ -769,12 +774,11 @@ export const pageWriteTools = {
           throw new Error(`Drive with ID "${driveId}" not found`);
         }
 
-        // If parentId is provided, verify it exists and belongs to this drive
-        if (parentId) {
-          const parentExists = await pageRepository.existsInDrive(parentId, driveId);
-          if (!parentExists) {
-            throw new Error(`Parent page with ID "${parentId}" not found in this drive`);
-          }
+        // If parentId is provided, verify it exists and belongs to this drive.
+        // `parent` is null for a missing or trashed page, matching what
+        // existsInDrive used to reject.
+        if (parentId && parent?.driveId !== driveId) {
+          throw new Error(`Parent page with ID "${parentId}" not found in this drive`);
         }
 
         // Check permissions for page creation.

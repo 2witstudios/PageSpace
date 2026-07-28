@@ -287,10 +287,25 @@ export async function canActorManageDrive(
   context: ToolExecutionContext,
   driveId: string,
 ): Promise<boolean> {
+  return driveGateWithAgentCheck(context, driveId, hasAgentDriveMembership);
+}
+
+/**
+ * Shared body of the two drive-level gates. The MCP scope ceiling, the
+ * app-token ceiling and the user owner/admin fallback are identical for both
+ * and MUST stay that way — if one of those ever tightens and only one gate
+ * picks it up, the looser gate becomes the way in. Only the agent question
+ * differs, so that is the one thing injected.
+ */
+async function driveGateWithAgentCheck(
+  context: ToolExecutionContext,
+  driveId: string,
+  agentCheck: (agentPageId: string, driveId: string) => Promise<boolean>,
+): Promise<boolean> {
   if (driveOutsideMcpScope(context, driveId)) return false;
   if (await driveDeniedByAppToken(context, driveId, 'manage')) return false;
   const agentPageId = await resolveActingAgentId(context);
-  if (agentPageId) return hasAgentDriveMembership(agentPageId, driveId);
+  if (agentPageId) return agentCheck(agentPageId, driveId);
   const access = await checkDriveAccess(driveId, context.userId);
   return access.isOwner || access.isAdmin;
 }
@@ -312,12 +327,7 @@ export async function canActorAdministerDrive(
   context: ToolExecutionContext,
   driveId: string,
 ): Promise<boolean> {
-  if (driveOutsideMcpScope(context, driveId)) return false;
-  if (await driveDeniedByAppToken(context, driveId, 'manage')) return false;
-  const agentPageId = await resolveActingAgentId(context);
-  if (agentPageId) return hasAgentDriveAdminRole(agentPageId, driveId);
-  const access = await checkDriveAccess(driveId, context.userId);
-  return access.isOwner || access.isAdmin;
+  return driveGateWithAgentCheck(context, driveId, hasAgentDriveAdminRole);
 }
 
 export async function getActorAccessiblePagesInDrive(

@@ -93,7 +93,6 @@ export type CrossDriveMoveFailureCode =
 export interface MovedPageSummary {
   id: string;
   title: string | null;
-  type: string;
   previousDriveId: string;
   previousParentId: string | null;
   position: number;
@@ -153,6 +152,11 @@ async function cascadeDriveIdToDescendants(
     // eslint-disable-next-line no-restricted-syntax -- level-wise tree walk, bounded by MAX_SUBTREE_DEPTH; a LIMIT would silently drop descendants and split the subtree across drives
     const children = await tx.query.pages.findMany({
       where: inArray(pages.parentId, frontier),
+      // ids only: this runs inside the open write transaction, and `pages`
+      // carries unbounded `content` plus several jsonb columns. Selecting whole
+      // rows would drag a whole subtree's document bodies through the wire and
+      // the heap while holding locks on the level above.
+      columns: { id: true },
     });
 
     const next = children.map((child) => child.id).filter((id) => !visited.has(id));
@@ -183,6 +187,8 @@ export async function movePagesToDrive(
 
   const targetDrive = await db.query.drives.findFirst({
     where: eq(drives.id, targetDriveId),
+    // Existence only — no column is read, and the full row carries drivePrompt.
+    columns: { id: true },
   });
   if (!targetDrive) {
     return fail('TARGET_DRIVE_NOT_FOUND', 404, 'Target drive not found');
@@ -211,6 +217,7 @@ export async function movePagesToDrive(
         eq(pages.driveId, targetDriveId),
         eq(pages.isTrashed, false),
       ),
+      columns: { id: true },
     });
     if (!targetParent) {
       return fail('TARGET_PARENT_NOT_FOUND', 404, 'Target folder not found');
@@ -220,6 +227,7 @@ export async function movePagesToDrive(
   // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const sourcePages = await db.query.pages.findMany({
     where: inArray(pages.id, pageIds),
+    columns: { id: true, driveId: true, parentId: true, title: true, type: true },
   });
   if (sourcePages.length !== pageIds.length) {
     return fail('SOURCE_PAGES_NOT_FOUND', 404, 'Some pages not found');
@@ -261,6 +269,7 @@ export async function movePagesToDrive(
       eq(pages.isTrashed, false),
     ),
     orderBy: [desc(pages.position)],
+    columns: { position: true },
   });
 
   let nextPosition = (lastPage?.position || 0) + 1;
@@ -302,7 +311,6 @@ export async function movePagesToDrive(
         moved.push({
           id: page.id,
           title: page.title,
-          type: page.type,
           previousDriveId: page.driveId,
           previousParentId: page.parentId,
           position: nextPosition,
