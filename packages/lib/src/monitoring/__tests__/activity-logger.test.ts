@@ -618,6 +618,32 @@ describe('activity-logger', () => {
       expect(callCount).toBe(2);
       expect(capturedState.insertValues?.pageId).toBeUndefined();
     });
+
+    it('should retry without pageId when the FK error is nested under .cause (Drizzle wrapper)', async () => {
+      const fkError = Object.assign(
+        new Error('Failed query: insert into "activity_logs" ("id", "userId") values ($1, $2)'),
+        {
+          cause: Object.assign(
+            new Error('insert or update on table "activity_logs" violates foreign key constraint'),
+            {
+              code: '23503',
+              constraint: 'activity_logs_pageId_pages_id_fk',
+              detail: 'Key (pageId)=(page-1) is not present in table "pages".',
+            }
+          ),
+        }
+      );
+      let callCount = 0;
+      mockInsertValues.mockImplementation((values: Record<string, unknown>) => {
+        callCount++;
+        if (callCount === 1) return Promise.reject(fkError);
+        capturedState.insertValues = values;
+        return Promise.resolve(undefined);
+      });
+      await logActivity({ ...baseInput, pageId: 'page-1' });
+      expect(callCount).toBe(2);
+      expect(capturedState.insertValues?.pageId).toBeUndefined();
+    });
   });
 
   // ── logActivityWithTx ─────────────────────────────────────────────────────
@@ -1006,6 +1032,20 @@ describe('activity-logger', () => {
     it('should include conversationType in metadata', async () => {
       logMessageActivity('u1', 'message_delete', { id: 'msg-1', pageId: 'p1', driveId: null, conversationType: 'global' }, { actorEmail: 'a@b.com' });
       await flush();
+      expect((capturedState.insertValues?.metadata as Record<string, unknown>)?.conversationType).toBe('global');
+    });
+
+    it('should forward a null pageId as undefined for global conversations', async () => {
+      logMessageActivity(
+        'u1',
+        'message_delete',
+        { id: 'msg-1', pageId: null, driveId: null, conversationType: 'global' },
+        { actorEmail: 'a@b.com' },
+        { previousContent: 'old', aiConversationId: 'conv-1' }
+      );
+      await flush();
+      expect(capturedState.insertValues?.pageId).toBeUndefined();
+      expect(capturedState.insertValues?.aiConversationId).toBe('conv-1');
       expect((capturedState.insertValues?.metadata as Record<string, unknown>)?.conversationType).toBe('global');
     });
 
