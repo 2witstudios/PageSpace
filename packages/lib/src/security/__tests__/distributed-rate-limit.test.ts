@@ -51,6 +51,8 @@ import {
   conservativeFallbackCheck,
   sweepExpiredInMemoryAttempts,
   countAuthFailure,
+  boundedIdentifier,
+  isPgUnavailabilityError,
   MAX_IN_MEMORY_ATTEMPT_ENTRIES,
   DISTRIBUTED_RATE_LIMITS,
   type RateLimitConfig,
@@ -61,6 +63,16 @@ import {
 // don't pass against a convenient flat error the production path never gets.
 function drizzleWrappedPgError(pgMessage = 'connection refused'): Error {
   const cause = Object.assign(new Error(pgMessage), { code: 'ECONNREFUSED' });
+  return Object.assign(
+    new Error('Failed query: insert into "rate_limit_buckets" ...'),
+    { cause },
+  );
+}
+
+// Same wrapper shape, but with a server-returned SQLSTATE instead of a
+// driver-level errno — the server answered, it is not down.
+function drizzleWrappedSqlstateError(sqlstate: string, message: string): Error {
+  const cause = Object.assign(new Error(message), { code: sqlstate });
   return Object.assign(
     new Error('Failed query: insert into "rate_limit_buckets" ...'),
     { cause },
@@ -426,6 +438,58 @@ describe('distributed-rate-limit', () => {
             nowSpy.mockReturnValue(t0 + 62_000);
             await checkDistributedRateLimit('herd', testConfig);
             expect(insertMock.mock.calls.length).toBe(probesBefore + 2);
+          } finally {
+            nowSpy.mockRestore();
+          }
+        });
+
+        it('does not open the circuit for data errors the server actively returned', async () => {
+          // A hostile payload (e.g. an oversized OAuth client_id blowing the
+          // B-tree entry limit) fails only ITS insert, with a server-returned
+          // SQLSTATE. The server is alive — the process-wide circuit must not
+          // open, or the payload becomes a lever to degrade every instance to
+          // the conservative fallback while Postgres is healthy.
+          mockInsertThrows(
+            drizzleWrappedSqlstateError('54000', 'index row size exceeds maximum')
+          );
+          const first = await checkDistributedRateLimit('data-error', testConfig);
+          expect(first.allowed).toBe(true); // this request still gets limited via fallback
+
+          const probes = insertMock.mock.calls.length;
+          await checkDistributedRateLimit('data-error-b', testConfig);
+          expect(insertMock.mock.calls.length).toBe(probes + 1); // still probing Postgres
+        });
+
+        it('opens the circuit for connection-class SQLSTATE errors', async () => {
+          mockInsertThrows(drizzleWrappedSqlstateError('08006', 'connection failure'));
+          await checkDistributedRateLimit('conn-error', testConfig);
+
+          const probes = insertMock.mock.calls.length;
+          await checkDistributedRateLimit('conn-error-b', testConfig);
+          expect(insertMock.mock.calls.length).toBe(probes); // circuit open, no probe
+        });
+
+        it('throttles the fallback WARN to once per interval with a suppression count', async () => {
+          const { loggers } = await import('../../logging/logger-config');
+          const t0 = 10_000_000;
+          const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(t0);
+          try {
+            await checkDistributedRateLimit('warn-a', testConfig);
+            await checkDistributedRateLimit('warn-b', testConfig);
+            await checkDistributedRateLimit('warn-c', testConfig);
+            const markerWarns = vi
+              .mocked(loggers.api.warn)
+              .mock.calls.filter((c) => String(c[0]).includes('RATE_LIMIT_PG_FALLBACK'));
+            expect(markerWarns.length).toBe(1);
+
+            // Next interval: one WARN, carrying how many were suppressed.
+            nowSpy.mockReturnValue(t0 + 31_000);
+            await checkDistributedRateLimit('warn-d', testConfig);
+            const after = vi
+              .mocked(loggers.api.warn)
+              .mock.calls.filter((c) => String(c[0]).includes('RATE_LIMIT_PG_FALLBACK'));
+            expect(after.length).toBe(2);
+            expect(after[1][1]).toMatchObject({ suppressedSinceLastWarn: 2 });
           } finally {
             nowSpy.mockRestore();
           }
@@ -952,6 +1016,61 @@ describe('distributed-rate-limit', () => {
         nowSpy.mockRestore();
       }
     }, 30_000);
+
+    it('bounds oversized identifiers by hashing before storing them as map keys', async () => {
+      // Unbounded attacker-supplied identifiers (e.g. 10KB OAuth client_ids)
+      // would defeat the entry cap's memory bound. Keys longer than the bound
+      // are hashed — not truncated — so distinct identifiers stay distinct.
+      const config: RateLimitConfig = { maxAttempts: 4, windowMs: 60_000 };
+      const longId = 'x'.repeat(10_000) + 'suffix-a';
+
+      const first = await checkDistributedRateLimit(longId, config);
+      expect(first.attemptsRemaining).toBe(1);
+
+      // The stored key IS the bounded form: presenting the bounded form
+      // directly shares the oversized original's counter.
+      const { createHash } = await import('crypto');
+      const boundedForm = `h:${createHash('sha256').update(longId).digest('hex')}`;
+      const second = await checkDistributedRateLimit(boundedForm, config);
+      expect(second.attemptsRemaining).toBe(0);
+
+      // A different oversized identifier with the same prefix keeps its own
+      // counter (would collide under truncation).
+      const otherLong = 'x'.repeat(10_000) + 'suffix-b';
+      const fresh = await checkDistributedRateLimit(otherLong, config);
+      expect(fresh.attemptsRemaining).toBe(1);
+    });
+  });
+
+  describe('boundedIdentifier (pure)', () => {
+    it('returns identifiers within the bound unchanged', () => {
+      expect(boundedIdentifier('login:203.0.113.7')).toBe('login:203.0.113.7');
+      expect(boundedIdentifier('x'.repeat(128))).toBe('x'.repeat(128));
+    });
+
+    it('hashes oversized identifiers to fixed-length, distinct, stable keys', () => {
+      const a = boundedIdentifier('x'.repeat(200) + 'a');
+      const b = boundedIdentifier('x'.repeat(200) + 'b');
+      expect(a).not.toBe(b);
+      expect(a.length).toBeLessThanOrEqual(80);
+      expect(boundedIdentifier('x'.repeat(200) + 'a')).toBe(a);
+    });
+  });
+
+  describe('isPgUnavailabilityError (pure)', () => {
+    it('treats driver-level network errors and connection/resource/shutdown SQLSTATEs as outages', () => {
+      expect(isPgUnavailabilityError(drizzleWrappedPgError())).toBe(true); // ECONNREFUSED
+      expect(isPgUnavailabilityError(drizzleWrappedSqlstateError('08006', 'connection failure'))).toBe(true);
+      expect(isPgUnavailabilityError(drizzleWrappedSqlstateError('53300', 'too many connections'))).toBe(true);
+      expect(isPgUnavailabilityError(drizzleWrappedSqlstateError('57P01', 'terminating connection'))).toBe(true);
+      expect(isPgUnavailabilityError(new Error('socket hang up'))).toBe(true); // no code at all
+    });
+
+    it('treats server-returned data/logic errors as NOT outages', () => {
+      expect(isPgUnavailabilityError(drizzleWrappedSqlstateError('54000', 'index row size exceeds maximum'))).toBe(false);
+      expect(isPgUnavailabilityError(drizzleWrappedSqlstateError('22001', 'value too long'))).toBe(false);
+      expect(isPgUnavailabilityError(drizzleWrappedSqlstateError('42P01', 'relation does not exist'))).toBe(false);
+    });
   });
 
   describe('conservativeFallbackMaxAttempts (pure)', () => {
