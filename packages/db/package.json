@@ -63,6 +63,10 @@
       "types": "./dist/schema/machine-agent-terminals.d.ts",
       "default": "./dist/schema/machine-agent-terminals.js"
     },
+    "./schema/agent-sessions": {
+      "types": "./dist/schema/agent-sessions.d.ts",
+      "default": "./dist/schema/agent-sessions.js"
+    },
     "./schema/machine-workspaces": {
       "types": "./dist/schema/machine-workspaces.d.ts",
       "default": "./dist/schema/machine-workspaces.js"
