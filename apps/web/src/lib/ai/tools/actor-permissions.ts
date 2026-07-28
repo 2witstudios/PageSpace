@@ -11,6 +11,7 @@ import {
   getAgentAccessLevel,
   getAgentAccessiblePagesInDrive,
   hasAgentDriveMembership,
+  hasAgentDriveAdminRole,
 } from '@pagespace/lib/permissions/agent-permissions';
 import {
   getAppAccessLevel,
@@ -290,6 +291,31 @@ export async function canActorManageDrive(
   if (await driveDeniedByAppToken(context, driveId, 'manage')) return false;
   const agentPageId = await resolveActingAgentId(context);
   if (agentPageId) return hasAgentDriveMembership(agentPageId, driveId);
+  const access = await checkDriveAccess(driveId, context.userId);
+  return access.isOwner || access.isAdmin;
+}
+
+/**
+ * Whether the actor may ADMINISTER a drive — the owner/admin bar, enforced
+ * uniformly for user and agent actors alike.
+ *
+ * Deliberately separate from `canActorManageDrive`. That helper resolves an
+ * agent actor to `hasAgentDriveMembership`, a bare row-existence check that
+ * ignores `role`, which is the right model for tools whose reach is already
+ * bounded by the agent's enabledTools allowlist. It is the WRONG model for
+ * accepting content into a drive from outside it: a plain MEMBER agent would
+ * clear a bar that /api/pages/bulk-move denies to a human without OWNER/ADMIN,
+ * and the moved subtree would land in a drive on weaker authority than the REST
+ * path requires. Used by the cross-drive move's destination check.
+ */
+export async function canActorAdministerDrive(
+  context: ToolExecutionContext,
+  driveId: string,
+): Promise<boolean> {
+  if (driveOutsideMcpScope(context, driveId)) return false;
+  if (await driveDeniedByAppToken(context, driveId, 'manage')) return false;
+  const agentPageId = await resolveActingAgentId(context);
+  if (agentPageId) return hasAgentDriveAdminRole(agentPageId, driveId);
   const access = await checkDriveAccess(driveId, context.userId);
   return access.isOwner || access.isAdmin;
 }

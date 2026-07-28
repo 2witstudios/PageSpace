@@ -18,6 +18,7 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
     getAgentAccessLevel: vi.fn(),
     hasAgentDriveMembership: vi.fn(),
+    hasAgentDriveAdminRole: vi.fn(),
     getAgentAccessiblePagesInDrive: vi.fn(),
 }));
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
@@ -156,7 +157,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 import { pageWriteTools } from '../page-write-tools';
 import { ensureTaskListForPage } from '@/services/api/task-sync-service';
 import { canUserEditPage, canUserDeletePage } from '@pagespace/lib/permissions/permissions';
-import { getAgentAccessLevel, hasAgentDriveMembership } from '@pagespace/lib/permissions/agent-permissions';
+import { getAgentAccessLevel, hasAgentDriveMembership, hasAgentDriveAdminRole } from '@pagespace/lib/permissions/agent-permissions';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { driveRepository } from '@pagespace/lib/repositories/drive-repository';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
@@ -170,6 +171,7 @@ const mockCanUserEditPage = vi.mocked(canUserEditPage);
 const mockCanUserDeletePage = vi.mocked(canUserDeletePage);
 const mockGetAgentAccessLevel = vi.mocked(getAgentAccessLevel);
 const mockHasAgentDriveMembership = vi.mocked(hasAgentDriveMembership);
+const mockHasAgentDriveAdminRole = vi.mocked(hasAgentDriveAdminRole);
 const mockPageRepo = vi.mocked(pageRepository);
 const mockDriveRepo = vi.mocked(driveRepository);
 const mockApplyPageMutation = vi.mocked(applyPageMutation);
@@ -1631,24 +1633,53 @@ describe('page-write-tools', () => {
       expect(mockMovePagesToDrive).toHaveBeenCalled();
     });
 
+    const agentContext = () => ({
+      toolCallId: '1', messages: [],
+      experimental_context: {
+        userId: 'user-1',
+        chatSource: { type: 'page' as const, agentPageId: 'agent-1' },
+      } as ToolExecutionContext,
+    });
+
     it('denies an agent actor without membership in the destination drive', async () => {
       mockGetAgentAccessLevel.mockResolvedValue({ canView: true, canEdit: true, canShare: false, canDelete: false });
-      mockHasAgentDriveMembership.mockImplementation(async (_agentId: string, driveId: string) =>
-        driveId !== TARGET_DRIVE
-      );
+      mockHasAgentDriveAdminRole.mockResolvedValue(false);
 
       await expect(
         pageWriteTools.move_page.execute!(
           { title: 'Test Page', pageId: 'page-1', targetDriveId: TARGET_DRIVE, position: 1 },
-          {
-            toolCallId: '1', messages: [],
-            experimental_context: {
-              userId: 'user-1',
-              chatSource: { type: 'page', agentPageId: 'agent-1' },
-            } as ToolExecutionContext,
-          }
+          agentContext()
         )
       ).rejects.toThrow('You do not have permission to move pages to this drive');
+    });
+
+    // The destination bar is OWNER/ADMIN, not "has a membership row". Agent
+    // authority is normally resolved via hasAgentDriveMembership, which ignores
+    // `role` entirely — using it here would let a plain MEMBER agent pull a whole
+    // subtree into a drive that bulk-move guards with OWNER/ADMIN for humans.
+    it('denies an agent that is only a MEMBER of the destination drive', async () => {
+      mockGetAgentAccessLevel.mockResolvedValue({ canView: true, canEdit: true, canShare: false, canDelete: false });
+      mockHasAgentDriveMembership.mockResolvedValue(true);   // a row exists...
+      mockHasAgentDriveAdminRole.mockResolvedValue(false);   // ...but it is not OWNER/ADMIN
+
+      await expect(
+        pageWriteTools.move_page.execute!(
+          { title: 'Test Page', pageId: 'page-1', targetDriveId: TARGET_DRIVE, position: 1 },
+          agentContext()
+        )
+      ).rejects.toThrow('You do not have permission to move pages to this drive');
+    });
+
+    it('allows an agent that administers the destination drive', async () => {
+      mockGetAgentAccessLevel.mockResolvedValue({ canView: true, canEdit: true, canShare: false, canDelete: false });
+      mockHasAgentDriveAdminRole.mockResolvedValue(true);
+
+      const result = await pageWriteTools.move_page.execute!(
+        { title: 'Test Page', pageId: 'page-1', targetDriveId: TARGET_DRIVE, position: 1 },
+        agentContext()
+      ) as { success: boolean };
+
+      expect(result.success).toBe(true);
     });
 
     it('denies a scoped MCP caller whose token cannot reach the destination drive', async () => {
@@ -1704,6 +1735,23 @@ describe('page-write-tools', () => {
       );
 
       expect(mockBroadcastPageEvent).toHaveBeenCalledTimes(2);
+    });
+
+    // parentId and newParentTitle are independently optional; keying the message
+    // off the title alone reported "at the top level" while the same result
+    // carried a parentId.
+    it('names the destination folder even when no parent title was supplied', async () => {
+      mockCheckDriveAccess.mockResolvedValue(adminAccess);
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const result = await pageWriteTools.move_page.execute!(
+        { title: 'Test Page', pageId: 'page-1', targetDriveId: TARGET_DRIVE, newParentId: 'folder-x', position: 1 },
+        crossDriveContext('owner-user')
+      ) as { parentId: string; message: string };
+
+      expect(result.parentId).toBe('folder-x');
+      expect(result.message).not.toContain('at the top level');
+      expect(result.message).toContain('destination folder');
     });
 
     it('surfaces a service failure through the tool error envelope', async () => {

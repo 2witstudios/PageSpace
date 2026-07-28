@@ -318,6 +318,31 @@ describe('movePagesToDrive', () => {
       expect(result.success === false && result.message).toContain(String(MAX_SUBTREE_DEPTH));
     });
 
+    // Boundary: the cap exists to catch a parentId cycle, not to reject deep
+    // trees. Firing it one level early would roll back a move in which every
+    // node had already been rewritten — the worst possible moment to abort.
+    it('migrates a subtree exactly MAX_SUBTREE_DEPTH levels deep in full', async () => {
+      let level = 0;
+      txQueryPagesFindMany.mockImplementation(async () =>
+        level < MAX_SUBTREE_DEPTH ? [{ id: `deep-${level++}` }] : [],
+      );
+
+      const result = await run();
+
+      expect(result).toMatchObject({ success: true, descendantCount: MAX_SUBTREE_DEPTH });
+    });
+
+    it('rejects one level deeper than the cap', async () => {
+      let level = 0;
+      txQueryPagesFindMany.mockImplementation(async () =>
+        level < MAX_SUBTREE_DEPTH + 1 ? [{ id: `deep-${level++}` }] : [],
+      );
+
+      const result = await run();
+
+      expect(result).toMatchObject({ success: false, code: 'SUBTREE_TOO_DEEP' });
+    });
+
     it('does not walk the tree at all when the page already lives in the target drive', async () => {
       vi.mocked(db.query.pages.findMany).mockResolvedValue([
         sourcePage({ driveId: TARGET_DRIVE }),

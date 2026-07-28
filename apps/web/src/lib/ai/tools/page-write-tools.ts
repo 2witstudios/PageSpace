@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { canActorEditPage, canActorDeletePage, canActorManageDrive, driveDeniedByAppToken, driveOutsideMcpScope } from './actor-permissions';
+import { canActorEditPage, canActorDeletePage, canActorManageDrive, canActorAdministerDrive, driveDeniedByAppToken, driveOutsideMcpScope } from './actor-permissions';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
 import { movePagesToDrive } from '@/services/api/page-cross-drive-move-service';
 import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
@@ -519,7 +519,11 @@ async function moveAcrossDrives(params: {
     userId: context.userId,
     authorize: {
       isDriveInScope: (driveId) => !driveOutsideMcpScope(context, driveId),
-      canAdministerDrive: (driveId) => canActorManageDrive(context, driveId),
+      // canActorAdministerDrive, NOT canActorManageDrive: the latter resolves an
+      // agent actor to bare drive-membership existence, so a plain MEMBER agent
+      // would clear a destination bar that bulk-move denies to a human without
+      // OWNER/ADMIN — and pull a whole subtree in on that weaker authority.
+      canAdministerDrive: (driveId) => canActorAdministerDrive(context, driveId),
       canEditPage: (movedPageId) => canActorEditPage(context, movedPageId),
     },
     activity: {
@@ -580,7 +584,7 @@ async function moveAcrossDrives(params: {
     message:
       `Moved "${page.title}"${descendants > 0 ? ` and ${descendants} nested page${descendants === 1 ? '' : 's'}` : ''}` +
       ` from workspace "${sourceDriveName}" to "${targetDrive.name}"` +
-      (newParentTitle ? ` under "${newParentTitle}".` : ' at the top level.'),
+      (newParentId ? ` under "${newParentTitle ?? 'the destination folder'}".` : ' at the top level.'),
   };
 }
 

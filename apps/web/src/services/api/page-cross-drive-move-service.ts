@@ -32,8 +32,14 @@ import { syncTaskItemOnMove } from '@/services/api/task-sync-service';
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /**
- * Depth ceiling for the descendant cascade. Matches MAX_DEPTH in
- * circular-reference-guard so the two tree walks agree on what "too deep" means.
+ * Depth ceiling for the descendant cascade — the number of descendant LEVELS
+ * below the moved roots that will be rewritten. Chosen to match MAX_DEPTH in
+ * circular-reference-guard, which bounds the ancestor walk the same way.
+ *
+ * The guard exists to stop a parentId cycle, not to reject deep trees: it fires
+ * only when a level beyond the ceiling still has unvisited nodes, so a subtree
+ * exactly MAX_SUBTREE_DEPTH levels deep migrates in full rather than being
+ * rolled back after every one of its nodes was already written.
  */
 export const MAX_SUBTREE_DEPTH = 100;
 
@@ -144,12 +150,6 @@ async function cascadeDriveIdToDescendants(
   let total = 0;
 
   for (let depth = 0; frontier.length > 0; depth++) {
-    if (depth >= MAX_SUBTREE_DEPTH) {
-      throw new PageSubtreeTooDeepError(
-        `Page subtree exceeds ${MAX_SUBTREE_DEPTH} levels — possible circular reference`,
-      );
-    }
-
     // eslint-disable-next-line no-restricted-syntax -- level-wise tree walk, bounded by MAX_SUBTREE_DEPTH; a LIMIT would silently drop descendants and split the subtree across drives
     const children = await tx.query.pages.findMany({
       where: inArray(pages.parentId, frontier),
@@ -157,6 +157,15 @@ async function cascadeDriveIdToDescendants(
 
     const next = children.map((child) => child.id).filter((id) => !visited.has(id));
     if (next.length === 0) break;
+
+    // Checked only once a level actually HAS unvisited nodes, so a tree exactly
+    // MAX_SUBTREE_DEPTH levels deep completes instead of being rolled back with
+    // every node already rewritten.
+    if (depth >= MAX_SUBTREE_DEPTH) {
+      throw new PageSubtreeTooDeepError(
+        `Page subtree exceeds ${MAX_SUBTREE_DEPTH} levels — possible circular reference`,
+      );
+    }
 
     next.forEach((id) => visited.add(id));
     await tx.update(pages).set({ driveId: newDriveId }).where(inArray(pages.id, next));
