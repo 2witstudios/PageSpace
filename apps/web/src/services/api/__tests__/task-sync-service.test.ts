@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Schema tables are opaque markers in these tests; the mock tx ignores them.
-vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'pages.id', parentId: 'pages.parentId', isTrashed: 'pages.isTrashed', position: 'pages.position', type: 'pages.type' } }));
+vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'pages.id', driveId: 'pages.driveId', parentId: 'pages.parentId', isTrashed: 'pages.isTrashed', position: 'pages.position', type: 'pages.type' } }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
   taskLists: { pageId: 'taskLists.pageId' },
   taskItems: { pageId: 'taskItems.pageId', id: 'taskItems.id', assigneeAgentId: 'taskItems.assigneeAgentId', completedAt: 'taskItems.completedAt' },
@@ -640,9 +640,51 @@ describe('scrubDriveScopedTaskAssociations', () => {
 
     await scrubDriveScopedTaskAssociations(tx as never, { pageIds: ['p1'], targetDriveId: 'drive-target' });
 
-    expect(workflowDriveUpdates).toContainEqual(
-      expect.objectContaining({ vals: { instructionPageId: null } }),
+    const clear = workflowDriveUpdates.find(
+      (u) => (u as { vals: Record<string, unknown> }).vals.instructionPageId === null,
     );
+    expect(clear).toBeDefined();
+    expect(JSON.stringify((clear as { cond: unknown }).cond)).toContain('wf-ok');
+  });
+
+  // "clear all surviving when any is stranded" would pass every single-workflow
+  // fixture; this pins that the two are decided independently.
+  it('clears only the workflow whose runbook stayed behind', async () => {
+    const { tx, workflowDriveUpdates } = makeTx({
+      scrubTaskItemIds: ['item-1'],
+      scrubWorkflowIds: ['wf-stranded', 'wf-travelled'],
+      triggerAgentByWorkflow: { 'wf-stranded': 'agent-came-along', 'wf-travelled': 'agent-came-along' },
+      agentsInTargetDrive: ['agent-came-along'],
+      instructionPageByWorkflow: { 'wf-stranded': 'runbook-left', 'wf-travelled': 'runbook-moved' },
+      pagesInTargetDrive: ['runbook-moved'],
+    });
+
+    await scrubDriveScopedTaskAssociations(tx as never, { pageIds: ['p1'], targetDriveId: 'drive-target' });
+
+    const clears = workflowDriveUpdates.filter(
+      (u) => (u as { vals: Record<string, unknown> }).vals.instructionPageId === null,
+    );
+    expect(clears).toHaveLength(1);
+    expect(JSON.stringify(clears[0])).toContain('wf-stranded');
+    expect(JSON.stringify(clears[0])).not.toContain('wf-travelled');
+  });
+
+  // 7783c6618's whole effect was unasserted: dropping the shared memo left every test
+  // green. The three resolutions in one scrub must cost ONE pages lookup, not three.
+  it('resolves page residency once per scrub, not once per consumer', async () => {
+    const { tx, scrubSelects } = makeTx({
+      scrubTaskItemIds: ['item-1'],
+      scrubWorkflowIds: ['wf-ok'],
+      scrubAgentIdByItem: { 'item-1': 'agent-a' },
+      triggerAgentByWorkflow: { 'wf-ok': 'agent-a' },
+      agentsInTargetDrive: ['agent-a'],
+      instructionPageByWorkflow: { 'wf-ok': 'agent-a' },
+    });
+
+    await scrubDriveScopedTaskAssociations(tx as never, { pageIds: ['p1'], targetDriveId: 'drive-target' });
+
+    const pageProbes = scrubSelects.filter((cond) => JSON.stringify(cond).includes('pages.driveId'));
+    expect(pageProbes).toHaveLength(1);
   });
 
   it('keeps an instruction page that travelled with the task', async () => {

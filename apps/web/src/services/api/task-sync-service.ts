@@ -88,11 +88,6 @@ export async function ensureTaskListForPage(
 }
 
 /**
- * Create the `task_items` row for a page under a known TASK_LIST parent.
- * Idempotent — does nothing if the row already exists. Ensures the parent's
- * `task_lists` row and default status configs exist first.
- */
-/**
  * Upper bound on the status vocabulary scanned when remapping. Lists carry 4 defaults
  * and a handful of custom statuses; the cap exists to satisfy the unbounded-findMany
  * rule, and overshooting it could only cost a remap to a different valid slug.
@@ -426,6 +421,9 @@ async function deleteTaskTriggerWorkflowsForPages(tx: Tx, pageIds: string[]): Pr
  */
 type DriveResidency = Map<string, boolean>
 
+/** Memo key. Includes the drive so one memo can never answer for a different one. */
+const residencyKey = (driveId: string, pageId: string) => `${driveId}:${pageId}`
+
 /** The subset of `pageIds` that do NOT live in `driveId` — i.e. did not travel. */
 async function resolvePagesOutsideDrive(
   tx: Tx,
@@ -434,21 +432,29 @@ async function resolvePagesOutsideDrive(
   residency: DriveResidency = new Map(),
 ): Promise<string[]> {
   if (pageIds.length === 0) return []
-  const unresolved = [...new Set(pageIds.filter((id) => !residency.has(id)))]
+  const unresolved = [...new Set(pageIds.filter((id) => !residency.has(residencyKey(driveId, id))))]
   for (const batch of chunk(unresolved, SCRUB_CHUNK_SIZE)) {
     const rows = await tx
       .select({ id: pages.id })
       .from(pages)
       .where(and(inArray(pages.id, batch), eq(pages.driveId, driveId)))
     const found = new Set(rows.map((row) => row.id))
-    for (const id of batch) residency.set(id, found.has(id))
+    // Every id in the batch is recorded, including the ones the query did not return —
+    // that is the `false` case, and it is what keeps the lookup below total.
+    for (const id of batch) residency.set(residencyKey(driveId, id), found.has(id))
   }
-  return pageIds.filter((id) => !residency.get(id))
+  return pageIds.filter((id) => !residency.get(residencyKey(driveId, id)))
 }
 
 /** Agent pages that stayed behind. Same question, named for its caller. */
 const resolveAgentsOutsideDrive = resolvePagesOutsideDrive
 
+/**
+ * Create the `task_items` row for a page under a known TASK_LIST parent.
+ * Idempotent — does nothing if the row already exists. Ensures the parent's
+ * `task_lists` row and default status configs exist first, and brings a
+ * pre-existing row's status into the destination list's vocabulary.
+ */
 async function addTaskItemUnderParent(
   tx: Tx,
   params: {
