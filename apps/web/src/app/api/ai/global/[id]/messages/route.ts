@@ -53,7 +53,7 @@ import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree
 import { getModelCapabilities, DEFAULT_IMAGE_MODEL } from '@/lib/ai/core/model-capabilities';
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName, sanitizeToolNamesForProvider } from '@/lib/ai/core/mcp-tool-converter';
 import { getUserPersonalization, getUserTimezone } from '@/lib/ai/core/personalization-utils';
-import { CORE_TOOL_NAMES } from '@/lib/ai/core/stub-tools';
+import { splitToolsForExposure, excludeAlwaysUpfront, ALWAYS_UPFRONT_TOOLS } from '@/lib/ai/tools/tool-exposure';
 import { createExecuteTool } from '@/lib/ai/tools/execute-tool';
 import { db } from '@pagespace/db/db'
 import { eq, and, desc, gt, lt, ne } from '@pagespace/db/operators'
@@ -854,15 +854,10 @@ MENTION PROCESSING:
       })
     ) as ToolSet;
 
-    // Core tools go to the model with full schemas
-    const coreTools = Object.fromEntries(
-      Object.entries(filteredAllTools).filter(([name]) => CORE_TOOL_NAMES.has(name))
-    ) as ToolSet;
-
-    // Non-core tools hidden from model; accessible only via execute_tool
-    const nonCoreTools = Object.fromEntries(
-      Object.entries(filteredAllTools).filter(([name]) => !CORE_TOOL_NAMES.has(name))
-    ) as ToolSet;
+    // Core tools (plus the always-upfront runtime toggles) go to the model with full
+    // schemas; everything else is hidden from the model and reachable only via
+    // execute_tool.
+    const { coreTools, nonCoreTools } = splitToolsForExposure(filteredAllTools, ALWAYS_UPFRONT_TOOLS);
 
     const nonCoreToolNamesPrompt = buildNonCoreToolNamesPrompt(Object.keys(nonCoreTools));
     const finalSystemPrompt = systemPrompt
@@ -872,7 +867,7 @@ MENTION PROCESSING:
 
     let finalTools: ToolSet = {
       ...coreTools,
-      tool_search: createToolSearchTool(filteredAllTools),
+      tool_search: createToolSearchTool(excludeAlwaysUpfront(filteredAllTools, ALWAYS_UPFRONT_TOOLS)),
       execute_tool: createExecuteTool(nonCoreTools),
     };
 
