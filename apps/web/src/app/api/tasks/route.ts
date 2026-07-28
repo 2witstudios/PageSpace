@@ -309,9 +309,9 @@ export async function GET(request: Request) {
 
     // Group-level status filter. Convert the requested group into DISTINCT
     // allowed-slug sets (custom configs first, defaults if none) and build an OR
-    // of one (pageId IN plain-id-array, status IN slugs) condition per set —
-    // typically ~2 conditions. One condition per task list, each carrying its own
-    // correlated subquery, is what OOM-killed Postgres on 2026-07-28 for a
+    // of one (pageId IN membership-subquery, status IN slugs) condition per set
+    // — typically ~2 conditions. One condition per task list, each carrying its
+    // own correlated subquery, is what OOM-killed Postgres on 2026-07-28 for a
     // principal with 7,703 task lists.
     if (params.statusGroup && params.statusGroup !== 'all') {
       // Custom configs only — lists without rows fall back to defaults in the
