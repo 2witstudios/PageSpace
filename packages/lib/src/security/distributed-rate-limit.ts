@@ -36,6 +36,7 @@
  * @see packages/lib/src/auth/rate-limit-utils.ts for the in-memory-only version
  */
 
+import { createHash } from 'crypto';
 import { db } from '@pagespace/db/db';
 import { sql, eq, lt } from '@pagespace/db/operators';
 import { rateLimitBuckets } from '@pagespace/db/schema/rate-limit-buckets';
@@ -73,6 +74,20 @@ interface InMemoryAttempt {
 
 const inMemoryAttempts = new Map<string, InMemoryAttempt>();
 let cleanupIntervalId: ReturnType<typeof setInterval> | null = null;
+
+// Longest identifier stored verbatim as a Map key. Unauthenticated callers
+// control identifier content (e.g. OAuth client_id), so without a byte bound
+// the 50k entry cap is not a memory bound — 10KB identifiers at the cap are
+// ~500MB. Oversized identifiers are HASHED, not truncated: distinct inputs
+// stay distinct, and equal inputs keep sharing one counter.
+export const MAX_IDENTIFIER_KEY_LENGTH = 128;
+
+export function boundedIdentifier(identifier: string): string {
+  if (identifier.length <= MAX_IDENTIFIER_KEY_LENGTH) {
+    return identifier;
+  }
+  return `h:${createHash('sha256').update(identifier).digest('hex')}`;
+}
 
 /**
  * Hard cap on distinct identifiers tracked in memory (~250 bytes/entry →
@@ -166,6 +181,8 @@ export function shutdownRateLimiting(): void {
   }
   inMemoryAttempts.clear();
   lastInlineSweepAt = 0;
+  lastFallbackWarnAt = 0;
+  suppressedFallbackWarns = 0;
   closePgCircuit();
 }
 
@@ -189,8 +206,9 @@ function inMemoryCheckRateLimit(
     };
   }
 
+  const key = boundedIdentifier(identifier);
   const now = Date.now();
-  let attempt = inMemoryAttempts.get(identifier);
+  let attempt = inMemoryAttempts.get(key);
 
   if (!attempt) {
     if (
@@ -214,7 +232,7 @@ function inMemoryCheckRateLimit(
       lastAttempt: now,
       expiresAt: now + config.windowMs,
     };
-    inMemoryAttempts.set(identifier, attempt);
+    inMemoryAttempts.set(key, attempt);
     return { allowed: true, attemptsRemaining: config.maxAttempts - 1 };
   }
 
@@ -267,7 +285,7 @@ function inMemoryCheckRateLimit(
 }
 
 function inMemoryResetRateLimit(identifier: string): void {
-  inMemoryAttempts.delete(identifier);
+  inMemoryAttempts.delete(boundedIdentifier(identifier));
 }
 
 function inMemoryGetRateLimitStatus(
@@ -275,7 +293,7 @@ function inMemoryGetRateLimitStatus(
   config: RateLimitConfig
 ): { blocked: boolean; retryAfter?: number; attemptsRemaining?: number } {
   const now = Date.now();
-  const attempt = inMemoryAttempts.get(identifier);
+  const attempt = inMemoryAttempts.get(boundedIdentifier(identifier));
 
   if (!attempt) {
     return { blocked: false, attemptsRemaining: config.maxAttempts };
@@ -349,6 +367,57 @@ function closePgCircuit(): void {
   pgProbeInFlight = false;
 }
 
+/**
+ * Distinguish "Postgres is unreachable/overloaded" from "Postgres actively
+ * rejected this query". Only the former may open the process-wide circuit:
+ * per-query errors can be attacker-crafted (an oversized identifier blowing
+ * the index entry limit fails only that insert, with SQLSTATE 54000), and
+ * treating them as outages would let a single hostile request degrade every
+ * instance to the conservative fallback while the database is healthy.
+ *
+ * Rule, walking the drizzle wrapper's cause chain: an errno-style network
+ * code (ECONNREFUSED, ETIMEDOUT, ...) is an outage. A 5-char SQLSTATE in
+ * class 08 (connection), 53 (insufficient resources) or 57 (operator
+ * intervention/shutdown) is an outage; any other SQLSTATE means the server
+ * was alive enough to answer — not an outage. No code anywhere means no
+ * server response (socket errors, generic timeouts) — treat as an outage,
+ * since payload-triggerable failures always come back with a SQLSTATE.
+ */
+export function isPgUnavailabilityError(error: unknown): boolean {
+  const OUTAGE_SQLSTATE_CLASSES = new Set(['08', '53', '57']);
+  let sawServerSqlstate = false;
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current instanceof Error; depth++) {
+    const code = (current as Error & { code?: unknown }).code;
+    if (typeof code === 'string') {
+      if (/^E[A-Z_]+$/.test(code)) {
+        return true; // errno-style driver/network failure
+      }
+      if (/^[0-9A-Z]{5}$/.test(code)) {
+        if (OUTAGE_SQLSTATE_CLASSES.has(code.slice(0, 2))) {
+          return true;
+        }
+        sawServerSqlstate = true;
+      }
+    }
+    current = current.cause;
+  }
+  return !sawServerSqlstate;
+}
+
+/**
+ * Record a failed Postgres attempt from a request path: open the circuit for
+ * genuine unavailability, otherwise just release any half-open probe claim so
+ * a server-returned per-query error never trips the breaker.
+ */
+function recordPgFailure(error: unknown, now: number): void {
+  if (isPgUnavailabilityError(error)) {
+    openPgCircuit(now);
+  } else {
+    pgProbeInFlight = false;
+  }
+}
+
 // Fail-closed response when DB is unavailable in production.
 function failClosedResponse(config: RateLimitConfig): RateLimitResult {
   return {
@@ -387,6 +456,14 @@ export function conservativeFallbackConfig(config: RateLimitConfig): RateLimitCo
  *
  * `memCheck` is injectable for tests; production callers use the default.
  */
+// During an outage every rate-limited request routes through the fallback;
+// an unthrottled per-request WARN would flood logging during the very
+// incident the breaker mitigates. One WARN per interval, carrying how many
+// occurrences were suppressed since the last emit.
+const FALLBACK_WARN_INTERVAL_MS = 30_000;
+let lastFallbackWarnAt = 0;
+let suppressedFallbackWarns = 0;
+
 export function conservativeFallbackCheck(
   identifier: string,
   config: RateLimitConfig,
@@ -397,10 +474,21 @@ export function conservativeFallbackCheck(
 
   try {
     const result = memCheck(identifier, conservativeFallbackConfig(config));
-    loggers.api.warn(
-      'RATE_LIMIT_PG_FALLBACK: Postgres unavailable in production - enforcing conservative per-instance in-memory limit',
-      { identifier: logId, allowed: result.allowed },
-    );
+    const now = Date.now();
+    if (lastFallbackWarnAt === 0 || now - lastFallbackWarnAt >= FALLBACK_WARN_INTERVAL_MS) {
+      loggers.api.warn(
+        'RATE_LIMIT_PG_FALLBACK: Postgres unavailable in production - enforcing conservative per-instance in-memory limit',
+        {
+          identifier: logId,
+          allowed: result.allowed,
+          suppressedSinceLastWarn: suppressedFallbackWarns,
+        },
+      );
+      lastFallbackWarnAt = now;
+      suppressedFallbackWarns = 0;
+    } else {
+      suppressedFallbackWarns++;
+    }
     return result;
   } catch {
     loggers.api.error('Postgres unavailable in production - DENYING request (fail-closed)', {
@@ -542,7 +630,7 @@ export async function checkDistributedRateLimit(
     postgresAvailableLogged = false;
 
     if (process.env.NODE_ENV === 'production') {
-      openPgCircuit(Date.now());
+      recordPgFailure(error, Date.now());
       return conservativeFallbackCheck(identifier, config);
     }
 
@@ -562,7 +650,7 @@ export async function resetDistributedRateLimit(identifier: string): Promise<voi
       loggers.api.debug('Postgres rate limit reset failed', {
         error: error instanceof Error ? error.message : String(error),
       });
-      openPgCircuit(Date.now());
+      recordPgFailure(error, Date.now());
     }
   }
 
@@ -635,9 +723,9 @@ export async function getDistributedRateLimitStatus(
         Math.ceil(config.maxAttempts - effectiveCount),
       ),
     };
-  } catch {
+  } catch (error) {
     if (process.env.NODE_ENV === 'production') {
-      openPgCircuit(Date.now());
+      recordPgFailure(error, Date.now());
       return conservativeFallbackStatus(identifier, config);
     }
 
@@ -701,7 +789,7 @@ export async function countAuthFailure(identifier: string, windowMs: number): Pr
     loggers.api.warn('countAuthFailure failed', {
       error: error instanceof Error ? error.message : String(error),
     });
-    openPgCircuit(Date.now());
+    recordPgFailure(error, Date.now());
     return 0;
   }
 }
