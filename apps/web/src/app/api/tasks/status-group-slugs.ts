@@ -1,0 +1,67 @@
+import { DEFAULT_STATUS_CONFIG, type TaskStatusGroup } from '@/lib/task-status-config';
+
+// Pure functional core of the /api/tasks statusGroup filter — no db, no clock.
+// Collapsing N task lists into K DISTINCT slug sets (typically ~2) is what keeps
+// the route's WHERE clause O(distinct configs) instead of O(task lists): building
+// one OR'd condition per task list, each with its own correlated subquery,
+// OOM-killed Postgres on 2026-07-28 for a principal with 7,703 task lists.
+
+export interface TaskListStatusConfigEntry {
+  slug: string;
+  group: TaskStatusGroup;
+}
+
+export interface StatusSlugGroup {
+  /** Sorted, deduped status slugs shared by every list in this group. */
+  slugs: string[];
+  /** Task-list page ids whose allowed-slug set is exactly `slugs`. */
+  listPageIds: string[];
+}
+
+const GROUP_MEMBERS: Record<'active' | 'completed', readonly TaskStatusGroup[]> = {
+  active: ['todo', 'in_progress'],
+  completed: ['done'],
+};
+
+const sortedUnique = (slugs: string[]): string[] => [...new Set(slugs)].sort();
+
+/**
+ * Group task lists by their DISTINCT allowed-slug set for the requested status
+ * group. Lists with custom status configs use those; lists without fall back to
+ * DEFAULT_STATUS_CONFIG. Set equality is order-insensitive, and a list whose
+ * config yields zero slugs for the requested group is excluded from every group.
+ */
+export function groupTaskListsByAllowedStatusSlugs(
+  taskListPageIds: readonly string[],
+  configsByListPageId: ReadonlyMap<string, readonly TaskListStatusConfigEntry[]>,
+  statusGroup: 'active' | 'completed',
+): StatusSlugGroup[] {
+  const allowedGroups = new Set<TaskStatusGroup>(GROUP_MEMBERS[statusGroup]);
+  const defaultSlugs = sortedUnique(
+    Object.entries(DEFAULT_STATUS_CONFIG)
+      .filter(([, cfg]) => allowedGroups.has(cfg.group))
+      .map(([slug]) => slug)
+  );
+
+  const groupsBySlugKey = new Map<string, StatusSlugGroup>();
+  for (const listPageId of taskListPageIds) {
+    const configs = configsByListPageId.get(listPageId);
+    const slugs = configs && configs.length > 0
+      ? sortedUnique(configs.filter(c => allowedGroups.has(c.group)).map(c => c.slug))
+      : defaultSlugs;
+    if (slugs.length === 0) continue;
+
+    // NUL-joined so the key cannot collide for any printable slug content -
+    // slugs are slugified to [a-z0-9_] at every write site today, but this
+    // helper should not depend on that cross-module invariant.
+    const key = slugs.join('\u0000');
+    const existing = groupsBySlugKey.get(key);
+    if (existing) {
+      existing.listPageIds.push(listPageId);
+    } else {
+      groupsBySlugKey.set(key, { slugs: [...slugs], listPageIds: [listPageId] });
+    }
+  }
+
+  return [...groupsBySlugKey.values()];
+}
