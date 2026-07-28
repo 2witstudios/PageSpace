@@ -169,6 +169,9 @@ export async function prepareHistoryForModel(
           minOutputChars: ELISION_MIN_OUTPUT_CHARS,
           elidableTools: new Set(DEFAULT_ELIDABLE_TOOLS),
           writeTools: WRITE_TOOLS,
+          // The newest load of each skill is the agent's active instructions —
+          // protected from elision (superseded loads of the same skill decay).
+          protectMostRecentByArgs: new Set(['load_skill']),
         }) as UIMessage[])
       : tailUIMessages;
 
