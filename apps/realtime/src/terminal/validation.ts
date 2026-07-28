@@ -1,3 +1,8 @@
+import {
+  shellConnectPayloadSchema,
+  type ShellConnectPayload,
+} from '@pagespace/lib/agent-sessions/contract';
+
 export type TerminalConnectPayload = { pageId: string; cols: number; rows: number };
 
 type Ok = { ok: true; value: TerminalConnectPayload };
@@ -96,6 +101,32 @@ export function validateAgentTerminalConnectPayload(payload: unknown): AgentResu
       connectionId: connectionId.value,
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// shell:* connect payload — parsed with the SHARED contract schema
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a `shell:connect` payload with the ONE shared contract schema
+ * (`packages/lib/src/agent-sessions/contract.ts`) instead of a local shape:
+ * web routes, this bridge, and the frontend all validate the same zod object,
+ * so the wire shape cannot drift per surface. The schema strips unknown keys,
+ * REJECTS nonsense dimensions (zero, negative, non-finite, non-numeric) and
+ * CLAMPS out-of-range ones — so a parsed payload needs no further clamping.
+ *
+ * The local `AgentTerminalConnectPayload` shapes above serve only the legacy
+ * `agent-terminal:*` family and are deleted with it in the Phase 8 sweep.
+ */
+export function parseShellConnectPayload(
+  payload: unknown,
+): { ok: true; value: ShellConnectPayload } | Err {
+  const parsed = shellConnectPayloadSchema.safeParse(payload);
+  if (!parsed.success) {
+    const path = parsed.error.issues[0]?.path.join('.');
+    return { ok: false, error: path ? `invalid ${path}` : 'invalid payload' };
+  }
+  return { ok: true, value: parsed.data };
 }
 
 export const MIN_COLS = 10;

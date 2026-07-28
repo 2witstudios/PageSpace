@@ -117,8 +117,19 @@ export type TerminalSession = {
    * (`AgentTerminalSandboxResult.agentTerminalId`) — the only path that
    * constructs a session — so a session with no row to persist onto (should
    * that ever happen) simply persists nothing on teardown.
+   *
+   * LEGACY family only (`agent-terminal:*`); the `shell:*` family records
+   * `shellId` instead. Deleted with the machines sweep (Phase 8).
    */
   agentTerminalId?: string;
+  /**
+   * The `agent_session_shells` row this PTY belongs to — the `shell:*`
+   * family's twin of `agentTerminalId`, serving the same two persists
+   * (`streamSessionId`, the #2205 cold tail) against the re-keyed table.
+   * Exactly one of the two is ever set, by whichever handler family created
+   * the session.
+   */
+  shellId?: string;
 };
 
 export function appendScrollback(
