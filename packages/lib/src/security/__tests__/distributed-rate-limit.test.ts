@@ -49,6 +49,8 @@ import {
   conservativeFallbackMaxAttempts,
   conservativeFallbackConfig,
   conservativeFallbackCheck,
+  sweepExpiredInMemoryAttempts,
+  MAX_IN_MEMORY_ATTEMPT_ENTRIES,
   DISTRIBUTED_RATE_LIMITS,
   type RateLimitConfig,
 } from '../distributed-rate-limit';
@@ -625,6 +627,82 @@ describe('distributed-rate-limit', () => {
       const afterExpiry = await checkDistributedRateLimit('expiry-test', config);
       expect(afterExpiry.allowed).toBe(true);
     });
+  });
+
+  describe('in-memory fallback memory bounds', () => {
+    beforeEach(() => {
+      process.env.NODE_ENV = 'production';
+      mockInsertThrows(drizzleWrappedPgError());
+    });
+
+    it('sweeps entries once their window has fully elapsed, not on a fixed 25h cutoff', async () => {
+      const t0 = 1_000_000;
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(t0);
+      try {
+        const config: RateLimitConfig = { maxAttempts: 5, windowMs: 60_000 };
+        await checkDistributedRateLimit('sweep-a', config);
+        await checkDistributedRateLimit('sweep-b', config);
+        await checkDistributedRateLimit('sweep-c', config);
+
+        expect(sweepExpiredInMemoryAttempts(t0 + 59_999)).toBe(0);
+        expect(sweepExpiredInMemoryAttempts(t0 + 60_000)).toBe(3);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('does not sweep an actively blocked entry before its block expires', async () => {
+      const t0 = 1_000_000;
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(t0);
+      try {
+        // maxAttempts 2 → conservative threshold 1; second check trips the
+        // 10-minute block, which outlives the 1s window.
+        const config: RateLimitConfig = {
+          maxAttempts: 2,
+          windowMs: 1_000,
+          blockDurationMs: 600_000,
+        };
+        await checkDistributedRateLimit('sweep-blocked', config);
+        const blocked = await checkDistributedRateLimit('sweep-blocked', config);
+        expect(blocked.allowed).toBe(false);
+
+        // Window has elapsed but the block is live — evicting now would reset
+        // the counter and void the block.
+        expect(sweepExpiredInMemoryAttempts(t0 + 1_000)).toBe(0);
+        nowSpy.mockReturnValue(t0 + 1_000);
+        const stillBlocked = await checkDistributedRateLimit('sweep-blocked', config);
+        expect(stillBlocked.allowed).toBe(false);
+
+        expect(sweepExpiredInMemoryAttempts(t0 + 600_000)).toBe(1);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('caps distinct tracked identifiers, evicting oldest-first under identifier flood', async () => {
+      const config: RateLimitConfig = { maxAttempts: 4, windowMs: 60_000 };
+
+      for (let i = 0; i < MAX_IN_MEMORY_ATTEMPT_ENTRIES; i++) {
+        await checkDistributedRateLimit(`flood:${i}`, config);
+      }
+
+      // A new identifier past the cap is still admitted and enforced (not
+      // denied, not unlimited) — the oldest entry is evicted to make room.
+      const overCap = await checkDistributedRateLimit('flood:new', config);
+      expect(overCap.allowed).toBe(true);
+
+      // flood:0 was evicted, so its counter restarted: conservative threshold
+      // is floor(4/2) = 2, and a fresh first attempt reports 1 remaining. Had
+      // it survived the flood, this second attempt would report 0.
+      const evicted = await checkDistributedRateLimit('flood:0', config);
+      expect(evicted.allowed).toBe(true);
+      expect(evicted.attemptsRemaining).toBe(1);
+
+      // A recent identifier kept its counter: second attempt → 0 remaining.
+      const retained = await checkDistributedRateLimit(`flood:${MAX_IN_MEMORY_ATTEMPT_ENTRIES - 1}`, config);
+      expect(retained.allowed).toBe(true);
+      expect(retained.attemptsRemaining).toBe(0);
+    }, 30_000);
   });
 
   describe('conservativeFallbackMaxAttempts (pure)', () => {
