@@ -207,13 +207,41 @@ describe('syncTaskItemOnMove', () => {
     expect(deletedPageIds).toHaveLength(0);
   });
 
-  it('removes from old list and adds to new list when moving between TASK_LISTs', async () => {
+  // Previously this asserted a delete + re-insert. That was silent data loss: the
+  // delete cascades task_assignees away and the re-insert carries bare defaults, so
+  // a task dragged between two lists lost its status, priority, due date, metadata
+  // and every assignee. Membership derives from pages.parentId and the row has no
+  // list pointer, so it was valid under the new parent throughout.
+  it('backfills without deleting when moving between TASK_LISTs and no row exists', async () => {
     const { tx, taskItemInserts, deletedPageIds } = makeTx({ pageTypes: { old: 'TASK_LIST', new: 'TASK_LIST' } });
     await syncTaskItemOnMove(tx as never, { movedPageId: 'list', movedPageType: 'TASK_LIST', oldParentId: 'old', newParentId: 'new', userId: 'u' });
-    expect(deletedPageIds).toEqual(['list']);
+    expect(deletedPageIds).toHaveLength(0);
     expect(taskItemInserts).toHaveLength(1);
     expect(taskItemInserts[0]).toMatchObject({ pageId: 'list' });
     expect(taskItemInserts[0]).not.toHaveProperty('position');
+  });
+
+  // The case the old behavior destroyed: an EXISTING row survives a list-to-list
+  // move untouched — no delete, and no insert to overwrite it.
+  it('leaves an existing task_items row completely untouched on a list-to-list move', async () => {
+    const { tx, taskItemInserts, deletedPageIds } = makeTx({
+      pageTypes: { old: 'TASK_LIST', new: 'TASK_LIST' },
+      existingItems: new Set(['list']),
+    });
+    await syncTaskItemOnMove(tx as never, { movedPageId: 'list', movedPageType: 'TASK_LIST', oldParentId: 'old', newParentId: 'new', userId: 'u' });
+    expect(deletedPageIds).toHaveLength(0);
+    expect(taskItemInserts).toHaveLength(0);
+  });
+
+  // ...while the destination list is still seeded, which is why shouldAdd stays true.
+  it('still seeds the destination task list on a list-to-list move', async () => {
+    const { tx, taskListInserts } = makeTx({
+      pageTypes: { old: 'TASK_LIST', new: 'TASK_LIST' },
+      existingItems: new Set(['list']),
+      existingTaskList: false,
+    });
+    await syncTaskItemOnMove(tx as never, { movedPageId: 'list', movedPageType: 'TASK_LIST', oldParentId: 'old', newParentId: 'new', userId: 'u' });
+    expect(taskListInserts).toHaveLength(1);
   });
 
   it('only removes when moving out of a TASK_LIST into a non-TASK_LIST', async () => {

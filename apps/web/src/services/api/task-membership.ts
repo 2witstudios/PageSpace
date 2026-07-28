@@ -30,10 +30,21 @@ export interface TaskItemSyncAction {
 
 /**
  * Decide which `task_items` mutations a page move requires:
- * - remove the row when the page leaves a TASK_LIST parent
+ * - remove the row when the page LEAVES task-list membership entirely
  * - add the row when the page lands under a TASK_LIST parent
  *
  * No-op for non-TASK_LIST pages and for pure reorders (parent unchanged).
+ *
+ * Moving between two TASK_LIST parents deliberately does NOT remove. The row is
+ * keyed by pageId and carries no pointer to its list — membership is derived from
+ * pages.parentId — so it stays valid under the new parent. Removing and re-adding
+ * would destroy the user's data: addTaskItemUnderParent re-inserts bare defaults
+ * (status 'pending', priority 'medium'), and task_assignees cascades on the delete,
+ * so a task dragged between two lists silently lost its status, priority, due date,
+ * metadata and every assignee. `shouldAdd` stays true for that case so the
+ * destination list is still seeded (task_lists row + default status configs) and a
+ * genuinely missing row is still backfilled — addTaskItemUnderParent returns early
+ * when a row already exists, which is what preserves it.
  */
 export const resolveTaskItemSyncAction = (input: {
   movedPageType: string;
@@ -45,9 +56,11 @@ export const resolveTaskItemSyncAction = (input: {
   if (input.movedPageType !== TASK_LIST_TYPE || input.oldParentId === input.newParentId) {
     return { shouldRemove: false, shouldAdd: false };
   }
+  const landsInTaskList = input.newParentId !== null && input.newParentType === TASK_LIST_TYPE;
   return {
-    shouldRemove: input.oldParentId !== null && input.oldParentType === TASK_LIST_TYPE,
-    shouldAdd: input.newParentId !== null && input.newParentType === TASK_LIST_TYPE,
+    shouldRemove:
+      input.oldParentId !== null && input.oldParentType === TASK_LIST_TYPE && !landsInTaskList,
+    shouldAdd: landsInTaskList,
   };
 };
 
