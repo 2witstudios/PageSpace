@@ -23,7 +23,7 @@ import { broadcastPageEvent, createPageEventPayload, broadcastDriveEvent, create
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import type { ToolExecutionContext } from '../core/types';
 import { maskIdentifier } from '@/lib/logging/mask';
-import { ensureTaskListForPage } from '@/services/api/task-sync-service';
+import { ensureTaskListForPage, syncTaskItemOnMove } from '@/services/api/task-sync-service';
 import { replaceLines } from '@/lib/editor/line-edit';
 import { insertAtAnchor } from '@/lib/editor/text-edit';
 import { resolveOrThrowPageId } from './page-context-defaults';
@@ -445,17 +445,40 @@ async function moveWithinDrive(params: {
     metadata: { newParentId, position },
   });
 
-  await applyPageMutation({
-    pageId: page.id,
-    operation: 'move',
-    updates: {
-      parentId: newParentId ?? null,
-      position: position,
-    },
-    updatedFields: ['parentId', 'position'],
-    expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
-    context: mutationContext,
+  // One transaction for the mutation AND the task-item sync, mirroring
+  // pageReorderService.reorderPage. Moving a TASK_LIST page in or out of a
+  // TASK_LIST parent adds/removes its `task_items` row; without this the AI
+  // tool left that row stale on same-drive moves while every other move path
+  // in the codebase (reorder, bulk-delete, and the cross-drive service this
+  // tool now calls) kept it correct — so the same tool was consistent only
+  // when it happened to cross a drive boundary.
+  let deferredTrigger: (() => void) | undefined;
+  await db.transaction(async (tx) => {
+    const mutResult = await applyPageMutation({
+      pageId: page.id,
+      operation: 'move',
+      updates: {
+        parentId: newParentId ?? null,
+        position: position,
+      },
+      updatedFields: ['parentId', 'position'],
+      expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
+      context: mutationContext,
+      tx,
+    });
+    // Passing our own tx makes the workflow trigger OUR responsibility to fire
+    // after commit — applyPageMutation only self-fires when it owns the tx.
+    deferredTrigger = mutResult.deferredTrigger;
+
+    await syncTaskItemOnMove(tx, {
+      movedPageId: page.id,
+      movedPageType: page.type,
+      oldParentId: page.parentId,
+      newParentId: newParentId ?? null,
+      userId: context.userId,
+    });
   });
+  deferredTrigger?.();
 
   // Broadcast page move event
   await broadcastPageEvent(

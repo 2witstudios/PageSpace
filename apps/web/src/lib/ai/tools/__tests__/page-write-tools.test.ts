@@ -106,7 +106,9 @@ vi.mock('@pagespace/lib/repositories/drive-repository', () => ({
 }));
 
 vi.mock('@/services/api/page-mutation-service', () => ({
-  applyPageMutation: vi.fn().mockResolvedValue(undefined),
+  // Real applyPageMutation resolves to a result object carrying deferredTrigger,
+  // which callers passing their own tx must fire after commit.
+  applyPageMutation: vi.fn().mockResolvedValue({ deferredTrigger: undefined }),
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -127,6 +129,7 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
 
 vi.mock('@/services/api/task-sync-service', () => ({
   ensureTaskListForPage: vi.fn().mockResolvedValue({ id: 'tasklist-1' }),
+  syncTaskItemOnMove: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@pagespace/lib/pages/circular-reference-guard', () => ({
@@ -147,7 +150,10 @@ vi.mock('@/lib/canvas/publish-page', () => ({
 // interceptable by mocking the module's exports. AI_CHAT: these agent fixtures
 // are real agent pages, so they keep the agent-scoped path.
 vi.mock('@pagespace/db/db', () => ({
-  db: { select: () => ({ from: () => ({ where: () => Promise.resolve([{ type: 'AI_CHAT', userScopedAccess: false }]) }) }) },
+  db: {
+    select: () => ({ from: () => ({ where: () => Promise.resolve([{ type: 'AI_CHAT', userScopedAccess: false }]) }) }),
+    transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn({})),
+  },
 }));
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -155,7 +161,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 
 import { pageWriteTools } from '../page-write-tools';
-import { ensureTaskListForPage } from '@/services/api/task-sync-service';
+import { ensureTaskListForPage, syncTaskItemOnMove } from '@/services/api/task-sync-service';
 import { canUserEditPage, canUserDeletePage } from '@pagespace/lib/permissions/permissions';
 import { getAgentAccessLevel, hasAgentDriveMembership, hasAgentDriveAdminRole } from '@pagespace/lib/permissions/agent-permissions';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
@@ -176,6 +182,7 @@ const mockPageRepo = vi.mocked(pageRepository);
 const mockDriveRepo = vi.mocked(driveRepository);
 const mockApplyPageMutation = vi.mocked(applyPageMutation);
 const mockEnsureTaskListForPage = vi.mocked(ensureTaskListForPage);
+const mockSyncTaskItemOnMove = vi.mocked(syncTaskItemOnMove);
 const mockCheckDriveAccess = vi.mocked(checkDriveAccess);
 const mockValidatePageMove = vi.mocked(validatePageMove);
 const mockMovePagesToDrive = vi.mocked(movePagesToDrive);
@@ -1465,6 +1472,31 @@ describe('page-write-tools', () => {
       expect(result.success).toBe(true);
       expect(mockApplyPageMutation).toHaveBeenCalledWith(
         expect.objectContaining({ pageId: 'page-1', operation: 'move' })
+      );
+    });
+
+    // Every other move path in the codebase syncs task_items; this one did not,
+    // so after the cross-drive work landed the SAME tool kept the row correct
+    // only when the move happened to cross a drive boundary.
+    it('syncs the task_items row on a same-drive move, like every other move path', async () => {
+      mockPageRepo.findById.mockResolvedValue(sourcePageRow({ id: 'page-1', parentId: 'old-parent' }));
+      mockCheckDriveAccess.mockResolvedValue(adminAccess);
+      mockPageRepo.existsInDrive.mockResolvedValue(true);
+      mockValidatePageMove.mockResolvedValue({ valid: true });
+
+      await pageWriteTools.move_page.execute!(
+        { title: 'Test Page', pageId: 'page-1', newParentId: 'new-parent', position: 1 },
+        crossDriveContext('admin-user')
+      );
+
+      expect(mockSyncTaskItemOnMove).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          movedPageId: 'page-1',
+          oldParentId: 'old-parent',
+          newParentId: 'new-parent',
+          userId: 'admin-user',
+        }),
       );
     });
 
