@@ -86,6 +86,12 @@ export function boundedIdentifier(identifier: string): string {
   if (identifier.length <= MAX_IDENTIFIER_KEY_LENGTH) {
     return identifier;
   }
+  // sha256 is deliberate and correct here despite identifiers possibly
+  // deriving from credentials (CodeQL js/insufficient-password-hash flags
+  // this): the digest is an in-memory Map KEY for rate-limit counting — never
+  // persisted, never used to verify anything — and the alternative stored the
+  // RAW identifier, which is strictly worse. A slow password KDF would itself
+  // be a DoS vector on this per-request hot path.
   return `h:${createHash('sha256').update(identifier).digest('hex')}`;
 }
 
@@ -662,17 +668,23 @@ export async function checkDistributedRateLimit(
  * Reset rate limit for an identifier (e.g., after successful auth).
  */
 export async function resetDistributedRateLimit(identifier: string): Promise<void> {
-  if (pgGateAllowsDb(Date.now())) {
-    const admittedEpoch = pgCircuitEpoch;
-    try {
-      await db.delete(rateLimitBuckets).where(eq(rateLimitBuckets.key, identifier));
-      closePgCircuitIfCurrent(admittedEpoch);
-    } catch (error) {
-      loggers.api.debug('Postgres rate limit reset failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      recordPgFailure(error, Date.now());
-    }
+  // Deliberately NOT gated by the circuit breaker: a reset REFUNDS a consumed
+  // limit (e.g. EXPORT_DATA's single attempt per 24h after a failed export),
+  // so silently skipping the delete while the circuit is open would leave the
+  // Postgres row intact and 429 the caller for the rest of the window once
+  // Postgres recovers. Resets are low-volume cold paths (post-auth-success,
+  // failure refunds) that cannot stampede a stalled pool the way hot check
+  // paths can; a failed delete keeps the pre-breaker best-effort semantics
+  // and re-arms the breaker, while a success doubles as recovery evidence.
+  const admittedEpoch = pgCircuitEpoch;
+  try {
+    await db.delete(rateLimitBuckets).where(eq(rateLimitBuckets.key, identifier));
+    closePgCircuitIfCurrent(admittedEpoch);
+  } catch (error) {
+    loggers.api.debug('Postgres rate limit reset failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    recordPgFailure(error, Date.now());
   }
 
   inMemoryResetRateLimit(identifier);
