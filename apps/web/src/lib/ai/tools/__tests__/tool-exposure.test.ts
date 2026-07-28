@@ -373,5 +373,22 @@ describe('applyToolExposureMode', () => {
       expect(result.toolDiscoveryPrompt).toBe('');
       expect(result.tools.tool_search).toBeUndefined();
     });
+
+    it('threads the skill corpus into tool_search (search mode)', async () => {
+      const tools: ToolSet = {
+        read_page: makeTool('Read a page'),
+        send_channel_message: makeTool('Send a channel message'),
+      } as ToolSet;
+
+      const result = applyToolExposureMode(tools, 'search', new Set(), [
+        { name: 'canvas-websites', description: 'Builds websites on CANVAS pages.' },
+      ]);
+
+      const searchResult = (await result.tools.tool_search!.execute!(
+        { query: 'websites' },
+        {} as never
+      )) as { skills?: Array<{ name: string }> };
+      expect(searchResult.skills?.map((s) => s.name)).toEqual(['canvas-websites']);
+    });
   });
 });

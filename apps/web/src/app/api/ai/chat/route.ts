@@ -82,6 +82,8 @@ import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-outp
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName, sanitizeToolNamesForProvider } from '@/lib/ai/core/mcp-tool-converter';
 import { getUserPersonalization } from '@/lib/ai/core/personalization-utils';
 import { applyToolExposureMode, ALWAYS_UPFRONT_TOOLS } from '@/lib/ai/tools/tool-exposure';
+import { buildBuiltinSkillCatalog, listEligibleSkills } from '@/lib/ai/core/skill-catalog';
+import { loadUserCommandCatalog } from '@/lib/commands/command-catalog-loader';
 import {
   buildVolatileTurnContext,
   appendTurnContextToLastUserMessage,
@@ -982,7 +984,19 @@ export async function POST(request: Request) {
     // hiding their names from a top-level key scan. Integration-tool suppression
     // needs the pre-exposure set to correctly detect an active sandbox toolkit.
     const preExposureTools = filteredTools;
-    const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
+    // Capability catalog: built-in skills (stable, appended to the system prompt
+    // below) + the per-viewer user/drive command list (volatile, appended to the
+    // last user message). Both gated on the agent actually having load_skill —
+    // without the loader, advertising loadable capabilities is noise.
+    const eligibleSkills = listEligibleSkills(allowedToolNames);
+    const userCommandCatalog =
+      eligibleSkills.length > 0 || allowedToolNames.includes('load_skill')
+        ? await loadUserCommandCatalog(userId!, page.driveId ?? null)
+        : { catalogPrompt: '', searchEntries: [] };
+    const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS, [
+      ...eligibleSkills,
+      ...userCommandCatalog.searchEntries,
+    ]);
     filteredTools = exposure.tools;
     const toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
 
@@ -1212,6 +1226,15 @@ export async function POST(request: Request) {
     // a custom system prompt is set (unlike drivePromptPrefix above, which is
     // only prepended in the customSystemPrompt branch).
     systemPrompt = memberDriveContextPrefix + systemPrompt;
+
+    // Skill catalog applies uniformly too — including custom-systemPrompt
+    // agents, which opt out of buildInlineInstructions and would otherwise
+    // carry load_skill with no idea what is loadable. It is capability
+    // metadata (like toolDiscoveryPrompt), not behavioral instruction, and
+    // varies only with the agent's tool configuration — stable per
+    // conversation, so it belongs in this cache-stable prompt, never the
+    // volatile block.
+    systemPrompt += buildBuiltinSkillCatalog(allowedToolNames);
 
     // Machine binding section — applies uniformly (custom or default system
     // prompt) for the same reason as memberDriveContextPrefix above. Fixed
@@ -1507,6 +1530,7 @@ export async function POST(request: Request) {
                 timestampPrompt: timestampSystemPrompt,
                 locationPrompt,
                 mentionPrompt: mentionSystemPrompt,
+                commandCatalogPrompt: userCommandCatalog.catalogPrompt,
                 commandPrompt: commandSystemPrompt,
               });
               const messagesWithContext = appendTurnContextToLastUserMessage(messages, turnContext);

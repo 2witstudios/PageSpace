@@ -23,7 +23,13 @@ const registry = {
 
 type ToolSearchResult = {
   tools: Array<{ name: string; description: string; inputSchema: { type: string } }>;
+  skills?: Array<{ name: string; description: string; usage: string }>;
 };
+
+const skillCorpus = [
+  { name: 'canvas-websites', description: 'Builds websites and landing pages on CANVAS pages.' },
+  { name: 'standup', description: 'Prepares standup notes.' },
+];
 
 describe('createToolSearchTool', () => {
   it('returns a tool with a string description', () => {
@@ -131,6 +137,53 @@ describe('createToolSearchTool', () => {
       should: 'return an empty tools array',
       actual: tools.length,
       expected: 0,
+    });
+  });
+
+  it('without a skill corpus the output is byte-identical to the tools-only shape', async () => {
+    const t = createToolSearchTool(registry);
+    const result = (await t.execute!({ query: 'calendar' }, {} as never)) as ToolSearchResult;
+    assert({
+      given: 'no skills passed (default)',
+      should: 'omit the skills key entirely',
+      actual: 'skills' in result,
+      expected: false,
+    });
+  });
+
+  it('keyword query matches skills by description and returns a load_skill pointer', async () => {
+    const t = createToolSearchTool(registry, skillCorpus);
+    const result = (await t.execute!({ query: 'website' }, {} as never)) as ToolSearchResult;
+    assert({
+      given: '"website" keyword with a skill corpus',
+      should: 'return the canvas-websites skill with load usage',
+      actual: result.skills?.map((s) => `${s.name}|${s.usage}`),
+      expected: ['canvas-websites|load_skill("canvas-websites")'],
+    });
+  });
+
+  it('select: resolves skill names alongside tool names', async () => {
+    const t = createToolSearchTool(registry, skillCorpus);
+    const result = (await t.execute!(
+      { query: 'select:update_task,standup' },
+      {} as never
+    )) as ToolSearchResult;
+    assert({
+      given: 'select: naming one tool and one skill',
+      should: 'return the tool schema and the skill pointer',
+      actual: [result.tools.map((x) => x.name), result.skills?.map((s) => s.name)],
+      expected: [['update_task'], ['standup']],
+    });
+  });
+
+  it('omits the skills key when the query matches no skill', async () => {
+    const t = createToolSearchTool(registry, skillCorpus);
+    const result = (await t.execute!({ query: 'calendar' }, {} as never)) as ToolSearchResult;
+    assert({
+      given: 'a query matching tools but no skills',
+      should: 'omit the skills key',
+      actual: 'skills' in result,
+      expected: false,
     });
   });
 });

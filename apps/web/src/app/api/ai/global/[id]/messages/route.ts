@@ -84,6 +84,8 @@ import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/valida
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
 import { createToolSearchTool } from '@/lib/ai/tools/tool-search-tool';
+import { buildBuiltinSkillCatalog, listEligibleSkills } from '@/lib/ai/core/skill-catalog';
+import { loadUserCommandCatalog } from '@/lib/commands/command-catalog-loader';
 import {
   buildVolatileTurnContext,
   appendTurnContextToLastUserMessage,
@@ -859,15 +861,30 @@ MENTION PROCESSING:
     // execute_tool.
     const { coreTools, nonCoreTools } = splitToolsForExposure(filteredAllTools, ALWAYS_UPFRONT_TOOLS);
 
+    // Capability catalog: built-in skills join the stable prompt; the
+    // per-viewer command list rides the volatile turn context below. Both
+    // feed tool_search's corpus so discovery has one search surface.
+    const availableToolNames = Object.keys(filteredAllTools);
+    const eligibleSkills = listEligibleSkills(availableToolNames);
+    const userCommandCatalog = await loadUserCommandCatalog(
+      userId,
+      locationContext?.currentDrive?.id ?? null
+    );
+    const skillCatalogPrompt = buildBuiltinSkillCatalog(availableToolNames);
+
     const nonCoreToolNamesPrompt = buildNonCoreToolNamesPrompt(Object.keys(nonCoreTools));
     const finalSystemPrompt = systemPrompt
       + (agentAwarenessPrompt ? '\n\n' + agentAwarenessPrompt : '')
       + pageTreePrompt
-      + (nonCoreToolNamesPrompt ? '\n\n' + nonCoreToolNamesPrompt : '');
+      + (nonCoreToolNamesPrompt ? '\n\n' + nonCoreToolNamesPrompt : '')
+      + skillCatalogPrompt;
 
     let finalTools: ToolSet = {
       ...coreTools,
-      tool_search: createToolSearchTool(excludeAlwaysUpfront(filteredAllTools, ALWAYS_UPFRONT_TOOLS)),
+      tool_search: createToolSearchTool(
+        excludeAlwaysUpfront(filteredAllTools, ALWAYS_UPFRONT_TOOLS),
+        [...eligibleSkills, ...userCommandCatalog.searchEntries]
+      ),
       execute_tool: createExecuteTool(nonCoreTools),
     };
 
@@ -1253,6 +1270,7 @@ MENTION PROCESSING:
               timestampPrompt: timestampSystemPrompt,
               locationPrompt,
               mentionPrompt: mentionSystemPrompt,
+              commandCatalogPrompt: userCommandCatalog.catalogPrompt,
               commandPrompt: commandSystemPrompt,
             });
             const messagesWithContext = appendTurnContextToLastUserMessage(messages, turnContext);
