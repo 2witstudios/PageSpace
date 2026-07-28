@@ -153,6 +153,9 @@ export async function runGitInSandbox({
       // Same for a PROMOTED project (issue #2204 phase 7): its repo lives on
       // its own Sprite, so git must attach there, not to the machine root.
       projectSandbox: ctx.projectSandbox,
+      // The session address (≡ conversationId) — what the session-anchored
+      // acquire implementation folds the Sprite key off.
+      conversationId: ctx.conversationId,
     });
     if (!acquired.ok) {
       return { success: false, error: 'Could not provision a sandbox.', reason: 'provision_failed' };

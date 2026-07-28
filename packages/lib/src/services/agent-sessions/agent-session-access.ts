@@ -18,6 +18,7 @@
 
 import {
   decideAgentSessionAccess,
+  decideAgentSessionEndAccess,
   type AgentSessionAccessDecision,
   type AgentSessionAccessSubject,
   type AgentSessionPagePermission,
@@ -84,4 +85,33 @@ export async function checkAgentSessionAccess({
   ]);
 
   return decideAgentSessionAccess({ requesterId, session, conversationOwnership, pagePermission, canRunCode });
+}
+
+/**
+ * The END-SESSION gather, wrapping {@link decideAgentSessionEndAccess}: same
+ * facts minus the capability check, because ending a session is release of
+ * compute and must survive a lost `canRunCode` (see the pure decider's doc).
+ * The `canRunCode` dep is deliberately not in this function's `Pick` — an end
+ * check that could consult it would be one refactor away from gating on it.
+ */
+export async function checkAgentSessionEndAccess({
+  requesterId,
+  sessionId,
+  deps,
+}: {
+  requesterId: string;
+  sessionId: string;
+  deps: Omit<AgentSessionAccessDeps, 'canRunCode'>;
+}): Promise<AgentSessionAccessCheck> {
+  const session = await deps.findSession(sessionId);
+  if (!session) return { allowed: false, reason: 'session_not_found' };
+
+  const [conversationOwnership, pagePermission] = await Promise.all([
+    deps.resolveConversationOwnership({ conversationId: session.sessionId, requesterId }),
+    session.agentPageId === null
+      ? Promise.resolve(null)
+      : deps.resolvePagePermission({ userId: requesterId, agentPageId: session.agentPageId }),
+  ]);
+
+  return decideAgentSessionEndAccess({ requesterId, session, conversationOwnership, pagePermission });
 }

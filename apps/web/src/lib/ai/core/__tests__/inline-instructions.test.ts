@@ -74,8 +74,8 @@ describe('buildInlineInstructions — TASK_MANAGEMENT gating', () => {
 });
 
 describe('buildInlineInstructions — AGENTS gating', () => {
-  it('includes AGENTS when ask_agent is available', () => {
-    const result = buildInlineInstructions(['ask_agent']);
+  it('includes AGENTS when spawn_session is available', () => {
+    const result = buildInlineInstructions(['spawn_session']);
     expect(result).toContain('AGENTS');
   });
 
@@ -156,7 +156,7 @@ describe('buildInlineInstructions — availableTools=undefined sentinel', () => 
 describe('buildInlineInstructions — full tool set', () => {
   it('includes all gated sections when all relevant tools are provided', () => {
     const result = buildInlineInstructions([
-      'create_task', 'ask_agent', 'set_task_trigger', 'glob_search',
+      'create_task', 'spawn_session', 'set_task_trigger', 'glob_search',
     ]);
     expect(result).toContain('TASK MANAGEMENT');
     expect(result).toContain('AGENTS');

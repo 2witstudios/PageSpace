@@ -4,7 +4,6 @@ import {
   filterToolsForReadOnly,
   filterToolsForWebSearch,
   filterToolsForMcpScope,
-  filterToolsForMachineBinding,
   isWebSearchTool,
   isImageGenTool,
   filterToolsForImageGen,
@@ -12,7 +11,6 @@ import {
   isAccountLevelOnlyTool,
   hasSandboxGitTools,
   suppressGithubIntegrationTools,
-  withSessionFamilyTools,
   filterToolsForAgentAllowlist,
   SESSION_FAMILY_TOOL_NAMES,
 } from '../tool-filtering';
@@ -129,28 +127,6 @@ describe('filterToolsForMcpScope', () => {
     const result = filterToolsForMcpScope(withDrive, true);
     expect(result.create_drive).toBeUndefined();
     expect(result.list_pages).toBe('list_pages');
-    expect(result.read_page).toBe('read_page');
-  });
-});
-
-describe('filterToolsForMachineBinding', () => {
-  const withMachineTools = {
-    switch_machine: 'switch_machine',
-    list_machines: 'list_machines',
-    read_page: 'read_page',
-  };
-
-  it('returns input unchanged when not bound', () => {
-    const result = filterToolsForMachineBinding(withMachineTools, false);
-    expect(result).toEqual(withMachineTools);
-    expect(result.switch_machine).toBe('switch_machine');
-    expect(result.list_machines).toBe('list_machines');
-  });
-
-  it('removes switch_machine and list_machines when bound to a machine pane', () => {
-    const result = filterToolsForMachineBinding(withMachineTools, true);
-    expect(result.switch_machine).toBeUndefined();
-    expect(result.list_machines).toBeUndefined();
     expect(result.read_page).toBe('read_page');
   });
 });
@@ -387,118 +363,122 @@ describe('suppressGithubIntegrationTools', () => {
   });
 });
 
-describe('withSessionFamilyTools', () => {
-  const driveAgentTools = {
-    read_page: 'read_page',
-    ask_agent: 'ask_agent',
-    bash: 'bash',
-  };
-  const sessionFamily = {
-    list_sessions: 'list_sessions',
-    add_session: 'add_session',
-    move_session: 'move_session',
-    kill_session: 'kill_session',
-    read_session: 'read_session',
-    send_session: 'send_session',
-  };
-
-  it('leaves the drive-agent tool set byte-unchanged when the conversation is not machine-bound', () => {
-    const result = withSessionFamilyTools(driveAgentTools, sessionFamily, false);
-    expect(result).toEqual(driveAgentTools);
-    expect(Object.keys(result)).toEqual(Object.keys(driveAgentTools));
-  });
-
-  it('registers the whole session family for a machine-bound conversation', () => {
-    const result = withSessionFamilyTools(driveAgentTools, sessionFamily, true);
-    expect(Object.keys(result).sort()).toEqual(
-      [...Object.keys(driveAgentTools), ...Object.keys(sessionFamily)].sort()
+describe('SESSION_FAMILY_TOOL_NAMES', () => {
+  it('names the nine session/shell orchestration tools', () => {
+    expect([...SESSION_FAMILY_TOOL_NAMES].sort()).toEqual(
+      [
+        'list_sessions',
+        'spawn_session',
+        'send_session',
+        'read_session',
+        'kill_session',
+        'spawn_shell',
+        'send_shell',
+        'read_shell',
+        'kill_shell',
+      ].sort()
     );
-  });
-
-  it('names every session-family tool it registers', () => {
-    expect([...SESSION_FAMILY_TOOL_NAMES].sort()).toEqual(Object.keys(sessionFamily).sort());
   });
 });
 
 describe('filterToolsForAgentAllowlist', () => {
-  const boundTools = {
+  const allTools = {
     read_page: 'read_page',
     create_page: 'create_page',
     bash: 'bash',
     list_sessions: 'list_sessions',
-    add_session: 'add_session',
-    move_session: 'move_session',
-    kill_session: 'kill_session',
-    read_session: 'read_session',
+    spawn_session: 'spawn_session',
     send_session: 'send_session',
+    read_session: 'read_session',
+    kill_session: 'kill_session',
+    spawn_shell: 'spawn_shell',
+    send_shell: 'send_shell',
+    read_shell: 'read_shell',
+    kill_shell: 'kill_shell',
   };
 
   it('leaves an unconfigured page unrestricted (null allowlist)', () => {
-    expect(filterToolsForAgentAllowlist(boundTools, null)).toEqual(boundTools);
+    expect(filterToolsForAgentAllowlist(allTools, null)).toEqual(allTools);
   });
 
-  it('keeps the session family for a bound conversation whose allowlist predates it', () => {
-    // A machine-bound page saved its allowlist before the session family
-    // existed. The family is the BINDING's orchestration surface, not a
-    // composer toggle — the allowlist must not silently strip it.
-    const result = filterToolsForAgentAllowlist(boundTools, ['read_page']);
-    expect(Object.keys(result).sort()).toEqual(
-      ['read_page', ...SESSION_FAMILY_TOOL_NAMES].sort()
-    );
+  it('filters the session/shell family like any other tool — no exemption', () => {
+    // The old machine-binding exemption is gone: an operator who restricted an
+    // agent's tools restricted the session family too.
+    const result = filterToolsForAgentAllowlist(allTools, ['read_page']);
+    expect(Object.keys(result)).toEqual(['read_page']);
   });
 
-  it('still blocks every listed PageSpace tool under an empty allowlist, keeping only the binding surface', () => {
-    const result = filterToolsForAgentAllowlist(boundTools, []);
-    expect(Object.keys(result).sort()).toEqual([...SESSION_FAMILY_TOOL_NAMES].sort());
+  it('blocks every listed tool under an empty allowlist, session family included', () => {
+    expect(filterToolsForAgentAllowlist(allTools, [])).toEqual({});
   });
 
-  it('cannot leak session tools into an unbound conversation — they are never in its input', () => {
+  it('keeps allowlisted session-family tools when they are named explicitly', () => {
+    const result = filterToolsForAgentAllowlist(allTools, ['spawn_session', 'read_session']);
+    expect(Object.keys(result).sort()).toEqual(['read_session', 'spawn_session']);
+  });
+
+  it('keeps only names present in both the tool set and the allowlist', () => {
     const driveTools = { read_page: 'read_page', ask_agent: 'ask_agent' };
-    expect(filterToolsForAgentAllowlist(driveTools, ['ask_agent'])).toEqual({
+    expect(filterToolsForAgentAllowlist(driveTools, ['ask_agent', 'spawn_session'])).toEqual({
       ask_agent: 'ask_agent',
     });
   });
 });
 
 /**
- * Issue #2204 follow-up, F3. The session family is registered by ADDITION
- * after the read-only filter ran, and its mutating members were not in
- * WRITE_TOOLS at all — so a read-only machine-bound conversation kept
- * add/move/kill/send_session, and send_session runs a full agent loop in the
- * target that can execute arbitrary shell commands.
+ * Issue #2204 follow-up, F3 (rebuilt for the session/shell family). The
+ * mutating members must live in WRITE_TOOLS: spawn_session/send_session run a
+ * full agent loop in the target that can execute arbitrary shell commands, so
+ * a read-only conversation that kept them would be read-only in name only.
  */
-describe('read-only mode vs the session family', () => {
+describe('read-only mode vs the session/shell family', () => {
   const sessionFamily = {
     list_sessions: 'list_sessions',
-    read_session: 'read_session',
-    add_session: 'add_session',
-    move_session: 'move_session',
-    kill_session: 'kill_session',
+    spawn_session: 'spawn_session',
     send_session: 'send_session',
+    read_session: 'read_session',
+    kill_session: 'kill_session',
+    spawn_shell: 'spawn_shell',
+    send_shell: 'send_shell',
+    read_shell: 'read_shell',
+    kill_shell: 'kill_shell',
   };
 
-  it('given the COMPOSED bound tool set, read-only should drop every mutating session tool', () => {
-    const composed = withSessionFamilyTools({}, sessionFamily, true);
-    expect(Object.keys(filterToolsForReadOnly(composed, true)).sort()).toEqual([
+  it('classifies the mutating session/shell tools as write tools', () => {
+    for (const name of [
+      'spawn_session',
+      'send_session',
+      'kill_session',
+      'spawn_shell',
+      'send_shell',
+      'kill_shell',
+    ]) {
+      expect(isWriteTool(name)).toBe(true);
+    }
+  });
+
+  it('keeps the read members out of WRITE_TOOLS', () => {
+    for (const name of ['list_sessions', 'read_session', 'read_shell']) {
+      expect(isWriteTool(name)).toBe(false);
+    }
+  });
+
+  it('no longer classifies the retired add_session/move_session names', () => {
+    expect(isWriteTool('add_session')).toBe(false);
+    expect(isWriteTool('move_session')).toBe(false);
+  });
+
+  it('given the full family, read-only should drop every mutating tool and keep the reads', () => {
+    expect(Object.keys(filterToolsForReadOnly(sessionFamily, true)).sort()).toEqual([
       'list_sessions',
       'read_session',
+      'read_shell',
     ]);
   });
 
   it('given read-only OFF, should keep the whole family', () => {
-    const composed = withSessionFamilyTools({}, sessionFamily, true);
-    expect(Object.keys(filterToolsForReadOnly(composed, false)).sort()).toEqual(
+    expect(Object.keys(filterToolsForReadOnly(sessionFamily, false)).sort()).toEqual(
       Object.keys(sessionFamily).sort(),
     );
-  });
-
-  it('given the allowlist exemption runs after read-only, it should not resurrect a dropped write tool', () => {
-    const readOnly = filterToolsForReadOnly(withSessionFamilyTools({}, sessionFamily, true), true);
-    // The family is exempt from the allowlist by name, but exemption only KEEPS
-    // keys that are present — it cannot add back what read-only removed.
-    expect(Object.keys(filterToolsForAgentAllowlist(readOnly, [])).sort()).toEqual([
-      'list_sessions',
-      'read_session',
-    ]);
   });
 });
