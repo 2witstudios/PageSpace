@@ -46,7 +46,9 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
   taskItems: { assigneeId: 'assigneeId', pageId: 'pageId', status: 'status', priority: 'priority', createdAt: 'createdAt', updatedAt: 'updatedAt', description: 'description', completedAt: 'completedAt' },
-  taskLists: { id: 'id', pageId: 'pageId' },
+  // Distinct sentinel — sharing 'pageId' with taskItems.pageId would make
+  // inArray-call assertions ambiguous between the two columns.
+  taskLists: { id: 'id', pageId: 'taskLists.pageId' },
   taskStatusConfigs: { taskListId: 'taskListId' },
 }));
 
@@ -103,7 +105,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { isNull, sql } from '@pagespace/db/operators';
+import { inArray, isNull, or, sql } from '@pagespace/db/operators';
 import { taskItems } from '@pagespace/db/schema/tasks';
 
 // ============================================================================
@@ -530,6 +532,133 @@ describe('GET /api/tasks', () => {
 
       const [, , searchPattern] = vi.mocked(sql).mock.calls[0] as unknown as [unknown, unknown, string];
       expect(searchPattern).toBe('%100\\% done%');
+    });
+  });
+
+  describe('statusGroup filter construction (OOM hardening)', () => {
+    // Route db.select shapes: the child-page fetch selects { id, parentId };
+    // everything else (valid-page subquery, search subquery, count) does not.
+    const mockSelectWithChildPages = (childRows: Array<{ id: string; parentId: string }>) => {
+      vi.mocked(db.select).mockImplementation(((selection?: Record<string, unknown>) => ({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue(
+            selection && 'parentId' in selection ? childRows : []
+          ),
+        }),
+      })) as any);
+    };
+
+    const pageIdInArrayCalls = () =>
+      vi.mocked(inArray).mock.calls.filter(
+        ([col, values]) => col === taskItems.pageId && Array.isArray(values)
+      );
+    const statusInArrayCalls = () =>
+      vi.mocked(inArray).mock.calls.filter(([col]) => col === taskItems.status);
+
+    it('collapses default-config task lists into one condition with a plain child-id array', async () => {
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([
+        createPageFixture({ id: 'page_a', driveId: 'drive_1', title: 'List A' }),
+        createPageFixture({ id: 'page_b', driveId: 'drive_1', title: 'List B' }),
+      ]);
+      vi.mocked(db.query.taskLists.findMany).mockResolvedValue([]);
+      mockSelectWithChildPages([
+        { id: 'child_a1', parentId: 'page_a' },
+        { id: 'child_a2', parentId: 'page_a' },
+        { id: 'child_b1', parentId: 'page_b' },
+      ]);
+
+      const request = new Request('https://example.com/api/tasks?context=user&statusGroup=active');
+      const response = await GET(request);
+
+      expect(response.status).toBe(200);
+      // One merged group — NOT one condition per task list.
+      expect(or).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(or).mock.calls[0]).toHaveLength(1);
+      // The condition carries a plain id array, never a db.select subquery.
+      expect(pageIdInArrayCalls()).toHaveLength(1);
+      expect(pageIdInArrayCalls()[0][1]).toEqual(['child_a1', 'child_a2', 'child_b1']);
+      expect(statusInArrayCalls()).toHaveLength(1);
+      expect(statusInArrayCalls()[0][1]).toEqual(['blocked', 'in_progress', 'pending']);
+    });
+
+    it('emits one condition per DISTINCT slug set for mixed custom/default configs', async () => {
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([
+        createPageFixture({ id: 'page_a', driveId: 'drive_1', title: 'List A' }),
+        createPageFixture({ id: 'page_b', driveId: 'drive_1', title: 'List B' }),
+        createPageFixture({ id: 'page_c', driveId: 'drive_1', title: 'List C' }),
+      ]);
+      vi.mocked(db.query.taskLists.findMany).mockResolvedValue([
+        createTaskListFixture({ id: 'tl_a', pageId: 'page_a' }),
+        createTaskListFixture({ id: 'tl_b', pageId: 'page_b' }),
+      ]);
+      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([
+        { id: 'cfg_a', taskListId: 'tl_a', name: 'Open', slug: 'open', color: 'c', group: 'todo', position: 0, createdAt: new Date(), updatedAt: new Date() },
+        { id: 'cfg_b', taskListId: 'tl_b', name: 'Open', slug: 'open', color: 'c', group: 'todo', position: 0, createdAt: new Date(), updatedAt: new Date() },
+      ] as any);
+      mockSelectWithChildPages([
+        { id: 'child_a1', parentId: 'page_a' },
+        { id: 'child_b1', parentId: 'page_b' },
+        { id: 'child_c1', parentId: 'page_c' },
+      ]);
+
+      const request = new Request('https://example.com/api/tasks?context=user&statusGroup=active');
+      const response = await GET(request);
+
+      expect(response.status).toBe(200);
+      // Two distinct slug sets: {open} (lists a+b) and the defaults (list c).
+      expect(or).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(or).mock.calls[0]).toHaveLength(2);
+      expect(pageIdInArrayCalls().map(([, values]) => values)).toEqual([
+        ['child_a1', 'child_b1'],
+        ['child_c1'],
+      ]);
+      expect(statusInArrayCalls().map(([, values]) => values)).toEqual([
+        ['open'],
+        ['blocked', 'in_progress', 'pending'],
+      ]);
+    });
+
+    it('fetches the child task-list pages exactly once (no per-list subqueries)', async () => {
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([
+        createPageFixture({ id: 'page_a', driveId: 'drive_1', title: 'List A' }),
+        createPageFixture({ id: 'page_b', driveId: 'drive_1', title: 'List B' }),
+      ]);
+      vi.mocked(db.query.taskLists.findMany).mockResolvedValue([]);
+
+      const childSelections: Array<Record<string, unknown> | undefined> = [];
+      vi.mocked(db.select).mockImplementation(((selection?: Record<string, unknown>) => {
+        if (selection && 'parentId' in selection) childSelections.push(selection);
+        return {
+          from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+        };
+      }) as any);
+
+      const request = new Request('https://example.com/api/tasks?context=user&statusGroup=active');
+      await GET(request);
+
+      expect(childSelections).toHaveLength(1);
+    });
+
+    it('short-circuits to an empty result when no task list yields slugs for the group', async () => {
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([
+        createPageFixture({ id: 'page_a', driveId: 'drive_1', title: 'List A' }),
+      ]);
+      vi.mocked(db.query.taskLists.findMany).mockResolvedValue([
+        createTaskListFixture({ id: 'tl_a', pageId: 'page_a' }),
+      ]);
+      // Custom config has only done-group statuses — nothing matches 'active'.
+      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([
+        { id: 'cfg_a', taskListId: 'tl_a', name: 'Shipped', slug: 'shipped', color: 'c', group: 'done', position: 0, createdAt: new Date(), updatedAt: new Date() },
+      ] as any);
+
+      const request = new Request('https://example.com/api/tasks?context=user&statusGroup=active');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.tasks).toEqual([]);
+      expect(body.pagination).toMatchObject({ total: 0, hasMore: false });
+      expect(db.query.taskItems.findMany).not.toHaveBeenCalled();
     });
   });
 

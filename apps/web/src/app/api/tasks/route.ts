@@ -5,6 +5,7 @@ import { eq, and, desc, count, gte, lt, lte, inArray, or, isNull, not, sql } fro
 import { pages } from '@pagespace/db/schema/core'
 import { taskItems, taskLists, taskStatusConfigs } from '@pagespace/db/schema/tasks';
 import { DEFAULT_STATUS_CONFIG, type TaskStatusGroup } from '@/lib/task-status-config';
+import { groupTaskListsByAllowedStatusSlugs } from './status-group-slugs';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { escapeLikePattern } from '@pagespace/lib/db/like-pattern';
@@ -334,37 +335,20 @@ export async function GET(request: Request) {
       }));
     }
 
-    // Group-level status filter. Convert the requested group into a per-task-list
-    // set of allowed status slugs (custom configs first, defaults if none) and
-    // build an OR over (pageId IN children, status IN (...)) tuples.
+    // Group-level status filter. Convert the requested group into DISTINCT
+    // allowed-slug sets (custom configs first, defaults if none) and build an OR
+    // of one (pageId IN plain-id-array, status IN slugs) condition per set —
+    // typically ~2 conditions. One condition per task list, each carrying its own
+    // correlated subquery, is what OOM-killed Postgres on 2026-07-28 for a
+    // principal with 7,703 task lists.
     if (params.statusGroup && params.statusGroup !== 'all') {
-      const allowedGroups: TaskStatusGroup[] = params.statusGroup === 'active'
-        ? ['todo', 'in_progress']
-        : ['done'];
-      const allowedGroupSet = new Set<TaskStatusGroup>(allowedGroups);
+      const slugGroups = groupTaskListsByAllowedStatusSlugs(
+        taskListPageIds,
+        taskListStatusMap,
+        params.statusGroup,
+      );
 
-      const defaultAllowedSlugs = Object.entries(DEFAULT_STATUS_CONFIG)
-        .filter(([, cfg]) => allowedGroupSet.has(cfg.group))
-        .map(([slug]) => slug);
-
-      const perTaskListConditions = taskListPageIds.map((listPageId) => {
-        const configs = taskListStatusMap.get(listPageId);
-        const slugs = configs && configs.length > 0
-          ? configs.filter((c) => allowedGroupSet.has(c.group)).map((c) => c.slug)
-          : defaultAllowedSlugs;
-        if (slugs.length === 0) return undefined;
-        const childPageSubquery = db
-          .select({ id: pages.id })
-          .from(pages)
-          .where(and(
-            eq(pages.parentId, listPageId),
-            eq(pages.type, 'TASK_LIST'),
-            eq(pages.isTrashed, false),
-          ));
-        return and(inArray(taskItems.pageId, childPageSubquery), inArray(taskItems.status, slugs));
-      }).filter((c): c is NonNullable<typeof c> => c !== undefined);
-
-      if (perTaskListConditions.length === 0) {
+      if (slugGroups.length === 0) {
         return NextResponse.json({
           tasks: [],
           statusConfigsByTaskList: serializedStatusConfigsByTaskList,
@@ -377,7 +361,34 @@ export async function GET(request: Request) {
         });
       }
 
-      filterConditions.push(or(...perTaskListConditions));
+      // One bounded fetch of the child task pages (same membership as the old
+      // per-list subqueries: parentId = list, type TASK_LIST, not trashed),
+      // partitioned back onto the slug groups as plain id arrays.
+      const includableListPageIds = slugGroups.flatMap(g => g.listPageIds);
+      const childTaskPages = await db
+        .select({ id: pages.id, parentId: pages.parentId })
+        .from(pages)
+        .where(and(
+          inArray(pages.parentId, includableListPageIds),
+          eq(pages.type, 'TASK_LIST'),
+          eq(pages.isTrashed, false),
+        ));
+      const childIdsByListPageId = new Map<string, string[]>();
+      for (const child of childTaskPages) {
+        if (!child.parentId) continue;
+        const existing = childIdsByListPageId.get(child.parentId);
+        if (existing) existing.push(child.id);
+        else childIdsByListPageId.set(child.parentId, [child.id]);
+      }
+
+      // A group whose lists have no children keeps its condition: inArray with an
+      // empty array renders as SQL `false`, matching the old empty-subquery result.
+      const perSlugSetConditions = slugGroups.map(group => and(
+        inArray(taskItems.pageId, group.listPageIds.flatMap(id => childIdsByListPageId.get(id) ?? [])),
+        inArray(taskItems.status, group.slugs),
+      ));
+
+      filterConditions.push(or(...perSlugSetConditions));
     }
 
     const whereCondition = and(...filterConditions);
