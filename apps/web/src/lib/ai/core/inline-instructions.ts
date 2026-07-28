@@ -19,7 +19,20 @@ const WORKSPACE_RULES = `WORKSPACE RULES:
 • Provide both driveId and driveSlug for operations.
 • Before creating a page, list_pages its destination to check for existing duplicates`;
 
-const PAGE_TYPES = `PAGE TYPES:
+/**
+ * PAGE TYPES section, in two variants keyed on load_skill:
+ *
+ * - With load_skill, the DOCUMENT/SHEET/CANVAS/TASK_LIST bullets are
+ *   one-liners with a load-the-skill pointer — the deep conventions live in
+ *   the on-demand skill bodies (apps/web/src/lib/ai/skills/bodies), loaded
+ *   only when the work actually touches that domain.
+ * - Without load_skill (stripped allowlist), the full inline text remains so
+ *   those agents lose nothing.
+ *
+ * Slimming rule: a bullet may only shrink here if the corresponding skill
+ * body covers it verbatim-or-better.
+ */
+const PAGE_TYPES_FULL = `PAGE TYPES:
 • FOLDER: Container with list/icon view of children. Accepts file uploads via drag-drop.
 • DOCUMENT: Rich text stored as HTML. Use insert_content to add lines before/after a heading or landmark, or replace_lines for precise line-range edits.
 • CODE: Plain-text source code with syntax highlighting. Use replace_lines for edits (raw text, no HTML processing).
@@ -30,11 +43,42 @@ const PAGE_TYPES = `PAGE TYPES:
 • CHANNEL: Team discussion thread with real-time messaging.
 • FILE: Uploaded file. Text-based files are readable via read_page.`;
 
-const TASK_MANAGEMENT = `TASK MANAGEMENT:
+const PAGE_TYPES_WITH_SKILLS = `PAGE TYPES:
+• FOLDER: Container with list/icon view of children. Accepts file uploads via drag-drop.
+• DOCUMENT: Rich text stored as HTML. Load the writing-documents skill before non-trivial writing or line-range editing.
+• CODE: Plain-text source code with syntax highlighting. Use replace_lines for edits (raw text, no HTML processing).
+• SHEET: Spreadsheet. Use edit_sheet_cells for cell edits; load the spreadsheets skill before formulas or new sheets.
+• CANVAS: Raw HTML/CSS/JS rendered in a sandboxed iframe. Load the canvas-websites skill before building or editing websites, embeds, or forms.
+• TASK_LIST: Task manager. Load the task-management skill before task workflows.
+• AI_CHAT: Custom AI agent with configurable system prompt and tool permissions.
+• CHANNEL: Team discussion thread with real-time messaging.
+• FILE: Uploaded file. Text-based files are readable via read_page.`;
+
+// `undefined` availableTools (the include-all sentinel used by the admin
+// prompt viewer) keeps the FULL text — the complete preview must show
+// everything an agent without skills would get.
+export function buildPageTypes(availableTools?: string[]): string {
+  return availableTools !== undefined && hasAny(availableTools, ['load_skill'])
+    ? PAGE_TYPES_WITH_SKILLS
+    : PAGE_TYPES_FULL;
+}
+
+const TASK_MANAGEMENT_FULL = `TASK MANAGEMENT:
 • Read the task list with read_page before any mutations — inspect existing tasks, statuses, structure
 • Tasks nest to any depth; a parent can't complete while direct subtasks remain open
 • Use existing status slugs; only call create_task_status when no existing status fits
 • For recurring task workflows, propose a trigger instead of asking the user to come back and ask again`;
+
+const TASK_MANAGEMENT_WITH_SKILLS = `TASK MANAGEMENT:
+• Read the task list with read_page before any mutations — inspect existing tasks, statuses, structure
+• Tasks nest to any depth; a parent can't complete while direct subtasks remain open
+• Load the task-management skill for statuses, assignees, triggers, and completion semantics`;
+
+export function buildTaskManagement(availableTools?: string[]): string {
+  return availableTools !== undefined && hasAny(availableTools, ['load_skill'])
+    ? TASK_MANAGEMENT_WITH_SKILLS
+    : TASK_MANAGEMENT_FULL;
+}
 
 const AGENTS = `AGENTS:
 • Discover available agents first — each has its own system prompt, tools, and expertise; list_agents reveals what's configured
@@ -113,8 +157,8 @@ export function buildInlineInstructions(availableTools?: string[]): string {
 
   const sections = [
     WORKSPACE_RULES,
-    PAGE_TYPES,
-    includeTaskManagement ? TASK_MANAGEMENT : null,
+    buildPageTypes(availableTools),
+    includeTaskManagement ? buildTaskManagement(availableTools) : null,
     includeAgents ? AGENTS : null,
     includeAutomation ? AUTOMATION : null,
     includeSearch ? SEARCH : null,
@@ -129,14 +173,18 @@ export function buildInlineInstructions(availableTools?: string[]): string {
 /**
  * Build inline instructions for the Global Assistant. Deliberately takes no
  * location context — see buildInlineInstructions above for why.
+ *
+ * Pass `availableTools` (the route's filtered tool names) so the page-type
+ * and task sections slim to skill pointers when load_skill is present;
+ * omitting it (admin prompt viewer) renders the full fallback text.
  */
-export function buildGlobalAssistantInstructions(): string {
+export function buildGlobalAssistantInstructions(availableTools?: string[]): string {
   return `
 ${WORKSPACE_RULES}
 
-${PAGE_TYPES}
+${buildPageTypes(availableTools)}
 
-${TASK_MANAGEMENT}
+${buildTaskManagement(availableTools)}
 
 ${AGENTS}
 

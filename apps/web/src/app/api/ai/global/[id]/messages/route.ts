@@ -5,7 +5,7 @@ import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { askUserTools, ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
 import { resolveMessageId } from '@/lib/ai/streams/resolveMessageId';
 import { canUseAskUser } from '@/lib/ai/core/ask-user-gating';
-import { ASK_USER_SECTION } from '@/lib/ai/core/inline-instructions';
+import { ASK_USER_SECTION, buildGlobalAssistantInstructions } from '@/lib/ai/core/inline-instructions';
 import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
 import {
   extractClientAskUserResults,
@@ -760,23 +760,15 @@ export async function POST(
     // appended to the last user message at assembly time so the system prefix stays
     // byte-identical across turns and provider prefix caches are not invalidated —
     // including turns where only the user's current page/drive changed.
+    // Workspace knowledge (page types, tasks, agents, automation, search,
+    // mentions) comes from the SHARED inline-instructions sections appended
+    // at finalSystemPrompt assembly below — this route previously carried a
+    // bespoke copy that drifted (it claimed tasks create linked DOCUMENT
+    // pages; they create TASK_LIST children). Only genuinely
+    // global-assistant-specific guidance remains inline here.
     const systemPrompt = baseSystemPrompt + '\n\n' + TOOL_DISCOVERY_PROMPT + `
 
 You are the Global Assistant for PageSpace - accessible from both the dashboard and sidebar.
-
-TASK MANAGEMENT:
-• Use create_page with type TASK_LIST to create task lists for tracking work
-• Use create_task with a TASK_LIST pageId to add tasks - each task creates a linked DOCUMENT page
-• Use read_page on TASK_LIST pages to view tasks and progress
-• Update task status as you progress - users see real-time updates
-
-CRITICAL NESTING PRINCIPLE:
-• NO RESTRICTIONS on what can contain what - organize based on logical user needs
-• Documents can contain AI chats, channels, folders, and canvas pages
-• AI chats can contain documents, other AI chats, folders, and any page type
-• Channels can contain any page type for organized discussion threads
-• Canvas pages can contain any page type for custom navigation structures
-• Think creatively about nesting - optimize for user workflow, not type conventions
 
 SMART EXPLORATION RULES:
 1. When in a drive context (see your current LOCATION context for the driveId) - ALWAYS explore it first:
@@ -801,13 +793,7 @@ SMART EXPLORATION RULES:
    - Suggest creating AI_CHAT and CHANNEL pages for organization
    - Be autonomous within current context
 
-CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? ` (Context: ${conversation.contextId})` : ''}
-
-MENTION PROCESSING:
-• When users @mention documents using @[Label](id:type) format, you MUST read those documents first
-• Use the read_page tool for each mentioned document before providing your main response
-• Let mentioned document content inform and enrich your response
-• Don't explicitly mention that you're reading @mentioned docs unless relevant to the conversation` +
+CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? ` (Context: ${conversation.contextId})` : ''}` +
       (canUseAskUser({ role: auth.role }) ? `\n\n${ASK_USER_SECTION}` : '') +
       drivePromptSection;
 
@@ -874,6 +860,7 @@ MENTION PROCESSING:
 
     const nonCoreToolNamesPrompt = buildNonCoreToolNamesPrompt(Object.keys(nonCoreTools));
     const finalSystemPrompt = systemPrompt
+      + '\n' + buildGlobalAssistantInstructions(availableToolNames)
       + (agentAwarenessPrompt ? '\n\n' + agentAwarenessPrompt : '')
       + pageTreePrompt
       + (nonCoreToolNamesPrompt ? '\n\n' + nonCoreToolNamesPrompt : '')
