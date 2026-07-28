@@ -30,11 +30,15 @@ function sampleTools(): ToolSet {
 }
 
 describe('ALWAYS_UPFRONT_TOOLS', () => {
-  it('covers exactly the composer-toggled tools both AI routes share', () => {
+  it('covers exactly the tools that bypass the agent allowlist on the way in', () => {
     // One shared set, imported by api/ai/chat and api/ai/global/[id]/messages, so a new
-    // composer toggle cannot be wired into one route and forgotten in the other.
-    // web_fetch is knowingly excluded — see the constant's doc comment.
+    // allowlist-bypassing override cannot be wired into one route and forgotten in the
+    // other. Membership is NOT "shares a composer toggle" — it is "re-added after
+    // filterToolsForAgentAllowlist", which is what makes execute_tool's re-check reject
+    // it if deferred. web_fetch shares the web-search toggle but has no such bypass, so
+    // it is correctly absent. See the constant's doc comment.
     expect([...ALWAYS_UPFRONT_TOOLS].sort()).toEqual(['generate_image', 'web_search']);
+    expect(ALWAYS_UPFRONT_TOOLS.has('web_fetch')).toBe(false);
   });
 
   it('promotes its members past the core-only split', () => {

@@ -19,23 +19,20 @@ export type ToolExposureMode = 'upfront' | 'search';
  *   deferred tools by name in the system prompt without sending their schemas, so the
  *   model calls them directly and the AI SDK rejects them as unknown tools.
  *
- * KNOWN GAP — `web_fetch`. The web-search toggle gates two tools, not one
- * (`WEB_SEARCH_TOOLS = {web_search, web_fetch}` in core/tool-filtering.ts), so by the
- * definition above `web_fetch` belongs here. It is deliberately omitted because adding
- * it to this shared set is the wrong trade today:
- * - On page chat it IS broken — an agent whose saved allowlist omits `web_fetch` but
- *   who toggles web search on gets it rejected at dispatch. A real bug.
- * - On the Global Assistant it is NOT broken — that route sets no allowlist, so
- *   `web_fetch` still dispatches fine through execute_tool. Promoting it there only
- *   adds its schema to every request, on the one surface deliberately engineered to
- *   keep upfront schemas small (see PR #1310, which dropped 29 schemas to save
- *   ~5-12k tokens/turn).
+ * Membership rule — why exactly these two, and not every toggled tool. Page chat
+ * destructures `web_search` and `generate_image` out of the baseline BEFORE applying
+ * the agent's saved allowlist, then re-adds them after it when the composer toggle is
+ * on (chat/route.ts, Steps 2 / 4 / 4b). Bypassing the allowlist on the way IN is what
+ * makes them fail on the way OUT: execute_tool re-checks the same allowlist, so a
+ * deferred override is rejected as "not permitted" precisely when it was toggled on.
+ * A tool is a member iff it has that bypass property.
  *
- * So the shared default would buy a page-chat fix by charging the Global Assistant
- * context it gains nothing from. The fix likely wants to be page-chat-specific, which
- * this design already permits — `alwaysUpfront` stays a per-call parameter, so that
- * route can pass `new Set([...ALWAYS_UPFRONT_TOOLS, 'web_fetch'])` without disturbing
- * anyone else. Left for its own change with its own tests.
+ * NOT `web_fetch`, despite sharing the web-search toggle (`WEB_SEARCH_TOOLS =
+ * {web_search, web_fetch}` in core/tool-filtering.ts). It is never destructured as an
+ * override and never re-added, so it flows through the normal allowlist path: either
+ * the allowlist permits it (execute_tool's check passes, dispatch works) or the
+ * allowlist drops it entirely (the model never sees it). It can never be
+ * present-but-rejected, so it has nothing to be rescued from.
  */
 export const ALWAYS_UPFRONT_TOOLS: ReadonlySet<string> = new Set(['web_search', 'generate_image']);
 
