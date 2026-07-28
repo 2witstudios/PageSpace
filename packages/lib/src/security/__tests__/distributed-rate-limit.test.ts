@@ -402,6 +402,38 @@ describe('distributed-rate-limit', () => {
           expect(other.allowed).toBe(true);
         });
 
+        it('a shorter block expiring does not reset the still-active window', async () => {
+          const t0 = 10_000_000;
+          const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(t0);
+          try {
+            // The OAUTH_DEVICE_POLL shape: window far longer than the block.
+            // maxAttempts 4 → conservative threshold 2.
+            const config: RateLimitConfig = {
+              maxAttempts: 4,
+              windowMs: 300_000,
+              blockDurationMs: 60_000,
+            };
+            await checkDistributedRateLimit('farm', config);
+            await checkDistributedRateLimit('farm', config);
+            const blocked = await checkDistributedRateLimit('farm', config);
+            expect(blocked.allowed).toBe(false);
+
+            // The 1-min block expires while the 5-min window is still live:
+            // the counter must persist — a full reset would compound to ~5x
+            // the allowance per window (above even the configured limit).
+            nowSpy.mockReturnValue(t0 + 61_000);
+            const afterBlock = await checkDistributedRateLimit('farm', config);
+            expect(afterBlock.allowed).toBe(false);
+
+            // Once the WINDOW itself ends, a fresh allowance is correct.
+            nowSpy.mockReturnValue(t0 + 301_000);
+            const afterWindow = await checkDistributedRateLimit('farm', config);
+            expect(afterWindow.allowed).toBe(true);
+          } finally {
+            nowSpy.mockRestore();
+          }
+        });
+
         it('serializes the half-open probe: concurrent requests do not stampede Postgres', async () => {
           const t0 = 10_000_000;
           const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(t0);
