@@ -50,6 +50,7 @@ import {
   conservativeFallbackConfig,
   conservativeFallbackCheck,
   sweepExpiredInMemoryAttempts,
+  countAuthFailure,
   MAX_IN_MEMORY_ATTEMPT_ENTRIES,
   DISTRIBUTED_RATE_LIMITS,
   type RateLimitConfig,
@@ -342,22 +343,61 @@ describe('distributed-rate-limit', () => {
 
         it('resumes distributed enforcement after Postgres recovers, ignoring fallback counts', async () => {
           const { loggers } = await import('../../logging/logger-config');
+          const t0 = 10_000_000;
+          const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(t0);
+          try {
+            // Exhaust the conservative in-memory threshold during the outage.
+            await checkDistributedRateLimit('prod-recovery', testConfig);
+            await checkDistributedRateLimit('prod-recovery', testConfig);
+            const blocked = await checkDistributedRateLimit('prod-recovery', testConfig);
+            expect(blocked.allowed).toBe(false);
 
-          // Exhaust the conservative in-memory threshold during the outage.
-          await checkDistributedRateLimit('prod-recovery', testConfig);
-          await checkDistributedRateLimit('prod-recovery', testConfig);
-          const blocked = await checkDistributedRateLimit('prod-recovery', testConfig);
-          expect(blocked.allowed).toBe(false);
+            // The probe cooldown elapses and Postgres is healthy again: the
+            // distributed count (1) is authoritative — outage-time in-memory
+            // counts (already blocked!) must not bleed into the decision.
+            nowSpy.mockReturnValue(t0 + 31_000);
+            mockInsertReturning(1);
+            const recovered = await checkDistributedRateLimit('prod-recovery', testConfig);
+            expect(recovered.allowed).toBe(true);
+            expect(recovered.attemptsRemaining).toBe(4);
+            expect(loggers.api.info).toHaveBeenCalledWith(
+              'Distributed rate limiting enabled (Postgres)'
+            );
+          } finally {
+            nowSpy.mockRestore();
+          }
+        });
 
-          // Postgres comes back: the distributed count (1) is authoritative and
-          // the in-memory outage counts must not bleed into the decision.
-          mockInsertReturning(1);
-          const recovered = await checkDistributedRateLimit('prod-recovery', testConfig);
-          expect(recovered.allowed).toBe(true);
-          expect(recovered.attemptsRemaining).toBe(4);
-          expect(loggers.api.info).toHaveBeenCalledWith(
-            'Distributed rate limiting enabled (Postgres)'
-          );
+        it('short-circuits Postgres probes while the outage cooldown is active', async () => {
+          await checkDistributedRateLimit('breaker-a', testConfig); // probe fails → circuit opens
+          const probesAfterOpen = insertMock.mock.calls.length;
+
+          const second = await checkDistributedRateLimit('breaker-a', testConfig);
+          const other = await checkDistributedRateLimit('breaker-b', testConfig);
+
+          // No further Postgres work while the circuit is open — the stalled
+          // pool must not accumulate probes — yet limits are still enforced.
+          expect(insertMock.mock.calls.length).toBe(probesAfterOpen);
+          expect(second.allowed).toBe(true);
+          expect(other.allowed).toBe(true);
+        });
+
+        it('re-probes once after the cooldown and re-opens on continued failure', async () => {
+          const t0 = 10_000_000;
+          const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(t0);
+          try {
+            await checkDistributedRateLimit('breaker-reopen', testConfig); // opens circuit
+            const callsWhileOpen = insertMock.mock.calls.length;
+
+            nowSpy.mockReturnValue(t0 + 31_000);
+            await checkDistributedRateLimit('breaker-reopen', testConfig); // half-open probe fails
+            expect(insertMock.mock.calls.length).toBe(callsWhileOpen + 1);
+
+            await checkDistributedRateLimit('breaker-reopen', testConfig); // circuit re-opened
+            expect(insertMock.mock.calls.length).toBe(callsWhileOpen + 1);
+          } finally {
+            nowSpy.mockRestore();
+          }
         });
       });
     });
@@ -375,6 +415,22 @@ describe('distributed-rate-limit', () => {
         throw new Error('DB down');
       });
       await expect(resetDistributedRateLimit('fail-reset')).resolves.toBeUndefined();
+    });
+
+    it('skips the Postgres delete while the outage cooldown is active', async () => {
+      process.env.NODE_ENV = 'production';
+      mockInsertThrows(drizzleWrappedPgError());
+      const config: RateLimitConfig = { maxAttempts: 5, windowMs: 60_000 };
+      await checkDistributedRateLimit('reset-breaker', config); // opens circuit
+
+      deleteMock.mockClear();
+      await resetDistributedRateLimit('reset-breaker');
+      expect(deleteMock).not.toHaveBeenCalled();
+
+      // The in-memory side was still cleared: next check starts a fresh
+      // conservative window (first of 2 → 1 remaining).
+      const after = await checkDistributedRateLimit('reset-breaker', config);
+      expect(after.attemptsRemaining).toBe(1);
     });
   });
 
@@ -471,6 +527,19 @@ describe('distributed-rate-limit', () => {
       expect(status.retryAfter).toBeLessThanOrEqual(10);
     });
 
+    it('short-circuits status probes while the outage cooldown is active', async () => {
+      process.env.NODE_ENV = 'production';
+      mockInsertThrows(drizzleWrappedPgError());
+      await checkDistributedRateLimit('status-breaker', testConfig); // opens circuit
+
+      selectMock.mockClear();
+      const status = await getDistributedRateLimitStatus('status-breaker', testConfig);
+      expect(selectMock).not.toHaveBeenCalled();
+      // 1 of the conservative 2 attempts consumed during the outage.
+      expect(status.blocked).toBe(false);
+      expect(status.attemptsRemaining).toBe(1);
+    });
+
     it('includes weighted contribution from previous bucket', async () => {
       // Pin to bucket boundary: prevWeight = 1, effective = 1 + 10*1 = 11 → blocked.
       const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(60_000);
@@ -484,6 +553,22 @@ describe('distributed-rate-limit', () => {
       } finally {
         nowSpy.mockRestore();
       }
+    });
+  });
+
+  describe('countAuthFailure under outage cooldown', () => {
+    it('returns 0 without probing Postgres while the cooldown is active', async () => {
+      process.env.NODE_ENV = 'production';
+      mockInsertThrows(drizzleWrappedPgError());
+      await checkDistributedRateLimit('authfail-breaker', {
+        maxAttempts: 5,
+        windowMs: 60_000,
+      }); // opens circuit
+
+      const probes = insertMock.mock.calls.length;
+      const count = await countAuthFailure('user@example.com', 60_000);
+      expect(count).toBe(0);
+      expect(insertMock.mock.calls.length).toBe(probes);
     });
   });
 
@@ -680,11 +765,15 @@ describe('distributed-rate-limit', () => {
     });
 
     it('does not evict an actively blocked entry to admit new identifiers', async () => {
-      // maxAttempts 2 → conservative threshold 1; second check trips a long block.
+      // maxAttempts 2 → conservative threshold 1; second check trips the block.
+      // blockDurationMs equals windowMs deliberately: this is the
+      // FORM_SUBMISSION shape, where a blocked entry does NOT outlive newer
+      // window entries — eviction policies that merely prefer later-expiring
+      // entries still sacrifice this block.
       const config: RateLimitConfig = {
         maxAttempts: 2,
         windowMs: 60_000,
-        blockDurationMs: 600_000,
+        blockDurationMs: 60_000,
       };
       await checkDistributedRateLimit('evict-victim', config);
       const blocked = await checkDistributedRateLimit('evict-victim', config);
@@ -743,29 +832,76 @@ describe('distributed-rate-limit', () => {
       expect(r3.allowed).toBe(false);
     });
 
-    it('caps distinct tracked identifiers, evicting oldest-first under identifier flood', async () => {
+    it('denies previously unseen identifiers at capacity instead of evicting active counters', async () => {
       const config: RateLimitConfig = { maxAttempts: 4, windowMs: 60_000 };
 
       for (let i = 0; i < MAX_IN_MEMORY_ATTEMPT_ENTRIES; i++) {
         await checkDistributedRateLimit(`flood:${i}`, config);
       }
 
-      // A new identifier past the cap is still admitted and enforced (not
-      // denied, not unlimited) — the oldest entry is evicted to make room.
+      // Every tracked window is still active, so there is no safe slot: the
+      // unseen identifier is conservatively denied rather than resetting
+      // someone else's active limit (never fail open, never sacrifice a
+      // victim's counter to an identifier-rotation flood).
       const overCap = await checkDistributedRateLimit('flood:new', config);
-      expect(overCap.allowed).toBe(true);
+      expect(overCap.allowed).toBe(false);
+      expect(overCap.retryAfter).toBeGreaterThan(0);
 
-      // flood:0 was evicted, so its counter restarted: conservative threshold
-      // is floor(4/2) = 2, and a fresh first attempt reports 1 remaining. Had
-      // it survived the flood, this second attempt would report 0.
-      const evicted = await checkDistributedRateLimit('flood:0', config);
-      expect(evicted.allowed).toBe(true);
-      expect(evicted.attemptsRemaining).toBe(1);
+      // Existing counters were preserved: flood:0 is on its second attempt of
+      // the conservative threshold floor(4/2) = 2 → 0 remaining, not a fresh
+      // window.
+      const oldest = await checkDistributedRateLimit('flood:0', config);
+      expect(oldest.allowed).toBe(true);
+      expect(oldest.attemptsRemaining).toBe(0);
+    }, 30_000);
 
-      // A recent identifier kept its counter: second attempt → 0 remaining.
-      const retained = await checkDistributedRateLimit(`flood:${MAX_IN_MEMORY_ATTEMPT_ENTRIES - 1}`, config);
-      expect(retained.allowed).toBe(true);
-      expect(retained.attemptsRemaining).toBe(0);
+    it('reclaims expired entries at capacity instead of denying new identifiers', async () => {
+      const t0 = 10_000_000;
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(t0);
+      try {
+        const config: RateLimitConfig = { maxAttempts: 4, windowMs: 60_000 };
+        for (let i = 0; i < MAX_IN_MEMORY_ATTEMPT_ENTRIES; i++) {
+          await checkDistributedRateLimit(`stale:${i}`, config);
+        }
+
+        // Every tracked window has elapsed: capacity is reclaimable, so a new
+        // identifier must be admitted, not denied.
+        nowSpy.mockReturnValue(t0 + 61_000);
+        const fresh = await checkDistributedRateLimit('stale:new', config);
+        expect(fresh.allowed).toBe(true);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    }, 30_000);
+
+    it('reclaims expired capacity beyond the bounded scan via a throttled full sweep', async () => {
+      const t0 = 10_000_000;
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(t0);
+      try {
+        const longConfig: RateLimitConfig = { maxAttempts: 4, windowMs: 3_600_000 };
+        const shortConfig: RateLimitConfig = { maxAttempts: 4, windowMs: 60_000 };
+
+        // The oldest entries are long-lived and still active; everything
+        // behind them is expired but out of reach of the bounded scan.
+        for (let i = 0; i < 20; i++) {
+          await checkDistributedRateLimit(`long:${i}`, longConfig);
+        }
+        for (let i = 0; i < MAX_IN_MEMORY_ATTEMPT_ENTRIES - 20; i++) {
+          await checkDistributedRateLimit(`short:${i}`, shortConfig);
+        }
+
+        nowSpy.mockReturnValue(t0 + 61_000);
+        const fresh = await checkDistributedRateLimit('short:new', shortConfig);
+        expect(fresh.allowed).toBe(true);
+
+        // The long-lived active counters survived reclamation: second attempt
+        // on an existing window → 0 of the conservative 2 remaining.
+        const long0 = await checkDistributedRateLimit('long:0', longConfig);
+        expect(long0.allowed).toBe(true);
+        expect(long0.attemptsRemaining).toBe(0);
+      } finally {
+        nowSpy.mockRestore();
+      }
     }, 30_000);
   });
 
