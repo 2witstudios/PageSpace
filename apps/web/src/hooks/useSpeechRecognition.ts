@@ -1,6 +1,24 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { create } from 'zustand';
+
+/**
+ * Cross-surface dictation activity. Each `useSpeechRecognition()` instance
+ * is otherwise local state — a mounted sidebar chat and main chat each own
+ * an independent SpeechRecognition object — so consumers that need to know
+ * "is dictation active ANYWHERE" (e.g. to avoid Read Aloud's TTS getting
+ * transcribed back into a draft) can't read that off any single instance.
+ * A count (not a boolean) so two simultaneously-listening surfaces don't
+ * have one's stop clear the other's still-active state.
+ */
+interface DictationActivityState {
+  activeCount: number;
+}
+
+export const useDictationActivityStore = create<DictationActivityState>(() => ({
+  activeCount: 0,
+}));
 
 export interface UseSpeechRecognitionOptions {
   /** Callback when speech is transcribed */
@@ -45,6 +63,10 @@ export function useSpeechRecognition({
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onTranscriptRef = useRef(onTranscript);
+  // Guards against double-decrementing the shared activeCount — onerror is
+  // typically followed by onend for the same session, and this instance's
+  // unmount cleanup could otherwise also fire after one of those already did.
+  const isCountedActiveRef = useRef(false);
 
   // Keep callback ref updated
   onTranscriptRef.current = onTranscript;
@@ -67,12 +89,25 @@ export function useSpeechRecognition({
     recognition.interimResults = true;
     recognition.lang = lang;
 
+    const markActive = () => {
+      if (isCountedActiveRef.current) return;
+      isCountedActiveRef.current = true;
+      useDictationActivityStore.setState((s) => ({ activeCount: s.activeCount + 1 }));
+    };
+    const markInactive = () => {
+      if (!isCountedActiveRef.current) return;
+      isCountedActiveRef.current = false;
+      useDictationActivityStore.setState((s) => ({ activeCount: Math.max(0, s.activeCount - 1) }));
+    };
+
     recognition.onstart = () => {
       setIsListening(true);
+      markActive();
     };
 
     recognition.onend = () => {
       setIsListening(false);
+      markInactive();
     };
 
     recognition.onresult = (event) => {
@@ -93,6 +128,7 @@ export function useSpeechRecognition({
     recognition.onerror = (event) => {
       console.error('Speech recognition error:', event.error);
       setIsListening(false);
+      markInactive();
 
       const errorMessages: Record<string, string> = {
         'not-allowed': 'Microphone access denied. Check your browser permissions.',
@@ -115,6 +151,9 @@ export function useSpeechRecognition({
 
     return () => {
       recognition.stop();
+      // Belt-and-suspenders in case onend never fires before unmount —
+      // guarded by isCountedActiveRef, so this is a no-op when it already did.
+      markInactive();
       if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
     };
   }, [lang, continuous]);

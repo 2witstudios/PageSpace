@@ -158,7 +158,10 @@ export async function POST(request: Request) {
     }
     holdId = gate.holdId;
 
-    // Call OpenAI TTS API
+    // Call OpenAI TTS API. Forwards the caller's abort signal so a client
+    // that cancels mid-request (e.g. Read Aloud's Stop button) also cancels
+    // the upstream request — otherwise it runs to completion and gets
+    // billed regardless of the client having already discarded it.
     const response = await fetch('https://api.openai.com/v1/audio/speech', {
       method: 'POST',
       headers: {
@@ -172,6 +175,7 @@ export async function POST(request: Request) {
         speed: clampedSpeed,
         response_format: 'mp3',
       }),
+      signal: request.signal,
     });
 
     if (!response.ok) {

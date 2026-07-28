@@ -45,6 +45,7 @@ import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimi
 import { selectVoiceStreamText } from '@/lib/ai/streams/selectVoiceStreamText';
 import { selectVoiceActivationBaseline } from '@/lib/ai/streams/selectVoiceActivationBaseline';
 import { selectPostBaselineAssistantMessage } from '@/lib/ai/streams/selectPostBaselineAssistantMessage';
+import { useReadAloud } from '@/hooks/useReadAloud';
 import { createId } from '@paralleldrive/cuid2';
 import { useStopStream } from '@/hooks/useStopStream';
 import { useOwnStreamMirror } from '@/hooks/useOwnStreamMirror';
@@ -543,6 +544,15 @@ const SidebarChatTab: React.FC = () => {
   const disableVoiceMode = useVoiceModeStore((s) => s.disable);
   const isVoiceModeActive = isVoiceModeEnabled && voiceOwner === VOICE_OWNER;
 
+  // Read Aloud: on-demand TTS for everything the assistant said since the
+  // user's last turn, via a shared playback singleton (see readAloudPlayer).
+  const { isReadingAloud, toggleReadAloud, canReadAloud: canReadAloudFor } = useReadAloud();
+  const canReadAloud = useMemo(() => canReadAloudFor(plainMessages), [canReadAloudFor, plainMessages]);
+  const handleReadAloudClick = useCallback(
+    () => toggleReadAloud(plainMessages),
+    [toggleReadAloud, plainMessages]
+  );
+
   // Display preferences
   const { preferences: displayPreferences } = useDisplayPreferences();
 
@@ -865,7 +875,9 @@ const SidebarChatTab: React.FC = () => {
     ),
   });
 
-  // Voice mode toggle handler
+  // Voice mode toggle handler. Enabling Voice Mode also stops any
+  // in-progress read-aloud playback — enforced inside readAloudPlayer itself
+  // (subscribed to the voice-mode store), not here.
   const handleVoiceModeToggle = useCallback(() => {
     if (isVoiceModeActive) {
       disableVoiceMode();
@@ -1116,6 +1128,9 @@ const SidebarChatTab: React.FC = () => {
           variant="sidebar"
           onVoiceModeClick={handleVoiceModeToggle}
           isVoiceModeActive={isVoiceModeActive}
+          onReadAloudClick={handleReadAloudClick}
+          isReadingAloud={isReadingAloud}
+          canReadAloud={canReadAloud}
           attachments={attachments}
           onAddFiles={addFiles}
           onRemoveFile={removeFile}

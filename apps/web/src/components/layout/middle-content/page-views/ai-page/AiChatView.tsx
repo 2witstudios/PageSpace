@@ -49,6 +49,7 @@ import { shouldRefreshAfterUndo } from '@/lib/ai/streams/shouldRefreshAfterUndo'
 import { shouldPrependConversation } from '@/lib/ai/streams/shouldPrependConversation';
 import { shouldReloadOnComountComplete } from '@/lib/ai/streams/shouldReloadOnComountComplete';
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
+import { useReadAloud } from '@/hooks/useReadAloud';
 
 // Shared hooks and components
 import {
@@ -582,6 +583,15 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // (see loadMessagesForConversation's docblock for why it is still kept in sync).
   const renderedMessages = useRenderedMessages(page.id, currentConversationId);
   const plainMessages = useMemo(() => renderedMessages.map((r) => r.message), [renderedMessages]);
+
+  // Read Aloud: on-demand TTS for everything the assistant said since the
+  // user's last turn, via a shared playback singleton (see readAloudPlayer).
+  const { isReadingAloud, toggleReadAloud, canReadAloud: canReadAloudFor } = useReadAloud();
+  const canReadAloud = useMemo(() => canReadAloudFor(plainMessages), [canReadAloudFor, plainMessages]);
+  const handleReadAloudClick = useCallback(
+    () => toggleReadAloud(plainMessages),
+    [toggleReadAloud, plainMessages]
+  );
 
   // "Load older" (epic leaf 6.6, scroll-to-top): AiChatView's route IS the agent-conversation
   // route (page.id is the agentId), so the shared agent-mode loader applies directly.
@@ -1240,7 +1250,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     prepareSend,
   ]);
 
-  // Voice mode toggle handler
+  // Voice mode toggle handler. Enabling Voice Mode also stops any
+  // in-progress read-aloud playback — enforced inside readAloudPlayer itself
+  // (subscribed to the voice-mode store), not here.
   const handleVoiceModeToggle = useCallback(() => {
     if (isVoiceModeActive) {
       disableVoiceMode();
@@ -1535,6 +1547,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                   }}
                   onVoiceModeClick={handleVoiceModeToggle}
                   isVoiceModeActive={isVoiceModeActive}
+                  onReadAloudClick={handleReadAloudClick}
+                  isReadingAloud={isReadingAloud}
+                  canReadAloud={canReadAloud}
                   attachments={attachments}
                   onAddFiles={addFiles}
                   onRemoveFile={removeFile}

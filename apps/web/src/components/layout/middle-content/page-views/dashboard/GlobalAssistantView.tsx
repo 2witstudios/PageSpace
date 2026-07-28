@@ -108,6 +108,7 @@ import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimi
 import { selectVoiceStreamText } from '@/lib/ai/streams/selectVoiceStreamText';
 import { selectVoiceActivationBaseline } from '@/lib/ai/streams/selectVoiceActivationBaseline';
 import { selectPostBaselineAssistantMessage } from '@/lib/ai/streams/selectPostBaselineAssistantMessage';
+import { useReadAloud } from '@/hooks/useReadAloud';
 import { createId } from '@paralleldrive/cuid2';
 
 const VOICE_OWNER: VoiceModeOwner = 'global-assistant';
@@ -436,6 +437,15 @@ const GlobalAssistantView: React.FC = () => {
   // above) never renders post-cutover — it stays the transport/controller only.
   const renderedMessages = useRenderedMessages(streamChannelId ?? '', currentConversationId);
   const plainMessages = useMemo(() => renderedMessages.map((r) => r.message), [renderedMessages]);
+
+  // Read Aloud: on-demand TTS for everything the assistant said since the
+  // user's last turn, via a shared playback singleton (see readAloudPlayer).
+  const { isReadingAloud, toggleReadAloud, canReadAloud: canReadAloudFor } = useReadAloud();
+  const canReadAloud = useMemo(() => canReadAloudFor(plainMessages), [canReadAloudFor, plainMessages]);
+  const handleReadAloudClick = useCallback(
+    () => toggleReadAloud(plainMessages),
+    [toggleReadAloud, plainMessages]
+  );
   // Loading/error UI reads the cache entry's state (replaces the context's
   // isMessagesLoading and the dashboard store's isConversationMessagesLoading).
   const messagesLoadState = useConversationLoadState(currentConversationId);
@@ -899,7 +909,9 @@ const GlobalAssistantView: React.FC = () => {
     setLastAIResponse((current) => (current?.id === next.id ? current : next));
   }, [renderedMessages, isVoiceModeActive]);
 
-  // Voice mode toggle handler
+  // Voice mode toggle handler. Enabling Voice Mode also stops any
+  // in-progress read-aloud playback — enforced inside readAloudPlayer itself
+  // (subscribed to the voice-mode store), not here.
   const handleVoiceModeToggle = useCallback(() => {
     if (isVoiceModeActive) {
       disableVoiceMode();
@@ -1095,6 +1107,9 @@ const GlobalAssistantView: React.FC = () => {
               popupPlacement={props.inputPosition === 'centered' ? 'bottom' : 'top'}
               onVoiceModeClick={handleVoiceModeToggle}
               isVoiceModeActive={isVoiceModeActive}
+              onReadAloudClick={handleReadAloudClick}
+              isReadingAloud={isReadingAloud}
+              canReadAloud={canReadAloud}
               attachments={attachments}
               onAddFiles={addFiles}
               onRemoveFile={removeFile}
