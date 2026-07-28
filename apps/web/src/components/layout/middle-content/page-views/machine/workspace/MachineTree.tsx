@@ -8,7 +8,7 @@ import { useMachineBranches } from '@/hooks/useMachineBranches';
 import ConfirmRemoveDialog from './ConfirmRemoveDialog';
 import RemoveButton from './RemoveButton';
 import NodeActionPalette from './NodeActionPalette';
-import { SidebarLoading } from '../tabs/tab-states';
+import { SidebarLoading } from '@/components/layout/left-sidebar/sidebar-states';
 
 /** A node in the Machine → Project → Branch tree, passed to `onSelectNode` and `renderNodeChildren`. */
 export type MachineTreeNode =

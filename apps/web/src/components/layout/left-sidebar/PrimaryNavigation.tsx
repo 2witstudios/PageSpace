@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Calendar, CheckSquare, Folder, Hash, Home, MessageSquare, SquareTerminal } from "lucide-react";
+import { Bot, Calendar, CheckSquare, Folder, Hash, Home, MessageSquare } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
@@ -20,8 +20,8 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
     const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
     const badges = useSidebarBadges();
     const { user } = useAuth();
-    // Machines are an app-admin feature end to end (only an admin can create a
-    // MACHINE page, and MachineView mounts no tabs for anyone else), so a
+    // Agent sandboxes are an app-admin feature end to end (the session routes
+    // refuse a non-admin, and the surface mounts no session view for one), so a
     // non-admin gets no nav entry rather than a destination that refuses them.
     const isAdmin = user?.role === "admin";
 
@@ -69,13 +69,14 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
             exact: false,
             badge: badges.calendar,
         },
-        // Driveless href hits a redirect, not a second implementation of the
-        // surface — the drive always ends up in the path.
+        // Both hrefs are real views: the driveless one aggregates every
+        // accessible drive's agents, the drive-scoped one shows just that
+        // drive's. Neither redirects to the other.
         ...(isAdmin
             ? [{
-                name: "Development",
-                href: driveId ? `/dashboard/${driveId}/development` : "/dashboard/development",
-                icon: SquareTerminal,
+                name: "Agents",
+                href: driveId ? `/dashboard/${driveId}/agents` : "/dashboard/agents",
+                icon: Bot,
                 exact: false,
                 badge: 0,
             }]
