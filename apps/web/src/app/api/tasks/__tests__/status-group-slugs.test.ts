@@ -135,6 +135,23 @@ describe('groupTaskListsByAllowedStatusSlugs', () => {
     expect(result[0].slugs).toEqual(['open']);
   });
 
+  it('does not collide slug sets whose joined text is identical (separator-safe key)', () => {
+    // ['a b'] and ['a', 'b'] would collide under a space-joined key; the
+    // grouping key must treat them as distinct sets.
+    const result = groupTaskListsByAllowedStatusSlugs(
+      ['list_one', 'list_two'],
+      configs([
+        ['list_one', [{ slug: 'a b', group: 'todo' }]],
+        ['list_two', [{ slug: 'a', group: 'todo' }, { slug: 'b', group: 'todo' }]],
+      ]),
+      'active',
+    );
+
+    expect(result).toHaveLength(2);
+    expect(result.find(g => g.listPageIds.includes('list_one'))?.slugs).toEqual(['a b']);
+    expect(result.find(g => g.listPageIds.includes('list_two'))?.slugs).toEqual(['a', 'b']);
+  });
+
   it('merges a custom config whose slug set equals the defaults with default-config lists', () => {
     const result = groupTaskListsByAllowedStatusSlugs(
       ['list_custom', 'list_default'],

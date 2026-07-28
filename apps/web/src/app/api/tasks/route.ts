@@ -22,8 +22,9 @@ import { decryptTaskUserRelations } from '@/lib/tasks/decrypt-task-relations';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
-// Page size for the cursor-paged task-list expansion. Keeps each query (and
-// each scoped-token permission batch) bounded regardless of drive-universe size.
+// Page size for the cursor-paged task-list expansion: bounds each pages query
+// regardless of drive-universe size. The scoped-token permission filter runs
+// ONCE over the accumulated ids after the loop (see below), not per chunk.
 const TASK_LIST_PAGE_CHUNK = 500;
 
 // Query parameter schema
@@ -154,7 +155,9 @@ export async function GET(request: Request) {
     // chunks — the old single unbounded findMany materialized every task list
     // in the drive universe (7,703 full rows for the 2026-07-28 OOM victim).
     // Enrichment data (titles, drive ids, status configs) is fetched later, for
-    // only the task lists represented in the response page.
+    // only the task lists represented in the response page. Chunked reads are
+    // not one snapshot: a list created mid-request whose random cuid sorts
+    // before the cursor is missed for this request only (self-heals next call).
     let taskListPageIds: string[] = [];
     let taskListCursor: string | undefined;
     for (;;) {
@@ -358,7 +361,11 @@ export async function GET(request: Request) {
       // Materializing child ids app-side would scale bind parameters with the
       // number of TASKS (not lists) and can exceed Postgres's 65,535-parameter
       // cap; per-LIST subqueries (the old shape) put thousands of subplans in
-      // one statement. Per-set subqueries avoid both.
+      // one statement. Per-set subqueries avoid both. Binds still scale with
+      // the LIST count (~2 per list across validTaskPageSubquery + the groups),
+      // so the protocol cap is reached around ~32k task lists — 4x the largest
+      // observed universe — and the failure mode there is a closed 500, not an
+      // OOM.
       const perSlugSetConditions = slugGroups.map(group => and(
         inArray(taskItems.pageId, db
           .select({ id: pages.id })
@@ -408,6 +415,11 @@ export async function GET(request: Request) {
 
     // Enrichment data (list page info + status configs) covers only the task
     // lists represented in this page of results, keyed by the task list PAGE ID.
+    // Deliberate contract narrowing (was: every accessible list) — fetching all
+    // lists' configs is what this fix removes. Clients fall back to
+    // DEFAULT_STATUS_CONFIG for lists absent from the map (task-helpers.ts), so
+    // unrepresented lists' custom statuses don't appear in filter dropdowns
+    // until their tasks are in the page.
     const representedListPageIds = [...new Set(
       decryptedTasks
         .map(task => task.page?.parentId)
