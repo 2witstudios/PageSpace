@@ -22,12 +22,23 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...c) => ['and', ...c]),
   asc: vi.fn((c) => ['asc', c]),
   isNotNull: vi.fn((c) => ['isNotNull', c]),
+  ne: vi.fn((a, b) => ['ne', a, b]),
   desc: vi.fn((c) => ['desc', c]),
   inArray: vi.fn((c, v) => ['inArray', c, v]),
 }));
 
 // The shells import `db` only as a type; provide a stub so the module loads.
 vi.mock('@pagespace/db/db', () => ({ db: {} }));
+
+import { taskItems as taskItemsTable, taskAssignees as taskAssigneesTable } from '@pagespace/db/schema/tasks';
+import { workflows as workflowsTable } from '@pagespace/db/schema/workflows';
+
+/** Identity of the mocked table objects, so delete() can be labelled unambiguously. */
+const schemaTables = {
+  taskItems: taskItemsTable as unknown as Record<string, string>,
+  taskAssignees: taskAssigneesTable as unknown as Record<string, string>,
+  workflows: workflowsTable as unknown as Record<string, string>,
+};
 
 import {
   ensureTaskItemForPage,
@@ -54,6 +65,10 @@ function makeTx(config: {
   /** task_items ids the scrub should find, and the workflow ids their triggers name. */
   scrubTaskItemIds?: string[];
   scrubWorkflowIds?: string[];
+  /** Agent page referenced by each found task item, and agents already in the target drive. */
+  scrubAgentIdByItem?: Record<string, string>;
+  scrubAssigneeAgentIds?: string[];
+  agentsInTargetDrive?: string[];
   /** Status carried by the preserved task_items row, and the destination's vocabulary. */
   existingItemStatus?: string;
   existingItemCompletedAt?: Date | null;
@@ -66,6 +81,9 @@ function makeTx(config: {
     lastPosition = null,
     scrubTaskItemIds = [],
     scrubWorkflowIds = [],
+    scrubAgentIdByItem = {},
+    scrubAssigneeAgentIds = [],
+    agentsInTargetDrive = [],
     existingItemStatus = 'pending',
     existingItemCompletedAt = null,
     destinationStatusConfigs = [],
@@ -90,31 +108,41 @@ function makeTx(config: {
 
   const scrubSelects: unknown[][] = [];
   const deletedTables: string[] = [];
-  // The scrub issues three selects in order: task_items by pageId, then task_triggers.
-  const scrubSelectResults = [
-    scrubTaskItemIds.map((id) => ({ id })),
-    scrubWorkflowIds.map((workflowId) => ({ workflowId })),
-  ];
-  let scrubSelectCall = 0;
 
   const tx = {
+    // Dispatch on the PROJECTION SHAPE, not call order: order-based dispatch would let
+    // two swapped selects — or a query against the wrong column — pass unnoticed.
     select: vi.fn((projection?: Record<string, unknown>) => {
-      // getPageType selects { type }; the scrub selects { id } / { workflowId }.
-      if (projection && !('type' in projection)) {
-        return {
-          from: () => ({
-            where: (cond: unknown[]) => {
-              scrubSelects.push(cond);
-              return Promise.resolve(scrubSelectResults[scrubSelectCall++] ?? []);
-            },
-          }),
-        };
-      }
-      return selectChain;
+      const keys = projection ? Object.keys(projection).sort().join(',') : '';
+      const result =
+        keys === 'assigneeAgentId,id'
+          ? scrubTaskItemIds.map((id) => ({ id, assigneeAgentId: scrubAgentIdByItem[id] ?? null }))
+        : keys === 'agentPageId' ? scrubAssigneeAgentIds.map((agentPageId) => ({ agentPageId }))
+        : keys === 'workflowId' ? scrubWorkflowIds.map((workflowId) => ({ workflowId }))
+        : keys === 'id' ? agentsInTargetDrive.map((id) => ({ id }))
+        : null;
+      if (result === null) return selectChain;
+      return {
+        from: () => ({
+          where: (cond: unknown[]) => {
+            scrubSelects.push(cond);
+            return Promise.resolve(result);
+          },
+        }),
+      };
     }),
-    delete: vi.fn((table: { pageId?: string; taskId?: string; id?: string }) => ({
+    // Label by the table's OWN identity, not by which keys it happens to expose —
+    // taskItems and workflows both carry `id`, and keying off that silently labelled
+    // every taskItems delete as 'workflows', making the preserve-the-row assertion
+    // impossible to fail.
+    delete: vi.fn((table: Record<string, string>) => ({
       where: (cond: unknown[]) => {
-        deletedTables.push(table?.taskId ? 'taskAssignees' : table?.id ? 'workflows' : 'taskItems');
+        const label =
+          table === schemaTables.taskAssignees ? 'taskAssignees'
+          : table === schemaTables.workflows ? 'workflows'
+          : table === schemaTables.taskItems ? 'taskItems'
+          : 'unknown';
+        deletedTables.push(label);
         deletedPageIds.push(cond?.[2] as string);
         return Promise.resolve();
       },
@@ -374,6 +402,39 @@ describe('syncTaskItemOnMove', () => {
     expect(taskItemUpdates).toEqual([{ status: 'shipped' }]);
   });
 
+  // A slug match alone is not proof the status still means the same thing: slugs come
+  // from slugify(name) and each list picks its own group, so "Review" can be `done` in
+  // one list and `in_progress` in another. Carrying it over unchanged leaves the row's
+  // group disagreeing with its own completedAt.
+  it('remaps a slug the destination defines in the WRONG group for a completed task', async () => {
+    const { tx, taskItemUpdates } = makeTx({
+      pageTypes: { old: 'TASK_LIST', new: 'TASK_LIST' },
+      existingItems: new Set(['list']),
+      existingItemStatus: 'review',
+      existingItemCompletedAt: new Date('2026-01-01'),
+      destinationStatusConfigs: [
+        { slug: 'review', group: 'in_progress', position: 0 },
+        { slug: 'shipped', group: 'done', position: 1 },
+      ],
+    });
+    await syncTaskItemOnMove(tx as never, { movedPageId: 'list', movedPageType: 'TASK_LIST', oldParentId: 'old', newParentId: 'new', userId: 'u' });
+    expect(taskItemUpdates).toEqual([{ status: 'shipped' }]);
+  });
+
+  it('remaps a slug the destination defines as done for an UNfinished task', async () => {
+    const { tx, taskItemUpdates } = makeTx({
+      pageTypes: { old: 'TASK_LIST', new: 'TASK_LIST' },
+      existingItems: new Set(['list']),
+      existingItemStatus: 'review',
+      destinationStatusConfigs: [
+        { slug: 'review', group: 'done', position: 0 },
+        { slug: 'todo', group: 'todo', position: 1 },
+      ],
+    });
+    await syncTaskItemOnMove(tx as never, { movedPageId: 'list', movedPageType: 'TASK_LIST', oldParentId: 'old', newParentId: 'new', userId: 'u' });
+    expect(taskItemUpdates).toEqual([{ status: 'todo' }]);
+  });
+
   // A list whose owner deleted 'pending' (permitted, via migrateToSlug) would otherwise
   // get a brand-new task seeded with a status it does not define — the very defect
   // normalizeStatusForList exists to prevent, reintroduced on the insert path.
@@ -415,14 +476,14 @@ describe('syncTaskItemOnMove', () => {
 describe('scrubDriveScopedTaskAssociations', () => {
   it('no-ops on an empty page list without touching the database', async () => {
     const { tx, deletedTables } = makeTx();
-    await scrubDriveScopedTaskAssociations(tx as never, { pageIds: [] });
+    await scrubDriveScopedTaskAssociations(tx as never, { pageIds: [], targetDriveId: 'drive-target' });
     expect(tx.select).not.toHaveBeenCalled();
     expect(deletedTables).toHaveLength(0);
   });
 
   it('no-ops when none of the moved pages are tasks', async () => {
     const { tx, deletedTables } = makeTx({ scrubTaskItemIds: [] });
-    await scrubDriveScopedTaskAssociations(tx as never, { pageIds: ['p1', 'p2'] });
+    await scrubDriveScopedTaskAssociations(tx as never, { pageIds: ['p1', 'p2'], targetDriveId: 'drive-target' });
     expect(deletedTables).toHaveLength(0);
   });
 
@@ -433,27 +494,46 @@ describe('scrubDriveScopedTaskAssociations', () => {
     const { tx, deletedTables } = makeTx({
       scrubTaskItemIds: ['item-1'],
       scrubWorkflowIds: ['wf-1', 'wf-2'],
+      scrubAgentIdByItem: { 'item-1': 'agent-left-behind' },
     });
 
-    await scrubDriveScopedTaskAssociations(tx as never, { pageIds: ['p1'] });
+    await scrubDriveScopedTaskAssociations(tx as never, { pageIds: ['p1'], targetDriveId: 'drive-target' });
 
     expect(deletedTables).toEqual(['workflows', 'taskAssignees']);
   });
 
   it('clears the agent assignee and drops agent assignee rows', async () => {
-    const { tx, taskItemUpdates, deletedTables } = makeTx({ scrubTaskItemIds: ['item-1'] });
+    const { tx, taskItemUpdates, deletedTables } = makeTx({
+      scrubTaskItemIds: ['item-1'],
+      scrubAgentIdByItem: { 'item-1': 'agent-left-behind' },
+    });
 
-    await scrubDriveScopedTaskAssociations(tx as never, { pageIds: ['p1'] });
+    await scrubDriveScopedTaskAssociations(tx as never, { pageIds: ['p1'], targetDriveId: 'drive-target' });
 
     expect(taskItemUpdates).toEqual([{ assigneeAgentId: null }]);
     expect(deletedTables).toContain('taskAssignees');
+  });
+
+  // Moving a project folder that carries BOTH its task list and the agent it assigns
+  // work to must not silently drop the assignment — that agent is not stale.
+  it('leaves alone an agent that moved into the target drive with the task', async () => {
+    const { tx, taskItemUpdates, deletedTables } = makeTx({
+      scrubTaskItemIds: ['item-1'],
+      scrubAgentIdByItem: { 'item-1': 'agent-came-along' },
+      agentsInTargetDrive: ['agent-came-along'],
+    });
+
+    await scrubDriveScopedTaskAssociations(tx as never, { pageIds: ['p1'], targetDriveId: 'drive-target' });
+
+    expect(taskItemUpdates).toHaveLength(0);
+    expect(deletedTables).not.toContain('taskAssignees');
   });
 
   // Human assignees, priority, dueDate and metadata are not drive-scoped, so the
   // scrub must not be a blanket row reset.
   it('does not delete the task_items rows themselves', async () => {
     const { tx, deletedTables } = makeTx({ scrubTaskItemIds: ['item-1'] });
-    await scrubDriveScopedTaskAssociations(tx as never, { pageIds: ['p1'] });
+    await scrubDriveScopedTaskAssociations(tx as never, { pageIds: ['p1'], targetDriveId: 'drive-target' });
     expect(deletedTables).not.toContain('taskItems');
   });
 });

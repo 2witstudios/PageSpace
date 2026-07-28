@@ -395,7 +395,7 @@ describe('movePagesToDrive', () => {
 
       expect(scrubDriveScopedTaskAssociations).toHaveBeenCalledWith(
         expect.anything(),
-        { pageIds: ['page-1', 'child-1', 'grandchild-1'] },
+        { pageIds: ['page-1', 'child-1', 'grandchild-1'], targetDriveId: TARGET_DRIVE },
       );
     });
 

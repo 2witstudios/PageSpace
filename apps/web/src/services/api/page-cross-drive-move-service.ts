@@ -330,6 +330,7 @@ export async function movePagesToDrive(
         // the boundary.
         await scrubDriveScopedTaskAssociations(tx, {
           pageIds: [...cascadeRoots, ...movedDescendants],
+          targetDriveId,
         });
       }
 

@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db'
-import { eq, and, asc, inArray, isNotNull } from '@pagespace/db/operators'
+import { eq, ne, and, asc, inArray, isNotNull } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskAssignees, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks'
 import { taskTriggers } from '@pagespace/db/schema/task-triggers'
@@ -100,6 +100,27 @@ export async function ensureTaskListForPage(
 const STATUS_CONFIG_REMAP_LIMIT = 200
 
 /**
+ * Postgres caps a statement at 65535 bind parameters. The cascade binds one inArray per
+ * tree level, which is naturally bounded; a whole-subtree scrub is not, so it chunks.
+ */
+const SCRUB_CHUNK_SIZE = 1000
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
+  return out
+}
+
+/**
+ * Whether a status group agrees with the row's own completion stamp. `completedAt` is
+ * the one completion signal that travels with the row and does not depend on any list's
+ * vocabulary, so it is the arbiter when the two could disagree.
+ */
+function isGroupConsistentWithCompletion(group: string, completedAt: Date | null): boolean {
+  return completedAt ? group === 'done' : group !== 'done'
+}
+
+/**
  * Keep a PRESERVED task row's status inside its new list's vocabulary.
  *
  * `task_items.status` is a bare slug with no foreign key; its meaning comes from the
@@ -120,16 +141,19 @@ async function normalizeStatusForList(
 ): Promise<void> {
   const { item, taskListId } = params
 
-  // Fast path: one indexed lookup on the (taskListId, slug) unique key. The status is
-  // valid for its new list in every case except the one this function exists for, so
-  // the full vocabulary is only fetched when a remap is actually needed.
+  // Fast path: one indexed lookup on the (taskListId, slug) unique key. A slug match
+  // alone is NOT proof the status still means what it meant — slugs come from
+  // slugify(name) and each list picks its own group, so "Review" can be `done` in one
+  // list and `in_progress` in another. Carrying such a status over unchanged leaves the
+  // row's group disagreeing with its own completedAt, which is the same incoherence a
+  // missing slug produces: ticked-but-counted-incomplete, or the reverse.
   const alreadyValid = await tx.query.taskStatusConfigs.findFirst({
     where: and(
       eq(taskStatusConfigs.taskListId, taskListId),
       eq(taskStatusConfigs.slug, item.status),
     ),
   })
-  if (alreadyValid) return
+  if (alreadyValid && isGroupConsistentWithCompletion(alreadyValid.group, item.completedAt)) return
 
   const configs = await tx.query.taskStatusConfigs.findMany({
     where: eq(taskStatusConfigs.taskListId, taskListId),
@@ -139,12 +163,9 @@ async function normalizeStatusForList(
   // A list with no configs at all has no vocabulary to conform to.
   if (configs.length === 0) return
 
-  // Never fall back across the done boundary. PUT /tasks/statuses validates each
-  // config's group but does not guarantee a list retains one of each, so a plain
-  // `?? configs[0]` could drop an unfinished task onto a done-group slug (ticked and
-  // struck through while every completedAt-based count still calls it incomplete) or
-  // the reverse. Completed work stays in a done slug or, failing that, the last one;
-  // unfinished work stays in any non-done slug.
+  // Never land on the wrong side of the done boundary. (The per-group deletion guard in
+  // the statuses route means a list with any configs keeps at least one of each group,
+  // so the final `?? configs[...]` arms are defence rather than live paths.)
   const replacement = item.completedAt
     ? (configs.find((config) => config.group === 'done') ?? configs[configs.length - 1])
     : (configs.find((config) => config.group === 'todo')
@@ -163,7 +184,19 @@ async function normalizeStatusForList(
  * migrateToSlug) gets its own first todo-group slug instead, so the seed can never be a
  * status its own list does not define.
  */
-async function resolveSeedStatus(tx: Tx, taskListId: string): Promise<string> {
+async function resolveSeedStatus(
+  tx: Tx,
+  taskListId: string,
+  cache?: Map<string, string>,
+): Promise<string> {
+  const cached = cache?.get(taskListId)
+  if (cached !== undefined) return cached
+  const resolved = await resolveSeedStatusUncached(tx, taskListId)
+  cache?.set(taskListId, resolved)
+  return resolved
+}
+
+async function resolveSeedStatusUncached(tx: Tx, taskListId: string): Promise<string> {
   const defaultSlug = DEFAULT_TASK_STATUSES[0].slug
   const hasDefault = await tx.query.taskStatusConfigs.findFirst({
     where: and(
@@ -197,50 +230,136 @@ async function resolveSeedStatus(tx: Tx, taskListId: string): Promise<string> {
  *     driveId; a drive-B member completing the task would otherwise fire a drive-A
  *     agent run seeded with drive-B content.
  *
- * The workflows rows are deleted FIRST and by explicit id: `task_triggers.taskItemId`
- * cascades from `task_items`, so any approach that removes triggers first leaves the
- * workflows behind, orphaned and unreachable (the hazard task-trigger-helpers'
- * disableTaskTriggers documents). Everything runs in the caller's transaction, so a
- * failed move takes the scrub with it.
+ * Only associations that genuinely stayed behind are dropped: an agent page that moved
+ * WITH the task (a project folder carrying both its task list and its agent) is still
+ * valid in the new drive and is left alone. Everything runs in the caller's
+ * transaction, so a failed move takes the scrub with it, and every id list is chunked
+ * because a whole subtree can exceed Postgres' bind-parameter cap.
  */
 export async function scrubDriveScopedTaskAssociations(
   tx: Tx,
-  params: { pageIds: string[] },
+  params: { pageIds: string[]; targetDriveId: string },
 ): Promise<void> {
-  const { pageIds } = params
+  const { pageIds, targetDriveId } = params
   if (pageIds.length === 0) return
 
+  const taskItemIds: string[] = []
+  const agentPageIds = new Set<string>()
+  for (const batch of chunk(pageIds, SCRUB_CHUNK_SIZE)) {
+    const rows = await tx
+      .select({ id: taskItems.id, assigneeAgentId: taskItems.assigneeAgentId })
+      .from(taskItems)
+      .where(inArray(taskItems.pageId, batch))
+    for (const row of rows) {
+      taskItemIds.push(row.id)
+      if (row.assigneeAgentId) agentPageIds.add(row.assigneeAgentId)
+    }
+  }
+  if (taskItemIds.length === 0) return
+
+  for (const batch of chunk(taskItemIds, SCRUB_CHUNK_SIZE)) {
+    const rows = await tx
+      .select({ agentPageId: taskAssignees.agentPageId })
+      .from(taskAssignees)
+      .where(and(inArray(taskAssignees.taskId, batch), isNotNull(taskAssignees.agentPageId)))
+    for (const row of rows) if (row.agentPageId) agentPageIds.add(row.agentPageId)
+  }
+
+  // An agent that travelled WITH the task is not stale — moving a project folder that
+  // contains both a task list and the agent it assigns work to must not silently drop
+  // the assignment. Only agents left behind in the old drive are scrubbed.
+  const staleAgentIds = await resolveAgentsOutsideDrive(tx, [...agentPageIds], targetDriveId)
+
+  await deleteTaskTriggerWorkflows(tx, taskItemIds, { exceptInDriveId: targetDriveId })
+
+  if (staleAgentIds.length === 0) return
+
+  for (const batch of chunk(taskItemIds, SCRUB_CHUNK_SIZE)) {
+    await tx
+      .delete(taskAssignees)
+      .where(and(inArray(taskAssignees.taskId, batch), inArray(taskAssignees.agentPageId, staleAgentIds)))
+
+    await tx
+      .update(taskItems)
+      .set({ assigneeAgentId: null })
+      .where(and(inArray(taskItems.id, batch), inArray(taskItems.assigneeAgentId, staleAgentIds)))
+  }
+}
+
+/**
+ * Delete the workflows backing these tasks' triggers, by explicit id.
+ *
+ * Order is the whole point: `task_triggers.taskItemId` cascades from `task_items`, so
+ * anything that removes the task (or its triggers) first leaves the workflows behind,
+ * unreachable from any task and never cleaned up. `disableTaskTriggers` documents the
+ * same hazard for the hard-delete paths; this variant runs inside the caller's
+ * transaction so a failed move rolls the deletion back with it.
+ *
+ * A task-trigger workflow is created 1:1 with its trigger and never shared (the
+ * (taskItemId, triggerType) unique constraint enforces it), so deleting by id cannot
+ * affect another task.
+ */
+async function deleteTaskTriggerWorkflows(
+  tx: Tx,
+  taskItemIds: string[],
+  options?: { exceptInDriveId?: string },
+): Promise<void> {
+  for (const batch of chunk(taskItemIds, SCRUB_CHUNK_SIZE)) {
+    const triggerRows = await tx
+      .select({ workflowId: taskTriggers.workflowId })
+      .from(taskTriggers)
+      .where(inArray(taskTriggers.taskItemId, batch))
+    if (triggerRows.length === 0) continue
+    const workflowIds = triggerRows.map((row) => row.workflowId)
+    for (const wfBatch of chunk(workflowIds, SCRUB_CHUNK_SIZE)) {
+      await tx.delete(workflows).where(
+        options?.exceptInDriveId
+          ? and(inArray(workflows.id, wfBatch), ne(workflows.driveId, options.exceptInDriveId))
+          : inArray(workflows.id, wfBatch),
+      )
+    }
+  }
+}
+
+/** Same, addressed by page rather than task-item id (the remove branch has no id yet). */
+async function deleteTaskTriggerWorkflowsForPages(tx: Tx, pageIds: string[]): Promise<void> {
   const rows = await tx
     .select({ id: taskItems.id })
     .from(taskItems)
     .where(inArray(taskItems.pageId, pageIds))
   if (rows.length === 0) return
-  const taskItemIds = rows.map((row) => row.id)
+  await deleteTaskTriggerWorkflows(tx, rows.map((row) => row.id))
+}
 
-  const triggerRows = await tx
-    .select({ workflowId: taskTriggers.workflowId })
-    .from(taskTriggers)
-    .where(inArray(taskTriggers.taskItemId, taskItemIds))
-  if (triggerRows.length > 0) {
-    // Deleting the workflow cascades its task_triggers rows away.
-    await tx.delete(workflows).where(inArray(workflows.id, triggerRows.map((r) => r.workflowId)))
+/** The subset of `agentPageIds` whose pages do NOT live in `driveId`. */
+async function resolveAgentsOutsideDrive(
+  tx: Tx,
+  agentPageIds: string[],
+  driveId: string,
+): Promise<string[]> {
+  if (agentPageIds.length === 0) return []
+  const inDrive = new Set<string>()
+  for (const batch of chunk(agentPageIds, SCRUB_CHUNK_SIZE)) {
+    const rows = await tx
+      .select({ id: pages.id })
+      .from(pages)
+      .where(and(inArray(pages.id, batch), eq(pages.driveId, driveId)))
+    for (const row of rows) inDrive.add(row.id)
   }
-
-  await tx
-    .delete(taskAssignees)
-    .where(and(inArray(taskAssignees.taskId, taskItemIds), isNotNull(taskAssignees.agentPageId)))
-
-  await tx
-    .update(taskItems)
-    .set({ assigneeAgentId: null })
-    .where(inArray(taskItems.id, taskItemIds))
+  return agentPageIds.filter((id) => !inDrive.has(id))
 }
 
 async function addTaskItemUnderParent(
   tx: Tx,
-  params: { pageId: string; parentId: string; userId: string },
+  params: {
+    pageId: string;
+    parentId: string;
+    userId: string;
+    /** Shared across a backfill loop: the parent is fixed, so the seed is too. */
+    seedStatusCache?: Map<string, string>;
+  },
 ): Promise<void> {
-  const { pageId, parentId, userId } = params
+  const { pageId, parentId, userId, seedStatusCache } = params
 
   const taskList = await ensureTaskListForPage(tx, { pageId: parentId, title: 'Task List', userId })
 
@@ -256,7 +375,11 @@ async function addTaskItemUnderParent(
   // can both pass the findFirst check above, and task_items.pageId is unique — without
   // this a second insert would 500 the read. The findFirst stays as a cheap fast path.
   await tx.insert(taskItems).values(
-    buildTaskItemInsert({ pageId, userId, status: await resolveSeedStatus(tx, taskList.id) }),
+    buildTaskItemInsert({
+      pageId,
+      userId,
+      status: await resolveSeedStatus(tx, taskList.id, seedStatusCache),
+    }),
   ).onConflictDoNothing({ target: taskItems.pageId })
 }
 
@@ -311,6 +434,10 @@ export async function syncTaskItemOnMove(
   })
 
   if (action.shouldRemove) {
+    // Delete the trigger workflows BEFORE the row: task_triggers.taskItemId cascades
+    // from task_items, so dropping the row first wipes the triggers and strands their
+    // workflows rows — unreachable from any task, and never cleaned up.
+    await deleteTaskTriggerWorkflowsForPages(tx, [movedPageId])
     await tx.delete(taskItems).where(eq(taskItems.pageId, movedPageId))
   }
 
@@ -346,8 +473,11 @@ export async function backfillMissingTaskItems(
   if (missing.length === 0) return
 
   await database.transaction(async (tx) => {
+    // parentId is fixed for the whole loop, so its seed status is resolved once
+    // rather than re-queried for every missing row on this hot read path.
+    const seedStatusCache = new Map<string, string>()
     for (const pageId of missing) {
-      await addTaskItemUnderParent(tx, { pageId, parentId, userId })
+      await addTaskItemUnderParent(tx, { pageId, parentId, userId, seedStatusCache })
     }
   })
 }
