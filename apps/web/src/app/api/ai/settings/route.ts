@@ -7,7 +7,7 @@ import {
   buildProviderAvailabilityMap,
   isProviderAvailable,
 } from '@/lib/ai/core/ai-utils';
-import { ONPREM_ALLOWED_PROVIDERS, DYNAMIC_MODEL_PROVIDERS, DEFAULT_PROVIDER, DEFAULT_MODEL, isValidModel, ADMIN_ONLY_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
+import { ONPREM_ALLOWED_PROVIDERS, DYNAMIC_MODEL_PROVIDERS, isValidModel, resolveProviderModel, ADMIN_ONLY_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
 import { requiresProSubscription, createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
@@ -45,9 +45,22 @@ export async function GET(request: Request) {
       action: 'get_settings',
     } });
 
+    // Resolve the stored pair through the same function the provider factory uses, so
+    // the selection we report is the one that would actually run. A user whose stored
+    // model has since been delisted from the catalog (model retirements happen every
+    // catalog refresh) would otherwise be shown a model the selector can't offer, while
+    // their requests silently ran the substituted default. Local/dynamic providers serve
+    // runtime-discovered models, so resolveProviderModel gates only their name.
+    const { provider: currentProvider, model: currentModel } = resolveProviderModel(
+      null,
+      null,
+      user?.currentAiProvider,
+      user?.currentAiModel,
+    );
+
     return NextResponse.json({
-      currentProvider: user?.currentAiProvider || DEFAULT_PROVIDER,
-      currentModel: user?.currentAiModel || DEFAULT_MODEL,
+      currentProvider,
+      currentModel,
       imageGenerationModel: user?.imageGenerationModel ?? null,
       userSubscriptionTier: user?.subscriptionTier || 'free',
       isAdmin: auth.role === 'admin',

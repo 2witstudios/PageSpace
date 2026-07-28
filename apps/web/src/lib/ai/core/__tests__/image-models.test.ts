@@ -41,7 +41,7 @@ describe('isImageOutputModel (pure)', () => {
       given: 'the DEFAULT_IMAGE_MODEL constant',
       should: 'be a google gemini flash image id',
       actual: DEFAULT_IMAGE_MODEL,
-      expected: 'google/gemini-3.1-flash-image-preview',
+      expected: 'google/gemini-3.1-flash-image',
     });
   });
 });

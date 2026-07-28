@@ -261,8 +261,43 @@ describe('AI settings route', () => {
       const body = await response.json();
 
       expect(body.currentProvider).toBe('openai');
-      expect(body.currentModel).toBe('openai/gpt-5.3-chat');
+      expect(body.currentModel).toBe('openai/gpt-5.6-luna');
       expect(body.userSubscriptionTier).toBe('free');
+    });
+
+    // Model retirements land with every catalog refresh, and the stored selection is
+    // never rewritten. Reporting a delisted id would put the selector in a state it
+    // can't represent, while the request path silently ran the substituted default.
+    it('resolves a stored model that has been delisted to the current default', async () => {
+      vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue({
+        id: mockUserId,
+        currentAiProvider: 'anthropic',
+        currentAiModel: 'anthropic/claude-3.5-haiku', // removed from the catalog
+        subscriptionTier: 'pro',
+        imageGenerationModel: null,
+      });
+
+      const response = await GET(makeRequest('GET'));
+      const body = await response.json();
+
+      expect(body.currentProvider).toBe('openai');
+      expect(body.currentModel).toBe('openai/gpt-5.6-luna');
+    });
+
+    it('leaves a runtime-discovered local model untouched', async () => {
+      vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue({
+        id: mockUserId,
+        currentAiProvider: 'ollama',
+        currentAiModel: 'some-locally-pulled-model',
+        subscriptionTier: 'free',
+        imageGenerationModel: null,
+      });
+
+      const response = await GET(makeRequest('GET'));
+      const body = await response.json();
+
+      expect(body.currentProvider).toBe('ollama');
+      expect(body.currentModel).toBe('some-locally-pulled-model');
     });
 
     it('returns auth error when not authenticated', async () => {
