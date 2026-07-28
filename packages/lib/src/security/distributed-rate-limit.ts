@@ -79,47 +79,46 @@ let cleanupIntervalId: ReturnType<typeof setInterval> | null = null;
  * ~12 MB worst case). The store is production-reachable during a Postgres
  * outage, where an attacker can spray arbitrary identifiers (emails, client
  * IDs) at unauthenticated endpoints; without a cap that turns the DB incident
- * into an application OOM. When full, the entry closest to expiry among the
- * oldest-inserted few is evicted: resetting a stale counter early slightly
- * loosens limiting under an active identifier flood, but identifier rotation
- * already defeats per-identifier limits, whereas unbounded growth defeats the
- * availability goal of the fallback itself.
+ * into an application OOM. At capacity, only EXPIRED entries are reclaimed;
+ * if every tracked window is still active, previously unseen identifiers are
+ * conservatively denied instead — evicting an active entry would let an
+ * attacker rotating identifiers reset a victim's counter or flush their own
+ * block. Denial at capacity only occurs under an extreme identifier flood and
+ * self-heals as tracked windows expire.
  */
 export const MAX_IN_MEMORY_ATTEMPT_ENTRIES = 50_000;
 
-// How many of the oldest entries to consider when the store is full. Bounds
-// eviction cost per insert while still strongly preferring window-only entries
-// (near expiry) over actively blocked ones (expiry extended to block end) —
-// evicting a live block would let an attacker flush their own block by
-// spraying fresh identifiers.
+// How many of the oldest entries (Map iteration is insertion-ordered, so
+// expired entries cluster at the old end) to scan for a reclaimable slot on
+// each at-capacity insert. Bounds per-request cost during a flood.
 const EVICTION_SCAN_LIMIT = 16;
 
+// A full-map sweep from the insert path is O(cap); allow at most one per
+// second so a flood cannot turn every request into a 50k-entry scan.
+const INLINE_SWEEP_MIN_INTERVAL_MS = 1_000;
+let lastInlineSweepAt = 0;
+
 /**
- * Evict one entry to admit a new identifier when the store is at capacity.
- * Scans the oldest EVICTION_SCAN_LIMIT entries (Map iteration is
- * insertion-ordered) and deletes the one closest to expiry; anything already
- * expired wins immediately. Blocks survive because their expiresAt extends to
- * the block end, sorting them behind ordinary window entries.
+ * Try to free a slot for a new identifier when the store is at capacity.
+ * Reclaims expired entries only — active counters and blocks are never
+ * sacrificed. Cheap bounded scan of the oldest entries first, then at most
+ * one throttled full sweep. Returns whether a slot was freed.
  */
-function evictForCapacity(now: number): void {
-  let victimKey: string | undefined;
-  let victimExpiry = Infinity;
+function tryReclaimCapacity(now: number): boolean {
   let scanned = 0;
   for (const [key, attempt] of inMemoryAttempts.entries()) {
     if (scanned >= EVICTION_SCAN_LIMIT) break;
     scanned++;
     if (now >= attempt.expiresAt) {
-      victimKey = key;
-      break;
-    }
-    if (attempt.expiresAt < victimExpiry) {
-      victimExpiry = attempt.expiresAt;
-      victimKey = key;
+      inMemoryAttempts.delete(key);
+      return true;
     }
   }
-  if (victimKey !== undefined) {
-    inMemoryAttempts.delete(victimKey);
+  if (now - lastInlineSweepAt >= INLINE_SWEEP_MIN_INTERVAL_MS) {
+    lastInlineSweepAt = now;
+    return sweepExpiredInMemoryAttempts(now) > 0;
   }
+  return false;
 }
 
 /**
@@ -166,6 +165,8 @@ export function shutdownRateLimiting(): void {
     cleanupIntervalId = null;
   }
   inMemoryAttempts.clear();
+  lastInlineSweepAt = 0;
+  closePgCircuit();
 }
 
 // Auto-start cleanup on module load
@@ -192,8 +193,17 @@ function inMemoryCheckRateLimit(
   let attempt = inMemoryAttempts.get(identifier);
 
   if (!attempt) {
-    if (inMemoryAttempts.size >= MAX_IN_MEMORY_ATTEMPT_ENTRIES) {
-      evictForCapacity(now);
+    if (
+      inMemoryAttempts.size >= MAX_IN_MEMORY_ATTEMPT_ENTRIES &&
+      !tryReclaimCapacity(now)
+    ) {
+      // Full of active windows/blocks: deny the unseen identifier rather than
+      // resetting someone else's active limit (see MAX_IN_MEMORY_ATTEMPT_ENTRIES).
+      return {
+        allowed: false,
+        retryAfter: Math.ceil(config.windowMs / 1000),
+        attemptsRemaining: 0,
+      };
     }
     // Re-arm the expiry sweep if a shutdown cleared it and traffic resumed —
     // without this, only the capacity cap would bound the store afterwards.
@@ -293,6 +303,31 @@ function inMemoryGetRateLimitStatus(
 // =============================================================================
 
 let postgresAvailableLogged = false;
+
+// -----------------------------------------------------------------------------
+// Postgres circuit breaker (production only)
+// -----------------------------------------------------------------------------
+// The outage this module defends against is an OOM-STALLED Postgres, not a
+// fast-rejecting one: without a breaker, every request waits out the pool's
+// connection/statement timeouts (seconds each) before falling back — adding
+// user-facing latency and piling more work onto the struggling database.
+// While the circuit is open, request paths skip Postgres entirely and use the
+// conservative in-memory fallback; once the cooldown elapses, the next request
+// probes Postgres (half-open) and either closes the circuit or re-opens it.
+const PG_PROBE_COOLDOWN_MS = 30_000;
+let pgUnhealthyUntil = 0;
+
+function pgCircuitOpen(now: number): boolean {
+  return process.env.NODE_ENV === 'production' && now < pgUnhealthyUntil;
+}
+
+function openPgCircuit(now: number): void {
+  pgUnhealthyUntil = now + PG_PROBE_COOLDOWN_MS;
+}
+
+function closePgCircuit(): void {
+  pgUnhealthyUntil = 0;
+}
 
 // Fail-closed response when DB is unavailable in production.
 function failClosedResponse(config: RateLimitConfig): RateLimitResult {
@@ -402,6 +437,11 @@ export async function checkDistributedRateLimit(
   config: RateLimitConfig
 ): Promise<RateLimitResult> {
   const now = Date.now();
+
+  if (pgCircuitOpen(now)) {
+    return conservativeFallbackCheck(identifier, config);
+  }
+
   const windowStart = currentWindowStart(config.windowMs, now);
   const prevWindowStart = new Date(windowStart.getTime() - config.windowMs);
   // expires_at covers 2 windows so the previous bucket survives long enough
@@ -442,6 +482,7 @@ export async function checkDistributedRateLimit(
       config.windowMs,
     );
 
+    closePgCircuit();
     if (!postgresAvailableLogged) {
       loggers.api.info('Distributed rate limiting enabled (Postgres)');
       postgresAvailableLogged = true;
@@ -481,6 +522,7 @@ export async function checkDistributedRateLimit(
     postgresAvailableLogged = false;
 
     if (process.env.NODE_ENV === 'production') {
+      openPgCircuit(Date.now());
       return conservativeFallbackCheck(identifier, config);
     }
 
@@ -492,12 +534,15 @@ export async function checkDistributedRateLimit(
  * Reset rate limit for an identifier (e.g., after successful auth).
  */
 export async function resetDistributedRateLimit(identifier: string): Promise<void> {
-  try {
-    await db.delete(rateLimitBuckets).where(eq(rateLimitBuckets.key, identifier));
-  } catch (error) {
-    loggers.api.debug('Postgres rate limit reset failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
+  if (!pgCircuitOpen(Date.now())) {
+    try {
+      await db.delete(rateLimitBuckets).where(eq(rateLimitBuckets.key, identifier));
+    } catch (error) {
+      loggers.api.debug('Postgres rate limit reset failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      openPgCircuit(Date.now());
+    }
   }
 
   inMemoryResetRateLimit(identifier);
@@ -515,6 +560,11 @@ export async function getDistributedRateLimitStatus(
   config: RateLimitConfig
 ): Promise<{ blocked: boolean; retryAfter?: number; attemptsRemaining?: number }> {
   const now = Date.now();
+
+  if (pgCircuitOpen(now)) {
+    return conservativeFallbackStatus(identifier, config);
+  }
+
   const windowStart = currentWindowStart(config.windowMs, now);
   const prevWindowStart = new Date(windowStart.getTime() - config.windowMs);
 
@@ -565,18 +615,31 @@ export async function getDistributedRateLimitStatus(
     };
   } catch {
     if (process.env.NODE_ENV === 'production') {
-      try {
-        return inMemoryGetRateLimitStatus(identifier, conservativeFallbackConfig(config));
-      } catch {
-        return {
-          blocked: true,
-          retryAfter: Math.ceil(config.windowMs / 1000),
-          attemptsRemaining: 0,
-        };
-      }
+      openPgCircuit(Date.now());
+      return conservativeFallbackStatus(identifier, config);
     }
 
     return inMemoryGetRateLimitStatus(identifier, config);
+  }
+}
+
+/**
+ * Read-only counterpart of conservativeFallbackCheck: reports the state of the
+ * conservative in-memory bucket while Postgres is unreachable, failing closed
+ * (blocked) only if the in-memory read itself throws.
+ */
+function conservativeFallbackStatus(
+  identifier: string,
+  config: RateLimitConfig,
+): { blocked: boolean; retryAfter?: number; attemptsRemaining?: number } {
+  try {
+    return inMemoryGetRateLimitStatus(identifier, conservativeFallbackConfig(config));
+  } catch {
+    return {
+      blocked: true,
+      retryAfter: Math.ceil(config.windowMs / 1000),
+      attemptsRemaining: 0,
+    };
   }
 }
 
@@ -586,11 +649,17 @@ export async function getDistributedRateLimitStatus(
  * `authfail:` key prefix so the count survives restarts and spans replicas
  * (#977) — feeding the pure auth-anomaly detector.
  *
- * Best-effort: returns 0 on DB error, so the caller treats an unknown count as
- * "no anomaly" rather than failing the auth request.
+ * Best-effort: returns 0 on DB error (and immediately while the Postgres
+ * circuit is open), so the caller treats an unknown count as "no anomaly"
+ * rather than failing — or stalling — the auth request.
  */
 export async function countAuthFailure(identifier: string, windowMs: number): Promise<number> {
   const now = Date.now();
+
+  if (pgCircuitOpen(now)) {
+    return 0;
+  }
+
   const windowStart = currentWindowStart(windowMs, now);
   const expiresAt = new Date(windowStart.getTime() + 2 * windowMs);
   const key = `authfail:${identifier}`;
@@ -609,6 +678,7 @@ export async function countAuthFailure(identifier: string, windowMs: number): Pr
     loggers.api.warn('countAuthFailure failed', {
       error: error instanceof Error ? error.message : String(error),
     });
+    openPgCircuit(Date.now());
     return 0;
   }
 }
