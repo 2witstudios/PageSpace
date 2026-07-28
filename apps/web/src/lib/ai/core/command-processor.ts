@@ -168,6 +168,48 @@ export function buildCommandSystemPrompt(injection: CommandInjection): string {
 }
 
 /**
+ * Build the load_skill tool-result payload for an injected command/skill —
+ * the model-initiated twin of buildCommandSystemPrompt (chip path). Same
+ * body, same 60k truncation contract, same listed-not-loaded child manifest,
+ * but framed as instructions to follow rather than "the user invoked":
+ * tool results are weighted as information by default, so the framing is
+ * load-bearing, not decoration.
+ */
+export function buildSkillLoadResult(injection: CommandInjection): string {
+  const lines: string[] = [`<skill_instructions name="${injection.trigger}">`];
+
+  if (injection.entryPage) {
+    let content = injection.entryPage.serializedContent;
+    if (content.length > COMMAND_CONTENT_CHAR_LIMIT) {
+      content =
+        content.slice(0, COMMAND_CONTENT_CHAR_LIMIT) +
+        `\n\n[Content truncated — the page is unusually large. Use read_page with pageId "${injection.entryPage.id}" to read the rest on demand.]`;
+    }
+    lines.push(content);
+  } else if (injection.dynamicContent) {
+    lines.push(injection.dynamicContent);
+  } else {
+    lines.push(injection.description);
+  }
+
+  lines.push('</skill_instructions>');
+  lines.push(
+    '',
+    `Follow these instructions for the current task. If this load is later elided from the conversation, call load_skill("${injection.trigger}") again to restore it.`
+  );
+
+  if (injection.children.length > 0) {
+    lines.push(
+      '',
+      'This skill provides these resources. They are NOT loaded; read any of them on demand with the read_page tool when relevant:',
+      ...injection.children.map((child) => `- "${child.title}" (pageId: ${child.id})`)
+    );
+  }
+
+  return lines.join('\n');
+}
+
+/**
  * Map a single resolved plan to its section of the system prompt: a skipped
  * command contributes a one-line notice so the AI can acknowledge it without
  * treating it as an error (spec §7.2: the response itself proceeds

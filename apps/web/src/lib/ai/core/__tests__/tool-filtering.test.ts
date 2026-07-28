@@ -97,6 +97,12 @@ describe('filterToolsForReadOnly', () => {
     expect(result.trash_page).toBeUndefined();
     expect(result.read_page).toBe('read_page');
   });
+
+  it('keeps load_skill in read-only mode (skills inform planning, not writing)', () => {
+    const tools = { ...baseline, load_skill: 'load_skill' };
+    const result = filterToolsForReadOnly(tools, true);
+    expect(result.load_skill).toBe('load_skill');
+  });
 });
 
 describe('filterToolsForWebSearch', () => {
