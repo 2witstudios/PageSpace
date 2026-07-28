@@ -79,13 +79,48 @@ let cleanupIntervalId: ReturnType<typeof setInterval> | null = null;
  * ~12 MB worst case). The store is production-reachable during a Postgres
  * outage, where an attacker can spray arbitrary identifiers (emails, client
  * IDs) at unauthenticated endpoints; without a cap that turns the DB incident
- * into an application OOM. When full, the oldest-inserted entry is evicted
- * (FIFO): resetting a stale counter early slightly loosens limiting under an
- * active identifier flood, but identifier rotation already defeats
- * per-identifier limits, whereas unbounded growth defeats the availability
- * goal of the fallback itself.
+ * into an application OOM. When full, the entry closest to expiry among the
+ * oldest-inserted few is evicted: resetting a stale counter early slightly
+ * loosens limiting under an active identifier flood, but identifier rotation
+ * already defeats per-identifier limits, whereas unbounded growth defeats the
+ * availability goal of the fallback itself.
  */
 export const MAX_IN_MEMORY_ATTEMPT_ENTRIES = 50_000;
+
+// How many of the oldest entries to consider when the store is full. Bounds
+// eviction cost per insert while still strongly preferring window-only entries
+// (near expiry) over actively blocked ones (expiry extended to block end) —
+// evicting a live block would let an attacker flush their own block by
+// spraying fresh identifiers.
+const EVICTION_SCAN_LIMIT = 16;
+
+/**
+ * Evict one entry to admit a new identifier when the store is at capacity.
+ * Scans the oldest EVICTION_SCAN_LIMIT entries (Map iteration is
+ * insertion-ordered) and deletes the one closest to expiry; anything already
+ * expired wins immediately. Blocks survive because their expiresAt extends to
+ * the block end, sorting them behind ordinary window entries.
+ */
+function evictForCapacity(now: number): void {
+  let victimKey: string | undefined;
+  let victimExpiry = Infinity;
+  let scanned = 0;
+  for (const [key, attempt] of inMemoryAttempts.entries()) {
+    if (scanned >= EVICTION_SCAN_LIMIT) break;
+    scanned++;
+    if (now >= attempt.expiresAt) {
+      victimKey = key;
+      break;
+    }
+    if (attempt.expiresAt < victimExpiry) {
+      victimExpiry = attempt.expiresAt;
+      victimKey = key;
+    }
+  }
+  if (victimKey !== undefined) {
+    inMemoryAttempts.delete(victimKey);
+  }
+}
 
 /**
  * Delete entries whose window AND any block have fully elapsed. Never evicts
@@ -115,6 +150,9 @@ function startCleanupInterval(): void {
   cleanupIntervalId = setInterval(() => {
     sweepExpiredInMemoryAttempts();
   }, 5 * 60 * 1000);
+
+  // Don't let the sweep keep the process alive (no-op outside Node).
+  (cleanupIntervalId as { unref?: () => unknown }).unref?.();
 }
 
 /**
@@ -139,18 +177,27 @@ function inMemoryCheckRateLimit(
   identifier: string,
   config: RateLimitConfig
 ): RateLimitResult {
+  // Match PG-up semantics for a degenerate zero/negative limit: with PG up,
+  // the first attempt already exceeds maxAttempts 0, so everything is denied.
+  // The fallback must never be looser than the configured limit.
+  if (config.maxAttempts < 1) {
+    return {
+      allowed: false,
+      retryAfter: Math.ceil(config.windowMs / 1000),
+      attemptsRemaining: 0,
+    };
+  }
+
   const now = Date.now();
   let attempt = inMemoryAttempts.get(identifier);
 
   if (!attempt) {
     if (inMemoryAttempts.size >= MAX_IN_MEMORY_ATTEMPT_ENTRIES) {
-      // Map iteration is insertion-ordered; drop the oldest entry to admit
-      // the new one (see MAX_IN_MEMORY_ATTEMPT_ENTRIES for the trade-off).
-      const oldest = inMemoryAttempts.keys().next();
-      if (!oldest.done) {
-        inMemoryAttempts.delete(oldest.value);
-      }
+      evictForCapacity(now);
     }
+    // Re-arm the expiry sweep if a shutdown cleared it and traffic resumed —
+    // without this, only the capacity cap would bound the store afterwards.
+    startCleanupInterval();
     attempt = {
       count: 1,
       firstAttempt: now,
