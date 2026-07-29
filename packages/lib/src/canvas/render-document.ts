@@ -219,6 +219,7 @@ export const NAV_BRIDGE_SCRIPT =
   "<script>(function(){" +
   "if(window.parent===window)return;" +
   "document.addEventListener('click',function(e){" +
+  "if(e.ctrlKey||e.metaKey||e.shiftKey||e.button!==0)return;" +
   "var a=e.target.closest('a');if(!a)return;" +
   "var href=a.getAttribute('href');if(!href)return;" +
   "if(href.indexOf('/dashboard/')!==0)return;" +

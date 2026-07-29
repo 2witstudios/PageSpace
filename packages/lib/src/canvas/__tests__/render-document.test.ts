@@ -931,12 +931,8 @@ describe('renderCanvasDocument — nav bridge', () => {
 
   it('given injectNavBridge: true AND a nonce, should stamp the nonce onto the nav-bridge script', () => {
     const out = renderCanvasDocument({ html: '<p>x</p>', injectNavBridge: true, nonce: 'nav-nonce==' });
-    const nonceStamped = `nonce="nav-nonce=="`;
-    // Both the nav bridge and any author scripts should have the nonce.
-    const navBridgeStart = out.indexOf(NAV_BRIDGE_SCRIPT.slice(0, 8));
-    expect(navBridgeStart).toBeGreaterThan(-1);
-    // The nonce should appear in the head section near the nav bridge.
-    expect(out).toContain(nonceStamped);
+    expect(out).toContain('<script nonce="nav-nonce==">(function(){');
+    expect(out).toContain('pagespace-navigate');
   });
 
   it('given both injectThemeBridge and injectNavBridge, should inject both scripts', () => {
