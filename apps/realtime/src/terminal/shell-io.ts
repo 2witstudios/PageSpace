@@ -209,19 +209,17 @@ async function resolveOrStartSession(
   abandoned: () => boolean,
 ): Promise<{ session: TerminalSession | undefined; started: boolean; reason?: string }> {
   const live = deps.sessionMap.getByKey(deps.sessionKeyFor(shellId));
+  if (live !== undefined) return { session: live, started: false };
+
   // A shell that has never run is not a refusal — it is a shell to START, so
   // long as the caller asked for one. This is the whole of issue #2206: the PTY
   // begins at the first agent IO, not at the first human to open the pane.
-  const outcome = live === undefined && startPlan.start
-    ? await deps.startSession?.({ shellId, userId: startPlan.userId }, abandoned)
-    : undefined;
-  const refused = outcome !== undefined && 'reason' in outcome;
-  const started = refused ? undefined : (outcome as TerminalSession | undefined);
-  return {
-    session: live ?? started,
-    started: started !== undefined,
-    ...(refused ? { reason: (outcome as ShellStartRefusal).reason } : {}),
-  };
+  if (!startPlan.start) return { session: undefined, started: false };
+
+  const outcome = await deps.startSession?.({ shellId, userId: startPlan.userId }, abandoned);
+  if (outcome === undefined) return { session: undefined, started: false };
+  if ('reason' in outcome) return { session: undefined, started: false, reason: outcome.reason };
+  return { session: outcome, started: true };
 }
 
 /**
