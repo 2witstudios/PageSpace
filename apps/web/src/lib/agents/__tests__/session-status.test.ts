@@ -10,12 +10,7 @@
  */
 import { describe, test, expect } from 'vitest';
 import type { AgentSessionDTO } from '@pagespace/lib/agent-sessions/contract';
-import {
-  deriveSandboxStatus,
-  describeSandboxStatus,
-  isSandboxLive,
-  SANDBOX_STATUS_COPY,
-} from '../session-status';
+import { deriveSandboxStatus, describeSandboxStatus, isSandboxLive, SANDBOX_STATUS_COPY, resolveDisplayStatus } from '../session-status';
 
 const session = (overrides: Partial<AgentSessionDTO> = {}): AgentSessionDTO => ({
   sessionId: 'conv-1',
@@ -97,5 +92,27 @@ describe('isSandboxLive', () => {
     expect(isSandboxLive('starting')).toBe(false);
     expect(isSandboxLive('none')).toBe(false);
     expect(isSandboxLive('ended')).toBe(false);
+  });
+});
+
+describe('resolveDisplayStatus', () => {
+  it('given no sandbox and a provision in flight, should report starting', () => {
+    // The one status no row can carry: the row is written only once a Sprite
+    // exists, so provisioning has no persisted in-flight state to read.
+    expect(resolveDisplayStatus({ status: 'none', isProvisioning: true })).toBe('starting');
+  });
+
+  it('given no sandbox and nothing in flight, should stay none', () => {
+    expect(resolveDisplayStatus({ status: 'none', isProvisioning: false })).toBe('none');
+  });
+
+  it('given a RUNNING session, should not downgrade to starting', () => {
+    // The row's own fact outranks a request being in flight — re-provisioning a
+    // live sandbox must not make the chip look like it is booting.
+    expect(resolveDisplayStatus({ status: 'running', isProvisioning: true })).toBe('running');
+  });
+
+  it('given an ENDED session, should not resurrect it as starting', () => {
+    expect(resolveDisplayStatus({ status: 'ended', isProvisioning: true })).toBe('ended');
   });
 });

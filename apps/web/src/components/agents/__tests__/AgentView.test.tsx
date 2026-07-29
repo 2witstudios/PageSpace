@@ -165,6 +165,41 @@ describe('AgentView', () => {
     await waitFor(() => expect(shellsState.current.addShell).toHaveBeenCalled());
   });
 
+  it('shows Starting on the chip while the first shell provisions the sandbox', async () => {
+    // There is no explicit "start sandbox" affordance — provisioning is lazy, so
+    // adding the first shell IS the cold start the user waits through. Without
+    // folding that in, the chip insists "No sandbox" for the whole wait, whose
+    // copy ("One starts the first time the agent needs to run something") is
+    // false precisely then.
+    sessionState.current.status = 'none';
+    let release: ((value: ShellDTO | null) => void) | undefined;
+    shellsState.current.addShell = vi.fn(
+      () => new Promise<ShellDTO | null>((resolve) => { release = resolve; }),
+    );
+    render(<AgentView agentId="agent-1" conversationId="conv-1" context="console" />);
+    expect(screen.getByTestId('sandbox-status-chip')).toHaveTextContent('No sandbox');
+
+    fireEvent.click(screen.getByRole('button', { name: /Add shell/ }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('sandbox-status-chip')).toHaveTextContent('Starting'),
+    );
+    release?.(null);
+  });
+
+  it('given a RUNNING sandbox, adding another shell should NOT read as Starting', async () => {
+    // The row's own fact outranks a request in flight: a second shell on a live
+    // sandbox is not a boot, and saying so would misreport a working sandbox.
+    sessionState.current.status = 'running';
+    shellsState.current.addShell = vi.fn(() => new Promise<ShellDTO | null>(() => {}));
+    render(<AgentView agentId="agent-1" conversationId="conv-1" context="console" />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Add shell/ }));
+
+    await waitFor(() => expect(shellsState.current.addShell).toHaveBeenCalled());
+    expect(screen.getByTestId('sandbox-status-chip')).toHaveTextContent('Ready');
+  });
+
   it('closing a shell tab calls removeShell with its shellId', async () => {
     shellsState.current.shells = [shellFixture({ shellId: 'shell-a', name: 'shell-a' })];
     render(<AgentView agentId="agent-1" conversationId="conv-1" context="console" />);

@@ -46,6 +46,28 @@ export function deriveSandboxStatus(session: AgentSessionDTO | null | undefined)
   return session.sandboxStatus;
 }
 
+/**
+ * Fold a client-side "provisioning right now" signal into the row's status.
+ *
+ * `'starting'` is the one status no row can carry: the row is written only once
+ * a Sprite exists, so the server has no in-flight state to report. It is a
+ * client-side transient, and this is the one place that rule lives.
+ *
+ * Only ever an UPGRADE from `'none'`. A session that is already `'running'` or
+ * `'ended'` has a real row, and its own fact outranks a request being in
+ * flight — re-provisioning a live sandbox must not make the chip look like it
+ * is booting.
+ */
+export function resolveDisplayStatus({
+  status,
+  isProvisioning,
+}: {
+  status: SandboxStatus;
+  isProvisioning: boolean;
+}): SandboxStatus {
+  return isProvisioning && status === 'none' ? 'starting' : status;
+}
+
 export interface SandboxStatusCopy {
   /** Chip text. Short enough to sit in a header beside a title. */
   label: string;

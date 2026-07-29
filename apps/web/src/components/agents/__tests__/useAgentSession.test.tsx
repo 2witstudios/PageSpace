@@ -171,3 +171,50 @@ describe('useAgentSession', () => {
     });
   });
 });
+
+describe('the starting transient', () => {
+  it('given an in-flight ensure on a session with no sandbox, should report starting', async () => {
+    // The backend cannot report this: the row is written only once a Sprite
+    // exists, so provisioning has no persisted in-flight state. This hook owns
+    // the transient, and without it the chip claims "no sandbox yet" for the
+    // whole of a cold start.
+    mockFetchWithAuth.mockResolvedValue(jsonResponse({ session: null }));
+    let release: ((value: unknown) => void) | undefined;
+    mockPost.mockReturnValue(new Promise((resolve) => { release = resolve; }));
+
+    const { result } = renderHook(() => useAgentSession('conv-1'), { wrapper });
+    await waitFor(() => expect(result.current.status).toBe('none'));
+
+    void result.current.ensureSession();
+    await waitFor(() => expect(result.current.status).toBe('starting'));
+
+    release?.({ session: session({ sandboxStatus: 'running' }) });
+    await waitFor(() => expect(result.current.status).toBe('running'));
+  });
+
+  it('given the ensure FAILS, should fall back to the row rather than strand on starting', async () => {
+    mockFetchWithAuth.mockResolvedValue(jsonResponse({ session: null }));
+    mockPost.mockRejectedValue(new Error('sandbox unavailable'));
+
+    const { result } = renderHook(() => useAgentSession('conv-1'), { wrapper });
+    await waitFor(() => expect(result.current.status).toBe('none'));
+
+    await act(async () => {
+      await result.current.ensureSession().catch(() => {});
+    });
+    expect(result.current.status).toBe('none');
+  });
+
+  it('given a session already RUNNING, should not downgrade to starting while ensuring', async () => {
+    // The row's own fact outranks a request being in flight — re-ensuring a live
+    // sandbox must not make the chip look like it is booting.
+    mockFetchWithAuth.mockResolvedValue(jsonResponse({ session: session({ sandboxStatus: 'running' }) }));
+    mockPost.mockReturnValue(new Promise(() => {}));
+
+    const { result } = renderHook(() => useAgentSession('conv-1'), { wrapper });
+    await waitFor(() => expect(result.current.status).toBe('running'));
+
+    void result.current.ensureSession();
+    await waitFor(() => expect(result.current.status).toBe('running'));
+  });
+});

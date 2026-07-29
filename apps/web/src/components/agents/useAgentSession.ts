@@ -1,11 +1,11 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import useSWR from 'swr';
 import type { AgentSessionDTO, SandboxStatus } from '@pagespace/lib/agent-sessions/contract';
 
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
-import { deriveSandboxStatus } from '@/lib/agents/session-status';
+import { deriveSandboxStatus, resolveDisplayStatus } from '@/lib/agents/session-status';
 
 /**
  * One conversation's sandbox, if it has one.
@@ -90,20 +90,36 @@ export function useAgentSession(sessionId: string | null | undefined): UseAgentS
   });
 
   const session = data?.session ?? null;
+  // `'starting'` is the one status no row can carry. Provisioning happens inside
+  // a single `ensureAgentSessionSandbox` call and the row is written only once a
+  // Sprite exists, so the server has no in-flight state to report — the backend
+  // derivation documents it as a client-side transient owned by exactly this
+  // hook. It was documented but never implemented, which left the chip reading
+  // "No sandbox yet. One starts the first time the agent needs to run
+  // something." for the whole of a cold start — the one moment that sentence is
+  // false — before jumping straight to "Running".
+  const [isEnsuring, setIsEnsuring] = useState(false);
 
   const ensureSession = useCallback(async (): Promise<AgentSessionDTO | null> => {
     if (!sessionId) return null;
-    const { session: ensured } = await post<SessionResponse>(sessionPath(sessionId));
-    // Write the server's answer straight into the cache: provisioning is the one
-    // moment where a stale 'none' would be actively misleading (the chip would
-    // still offer to start a sandbox that is already starting).
-    await mutate({ session: ensured ?? null }, { revalidate: false });
-    return ensured ?? null;
+    setIsEnsuring(true);
+    try {
+      const { session: ensured } = await post<SessionResponse>(sessionPath(sessionId));
+      // Write the server's answer straight into the cache: provisioning is the
+      // one moment where a stale 'none' would be actively misleading (the chip
+      // would still offer to start a sandbox that is already starting).
+      await mutate({ session: ensured ?? null }, { revalidate: false });
+      return ensured ?? null;
+    } finally {
+      // Cleared in `finally`: a provisioning failure must fall back to whatever
+      // the row actually says, not strand the chip on "Starting" forever.
+      setIsEnsuring(false);
+    }
   }, [sessionId, mutate]);
 
   return {
     session,
-    status: deriveSandboxStatus(session),
+    status: resolveDisplayStatus({ status: deriveSandboxStatus(session), isProvisioning: isEnsuring }),
     isLoading: isLoading && !data,
     error: error as Error | undefined,
     ensureSession,

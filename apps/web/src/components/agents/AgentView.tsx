@@ -31,7 +31,7 @@ import { useSessionShells } from './useSessionShells';
 import SessionChat from './chat/SessionChat';
 import Shell from './shell/Shell';
 import { resolveSessionTabs, CHAT_TAB_ID } from '@/lib/agents/session-tabs';
-import { describeSandboxStatus } from '@/lib/agents/session-status';
+import { describeSandboxStatus, resolveDisplayStatus } from '@/lib/agents/session-status';
 
 const SETTINGS_TAB_ID = 'settings';
 
@@ -124,7 +124,14 @@ export default function AgentView({
     );
   }
 
-  const statusCopy = describeSandboxStatus(session.status);
+  // Adding the first shell is what actually provisions the sandbox (there is no
+  // explicit "start" affordance — provisioning is lazy by design), so it is the
+  // one moment a user watches a cold Sprite boot. Without folding it in, the
+  // chip reads "No sandbox yet. One starts the first time the agent needs to run
+  // something." for that entire wait — the one moment that sentence is false.
+  const statusCopy = describeSandboxStatus(
+    resolveDisplayStatus({ status: session.status, isProvisioning: isAddingShell }),
+  );
 
   return (
     <div data-testid="agent-view" className="flex h-full min-h-0 flex-col">
