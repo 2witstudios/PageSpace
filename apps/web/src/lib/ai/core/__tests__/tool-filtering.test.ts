@@ -370,20 +370,32 @@ describe('suppressGithubIntegrationTools', () => {
 });
 
 describe('SESSION_FAMILY_TOOL_NAMES', () => {
+  const MUTATIONS = ['spawn_session', 'send_session', 'kill_session', 'spawn_shell', 'send_shell', 'kill_shell'];
+  const READS = ['list_sessions', 'read_session', 'read_shell'];
+
   it('names the nine session/shell orchestration tools', () => {
-    expect([...SESSION_FAMILY_TOOL_NAMES].sort()).toEqual(
-      [
-        'list_sessions',
-        'spawn_session',
-        'send_session',
-        'read_session',
-        'kill_session',
-        'spawn_shell',
-        'send_shell',
-        'read_shell',
-        'kill_shell',
-      ].sort()
-    );
+    expect([...SESSION_FAMILY_TOOL_NAMES].sort()).toEqual([...MUTATIONS, ...READS].sort());
+  });
+
+  // The security property, not a restatement of the list: a read-only agent must
+  // not be able to spawn a shell (and write through it), but must still be able
+  // to observe its own sessions.
+  it('given read-only mode, should strip every session/shell MUTATION', () => {
+    const tools = Object.fromEntries(SESSION_FAMILY_TOOL_NAMES.map((name) => [name, {}]));
+    const filtered = filterToolsForReadOnly(tools, true);
+
+    for (const name of MUTATIONS) {
+      expect(filtered, `${name} must be write-gated`).not.toHaveProperty(name);
+    }
+  });
+
+  it('given read-only mode, should KEEP the session/shell read verbs', () => {
+    const tools = Object.fromEntries(SESSION_FAMILY_TOOL_NAMES.map((name) => [name, {}]));
+    const filtered = filterToolsForReadOnly(tools, true);
+
+    for (const name of READS) {
+      expect(filtered, `${name} is a read and must survive read-only`).toHaveProperty(name);
+    }
   });
 });
 

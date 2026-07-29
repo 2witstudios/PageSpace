@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
-import { eq, and, ne, desc, sql, inArray } from '@pagespace/db/operators'
-import { chatMessages, pages } from '@pagespace/db/schema/core';
+import { eq, and, ne, desc, sql } from '@pagespace/db/operators'
+import { chatMessages } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
@@ -66,14 +66,12 @@ export async function GET(
 
     const { agentId, conversationId } = await context.params;
 
-    // Verify the conversation-hosting AI_CHAT agent page exists.
-    const agent = await db.query.pages.findFirst({
-      where: and(
-        eq(pages.id, agentId),
-        inArray(pages.type, ['AI_CHAT']),
-        eq(pages.isTrashed, false)
-      ),
-    });
+    // Verify the conversation-hosting agent page exists. Goes through the
+    // repository like its two sibling routes rather than repeating the query:
+    // WHICH page types may host a conversation is one decision, and an inline
+    // copy is how the last change to it (dropping MACHINE) reached two of the
+    // three routes and not the third.
+    const agent = await conversationRepository.getAiAgent(agentId);
 
     if (!agent) {
       return NextResponse.json(

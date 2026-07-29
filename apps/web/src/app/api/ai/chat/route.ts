@@ -10,6 +10,7 @@ import {
   type ToolSet,
 } from 'ai';
 import { ONPREM_ALLOWED_PROVIDERS, DEFAULT_PROVIDER, DEFAULT_MODEL, resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
+import { readAgentDispatchDepth } from '@/lib/ai/core/agent-dispatch-depth';
 import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
 import { ALL_PROVIDER_NAMES } from '@/lib/ai/core/ai-utils';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
@@ -576,8 +577,7 @@ export async function POST(request: Request) {
     // hop so the depth cap (MAX_AGENT_DEPTH) still terminates A→B→C. Untrusted
     // by design and safe untrusted: forging it LOW yields the default any
     // client already has, forging it HIGH only restricts the forger.
-    const rawDispatchDepth = Number.parseInt(request.headers.get('X-Agent-Dispatch-Depth') ?? '', 10);
-    const agentDispatchDepth = Number.isInteger(rawDispatchDepth) && rawDispatchDepth > 0 ? rawDispatchDepth : 0;
+    const agentDispatchDepth = readAgentDispatchDepth(request.headers);
 
     // Process @mentions in the user's message
     let mentionSystemPrompt = '';

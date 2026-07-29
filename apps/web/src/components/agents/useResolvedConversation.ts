@@ -15,6 +15,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createId } from '@paralleldrive/cuid2';
 import { fetchMostRecentAgentConversation, createAgentConversation } from '@/lib/ai/shared/agent-conversations';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
+import { toast } from 'sonner';
 
 export interface UseResolvedConversationResult {
   /** null until resolution completes. */
@@ -51,7 +52,15 @@ export function useResolvedConversation(agentId: string): UseResolvedConversatio
         await createAgentConversation(agentId, newConversationId);
       } catch (error) {
         if (resolvingAgentIdRef.current !== agentId) return;
+        // Surfaced, not just logged: the conversation id is already seeded and
+        // selected locally, so a silent failure here leaves the user typing into
+        // a conversation the server has never heard of — their first send is the
+        // first they'd learn of it. Matches the toast-on-failure convention the
+        // rest of this surface uses (see useAgentSessionChat).
         console.error('Failed to create agent conversation:', error);
+        toast.error('Could not start a new conversation', {
+          description: error instanceof Error ? error.message : 'Please try again.',
+        });
       }
     };
     void resolve();

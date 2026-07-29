@@ -135,6 +135,13 @@ const WEB_SEARCH_TOOLS = new Set(['web_search', 'web_fetch']);
  * caller's own session's sandbox). Registered alongside bash/git behind the
  * CODE_EXECUTION kill-switch in `buildPageSpaceTools`; a conversation IS a
  * session, so there is no binding to gate registration on.
+ *
+ * Exported for the read-only DRIFT GUARD in this module's tests: every mutating
+ * member must appear in `WRITE_TOOLS` (or a read-only agent could spawn a shell
+ * and write through it, defeating the read-only promise), and every read verb
+ * must NOT (or a read-only agent could not even observe its own sessions). A
+ * tenth tool added to the family without a matching WRITE_TOOLS decision fails
+ * that test rather than silently picking the wrong default.
  */
 export const SESSION_FAMILY_TOOL_NAMES: readonly string[] = [
   'list_sessions',

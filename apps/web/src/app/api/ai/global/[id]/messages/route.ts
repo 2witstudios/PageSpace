@@ -5,6 +5,7 @@ import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { askUserTools, ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
 import { resolveMessageId } from '@/lib/ai/streams/resolveMessageId';
 import { canUseAskUser } from '@/lib/ai/core/ask-user-gating';
+import { readAgentDispatchDepth } from '@/lib/ai/core/agent-dispatch-depth';
 import { ASK_USER_SECTION, buildGlobalAssistantInstructions } from '@/lib/ai/core/inline-instructions';
 import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
 import {
@@ -292,8 +293,7 @@ export async function POST(
     // this same route; the header carries the chain depth across the HTTP hop
     // so the depth cap still terminates A→B→C. Safe untrusted — forging it low
     // is the default, forging it high only restricts the forger.
-    const rawDispatchDepth = Number.parseInt(request.headers.get('X-Agent-Dispatch-Depth') ?? '', 10);
-    const agentDispatchDepth = Number.isInteger(rawDispatchDepth) && rawDispatchDepth > 0 ? rawDispatchDepth : 0;
+    const agentDispatchDepth = readAgentDispatchDepth(request.headers);
 
     // Body size guard — reject payloads over 25MB before parsing
     const contentLength = parseInt(request.headers.get('content-length') || '0', 10);

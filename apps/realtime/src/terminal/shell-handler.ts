@@ -262,6 +262,12 @@ function readConnectionId(payload: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
+/**
+ * Per-message stdin cap, in BYTES — measured with `Buffer.byteLength`, not
+ * `String.length`. The two differ by up to 4x on multi-byte input (emoji, CJK),
+ * and the HTTP session-input path already measured bytes, so a UTF-16-unit check
+ * here meant the same payload could pass one path and fail the other.
+ */
 export const MAX_INPUT_BYTES = 4096;
 
 /**
@@ -1738,7 +1744,7 @@ export function buildShellHandlers({
       const session = sessionMap.getBySocket(socketKey(connectionId));
       if (!session) return;
       const p = payload as { data?: string };
-      if (typeof p?.data === 'string' && p.data.length <= MAX_INPUT_BYTES) {
+      if (typeof p?.data === 'string' && Buffer.byteLength(p.data, 'utf8') <= MAX_INPUT_BYTES) {
         // Input is activity for the task hold: a typed prompt is work in
         // progress even before the agent's first byte of output.
         session.lastInputAt = Date.now();

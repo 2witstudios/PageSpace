@@ -1043,6 +1043,25 @@ describe('buildShellHandlers', () => {
       expect(shell.write).toHaveBeenCalledWith('ls\n');
     });
 
+    it('given multi-byte input under the byte cap but over it in UTF-16 units, should still accept it', async () => {
+      // The HTTP session-input path measures BYTES; this path used to measure
+      // String.length, so the same payload could pass one and fail the other.
+      const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+      // 1000 emoji: 4 bytes each = 4000 bytes (under 4096), but 2000 UTF-16 units.
+      onInput({ data: '\u{1F600}'.repeat(1000) });
+      expect(shell.write).toHaveBeenCalled();
+    });
+
+    it('given input whose BYTE length exceeds the cap, should drop it even when its string length does not', async () => {
+      const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+      shell.write.mockClear();
+      // 1500 emoji = 6000 bytes (over), but only 3000 UTF-16 units (under 4096).
+      onInput({ data: '\u{1F600}'.repeat(1500) });
+      expect(shell.write).not.toHaveBeenCalled();
+    });
+
     it('given input over MAX_INPUT_BYTES, should drop it', async () => {
       const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
       await onConnect(validPayload);
