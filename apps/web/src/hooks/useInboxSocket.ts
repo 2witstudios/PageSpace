@@ -22,7 +22,7 @@ interface UseInboxSocketOptions {
    * Omit for cross-drive views (e.g. "all channels").
    */
   driveId?: string;
-  hasLoadedRef?: React.MutableRefObject<boolean>;
+  hasLoadedRef?: React.RefObject<boolean>;
 }
 
 /**

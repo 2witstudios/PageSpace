@@ -118,7 +118,11 @@ describe('useInboxSocket', () => {
       expect(swrMatch, `${file}: could not find a useSWR<InboxResponse>(key, fetcher, ...) call`).toBeTruthy();
       const swrKey = swrMatch![1];
 
-      const socketCallMatch = source.match(/useInboxSocket\(\{([^}]*)\}\)/);
+      // Lazy [\s\S]*? (not [^}]*) so this still matches if the object literal
+      // is reformatted across multiple lines. It still can't handle a nested
+      // object literal inlined as one of the args (e.g. hasLoadedRef: { current:
+      // false } instead of a variable) — none of these consumers do that today.
+      const socketCallMatch = source.match(/useInboxSocket\(\{([\s\S]*?)\}\s*\)/);
       expect(socketCallMatch, `${file}: could not find a useInboxSocket({ ... }) call`).toBeTruthy();
       const socketCallArgs = socketCallMatch![1];
 
