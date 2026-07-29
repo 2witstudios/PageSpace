@@ -773,7 +773,10 @@ describe('ensureAgentSessionSandbox — concurrency ceiling', () => {
       ),
     });
 
-    expect(result).toMatchObject({ ok: false, reason: 'denied', denial: 'not_authorized' });
+    // `session_limit_reached`, NOT `not_authorized`: the caller has every right
+    // to this session and has simply run out of allowance. The routes map the
+    // two differently (429 + a real message vs 403 + an authz-denial audit row).
+    expect(result).toMatchObject({ ok: false, reason: 'denied', denial: 'session_limit_reached' });
     // The point of gating before the mint: no VM exists to leak or bill.
     expect(host.calls.provision).toHaveLength(0);
     expect(store.rows.get(SESSION_ID)?.sandboxId).toBeNull();
