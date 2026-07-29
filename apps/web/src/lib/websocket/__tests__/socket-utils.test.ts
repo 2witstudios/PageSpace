@@ -53,8 +53,8 @@ import {
   broadcastAiMessageDeleted,
   broadcastAiUndoApplied,
   broadcastAiConversationAdded,
-  notifyTerminalAgentActivity,
-  type TerminalActivityEventPayload,
+  notifyShellAgentActivity,
+  type ShellActivityEventPayload,
   type ChatUserMessagePayload,
   type ChatMessageEditedPayload,
   type ChatMessageDeletedPayload,
@@ -72,6 +72,7 @@ import {
   type AiStreamStartPayload,
   type AiStreamCompletePayload,
 } from '../socket-utils';
+import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-sessions/contract';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 
 describe('socket-utils', () => {
@@ -620,30 +621,32 @@ describe('socket-utils', () => {
     });
   });
 
-  describe('notifyTerminalAgentActivity', () => {
-    const payload: TerminalActivityEventPayload = {
-      tenantId: 'tenant-1',
-      driveId: 'drive-1',
-      pageId: 'terminal-page-1',
+  describe('notifyShellAgentActivity', () => {
+    const payload: ShellActivityEventPayload = {
+      sessionId: 'conv-1',
       command: 'echo hi',
       output: 'hi',
       exitCode: 0,
       agentLabel: 'Agent Bob',
     };
 
-    it('given a valid payload, should POST it to /api/terminal-activity (not the broadcast endpoint)', async () => {
-      await notifyTerminalAgentActivity(payload);
+    it('given a valid payload, should POST it to the route the realtime server serves', async () => {
+      // Pinned against the shared constant rather than a literal: this caller
+      // spent the whole rebuild posting to `/api/terminal-activity`, a route
+      // that stopped existing when the bridge was re-keyed.
+      await notifyShellAgentActivity(payload);
 
       expect(mockFetch).toHaveBeenCalledTimes(1);
       const [url, init] = mockFetch.mock.calls[0];
-      expect(url).toBe('http://localhost:3001/api/terminal-activity');
+      expect(url).toBe(`http://localhost:3001${SHELL_BRIDGE_ROUTES.activity}`);
+      expect(SHELL_BRIDGE_ROUTES.activity).toBe('/api/shell-activity');
       expect(JSON.parse(init.body)).toEqual(payload);
     });
 
     it('given no INTERNAL_REALTIME_URL, should not call fetch', async () => {
       process.env.INTERNAL_REALTIME_URL = '';
 
-      await notifyTerminalAgentActivity(payload);
+      await notifyShellAgentActivity(payload);
 
       expect(mockFetch).not.toHaveBeenCalled();
     });
@@ -651,7 +654,7 @@ describe('socket-utils', () => {
     it('given fetch throws, should not throw (best-effort)', async () => {
       mockFetch.mockRejectedValue(new Error('Network error'));
 
-      await expect(notifyTerminalAgentActivity(payload)).resolves.not.toThrow();
+      await expect(notifyShellAgentActivity(payload)).resolves.not.toThrow();
     });
   });
 

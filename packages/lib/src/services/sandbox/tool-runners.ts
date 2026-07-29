@@ -78,7 +78,7 @@ export interface SandboxQuotaDeps {
 /**
  * Metering seam for a machine run's active-runtime cost (Terminal Epic 3).
  * Optional — omitting it disables metering (no hold, no charge), mirroring
- * every other optional seam in this file (`screenOutput`, `notifyTerminalActivity`).
+ * every other optional seam in this file (`screenOutput`, `notifyShellActivity`).
  *
  * The hold->settle protocol mirrors the voice STT recipe
  * (apps/web/src/app/api/voice/transcribe/route.ts): `gate` places a flat-estimate
@@ -109,11 +109,16 @@ export interface SandboxBillingDeps {
  * Terminal's live PTY/output feed (Terminal Epic 1 T1.5 activity visibility) —
  * so a human watching a Terminal page sees the agent's work as it happens.
  */
-export interface TerminalActivityNotification {
-  /** The session's identifying agent page. */
-  pageId: string;
-  driveId?: string;
-  tenantId: string;
+export interface ShellActivityNotification {
+  /**
+   * The session whose sandbox the agent acted on — ≡ its conversation id.
+   *
+   * This replaces the old `(tenantId, driveId, pageId)` machine tuple, which
+   * had no successor and, worse, could not address a global-assistant session
+   * at all: those have a null agent page, so the tuple's `pageId` gate silently
+   * excluded them from the feed. Every session has this id.
+   */
+  sessionId: string;
   command: string;
   output: string;
   exitCode: number;
@@ -195,7 +200,7 @@ export interface SandboxRunDeps {
    * result, and omitting it simply disables the feed (no Terminal epic
    * consumer wired yet, or the machine has no live watcher).
    */
-  notifyTerminalActivity?: (input: TerminalActivityNotification) => Promise<void>;
+  notifyShellActivity?: (input: ShellActivityNotification) => Promise<void>;
   /**
    * Optional metering seam (Terminal Epic 3): meters this run's active-runtime
    * cost against the machine's payer. Omitted -> unmetered (no hold, no charge).
@@ -377,13 +382,13 @@ async function safeAudit(
 
 // Best-effort, fire-and-forget: a failing/missing activity feed must never
 // affect the bash tool's result — it is a visibility nicety, not a safety gate.
-async function safeNotifyTerminalActivity(
+async function safeNotifyShellActivity(
   deps: SandboxRunDeps,
-  input: TerminalActivityNotification,
+  input: ShellActivityNotification,
 ): Promise<void> {
-  if (!deps.notifyTerminalActivity) return;
+  if (!deps.notifyShellActivity) return;
   try {
-    await deps.notifyTerminalActivity(input);
+    await deps.notifyShellActivity(input);
   } catch {
     // Intentionally swallowed.
   }
@@ -728,24 +733,23 @@ export async function runBashInSandbox({
       durationMs,
       anomaly: anomalyForExit(run.exitCode),
     });
-    if (session.pageId) {
+    // Gated on the SESSION id, not the agent page: the sandbox this ran in
+    // belongs to the session, and a global-assistant session has no page at all.
+    if (ctx.conversationId) {
       // Fire-and-forget: this is a visibility nicety over a network hop to
       // another service, not a safety gate. Awaiting it would tie every
-      // successful bash call's latency to the terminal-activity feed's
-      // availability (up to its own request timeout) for no benefit — the
-      // tool result below does not depend on it. safeNotifyTerminalActivity
-      // already swallows its own errors, so this can never surface as an
-      // unhandled rejection.
-      void safeNotifyTerminalActivity(deps, {
-        pageId: session.pageId,
-        driveId: ctx.driveId,
-        tenantId: ctx.tenantId,
+      // successful bash call's latency to the activity feed's availability (up
+      // to its own request timeout) for no benefit — the tool result below does
+      // not depend on it. safeNotifyShellActivity already swallows its own
+      // errors, so this can never surface as an unhandled rejection.
+      void safeNotifyShellActivity(deps, {
+        sessionId: ctx.conversationId,
         command,
         output: [stdout.text, stderr.text].filter((text) => text.length > 0).join('\n'),
         exitCode: run.exitCode,
         // No display name is set for a plain email fallback — a raw email
-        // address is PII and this feed is visible to every viewer with edit
-        // access to the Terminal page, not just the acting user.
+        // address is PII and this feed is visible to everyone watching a shell
+        // of this session, not just the acting user.
         agentLabel: ctx.actorDisplayName ?? 'AI agent',
       });
     }

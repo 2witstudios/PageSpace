@@ -157,3 +157,26 @@ export const shellConnectPayloadSchema = z
   }));
 
 export type ShellConnectPayload = z.output<typeof shellConnectPayloadSchema>;
+
+/**
+ * The internal HTTP routes the realtime shell bridge serves.
+ *
+ * Declared here, and imported by BOTH sides, because they already drifted once:
+ * the phase-3 re-key renamed these from `session-*` to `shell-*` on the server
+ * while the web tool client kept posting to the old names, so every agent
+ * `read_shell`/`send_shell` 404'd and came back as "could not reach the
+ * terminal service". Nothing caught it — each side is unit-tested against a
+ * mocked transport, so both suites were green against a hop that could not
+ * connect. A string that two apps must agree on is a shape, and this module's
+ * rule is that no shape is declared twice.
+ */
+export const SHELL_BRIDGE_ROUTES = {
+  /** `read_shell`, and the multi-shell liveness sweep. */
+  read: '/api/shell-read',
+  /** `send_shell`. */
+  input: '/api/shell-input',
+  /** Activity/keepalive pings for a live PTY. */
+  activity: '/api/shell-activity',
+} as const;
+
+export type ShellBridgeRoute = (typeof SHELL_BRIDGE_ROUTES)[keyof typeof SHELL_BRIDGE_ROUTES];

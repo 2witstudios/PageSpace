@@ -3,6 +3,7 @@ import * as Sentry from '@sentry/node';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { Server, Socket } from 'socket.io';
 import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-sessions/contract';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { verifyBroadcastSignature } from '@pagespace/lib/auth/broadcast-auth';
 import * as dotenv from 'dotenv';
@@ -874,7 +875,7 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                 res.end(JSON.stringify({ error: 'Invalid JSON' }));
             }
         });
-    } else if (req.method === 'POST' && req.url === '/api/shell-read') {
+    } else if (req.method === 'POST' && req.url === SHELL_BRIDGE_ROUTES.read) {
         // read_shell (shell:* family) + the liveness sweep, re-keyed to
         // {shellId}. The bytes live in THIS process's session map, so the web
         // tier — which has already authorized the shell against the shared
@@ -896,7 +897,7 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                 res.end(JSON.stringify({ success: false, error: 'Internal error' }));
             });
         });
-    } else if (req.method === 'POST' && req.url === '/api/shell-input') {
+    } else if (req.method === 'POST' && req.url === SHELL_BRIDGE_ROUTES.input) {
         // send_shell (shell:* family): types stdin into a live shell PTY
         // through the same `session.command.write` a human viewer's keystroke
         // takes, so anyone watching sees it echoed exactly as they would see a
@@ -918,7 +919,7 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                 res.end(JSON.stringify({ success: false, error: 'Internal error' }));
             });
         });
-    } else if (req.method === 'POST' && req.url === '/api/shell-activity') {
+    } else if (req.method === 'POST' && req.url === SHELL_BRIDGE_ROUTES.activity) {
         // Streams an agent's bash run into the live shell feeds of its SESSION
         // (the shell:* successor to /api/terminal-activity, addressed by
         // sessionId). Best-effort: no live shell (nobody watching) is not an

@@ -53,6 +53,7 @@ import {
   measureWarmSessionStorage,
 } from '@/lib/agent-sessions/agent-sessions-runtime';
 import type { ToolExecutionContext } from '../core/types';
+import { notifyShellAgentActivity } from '@/lib/websocket/socket-utils';
 
 // The Sprites client is a process-wide stateless singleton, built lazily so
 // importing this module does no SDK work at load.
@@ -182,6 +183,13 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
     },
     buildEnv: defaultBuildEnv,
     audit: (input) => writeCodeExecutionAudit({ input }),
+    // Activity-visibility seam: stream a successful bash run into the live PTY
+    // feed of every shell in this session, so a human watching one of them sees
+    // what the agent just did on the sandbox they share. The realtime handler
+    // for this has been in place (and tested) since the bridge re-key; this
+    // wiring is what makes it reachable. Best-effort — `notifyShellAgentActivity`
+    // logs and swallows its own errors, and the runner fires it unawaited.
+    notifyShellActivity: (input) => notifyShellAgentActivity(input),
     // Injection seam (DEFENSE-IN-DEPTH, fail-open): screen untrusted tool output
     // through the built-in heuristic classifier before it becomes a model message.
     // Annotates flagged content (never blocks); a classifier error fails open. A

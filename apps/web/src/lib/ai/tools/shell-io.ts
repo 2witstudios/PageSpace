@@ -22,6 +22,7 @@
  */
 
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
+import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-sessions/contract';
 import { annotateToolOutput } from '@pagespace/lib/services/sandbox/injection-seam';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { scrollbackLines, tailOfLines } from '@pagespace/lib/services/agent-sessions/session-scrollback';
@@ -39,7 +40,14 @@ const REALTIME_TIMEOUT_MS = 5000;
 const COLD_START_TIMEOUT_MS = 25_000;
 
 export interface RealtimeShellReadPayload {
-  shellId: string;
+  /**
+   * A list because the realtime endpoint also serves the multi-shell liveness
+   * sweep. `read_shell` always names exactly one — and that matters beyond
+   * shape: the bridge only STARTS a never-run PTY when the read is
+   * single-addressed, so sending one id in a list is what keeps issue #2206's
+   * start-on-first-read working.
+   */
+  shellIds: string[];
   limit: number;
   /** Absent on liveness-only probes; present when this read may START a never-run PTY. */
   start?: true;
@@ -53,8 +61,9 @@ export interface RealtimeShellSendPayload {
   userId: string;
 }
 
-export interface RealtimeShellReadResponse {
-  success: boolean;
+/** One entry of the endpoint's per-shell answer. */
+export interface RealtimeShellReadEntry {
+  shellId: string;
   live: boolean;
   hasOutput: boolean;
   viewers: number;
@@ -63,6 +72,11 @@ export interface RealtimeShellReadResponse {
   started?: true;
   /** Why no PTY is live, when the start refused with a stateable reason. */
   reason?: string;
+}
+
+export interface RealtimeShellReadResponse {
+  success: boolean;
+  shells?: RealtimeShellReadEntry[];
 }
 
 export interface RealtimeShellSendResponse {
@@ -166,8 +180,8 @@ export function createShellIo(transport: RealtimeShellIoTransport): {
 } {
   return {
     read: async ({ shellId, lines, userId, cold }) => {
-      const answer = await transport.read({
-        shellId,
+      const response = await transport.read({
+        shellIds: [shellId],
         limit: lines,
         // Reading a shell that has never run STARTS it (issue #2206) — but only
         // when there is no cold tail to serve instead (issue #2205): a cold
@@ -176,7 +190,12 @@ export function createShellIo(transport: RealtimeShellIoTransport): {
         ...(cold === undefined ? { start: true as const, userId } : {}),
       });
 
-      if (!answer?.success) return { ok: false, error: UNREACHABLE_READ };
+      if (!response?.success) return { ok: false, error: UNREACHABLE_READ };
+      // A success with no entry for the id we named is not an answer about this
+      // shell — it is the endpoint declining to say anything. Treating a missing
+      // entry as "not live" would report a running build as dead.
+      const answer = response.shells?.find((entry) => entry.shellId === shellId);
+      if (!answer) return { ok: false, error: UNREACHABLE_READ };
 
       // A cold tail is history, never consulted while the PTY is live.
       if (!answer.live) return planColdShellReadAnswer({ lines, cold, reason: answer.reason });
@@ -256,6 +275,10 @@ async function postSigned<T>(path: string, payload: { start?: true }): Promise<T
 
 /** The production transport: signed POSTs to the realtime service that owns the PTYs. */
 export const realtimeShellIoTransport: RealtimeShellIoTransport = {
-  read: (payload) => postSigned<RealtimeShellReadResponse>('/api/session-read', payload),
-  send: (payload) => postSigned<RealtimeShellSendResponse>('/api/session-input', payload),
+  // Routes come from the contract module, not a literal here: this client and
+  // the realtime route table drifted apart once already (phase 3 renamed the
+  // bridge; this side kept the old names, so every agent read/send 404'd), and
+  // both suites stayed green because each mocks the other.
+  read: (payload) => postSigned<RealtimeShellReadResponse>(SHELL_BRIDGE_ROUTES.read, payload),
+  send: (payload) => postSigned<RealtimeShellSendResponse>(SHELL_BRIDGE_ROUTES.input, payload),
 };

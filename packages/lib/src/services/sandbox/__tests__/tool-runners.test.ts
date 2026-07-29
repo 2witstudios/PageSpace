@@ -227,11 +227,11 @@ describe('runBashInSandbox', () => {
     expect(slots.released).toBe(1);
   });
 
-  it('given a successful run and a resolved machine pageId, should notify the terminal activity feed', async () => {
+  it('given a successful run, should notify the session\'s shell activity feed', async () => {
     const notified: unknown[] = [];
     const { deps } = makeDeps({
       acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
-      notifyTerminalActivity: async (input) => {
+      notifyShellActivity: async (input) => {
         notified.push(input);
       },
     });
@@ -243,9 +243,7 @@ describe('runBashInSandbox', () => {
     expect(result).toMatchObject({ success: true });
     expect(notified).toEqual([
       {
-        pageId: 'terminal-page-1',
-        driveId: 'd1',
-        tenantId: 't1',
+        sessionId: 'c1',
         command: 'echo hi',
         output: 'ok',
         exitCode: 0,
@@ -296,23 +294,39 @@ describe('runBashInSandbox', () => {
     await Promise.resolve();
   });
 
-  it('given no resolved machine pageId, should never call the terminal activity feed', async () => {
-    const notified: unknown[] = [];
+  it('given a GLOBAL-ASSISTANT session (no agent page), should still notify — it has a sandbox too', async () => {
+    // The old gate was the agent pageId, which a global-assistant session does
+    // not have, so this whole class of session was silently excluded from the
+    // feed. The session id is the address now, and every session has one.
+    const notified: Array<{ sessionId: string }> = [];
     const { deps } = makeDeps({
       acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
-      notifyTerminalActivity: async (input) => {
+      notifyShellActivity: async (input) => {
         notified.push(input);
       },
     });
-    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ agentPageId: undefined }), deps });
+    expect(result).toMatchObject({ success: true });
+    expect(notified[0]?.sessionId).toBe('c1');
+  });
+
+  it('given no conversation id, should never call the activity feed — there is nothing to address', async () => {
+    const notified: unknown[] = [];
+    const { deps } = makeDeps({
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+      notifyShellActivity: async (input) => {
+        notified.push(input);
+      },
+    });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ conversationId: undefined }), deps });
     expect(result).toMatchObject({ success: true });
     expect(notified).toEqual([]);
   });
 
-  it('given a throwing terminal activity feed, should still return the successful result', async () => {
+  it('given a throwing activity feed, should still return the successful result', async () => {
     const { deps } = makeDeps({
       acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
-      notifyTerminalActivity: async () => {
+      notifyShellActivity: async () => {
         throw new Error('feed down');
       },
     });
@@ -320,14 +334,14 @@ describe('runBashInSandbox', () => {
     expect(result).toEqual({ success: true, stdout: 'ok', stderr: '', exitCode: 0, truncated: false });
   });
 
-  it('given a slow-to-resolve terminal activity feed, should NOT block the tool result on it (fire-and-forget)', async () => {
+  it('given a slow-to-resolve activity feed, should NOT block the tool result on it (fire-and-forget)', async () => {
     let releaseFeed: (() => void) | undefined;
     const feedGate = new Promise<void>((resolve) => {
       releaseFeed = resolve;
     });
     const { deps } = makeDeps({
       acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
-      notifyTerminalActivity: async () => {
+      notifyShellActivity: async () => {
         await feedGate; // Never resolves during this test unless we release it.
       },
     });
@@ -338,13 +352,13 @@ describe('runBashInSandbox', () => {
     releaseFeed?.(); // Avoid leaving a dangling unresolved promise after the test.
   });
 
-  it('given both stdout and stderr, should combine them for the terminal activity feed instead of dropping stderr', async () => {
+  it('given both stdout and stderr, should combine them for the activity feed instead of dropping stderr', async () => {
     const notified: Array<{ output: string }> = [];
     const { deps } = makeDeps({
       acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
       reconnect: async () =>
         makeSandbox({ runCommand: async () => ({ exitCode: 0, stdout: 'out-line', stderr: 'err-line' }) }),
-      notifyTerminalActivity: async (input) => {
+      notifyShellActivity: async (input) => {
         notified.push(input);
       },
     });
@@ -356,7 +370,7 @@ describe('runBashInSandbox', () => {
     const notified: Array<{ agentLabel: string }> = [];
     const { deps } = makeDeps({
       acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
-      notifyTerminalActivity: async (input) => {
+      notifyShellActivity: async (input) => {
         notified.push(input);
       },
     });
