@@ -82,6 +82,23 @@ export function useInboxSocket({ cacheKey, scope, driveId, hasLoadedRef: externa
           if (existingIndex >= 0) {
             // Update existing item
             const existingItem = updatedItems[existingIndex];
+
+            // A sidebar and its matching center list (e.g. DMSidebar +
+            // DMCenterList on /dashboard/dms) share this exact cacheKey and
+            // each mount their own useInboxSocket, so both run this updater
+            // independently for the same socket event. mutate()'s functional
+            // updater applies synchronously, so the second call's
+            // currentData already reflects the first call's write — visible
+            // here as lastMessageAt already matching the incoming payload.
+            // Without this guard, one message double-increments unreadCount
+            // (0 -> 1 -> 2). payload.unreadCount (an explicit value from the
+            // server) and read_status_changed's reset to 0 are naturally
+            // idempotent already, so only the +1 fallback needs guarding.
+            const willIncrement = payload.unreadCount === undefined && payload.operation !== 'read_status_changed';
+            if (willIncrement && payload.lastMessageAt !== undefined && payload.lastMessageAt === existingItem.lastMessageAt) {
+              return currentData;
+            }
+
             updatedItems[existingIndex] = {
               ...existingItem,
               lastMessageAt: payload.lastMessageAt || existingItem.lastMessageAt,

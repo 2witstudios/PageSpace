@@ -56,6 +56,7 @@ vi.mock('swr', () => ({
 
 import { useInboxSocket } from '../useInboxSocket';
 import type { InboxEventPayload } from '@/lib/websocket/socket-utils';
+import type { InboxResponse } from '@pagespace/lib/types';
 
 const CHANNEL_KEY = '/api/inbox?type=channel&limit=20';
 const DM_KEY = '/api/inbox?type=dm&limit=20';
@@ -240,6 +241,82 @@ describe('useInboxSocket', () => {
         expect.any(Function),
         { revalidate: false }
       );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Duplicate-handler idempotency: a sidebar and its matching center list
+  // (e.g. DMSidebar + DMCenterList, both mounted simultaneously on
+  // /dashboard/dms via Layout) share this exact cacheKey and each mount their
+  // own useInboxSocket, so one socket event runs this updater twice. Flagged
+  // by automated review (chatgpt-codex-connector, P1) after the driveId fix;
+  // verified empirically first (see PR #2247 discussion) that SWR's
+  // functional mutate() applies synchronously, so the second call's
+  // currentData already reflects the first call's write. Simulated here by
+  // invoking the captured updater twice in sequence, chaining the return
+  // value — exactly how two independent handlers would observe the cache.
+  // -------------------------------------------------------------------------
+  describe('duplicate-handler idempotency (shared cacheKey)', () => {
+    const seedData: InboxResponse = {
+      items: [{
+        id: 'dm-1',
+        type: 'dm',
+        name: 'Test User',
+        avatarUrl: null,
+        lastMessageAt: '2026-07-28T12:00:00.000Z',
+        lastMessagePreview: 'old message',
+        lastMessageSender: null,
+        unreadCount: 0,
+      }],
+      pagination: { hasMore: false, nextCursor: null },
+    };
+
+    const runUpdaterTwice = (payload: InboxEventPayload, currentData: InboxResponse) => {
+      // Fresh render + clean mock state each call: this simulates exactly
+      // one hook instance receiving one socket event, so the two applications
+      // below are of the *same* captured updater (standing in for two
+      // sibling hook instances), not an artifact of a stale prior render.
+      const rendered = renderInboxSocket({ cacheKey: DM_KEY, scope: 'dm' });
+      mockMutate.mockClear();
+
+      act(() => {
+        mockSocket._trigger('inbox:dm_updated', payload);
+      });
+
+      expect(mockMutate.mock.calls).toHaveLength(1);
+      const updater = mockMutate.mock.calls[0][1] as (data: InboxResponse) => InboxResponse;
+      const afterFirstHandler = updater(currentData);
+      const afterSecondHandler = updater(afterFirstHandler);
+      rendered.unmount();
+      return { afterFirstHandler, afterSecondHandler };
+    };
+
+    it('one message increments unreadCount exactly once, not twice, across two handlers', () => {
+      const payload = dmPayload({ id: 'dm-1', lastMessageAt: '2026-07-28T13:00:00.000Z', unreadCount: undefined });
+      const { afterFirstHandler, afterSecondHandler } = runUpdaterTwice(payload, seedData);
+
+      expect(afterFirstHandler.items[0].unreadCount).toBe(1);
+      expect(afterSecondHandler.items[0].unreadCount).toBe(1);
+    });
+
+    it('two distinct messages still each increment unreadCount once (guard is not overzealous)', () => {
+      const firstPayload = dmPayload({ id: 'dm-1', lastMessageAt: '2026-07-28T13:00:00.000Z', unreadCount: undefined });
+      const { afterFirstHandler: afterFirstMessage } = runUpdaterTwice(firstPayload, seedData);
+      expect(afterFirstMessage.items[0].unreadCount).toBe(1);
+
+      const secondPayload = dmPayload({ id: 'dm-1', lastMessageAt: '2026-07-28T14:00:00.000Z', unreadCount: undefined });
+      const { afterFirstHandler, afterSecondHandler } = runUpdaterTwice(secondPayload, afterFirstMessage);
+
+      expect(afterFirstHandler.items[0].unreadCount).toBe(2);
+      expect(afterSecondHandler.items[0].unreadCount).toBe(2);
+    });
+
+    it('an explicit server-provided unreadCount is naturally idempotent without the guard', () => {
+      const payload = dmPayload({ id: 'dm-1', lastMessageAt: '2026-07-28T13:00:00.000Z', unreadCount: 5 });
+      const { afterFirstHandler, afterSecondHandler } = runUpdaterTwice(payload, seedData);
+
+      expect(afterFirstHandler.items[0].unreadCount).toBe(5);
+      expect(afterSecondHandler.items[0].unreadCount).toBe(5);
     });
   });
 
