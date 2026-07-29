@@ -13,7 +13,15 @@
 
 import { create } from 'zustand';
 
-export type SessionType = 'document' | 'ai-streaming' | 'form' | 'other';
+/**
+ * 'shell' is a live PTY (`components/agents/shell/XtermTerminal.tsx`). It is
+ * NOT in `isAnyEditing()`'s set below — an open shell must defer auth refresh
+ * (via `isAnyActive()`, which counts every session regardless of type) but
+ * must NOT pause SWR revalidation, or a surface polling `isAnyEditing()`
+ * (`usePageAgents`, the Agents sidebar's list) would freeze for as long as any
+ * shell anywhere stays open. See `usePageAgents.ts`'s regression test.
+ */
+export type SessionType = 'document' | 'ai-streaming' | 'form' | 'shell' | 'other';
 
 export interface EditingSession {
   id: string;
@@ -64,6 +72,10 @@ export const useEditingStore = create<EditingState>((set, get) => ({
   pendingSends: new Set(),
 
   // Query methods
+  // Deliberately 'document'/'form' ONLY — 'ai-streaming' and 'shell' must never
+  // pause SWR revalidation through this check (a live chat stream or an open
+  // shell is not something a background refetch could clobber the way a
+  // document/form edit could), only defer auth refresh via isAnyActive().
   isAnyEditing: () => {
     const sessions = Array.from(get().activeSessions.values());
     return sessions.some(s => s.type === 'document' || s.type === 'form');

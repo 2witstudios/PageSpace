@@ -11,6 +11,14 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 
+vi.mock('../AgentView', () => ({
+  default: ({ agentId, conversationId }: { agentId: string; conversationId: string }) => (
+    <div data-testid="agent-view">
+      {agentId}/{conversationId}
+    </div>
+  ),
+}));
+
 import AgentsSurface from '../AgentsSurface';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 
@@ -85,5 +93,11 @@ describe('AgentsSurface', () => {
     window.history.replaceState({}, '', '/dashboard/agents?agent=agent-1&c=conv-1');
     const { container } = render(<AgentsSurface />);
     expect(container.textContent?.toLowerCase()).not.toContain('session');
+  });
+
+  test('renders AgentView, keyed by conversationId, once both an agent and a conversation are selected', () => {
+    window.history.replaceState({}, '', '/dashboard/agents?agent=agent-1&c=conv-1');
+    render(<AgentsSurface />);
+    expect(screen.getByTestId('agent-view')).toHaveTextContent('agent-1/conv-1');
   });
 });
