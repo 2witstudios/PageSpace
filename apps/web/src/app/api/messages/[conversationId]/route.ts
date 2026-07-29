@@ -48,27 +48,33 @@ function attachmentValidationErrorResponse(
 }
 
 /**
- * Shared by the GET side-effect and the explicit PATCH: only a call that
- * actually flipped unread rows counts as "read" — a no-op poll/PATCH must not
- * broadcast or touch notifications (GET-path noise). The notification clear
- * and the inbox broadcast are independent writes, so they run in parallel.
+ * Shared by the GET side-effect and the explicit PATCH.
+ *
+ * The notification clear runs on every call, independent of `markedCount` — a
+ * NEW_DIRECT_MESSAGE notification can be unread even when its underlying
+ * message row was already marked read (e.g. by a build predating this fix),
+ * so gating the clear on `markedCount` would leave it orphaned forever.
+ *
+ * The inbox broadcast stays gated on `markedCount > 0` — a no-op poll must
+ * not emit socket traffic (GET-path noise) — and runs AFTER the notification
+ * write resolves, so a listener like `useSidebarBadges` that revalidates on
+ * this event observes the post-write state rather than racing it.
  */
 async function markDmConversationReadAndNotify(
   userId: string,
   conversationId: string,
   markedCount: number
 ): Promise<number> {
-  if (markedCount <= 0) return 0;
+  const notificationsMarkedRead = await markDmConversationNotificationsRead(userId, conversationId);
 
-  const [notificationsMarkedRead] = await Promise.all([
-    markDmConversationNotificationsRead(userId, conversationId),
-    broadcastInboxEvent(userId, {
+  if (markedCount > 0) {
+    await broadcastInboxEvent(userId, {
       operation: 'read_status_changed',
       type: 'dm',
       id: conversationId,
       unreadCount: 0,
-    }),
-  ]);
+    });
+  }
 
   return notificationsMarkedRead;
 }

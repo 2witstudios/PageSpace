@@ -345,7 +345,7 @@ describe('markAllNotificationsAsRead', () => {
 });
 
 describe('markPageNotificationsRead', () => {
-  it('marks unread notifications for the page as read, scoped to the calling user, and returns the count', async () => {
+  it('marks unread MENTION notifications for the page as read, scoped to the calling user, and returns the count', async () => {
     const { setFn } = setupUpdateChain([{ id: 'n1' }, { id: 'n2' }]);
 
     const count = await markPageNotificationsRead('user-1', 'page-1');
@@ -357,6 +357,11 @@ describe('markPageNotificationsRead', () => {
     expect(eq).toHaveBeenCalledWith('userId', 'user-1');
     expect(eq).toHaveBeenCalledWith('pageId', 'page-1');
     expect(eq).toHaveBeenCalledWith('isRead', false);
+    // Regression guard: a page can carry PERMISSION_UPDATED/PAGE_SHARED/
+    // TASK_ASSIGNED notifications with the same pageId as a MENTION — this
+    // call must only ever touch MENTION rows, or reading a channel would
+    // silently dismiss an unrelated notification the user never saw.
+    expect(eq).toHaveBeenCalledWith('type', 'MENTION');
     expect(count).toBe(2);
   });
 
@@ -370,7 +375,7 @@ describe('markPageNotificationsRead', () => {
 });
 
 describe('markDmConversationNotificationsRead', () => {
-  it('marks unread notifications for the conversation as read, scoped to the calling user, and returns the count', async () => {
+  it('marks unread NEW_DIRECT_MESSAGE notifications for the conversation as read, scoped to the calling user, and returns the count', async () => {
     const { setFn } = setupUpdateChain([{ id: 'n1' }]);
 
     const count = await markDmConversationNotificationsRead('user-1', 'conv-1');
@@ -381,6 +386,10 @@ describe('markDmConversationNotificationsRead', () => {
     // NEW_DIRECT_MESSAGE notification for this conversation must not be touched.
     expect(eq).toHaveBeenCalledWith('userId', 'user-1');
     expect(eq).toHaveBeenCalledWith('isRead', false);
+    // Regression guard: only NEW_DIRECT_MESSAGE rows carry a conversationId
+    // in metadata today, but the type filter is explicit so a future
+    // notification type reusing that metadata shape is never swept up here.
+    expect(eq).toHaveBeenCalledWith('type', 'NEW_DIRECT_MESSAGE');
     expect(count).toBe(1);
   });
 

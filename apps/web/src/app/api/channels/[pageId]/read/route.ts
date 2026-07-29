@@ -44,20 +44,21 @@ export async function POST(
     DO UPDATE SET "lastReadAt" = NOW()
   `);
 
-  // Broadcast read status change and clear MENTION (and other) notifications
-  // tied to this page in parallel — independent writes, no dependency between
-  // them. Skipping the notification clear would leave the nav Channels badge
-  // lit even though the channel itself is read.
-  const [, notificationsMarkedRead] = await Promise.all([
-    broadcastInboxEvent(userId, {
-      operation: 'read_status_changed',
-      type: 'channel',
-      id: pageId,
-      driveId: channel.driveId,
-      unreadCount: 0,
-    }),
-    markPageNotificationsRead(userId, pageId),
-  ]);
+  // Clear MENTION notifications tied to this page BEFORE broadcasting —
+  // otherwise the nav Channels badge stays lit even though the channel
+  // itself is read. Sequenced (not parallel): a listener like
+  // useSidebarBadges revalidates /api/sidebar/badges as soon as the
+  // broadcast lands, and must observe the post-write notification state
+  // rather than racing the still-in-flight update.
+  const notificationsMarkedRead = await markPageNotificationsRead(userId, pageId);
+
+  await broadcastInboxEvent(userId, {
+    operation: 'read_status_changed',
+    type: 'channel',
+    id: pageId,
+    driveId: channel.driveId,
+    unreadCount: 0,
+  });
 
   loggers.api.debug('Channel marked as read', { channelId: pageId, userId, notificationsMarkedRead });
 

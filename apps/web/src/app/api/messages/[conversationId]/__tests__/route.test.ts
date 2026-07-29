@@ -719,16 +719,32 @@ describe('GET /api/messages/[conversationId]', () => {
     expect(body.notificationsMarkedRead).toBe(2);
   });
 
-  it('AC3: a GET that marks nothing read broadcasts nothing and does not touch notifications', async () => {
+  it('AC3: a GET that marks nothing read broadcasts nothing (but still checks notifications)', async () => {
     mockMarkActiveMessagesRead.mockResolvedValue(0);
+    mockMarkDmConversationNotificationsRead.mockResolvedValue(0);
 
     const res = await callGet();
 
     expect(res.status).toBe(200);
     expect(mockBroadcastInboxEvent).not.toHaveBeenCalled();
-    expect(mockMarkDmConversationNotificationsRead).not.toHaveBeenCalled();
     const body = await res.json();
     expect(body.notificationsMarkedRead).toBe(0);
+  });
+
+  it('clears an orphaned NEW_DIRECT_MESSAGE notification even when no message row needed flipping, without broadcasting', async () => {
+    // Regression: a notification can be unread even when its message was
+    // already marked read by an older build (pre-Hole-E) — gating the
+    // notification clear on markedCount would leave it stuck forever.
+    mockMarkActiveMessagesRead.mockResolvedValue(0);
+    mockMarkDmConversationNotificationsRead.mockResolvedValue(1);
+
+    const res = await callGet();
+
+    expect(res.status).toBe(200);
+    expect(mockMarkDmConversationNotificationsRead).toHaveBeenCalledWith(SENDER_ID, CONVERSATION_ID);
+    expect(mockBroadcastInboxEvent).not.toHaveBeenCalled();
+    const body = await res.json();
+    expect(body.notificationsMarkedRead).toBe(1);
   });
 });
 
@@ -799,16 +815,29 @@ describe('PATCH /api/messages/[conversationId] (mark-as-read)', () => {
     expect(body.notificationsMarkedRead).toBe(1);
   });
 
-  it('AC3: a PATCH that marks nothing read broadcasts nothing and does not touch notifications', async () => {
+  it('AC3: a PATCH that marks nothing read broadcasts nothing (but still checks notifications)', async () => {
     mockMarkActiveMessagesRead.mockResolvedValue(0);
+    mockMarkDmConversationNotificationsRead.mockResolvedValue(0);
 
     const res = await callPatch();
 
     expect(res.status).toBe(200);
     expect(mockBroadcastInboxEvent).not.toHaveBeenCalled();
-    expect(mockMarkDmConversationNotificationsRead).not.toHaveBeenCalled();
     const body = await res.json();
     expect(body.notificationsMarkedRead).toBe(0);
+  });
+
+  it('clears an orphaned NEW_DIRECT_MESSAGE notification even when no message row needed flipping, without broadcasting', async () => {
+    mockMarkActiveMessagesRead.mockResolvedValue(0);
+    mockMarkDmConversationNotificationsRead.mockResolvedValue(1);
+
+    const res = await callPatch();
+
+    expect(res.status).toBe(200);
+    expect(mockMarkDmConversationNotificationsRead).toHaveBeenCalledWith(SENDER_ID, CONVERSATION_ID);
+    expect(mockBroadcastInboxEvent).not.toHaveBeenCalled();
+    const body = await res.json();
+    expect(body.notificationsMarkedRead).toBe(1);
   });
 });
 
