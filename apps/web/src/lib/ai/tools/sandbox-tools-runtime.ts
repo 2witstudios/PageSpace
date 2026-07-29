@@ -180,7 +180,15 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
         sessionId,
         // The exec client exposes `runCommand`; the measurement seam speaks the
         // host's `exec`. One adapter here beats widening either contract.
-        attach: async () => ({ exec: (args) => sandbox.runCommand(args) }),
+        //
+        // `spriteInstanceId` comes off THIS sandbox — the one the tool run
+        // acquired and just used — because that is the disk `du` will walk.
+        // Reading it from the session row instead would name whatever generation
+        // is current at persist time, which is not necessarily this one.
+        attach: async () => ({
+          exec: (args) => sandbox.runCommand(args),
+          spriteInstanceId: sandbox.spriteInstanceId,
+        }),
       }),
     notifyShellActivity: (input) => notifyShellAgentActivity(input),
     // Injection seam (DEFENSE-IN-DEPTH, fail-open): screen untrusted tool output

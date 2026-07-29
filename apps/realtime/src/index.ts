@@ -285,9 +285,11 @@ async function measureWarmSessionStorageOnResume(sessionId: string, sandboxId: s
     await refreshSessionStorageMeasurement({
       handle: { exec: (args) => sandbox.runCommand(args) },
       sessionId,
-      // The generation read above, before the walk — a re-provision mid-`du`
-      // moves the row on and the stale write is dropped (see the web tier).
-      spriteInstanceId: row.spriteInstanceId ?? null,
+      // The FETCHED sandbox's own generation, not the row's: the CAS has to
+      // describe the disk that was walked (see the web tier). Here the two
+      // usually agree — the sandbox is fetched right after the row — but
+      // "usually" is exactly what a CAS is for.
+      spriteInstanceId: sandbox.spriteInstanceId ?? null,
       lastMeasuredAt: row.storageMeasuredAt ?? null,
       now: new Date(),
       persist: async ({ spriteInstanceId, measuredBytes, measuredAt }) => {
