@@ -48,10 +48,15 @@ const fetcher = async (url: string): Promise<SessionResponse> => {
     const body: { error?: unknown } | null = await response.json().catch(() => null);
     throw new Error(typeof body?.error === 'string' ? body.error : `Failed to load sandbox: ${response.status}`);
   }
-  const body = (await response.json()) as SessionResponse | AgentSessionDTO;
-  // Accept either envelope shape — `{ session }` or the DTO itself — so the hook
-  // does not become the reason a route has to pick one.
-  return 'session' in body ? body : { session: body };
+  // The route has ONE success shape: `{ session }`, with `session: null` for a
+  // conversation that never acquired a sandbox. This used to accept the bare DTO
+  // too, "so the hook does not become the reason a route has to pick one" — but
+  // the route had already picked, and tolerating a shape nothing sends only
+  // hides the day the two stop agreeing. That is not hypothetical here: the
+  // tool layer's realtime hop spent this whole rebuild speaking a format its
+  // endpoint never used, and permissive parsing on the client is what keeps
+  // that class of break silent.
+  return (await response.json()) as SessionResponse;
 };
 
 export interface UseAgentSessionResult {
@@ -88,8 +93,7 @@ export function useAgentSession(sessionId: string | null | undefined): UseAgentS
 
   const ensureSession = useCallback(async (): Promise<AgentSessionDTO | null> => {
     if (!sessionId) return null;
-    const body = await post<SessionResponse | AgentSessionDTO>(sessionPath(sessionId));
-    const ensured = body && 'session' in body ? body.session : (body as AgentSessionDTO | null);
+    const { session: ensured } = await post<SessionResponse>(sessionPath(sessionId));
     // Write the server's answer straight into the cache: provisioning is the one
     // moment where a stale 'none' would be actively misleading (the chip would
     // still offer to start a sandbox that is already starting).

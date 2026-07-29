@@ -84,10 +84,14 @@ describe('useAgentSession', () => {
     expect(result.current.status).toBe('none');
   });
 
-  it('accepts a bare DTO envelope as well as { session }', async () => {
-    // The route hasn't been written yet; the hook is not the reason it has to
-    // pick an envelope.
-    mockFetchWithAuth.mockResolvedValue(jsonResponse(session({ sandboxStatus: 'starting' })));
+  it('reads the { session } envelope the route actually returns', async () => {
+    // Written in the frontend phase, before the route existed, as "the hook is
+    // not the reason it has to pick an envelope" — reasonable then. The route
+    // has since picked `{ session }`, so accepting a bare DTO now pins
+    // tolerance for a response nothing sends. Permissive client parsing is what
+    // keeps a client/server divergence silent, which is exactly how the tool
+    // layer's realtime hop went a whole rebuild speaking the wrong format.
+    mockFetchWithAuth.mockResolvedValue(jsonResponse({ session: session({ sandboxStatus: 'starting' }) }));
     const { result } = renderHook(() => useAgentSession('conv-1'), { wrapper });
     await waitFor(() => expect(result.current.status).toBe('starting'));
   });

@@ -138,9 +138,14 @@ describe('useSessionShells', () => {
       expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions/conv-1/shells', { name: 'build' });
     });
 
-    it('accepts a bare DTO envelope as well as { shell }', async () => {
+    it('reads the { shell } envelope the route actually returns', async () => {
+      // This replaces a test that asserted the hook ALSO accepts a bare DTO.
+      // The route has one success shape (`201 { shell }`), so that test pinned
+      // tolerance for a response nothing sends — and tolerating shapes the
+      // server does not produce is what let the tool layer's realtime hop go a
+      // whole rebuild speaking a format its endpoint never used.
       routeFetch([]);
-      mockPost.mockResolvedValue(shell('sh-1'));
+      mockPost.mockResolvedValue({ shell: shell('sh-1') });
       const { result } = renderHook(() => useSessionShells('conv-1'), { wrapper });
       await waitFor(() => expect(result.current.isLoading).toBe(false));
 

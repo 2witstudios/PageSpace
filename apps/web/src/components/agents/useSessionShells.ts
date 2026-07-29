@@ -98,11 +98,15 @@ export function useSessionShells(sessionId: string | null | undefined): UseSessi
       if (!sessionId) return null;
       const created = await mutate(
         async (current) => {
-          const body = await post<{ shell: ShellDTO } | ShellDTO>(
+          // The route answers `201 { shell }` — one shape, not two. The union
+          // this used to accept (`{shell} | ShellDTO`) hedged against a response
+          // the server never sends, and a cast covered the arm that could not
+          // happen. That kind of "not sure what comes back" is how the tool
+          // layer's realtime hop came to speak a shape its endpoint never used.
+          const { shell } = await post<{ shell: ShellDTO }>(
             shellsPath(sessionId),
             name ? { name } : {},
           );
-          const shell = body && 'shell' in body ? body.shell : (body as ShellDTO);
           return withShell(shell)(current);
         },
         {
