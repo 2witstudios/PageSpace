@@ -66,9 +66,12 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 // --- Notifications -------------------------------------------------------------
 const mockCreateOrUpdateMessageNotification = vi.fn();
+const mockMarkDmConversationNotificationsRead = vi.fn();
 vi.mock('@pagespace/lib/notifications/notifications', () => ({
   createOrUpdateMessageNotification: (...args: unknown[]) =>
     mockCreateOrUpdateMessageNotification(...args),
+  markDmConversationNotificationsRead: (...args: unknown[]) =>
+    mockMarkDmConversationNotificationsRead(...args),
 }));
 
 // --- Realtime broadcast helpers ------------------------------------------------
@@ -604,11 +607,18 @@ const liveMessage = (overrides: Partial<{
 describe('GET /api/messages/[conversationId]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.INTERNAL_REALTIME_URL = 'http://realtime.test';
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
     mockFindConversationForParticipant.mockResolvedValue(mockConversation());
     mockListActiveMessages.mockResolvedValue([]);
-    mockMarkActiveMessagesRead.mockResolvedValue(undefined);
+    // Default: this GET actually flips unread rows (realistic "opening a DM
+    // with unread messages" case) — markActiveMessagesRead now reports a
+    // count, not void, so downstream broadcast/notification-clear logic can
+    // gate on it (Hole D / GET-path noise).
+    mockMarkActiveMessagesRead.mockResolvedValue(1);
     mockUpdateConversationLastRead.mockResolvedValue(undefined);
+    mockMarkDmConversationNotificationsRead.mockResolvedValue(0);
+    mockBroadcastInboxEvent.mockResolvedValue(undefined);
   });
 
   it('GET_messages_filtersOutSoftDeleted_byDelegatingToListActiveMessages', async () => {
@@ -685,15 +695,69 @@ describe('GET /api/messages/[conversationId]', () => {
     expect(res.status).toBe(404);
     expect(mockListActiveMessages).not.toHaveBeenCalled();
   });
+
+  // ===== Hole D + GET-path noise (AC2, AC3) =====
+  it('AC2: broadcasts exactly one inbox:read_status_changed and clears DM notifications when the GET actually marks rows read', async () => {
+    mockMarkActiveMessagesRead.mockResolvedValue(1);
+    mockMarkDmConversationNotificationsRead.mockResolvedValue(2);
+
+    const res = await callGet();
+
+    expect(res.status).toBe(200);
+    expect(mockBroadcastInboxEvent).toHaveBeenCalledTimes(1);
+    expect(mockBroadcastInboxEvent).toHaveBeenCalledWith(
+      SENDER_ID,
+      expect.objectContaining({
+        operation: 'read_status_changed',
+        type: 'dm',
+        id: CONVERSATION_ID,
+        unreadCount: 0,
+      })
+    );
+    expect(mockMarkDmConversationNotificationsRead).toHaveBeenCalledWith(SENDER_ID, CONVERSATION_ID);
+    const body = await res.json();
+    expect(body.notificationsMarkedRead).toBe(2);
+  });
+
+  it('AC3: a GET that marks nothing read broadcasts nothing (but still checks notifications)', async () => {
+    mockMarkActiveMessagesRead.mockResolvedValue(0);
+    mockMarkDmConversationNotificationsRead.mockResolvedValue(0);
+
+    const res = await callGet();
+
+    expect(res.status).toBe(200);
+    expect(mockBroadcastInboxEvent).not.toHaveBeenCalled();
+    const body = await res.json();
+    expect(body.notificationsMarkedRead).toBe(0);
+  });
+
+  it('clears an orphaned NEW_DIRECT_MESSAGE notification even when no message row needed flipping, without broadcasting', async () => {
+    // Regression: a notification can be unread even when its message was
+    // already marked read by an older build (pre-Hole-E) — gating the
+    // notification clear on markedCount would leave it stuck forever.
+    mockMarkActiveMessagesRead.mockResolvedValue(0);
+    mockMarkDmConversationNotificationsRead.mockResolvedValue(1);
+
+    const res = await callGet();
+
+    expect(res.status).toBe(200);
+    expect(mockMarkDmConversationNotificationsRead).toHaveBeenCalledWith(SENDER_ID, CONVERSATION_ID);
+    expect(mockBroadcastInboxEvent).not.toHaveBeenCalled();
+    const body = await res.json();
+    expect(body.notificationsMarkedRead).toBe(1);
+  });
 });
 
 describe('PATCH /api/messages/[conversationId] (mark-as-read)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.INTERNAL_REALTIME_URL = 'http://realtime.test';
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
     mockFindConversationForParticipant.mockResolvedValue(mockConversation());
-    mockMarkActiveMessagesRead.mockResolvedValue(undefined);
+    mockMarkActiveMessagesRead.mockResolvedValue(1);
     mockUpdateConversationLastRead.mockResolvedValue(undefined);
+    mockMarkDmConversationNotificationsRead.mockResolvedValue(0);
+    mockBroadcastInboxEvent.mockResolvedValue(undefined);
   });
 
   it('PATCH_markAsRead_skipsSoftDeleted_byDelegatingToMarkActiveMessagesRead', async () => {
@@ -726,6 +790,54 @@ describe('PATCH /api/messages/[conversationId] (mark-as-read)', () => {
 
     expect(res.status).toBe(404);
     expect(mockMarkActiveMessagesRead).not.toHaveBeenCalled();
+  });
+
+  // ===== Hole D + GET-path noise mirror (AC2, AC3) =====
+  it('AC2: broadcasts exactly one inbox:read_status_changed and clears DM notifications when the PATCH actually marks rows read', async () => {
+    mockMarkActiveMessagesRead.mockResolvedValue(3);
+    mockMarkDmConversationNotificationsRead.mockResolvedValue(1);
+
+    const res = await callPatch();
+
+    expect(res.status).toBe(200);
+    expect(mockBroadcastInboxEvent).toHaveBeenCalledTimes(1);
+    expect(mockBroadcastInboxEvent).toHaveBeenCalledWith(
+      SENDER_ID,
+      expect.objectContaining({
+        operation: 'read_status_changed',
+        type: 'dm',
+        id: CONVERSATION_ID,
+        unreadCount: 0,
+      })
+    );
+    expect(mockMarkDmConversationNotificationsRead).toHaveBeenCalledWith(SENDER_ID, CONVERSATION_ID);
+    const body = await res.json();
+    expect(body.notificationsMarkedRead).toBe(1);
+  });
+
+  it('AC3: a PATCH that marks nothing read broadcasts nothing (but still checks notifications)', async () => {
+    mockMarkActiveMessagesRead.mockResolvedValue(0);
+    mockMarkDmConversationNotificationsRead.mockResolvedValue(0);
+
+    const res = await callPatch();
+
+    expect(res.status).toBe(200);
+    expect(mockBroadcastInboxEvent).not.toHaveBeenCalled();
+    const body = await res.json();
+    expect(body.notificationsMarkedRead).toBe(0);
+  });
+
+  it('clears an orphaned NEW_DIRECT_MESSAGE notification even when no message row needed flipping, without broadcasting', async () => {
+    mockMarkActiveMessagesRead.mockResolvedValue(0);
+    mockMarkDmConversationNotificationsRead.mockResolvedValue(1);
+
+    const res = await callPatch();
+
+    expect(res.status).toBe(200);
+    expect(mockMarkDmConversationNotificationsRead).toHaveBeenCalledWith(SENDER_ID, CONVERSATION_ID);
+    expect(mockBroadcastInboxEvent).not.toHaveBeenCalled();
+    const body = await res.json();
+    expect(body.notificationsMarkedRead).toBe(1);
   });
 });
 

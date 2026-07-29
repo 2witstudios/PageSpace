@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { createOrUpdateMessageNotification } from '@pagespace/lib/notifications/notifications'
+import { createOrUpdateMessageNotification, markDmConversationNotificationsRead } from '@pagespace/lib/notifications/notifications'
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { dmMessageRepository } from '@pagespace/lib/services/dm-message-repository';
@@ -45,6 +45,38 @@ function attachmentValidationErrorResponse(
     { error: isOwnerMismatch ? 'You do not own this file' : 'File is not linked to this conversation' },
     { status: 403 }
   );
+}
+
+/**
+ * Shared by the GET side-effect and the explicit PATCH.
+ *
+ * The notification clear runs on every call, independent of `markedCount` — a
+ * NEW_DIRECT_MESSAGE notification can be unread even when its underlying
+ * message row was already marked read (e.g. by a build predating this fix),
+ * so gating the clear on `markedCount` would leave it orphaned forever.
+ *
+ * The inbox broadcast stays gated on `markedCount > 0` — a no-op poll must
+ * not emit socket traffic (GET-path noise) — and runs AFTER the notification
+ * write resolves, so a listener like `useSidebarBadges` that revalidates on
+ * this event observes the post-write state rather than racing it.
+ */
+async function markDmConversationReadAndNotify(
+  userId: string,
+  conversationId: string,
+  markedCount: number
+): Promise<number> {
+  const notificationsMarkedRead = await markDmConversationNotificationsRead(userId, conversationId);
+
+  if (markedCount > 0) {
+    await broadcastInboxEvent(userId, {
+      operation: 'read_status_changed',
+      type: 'dm',
+      id: conversationId,
+      unreadCount: 0,
+    });
+  }
+
+  return notificationsMarkedRead;
 }
 
 // GET /api/messages/[conversationId] - Get messages in a conversation
@@ -169,7 +201,7 @@ export async function GET(
       : conversation.participant1Id;
 
     const readAt = new Date();
-    await Promise.all([
+    const [markedCount] = await Promise.all([
       dmMessageRepository.markActiveMessagesRead({
         conversationId,
         otherUserId,
@@ -182,6 +214,8 @@ export async function GET(
       }),
     ]);
 
+    const notificationsMarkedRead = await markDmConversationReadAndNotify(userId, conversationId, markedCount);
+
     // Show oldest first in the response payload.
     messages.reverse();
 
@@ -191,7 +225,7 @@ export async function GET(
 
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'message', resourceId: conversationId });
 
-    return NextResponse.json({ messages: enriched });
+    return NextResponse.json({ messages: enriched, notificationsMarkedRead });
   } catch (error) {
     loggers.api.error('Error fetching messages:', error as Error);
     return NextResponse.json(
@@ -629,7 +663,7 @@ export async function PATCH(
       : conversation.participant1Id;
 
     const readAt = new Date();
-    await Promise.all([
+    const [markedCount] = await Promise.all([
       dmMessageRepository.markActiveMessagesRead({
         conversationId,
         otherUserId,
@@ -642,9 +676,11 @@ export async function PATCH(
       }),
     ]);
 
+    const notificationsMarkedRead = await markDmConversationReadAndNotify(userId, conversationId, markedCount);
+
     auditRequest(request, { eventType: 'data.write', userId, resourceType: 'message', resourceId: conversationId, details: { operation: 'mark_read' } });
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, notificationsMarkedRead });
   } catch (error) {
     loggers.api.error('Error marking messages as read:', error as Error);
     return NextResponse.json(

@@ -655,8 +655,8 @@ export interface MarkMessagesReadInput {
 
 async function markActiveMessagesRead(
   input: MarkMessagesReadInput
-): Promise<void> {
-  await db
+): Promise<number> {
+  const updated = await db
     .update(directMessages)
     .set({ isRead: true, readAt: input.readAt })
     .where(
@@ -666,7 +666,10 @@ async function markActiveMessagesRead(
         eq(directMessages.isRead, false),
         eq(directMessages.isActive, true)
       )
-    );
+    )
+    .returning({ id: directMessages.id });
+
+  return updated.length;
 }
 
 export interface UpdateLastReadInput {

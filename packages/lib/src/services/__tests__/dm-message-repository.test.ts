@@ -125,6 +125,75 @@ describe('dmMessageRepository.softDeleteMessage', () => {
   });
 });
 
+describe('dmMessageRepository.markActiveMessagesRead', () => {
+  it('flips unread active rows from the other participant and returns the count flipped (AC1)', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'msg-1', conversationId: 'conv-1', senderId: 'u-other', isActive: true, isRead: false, readAt: null },
+      { id: 'msg-2', conversationId: 'conv-1', senderId: 'u-other', isActive: true, isRead: false, readAt: null },
+    ]);
+
+    const readAt = new Date('2026-05-01T10:00:00Z');
+    const count = await dmMessageRepository.markActiveMessagesRead({
+      conversationId: 'conv-1',
+      otherUserId: 'u-other',
+      readAt,
+    });
+
+    const rows = testDbState.rows('directMessages');
+    assert({
+      given: 'two unread active DMs from the other participant',
+      should: 'flip both to isRead=true/readAt and report the count of rows it actually flipped',
+      actual: {
+        count,
+        isRead: rows.map((r) => r.isRead),
+        readAt: rows.map((r) => r.readAt),
+      },
+      expected: { count: 2, isRead: [true, true], readAt: [readAt, readAt] },
+    });
+  });
+
+  it('does not flip the caller\'s own messages, other conversations, already-read rows, or soft-deleted rows', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'own-msg', conversationId: 'conv-1', senderId: 'u-self', isActive: true, isRead: false, readAt: null },
+      { id: 'other-conv', conversationId: 'conv-2', senderId: 'u-other', isActive: true, isRead: false, readAt: null },
+      { id: 'already-read', conversationId: 'conv-1', senderId: 'u-other', isActive: true, isRead: true, readAt: new Date('2026-04-01T00:00:00Z') },
+      { id: 'soft-deleted', conversationId: 'conv-1', senderId: 'u-other', isActive: false, isRead: false, readAt: null },
+    ]);
+
+    const count = await dmMessageRepository.markActiveMessagesRead({
+      conversationId: 'conv-1',
+      otherUserId: 'u-other',
+      readAt: new Date('2026-05-01T10:00:00Z'),
+    });
+
+    assert({
+      given: 'rows that must never be flipped by this call (own message, other conversation, already read, soft-deleted)',
+      should: 'return 0 — none of them match the (conversationId, senderId=otherUserId, isRead=false, isActive=true) predicate',
+      actual: count,
+      expected: 0,
+    });
+  });
+
+  it('returns 0 when there is nothing unread to mark (GET-path noise / AC3 precondition)', async () => {
+    testDbState.seed('directMessages', [
+      { id: 'msg-1', conversationId: 'conv-1', senderId: 'u-other', isActive: true, isRead: true, readAt: new Date('2026-04-01T00:00:00Z') },
+    ]);
+
+    const count = await dmMessageRepository.markActiveMessagesRead({
+      conversationId: 'conv-1',
+      otherUserId: 'u-other',
+      readAt: new Date('2026-05-01T10:00:00Z'),
+    });
+
+    assert({
+      given: 'a conversation with no unread rows from the other participant',
+      should: 'return 0 so the route can skip broadcasting/notification-clearing entirely',
+      actual: count,
+      expected: 0,
+    });
+  });
+});
+
 describe('dmMessageRepository.restoreDmMessage', () => {
   it('flips isActive=true and resets deletedAt; bumps parent.replyCount when the parent is still active', async () => {
     testDbState.seed('directMessages', [
