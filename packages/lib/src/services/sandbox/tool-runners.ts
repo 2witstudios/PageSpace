@@ -38,14 +38,6 @@ import {
   type CheckpointState,
 } from './checkpoint-policy';
 import { getValidatedEnv } from '../../config/env-validation';
-import {
-  resolveMachinePageId,
-  type AcquireMachineSandboxInput,
-  type AcquireMachineSandboxResult,
-  type MachineRefLike,
-} from './machine-session';
-import type { AcquireBranchSandboxResult } from './branch-session';
-import type { AcquireProjectSandboxResult } from './project-session';
 import type { ExecutableSandbox, SandboxRunResult } from './sandbox-client/types';
 import type { CodeExecutionAuditInput, CodeExecutionAnomaly } from './audit';
 
@@ -66,8 +58,6 @@ export interface SandboxActorContext {
   aiProvider?: string;
   aiModel?: string;
   tier: SubscriptionTier;
-  /** The ACTIVE machine this call routes to (Terminal epics); undefined defaults to 'own'. */
-  activeMachine?: MachineRefLike;
   /**
    * Stable id for the CURRENT agent turn (one streamText run) — the same value
    * for every tool call within that run, a fresh value for the next one.
@@ -77,26 +67,6 @@ export interface SandboxActorContext {
    * for that call rather than guessed at.
    */
   turnId?: string;
-  /**
-   * Present when this run is bound to a "PageSpace Agent" branch pane (issue
-   * #2166 phases 5/9's `deriveMachinePaneBinding.branchSandbox`) — the
-   * branch's owning Machine page id plus the `machine_branches` row backing
-   * it. Routes `acquireSandbox` through the attach-only branch seam
-   * (`acquireBranchSandbox`, branch-session.ts) instead of the machine's own
-   * persistent session. Undefined for every other run.
-   */
-  branchSandbox?: { machineId: string; machineBranchId: string };
-  /**
-   * Present when this run is bound to a PROMOTED project node (issue #2204
-   * phase 7) — the owning Machine page id plus the `machine_projects` row
-   * backing it. The project-tier twin of `branchSandbox`: it routes
-   * `acquireSandbox` through the attach-only PROJECT seam
-   * (`acquireProjectSandbox`, project-session.ts) instead of the machine's own
-   * persistent session, because a promoted project no longer lives there.
-   * Undefined for an unpromoted project (which still runs on the machine's
-   * Sprite at the checkout's cwd) and for every other run.
-   */
-  projectSandbox?: { machineId: string; machineProjectId: string };
 }
 
 export interface SandboxQuotaDeps {
@@ -121,11 +91,11 @@ export interface SandboxQuotaDeps {
 export interface SandboxBillingDeps {
   /**
    * Resolves who pays for THIS run (Terminal Epic 3 owner-pays) — the
-   * referenced machine's actual page owner when resolvable, else the acting
+   * referenced agent page's actual owner when resolvable, else the acting
    * tenantId. The one seam payer resolution goes through; see
-   * `machine-payer.ts`'s `resolveMachinePayerId`.
+   * `sandbox-payer.ts`'s `resolveSandboxPayerId`.
    */
-  resolvePayerId: (input: { tenantId: string; machinePageId?: string }) => Promise<string>;
+  resolvePayerId: (input: { tenantId: string; agentPageId?: string }) => Promise<string>;
   /** Places a flat-estimate hold for this payer before the machine run begins. */
   gate: (input: { payerId: string }) => Promise<{ allowed: boolean; holdId?: string; reason?: string }>;
   /** Settles the hold to the real active-window cost. Only called on a successful run. */
@@ -140,7 +110,7 @@ export interface SandboxBillingDeps {
  * so a human watching a Terminal page sees the agent's work as it happens.
  */
 export interface TerminalActivityNotification {
-  /** The machine's identifying page (resolveMachinePageId's output). */
+  /** The session's identifying agent page. */
   pageId: string;
   driveId?: string;
   tenantId: string;
@@ -177,32 +147,34 @@ export interface SandboxCheckpointDeps {
   createCheckpoint: (input: { sandbox: ExecutableSandbox; comment: string }) => Promise<void>;
 }
 
-/**
- * `acquireSandbox`'s request: the machine-session shape plus the optional
- * branch routing key. `branchSandbox` present → the caller routes to
- * `acquireBranchSandbox` (attach-only); absent → `acquireMachineSandbox` as
- * before.
- */
-export type AcquireSandboxRequest = Omit<AcquireMachineSandboxInput, 'deps'> & {
-  branchSandbox?: { machineId: string; machineBranchId: string };
-  /** Promoted-project routing key — see `SandboxActorContext.projectSandbox`. */
-  projectSandbox?: { machineId: string; machineProjectId: string };
+/** `acquireSandbox`'s request: everything the session-anchored acquire implementation needs to ensure the caller's agent-session sandbox. */
+export interface AcquireSandboxRequest {
+  tenantId: string;
+  /** Absent for global (non-drive) contexts. */
+  driveId?: string;
+  userId: string;
+  requestOrigin?: 'user' | 'agent';
+  agentPageId?: string;
   /**
    * The conversation this run belongs to — which IS the agent-session id
    * (contract.ts invariant 1). The session-anchored `acquireSandbox`
-   * implementation folds the Sprite key off it; the legacy machine arms ignore
-   * it. Threaded from the actor context so the injected implementation never
-   * has to reach around the request for its own address.
+   * implementation folds the Sprite key off it.
    */
   conversationId?: string;
-};
+}
+
+export type SandboxAcquireResult =
+  | { ok: true; sandboxId: string; resumed: boolean; pageId?: string }
+  | {
+      ok: false;
+      reason: SandboxToolDenialReason;
+      cause?: unknown;
+    };
 
 export interface SandboxRunDeps {
   isEnabled: () => boolean;
-  /** Pre-bound `acquireMachineSandbox` / `acquireBranchSandbox` (lifecycle deps already injected). */
-  acquireSandbox: (
-    input: AcquireSandboxRequest,
-  ) => Promise<AcquireMachineSandboxResult | AcquireBranchSandboxResult | AcquireProjectSandboxResult>;
+  /** Ensures the caller's agent-session sandbox is provisioned and live (lifecycle deps already injected). */
+  acquireSandbox: (input: AcquireSandboxRequest) => Promise<SandboxAcquireResult>;
   /** Reconnect to the executable handle for an acquired sandbox id. */
   reconnect: (sandboxId: string) => Promise<ExecutableSandbox | null>;
   quota: SandboxQuotaDeps;
@@ -275,7 +247,7 @@ function safeLogWarn(
 // vs infra failures that are genuinely unexpected (error-level).
 const AUTHZ_DENY_REASONS = new Set([
   'no_drive_access', 'insufficient_role', 'no_agent_access', 'app_admin_required', 'kill_switch_off', 'no_machine',
-  'machine_runtime_exceeded', 'branch_not_found',
+  'machine_runtime_exceeded',
 ]);
 
 
@@ -357,9 +329,6 @@ function acquireRequest(ctx: SandboxActorContext): AcquireSandboxRequest {
     userId: ctx.userId,
     requestOrigin: ctx.requestOrigin,
     agentPageId: ctx.agentPageId,
-    activeMachine: ctx.activeMachine,
-    branchSandbox: ctx.branchSandbox,
-    projectSandbox: ctx.projectSandbox,
     conversationId: ctx.conversationId,
   };
 }
@@ -411,26 +380,8 @@ async function safeNotifyTerminalActivity(
 }
 
 // Map a denial from the lifecycle acquire onto the tool-facing reason set.
-// `branch_not_found`/`project_not_found` (the attach-only seams' own
-// fail-closed reasons, with no tool-facing equivalent) fall through to 'error'
-// with the rest.
-function reasonFromAcquire(
-  result: Extract<AcquireMachineSandboxResult | AcquireBranchSandboxResult | AcquireProjectSandboxResult, { ok: false }>,
-): SandboxToolDenialReason {
-  switch (result.reason) {
-    case 'app_admin_required':
-    case 'no_drive_access':
-    case 'insufficient_role':
-    case 'no_agent_access':
-    case 'no_machine':
-    case 'provision_failed':
-    case 'machine_runtime_exceeded':
-      return result.reason;
-    case 'kill_switch_off':
-      return 'kill_switch_off';
-    default:
-      return 'error';
-  }
+function reasonFromAcquire(result: Extract<SandboxAcquireResult, { ok: false }>): SandboxToolDenialReason {
+  return result.reason;
 }
 
 const anomalyForExit = (exitCode: number): CodeExecutionAnomaly | undefined => {
@@ -462,8 +413,8 @@ async function withMachineBilling<S>(
   const billing = deps.billing;
   if (!billing) return run();
 
-  const machinePageId = resolveMachinePageId({ agentPageId: ctx.agentPageId, activeMachine: ctx.activeMachine });
-  const payerId = await billing.resolvePayerId({ tenantId: ctx.tenantId, machinePageId });
+  const agentPageId = ctx.agentPageId;
+  const payerId = await billing.resolvePayerId({ tenantId: ctx.tenantId, agentPageId });
   const gate = await billing.gate({ payerId });
   if (!gate.allowed) return fail('credit_exhausted');
 
@@ -475,7 +426,7 @@ async function withMachineBilling<S>(
     if (result.success) {
       handedOff = true;
       const activeSeconds = Math.max(0, (deps.now().getTime() - startedAt) / 1000);
-      await billing.trackUsage({ payerId, holdId, activeSeconds, pageId: machinePageId });
+      await billing.trackUsage({ payerId, holdId, activeSeconds, pageId: agentPageId });
     }
     return result;
   } finally {

@@ -47,37 +47,9 @@
       "types": "./dist/schema/drafts.d.ts",
       "default": "./dist/schema/drafts.js"
     },
-    "./schema/machine-sessions": {
-      "types": "./dist/schema/machine-sessions.d.ts",
-      "default": "./dist/schema/machine-sessions.js"
-    },
-    "./schema/machine-projects": {
-      "types": "./dist/schema/machine-projects.d.ts",
-      "default": "./dist/schema/machine-projects.js"
-    },
-    "./schema/machine-branches": {
-      "types": "./dist/schema/machine-branches.d.ts",
-      "default": "./dist/schema/machine-branches.js"
-    },
-    "./schema/machine-agent-terminals": {
-      "types": "./dist/schema/machine-agent-terminals.d.ts",
-      "default": "./dist/schema/machine-agent-terminals.js"
-    },
     "./schema/agent-sessions": {
       "types": "./dist/schema/agent-sessions.d.ts",
       "default": "./dist/schema/agent-sessions.js"
-    },
-    "./schema/machine-workspaces": {
-      "types": "./dist/schema/machine-workspaces.d.ts",
-      "default": "./dist/schema/machine-workspaces.js"
-    },
-    "./schema/machine-workspace-bootstraps": {
-      "types": "./dist/schema/machine-workspace-bootstraps.d.ts",
-      "default": "./dist/schema/machine-workspace-bootstraps.js"
-    },
-    "./schema/machine-panes": {
-      "types": "./dist/schema/machine-panes.d.ts",
-      "default": "./dist/schema/machine-panes.js"
     },
     "./schema/share-links": {
       "types": "./dist/schema/share-links.d.ts",

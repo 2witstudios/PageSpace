@@ -19,7 +19,7 @@ import {
   type ResolveSessionShellResult,
 } from '@pagespace/lib/services/agent-sessions/session-shells';
 import type { ShellDTO } from '@pagespace/lib/agent-sessions/contract';
-import { getAgentSessionStore, getMachineHost } from './agent-sessions-runtime';
+import { getAgentSessionStore, getSandboxHost } from './agent-sessions-runtime';
 
 let shellStorePromise: ReturnType<typeof createDbSessionShellStore> | null = null;
 
@@ -55,7 +55,7 @@ export async function resolveShellById(shellId: string): Promise<ResolveSessionS
 export async function killShellById(shellId: string): Promise<KillSessionShellResult> {
   const [store, host, sessionStore] = await Promise.all([
     getSessionShellStore(),
-    getMachineHost(),
+    getSandboxHost(),
     getAgentSessionStore(),
   ]);
   return killSessionShellById({

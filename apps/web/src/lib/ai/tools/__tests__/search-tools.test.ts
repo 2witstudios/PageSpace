@@ -203,9 +203,9 @@ describe('search-tools', () => {
     });
 
     // Regression test for #2150: the tool's z.enum listed only 8 of the
-    // enum's 10 members, so an agent asking for FILE or MACHINE pages was
-    // rejected by zod before execute() ever ran. The schema is now derived
-    // from the canonical PageType enum.
+    // enum's 9 members, so an agent asking for FILE pages was rejected by
+    // zod before execute() ever ran. The schema is now derived from the
+    // canonical PageType enum.
     it('accepts every canonical page type in its includeTypes schema', () => {
       const schema = searchTools.glob_search.inputSchema as {
         safeParse: (v: unknown) => { success: boolean };
@@ -217,25 +217,7 @@ describe('search-tools', () => {
       });
 
       assert({
-        given: 'glob_search includeTypes containing all ten PageType values',
-        should: 'validate successfully against the input schema',
-        actual: result.success,
-        expected: true,
-      });
-    });
-
-    it('accepts FILE and MACHINE as includeTypes values', () => {
-      const schema = searchTools.glob_search.inputSchema as {
-        safeParse: (v: unknown) => { success: boolean };
-      };
-      const result = schema.safeParse({
-        driveId: 'drive-1',
-        pattern: '*',
-        includeTypes: ['FILE', 'MACHINE'],
-      });
-
-      assert({
-        given: 'glob_search includeTypes containing FILE and MACHINE',
+        given: 'glob_search includeTypes containing all nine PageType values',
         should: 'validate successfully against the input schema',
         actual: result.success,
         expected: true,

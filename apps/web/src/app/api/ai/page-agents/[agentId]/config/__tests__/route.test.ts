@@ -130,8 +130,6 @@ const mockAgent = (overrides: Partial<{
   aiModel: string | null;
   toolExposureMode: 'upfront' | 'search' | null;
   isTrashed: boolean;
-  machineAccess: boolean;
-  machines: Array<{ kind: 'own' } | { kind: 'existing'; machineId: string }>;
 }> = {}) => ({
   id: overrides.id ?? mockAgentId,
   type: overrides.type ?? 'AI_CHAT',
@@ -144,8 +142,6 @@ const mockAgent = (overrides: Partial<{
   aiModel: overrides.aiModel ?? 'claude-3-opus',
   toolExposureMode: overrides.toolExposureMode ?? 'upfront',
   isTrashed: overrides.isTrashed ?? false,
-  machineAccess: overrides.machineAccess ?? false,
-  machines: overrides.machines ?? [],
 });
 
 const createRequest = (agentId: string, body: Record<string, unknown>) =>

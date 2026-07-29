@@ -48,8 +48,7 @@ export async function GET(
     }
 
     // Parse includeTypes. Derived from the canonical PageType enum — a
-    // hand-written list here had drifted and silently dropped FILE and
-    // MACHINE (#2150).
+    // hand-written list here had drifted and silently dropped FILE (#2150).
     const includeTypes = parsePageTypesParam(includeTypesParam);
 
     // Check drive access. A scoped MCP token is its own drive member — gate on

@@ -74,9 +74,6 @@ export const updateConfig = async (
       | 'enabledUserIntegrations'
       | 'driveOverrides'
       | 'inheritDriveIntegrations'
-      | 'machineAccess'
-      | 'machines'
-      | 'ownMachinePageId'
     >
   >
 ): Promise<GlobalAssistantConfig> => {

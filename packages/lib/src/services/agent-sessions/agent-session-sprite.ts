@@ -37,8 +37,8 @@
  * executes the verdict — including which columns the verdict says to stamp.
  */
 
-import type { MachineHandle, MachineHost, MachineSubstrateSpec } from '../sandbox/machine-host';
-import { MachineSpriteReplacedError } from '../sandbox/machine-host';
+import type { SandboxHandle, SandboxHost, SandboxSubstrateSpec } from '../sandbox/sandbox-host';
+import { SandboxSpriteReplacedError } from '../sandbox/sandbox-host';
 import type { SandboxCreateOptions } from '../sandbox/sandbox-options';
 import type { FullEgressEnablement } from '../sandbox/containment';
 import type { CanRunCodeInput, CanRunCodeResult } from '../sandbox/can-run-code';
@@ -64,8 +64,8 @@ export interface AgentSessionSpriteDeps {
   /** Only the identity/stamp slice of the session store — this module never reads or writes anything else. */
   store: Pick<AgentSessionStore, 'updateSpriteIdentity' | 'applyStamps' | 'reloadSpritePointer' | 'enqueueReclaim'>;
   /** The provider-neutral Sprite lifecycle seam. */
-  host: MachineHost;
-  substrate: MachineSubstrateSpec;
+  host: SandboxHost;
+  substrate: SandboxSubstrateSpec;
   options: SandboxCreateOptions;
   /** Server-held `SANDBOX_SESSION_SECRET` for Sprite-key derivation. */
   secret: string;
@@ -91,7 +91,7 @@ export interface AgentSessionSpriteDeps {
   measureSessionStorage?: (input: {
     sessionId: string;
     agentPageId: string | null;
-    handle: MachineHandle;
+    handle: SandboxHandle;
   }) => Promise<void>;
   now: () => Date;
 }
@@ -120,20 +120,20 @@ export type EnsureAgentSessionSandboxResult =
  * trigger and no row-based cross-check could ever discover the VM. A
  * fire-and-forget kill that swallowed its error would leak a billed VM forever on
  * any provider hiccup. So: kill, check the outcome, and enqueue on failure. A
- * confirmed kill needs no enqueue — nor does a `MachineSpriteReplacedError`,
+ * confirmed kill needs no enqueue — nor does a `SandboxSpriteReplacedError`,
  * which means a replacement already took the name and our target is already gone.
  */
 async function killUnreferencedOrEnqueue(
   deps: Pick<AgentSessionSpriteDeps, 'host' | 'store'>,
-  handle: MachineHandle,
+  handle: SandboxHandle,
 ): Promise<void> {
   try {
-    await deps.host.kill({ machineId: handle.machineId, expectedInstanceId: handle.spriteInstanceId });
+    await deps.host.kill({ sandboxId: handle.sandboxId, expectedInstanceId: handle.spriteInstanceId });
     return; // confirmed dead
   } catch (error) {
-    if (error instanceof MachineSpriteReplacedError) return;
+    if (error instanceof SandboxSpriteReplacedError) return;
     await deps.store
-      .enqueueReclaim({ sandboxId: handle.machineId, spriteInstanceId: handle.spriteInstanceId ?? null })
+      .enqueueReclaim({ sandboxId: handle.sandboxId, spriteInstanceId: handle.spriteInstanceId ?? null })
       .catch(() => {
         /* best-effort: the outbox insert failed too; the provisioning failure is still reported. */
       });
@@ -144,7 +144,7 @@ async function killUnreferencedOrEnqueue(
  * Has a concurrent provisioner of the SAME session already recorded the Sprite WE
  * hold?
  *
- * `MachineHost.provision` is NAME-keyed on the session's deterministic key, so
+ * `SandboxHost.provision` is NAME-keyed on the session's deterministic key, so
  * two concurrent provisions of one unprovisioned session can hold the SAME
  * physical VM. A row is a genuine shared winner ONLY when its `spriteInstanceId`
  * MATCHES our handle's instance (both non-null): the true race shares one VM ⇒
@@ -155,7 +155,7 @@ async function killUnreferencedOrEnqueue(
 async function findPersistedWinner(
   deps: Pick<AgentSessionSpriteDeps, 'store'>,
   sessionId: string,
-  handle: MachineHandle,
+  handle: SandboxHandle,
 ): Promise<{ sandboxId: string } | null> {
   const winner = await deps.store.reloadSpritePointer(sessionId).catch(() => null);
   const ourInstance = handle.spriteInstanceId ?? null;
@@ -183,7 +183,7 @@ async function reconcileBeforeKill({
 }: {
   deps: Pick<AgentSessionSpriteDeps, 'store' | 'host'>;
   sessionId: string;
-  handle: MachineHandle;
+  handle: SandboxHandle;
 }): Promise<{ kind: 'resumed'; sandboxId: string } | { kind: 'killed' }> {
   const winner = await findPersistedWinner(deps, sessionId, handle);
   // The row records OUR instance — the live, referenced VM we hold. Must NOT
@@ -249,9 +249,9 @@ async function probeRecordedSprite(
 ): Promise<SpriteProbeOutcome> {
   if (row.sandboxId === null || row.spriteTornDownAt !== null) return { kind: 'unprobed' };
   try {
-    const handle = await deps.host.attach({ machineId: row.sandboxId });
+    const handle = await deps.host.attach({ sandboxId: row.sandboxId });
     if (!handle) return { kind: 'vanished' };
-    return { kind: 'live', instance: { sandboxId: handle.machineId, spriteInstanceId: handle.spriteInstanceId ?? null } };
+    return { kind: 'live', instance: { sandboxId: handle.sandboxId, spriteInstanceId: handle.spriteInstanceId ?? null } };
   } catch {
     return { kind: 'unknown' };
   }
@@ -331,7 +331,7 @@ export async function ensureAgentSessionSandbox({
       // the row before anything treats it as resumed: leaving the stale instance
       // there makes every later teardown politely miss, and the live replacement
       // then bills forever with nothing pointing at it.
-      const handle = await deps.host.attach({ machineId: plan.sandboxId }).catch(() => null);
+      const handle = await deps.host.attach({ sandboxId: plan.sandboxId }).catch(() => null);
       if (!handle) {
         // It vanished between the probe and here. Nothing to adopt and nothing to
         // kill; a retry re-probes and reprovisions.
@@ -381,7 +381,7 @@ export async function ensureAgentSessionSandbox({
         row.sessionKey ??
         deriveAgentSessionSpriteKey({ tenantId: actor.tenantId, sessionId: row.sessionId, secret: deps.secret });
 
-      let handle: MachineHandle;
+      let handle: SandboxHandle;
       try {
         handle = await deps.host.provision({
           name: sessionKey,
@@ -406,7 +406,7 @@ export async function ensureAgentSessionSandbox({
           sessionId: row.sessionId,
           previousSandboxId: plan.previousSandboxId,
           sessionKey,
-          sandboxId: handle.machineId,
+          sandboxId: handle.sandboxId,
           spriteInstanceId: handle.spriteInstanceId ?? null,
           egressPolicyToken: handle.egressPolicyToken ?? null,
           stamps: plan.stamps,
@@ -440,7 +440,7 @@ export async function ensureAgentSessionSandbox({
           });
       }
 
-      return { ok: true, sandboxId: handle.machineId, resumed: false };
+      return { ok: true, sandboxId: handle.sandboxId, resumed: false };
     }
 
     default:

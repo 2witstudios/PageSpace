@@ -9,12 +9,12 @@ import {
   deleteMachinePath,
   verifyMachinePathsWithinScope,
 } from '../machine-fs';
-import type { MachineHandle } from '../machine-host';
+import type { SandboxHandle } from '../sandbox-host';
 import type { RunCommandArgs, SandboxRunResult } from '../sandbox-client/types';
 import type { WriteFileEntry } from '../sandbox-client/types';
 
 /**
- * The primitives take a `MachineHandle` as an injected dependency, so a fake
+ * The primitives take a `SandboxHandle` as an injected dependency, so a fake
  * one — exec/readFile programmable, the PTY surface stubbed — exercises every
  * branch with zero real Sprite calls.
  */
@@ -22,9 +22,9 @@ function makeHandle(overrides: {
   exec?: (args: RunCommandArgs) => Promise<SandboxRunResult>;
   readFile?: (args: { path: string }) => Promise<Buffer | null>;
   writeFiles?: (files: WriteFileEntry[]) => Promise<void>;
-}): MachineHandle {
+}): SandboxHandle {
   return {
-    machineId: 'sbx-test',
+    sandboxId: 'sbx-test',
     spriteInstanceId: null,
     exec: overrides.exec ?? (async () => ({ exitCode: 0, stdout: '', stderr: '' })),
     readFile: overrides.readFile ?? (async () => null),
@@ -41,7 +41,7 @@ function makeHandle(overrides: {
 /** Records every `exec` call's argv for assertions on argv shape/ordering. */
 function makeExecRecorder(
   responder: (args: RunCommandArgs) => SandboxRunResult,
-): { handle: MachineHandle; calls: RunCommandArgs[] } {
+): { handle: SandboxHandle; calls: RunCommandArgs[] } {
   const calls: RunCommandArgs[] = [];
   const handle = makeHandle({
     exec: async (args) => {

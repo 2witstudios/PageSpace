@@ -281,16 +281,15 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
       expect(options?.includeTypes).toEqual(['TASK_LIST']);
     });
 
-    // Regression tests for #2150: the route hand-declared VALID_PAGE_TYPES with
-    // only 8 of the enum's 10 members, so FILE and MACHINE were stripped from
-    // the filter. Asking for FILE alone left an empty array, which
-    // globSearchPages treats as "no filter" — the caller silently got EVERY
-    // page instead of only files.
-    it('should include FILE and MACHINE as valid includeTypes values (#2150)', async () => {
+    // Regression test for #2150: the route hand-declared VALID_PAGE_TYPES with
+    // only 8 of the enum's 9 members, so FILE was stripped from the filter.
+    // Asking for FILE alone left an empty array, which globSearchPages treats
+    // as "no filter" — the caller silently got EVERY page instead of only files.
+    it('should include FILE as a valid includeTypes value (#2150)', async () => {
       vi.mocked(checkDriveAccessForSearch).mockResolvedValue(createDriveSearchInfo());
       vi.mocked(globSearchPages).mockResolvedValue(createGlobSearchResponse());
 
-      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*&includeTypes=FILE,MACHINE`);
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*&includeTypes=FILE`);
       await GET(request, createContext(mockDriveId));
 
       expect(globSearchPages).toHaveBeenCalledWith(
@@ -298,7 +297,7 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
         mockUserId,
         '*',
         'test-drive',
-        { includeTypes: ['FILE', 'MACHINE'], maxResults: 100 }
+        { includeTypes: ['FILE'], maxResults: 100 }
       );
     });
 

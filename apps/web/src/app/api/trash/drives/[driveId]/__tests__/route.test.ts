@@ -1,9 +1,5 @@
 /**
- * Permanent drive delete — the machine-ref repair (issue #2156).
- *
- * Deleting the drive FK-cascades its pages away, MACHINE pages included, so the
- * denormalized `machines` blobs elsewhere are left pointing at nothing. The ids
- * must be snapshotted before the delete and swept after.
+ * Permanent drive delete.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -13,22 +9,15 @@ const {
   mockAuthenticate,
   mockGetRecipients,
   mockBroadcast,
-  mockCollectMachineIds,
-  mockSweepMachineRefs,
-  callOrder,
-} = vi.hoisted(() => {
-  const order: string[] = [];
-  return {
-    mockFindDrive: vi.fn(),
-    mockDeleteWhere: vi.fn(),
-    mockAuthenticate: vi.fn(),
-    mockGetRecipients: vi.fn(),
-    mockBroadcast: vi.fn(),
-    mockCollectMachineIds: vi.fn(),
-    mockSweepMachineRefs: vi.fn(),
-    callOrder: order,
-  };
-});
+  mockAuditRequest,
+} = vi.hoisted(() => ({
+  mockFindDrive: vi.fn(),
+  mockDeleteWhere: vi.fn(),
+  mockAuthenticate: vi.fn(),
+  mockGetRecipients: vi.fn(),
+  mockBroadcast: vi.fn(),
+  mockAuditRequest: vi.fn(),
+}));
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
@@ -52,17 +41,13 @@ vi.mock('@pagespace/lib/services/drive-guards', () => ({
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } },
 }));
-vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: (...args: unknown[]) => mockAuditRequest(...args) }));
 vi.mock('@/lib/websocket', () => ({
   broadcastDriveEvent: (...args: unknown[]) => mockBroadcast(...args),
   createDriveEventPayload: vi.fn((...args: unknown[]) => args),
 }));
 vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   getDriveRecipientUserIds: (...args: unknown[]) => mockGetRecipients(...args),
-}));
-vi.mock('@/lib/machines/machine-ref-sweep-runtime', () => ({
-  collectMachinePageIdsInDrive: (...args: unknown[]) => mockCollectMachineIds(...args),
-  sweepDanglingMachineRefs: (...args: unknown[]) => mockSweepMachineRefs(...args),
 }));
 vi.mock('next/server', () => ({
   NextResponse: {
@@ -80,57 +65,43 @@ const context = { params: Promise.resolve({ driveId: 'drive-1' }) };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  callOrder.length = 0;
   mockAuthenticate.mockResolvedValue({ userId: 'user-1' });
   mockFindDrive.mockResolvedValue({ id: 'drive-1', name: 'Work', slug: 'work', isTrashed: true, ownerId: 'user-1' });
   mockGetRecipients.mockResolvedValue(['user-1']);
   mockBroadcast.mockResolvedValue(undefined);
-  mockDeleteWhere.mockImplementation(async () => {
-    callOrder.push('delete');
-  });
-  mockCollectMachineIds.mockImplementation(async () => {
-    callOrder.push('collect');
-    return ['machine-1'];
-  });
-  mockSweepMachineRefs.mockImplementation(async () => {
-    callOrder.push('sweep');
-    return { deadMachineIds: ['machine-1'], agentsUpdated: 1, globalConfigsUpdated: 1, failures: 0 };
-  });
+  mockDeleteWhere.mockResolvedValue(undefined);
 });
 
 describe('DELETE /api/trash/drives/[driveId]', () => {
-  it('snapshots the drive MACHINE ids before deleting and sweeps their refs after', async () => {
+  it('given an authenticated owner deleting a trashed drive, should permanently delete it and broadcast', async () => {
     const response = await DELETE(makeRequest(), context);
+    const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(mockCollectMachineIds).toHaveBeenCalledWith('drive-1');
-    expect(mockSweepMachineRefs).toHaveBeenCalledWith(['machine-1']);
-    expect(callOrder).toEqual(['collect', 'delete', 'sweep']);
+    expect(body).toEqual({ success: true });
+    expect(mockDeleteWhere).toHaveBeenCalledTimes(1);
+    expect(mockBroadcast).toHaveBeenCalledTimes(1);
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'data.delete', userId: 'user-1', resourceType: 'drive', resourceId: 'drive-1' }),
+    );
   });
 
-  it('skips the sweep when the drive held no machines', async () => {
-    mockCollectMachineIds.mockResolvedValue([]);
-
-    await DELETE(makeRequest(), context);
-
-    expect(mockSweepMachineRefs).not.toHaveBeenCalled();
-  });
-
-  it('still reports success when the sweep fails', async () => {
-    mockSweepMachineRefs.mockRejectedValue(new Error('deadlock detected'));
+  it('given the drive is not owned by the requester, should return 404 and never delete', async () => {
+    mockFindDrive.mockResolvedValue(undefined);
 
     const response = await DELETE(makeRequest(), context);
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(404);
+    expect(mockDeleteWhere).not.toHaveBeenCalled();
   });
 
-  it('does not sweep when the drive is not in the trash', async () => {
+  it('given the drive is not in the trash, should reject with 400 and never delete', async () => {
     mockFindDrive.mockResolvedValue({ id: 'drive-1', isTrashed: false });
 
     const response = await DELETE(makeRequest(), context);
 
     expect(response.status).toBe(400);
-    expect(mockCollectMachineIds).not.toHaveBeenCalled();
-    expect(mockSweepMachineRefs).not.toHaveBeenCalled();
+    expect(mockDeleteWhere).not.toHaveBeenCalled();
   });
 });

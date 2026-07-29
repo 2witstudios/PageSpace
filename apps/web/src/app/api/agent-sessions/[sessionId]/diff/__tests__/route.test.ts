@@ -45,7 +45,7 @@ import { GET } from '../route';
 
 const AUTH_USER = { userId: 'user-1', role: 'admin' };
 const SESSION_ID = 'conv-1';
-const HANDLE = { machineId: 'sb-1' };
+const HANDLE = { sandboxId: 'sb-1' };
 const params = { params: Promise.resolve({ sessionId: SESSION_ID }) };
 const get = (query: string) =>
   GET(new Request(`http://localhost/api/agent-sessions/${SESSION_ID}/diff${query}`), params);

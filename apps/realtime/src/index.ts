@@ -17,53 +17,21 @@ import {
   decideFullEgressEnablement,
   isContainmentVerified,
 } from '@pagespace/lib/services/sandbox/containment';
-import {
-  getSandboxSessionSecret,
-  acquireMachineSession,
-  createDbMachineSessionStore,
-  deriveMachineSessionKey,
-  findLiveMachineSandboxId,
-} from '@pagespace/lib/services/sandbox/machine-session-manager';
-import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/machine-billing';
-import {
-  measureMachineStorageOpportunistically,
-  measureAgentTerminalStorageOpportunistically,
-} from '@pagespace/lib/services/sandbox/machine-storage-billing';
+import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/machine-session-manager';
+import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/sandbox-billing';
 import { checkMachineRuntimeGuardrail, recordMachineActivity, acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
 import { createSpritesSandboxClient, createSpriteHandleCache, type SpritesSdk } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
-import { createSpriteMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-machine-host';
+import { createSpriteSandboxHost } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-sandbox-host';
 import {
   createSpriteTasksClient,
   createTaskHoldController,
   taskHoldName,
   resolveTaskHoldConfig,
 } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-tasks';
-import { createExecClientFromMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/machine-host-adapter';
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
-import {
-  buildAgentTerminalHandlers,
-  ensureAgentTerminalSession,
-  armIdleReap,
-  type AgentTerminalSessionDeps,
-  type SocketLike,
-} from './terminal/agent-terminal-handler';
-import { handleTerminalActivityRequest } from './terminal/terminal-activity';
-import { handleSessionReadRequest, handleSessionSendRequest } from './terminal/session-io';
-import { deriveAgentTerminalSessionKey, agentTerminalScopeFromNames } from './terminal/agent-terminal-session-key';
-import { buildAgentTerminalCheckAuth, resolveMachineSandbox } from './terminal/agent-terminal-access';
 import { createTerminalSessionMap, type TerminalSession } from './terminal/terminal-session-map';
 import { openPtyShell } from './terminal/sprites-shell';
 import { getRealtimeSpritesSdk } from './terminal/realtime-sprites-client';
-import { createDbMachineBranchStore } from '@pagespace/lib/services/machines/machine-branches-store';
-import { propagateClaudeCredential } from '@pagespace/lib/services/machines/machine-branches';
-import { createDbMachineAgentTerminalStore } from '@pagespace/lib/services/machines/agent-terminals-store';
-import { createDbMachineProjectStore } from '@pagespace/lib/services/machines/machine-projects-store';
-import {
-  resolveAgentTerminal,
-  resolveAgentTerminalRow,
-  type AgentTerminalMachineSandbox,
-  type AgentTerminalMachineSandboxResult,
-} from '@pagespace/lib/services/machines/agent-terminals';
 import {
   buildShellHandlers,
   ensureShellSession,
@@ -123,33 +91,21 @@ initializeLogging(async (error) => {
   await Sentry.flush(2000);
 });
 
-// One map for every agent terminal (Terminal — universal scope reshape): a
-// Sprite (the owning Machine's own persistent one, for machine/project scope,
-// or a branch's isolated one) can host several of these concurrently, each
-// keyed by its own (scope, name) sessionKey — this REPLACES the retired
-// human-only `terminal:*` family (a plain shell is now a machine-scope agent
-// terminal of `agentType: 'shell'` on this same map).
+// One map for every live shell PTY, keyed by its own sessionKey — a session's
+// shared Sprite can host several of these concurrently.
 const agentTerminalSessionMap = createTerminalSessionMap();
 
-// Cache the DB terminal session store promise at module level (created once, not per-connection).
-const dbMachineSessionStorePromise = createDbMachineSessionStore();
-const dbMachineBranchStorePromise = createDbMachineBranchStore();
-const dbMachineAgentTerminalStorePromise = createDbMachineAgentTerminalStore();
-const dbMachineProjectStorePromise = createDbMachineProjectStore();
-// The shell:* family's stores (agent sessions + their shells) — created once,
-// exactly like the machine stores above they will outlive (Phase 8 sweep).
+// The shell:* family's stores (agent sessions + their shells) — created once
+// at module level, not per-connection.
 const dbAgentSessionStorePromise = createDbAgentSessionStore();
 const dbSessionShellStorePromise = createDbSessionShellStore();
-
-/** The conventional name for a machine's plain shell — a machine-scope agent terminal of `agentType: 'shell'` (see `agent-terminal-types.ts`), the retired human `terminal:*` family's replacement. */
-const SHELL_AGENT_TERMINAL_NAME = 'shell';
 
 /**
  * Decrypt PII at the edge (GDPR #965): actorEmail is denormalized into a
  * plaintext activity-log/audit snapshot downstream (writeCodeExecutionAudit),
  * not an encrypted column, so a ciphertext users.email must never reach it.
- * Extracted as a pure helper (rather than inlined in makeAgentTerminalCheckAuth)
- * so it's directly unit-testable without mocking the rest of the terminal-auth
+ * Extracted as a pure helper (rather than inlined in `buildShellCheckAuth`)
+ * so it's directly unit-testable without mocking the rest of the shell-auth
  * pipeline (sandbox provisioning, sprites SDK, audit sink).
  */
 export async function resolveActorEmail(rawEmail: string | null | undefined): Promise<string> {
@@ -157,13 +113,10 @@ export async function resolveActorEmail(rawEmail: string | null | undefined): Pr
 }
 
 /**
- * A page's CURRENT driveId + that drive's owner (the `tenantId` convention
- * `deriveMachineSessionKey` uses) — the two reads `buildMachineSandbox.acquire`
- * already did inline, now shared with `refreshBranchCredential` below so a
- * bare-`pageId` lookup is never substituted for deriving the exact CURRENT
- * session key (a page moved between drives can leave its OLD drive's session
- * row behind under a DIFFERENT key — see `findLiveMachineSandboxId`'s doc
- * comment on `machine-session-manager.ts`).
+ * A page's CURRENT driveId + that drive's owner (the `tenantId` convention the
+ * Sprite session-key derivation uses) — shared by every call site below that
+ * needs "which drive owns this agent page, and who pays" without risking a
+ * stale cross-drive lookup.
  */
 type DriveOwnerContextResult =
   | { ok: true; driveId: string; tenantId: string }
@@ -177,451 +130,6 @@ async function resolveDriveOwnerContext(pageId: string): Promise<DriveOwnerConte
   return { ok: true, driveId: pageRow.driveId, tenantId: driveRow.ownerId };
 }
 
-/**
- * Acquires the OWNING Machine's persistent Sprite for `AgentTerminalMachineSandbox`
- * (machine/project scope share this one Sprite — see `agent-terminals.ts`),
- * re-authorizing `actorUserId` (resume re-authz) on every call. Mirrors the
- * acquisition the retired human terminal's `makeTerminalCheckAuth` used to
- * perform inline.
- *
- * Does NOT wake the Sprite, and does not read it a second time to try. A Sprite
- * has no explicit wake API — an incoming request wakes it automatically
- * (docs.sprites.dev/concepts/lifecycle) — so the PTY's own `createSession` /
- * `attachSession` IS the wake, and it already carries the bounded pre-open retry
- * that the cold-start drop needs (`withWakeRetry` / `openPtyShell`'s reconnect).
- * The `sh -c :` this used to run first bought nothing but a SECOND cold start on
- * the slowest path we have.
- *
- * `sdk` is threaded in (rather than resolved here) so the whole connect —
- * acquire, auth, launch resolution — shares ONE `createSpriteHandleCache` and
- * therefore ONE underlying `getSprite`.
- */
-function buildMachineSandbox(actorUserId: string, sdk: SpritesSdk): AgentTerminalMachineSandbox {
-  // The caller (resolveProjectOrMachineLocation, agent-terminals.ts) collapses
-  // every acquire failure to one generic 'machine_unavailable' reason — log the
-  // SPECIFIC reason here so it's still visible in realtime logs for triage.
-  function deny(reason: string, machineId: string): AgentTerminalMachineSandboxResult {
-    loggers.realtime.warn('Machine sandbox acquire denied', { reason, machineId, actorUserId });
-    return { ok: false, reason };
-  }
-
-  return {
-    acquire: async (machineId): Promise<AgentTerminalMachineSandboxResult> => {
-      const context = await resolveDriveOwnerContext(machineId);
-      if (!context.ok) return deny(context.reason, machineId);
-      const { driveId, tenantId } = context;
-
-      const nowMs = Date.now();
-      const guardrail = checkMachineRuntimeGuardrail({ machineKey: machineId, now: nowMs });
-      if (!guardrail.allowed) return deny(guardrail.reason, machineId);
-
-      const store = await dbMachineSessionStorePromise;
-      const rawClient = createSpritesSandboxClient({ sdk });
-      const host = createSpriteMachineHost({ sdk, client: rawClient });
-      const client = createExecClientFromMachineHost(host, { kind: 'sprite' });
-
-      const result = await acquireMachineSession({
-        pageId: machineId,
-        driveId,
-        tenantId,
-        userId: actorUserId,
-        // Already authorized by the caller's access + canRunCode checks before
-        // resolveAgentTerminal ever reaches this acquire.
-        canRun: true,
-        deps: {
-          store,
-          client,
-          now: () => new Date(),
-          secret: getSandboxSessionSecret(),
-          checkFullEgressEnablement: async () =>
-            decideFullEgressEnablement({
-              adminGateEnabled: isCodeExecutionEnabled(),
-              containment: isContainmentVerified() ? { contained: true } : null,
-            }),
-        },
-      });
-      if (!result.ok) return deny(result.reason, machineId);
-
-      recordMachineActivity({ machineKey: machineId, now: nowMs });
-
-      // Opportunistic storage measurement (Sprites 6-1): this is the
-      // terminal-CONNECT wake — the reconcile relies on it to meter machines
-      // used only through the interactive PTY (no agent tool ops), which would
-      // otherwise stay never-measured and bill the 0 floor forever. Throttled +
-      // best-effort; the network `attach` is lazy, paid only when a measurement
-      // is actually due, and this never blocks or fails the PTY session.
-      void measureMachineStorageOpportunistically({
-        pageId: machineId,
-        resolveHandle: () => host.attach({ machineId: result.sandboxId }),
-      });
-
-      return { ok: true, sandboxId: result.sandboxId };
-    },
-  };
-}
-
-/**
- * Shell adapter over the pure `deriveAgentTerminalSessionKey`
- * (`agent-terminal-session-key.ts`): maps the transport's optional
- * (projectName, branchName) pair into the discriminated scope and keys off the
- * owning Machine Terminal page id (`machineId`), NOT the Sprite `sandboxId`.
- * Keying on `machineId` means a warm reattach never has to resolve the Sprite
- * before the fast-path map lookup can run.
- */
-function buildAgentTerminalSessionKey({
-  machineId,
-  projectName,
-  branchName,
-  name,
-}: {
-  machineId: string;
-  projectName?: string;
-  branchName?: string;
-  name: string;
-}): string {
-  return deriveAgentTerminalSessionKey({
-    machineId,
-    scope: agentTerminalScopeFromNames({ projectName, branchName }),
-    name,
-  });
-}
-
-/**
- * Resolve the Sprite a FRESH agent-terminal PTY will attach to (lazy sprite
- * resolution — leaf 1-2): resolve the (scope, name) target down to its Machine
- * Sprite via `resolveAgentTerminal` (machine/project scope may reconnect/resume
- * the Sprite through `buildMachineSandbox`), then read that Sprite. Deliberately
- * NOT part of the access decision — a Sprite is woken automatically by any exec,
- * so authorization never needs to touch it (see `agent-terminal-access.ts`).
- *
- * ONE `createSpriteHandleCache` is built here, per connect, and threaded through
- * BOTH halves — the machine acquire (whose `getOrCreate` probes the Sprite by
- * name) and the launch resolution below (which needs the raw handle for the PTY).
- * They read the same Sprite, so they now share one control-plane round-trip
- * instead of paying for two. The cache is deliberately connect-scoped, never
- * module-scoped: a Sprite handle is a live object, and a process-lifetime cache
- * would keep serving one that has since been destroyed and re-created under the
- * same name.
- */
-async function resolveAgentTerminalSandbox({
-  userId,
-  machineId,
-  projectName,
-  branchName,
-  name,
-}: {
-  userId: string;
-  machineId: string;
-  projectName?: string;
-  branchName?: string;
-  name: string;
-}) {
-  const sdk = createSpriteHandleCache(await getRealtimeSpritesSdk());
-  // Construction only (no I/O) — cheap to build unconditionally even for
-  // machine/project-scope targets that never touch `refreshBranchCredential`.
-  const host = createSpriteMachineHost({ sdk, client: createSpritesSandboxClient({ sdk }) });
-
-  return resolveMachineSandbox(
-    { machineId, projectName, branchName, name },
-    {
-      resolveAgentTerminal: async (target) => {
-        const [branchStore, agentTerminalStore, projectStore] = await Promise.all([
-          dbMachineBranchStorePromise,
-          dbMachineAgentTerminalStorePromise,
-          dbMachineProjectStorePromise,
-        ]);
-        return resolveAgentTerminal({
-          machineId: target.machineId,
-          projectName: target.projectName,
-          branchName: target.branchName,
-          name: target.name,
-          deps: {
-            branchStore,
-            store: agentTerminalStore,
-            projectStore: { findByName: (tId, pName) => projectStore.findByName(tId, pName) },
-            machineSandbox: buildMachineSandbox(userId, sdk),
-          },
-        });
-      },
-      // Served from the cache the acquire above already populated (machine/project
-      // scope). A branch-scope target never acquires, so this is its one and only
-      // read.
-      getSprite: (sandboxId) => sdk.getSprite(sandboxId),
-      // Refresh the branch Sprite's Claude Code credential from the root
-      // Machine's own Sprite (see `propagateClaudeCredential`'s doc comment on
-      // `machine-branches.ts`) — this IS the branch's actual attach path for
-      // opening/reattaching its agent terminal, unlike `spawnBranch`/
-      // `attachBranch`, which this bridge never calls. `resolveMachineSandbox`
-      // only invokes this for branch-scope targets. Shares this connect's
-      // handle cache (`sdk`), so re-reading the ALREADY-fetched branch Sprite
-      // costs nothing; only the root Sprite's read is a genuinely new call.
-      refreshBranchCredential: async ({ machineId: rootMachineId, sandboxId }) => {
-        try {
-          const branchHandle = await host.attach({ machineId: sandboxId });
-          if (!branchHandle) return;
-          await propagateClaudeCredential({
-            machineId: rootMachineId,
-            branchHandle,
-            resolveRootMachineHandle: async (mid) => {
-              // Derives the CURRENT session key (driveId + drive owner), not
-              // a bare-pageId lookup — see `findLiveMachineSandboxId`'s doc
-              // comment on why that would risk resolving a STALE session
-              // left behind by a prior drive move (caught in review, P1).
-              const context = await resolveDriveOwnerContext(mid);
-              if (!context.ok) return null;
-              const rootSandboxId = await findLiveMachineSandboxId({
-                tenantId: context.tenantId,
-                driveId: context.driveId,
-                pageId: mid,
-                secret: getSandboxSessionSecret(),
-              });
-              if (!rootSandboxId) return null;
-              return host.attach({ machineId: rootSandboxId });
-            },
-          });
-        } catch {
-          // Best-effort — a credential refresh must never block or fail
-          // opening the PTY itself (see `ResolveMachineSandboxDeps.
-          // refreshBranchCredential`'s doc comment).
-        }
-      },
-      // Meter this session Sprite's storage on the PTY connect wake (its
-      // `attachBranch` equivalent), so a session used only interactively still
-      // gets measured instead of billing the 0 floor forever. `resolveHandle` is
-      // lazy — paid only when a measurement is actually due — and shares this
-      // connect's handle cache; throttled + best-effort inside.
-      measureAgentTerminalStorage: async ({ machineAgentTerminalId, machinePageId, sandboxId }) => {
-        await measureAgentTerminalStorageOpportunistically({
-          machineAgentTerminalId,
-          machinePageId,
-          resolveHandle: () => host.attach({ machineId: sandboxId }),
-        });
-      },
-    },
-  );
-}
-
-/**
- * Auth for a named, pluggable-agent-typed terminal at one of the three
- * universal Terminal scopes (`agent-terminals.ts`) — access is governed by
- * the OWNING Machine's Terminal page (`machineId`), same edit-level bar the
- * retired human terminal used, then resolved down to the specific
- * machine/project/branch target + agent-terminal row. Does not provision an
- * agent-terminal row itself: an unreserved (scope, name) is `not_found`
- * (spawn it first via the Runtime API), and a vanished Sprite fails at the
- * `getSprite` step. The pure access decision (`decideAgentTerminalAccess`) and
- * the lazy sprite resolution (`resolveAgentTerminalSandbox`) are split (leaf
- * 1-2) so the re-auth interval can re-check access alone — this composition
- * just wires the real IO dependencies into both halves.
- */
-const makeAgentTerminalCheckAuth = buildAgentTerminalCheckAuth({
-  getAccessLevel: (userId, machineId) => getUserAccessLevel(userId, machineId),
-  getPageDriveId: async (machineId) => {
-    const [pageRow] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, machineId)).limit(1);
-    return pageRow;
-  },
-  canRunCode: ({ userId, driveId, requestOrigin }) => canRunCode({ userId, driveId, requestOrigin }),
-  getDriveAndUser: async ({ driveId, userId }) => {
-    const [driveRow, userRow] = await Promise.all([
-      db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, driveId)).limit(1).then((r) => r[0]),
-      db.select({ subscriptionTier: users.subscriptionTier, email: users.email }).from(users).where(eq(users.id, userId)).limit(1).then((r) => r[0]),
-    ]);
-    return { driveRow, userRow };
-  },
-  resolveActorEmail,
-  acquireSlot: ({ userId, tier }) => acquireCodeExecutionSlot({ userId, tier }),
-  releaseSlot: (userId) => releaseCodeExecutionSlot({ userId }),
-  resolveSandbox: (target) => resolveAgentTerminalSandbox(target),
-  // DB-only existence check for the (scope, name) target — no Sprite is resolved
-  // or woken, so the reattach fast path and the 60s re-auth tick can both afford
-  // to run it. It is what keeps a deleted project/branch/agent-terminal row from
-  // going unnoticed now that the sandbox resolution is lazy.
-  resolveMachineRow: async ({ machineId, projectName, branchName, name }) => {
-    const [branchStore, agentTerminalStore, projectStore] = await Promise.all([
-      dbMachineBranchStorePromise,
-      dbMachineAgentTerminalStorePromise,
-      dbMachineProjectStorePromise,
-    ]);
-    return resolveAgentTerminalRow({
-      machineId,
-      projectName,
-      branchName,
-      name,
-      deps: {
-        branchStore,
-        store: agentTerminalStore,
-        projectStore: { findByName: (tId, pName) => projectStore.findByName(tId, pName) },
-      },
-    });
-  },
-  // Write code execution audit record (agent terminal PTY session open) — this
-  // launches an arbitrary pluggable agent binary (the resolved command, or a
-  // per-terminal command override) inside the Sprite.
-  writeAudit: ({ userId, actorEmail, driveId, command }) => {
-    writeCodeExecutionAudit({
-      input: {
-        userId,
-        actorEmail,
-        driveId,
-        requestOrigin: 'user',
-        profile: 'pty',
-        code: `[Agent terminal session opened: ${command}]`,
-        exitCode: null,
-        durationMs: 0,
-        timestamp: new Date(),
-      },
-    }).catch(() => {});
-  },
-  buildSessionKey: ({ machineId, projectName, branchName, name }) =>
-    buildAgentTerminalSessionKey({ machineId, projectName, branchName, name }),
-  logDenied: (reason, context) => loggers.realtime.warn('Agent terminal auth denied', { reason, ...context }),
-  logSandboxLookupFailed: (context) => loggers.realtime.warn('Agent terminal sandbox lookup failed', { reason: 'provision_failed', ...context }),
-});
-
-/**
- * Everything it takes to START a PTY, wired once for BOTH callers: a viewer's
- * `agent-terminal:connect` (below) and a headless start driven by agent IO over
- * signed HTTP (`startHeadlessAgentTerminal`). Shared deliberately — a second
- * copy of the billing seam or the task-hold factory is a second place for
- * slot accounting and metering to drift.
- */
-const agentTerminalSessionDeps: AgentTerminalSessionDeps = {
-  sessionMap: agentTerminalSessionMap,
-  openShell: openPtyShell,
-  checkAuth: makeAgentTerminalCheckAuth,
-  persistStreamSessionId: async ({ agentTerminalId, sessionId }) => {
-    const store = await dbMachineAgentTerminalStorePromise;
-    await store.updateStreamSessionId({ id: agentTerminalId, streamSessionId: sessionId, now: new Date() });
-  },
-  // Issue #2205: bounded scrollback tail persisted once per teardown, so a
-  // `read_session` after the PTY has died can still answer with its final
-  // output instead of `live:false` and nothing. Shared by both callers — a
-  // headless session's idle reap or exit deserves the same cold-read recovery
-  // a viewer-created one gets.
-  persistColdTail: async ({ agentTerminalId, tail, hasOutput, endedAt }) => {
-    const store = await dbMachineAgentTerminalStorePromise;
-    await store.recordColdTail({ id: agentTerminalId, tail, hasOutput, endedAt });
-  },
-  // Terminal Epic 3: meters this PTY session's active-runtime cost against the
-  // machine's payer, whoever started it. Sprite wall-clock is equally billable
-  // whether a human, a pluggable agent, or an agent's `send_session` woke it.
-  billing: defaultSandboxBillingDeps,
-  // Sprites Tasks API hold (leaf 5-1): while an agent is running or a
-  // viewer attached, a short-expiry platform task (refreshed on a
-  // heartbeat, deleted on exit) keeps the sprite from cold-pausing mid-run;
-  // released when idle so the sprite CAN pause. 5m expiry / 60s refresh
-  // defaults, overridable via SPRITE_TASK_HOLD_EXPIRE_SECONDS /
-  // SPRITE_TASK_HOLD_REFRESH_MS.
-  createTaskHold: ({ sprite, sessionKey }) =>
-    createTaskHoldController({
-      client: createSpriteTasksClient({ sprite }),
-      // Per-INCARNATION name (session key + creation time), not per key: a
-      // torn-down session's queued final DELETE runs on its own serialized
-      // queue, so under a shared name it could land AFTER a quickly
-      // reopened session's CREATE and destroy the live hold. Distinct names
-      // make that race unrepresentable; an orphaned old task self-expires.
-      taskName: taskHoldName(`${sessionKey}:${Date.now()}`),
-      ...resolveTaskHoldConfig(process.env),
-      onError: (stage, result) => {
-        // Degrade gracefully: a lost hold means a possible pause, which the
-        // checkpoint work (5-2) already survives — log and carry on.
-        // exitCode 127 = curl missing from the sprite image (feature inert
-        // for this sprite); an HTTP status = the tasks API answered.
-        loggers.realtime.warn(`Sprite task hold ${stage} failed`, {
-          sessionKey,
-          status: result.status,
-          exitCode: result.exitCode,
-        });
-      },
-    }),
-};
-
-/**
- * The geometry a shell nobody is looking at is born with.
- *
- * A PTY must have one — programs read `$COLUMNS`/`$LINES` and wrap their output
- * to it — and 80x24 is the conventional default a terminal with no window to
- * measure gets. The first human to open the pane resizes it to their real
- * window (`agent-terminal:resize`), so this only ever governs the wrapping of
- * output produced before anyone looked.
- */
-const HEADLESS_COLS = 80;
-const HEADLESS_ROWS = 24;
-
-/**
- * Start a PTY for an agent that is reading or typing into a shell whose session
- * has never run (issue #2206) — the `startSession` seam of `session-io.ts`.
- *
- * Authorization is decided HERE, against the userId the (signed) request names,
- * and not inherited from the web tier's own check. The web tier authorized a
- * conversation's access to a session ADDRESS; this starts a sandbox process —
- * reserving that user's concurrency slot, billing their machine's payer, and
- * writing a code-execution audit row. Those are the socket path's reasons for
- * running `checkAuth` before `resolveSandbox`, and they do not become someone
- * else's job because the request arrived over HTTP.
- *
- * `undefined` for every failure: the caller's answer ("no PTY, nothing typed")
- * is the same whichever way a start failed, and the specific reason is already
- * logged by `checkAuth`/`resolveSandbox` at the point it was decided.
- *
- * `abandoned` DOES have a real signal here, unlike a socket connect (which has
- * no equivalent — see the old comment this replaced): the web tier's `fetch`
- * to this endpoint still gives up eventually (`COLD_START_TIMEOUT_MS`,
- * `session-io-pty.ts` — generous for a `start: true` call, but a cold Sprite
- * wake plus a liveness check can still outrun it), and a caller that saw that
- * timeout as "nothing happened" may retry the same input. Forwarded straight
- * to `ensureAgentTerminalSession`'s own check at the last await before the
- * PTY exists, keyed off the SAME request's connection rather than a viewer's
- * `connectionId`.
- */
-const startHeadlessAgentTerminal = async (
-  {
-    machineId,
-    projectName,
-    branchName,
-    name,
-    userId,
-  }: {
-    machineId: string;
-    projectName?: string;
-    branchName?: string;
-    name: string;
-    userId: string;
-  },
-  abandoned: () => boolean,
-) => {
-  const access = await makeAgentTerminalCheckAuth({ userId, machineId, projectName, branchName, name });
-  if (!access.ok) return undefined;
-
-  const outcome = await ensureAgentTerminalSession(agentTerminalSessionDeps, {
-    access,
-    target: { machineId, projectName, branchName, name },
-    userId,
-    cols: HEADLESS_COLS,
-    rows: HEADLESS_ROWS,
-    abandoned,
-  });
-  if (outcome.kind === 'failed') return undefined;
-  loggers.realtime.info('Agent terminal session started headlessly', {
-    sessionKey: access.sessionKey,
-    sandboxId: outcome.session.sandboxId,
-    reused: outcome.kind === 'existing',
-  });
-  return outcome.session;
-};
-
-/** The session-IO deps both HTTP verbs share — the map, the key derivation, and the two effects. */
-const sessionIoDeps = {
-  sessionMap: agentTerminalSessionMap,
-  sessionKeyFor: buildAgentTerminalSessionKey,
-  startSession: startHeadlessAgentTerminal,
-  // `agentTerminalSessionDeps` already carries `billing` and `persistColdTail`
-  // — the same two teardown-time effects a socket-created session's reap
-  // uses, so a headless session's reap persists its cold tail too.
-  rearmIdleReap: (session: TerminalSession) =>
-    armIdleReap(agentTerminalSessionDeps, agentTerminalSessionMap, session),
-};
-
 // ---------------------------------------------------------------------------
 // shell:* family — the PTY bridge re-keyed onto agent sessions (Phase 3).
 //
@@ -630,8 +138,8 @@ const sessionIoDeps = {
 // verdict the web API routes enforce (via `checkAgentSessionAccess`), and
 // provisioning is the SAME `ensureAgentSessionSandbox` path the web tier uses —
 // one code path, so concurrent provisioners CAS against one store instead of
-// fighting. The legacy `agent-terminal:*` family above stays registered (the
-// pre-Phase-6 web client still emits it) until the Phase 8 sweep deletes it.
+// fighting. The legacy `agent-terminal:*` family (machine/project/branch-scope
+// PTYs) was deleted in the Phase 8 teardown.
 // ---------------------------------------------------------------------------
 
 /**
@@ -659,7 +167,7 @@ async function ensureShellSessionSandbox({ sessionId, userId }: { sessionId: str
   }
 
   const sdk = createSpriteHandleCache(await getRealtimeSpritesSdk());
-  const host = createSpriteMachineHost({ sdk, client: createSpritesSandboxClient({ sdk }) });
+  const host = createSpriteSandboxHost({ sdk, client: createSpritesSandboxClient({ sdk }) });
 
   const result = await ensureAgentSessionSandbox({
     row: { ...row, sessionId: row.conversationId },
@@ -810,8 +318,47 @@ const shellSessionDeps: ShellSessionDeps = {
     await store.recordColdTail({ id: shellId, tail, hasOutput, endedAt });
   },
   billing: defaultSandboxBillingDeps,
-  createTaskHold: agentTerminalSessionDeps.createTaskHold,
+  // Sprites Tasks API hold (leaf 5-1): while an agent is running or a
+  // viewer attached, a short-expiry platform task (refreshed on a
+  // heartbeat, deleted on exit) keeps the sprite from cold-pausing mid-run;
+  // released when idle so the sprite CAN pause. 5m expiry / 60s refresh
+  // defaults, overridable via SPRITE_TASK_HOLD_EXPIRE_SECONDS /
+  // SPRITE_TASK_HOLD_REFRESH_MS.
+  createTaskHold: ({ sprite, sessionKey }) =>
+    createTaskHoldController({
+      client: createSpriteTasksClient({ sprite }),
+      // Per-INCARNATION name (session key + creation time), not per key: a
+      // torn-down session's queued final DELETE runs on its own serialized
+      // queue, so under a shared name it could land AFTER a quickly
+      // reopened session's CREATE and destroy the live hold. Distinct names
+      // make that race unrepresentable; an orphaned old task self-expires.
+      taskName: taskHoldName(`${sessionKey}:${Date.now()}`),
+      ...resolveTaskHoldConfig(process.env),
+      onError: (stage, result) => {
+        // Degrade gracefully: a lost hold means a possible pause, which the
+        // checkpoint work (5-2) already survives — log and carry on.
+        // exitCode 127 = curl missing from the sprite image (feature inert
+        // for this sprite); an HTTP status = the tasks API answered.
+        loggers.realtime.warn(`Sprite task hold ${stage} failed`, {
+          sessionKey,
+          status: result.status,
+          exitCode: result.exitCode,
+        });
+      },
+    }),
 };
+
+/**
+ * The geometry a shell nobody is looking at is born with.
+ *
+ * A PTY must have one — programs read `$COLUMNS`/`$LINES` and wrap their output
+ * to it — and 80x24 is the conventional default a terminal with no window to
+ * measure gets. The first human to open the pane resizes it to their real
+ * window (`shell:resize`), so this only ever governs the wrapping of output
+ * produced before anyone looked.
+ */
+const HEADLESS_COLS = 80;
+const HEADLESS_ROWS = 24;
 
 /**
  * Start a PTY for an agent reading or typing into a shell whose session has
@@ -1215,88 +762,6 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: 'Invalid JSON' }));
             }
-        });
-    } else if (req.method === 'POST' && req.url === '/api/terminal-activity') {
-        // Streams an agent's bash run into a live Terminal's PTY/output feed
-        // (Terminal Epic 1 T1.5, activity visibility). Best-effort: a live
-        // session may not exist (nobody watching), which is not an error.
-        readCappedBody(body => {
-            const signatureHeader = req.headers['x-broadcast-signature'] as string;
-            if (!verifySignature(signatureHeader, body)) {
-                res.writeHead(401, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Authentication failed' }));
-                return;
-            }
-
-            handleTerminalActivityRequest(
-                {
-                    sessionMap: agentTerminalSessionMap,
-                    // The machine's conventional 'shell' agent terminal (the retired
-                    // human `terminal:*` family's replacement) is keyed on the owning
-                    // Terminal page id (`pageId` == the checkAuth `machineId`), so its
-                    // in-memory sessionKey is derivable WITHOUT resolving the Sprite. We
-                    // still gate on the persisted machine_sessions record existing (no
-                    // provisioning) so we only target a shell that has actually run.
-                    resolveSessionKey: async ({ tenantId, driveId, pageId }) => {
-                        const store = await dbMachineSessionStorePromise;
-                        const key = deriveMachineSessionKey({ tenantId, driveId, pageId, secret: getSandboxSessionSecret() });
-                        const record = await store.findBySessionKey(key);
-                        return record ? buildAgentTerminalSessionKey({ machineId: pageId, name: SHELL_AGENT_TERMINAL_NAME }) : null;
-                    },
-                },
-                body,
-            ).then((result) => {
-                res.writeHead(result.status, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify(result.body));
-            }).catch((error: unknown) => {
-                loggers.realtime.error('Terminal activity request failed', error instanceof Error ? error : new Error(String(error)));
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: 'Internal error' }));
-            });
-        });
-    } else if (req.method === 'POST' && req.url === '/api/session-read') {
-        // read_session (PTY half) + the list_sessions liveness sweep. The bytes
-        // live in THIS process's session map, so the web tier — which has
-        // already resolved and authorized the session against the
-        // conversation's derived handle set — asks for them over a signed POST.
-        readCappedBody(body => {
-            const signatureHeader = req.headers['x-broadcast-signature'] as string;
-            if (!verifySignature(signatureHeader, body)) {
-                res.writeHead(401, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Authentication failed' }));
-                return;
-            }
-
-            handleSessionReadRequest(sessionIoDeps, body, trackRequestAbandonment()).then((result) => {
-                res.writeHead(result.status, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify(result.body));
-            }).catch((error: unknown) => {
-                loggers.realtime.error('Session read request failed', error instanceof Error ? error : new Error(String(error)));
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: 'Internal error' }));
-            });
-        });
-    } else if (req.method === 'POST' && req.url === '/api/session-input') {
-        // send_session (PTY half): types stdin into a live agent-terminal PTY
-        // through the same `session.command.write` a human viewer's keystroke
-        // takes, so anyone watching sees it echoed exactly as they would see a
-        // teammate type. Authorization happened in the web tier before signing.
-        readCappedBody(body => {
-            const signatureHeader = req.headers['x-broadcast-signature'] as string;
-            if (!verifySignature(signatureHeader, body)) {
-                res.writeHead(401, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Authentication failed' }));
-                return;
-            }
-
-            handleSessionSendRequest(sessionIoDeps, body, undefined, trackRequestAbandonment()).then((result) => {
-                res.writeHead(result.status, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify(result.body));
-            }).catch((error: unknown) => {
-                loggers.realtime.error('Session input request failed', error instanceof Error ? error : new Error(String(error)));
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: 'Internal error' }));
-            });
         });
     } else if (req.method === 'POST' && req.url === '/api/shell-read') {
         // read_shell (shell:* family) + the liveness sweep, re-keyed to
@@ -1930,42 +1395,7 @@ io.on('connection', (socket: AuthSocket) => {
     pageIdExtractor: (payload: unknown) => (payload as { pageId?: string })?.pageId,
   }));
 
-  // Agent terminal PTY handlers (Terminal — universal scope reshape) — a
-  // named, pluggable-agent-typed session at machine/project/branch scope. A
-  // plain machine shell is just a machine-scope agent terminal of
-  // `agentType: 'shell'` on this SAME path — the retired human-only
-  // `terminal:*` family's replacement — so billing (Terminal Epic 3) meters
-  // every agent-terminal connection's active-runtime cost against the
-  // machine's payer uniformly, not only the human-shell case.
-  const agentTerminalHandlers = buildAgentTerminalHandlers({
-    ...agentTerminalSessionDeps,
-    socket: socket as unknown as SocketLike,
-  });
-
-  socket.on('agent-terminal:connect', (payload) => {
-    agentTerminalHandlers.onConnect(payload).then(() => {
-      // Same `connectionId ?? socket.id` fallback `onConnect` itself uses —
-      // several split panes can share this one socket, each under its own
-      // connectionId, so a bare `socket.id` lookup would only ever find
-      // whichever pane never sent one.
-      const payloadConnectionId =
-        payload !== null && typeof payload === 'object' && typeof (payload as { connectionId?: unknown }).connectionId === 'string'
-          ? (payload as { connectionId: string }).connectionId
-          : undefined;
-      const session = agentTerminalSessionMap.getBySocket(payloadConnectionId ?? socket.id);
-      if (session) {
-        loggers.realtime.info('Agent terminal session opened', { userId: user?.id, sessionKey: session.sessionKey, sandboxId: session.sandboxId });
-      }
-    }).catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : 'Internal error';
-      socket.emit('agent-terminal:error', { message: msg });
-    });
-  });
-  socket.on('agent-terminal:input', (payload) => agentTerminalHandlers.onInput(payload));
-  socket.on('agent-terminal:resize', (payload) => agentTerminalHandlers.onResize(payload));
-  socket.on('agent-terminal:disconnect', (payload) => agentTerminalHandlers.onDisconnect(payload));
-
-  // Shell PTY handlers (shell:* — the re-keyed family): a named PTY inside its
+  // Shell PTY handlers (shell:* family): a named PTY inside its
   // agent session's ONE shared sandbox, addressed by `{shellId}` alone. Billing
   // meters every connection's active-runtime cost against the session's payer
   // (agent page's drive owner, or the session owner for a global-assistant
@@ -1999,7 +1429,6 @@ io.on('connection', (socket: AuthSocket) => {
   socket.on('shell:disconnect', (payload) => shellHandlers.onDisconnect(payload));
 
   socket.on('disconnect', (reason) => {
-    agentTerminalHandlers.onDisconnect();
     shellHandlers.onDisconnect();
     // Clean up presence tracking and broadcast updates for affected pages
     const affectedPages = presenceTracker.removeSocket(socket.id);

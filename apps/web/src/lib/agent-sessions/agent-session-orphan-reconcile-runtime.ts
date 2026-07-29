@@ -1,19 +1,9 @@
 /**
- * Default (real) IO composition for the orphan-teardown reconcile cron, agent-
- * sessions half (Phase 7, Dev → Agents billing/storage re-point) — binds
- * `reconcileOrphanSprites` (from `@pagespace/lib/services/sandbox/
- * sprite-orphan-reconcile`, the sandbox-layer successor described in that
- * module's own doc) to the real `agent_sessions` table and the shared
- * `machine_sprite_reclaims` outbox. Mirrors
- * `machine-orphan-reconcile-runtime.ts`'s composition pattern for the legacy
- * machine-tree world — this is its `agent_sessions` twin, run ALONGSIDE it
- * (not instead of it) by the cron route: the outbox is genuinely SHARED (one
- * AFTER-DELETE trigger on `agent_sessions`, reusing the machine-tree world's
- * `enqueue_sprite_reclaim()` per the design), so both reconcilers draining it
- * in the same tick is safe (`killSprite`/outbox release are idempotent — a row
- * either reconciler already claimed simply finds nothing left to release) even
- * though it is mildly redundant. The old machine-tree reconciler keeps running
- * unchanged until the Phase 8 teardown deletes the tables it enumerates.
+ * Default (real) IO composition for the orphan-teardown reconcile cron — binds
+ * `reconcileOrphanSprites` (`@pagespace/lib/services/sandbox/
+ * sprite-orphan-reconcile`) to the real `agent_sessions` table and the
+ * `machine_sprite_reclaims` outbox (the FK-less table stays under its
+ * pre-Phase-8 physical name — see that table's own doc comment).
  *
  * Two sources, per `sprite-orphan-reconcile.ts`'s module doc:
  *
@@ -34,11 +24,17 @@ import { db } from '@pagespace/db/db';
 import { agentSessions } from '@pagespace/db/schema/agent-sessions';
 import { machineSpriteReclaims } from '@pagespace/db/schema/machine-sprite-reclaims';
 import type { ReconcileOrphanSpritesDeps, SpriteOrphanRow } from '@pagespace/lib/services/sandbox/sprite-orphan-reconcile';
-import { MachineSpriteReplacedError } from '@pagespace/lib/services/sandbox/machine-host';
-import { MAX_CANDIDATES_PER_TABLE } from '@/lib/machines/machine-orphan-reconcile-runtime';
-import { getAgentSessionStore, getMachineHost } from './agent-sessions-runtime';
+import { SandboxSpriteReplacedError } from '@pagespace/lib/services/sandbox/sandbox-host';
+import { getAgentSessionStore, getSandboxHost } from './agent-sessions-runtime';
 
-/** One row more than the cap, purely to learn whether a backlog remains beyond it — mirrors the legacy runtime's own lookahead. */
+/**
+ * Cap on how many candidate rows each source contributes to one reconcile
+ * tick — bounds a single run's work regardless of backlog size; a backlog
+ * beyond the cap simply drains over successive ticks (see `capped` below).
+ */
+export const MAX_CANDIDATES_PER_TABLE = 200;
+
+/** One row more than the cap, purely to learn whether a backlog remains beyond it. */
 const LOOKAHEAD = MAX_CANDIDATES_PER_TABLE + 1;
 
 export const defaultReconcileAgentSessionOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
@@ -101,15 +97,15 @@ export const defaultReconcileAgentSessionOrphanSpritesDeps: ReconcileOrphanSprit
 
   async killSprite({ sandboxId, spriteInstanceId }) {
     try {
-      const host = await getMachineHost();
+      const host = await getSandboxHost();
       // Idempotent: an already-destroyed Sprite is a successful kill.
-      await host.kill({ machineId: sandboxId, expectedInstanceId: spriteInstanceId ?? undefined });
+      await host.kill({ sandboxId, expectedInstanceId: spriteInstanceId ?? undefined });
       return { ok: true };
     } catch (error) {
       // A DIFFERENT VM holds this name now — our target is already gone,
       // exactly the outcome we wanted. The newcomer has its OWN fresh
       // tracking row, so releasing ours never orphans it.
-      if (error instanceof MachineSpriteReplacedError) return { ok: true };
+      if (error instanceof SandboxSpriteReplacedError) return { ok: true };
       return { ok: false, error };
     }
   },

@@ -11,11 +11,11 @@
  * knows answers `vanished`. Result unions only — routes map, never catch.
  */
 
-import { adaptMachineHandleToExecutableSandbox } from '@pagespace/lib/services/sandbox/sandbox-client/machine-host-adapter';
+import { adaptSandboxHandleToExecutableSandbox } from '@pagespace/lib/services/sandbox/sandbox-client/sandbox-host-adapter';
 import type { GitSandboxRunDeps } from '@pagespace/lib/services/sandbox/git-tool-runners';
 import type { SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';
 import { defaultBuildEnv } from '@pagespace/lib/services/sandbox/tool-runners';
-import type { MachineHandle } from '@pagespace/lib/services/sandbox/machine-host';
+import type { SandboxHandle } from '@pagespace/lib/services/sandbox/sandbox-host';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { resolveGitHubTokenForSandbox } from '@pagespace/lib/services/sandbox/github-token';
 import {
@@ -28,10 +28,10 @@ import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
-import { findSessionRecord, getMachineHost } from './agent-sessions-runtime';
+import { findSessionRecord, getSandboxHost } from './agent-sessions-runtime';
 
 export type ResolveSessionSandboxHandleResult =
-  | { ok: true; handle: MachineHandle }
+  | { ok: true; handle: SandboxHandle }
   /** `not_started` = the session never acquired a sandbox (or it was ended); `vanished` = it recorded one the platform no longer has. */
   | { ok: false; reason: 'not_found' | 'not_started' | 'vanished' };
 
@@ -44,8 +44,8 @@ export async function resolveSessionSandboxHandle(
   if (session.sandboxId === null || session.spriteTornDownAt !== null) {
     return { ok: false, reason: 'not_started' };
   }
-  const host = await getMachineHost();
-  const handle = await host.attach({ machineId: session.sandboxId }).catch(() => null);
+  const host = await getSandboxHost();
+  const handle = await host.attach({ sandboxId: session.sandboxId }).catch(() => null);
   if (!handle) return { ok: false, reason: 'vanished' };
   return { ok: true, handle };
 }
@@ -92,10 +92,10 @@ export function buildSessionReadActorCtx(scopeKey: string, actor: SessionActorCo
 
 /**
  * `runGitInSandbox` deps bound directly to an already-resolved session
- * `MachineHandle` — no acquire/reconnect lookup (the handle IS the sandbox).
+ * `SandboxHandle` — no acquire/reconnect lookup (the handle IS the sandbox).
  */
-export function buildSessionGitDepsForHandle(handle: MachineHandle): GitSandboxRunDeps {
-  const sandbox = adaptMachineHandleToExecutableSandbox(handle);
+export function buildSessionGitDepsForHandle(handle: SandboxHandle): GitSandboxRunDeps {
+  const sandbox = adaptSandboxHandleToExecutableSandbox(handle);
   return {
     isEnabled: isCodeExecutionEnabled,
     resolveGitHubToken: (userId: string) => resolveGitHubTokenForSandbox({ userId, db }),
@@ -103,7 +103,7 @@ export function buildSessionGitDepsForHandle(handle: MachineHandle): GitSandboxR
     buildEnv: defaultBuildEnv,
     audit: (input) => writeCodeExecutionAudit({ input }),
     now: () => new Date(),
-    acquireSandbox: async () => ({ ok: true, sandboxId: handle.machineId, resumed: false }),
+    acquireSandbox: async () => ({ ok: true, sandboxId: handle.sandboxId, resumed: false }),
     reconnect: async () => sandbox,
   };
 }

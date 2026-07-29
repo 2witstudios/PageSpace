@@ -13,7 +13,7 @@
  *   copyMachinePath      — copy a path (no-clobber).
  *   deleteMachinePath    — remove a path, recursively, idempotently.
  *
- * All seven take a `MachineHandle` (./machine-host.ts) as an INJECTED
+ * All seven take a `SandboxHandle` (./sandbox-host.ts) as an INJECTED
  * dependency rather than constructing a Sprite host themselves, mirroring the
  * DI shape of `runGitInSandbox` (./git-tool-runners.ts). That keeps them
  * unit-testable against a fake handle with zero real Sprite calls, per the
@@ -30,13 +30,13 @@
  * git-object reads, a separate git-ref-aware service that depends on this one;
  * do NOT add a ref parameter here.
  *
- * This runs commands through `MachineHandle.exec`/`readFile`/`writeFiles`,
+ * This runs commands through `SandboxHandle.exec`/`readFile`/`writeFiles`,
  * deliberately NOT through the AI-agent tool-runner orchestration (billing
  * holds, injection screening, LLM-facing denial vocabulary) — that layer is
  * shaped for an agent, not a browsing UI.
  */
 
-import type { MachineHandle } from './machine-host';
+import type { SandboxHandle } from './sandbox-host';
 
 export interface MachineDirectoryEntry {
   name: string;
@@ -69,7 +69,7 @@ export async function listMachineDirectory({
   handle,
   path,
 }: {
-  handle: MachineHandle;
+  handle: SandboxHandle;
   path: string;
 }): Promise<ListMachineDirectoryResult> {
   const run = await handle.exec({ cmd: 'ls', args: ['-Ap', '--', path] });
@@ -91,13 +91,13 @@ export async function listMachineDirectory({
 
 /**
  * Read one file's bytes from a Machine's working tree. A thin wrapper over
- * `MachineHandle.readFile`, which returns `null` for a missing file.
+ * `SandboxHandle.readFile`, which returns `null` for a missing file.
  */
 export async function readMachineFile({
   handle,
   path,
 }: {
-  handle: MachineHandle;
+  handle: SandboxHandle;
   path: string;
 }): Promise<ReadMachineFileResult> {
   const content = await handle.readFile({ path });
@@ -129,7 +129,7 @@ export async function createMachineDirectory({
   handle,
   path,
 }: {
-  handle: MachineHandle;
+  handle: SandboxHandle;
   path: string;
 }): Promise<MutateMachinePathResult> {
   const run = await handle.exec({ cmd: 'mkdir', args: ['--', path] });
@@ -144,7 +144,7 @@ export async function createMachineDirectory({
  * argv element, never shell-interpolated — same documented exception as
  * `machinePathExists` below).
  */
-async function machineDirectoryExists(handle: MachineHandle, path: string): Promise<boolean> {
+async function machineDirectoryExists(handle: SandboxHandle, path: string): Promise<boolean> {
   const run = await handle.exec({ cmd: 'test', args: ['-d', path] });
   return run.exitCode === 0;
 }
@@ -153,7 +153,7 @@ async function machineDirectoryExists(handle: MachineHandle, path: string): Prom
  * Create or overwrite one file's bytes on a Machine's working tree.
  *
  * The parent directory is preflighted (`test -d`) and a missing parent is
- * `not_found`, NEVER silently created: `MachineHandle.writeFiles` is not a
+ * `not_found`, NEVER silently created: `SandboxHandle.writeFiles` is not a
  * plain write — the Sprite implementation retries a failed write after
  * `mkdir -p`-ing the file's parent, so without this guard a save against a
  * path whose folder a live terminal just deleted would quietly resurrect the
@@ -171,7 +171,7 @@ export async function writeMachineFile({
   content,
   noClobber = false,
 }: {
-  handle: MachineHandle;
+  handle: SandboxHandle;
   path: string;
   content: string | Uint8Array;
   /**
@@ -220,7 +220,7 @@ export async function writeMachineFile({
  * cross-tenant boundary to violate here, and path confinement already happened
  * once, upstream in the route.
  */
-async function machinePathExists(handle: MachineHandle, path: string): Promise<boolean> {
+async function machinePathExists(handle: SandboxHandle, path: string): Promise<boolean> {
   const run = await handle.exec({ cmd: 'test', args: ['-e', path, '-o', '-L', path] });
   return run.exitCode === 0;
 }
@@ -231,7 +231,7 @@ export async function moveMachinePath({
   fromPath,
   toPath,
 }: {
-  handle: MachineHandle;
+  handle: SandboxHandle;
   fromPath: string;
   toPath: string;
 }): Promise<MutateMachinePathResult> {
@@ -251,7 +251,7 @@ export async function copyMachinePath({
   fromPath,
   toPath,
 }: {
-  handle: MachineHandle;
+  handle: SandboxHandle;
   fromPath: string;
   toPath: string;
 }): Promise<MutateMachinePathResult> {
@@ -311,7 +311,7 @@ export async function verifyMachinePathsWithinScope({
   scopeRoot,
   paths,
 }: {
-  handle: MachineHandle;
+  handle: SandboxHandle;
   boundaryRoot: string;
   scopeRoot: string;
   paths: string[];
@@ -344,7 +344,7 @@ export async function deleteMachinePath({
   handle,
   path,
 }: {
-  handle: MachineHandle;
+  handle: SandboxHandle;
   path: string;
 }): Promise<MutateMachinePathResult> {
   const run = await handle.exec({ cmd: 'rm', args: ['-rf', '--', path] });

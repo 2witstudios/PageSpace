@@ -13,12 +13,12 @@
  */
 
 import type {
-  MachineHandle,
-  MachineHost,
-  MachineStream,
-  MachineStreamSessionInfo,
-} from '../../sandbox/machine-host';
-import { MachineSpriteReplacedError } from '../../sandbox/machine-host';
+  SandboxHandle,
+  SandboxHost,
+  SandboxStream,
+  SandboxStreamSessionInfo,
+} from '../../sandbox/sandbox-host';
+import { SandboxSpriteReplacedError } from '../../sandbox/sandbox-host';
 import type { AgentSessionRecord, AgentSessionStore } from '../agent-sessions-store';
 import { stampColumns } from '../agent-sessions-store';
 import type { SessionShellRecord, SessionShellStore } from '../session-shells-store';
@@ -168,18 +168,18 @@ export function makeAgentSessionStore(seed: AgentSessionRecord[] = []): FakeAgen
 }
 
 export interface FakeSpriteHost {
-  host: MachineHost;
+  host: SandboxHost;
   /** Live VMs by NAME. A name is reused across re-creates, which is exactly why instances exist. */
   live: Map<string, { instanceId: string | null; egressPolicyToken?: string }>;
   calls: {
     provision: Array<{ name: string; appliedEgressToken?: string | null }>;
-    kill: Array<{ machineId: string; expectedInstanceId?: string | null }>;
+    kill: Array<{ sandboxId: string; expectedInstanceId?: string | null }>;
     attach: string[];
   };
 }
 
-export function makeHandle(machineId: string, instanceId: string | null, egressPolicyToken?: string): MachineHandle {
-  const unusedStream: MachineStream = {
+export function makeHandle(sandboxId: string, instanceId: string | null, egressPolicyToken?: string): SandboxHandle {
+  const unusedStream: SandboxStream = {
     write: () => {},
     resize: () => {},
     onData: () => {},
@@ -188,14 +188,14 @@ export function makeHandle(machineId: string, instanceId: string | null, egressP
     kill: () => {},
   };
   return {
-    machineId,
+    sandboxId,
     spriteInstanceId: instanceId,
     egressPolicyToken,
     exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
     writeFiles: async () => {},
     readFile: async () => null,
     stream: async () => unusedStream,
-    listStreams: async (): Promise<MachineStreamSessionInfo[]> => [],
+    listStreams: async (): Promise<SandboxStreamSessionInfo[]> => [],
     killSession: async () => {},
     createCheckpoint: async () => {},
   };
@@ -227,7 +227,7 @@ export function makeSpriteHost(
   const calls: FakeSpriteHost['calls'] = { provision: [], kill: [], attach: [] };
   let attempts = 0;
 
-  const host: MachineHost = {
+  const host: SandboxHost = {
     async provision({ name, appliedEgressToken }) {
       calls.provision.push({ name, appliedEgressToken });
       if (options.provisionError) throw options.provisionError;
@@ -242,18 +242,18 @@ export function makeSpriteHost(
       return makeHandle(name, instanceId, egressPolicyToken);
     },
 
-    async attach({ machineId }) {
-      calls.attach.push(machineId);
+    async attach({ sandboxId }) {
+      calls.attach.push(sandboxId);
       if (options.attachError) throw options.attachError;
-      const existing = live.get(machineId);
+      const existing = live.get(sandboxId);
       if (!existing) return null;
-      return makeHandle(machineId, existing.instanceId, existing.egressPolicyToken);
+      return makeHandle(sandboxId, existing.instanceId, existing.egressPolicyToken);
     },
 
-    async kill({ machineId, expectedInstanceId }) {
-      calls.kill.push({ machineId, expectedInstanceId });
+    async kill({ sandboxId, expectedInstanceId }) {
+      calls.kill.push({ sandboxId, expectedInstanceId });
       if (options.killError) throw options.killError;
-      const existing = live.get(machineId);
+      const existing = live.get(sandboxId);
       if (!existing) return; // idempotent: already gone
       if (
         expectedInstanceId !== undefined &&
@@ -262,9 +262,9 @@ export function makeSpriteHost(
         existing.instanceId !== expectedInstanceId
       ) {
         // A DIFFERENT VM holds this name now — refuse rather than destroy it.
-        throw new MachineSpriteReplacedError(machineId, expectedInstanceId, existing.instanceId);
+        throw new SandboxSpriteReplacedError(sandboxId, expectedInstanceId, existing.instanceId);
       }
-      live.delete(machineId);
+      live.delete(sandboxId);
     },
   };
 

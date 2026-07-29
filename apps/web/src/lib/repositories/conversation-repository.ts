@@ -180,9 +180,8 @@ export const conversationRepository = {
    * Get an AI_CHAT agent by ID
    */
   async getAiAgent(agentId: string): Promise<AiAgent | null> {
-    // Conversation-hosting pages: AI_CHAT agents only. (The MACHINE widening
-    // is reverted — agent sessions anchor to the conversation itself, and the
-    // MACHINE page type is on its way out entirely.)
+    // Conversation-hosting pages: AI_CHAT agents only — agent sessions anchor
+    // to the conversation itself, and the Machine page type is gone entirely.
     const agent = await db.query.pages.findFirst({
       where: and(
         eq(pages.id, agentId),

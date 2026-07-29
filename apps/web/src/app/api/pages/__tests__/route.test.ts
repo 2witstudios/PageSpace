@@ -320,43 +320,15 @@ describe('POST /api/pages', () => {
       expect(body.error).toMatch(/not found/i);
     });
 
-    it('returns 403 when a non-admin creates a MACHINE page', async () => {
+    it('rejects MACHINE as an unknown page type (the Machine page type is gone)', async () => {
       const response = await POST(createRequest({
         title: 'Prod Shell',
         type: 'MACHINE',
         driveId: mockDriveId,
       }));
-      const body = await response.json();
 
-      expect(response.status).toBe(403);
-      expect(body.error).toMatch(/administrator/i);
+      expect(response.status).toBe(400);
       expect(pageService.createPage).not.toHaveBeenCalled();
-    });
-
-    it('allows an admin to create a MACHINE page', async () => {
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
-        ...mockWebAuth(mockUserId),
-        role: 'admin',
-      });
-      vi.mocked(pageService.createPage).mockResolvedValue({
-        ...successResult,
-        page: { ...mockPage, type: 'MACHINE' },
-      });
-
-      const response = await POST(createRequest({
-        title: 'Prod Shell',
-        type: 'MACHINE',
-        driveId: mockDriveId,
-      }));
-      const body = await response.json();
-
-      expect(response.status).toBe(201);
-      expect(body.type).toBe('MACHINE');
-      expect(pageService.createPage).toHaveBeenCalledWith(
-        mockUserId,
-        expect.objectContaining({ type: 'MACHINE' }),
-        expect.objectContaining({ authorizeEdit: expect.any(Function) }),
-      );
     });
   });
 

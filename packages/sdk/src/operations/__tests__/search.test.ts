@@ -81,8 +81,8 @@ describe('search.glob — input validation', () => {
     expect(result.success).toBe(true);
   });
 
-  it('accepts FILE and MACHINE, which the inlined list used to omit (#2150)', () => {
-    const result = globSearch.inputSchema.safeParse({ driveId: 'd1abc', pattern: '*', includeTypes: 'FILE,MACHINE' });
+  it('accepts FILE, which the inlined list used to omit (#2150)', () => {
+    const result = globSearch.inputSchema.safeParse({ driveId: 'd1abc', pattern: '*', includeTypes: 'FILE' });
     expect(result.success).toBe(true);
   });
 
