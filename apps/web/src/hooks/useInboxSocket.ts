@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef } from 'react';
 import { useSWRConfig } from 'swr';
 import { useSocket } from './useSocket';
 import { useEditingStore } from '@/stores/useEditingStore';
@@ -9,41 +9,50 @@ import type { InboxEventPayload } from '@/lib/websocket/socket-utils';
 import type { InboxResponse } from '@pagespace/lib/types';
 
 interface UseInboxSocketOptions {
-  driveId?: string;
+  /** The exact string passed to useSWR. Must be identical — SWR keys by value. */
+  cacheKey: string;
+  /** Item types this cache holds. Payloads of other types are ignored. */
+  scope: 'dm' | 'channel' | 'all';
   hasLoadedRef?: React.MutableRefObject<boolean>;
 }
 
 /**
  * Hook that listens for inbox events (DM/channel updates) and updates the SWR cache.
- * Integrates with editing store to prevent updates during active editing sessions.
+ * Integrates with editing store to defer (not drop) updates during active editing sessions.
  *
+ * @param cacheKey - The exact string the consumer passes to useSWR. SWR keys by value, so
+ *                   this must match verbatim or writes land in a cache entry with no subscriber.
+ * @param scope - Restricts which payload types this subscription writes to its cache.
  * @param hasLoadedRef - Optional ref to track if initial data has loaded. When provided,
  *                       socket updates will only be processed after hasLoadedRef.current is true.
  *                       This prevents socket events from racing with initial data fetches.
  */
-export function useInboxSocket({ driveId, hasLoadedRef: externalRef }: UseInboxSocketOptions = {}) {
+export function useInboxSocket({ cacheKey, scope, hasLoadedRef: externalRef }: UseInboxSocketOptions) {
   const socket = useSocket();
   const { mutate } = useSWRConfig();
   const internalRef = useRef(false);
   const hasLoadedRef = externalRef ?? internalRef;
-
-  // Build the SWR cache key
-  const getCacheKey = useCallback(() => {
-    return driveId
-      ? `/api/inbox?driveId=${driveId}&limit=20`
-      : '/api/inbox?limit=20';
-  }, [driveId]);
+  const staleRef = useRef(false);
 
   useEffect(() => {
     if (!socket) return;
 
     const handleInboxUpdate = (payload: InboxEventPayload) => {
-      // Skip updates if we haven't loaded yet or if editing is active
-      if (!hasLoadedRef.current || useEditingStore.getState().isAnyEditing()) {
+      // Ignore payloads outside this subscription's scope before any other
+      // work — otherwise every DM event runs the updater against a channels
+      // cache (and vice versa), finds no match, and falls through to a full
+      // revalidation fallback per mounted list.
+      if (scope !== 'all' && payload.type !== scope) return;
+
+      // Skip updates if we haven't loaded yet (race guard against the initial fetch).
+      if (!hasLoadedRef.current) return;
+
+      if (useEditingStore.getState().isAnyEditing()) {
+        // Defer, don't drop: the editing-store subscription effect below
+        // replays this once editing ends.
+        staleRef.current = true;
         return;
       }
-
-      const cacheKey = getCacheKey();
 
       // Optimistically update the SWR cache
       mutate(
@@ -117,7 +126,19 @@ export function useInboxSocket({ driveId, hasLoadedRef: externalRef }: UseInboxS
       socket.off('inbox:read_status_changed', handleInboxUpdate);
       socket.off('inbox:thread_updated', handleThreadUpdated);
     };
-  }, [socket, getCacheKey, mutate, hasLoadedRef]);
+  }, [socket, cacheKey, scope, mutate, hasLoadedRef]);
+
+  // Replay path: an update dropped while editing was active is never lost —
+  // once every editing session ends, revalidate the cache from the server.
+  useEffect(() => {
+    const unsubscribe = useEditingStore.subscribe((state) => {
+      if (staleRef.current && !state.isAnyEditing()) {
+        staleRef.current = false;
+        mutate(cacheKey);
+      }
+    });
+    return unsubscribe;
+  }, [cacheKey, mutate]);
 
   return {
     hasLoadedRef,
