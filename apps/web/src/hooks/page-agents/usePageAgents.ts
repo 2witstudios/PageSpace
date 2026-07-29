@@ -63,27 +63,33 @@ const fetcher = async (url: string) => {
  * @param driveId - Optional drive ID to filter agents to a single drive
  * @param options.includeSystemPrompt - Include full system prompts (default: false)
  * @param options.refreshInterval - Refresh interval in ms (default: 60000 = 1 minute)
+ * @param options.enabled - When false, passes a null SWR key so no request is
+ *   made at all (default: true). For a surface that will refuse to render the
+ *   list anyway — the Agents console behind its admin gate — fetching and then
+ *   discarding is just a request nobody reads.
  */
 export function usePageAgents(
   driveId?: string,
   options: {
     includeSystemPrompt?: boolean;
     refreshInterval?: number;
+    enabled?: boolean;
   } = {}
 ) {
-  const { includeSystemPrompt = false, refreshInterval = 60000 } = options;
+  const { includeSystemPrompt = false, refreshInterval = 60000, enabled = true } = options;
   const hasLoadedRef = useRef(false);
   const isAnyEditing = useEditingStore(state => state.isAnyEditing());
 
   // Build the API URL with query params
   const swrKey = useMemo(() => {
+    if (!enabled) return null;
     const params = new URLSearchParams();
     params.set('groupByDrive', 'true');
     if (includeSystemPrompt) {
       params.set('includeSystemPrompt', 'true');
     }
     return `/api/ai/page-agents/multi-drive?${params.toString()}`;
-  }, [includeSystemPrompt]);
+  }, [includeSystemPrompt, enabled]);
 
   // Reset hasLoadedRef when SWR key changes so the new key's initial fetch isn't paused
   useEffect(() => {

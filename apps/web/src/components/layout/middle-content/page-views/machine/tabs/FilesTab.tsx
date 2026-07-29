@@ -57,7 +57,8 @@ import MachineTree, { type MachineTreeNode } from '../workspace/MachineTree';
 import MachineFileTree from '../workspace/MachineFileTree';
 import FilesFilePane from './FilesFilePane';
 import TabSidebar from './TabSidebar';
-import { PaneNotice, SidebarLoading, SidebarNotice } from './tab-states';
+import { PaneNotice } from './tab-states';
+import { SidebarLoading, SidebarNotice } from '@/components/layout/left-sidebar/sidebar-states';
 import { type FilesScope, filesScopeKey, filesScopeSearchParams } from './files-scope';
 import {
   FILES_ABSENT_COPY,

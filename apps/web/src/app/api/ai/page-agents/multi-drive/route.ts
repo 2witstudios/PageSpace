@@ -178,7 +178,7 @@ export async function GET(request: Request) {
       },
       nextSteps: [
         totalAgentCount > 0 ? 'Use read_page to view full agent configurations' : 'No agents found - consider creating some',
-        'Use ask_agent to consult with specific agents',
+        'Use spawn_session (with the agent id as `agent`) to delegate to specific agents',
         'Use list_agents for drive-specific agent listings',
         `Accessible drives: ${scopedDrives.map(d => d.name).join(', ')}`
       ]

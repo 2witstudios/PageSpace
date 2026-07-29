@@ -25,6 +25,21 @@ describe('resolveSidebarVariant', () => {
     expect(resolveSidebarVariant('/dashboard/developments')).toBe('default');
   });
 
+  test('routes both Agents shapes to the Agents sidebar', () => {
+    expect(resolveSidebarVariant('/dashboard/agents')).toBe('agents');
+    expect(resolveSidebarVariant('/dashboard/drive-1/agents')).toBe('agents');
+  });
+
+  // Note the case Development needs and Agents does not: a trailing id segment.
+  // An Agents selection is `?agent=&c=`, which `usePathname` never carries — so
+  // the pathname this resolves from is byte-identical before and after every
+  // selection, which is the same fact as "selecting remounts nothing".
+
+  test('does not swallow a page whose id merely starts with the segment', () => {
+    expect(resolveSidebarVariant('/dashboard/drive-1/agents-archive')).toBe('default');
+    expect(resolveSidebarVariant('/dashboard/agentsx')).toBe('default');
+  });
+
   test('leaves the existing swaps alone', () => {
     expect(resolveSidebarVariant('/dashboard/dms')).toBe('dms');
     expect(resolveSidebarVariant('/dashboard/dms/thread-1')).toBe('dms');

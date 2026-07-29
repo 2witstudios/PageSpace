@@ -162,9 +162,6 @@ vi.mock('@/lib/ai/core/personalization-utils', () => ({
 vi.mock('@pagespace/lib/services/machines/machine-pane-binding', () => ({
   deriveMachinePaneBinding: vi.fn().mockResolvedValue(null),
 }));
-vi.mock('@/lib/ai/machine-pane/machine-pane-binding-runtime', () => ({
-  buildMachinePaneBindingDeps: vi.fn(() => ({})),
-}));
 
 vi.mock('ai', () => ({
   streamText: vi.fn(),

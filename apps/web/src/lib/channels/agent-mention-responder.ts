@@ -470,15 +470,19 @@ export async function triggerMentionedAgentResponses(
       return;
     }
 
-    const [{ agentCommunicationTools }, { channelTools }] = await Promise.all([
+    // executeAskAgent is the KEPT internal invoke-an-agent engine — the
+    // ask_agent TOOL surface died with the session-family rebuild (spawn/send
+    // with wait absorbed it), but a mention reply is exactly this inline,
+    // ephemeral consult.
+    const [{ executeAskAgent }, { channelTools }] = await Promise.all([
       import('@/lib/ai/tools/agent-communication-tools'),
       import('@/lib/ai/tools/channel-tools'),
     ]);
 
-    const askAgentExecute = agentCommunicationTools.ask_agent.execute;
+    const askAgentExecute = executeAskAgent;
     const sendChannelExecute = channelTools.send_channel_message.execute;
 
-    if (!askAgentExecute || !sendChannelExecute) {
+    if (!sendChannelExecute) {
       channelMentionLogger.warn('Agent mention responder tools are unavailable');
       return;
     }

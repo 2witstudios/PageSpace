@@ -187,6 +187,14 @@ export type AcquireSandboxRequest = Omit<AcquireMachineSandboxInput, 'deps'> & {
   branchSandbox?: { machineId: string; machineBranchId: string };
   /** Promoted-project routing key — see `SandboxActorContext.projectSandbox`. */
   projectSandbox?: { machineId: string; machineProjectId: string };
+  /**
+   * The conversation this run belongs to — which IS the agent-session id
+   * (contract.ts invariant 1). The session-anchored `acquireSandbox`
+   * implementation folds the Sprite key off it; the legacy machine arms ignore
+   * it. Threaded from the actor context so the injected implementation never
+   * has to reach around the request for its own address.
+   */
+  conversationId?: string;
 };
 
 export interface SandboxRunDeps {
@@ -352,6 +360,7 @@ function acquireRequest(ctx: SandboxActorContext): AcquireSandboxRequest {
     activeMachine: ctx.activeMachine,
     branchSandbox: ctx.branchSandbox,
     projectSandbox: ctx.projectSandbox,
+    conversationId: ctx.conversationId,
   };
 }
 
