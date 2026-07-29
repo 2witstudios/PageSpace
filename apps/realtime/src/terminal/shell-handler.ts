@@ -17,9 +17,12 @@ import { scrollbackLines, capTailBytes } from '@pagespace/lib/services/agent-ses
  * compound tuple or scope discriminant exists anywhere on this path. One
  * connect/input/resize/disconnect life-cycle, keyed by the shellId-derived
  * `sessionKey`, launching the shell's `AGENT_LAUNCH_SPECS` command (or a
- * per-shell `command` override) inside the session's sandbox at `$HOME` (see
- * `sprites-shell.ts`'s `openPtyShell` — a session's filesystem has no
- * scope-derived checkout to land in).
+ * per-shell `command` override) inside the session's sandbox at `SANDBOX_ROOT`
+ * (`/workspace`) — a session's filesystem has no scope-derived checkout to land
+ * in, so every shell starts at the same root. That root is also
+ * `SESSION_STORAGE_MEASURE_PATH`, so bytes a shell writes here ARE billed;
+ * this used to read `$HOME`, which combined with that module's "caches under
+ * $HOME go uncounted" to imply the opposite.
  *
  * Continuity across a realtime-process restart is by EXACT session id, never by
  * guesswork: a session's one Sprite hosts every shell in it, so "any tty
@@ -64,7 +67,7 @@ export type ShellSandboxResult =
       /** ≡ the conversation id of the owning session. */
       sessionId: string;
       sandboxId: string;
-      /** The working directory for a FRESH session — always the sandbox home (`$HOME`). */
+      /** The working directory for a FRESH session — always `SANDBOX_ROOT` (`/workspace`). */
       cwd: string;
       sprite: SpriteInstanceLike;
       /** The agentType's resolved launch command — the literal sentinel `'shell'` when unresolved to an actual shell binary yet (see `resolveShellCommand`). */
