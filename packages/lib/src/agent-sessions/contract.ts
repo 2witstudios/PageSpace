@@ -180,3 +180,86 @@ export const SHELL_BRIDGE_ROUTES = {
 } as const;
 
 export type ShellBridgeRoute = (typeof SHELL_BRIDGE_ROUTES)[keyof typeof SHELL_BRIDGE_ROUTES];
+
+/**
+ * The shell-bridge wire shapes — the request/response bodies that cross the
+ * signed HTTP hop between `apps/web`'s tool layer and `apps/realtime`.
+ *
+ * Here for the same reason the routes are: these were declared twice, once per
+ * app, and they drifted. The client sent `{shellId}` where the endpoint takes
+ * `{shellIds: []}` and expected a flat body where the endpoint answers per-id.
+ * Two independent declarations of one wire format are two things that can
+ * disagree while both type-check, and each side's suite mocks the other, so
+ * nothing fails until production. One declaration cannot disagree with itself.
+ */
+
+/**
+ * Opting IN to starting a never-run PTY.
+ *
+ * Both fields are required to start: `start` because starting a PTY reserves a
+ * concurrency slot and begins billing a payer — an effect no caller should get
+ * by accident — and `userId` because that start is authorized, metered and
+ * audited against a real person, exactly as a socket connect is. A caller that
+ * omits them gets the no-start answer.
+ */
+export interface ShellStartRequest {
+  start?: boolean;
+  userId?: string;
+}
+
+export interface ShellReadPayload extends ShellStartRequest {
+  /**
+   * A list because this endpoint also serves the multi-shell liveness sweep.
+   * `read_shell` always names exactly one — and that is load-bearing, not
+   * stylistic: the bridge only STARTS a never-run PTY for a single-addressed
+   * read, so naming one id is what keeps start-on-first-read working.
+   */
+  shellIds: string[];
+  /** Lines of scrollback tail; `0` asks for liveness only. */
+  limit?: number;
+}
+
+export interface ShellReadEntry {
+  shellId: string;
+  live: boolean;
+  /**
+   * Has this PTY ever emitted a byte? Reported separately from `output` because
+   * a single chunk bigger than the ring is pushed and trimmed straight back off
+   * — an empty tail from a loud session is possible, and must not read as
+   * silence.
+   */
+  hasOutput: boolean;
+  /** How many humans are watching right now. Zero does not mean not running. */
+  viewers: number;
+  output: string;
+  /** Why nothing is live, when the start refused with a stateable reason. */
+  reason?: string;
+  /**
+   * Did THIS read start the PTY? Present only when it did. The reader needs it:
+   * an empty tail from a shell that booted a moment ago is the boot, not the
+   * silence of a command that produced nothing.
+   */
+  started?: true;
+}
+
+export interface ShellReadResult {
+  success: boolean;
+  shells?: ShellReadEntry[];
+  error?: string;
+}
+
+export interface ShellSendPayload extends ShellStartRequest {
+  shellId: string;
+  input: string;
+}
+
+export interface ShellSendResult {
+  success: boolean;
+  live?: boolean;
+  delivered?: boolean;
+  /** Did THIS send start the PTY? Present only when it did. */
+  started?: true;
+  /** Why nothing is live, when the start refused with a stateable reason. */
+  reason?: string;
+  error?: string;
+}

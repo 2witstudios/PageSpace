@@ -36,6 +36,13 @@
  */
 
 import type { TerminalSession, TerminalSessionMap } from './terminal-session-map';
+import type {
+  ShellReadPayload,
+  ShellReadEntry,
+  ShellReadResult,
+  ShellSendPayload,
+  ShellSendResult,
+} from '@pagespace/lib/agent-sessions/contract';
 import { resumeBillingClock } from './shell-handler';
 import {
   MAX_SCROLLBACK_TAIL_BYTES,
@@ -114,49 +121,6 @@ export interface ShellIoDeps {
 }
 
 /**
- * The two fields a caller adds when it wants a never-started shell STARTED.
- *
- * Both are required together and neither is inferred. `start` is opt-in because
- * starting a PTY reserves a concurrency slot and begins billing a payer — an
- * effect no caller should get by accident — and `userId` because that start is
- * authorized, metered and audited against a real person, exactly as a socket
- * connect is. A caller that omits them gets the no-start answer.
- */
-interface ShellStartRequest {
-  start?: boolean;
-  userId?: string;
-}
-
-export interface ShellReadPayload extends ShellStartRequest {
-  shellIds: string[];
-  /** Lines of scrollback tail; `0` asks for liveness only. */
-  limit?: number;
-}
-
-export interface ShellReadEntry {
-  shellId: string;
-  live: boolean;
-  /**
-   * Has this PTY ever emitted a byte? Reported separately from `output` because
-   * a single chunk bigger than the ring is pushed and trimmed straight back off
-   * (see `TerminalSession.hasOutput`) — an empty tail from a loud session is
-   * possible, and must not read as silence.
-   */
-  hasOutput: boolean;
-  /** How many humans are watching right now. Zero does not mean not running. */
-  viewers: number;
-  output: string;
-  /** Why nothing is live, when the start refused with a stateable reason. */
-  reason?: string;
-  /**
-   * Did THIS read start the PTY? Present only when it did. The reader needs it:
-   * an empty tail from a shell that booted a moment ago is the boot, not the
-   * silence of a command that produced nothing.
-   */
-  started?: true;
-}
-
-/**
  * A headless start that refused, WITH a reason the caller can act on.
  *
  * `undefined` already meant "no PTY", but it conflated "the caller abandoned
@@ -169,27 +133,7 @@ export interface ShellStartRefusal {
   reason: string;
 }
 
-export interface ShellReadResult {
-  success: boolean;
-  shells?: ShellReadEntry[];
-  error?: string;
-}
 
-export interface ShellSendPayload extends ShellStartRequest {
-  shellId: string;
-  input: string;
-}
-
-export interface ShellSendResult {
-  success: boolean;
-  live?: boolean;
-  delivered?: boolean;
-  /** Did THIS send start the PTY? Present only when it did. */
-  started?: true;
-  /** Why nothing is live, when the start refused with a stateable reason. */
-  reason?: string;
-  error?: string;
-}
 
 /**
  * Resolve a shell to a live session, starting it if it has never run and the
@@ -497,3 +441,8 @@ export async function handleShellReadRequest(
 
   return { status: 200, body: { success: true, shells } };
 }
+
+// Re-exported: these are the shared wire shapes (see the contract module), kept
+// importable from here so call sites that think in terms of this bridge do not
+// need to know where the declaration lives.
+export type { ShellReadPayload, ShellReadEntry, ShellReadResult, ShellSendPayload, ShellSendResult };

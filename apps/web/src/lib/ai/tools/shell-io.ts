@@ -23,6 +23,13 @@
 
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-sessions/contract';
+import type {
+  ShellReadPayload,
+  ShellReadEntry,
+  ShellReadResult,
+  ShellSendPayload,
+  ShellSendResult,
+} from '@pagespace/lib/agent-sessions/contract';
 import { annotateToolOutput } from '@pagespace/lib/services/sandbox/injection-seam';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { scrollbackLines, tailOfLines } from '@pagespace/lib/services/agent-sessions/session-scrollback';
@@ -39,54 +46,20 @@ const REALTIME_TIMEOUT_MS = 5000;
  */
 const COLD_START_TIMEOUT_MS = 25_000;
 
-export interface RealtimeShellReadPayload {
-  /**
-   * A list because the realtime endpoint also serves the multi-shell liveness
-   * sweep. `read_shell` always names exactly one — and that matters beyond
-   * shape: the bridge only STARTS a never-run PTY when the read is
-   * single-addressed, so sending one id in a list is what keeps issue #2206's
-   * start-on-first-read working.
-   */
-  shellIds: string[];
-  limit: number;
-  /** Absent on liveness-only probes; present when this read may START a never-run PTY. */
-  start?: true;
-  userId?: string;
-}
-
-export interface RealtimeShellSendPayload {
-  shellId: string;
-  input: string;
-  start: true;
-  userId: string;
-}
-
-/** One entry of the endpoint's per-shell answer. */
-export interface RealtimeShellReadEntry {
-  shellId: string;
-  live: boolean;
-  hasOutput: boolean;
-  viewers: number;
-  output: string;
-  /** Present only when THIS call started the PTY. */
-  started?: true;
-  /** Why no PTY is live, when the start refused with a stateable reason. */
-  reason?: string;
-}
-
-export interface RealtimeShellReadResponse {
-  success: boolean;
-  shells?: RealtimeShellReadEntry[];
-}
-
-export interface RealtimeShellSendResponse {
-  success: boolean;
-  live?: boolean;
-  delivered?: boolean;
-  started?: true;
-  /** Why no PTY is live, when the start refused with a stateable reason. */
-  reason?: string;
-}
+/**
+ * The wire shapes are the contract module's, not this file's.
+ *
+ * They used to be re-declared here, and that is precisely how the client came
+ * to send `{shellId}` to an endpoint taking `{shellIds: []}` and to read a flat
+ * body from an endpoint answering per-id — two declarations of one format, each
+ * side's tests mocking the other, both suites green, the hop dead. Aliased
+ * rather than re-declared so the compiler now rejects the drift.
+ */
+export type RealtimeShellReadPayload = ShellReadPayload;
+export type RealtimeShellReadEntry = ShellReadEntry;
+export type RealtimeShellReadResponse = ShellReadResult;
+export type RealtimeShellSendPayload = ShellSendPayload;
+export type RealtimeShellSendResponse = ShellSendResult;
 
 /**
  * The signed HTTP hop, injected so the tool logic is unit-tested without a
@@ -248,7 +221,7 @@ export function createShellIo(transport: RealtimeShellIoTransport): {
  * non-answer. `payload.start` picks the deadline: a cold Sprite wake gets the
  * long one.
  */
-async function postSigned<T>(path: string, payload: { start?: true }): Promise<T | null> {
+async function postSigned<T>(path: string, payload: { start?: boolean }): Promise<T | null> {
   const realtimeUrl = process.env.INTERNAL_REALTIME_URL;
   if (!realtimeUrl) return null;
 
