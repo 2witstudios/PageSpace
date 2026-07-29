@@ -25,7 +25,6 @@ import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth
 import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-sessions/contract';
 import type {
   ShellReadPayload,
-  ShellReadEntry,
   ShellReadResult,
   ShellSendPayload,
   ShellSendResult,
@@ -56,7 +55,6 @@ const COLD_START_TIMEOUT_MS = 25_000;
  * rather than re-declared so the compiler now rejects the drift.
  */
 export type RealtimeShellReadPayload = ShellReadPayload;
-export type RealtimeShellReadEntry = ShellReadEntry;
 export type RealtimeShellReadResponse = ShellReadResult;
 export type RealtimeShellSendPayload = ShellSendPayload;
 export type RealtimeShellSendResponse = ShellSendResult;
