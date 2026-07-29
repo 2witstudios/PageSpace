@@ -193,6 +193,7 @@ import { workflowTools } from '../../tools/workflow-tools';
 import { triggerTools } from '../../tools/trigger-tools';
 import { modelTools } from '../../tools/model-tools';
 import { commandTools } from '../../tools/command-tools';
+import { skillTools } from '../../tools/skill-tools';
 import { formTools } from '../../tools/form-tools';
 import { imageGenerationTools } from '../../tools/image-generation-tools';
 
@@ -222,6 +223,7 @@ describe('ai-tools', () => {
         ...triggerTools,
         ...modelTools,
         ...commandTools,
+        ...skillTools,
         ...formTools,
         ...imageGenerationTools,
       });

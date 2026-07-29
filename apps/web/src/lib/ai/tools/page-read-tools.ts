@@ -18,6 +18,7 @@ import { toModelOutputForReadPage, buildVisualContentMetadata } from './read-pag
 import { ensureTaskListForPage, seedDefaultTaskStatusConfigs } from '@/services/api/task-sync-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { resolveOrThrowPageId } from './page-context-defaults';
+import { resolveDriveScope } from './drive-context-defaults';
 
 const pageReadLogger = loggers.ai.child({ module: 'page-read-tools' });
 
@@ -44,22 +45,25 @@ export const pageReadTools = {
     description: 'List pages at a location in a workspace. Defaults to direct children of the drive root (ls-style). Pass parentId to navigate into a folder. Set recursive: true to return the full subtree. Each result includes hasChildren so you know whether to drill in further. Pass include: "content" to batch each page\'s content into the response instead of calling read_page per page — capped at ' + MAX_CONTENT_INCLUDE_PAGES + ' pages per call.',
     inputSchema: z.object({
       driveSlug: z.string().optional().describe('The human-readable slug of the drive (for semantic understanding)'),
-      driveId: z.string().describe('The unique ID of the drive (used for operations)'),
+      driveId: z.string().optional().describe('The unique ID of the drive (used for operations). Omit to list the workspace currently in view (see LOCATION context).'),
       parentId: z.string().optional().describe('Page ID to list children of. Omit for drive root.'),
       recursive: z.boolean().optional().describe('Set true to return the full subtree instead of direct children only. Default: false.'),
       include: z.enum(['content']).optional().describe(`Set to "content" to batch each page's content into the response instead of calling read_page per page. Content over ${MAX_CONTENT_CHARS_PER_PAGE} characters is clipped (contentClipped: true) — resume with read_page's lineStart at contentClippedAfterLine + 1. CHANNEL/TASK_LIST/FILE pages get a short summary instead of content.`),
     }),
-    execute: async ({ driveSlug, driveId, parentId, recursive = false, include }, { experimental_context: context }) => {
+    execute: async ({ driveSlug, driveId: driveIdArg, parentId, recursive = false, include }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
       }
 
+      const { driveId, scopeSource } = resolveDriveScope(driveIdArg, context as ToolExecutionContext);
+
       const normalizedParentId = parentId ? parentId : undefined;
 
       try {
         if (!await canActorAccessDrive(context as ToolExecutionContext, driveId)) {
-          return { success: false, error: `You don't have access to the "${driveSlug}" workspace` };
+          // driveSlug is absent whenever driveId was defaulted from location.
+          return { success: false, error: `You don't have access to the "${driveSlug ?? driveId}" workspace` };
         }
         const visiblePages = await getActorAccessiblePagesInDrive(context as ToolExecutionContext, driveId);
 
@@ -204,6 +208,8 @@ export const pageReadTools = {
         return {
           success: true,
           driveSlug: driveLabel,
+          driveId,
+          scopeSource,
           location,
           breadcrumb,
           pages: resultPages,

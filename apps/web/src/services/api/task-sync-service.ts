@@ -1,7 +1,9 @@
 import { db } from '@pagespace/db/db'
-import { eq, inArray } from '@pagespace/db/operators'
+import { eq, and, asc, inArray, isNotNull } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
-import { taskLists, taskItems, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks'
+import { taskLists, taskItems, taskAssignees, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks'
+import { taskTriggers } from '@pagespace/db/schema/task-triggers'
+import { workflows } from '@pagespace/db/schema/workflows'
 import {
   TASK_LIST_TYPE,
   shouldHaveTaskItem,
@@ -86,28 +88,404 @@ export async function ensureTaskListForPage(
 }
 
 /**
+ * Upper bound on the status vocabulary scanned when remapping. Lists carry 4 defaults
+ * and a handful of custom statuses; the cap exists to satisfy the unbounded-findMany
+ * rule, and overshooting it could only cost a remap to a different valid slug.
+ */
+const STATUS_CONFIG_REMAP_LIMIT = 200
+
+/**
+ * Postgres caps a statement at 65535 bind parameters. The cascade binds one inArray per
+ * tree level, which is naturally bounded; a whole-subtree scrub is not, so it chunks.
+ */
+const SCRUB_CHUNK_SIZE = 1000
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
+  return out
+}
+
+/**
+ * Keep a PRESERVED task row's status inside its new list's vocabulary.
+ *
+ * `task_items.status` is a bare slug with no foreign key; its meaning comes from the
+ * owning list's `task_status_configs`, unique per (taskListId, slug). Every write path
+ * enforces that — POST/PATCH reject an unknown slug, and deleting a config demands a
+ * migrateToSlug — so a move is the only way to produce a task whose status its list
+ * does not define. Left alone, such a task falls into the board's first column
+ * regardless of meaning, renders its raw slug as a badge, drops out of status-filtered
+ * queries, and (when the slug was a done one) shows unticked while `completedAt` still
+ * counts it complete in the parent's progress.
+ *
+ * Only the genuinely broken case is repaired: a slug the destination does not define at
+ * all. `completedAt` is the intent signal for the replacement, so a finished task stays
+ * finished and an unfinished one stays actionable. A slug the list DOES define is left
+ * untouched — see the note at the short-circuit for why neither field may be rewritten.
+ */
+async function normalizeStatusForList(
+  tx: Tx,
+  params: { item: { id: string; status: string; completedAt: Date | null }; taskListId: string },
+): Promise<void> {
+  const { item, taskListId } = params
+
+  // Fast path: one indexed lookup on the (taskListId, slug) unique key.
+  //
+  // A slug match is not proof the status means the same thing — slugs come from
+  // slugify(name) and each list picks its own group, so "Review" can be `done` in one
+  // list and `in_progress` in another, leaving the row's group at odds with its own
+  // completedAt. That is knowingly tolerated; see below for why neither field may be
+  // rewritten to reconcile it.
+  const alreadyValid = await tx.query.taskStatusConfigs.findFirst({
+    where: and(
+      eq(taskStatusConfigs.taskListId, taskListId),
+      eq(taskStatusConfigs.slug, item.status),
+    ),
+  })
+  // A defined slug is left completely alone, even when its group disagrees with
+  // completedAt. Both available "repairs" are worse than the disagreement:
+  //   • rewriting `status` reverses a deliberate regroup — the owner who moved "Review"
+  //     out of the done group would find every such task flung back into Done;
+  //   • rewriting `completedAt` fabricates a completion time (bypassing the sub-task
+  //     guard that makes PATCH return 422, and permanently disabling the task's
+  //     due-date trigger) or destroys a real one that nothing else records.
+  // The disagreement is not new or move-specific either: PUT /tasks/statuses regroups a
+  // config in place and DELETE+migrateToSlug re-points tasks, both leaving it inside a
+  // single list. The product already tolerates it there, so a move must not pay for it
+  // with the user's data.
+  if (alreadyValid) return
+
+  const configs = await tx.query.taskStatusConfigs.findMany({
+    where: eq(taskStatusConfigs.taskListId, taskListId),
+    orderBy: [asc(taskStatusConfigs.position)],
+    limit: STATUS_CONFIG_REMAP_LIMIT,
+  })
+  // A list with no configs at all has no vocabulary to conform to.
+  if (configs.length === 0) return
+
+  // Never land on the wrong side of the done boundary. (The per-group deletion guard in
+  // the statuses route means a list with any configs keeps at least one of each group,
+  // so the final `?? configs[...]` arms are defence rather than live paths.)
+  const replacement = item.completedAt
+    ? (configs.find((config) => config.group === 'done') ?? configs[configs.length - 1])
+    : (configs.find((config) => config.group === 'todo')
+        ?? configs.find((config) => config.group !== 'done')
+        ?? configs[0])
+
+  await tx
+    .update(taskItems)
+    .set({ status: replacement.slug })
+    .where(eq(taskItems.id, item.id))
+}
+
+/**
+ * The slug a brand-new task should start in for THIS list. Defaults to 'pending' only
+ * when the list still defines it; a list whose owner deleted that status (permitted via
+ * migrateToSlug) gets its own first todo-group slug instead, so the seed can never be a
+ * status its own list does not define.
+ */
+async function resolveSeedStatus(
+  tx: Tx,
+  taskListId: string,
+  cache?: Map<string, string>,
+): Promise<string> {
+  const cached = cache?.get(taskListId)
+  if (cached !== undefined) return cached
+  const resolved = await resolveSeedStatusUncached(tx, taskListId)
+  cache?.set(taskListId, resolved)
+  return resolved
+}
+
+async function resolveSeedStatusUncached(tx: Tx, taskListId: string): Promise<string> {
+  const defaultSlug = DEFAULT_TASK_STATUSES[0].slug
+  const hasDefault = await tx.query.taskStatusConfigs.findFirst({
+    where: and(
+      eq(taskStatusConfigs.taskListId, taskListId),
+      eq(taskStatusConfigs.slug, defaultSlug),
+    ),
+  })
+  if (hasDefault) return defaultSlug
+
+  const configs = await tx.query.taskStatusConfigs.findMany({
+    where: eq(taskStatusConfigs.taskListId, taskListId),
+    orderBy: [asc(taskStatusConfigs.position)],
+    limit: STATUS_CONFIG_REMAP_LIMIT,
+  })
+  const seed = configs.find((config) => config.group === 'todo')
+    ?? configs.find((config) => config.group !== 'done')
+    ?? configs[0]
+  return seed?.slug ?? defaultSlug
+}
+
+/**
+ * Drop the associations on a task row that are scoped to the drive it just LEFT.
+ *
+ * A cross-drive move preserves the row — priority, dueDate, metadata and human
+ * assignees are all drive-independent — but three things are not, and the task write
+ * paths actively refuse to create them across a boundary:
+ *   • `assigneeAgentId` and `task_assignees.agentPageId` name agent pages in the old
+ *     drive; left in place, a drive-A agent's title renders to every drive-B viewer and
+ *     cannot be edited away, because a PATCH re-sending that agent id now 400s.
+ *   • `task_triggers` link the task to `workflows`, which carry their own NOT NULL
+ *     driveId; a drive-B member completing the task would otherwise fire a drive-A
+ *     agent run seeded with drive-B content.
+ *
+ * Only associations that genuinely stayed behind are dropped: an agent page that moved
+ * WITH the task (a project folder carrying both its task list and its agent) is still
+ * valid in the new drive and is left alone. Everything runs in the caller's
+ * transaction, so a failed move takes the scrub with it, and every id list is chunked
+ * because a whole subtree can exceed Postgres' bind-parameter cap.
+ */
+export async function scrubDriveScopedTaskAssociations(
+  tx: Tx,
+  params: { pageIds: string[]; targetDriveId: string },
+): Promise<void> {
+  const { pageIds, targetDriveId } = params
+  if (pageIds.length === 0) return
+
+  const taskItemIds: string[] = []
+  const agentPageIds = new Set<string>()
+  for (const batch of chunk(pageIds, SCRUB_CHUNK_SIZE)) {
+    const rows = await tx
+      .select({ id: taskItems.id, assigneeAgentId: taskItems.assigneeAgentId })
+      .from(taskItems)
+      .where(inArray(taskItems.pageId, batch))
+    for (const row of rows) {
+      taskItemIds.push(row.id)
+      if (row.assigneeAgentId) agentPageIds.add(row.assigneeAgentId)
+    }
+  }
+  if (taskItemIds.length === 0) return
+
+  for (const batch of chunk(taskItemIds, SCRUB_CHUNK_SIZE)) {
+    const rows = await tx
+      .select({ agentPageId: taskAssignees.agentPageId })
+      .from(taskAssignees)
+      .where(and(inArray(taskAssignees.taskId, batch), isNotNull(taskAssignees.agentPageId)))
+    for (const row of rows) if (row.agentPageId) agentPageIds.add(row.agentPageId)
+  }
+
+  // An agent that travelled WITH the task is not stale — moving a project folder that
+  // contains both a task list and the agent it assigns work to must not silently drop
+  // the assignment. Only agents left behind in the old drive are scrubbed.
+  const residency: DriveResidency = new Map()
+  const staleAgentIds = await resolveAgentsOutsideDrive(tx, [...agentPageIds], targetDriveId, residency)
+
+  // Trigger staleness is resolved SEPARATELY from assignment staleness. A trigger's
+  // agent comes from workflows.agentPageId, which PUT /api/tasks/:id/triggers sets
+  // without touching task_items.assigneeAgentId — a task can carry a trigger and no
+  // assignee at all, or a trigger naming a different agent than its assignee. Keying
+  // the sweep off the assignee set let exactly those workflows survive a move, still
+  // pointing at a source-drive agent, which is the leak this whole function exists to
+  // stop. Workflows whose agent came along are repointed at the new drive instead of
+  // being deleted, since their driveId is stamped once at creation and never rewritten.
+  await reconcileTaskTriggerWorkflows(tx, taskItemIds, targetDriveId, residency)
+
+  if (staleAgentIds.length === 0) return
+
+  for (const batch of chunk(taskItemIds, SCRUB_CHUNK_SIZE)) {
+    await tx
+      .delete(taskAssignees)
+      .where(and(inArray(taskAssignees.taskId, batch), inArray(taskAssignees.agentPageId, staleAgentIds)))
+
+    await tx
+      .update(taskItems)
+      .set({ assigneeAgentId: null })
+      .where(and(inArray(taskItems.id, batch), inArray(taskItems.assigneeAgentId, staleAgentIds)))
+  }
+}
+
+/**
+ * Delete the workflows backing these tasks' triggers, by explicit id.
+ *
+ * Order is the whole point: `task_triggers.taskItemId` cascades from `task_items`, so
+ * anything that removes the task (or its triggers) first leaves the workflows behind,
+ * unreachable from any task and never cleaned up. `disableTaskTriggers` documents the
+ * same hazard for the hard-delete paths; this variant runs inside the caller's
+ * transaction so a failed move rolls the deletion back with it.
+ *
+ * A task-trigger workflow is created 1:1 with its trigger and never shared (the
+ * (taskItemId, triggerType) unique constraint enforces it), so deleting by id cannot
+ * affect another task.
+ */
+async function deleteTaskTriggerWorkflows(tx: Tx, taskItemIds: string[]): Promise<void> {
+  for (const wfBatch of chunk(await collectTriggerWorkflowIds(tx, taskItemIds), SCRUB_CHUNK_SIZE)) {
+    await tx.delete(workflows).where(inArray(workflows.id, wfBatch))
+  }
+}
+
+/** The workflow ids backing these tasks' triggers. */
+async function collectTriggerWorkflowIds(tx: Tx, taskItemIds: string[]): Promise<string[]> {
+  const workflowIds: string[] = []
+  for (const batch of chunk(taskItemIds, SCRUB_CHUNK_SIZE)) {
+    const rows = await tx
+      .select({ workflowId: taskTriggers.workflowId })
+      .from(taskTriggers)
+      .where(inArray(taskTriggers.taskItemId, batch))
+    for (const row of rows) workflowIds.push(row.workflowId)
+  }
+  return workflowIds
+}
+
+/**
+ * Bring these tasks' trigger workflows into line with the drive they now live in.
+ *
+ * A trigger's agent is `workflows.agentPageId`, set by the triggers route independently
+ * of any task assignee, so its staleness must be resolved on its own terms. A workflow
+ * whose agent stayed behind is deleted; one whose agent travelled along is still valid
+ * and is instead REPOINTED at the new drive — `workflows.driveId` is stamped once at
+ * creation and never rewritten, so leaving it would have the workflow execute against
+ * the old drive, filtering its own context pages out by driveId and telling the agent to
+ * create work back in the drive it left.
+ */
+async function reconcileTaskTriggerWorkflows(
+  tx: Tx,
+  taskItemIds: string[],
+  targetDriveId: string,
+  residency: DriveResidency = new Map(),
+): Promise<void> {
+  const byAgent = new Map<string, string[]>()
+  const instructionPageByWorkflow = new Map<string, string>()
+  for (const batch of chunk(taskItemIds, SCRUB_CHUNK_SIZE)) {
+    const rows = await tx
+      .select({
+        workflowId: taskTriggers.workflowId,
+        agentPageId: workflows.agentPageId,
+        instructionPageId: workflows.instructionPageId,
+      })
+      .from(taskTriggers)
+      .innerJoin(workflows, eq(workflows.id, taskTriggers.workflowId))
+      .where(inArray(taskTriggers.taskItemId, batch))
+    for (const row of rows) {
+      const list = byAgent.get(row.agentPageId) ?? []
+      list.push(row.workflowId)
+      byAgent.set(row.agentPageId, list)
+      if (row.instructionPageId) instructionPageByWorkflow.set(row.workflowId, row.instructionPageId)
+    }
+  }
+  if (byAgent.size === 0) return
+
+  const staleTriggerAgents = new Set(
+    await resolveAgentsOutsideDrive(tx, [...byAgent.keys()], targetDriveId, residency),
+  )
+
+  const doomed: string[] = []
+  const surviving: string[] = []
+  for (const [agentPageId, workflowIds] of byAgent) {
+    ;(staleTriggerAgents.has(agentPageId) ? doomed : surviving).push(...workflowIds)
+  }
+
+  for (const batch of chunk(doomed, SCRUB_CHUNK_SIZE)) {
+    await tx.delete(workflows).where(inArray(workflows.id, batch))
+  }
+  for (const batch of chunk(surviving, SCRUB_CHUNK_SIZE)) {
+    await tx.update(workflows).set({ driveId: targetDriveId }).where(inArray(workflows.id, batch))
+  }
+
+  // contextPageIds need no repair: executeWorkflow re-filters them by the run's driveId,
+  // so repointing above already turns a left-behind page into a dropped one.
+  // instructionPageId gets no such backstop — loadInstructionPage gates only on the
+  // workflow CREATOR's membership, and that creator is a source-drive user, so a runbook
+  // left behind would keep being read and its content persisted into a destination-drive
+  // agent page for every viewer there. Cleared when its page did not travel.
+  const survivingWithInstruction = surviving.filter((id) => instructionPageByWorkflow.has(id))
+  if (survivingWithInstruction.length === 0) return
+
+  const instructionPageIds = [
+    ...new Set(survivingWithInstruction.map((id) => instructionPageByWorkflow.get(id)!)),
+  ]
+  const strandedInstructionPages = new Set(
+    await resolvePagesOutsideDrive(tx, instructionPageIds, targetDriveId, residency),
+  )
+  const workflowsToClear = survivingWithInstruction.filter((id) =>
+    strandedInstructionPages.has(instructionPageByWorkflow.get(id)!),
+  )
+  for (const batch of chunk(workflowsToClear, SCRUB_CHUNK_SIZE)) {
+    await tx.update(workflows).set({ instructionPageId: null }).where(inArray(workflows.id, batch))
+  }
+}
+
+/** Same, addressed by page rather than task-item id (the remove branch has no id yet). */
+async function deleteTaskTriggerWorkflowsForPages(tx: Tx, pageIds: string[]): Promise<void> {
+  const rows = await tx
+    .select({ id: taskItems.id })
+    .from(taskItems)
+    .where(inArray(taskItems.pageId, pageIds))
+  if (rows.length === 0) return
+  await deleteTaskTriggerWorkflows(tx, rows.map((row) => row.id))
+}
+
+/**
+ * pageId -> "did this page end up in the target drive". Shared across one scrub so the
+ * assignee agents and the trigger agents — usually the same pages — are looked up once.
+ */
+type DriveResidency = Map<string, boolean>
+
+/** Memo key. Includes the drive so one memo can never answer for a different one. */
+const residencyKey = (driveId: string, pageId: string) => `${driveId}:${pageId}`
+
+/** The subset of `pageIds` that do NOT live in `driveId` — i.e. did not travel. */
+async function resolvePagesOutsideDrive(
+  tx: Tx,
+  pageIds: string[],
+  driveId: string,
+  residency: DriveResidency = new Map(),
+): Promise<string[]> {
+  if (pageIds.length === 0) return []
+  const unresolved = [...new Set(pageIds.filter((id) => !residency.has(residencyKey(driveId, id))))]
+  for (const batch of chunk(unresolved, SCRUB_CHUNK_SIZE)) {
+    const rows = await tx
+      .select({ id: pages.id })
+      .from(pages)
+      .where(and(inArray(pages.id, batch), eq(pages.driveId, driveId)))
+    const found = new Set(rows.map((row) => row.id))
+    // Every id in the batch is recorded, including the ones the query did not return —
+    // that is the `false` case, and it is what keeps the lookup below total.
+    for (const id of batch) residency.set(residencyKey(driveId, id), found.has(id))
+  }
+  return pageIds.filter((id) => !residency.get(residencyKey(driveId, id)))
+}
+
+/** Agent pages that stayed behind. Same question, named for its caller. */
+const resolveAgentsOutsideDrive = resolvePagesOutsideDrive
+
+/**
  * Create the `task_items` row for a page under a known TASK_LIST parent.
  * Idempotent — does nothing if the row already exists. Ensures the parent's
- * `task_lists` row and default status configs exist first.
+ * `task_lists` row and default status configs exist first, and brings a
+ * pre-existing row's status into the destination list's vocabulary.
  */
 async function addTaskItemUnderParent(
   tx: Tx,
-  params: { pageId: string; parentId: string; userId: string },
+  params: {
+    pageId: string;
+    parentId: string;
+    userId: string;
+    /** Shared across a backfill loop: the parent is fixed, so the seed is too. */
+    seedStatusCache?: Map<string, string>;
+  },
 ): Promise<void> {
-  const { pageId, parentId, userId } = params
+  const { pageId, parentId, userId, seedStatusCache } = params
 
-  await ensureTaskListForPage(tx, { pageId: parentId, title: 'Task List', userId })
+  const taskList = await ensureTaskListForPage(tx, { pageId: parentId, title: 'Task List', userId })
 
   const existing = await tx.query.taskItems.findFirst({
     where: eq(taskItems.pageId, pageId),
   })
-  if (existing) return
+  if (existing) {
+    await normalizeStatusForList(tx, { item: existing, taskListId: taskList.id })
+    return
+  }
 
   // ON CONFLICT DO NOTHING guards the self-heal race: concurrent GETs on a legacy list
   // can both pass the findFirst check above, and task_items.pageId is unique — without
   // this a second insert would 500 the read. The findFirst stays as a cheap fast path.
   await tx.insert(taskItems).values(
-    buildTaskItemInsert({ pageId, userId }),
+    buildTaskItemInsert({
+      pageId,
+      userId,
+      status: await resolveSeedStatus(tx, taskList.id, seedStatusCache),
+    }),
   ).onConflictDoNothing({ target: taskItems.pageId })
 }
 
@@ -162,6 +540,10 @@ export async function syncTaskItemOnMove(
   })
 
   if (action.shouldRemove) {
+    // Delete the trigger workflows BEFORE the row: task_triggers.taskItemId cascades
+    // from task_items, so dropping the row first wipes the triggers and strands their
+    // workflows rows — unreachable from any task, and never cleaned up.
+    await deleteTaskTriggerWorkflowsForPages(tx, [movedPageId])
     await tx.delete(taskItems).where(eq(taskItems.pageId, movedPageId))
   }
 
@@ -197,8 +579,11 @@ export async function backfillMissingTaskItems(
   if (missing.length === 0) return
 
   await database.transaction(async (tx) => {
+    // parentId is fixed for the whole loop, so its seed status is resolved once
+    // rather than re-queried for every missing row on this hot read path.
+    const seedStatusCache = new Map<string, string>()
     for (const pageId of missing) {
-      await addTaskItemUnderParent(tx, { pageId, parentId, userId })
+      await addTaskItemUnderParent(tx, { pageId, parentId, userId, seedStatusCache })
     }
   })
 }

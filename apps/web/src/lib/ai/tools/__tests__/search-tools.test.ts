@@ -96,6 +96,61 @@ describe('search-tools', () => {
     });
   });
 
+  // driveId was required on both search tools, so a model without one in its
+  // arguments guessed a workspace — and a search in the wrong workspace returns
+  // zero hits, which reads as "the content doesn't exist".
+  describe('resolving an omitted driveId', () => {
+    const contextInDrive = (driveId: string) => ({
+      toolCallId: '1',
+      messages: [],
+      experimental_context: {
+        userId: 'user-123',
+        locationContext: { currentDrive: { id: driveId, name: 'Work', slug: 'work' } },
+      } as ToolExecutionContext,
+    });
+
+    it('regex_search scopes to the workspace in view', async () => {
+      mockCanActorAccessDrive.mockResolvedValue(false);
+
+      // Access is checked against the RESOLVED drive — defaulting must not widen reach.
+      await expect(
+        searchTools.regex_search.execute!(
+          { pattern: 'TODO.*', searchIn: 'both', maxResults: 10, contentTypes: ['documents'] },
+          contextInDrive('drive-loc')
+        )
+      ).rejects.toThrow("You don't have access to this drive");
+      expect(mockCanActorAccessDrive).toHaveBeenCalledWith(expect.anything(), 'drive-loc');
+    });
+
+    it('glob_search scopes to the workspace in view', async () => {
+      mockCanActorAccessDrive.mockResolvedValue(false);
+
+      await expect(
+        searchTools.glob_search.execute!(
+          { pattern: '**/README*', maxResults: 10 },
+          contextInDrive('drive-loc')
+        )
+      ).rejects.toThrow("You don't have access to this drive");
+      expect(mockCanActorAccessDrive).toHaveBeenCalledWith(expect.anything(), 'drive-loc');
+    });
+
+    it('asks rather than guessing when no workspace is in view', async () => {
+      await expect(
+        searchTools.regex_search.execute!(
+          { pattern: 'TODO.*', searchIn: 'both', maxResults: 10, contentTypes: ['documents'] },
+          createAuthContext()
+        )
+      ).rejects.toThrow('no workspace is currently in view');
+
+      await expect(
+        searchTools.glob_search.execute!(
+          { pattern: '**/README*', maxResults: 10 },
+          createAuthContext()
+        )
+      ).rejects.toThrow('no workspace is currently in view');
+    });
+  });
+
   describe('glob_search', () => {
     it('has correct tool definition', () => {
       expect(typeof searchTools.glob_search).toBe('object');

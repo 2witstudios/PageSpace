@@ -44,11 +44,16 @@ export interface CreateImageFilePageInput {
   /** Optional prompt to stamp into fileMetadata for provenance. */
   prompt?: string;
   /**
-   * Optional target location instead of the Home-drive gallery. SECURITY: the caller
-   * MUST verify the user can edit `targetDriveId`/`targetParentId` before passing them
-   * (this helper does not check drive/parent edit permissions). The generate_image tool
-   * deliberately does NOT expose these to the model — it always uses the owner's Home
-   * gallery — so untrusted, model-supplied drive ids can't reach here.
+   * Optional target location instead of the Home-drive gallery.
+   *
+   * `targetDriveId` alone files the image into THAT drive's "Generated Images"
+   * folder (find-or-create at its root); pass `targetParentId` as well to place it
+   * under an exact page. Omit both for the Home-drive gallery.
+   *
+   * SECURITY: this helper does NOT check drive/parent edit permissions. The caller
+   * MUST verify the actor can edit the target first — `generate_image` does expose
+   * these to the model and runs `canActorEditPage` on `targetParentId ?? targetDriveId`
+   * before calling here. Any new caller must do the same.
    */
   targetDriveId?: string;
   targetParentId?: string;
@@ -63,7 +68,7 @@ export interface FilePageWrite {
 export interface CreateImageFilePageDeps {
   hash?: (buffer: Buffer) => string;
   putObject?: (key: string, body: Buffer, contentType: string) => Promise<void>;
-  resolveGalleryParent?: (userId: string) => Promise<{ driveId: string; parentId: string }>;
+  resolveGalleryParent?: (userId: string, driveId?: string) => Promise<{ driveId: string; parentId: string }>;
   getNextPosition?: (driveId: string, parentId: string | null) => Promise<number>;
   /** Returns whether the content-addressed `files` row was newly inserted (charge once). */
   persist?: (write: FilePageWrite) => Promise<{ fileWasInserted: boolean }>;
@@ -151,13 +156,24 @@ export function buildImageFilePageValues(params: {
   };
 }
 
-/** Shell: find-or-create the "Generated Images" folder at the user's Home-drive root. */
-async function defaultResolveGalleryParent(userId: string): Promise<{ driveId: string; parentId: string }> {
-  const home = await getHomeDrive(userId);
-  if (!home) {
-    throw new Error(`Home drive not found for user ${userId}`);
+/**
+ * Shell: find-or-create the "Generated Images" folder at the root of `targetDriveId`,
+ * or of the user's Home drive when no drive is named. The gallery semantics travel
+ * with the drive so an image filed into a work drive lands somewhere just as tidy as
+ * one filed into Home.
+ */
+async function defaultResolveGalleryParent(
+  userId: string,
+  targetDriveId?: string,
+): Promise<{ driveId: string; parentId: string }> {
+  let driveId = targetDriveId;
+  if (!driveId) {
+    const home = await getHomeDrive(userId);
+    if (!home) {
+      throw new Error(`Home drive not found for user ${userId}`);
+    }
+    driveId = home.id;
   }
-  const driveId = home.id;
 
   const existing = await db.query.pages.findFirst({
     where: and(
@@ -212,8 +228,9 @@ async function defaultPersist(write: FilePageWrite): Promise<{ fileWasInserted: 
 
 /**
  * Persist `buffer` as a FILE page. Defaults to the user's Home-drive "Generated Images"
- * gallery; `targetDriveId`/`targetParentId` file it elsewhere (caller MUST have verified
- * edit permission — see the input type). Enforces the storage quota before writing and
+ * gallery; `targetDriveId` files it into that drive's gallery and `targetParentId` under
+ * an exact page (caller MUST have verified edit permission — see the input type).
+ * Enforces the storage quota before writing and
  * charges storage on first store. Returns the new page id (viewable at
  * `/api/files/${pageId}/view`).
  */
@@ -233,13 +250,21 @@ export async function createImageFilePage(
   const hash = (deps.hash ?? sha256Hex)(input.buffer);
   await (deps.putObject ?? putObject)(buildS3Key(hash), input.buffer, input.mimeType);
 
+  // Branch on the PARENT, not the drive: a named parent is an exact placement the
+  // caller already authorized, while a drive alone means "that drive's gallery".
   let driveId: string;
   let parentId: string | null;
-  if (input.targetDriveId) {
+  if (input.targetParentId) {
+    if (!input.targetDriveId) {
+      throw new Error('targetDriveId is required when targetParentId is provided');
+    }
     driveId = input.targetDriveId;
-    parentId = input.targetParentId ?? null;
+    parentId = input.targetParentId;
   } else {
-    const gallery = await (deps.resolveGalleryParent ?? defaultResolveGalleryParent)(input.userId);
+    const gallery = await (deps.resolveGalleryParent ?? defaultResolveGalleryParent)(
+      input.userId,
+      input.targetDriveId,
+    );
     driveId = gallery.driveId;
     parentId = gallery.parentId;
   }

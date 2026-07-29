@@ -9,6 +9,8 @@
 // Do NOT list tool names here — the model already receives a flat tool list and can call tool_search.
 // Add a bullet only when the model predictably gets it wrong without explicit guidance.
 
+import { BUILTIN_SKILLS, isSkillEligible } from '@pagespace/lib/commands/command-core';
+
 // ---------------------------------------------------------------------------
 // Shared sections — identical in both page-context and global-assistant flows
 // ---------------------------------------------------------------------------
@@ -19,22 +21,87 @@ const WORKSPACE_RULES = `WORKSPACE RULES:
 • Provide both driveId and driveSlug for operations.
 • Before creating a page, list_pages its destination to check for existing duplicates`;
 
-const PAGE_TYPES = `PAGE TYPES:
-• FOLDER: Container with list/icon view of children. Accepts file uploads via drag-drop.
-• DOCUMENT: Rich text stored as HTML. Use insert_content to add lines before/after a heading or landmark, or replace_lines for precise line-range edits.
-• CODE: Plain-text source code with syntax highlighting. Use replace_lines for edits (raw text, no HTML processing).
-• SHEET: Spreadsheet stored as TOML. Use edit_sheet_cells for cell-level edits.
-• CANVAS: Raw HTML/CSS rendered in a sandboxed iframe. Author HTML renders into a real <body> — write standard HTML/CSS/JS. For uploaded FILE pages embedded in canvas HTML, use /dashboard/{driveId}/{filePageId}/view (not /api/files) so the same link works in unpublished iframes and can be rewritten for published canvases. For a signup/waitlist/contact form, call provision_form_target first — a hand-written <form> instead needs a human to finish wiring it to a Sheet in the page's Forms tab, since there's no tool for that step.
-• TASK_LIST: Task manager where each task auto-creates a linked child TASK_LIST page for its description and sub-tasks.
-• AI_CHAT: Custom AI agent with configurable system prompt and tool permissions.
-• CHANNEL: Team discussion thread with real-time messaging.
-• FILE: Uploaded file. Text-based files are readable via read_page.`;
+/**
+ * PAGE TYPES section. The DOCUMENT/SHEET/CANVAS/TASK_LIST bullets each have
+ * a full variant and a slim skill-pointer variant — the deep conventions
+ * live in the on-demand skill bodies (apps/web/src/lib/ai/skills/bodies),
+ * loaded only when the work actually touches that domain.
+ *
+ * A bullet slims ONLY when its specific skill is eligible for this agent
+ * (load_skill present AND the skill's requiredTools intersect the agent's
+ * tools — the same isSkillEligible the catalog uses). Anything else — no
+ * load_skill, a stripped allowlist, read-only mode, or the undefined
+ * include-all sentinel used by the admin prompt viewer — keeps that
+ * bullet's FULL text, so the stable prompt never points at a skill the
+ * catalog doesn't advertise.
+ *
+ * Slimming rule: a bullet may only shrink here if the corresponding skill
+ * body covers it verbatim-or-better.
+ */
+const PAGE_TYPE_BULLETS: ReadonlyArray<{
+  full: string;
+  slim?: string;
+  skill?: string;
+}> = [
+  { full: '• FOLDER: Container with list/icon view of children. Accepts file uploads via drag-drop.' },
+  {
+    full: '• DOCUMENT: Rich text stored as HTML. Use insert_content to add lines before/after a heading or landmark, or replace_lines for precise line-range edits.',
+    slim: '• DOCUMENT: Rich text stored as HTML. Load the writing-documents skill before non-trivial writing or line-range editing.',
+    skill: 'writing-documents',
+  },
+  { full: '• CODE: Plain-text source code with syntax highlighting. Use replace_lines for edits (raw text, no HTML processing).' },
+  {
+    full: '• SHEET: Spreadsheet stored as TOML. Use edit_sheet_cells for cell-level edits.',
+    slim: '• SHEET: Spreadsheet. Use edit_sheet_cells for cell edits; load the spreadsheets skill before formulas or new sheets.',
+    skill: 'spreadsheets',
+  },
+  {
+    full: '• CANVAS: Raw HTML/CSS rendered in a sandboxed iframe. Author HTML renders into a real <body> — write standard HTML/CSS/JS. For uploaded FILE pages embedded in canvas HTML, use /dashboard/{driveId}/{filePageId}/view (not /api/files) so the same link works in unpublished iframes and can be rewritten for published canvases. For a signup/waitlist/contact form, call provision_form_target first — a hand-written <form> instead needs a human to finish wiring it to a Sheet in the page\'s Forms tab, since there\'s no tool for that step.',
+    slim: '• CANVAS: Raw HTML/CSS/JS rendered in a sandboxed iframe. Load the canvas-websites skill before building or editing websites, embeds, or forms.',
+    skill: 'canvas-websites',
+  },
+  {
+    full: '• TASK_LIST: Task manager where each task auto-creates a linked child TASK_LIST page for its description and sub-tasks.',
+    slim: '• TASK_LIST: Task manager. Load the task-management skill before task workflows.',
+    skill: 'task-management',
+  },
+  { full: '• AI_CHAT: Custom AI agent with configurable system prompt and tool permissions.' },
+  { full: '• CHANNEL: Team discussion thread with real-time messaging.' },
+  { full: '• FILE: Uploaded file. Text-based files are readable via read_page.' },
+];
 
-const TASK_MANAGEMENT = `TASK MANAGEMENT:
+/** Whether a builtin skill's pointer is actionable for this tool set. */
+function skillPointerUsable(availableTools: string[] | undefined, trigger: string): boolean {
+  if (availableTools === undefined || !availableTools.includes('load_skill')) return false;
+  const definition = BUILTIN_SKILLS.find((skill) => skill.trigger === trigger);
+  return definition !== undefined && isSkillEligible(definition, availableTools);
+}
+
+function buildPageTypes(availableTools?: string[]): string {
+  const lines = PAGE_TYPE_BULLETS.map((bullet) =>
+    bullet.slim && bullet.skill && skillPointerUsable(availableTools, bullet.skill)
+      ? bullet.slim
+      : bullet.full
+  );
+  return `PAGE TYPES:\n${lines.join('\n')}`;
+}
+
+const TASK_MANAGEMENT_FULL = `TASK MANAGEMENT:
 • Read the task list with read_page before any mutations — inspect existing tasks, statuses, structure
 • Tasks nest to any depth; a parent can't complete while direct subtasks remain open
 • Use existing status slugs; only call create_task_status when no existing status fits
 • For recurring task workflows, propose a trigger instead of asking the user to come back and ask again`;
+
+const TASK_MANAGEMENT_WITH_SKILLS = `TASK MANAGEMENT:
+• Read the task list with read_page before any mutations — inspect existing tasks, statuses, structure
+• Tasks nest to any depth; a parent can't complete while direct subtasks remain open
+• Load the task-management skill for statuses, assignees, triggers, and completion semantics`;
+
+function buildTaskManagement(availableTools?: string[]): string {
+  return skillPointerUsable(availableTools, 'task-management')
+    ? TASK_MANAGEMENT_WITH_SKILLS
+    : TASK_MANAGEMENT_FULL;
+}
 
 const AGENTS = `AGENTS:
 • Discover available agents first — each has its own system prompt, tools, and expertise; list_agents reveals what's configured
@@ -113,8 +180,8 @@ export function buildInlineInstructions(availableTools?: string[]): string {
 
   const sections = [
     WORKSPACE_RULES,
-    PAGE_TYPES,
-    includeTaskManagement ? TASK_MANAGEMENT : null,
+    buildPageTypes(availableTools),
+    includeTaskManagement ? buildTaskManagement(availableTools) : null,
     includeAgents ? AGENTS : null,
     includeAutomation ? AUTOMATION : null,
     includeSearch ? SEARCH : null,
@@ -129,14 +196,18 @@ export function buildInlineInstructions(availableTools?: string[]): string {
 /**
  * Build inline instructions for the Global Assistant. Deliberately takes no
  * location context — see buildInlineInstructions above for why.
+ *
+ * Pass `availableTools` (the route's filtered tool names) so the page-type
+ * and task sections slim to skill pointers when load_skill is present;
+ * omitting it (admin prompt viewer) renders the full fallback text.
  */
-export function buildGlobalAssistantInstructions(): string {
+export function buildGlobalAssistantInstructions(availableTools?: string[]): string {
   return `
 ${WORKSPACE_RULES}
 
-${PAGE_TYPES}
+${buildPageTypes(availableTools)}
 
-${TASK_MANAGEMENT}
+${buildTaskManagement(availableTools)}
 
 ${AGENTS}
 

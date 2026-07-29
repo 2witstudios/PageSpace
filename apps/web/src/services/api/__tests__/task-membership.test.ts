@@ -48,9 +48,22 @@ describe('resolveTaskItemSyncAction', () => {
     ).toEqual({ shouldRemove: false, shouldAdd: false });
   });
 
-  it('removes and adds when moving between two TASK_LIST parents', () => {
-    expect(resolveTaskItemSyncAction(base)).toEqual({ shouldRemove: true, shouldAdd: true });
+  // Previously asserted { shouldRemove: true, shouldAdd: true }. That expectation
+  // encoded silent data loss: the remove cascades task_assignees away and the
+  // re-add inserts bare defaults, so dragging a task between two lists wiped its
+  // status, priority, due date, metadata and assignees. The row is keyed by pageId
+  // and carries no list pointer, so it was valid under the new parent all along.
+  it('preserves the existing row when moving between two TASK_LIST parents', () => {
+    expect(resolveTaskItemSyncAction(base)).toEqual({ shouldRemove: false, shouldAdd: true });
   });
+
+  // shouldAdd stays true on that path so the destination still gets its task_lists
+  // row and default status configs seeded; addTaskItemUnderParent returns early when
+  // a row already exists, so nothing is overwritten.
+  it('still signals add on a list-to-list move, so the destination list is seeded', () => {
+    expect(resolveTaskItemSyncAction(base).shouldAdd).toBe(true);
+  });
+
 
   it('only adds when moving from a non-TASK_LIST parent into a TASK_LIST parent', () => {
     expect(

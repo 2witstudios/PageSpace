@@ -78,6 +78,8 @@ import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-outp
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName, sanitizeToolNamesForProvider } from '@/lib/ai/core/mcp-tool-converter';
 import { getUserPersonalization } from '@/lib/ai/core/personalization-utils';
 import { applyToolExposureMode, ALWAYS_UPFRONT_TOOLS } from '@/lib/ai/tools/tool-exposure';
+import { buildBuiltinSkillCatalog, listEligibleSkills } from '@/lib/ai/core/skill-catalog';
+import { loadUserCommandCatalog } from '@/lib/commands/command-catalog-loader';
 import {
   buildVolatileTurnContext,
   appendTurnContextToLastUserMessage,
@@ -110,7 +112,8 @@ import {
 } from '@/lib/ai/core/stream-abort-registry';
 import { runAgentWithRetry, AGENT_MAX_STEPS, isRunAborted, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
 import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
-import { locationContextToPageContext } from '@/lib/ai/shared/buildPageContext';
+import { locationContextToPageContext, pageContextToLocationContext } from '@/lib/ai/shared/buildPageContext';
+import type { LocationContext } from '@/lib/ai/shared/chat-types';
 import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
@@ -306,8 +309,8 @@ export async function POST(request: Request) {
     // the legacy client-computed pageContext only for old clients that never sent a
     // contextRef at all. Deferred until after the required-field checks above so an
     // invalid request (no messages/chatId) fails fast without an extra DB round-trip.
-    const pageContext = contextRef
-      ? locationContextToPageContext(await resolveRequestContext(authResult, contextRef, (denied) => {
+    const resolvedLocation = contextRef
+      ? await resolveRequestContext(authResult, contextRef, (denied) => {
           auditRequest(request, {
             eventType: 'authz.access.denied',
             userId,
@@ -316,8 +319,20 @@ export async function POST(request: Request) {
             details: { reason: 'context_ref_denied', method: 'POST', chatId },
             riskScore: 0.3,
           });
-        }))
+        })
+      : null;
+    const pageContext = contextRef
+      ? locationContextToPageContext(resolvedLocation)
       : legacyPageContext;
+
+    // ONE normalized location for this turn, feeding both the model prompt and
+    // the tool context. PageContext can't represent a drive-level location (it
+    // requires a page), so deriving the prompt from it alone left the model told
+    // "operating from the dashboard" on /dashboard/<drive>/<section> while tools
+    // defaulted `driveId` to that very drive.
+    const turnLocation: LocationContext | null = contextRef
+      ? resolvedLocation
+      : pageContextToLocationContext(legacyPageContext);
 
     const mcpScopeError = await checkMCPPageScope(authResult, chatId);
     if (mcpScopeError) {
@@ -936,7 +951,19 @@ export async function POST(request: Request) {
     // hiding their names from a top-level key scan. Integration-tool suppression
     // needs the pre-exposure set to correctly detect an active sandbox toolkit.
     const preExposureTools = filteredTools;
-    const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
+    // Capability catalog: built-in skills (stable, appended to the system prompt
+    // below) + the per-viewer user/drive command list (volatile, appended to the
+    // last user message). Both gated on the agent actually having load_skill —
+    // without the loader, advertising loadable capabilities is noise.
+    const eligibleSkills = listEligibleSkills(allowedToolNames);
+    const userCommandCatalog =
+      eligibleSkills.length > 0 || allowedToolNames.includes('load_skill')
+        ? await loadUserCommandCatalog(userId!, page.driveId ?? null, allowedToolNames)
+        : { catalogPrompt: '', searchEntries: [] };
+    const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS, [
+      ...eligibleSkills,
+      ...userCommandCatalog.searchEntries,
+    ]);
     filteredTools = exposure.tools;
     const toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
 
@@ -1148,24 +1175,26 @@ export async function POST(request: Request) {
       systemPrompt += buildInlineInstructions(allowedToolNames);
     }
 
-    const locationPrompt = buildLocationTurnPrompt(pageContext ? {
-      currentPage: {
-        title: pageContext.pageTitle,
-        type: pageContext.pageType,
-        path: pageContext.pagePath,
-      },
-      currentDrive: pageContext.driveId ? {
-        id: pageContext.driveId,
-        name: pageContext.driveName,
-        slug: pageContext.driveSlug,
-      } : undefined,
-      breadcrumbs: pageContext.breadcrumbs,
+    const locationPrompt = buildLocationTurnPrompt(turnLocation ? {
+      currentPage: turnLocation.currentPage,
+      currentDrive: turnLocation.currentDrive,
+      breadcrumbs: turnLocation.breadcrumbs,
     } : undefined);
 
     // Cross-drive membership context applies uniformly regardless of whether
     // a custom system prompt is set (unlike drivePromptPrefix above, which is
     // only prepended in the customSystemPrompt branch).
     systemPrompt = memberDriveContextPrefix + systemPrompt;
+
+    // Skill catalog applies uniformly too — including custom-systemPrompt
+    // agents, which opt out of buildInlineInstructions and would otherwise
+    // carry load_skill with no idea what is loadable. It is capability
+    // metadata (like toolDiscoveryPrompt), not behavioral instruction, and
+    // varies only with the agent's tool configuration — stable per
+    // conversation, so it belongs in this cache-stable prompt, never the
+    // volatile block.
+    systemPrompt += buildBuiltinSkillCatalog(allowedToolNames);
+
 
     // Build timestamp system prompt for temporal awareness
     const userTimezone = user?.timezone ?? undefined;
@@ -1453,6 +1482,7 @@ export async function POST(request: Request) {
                 timestampPrompt: timestampSystemPrompt,
                 locationPrompt,
                 mentionPrompt: mentionSystemPrompt,
+                commandCatalogPrompt: userCommandCatalog.catalogPrompt,
                 commandPrompt: commandSystemPrompt,
               });
               const messagesWithContext = appendTurnContextToLastUserMessage(messages, turnContext);
@@ -1486,28 +1516,23 @@ export async function POST(request: Request) {
                 aiProvider: currentProvider,
                 aiModel: currentModel,
                 conversationId,
-                locationContext: pageContext ? {
-                  currentPage: {
-                    id: pageContext.pageId,
-                    title: pageContext.pageTitle,
-                    type: pageContext.pageType,
-                    path: pageContext.pagePath,
-                  },
-                  currentDrive: pageContext.driveId ? {
-                    id: pageContext.driveId,
-                    name: pageContext.driveName,
-                    slug: pageContext.driveSlug,
-                  } : undefined,
-                  breadcrumbs: pageContext.breadcrumbs,
+                // Same normalized location the model prompt was built from, so
+                // the two can never disagree about which workspace is in view.
+                locationContext: turnLocation ? {
+                  currentPage: turnLocation.currentPage ?? undefined,
+                  currentDrive: turnLocation.currentDrive ?? undefined,
+                  breadcrumbs: turnLocation.breadcrumbs,
                 } : undefined,
                 // Turn-start snapshot of the agent's working page — tools that
                 // shift focus (e.g. create_page) mutate this in place so later
                 // tool calls in the same turn track the agent's own actions
-                // rather than staying pinned to the turn-start snapshot.
-                currentWorkingPage: pageContext ? {
-                  id: pageContext.pageId,
-                  title: pageContext.pageTitle,
-                  type: pageContext.pageType,
+                // rather than staying pinned to the turn-start snapshot. Derived
+                // from the same turnLocation as everything else above, so there
+                // is exactly one answer to "where is the user" in this route.
+                currentWorkingPage: turnLocation?.currentPage ? {
+                  id: turnLocation.currentPage.id,
+                  title: turnLocation.currentPage.title,
+                  type: turnLocation.currentPage.type,
                 } : undefined,
                 modelCapabilities: modelCapabilitiesForTools,
                 isAdmin: isAdminUser,
@@ -1741,9 +1766,12 @@ export async function POST(request: Request) {
               conversationId, // Use actual conversation ID instead of pageId
               messageId,
               pageId: chatId,
-              // Empty string (no drive in view) must read as "no drive", not a
-              // literal '' driveId — matches the truthy-guards used elsewhere
-              // in this file for the same pageContext.driveId field.
+              // Deliberately still pageContext, NOT turnLocation: usage is
+              // attributed to the drive of the PAGE in view, and turnLocation
+              // also carries a drive on drive-level routes where no page is
+              // open. Switching would start attributing spend to a drive this
+              // metric never counted. The `|| undefined` keeps an empty-string
+              // driveId reading as "no drive".
               driveId: pageContext?.driveId || undefined,
               // 'exhausted' = retry shell gave up (failure); clean/terminal = a real
               // completion. Cost still settles regardless (the provider charged us).

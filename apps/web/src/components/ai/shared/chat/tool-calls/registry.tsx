@@ -1062,6 +1062,20 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     );
   },
 
+  // load_skill returns the instruction body as a plain string (`output`;
+  // `parsedOutput` is {}). Render a collapsed "Loaded skill" acknowledgement
+  // like pi's [skill] row rather than dumping the full instruction pack —
+  // soft errors (which don't carry <skill_instructions>) fall through to the
+  // generic renderer so the failure text stays visible.
+  load_skill: ({ parsedInput, output }) => {
+    const name = typeof parsedInput?.name === 'string' ? parsedInput.name : undefined;
+    const content = typeof output === 'string' ? output : null;
+    if (!name || !content || !content.includes('<skill_instructions')) return null;
+    const lines = content.split('\n');
+    const preview = lines.slice(0, 12).join('\n') + (lines.length > 12 ? '\n…' : '');
+    return <RichContentRenderer title={`Skill: ${name}`} content={preview} />;
+  },
+
 
   // === WORKFLOWS ===
   list_workflows: ({ parsedOutput }) => {

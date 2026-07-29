@@ -18,6 +18,7 @@ import { workflowTools } from '../tools/workflow-tools';
 import { triggerTools } from '../tools/trigger-tools';
 import { modelTools } from '../tools/model-tools';
 import { commandTools } from '../tools/command-tools';
+import { skillTools } from '../tools/skill-tools';
 import { formTools } from '../tools/form-tools';
 import { imageGenerationTools } from '../tools/image-generation-tools';
 import { buildSandboxTools } from '../tools/sandbox-tools-runtime';
@@ -55,6 +56,7 @@ const TOOL_MODULES = {
   triggers: triggerTools,
   models: modelTools,
   commands: commandTools,
+  skills: skillTools,
   forms: formTools,
   imageGeneration: imageGenerationTools,
 } as const;

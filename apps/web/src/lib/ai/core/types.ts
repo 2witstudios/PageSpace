@@ -94,6 +94,14 @@ export interface ToolExecutionContext {
   // `pageId` argument on read/write page tools.
   currentWorkingPage?: { id: string; title: string; type: string };
 
+  // Drive-level twin of currentWorkingPage: mutated in place by create_page (and
+  // create_drive) so a later tool call in the SAME turn that omits `driveId`
+  // follows the agent's own action rather than snapping back to the turn-start
+  // location. Read by resolveDefaultDriveId (drive-context-defaults.ts). Not
+  // seeded at route level — the resolver already falls through to
+  // locationContext.currentDrive.
+  currentWorkingDrive?: { id: string; name?: string };
+
   // Sprites Platform Alignment 5-2: a stable id for THIS agent turn (one
   // streamText run), lazily stamped once by `resolveSandboxActorContext`
   // (apps/web/src/lib/ai/tools/sandbox-tools-runtime.ts) the first time a

@@ -30,7 +30,8 @@ export function buildLocationTurnPrompt(input: LocationPromptInput | undefined):
     return `LOCATION (current, this turn):
 • Operating from the dashboard — no specific workspace or page is currently in view
 • Use list_drives to discover available workspaces before suggesting new drive creation
-• When the user says "here" or "this", ask which workspace/page they mean, or use list_drives/list_pages to find out`;
+• When the user says "here" or "this", ask which workspace/page they mean, or use list_drives/list_pages to find out
+• Do NOT assume the Home drive — ask which workspace, or use list_drives`;
   }
 
   const lines: string[] = ['LOCATION (current, this turn):'];
@@ -57,6 +58,7 @@ export function buildLocationTurnPrompt(input: LocationPromptInput | undefined):
 
   if (input.currentDrive?.id) {
     lines.push('• Start with list_pages on this drive (driveId above) before exploring elsewhere');
+    lines.push('• Omit driveId on create_page, list_pages, glob_search, regex_search and generate_image to act on THIS workspace — never substitute a different drive, and never the Home drive, unless the user names one');
   }
 
   return lines.join('\n');
