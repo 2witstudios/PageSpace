@@ -29,6 +29,20 @@ const ownerId = createId();
 const driveId = createId();
 const agentPageId = createId();
 const conversationIds: string[] = [];
+/**
+ * Every sandbox id this file lets reach the DB, recorded AS IT IS WRITTEN.
+ *
+ * The AFTER-DELETE trigger on `agent_sessions` enqueues a reclaim row for each
+ * live sandbox, and the outbox is FK-less by design — nothing cascades those
+ * away, and a leaked one is a name the orphan cron will later try to destroy.
+ *
+ * Recorded at write time rather than read back at teardown because the cascade
+ * test deletes its own conversation mid-run: by `afterAll` the session row is
+ * already gone and its pointer is unrecoverable from the table. Teardown ALSO
+ * reads the surviving rows, which is what catches ids this helper never saw
+ * (`updateSpriteIdentity` swaps in new ones). Neither half is sufficient alone.
+ */
+const sandboxIds = new Set<string>(['sbx-integration-outbox']);
 
 let store: Awaited<ReturnType<typeof createDbAgentSessionStore>>;
 
@@ -38,6 +52,7 @@ async function seedSession(
 ) {
   const conversationId = createId();
   conversationIds.push(conversationId);
+  if (over.sandboxId) sandboxIds.add(over.sandboxId);
   await db.insert(conversations).values({
     id: conversationId,
     userId: ownerId,
@@ -77,7 +92,6 @@ afterAll(async () => {
   // (`seedSession` overrides, `updateSpriteIdentity` CAS swaps, or a future
   // case not yet written). A leaked row is not cosmetic: the orphan-reconcile
   // cron picks it up and tries to destroy a Sprite name.
-  const sandboxIds = new Set(['sbx-integration-outbox']);
   if (conversationIds.length > 0) {
     const rows = await db
       .select({ sandboxId: agentSessions.sandboxId })
@@ -286,6 +300,95 @@ describe('enqueueReclaim', () => {
     expect(rows).toHaveLength(1);
     // Chases the NEWEST instance — mirrors the AFTER-DELETE trigger's own insert.
     expect(rows[0].spriteInstanceId).toBe('i-2');
+  });
+});
+
+describe('reclaim trigger — every cascade path that can strand a live Sprite', () => {
+  /**
+   * The trigger's own doc lists the paths that reach it: deleting a
+   * conversation, hard-deleting the AI_CHAT page, deleting the drive, and the
+   * GDPR/account-erasure delete of the user. Only the first was covered, and
+   * the others are the expensive ones — a drive delete reaches the session row
+   * through TWO cascade hops, and if any link is missing the Sprite bills
+   * forever with nothing left pointing at it.
+   *
+   * Asserted against real Postgres because that is the only place a cascade
+   * chain and an AFTER-DELETE trigger actually exist; no in-memory fake can
+   * tell you whether the FK path is wired.
+   */
+  async function seedProbe(over: {
+    suffix: string;
+    sandboxId: string;
+    spriteTornDownAt?: Date;
+    withPage: boolean;
+  }) {
+    const probeUserId = createId();
+    const probeDriveId = createId();
+    const probePageId = createId();
+    const conversationId = createId();
+    await db.insert(users).values({ id: probeUserId, email: `probe-${probeUserId}@example.test`, name: 'Probe' });
+    await db.insert(drives).values({ id: probeDriveId, name: 'Probe', slug: `probe-${probeDriveId}`, ownerId: probeUserId });
+    if (over.withPage) {
+      await db.insert(pages).values({ id: probePageId, title: 'Agent', type: 'AI_CHAT', driveId: probeDriveId, position: 1 });
+    }
+    await db.insert(conversations).values({
+      id: conversationId,
+      userId: probeUserId,
+      title: 'probe',
+      type: over.withPage ? 'page' : 'global',
+      contextId: over.withPage ? probePageId : null,
+    });
+    await db.insert(agentSessions).values({
+      conversationId,
+      ownerId: probeUserId,
+      agentPageId: over.withPage ? probePageId : null,
+      sandboxId: over.sandboxId,
+      spriteInstanceId: 'i',
+      spriteTornDownAt: over.spriteTornDownAt ?? null,
+    });
+    sandboxIds.add(over.sandboxId);
+    return { probeUserId, probeDriveId, probePageId, conversationId };
+  }
+
+  async function reclaimed(sandboxId: string): Promise<boolean> {
+    const rows = await db
+      .select()
+      .from(machineSpriteReclaims)
+      .where(eq(machineSpriteReclaims.sandboxId, sandboxId));
+    return rows.length > 0;
+  }
+
+  it('given the AGENT PAGE is deleted, should rescue the pointer', async () => {
+    const probe = await seedProbe({ suffix: 'page', sandboxId: 'sbx-cascade-page', withPage: true });
+    await db.delete(pages).where(eq(pages.id, probe.probePageId));
+    expect(await reclaimed('sbx-cascade-page')).toBe(true);
+    await db.delete(users).where(eq(users.id, probe.probeUserId));
+  });
+
+  it('given the DRIVE is deleted, should rescue the pointer through two cascade hops', async () => {
+    const probe = await seedProbe({ suffix: 'drive', sandboxId: 'sbx-cascade-drive', withPage: true });
+    await db.delete(drives).where(eq(drives.id, probe.probeDriveId));
+    expect(await reclaimed('sbx-cascade-drive')).toBe(true);
+    await db.delete(users).where(eq(users.id, probe.probeUserId));
+  });
+
+  it('given the USER is erased (GDPR/account deletion), should rescue the pointer', async () => {
+    const probe = await seedProbe({ suffix: 'user', sandboxId: 'sbx-cascade-user', withPage: false });
+    await db.delete(users).where(eq(users.id, probe.probeUserId));
+    expect(await reclaimed('sbx-cascade-user')).toBe(true);
+  });
+
+  it('given the Sprite is ALREADY torn down, should NOT re-enqueue its name', async () => {
+    // The name is reusable, so re-enqueueing a confirmed-dead one asks the
+    // reconciler to destroy whatever legitimately took the name next.
+    const probe = await seedProbe({
+      suffix: 'dead',
+      sandboxId: 'sbx-cascade-dead',
+      spriteTornDownAt: new Date(),
+      withPage: false,
+    });
+    await db.delete(users).where(eq(users.id, probe.probeUserId));
+    expect(await reclaimed('sbx-cascade-dead')).toBe(false);
   });
 });
 
