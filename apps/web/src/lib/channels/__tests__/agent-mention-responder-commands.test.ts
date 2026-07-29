@@ -35,7 +35,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   },
 }));
 vi.mock('@/lib/ai/tools/agent-communication-tools', () => ({
-  agentCommunicationTools: { ask_agent: { execute: vi.fn() } },
+  executeAskAgent: vi.fn(),
 }));
 vi.mock('@/lib/ai/tools/channel-tools', () => ({
   channelTools: { send_channel_message: { execute: vi.fn() } },
@@ -66,7 +66,7 @@ vi.mock('@/lib/ai/core/command-resolver', () => ({
 
 import { db } from '@pagespace/db/db';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
-import { agentCommunicationTools } from '@/lib/ai/tools/agent-communication-tools';
+import { executeAskAgent } from '@/lib/ai/tools/agent-communication-tools';
 import { channelTools } from '@/lib/ai/tools/channel-tools';
 import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
 import type { CommandExecutionPlan } from '@/lib/ai/core/command-processor';
@@ -76,7 +76,7 @@ const mockPagesFindMany = db.query.pages.findMany as unknown as Mock;
 const mockChannelMessagesFindMany = db.query.channelMessages.findMany as unknown as Mock;
 const mockCanUserViewPage = vi.mocked(canUserViewPage);
 const mockPlanCommandExecutions = vi.mocked(planCommandExecutions);
-const mockAskAgentExecute = agentCommunicationTools.ask_agent.execute as unknown as Mock;
+const mockAskAgentExecute = executeAskAgent as unknown as Mock;
 const mockSendChannelExecute = channelTools.send_channel_message.execute as unknown as Mock;
 
 const CMD_ID = 'tz4a98xxat96iws9zmbrgj3a';

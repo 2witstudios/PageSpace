@@ -108,3 +108,26 @@ export function decideAgentSessionAccess({
 
   return { allowed: true };
 }
+
+export type DecideAgentSessionEndAccessInput = Omit<DecideAgentSessionAccessInput, 'canRunCode'>;
+
+/**
+ * The END-SESSION variant of the decision: identity and page gates only, with
+ * the capability gate DELIBERATELY absent.
+ *
+ * Ending a session is release-of-compute, and the lifecycle planner already
+ * decided that teardown runs unconditional on `canRun` — an actor who has just
+ * LOST the right to a sandbox (the CODE_EXECUTION flag flipped off, an admin
+ * role revoked) must still be able to end their own session, or the Sprite
+ * bills until an operator notices. The identity and page gates stay: releasing
+ * someone ELSE's compute is still touching someone else's session.
+ *
+ * Implemented by delegating to {@link decideAgentSessionAccess} with the
+ * capability pinned true, so the two deciders cannot drift on the gates they
+ * share — this function IS the other one minus its last gate, by construction.
+ */
+export function decideAgentSessionEndAccess(
+  input: DecideAgentSessionEndAccessInput,
+): AgentSessionAccessDecision {
+  return decideAgentSessionAccess({ ...input, canRunCode: true });
+}

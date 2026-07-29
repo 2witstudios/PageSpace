@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   decideAgentSessionAccess,
+  decideAgentSessionEndAccess,
   type DecideAgentSessionAccessInput,
   type AgentSessionAccessSubject,
 } from '../decide-session-access';
@@ -140,5 +141,62 @@ describe('decideAgentSessionAccess — one decision for web and realtime', () =>
   it('should never return a reason alongside an allow', () => {
     const decision = decideAgentSessionAccess(input()) as { allowed: boolean; reason?: string };
     expect(decision.reason).toBeUndefined();
+  });
+});
+
+describe('decideAgentSessionEndAccess — capability gate deliberately absent', () => {
+  it('given the owner WITHOUT canRunCode, should still allow ending the session', () => {
+    expect(
+      decideAgentSessionEndAccess({
+        requesterId: OWNER,
+        session,
+        conversationOwnership: 'owner',
+        pagePermission: 'view',
+      }),
+    ).toEqual({ allowed: true });
+  });
+
+  it('given the owner of a global-assistant session, should allow ending it', () => {
+    expect(
+      decideAgentSessionEndAccess({
+        requesterId: OWNER,
+        session: globalSession,
+        conversationOwnership: 'owner',
+        pagePermission: null,
+      }),
+    ).toEqual({ allowed: true });
+  });
+
+  it('given a requester who is neither owner nor shared, should still deny', () => {
+    expect(
+      decideAgentSessionEndAccess({
+        requesterId: OTHER,
+        session,
+        conversationOwnership: 'none',
+        pagePermission: 'view',
+      }),
+    ).toEqual({ allowed: false, reason: 'not_shared' });
+  });
+
+  it('given a shared requester without page access, should still deny', () => {
+    expect(
+      decideAgentSessionEndAccess({
+        requesterId: OTHER,
+        session,
+        conversationOwnership: 'shared',
+        pagePermission: 'none',
+      }),
+    ).toEqual({ allowed: false, reason: 'page_access_denied' });
+  });
+
+  it('given a non-owner on a global-assistant session, should still deny (owner-only)', () => {
+    expect(
+      decideAgentSessionEndAccess({
+        requesterId: OTHER,
+        session: globalSession,
+        conversationOwnership: 'shared',
+        pagePermission: null,
+      }),
+    ).toEqual({ allowed: false, reason: 'global_assistant_not_owner' });
   });
 });

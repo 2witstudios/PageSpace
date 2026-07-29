@@ -40,7 +40,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 const mockAskAgentExecute = vi.fn();
 vi.mock('@/lib/ai/tools/agent-communication-tools', () => ({
-  agentCommunicationTools: { ask_agent: { execute: (...args: unknown[]) => mockAskAgentExecute(...args) } },
+  executeAskAgent: (...args: unknown[]) => mockAskAgentExecute(...args),
 }));
 const mockSendChannelExecute = vi.fn();
 vi.mock('@/lib/ai/tools/channel-tools', () => ({

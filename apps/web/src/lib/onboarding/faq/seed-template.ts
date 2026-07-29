@@ -102,7 +102,7 @@ Tips for good agents:
 
 ## Multi-agent pipelines
 
-Agents can delegate to other agents using \`ask_agent\`. This enables orchestrator + specialist patterns where one agent coordinates the work of others.
+Agents can delegate to other agents by spawning worker sessions (\`spawn_session\`). This enables orchestrator + specialist patterns where one agent coordinates the work of others.
 
 ---
 

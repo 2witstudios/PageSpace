@@ -12,14 +12,13 @@ import { z } from 'zod';
 import type { GitToolRow } from './tools/types';
 import type { SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';
 import type { MachineNodeHandle } from '@pagespace/lib/services/machines/machine-pane-binding';
-import type { MachineRef } from '@/lib/repositories/page-agent-repository';
 
 export type OpenResult =
   | {
       ok: true;
       userId: string;
-      ctx: SandboxActorContext & { activeMachine: MachineRef };
-      /** The machine-tree node this call resolved to; its `cwd` is the default working directory. */
+      ctx: SandboxActorContext;
+      /** Legacy machine-tree node cwd override; the session-anchored `open` never sets it. */
       node?: MachineNodeHandle;
     }
   | { ok: false; error: { success: false; error: string } };

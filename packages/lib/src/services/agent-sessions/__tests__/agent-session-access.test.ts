@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { checkAgentSessionAccess, type AgentSessionAccessDeps } from '../agent-session-access';
+import { checkAgentSessionAccess, checkAgentSessionEndAccess, type AgentSessionAccessDeps } from '../agent-session-access';
 import { AGENT_PAGE_ID, OWNER_ID, SESSION_ID } from './fakes';
 
 const subject = { sessionId: SESSION_ID, ownerId: OWNER_ID, agentPageId: AGENT_PAGE_ID };
@@ -151,5 +151,47 @@ describe('checkAgentSessionAccess', () => {
   it('given an empty requester, should deny', async () => {
     const decision = await checkAgentSessionAccess({ requesterId: '', sessionId: SESSION_ID, deps: makeDeps() });
     expect(decision).toEqual({ allowed: false, reason: 'invalid_requester' });
+  });
+});
+
+describe('checkAgentSessionEndAccess', () => {
+  const endDeps = (over: Partial<Omit<AgentSessionAccessDeps, 'canRunCode'>> = {}): Omit<AgentSessionAccessDeps, 'canRunCode'> => {
+    const { findSession, resolveConversationOwnership, resolvePagePermission } = makeDeps();
+    return { findSession, resolveConversationOwnership, resolvePagePermission, ...over };
+  };
+
+  it('given the owner, should allow WITHOUT consulting any capability dep (none exists to consult)', async () => {
+    const decision = await checkAgentSessionEndAccess({ requesterId: OWNER_ID, sessionId: SESSION_ID, deps: endDeps() });
+    expect(decision).toEqual({ allowed: true });
+  });
+
+  it('given no such session, should report session_not_found', async () => {
+    const decision = await checkAgentSessionEndAccess({
+      requesterId: OWNER_ID,
+      sessionId: 'nope',
+      deps: endDeps({ findSession: async () => null }),
+    });
+    expect(decision).toEqual({ allowed: false, reason: 'session_not_found' });
+  });
+
+  it('given a requester with no claim on the conversation, should still deny', async () => {
+    const decision = await checkAgentSessionEndAccess({
+      requesterId: 'user-2',
+      sessionId: SESSION_ID,
+      deps: endDeps({ resolveConversationOwnership: async () => 'none' }),
+    });
+    expect(decision).toEqual({ allowed: false, reason: 'not_shared' });
+  });
+
+  it('given a page-anchored session the requester cannot view, should deny on the page gate', async () => {
+    const decision = await checkAgentSessionEndAccess({
+      requesterId: 'user-2',
+      sessionId: SESSION_ID,
+      deps: endDeps({
+        resolveConversationOwnership: async () => 'shared',
+        resolvePagePermission: async () => 'none',
+      }),
+    });
+    expect(decision).toEqual({ allowed: false, reason: 'page_access_denied' });
   });
 });

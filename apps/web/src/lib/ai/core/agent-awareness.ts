@@ -100,7 +100,7 @@ export async function buildAgentAwarenessPrompt(userId: string): Promise<string>
     }
 
     let prompt = '## Available AI Agents\n\n';
-    prompt += 'You can consult these agents using `ask_agent`. If the user references an agent not listed here, use `list_agents` or `multi_drive_list_agents` to find it.\n\n';
+    prompt += 'You can delegate to these agents with `spawn_session` (pass their ID as `agent`; `wait: true` for a synchronous answer). If the user references an agent not listed here, use `list_agents` or `multi_drive_list_agents` to find it.\n\n';
 
     for (const agent of visibleAgents) {
       prompt += `- **${agent.title}** (ID: ${agent.id}) [${agent.driveName}]\n`;

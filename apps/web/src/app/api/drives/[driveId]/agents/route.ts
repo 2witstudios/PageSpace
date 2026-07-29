@@ -159,7 +159,7 @@ export async function GET(
       nextSteps: [
         accessibleAgents.length > 0 ? 'Use read_page to view full agent configurations' : 'No agents found - consider creating one',
         'Use update_agent_config to modify agent settings',
-        'Use ask_agent to consult with specific agents',
+        'Use spawn_session (with the agent id as `agent`) to delegate to specific agents',
         `Drive: ${drive.name} (${drive.id})`
       ]
     });
