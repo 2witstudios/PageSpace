@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTheme } from 'next-themes';
+import { useRouter } from 'next/navigation';
 import { renderCanvasDocument } from '@pagespace/lib/canvas/render-document';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import {
@@ -49,6 +50,7 @@ export function CanvasFrame({ html, title }: CanvasFrameProps) {
   const [previewHtml, setPreviewHtml] = useState(html);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const { resolvedTheme } = useTheme();
+  const router = useRouter();
 
   useEffect(() => {
     const refs = extractDashboardFileViewRefs(html);
@@ -96,7 +98,7 @@ export function CanvasFrame({ html, title }: CanvasFrameProps) {
   // injectThemeBridge: true injects a script that listens for theme messages
   // so the canvas iframe's dark/light state matches the app's current theme.
   const srcDoc = useMemo(
-    () => renderCanvasDocument({ html: previewHtml, title, baseTarget: '_blank', injectThemeBridge: true, nonce }),
+    () => renderCanvasDocument({ html: previewHtml, title, baseTarget: '_blank', injectThemeBridge: true, injectNavBridge: true, nonce }),
     [previewHtml, title, nonce],
   );
 
@@ -129,6 +131,27 @@ export function CanvasFrame({ html, title }: CanvasFrameProps) {
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
   }, [resolvedTheme]);
+
+  // Listen for navigation requests from the canvas iframe. The injected nav
+  // bridge intercepts clicks on `/dashboard/...` links and sends
+  // `{ type: 'pagespace-navigate', href }` via postMessage. We verify the
+  // message came from our iframe, then router.push for in-app navigation.
+  // This keeps the sandbox boundary intact (no allow-same-origin needed) while
+  // giving smooth in-app navigation instead of new-tab pop-outs.
+  const handleNavigation = useCallback((href: string) => {
+    router.push(href);
+  }, [router]);
+
+  useEffect(() => {
+    function handleNavMessage(e: MessageEvent) {
+      if (e.source !== iframeRef.current?.contentWindow) return;
+      if (e.data?.type !== 'pagespace-navigate') return;
+      if (typeof e.data.href !== 'string') return;
+      handleNavigation(e.data.href);
+    }
+    window.addEventListener('message', handleNavMessage);
+    return () => window.removeEventListener('message', handleNavMessage);
+  }, [handleNavigation]);
 
   return (
     <iframe

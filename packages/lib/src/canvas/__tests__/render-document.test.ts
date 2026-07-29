@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderCanvasDocument, deriveDescription, escapeHtml, BASELINE_CSP, BASELINE_RESET, THEME_BRIDGE_SCRIPT } from '../render-document';
+import { renderCanvasDocument, deriveDescription, escapeHtml, BASELINE_CSP, BASELINE_RESET, THEME_BRIDGE_SCRIPT, NAV_BRIDGE_SCRIPT } from '../render-document';
 
 describe('renderCanvasDocument', () => {
   it('given any input, should return a full HTML document', () => {
@@ -902,5 +902,46 @@ describe('renderCanvasDocument — cspOverride', () => {
     });
     expect(out).toContain('content="default-src \'none\'; script-src \'none\';"');
     expect(out).not.toContain('ignored.example');
+  });
+});
+
+describe('renderCanvasDocument — nav bridge', () => {
+  it('given injectNavBridge: true, should inject the nav bridge script inside <head>', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', injectNavBridge: true });
+    const headEnd = out.indexOf('</head>');
+    const head = out.slice(0, headEnd);
+    expect(head).toContain(NAV_BRIDGE_SCRIPT);
+  });
+
+  it('given no injectNavBridge, should NOT inject the nav bridge script', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>' });
+    expect(out).not.toContain('pagespace-navigate');
+  });
+
+  it('given injectNavBridge: true, the bridge should check for iframe context (parent !== window)', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', injectNavBridge: true });
+    expect(out).toContain('window.parent===window');
+  });
+
+  it('given injectNavBridge: true, the bridge should intercept /dashboard/ links via postMessage', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', injectNavBridge: true });
+    expect(out).toContain("type:'pagespace-navigate'");
+    expect(out).toContain("/dashboard/");
+  });
+
+  it('given injectNavBridge: true AND a nonce, should stamp the nonce onto the nav-bridge script', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', injectNavBridge: true, nonce: 'nav-nonce==' });
+    const nonceStamped = `nonce="nav-nonce=="`;
+    // Both the nav bridge and any author scripts should have the nonce.
+    const navBridgeStart = out.indexOf(NAV_BRIDGE_SCRIPT.slice(0, 8));
+    expect(navBridgeStart).toBeGreaterThan(-1);
+    // The nonce should appear in the head section near the nav bridge.
+    expect(out).toContain(nonceStamped);
+  });
+
+  it('given both injectThemeBridge and injectNavBridge, should inject both scripts', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', injectThemeBridge: true, injectNavBridge: true });
+    expect(out).toContain(THEME_BRIDGE_SCRIPT);
+    expect(out).toContain(NAV_BRIDGE_SCRIPT);
   });
 });

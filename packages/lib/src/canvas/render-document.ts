@@ -116,6 +116,16 @@ export interface RenderCanvasDocumentInput {
    */
   injectThemeBridge?: boolean;
   /**
+   * When true, injects a click interceptor <script> into <head> that catches
+   * clicks on `/dashboard/...` links and forwards them to the parent via
+   * `postMessage({ type: 'pagespace-navigate', href })`. The parent (CanvasFrame)
+   * listens and calls `router.push(href)`, giving in-app navigation without
+   * breaking the sandbox isolation. Only active inside an iframe
+   * (`window.parent !== window`); published pages (standalone documents) are
+   * unaffected because their links are already rewritten to public URLs.
+   */
+  injectNavBridge?: boolean;
+  /**
    * When set, used VERBATIM as the emitted CSP `<meta>` content instead of
    * `buildBaselineCsp(formActionOrigin)`. Lets other renderers (e.g. the
    * published-document pipeline, which needs `script-src 'none'`) reuse this
@@ -191,6 +201,30 @@ export const THEME_BRIDGE_SCRIPT =
   "document.documentElement.classList.toggle('dark',e.data.isDark);}});" +
   // Request current theme from parent on load (in-app only; harmless on published)
   "try{window.parent.postMessage({type:'pagespace-theme-request'},'*');}catch(e){}" +
+  "})();</script>";
+
+/**
+ * Inline script injected when `injectNavBridge` is true. Provides in-app
+ * navigation for canvas iframes by intercepting clicks on `/dashboard/...`
+ * links and forwarding them to the parent via postMessage.
+ *
+ * Only active inside an iframe (`window.parent !== window`). On published
+ * pages (standalone documents) it is a no-op because `parent === window`.
+ *
+ * Pattern matches the in-app link convention: `/dashboard/{driveId}/{pageId}`
+ * (and the `/view` variant for file pages). Hash-only links (`#section`) and
+ * external URLs pass through to default behavior.
+ */
+export const NAV_BRIDGE_SCRIPT =
+  "<script>(function(){" +
+  "if(window.parent===window)return;" +
+  "document.addEventListener('click',function(e){" +
+  "var a=e.target.closest('a');if(!a)return;" +
+  "var href=a.getAttribute('href');if(!href)return;" +
+  "if(href.indexOf('/dashboard/')!==0)return;" +
+  "e.preventDefault();e.stopPropagation();" +
+  "window.parent.postMessage({type:'pagespace-navigate',href:href},'*');" +
+  "},true);" +
   "})();</script>";
 
 // Re-exported for existing consumers — the implementation lives in a
@@ -322,7 +356,7 @@ function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[], no
  * Render a complete, standalone HTML document for a canvas page.
  */
 export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
-  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, formActionOrigin, injectThemeBridge, nonce, cspOverride } = input;
+  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, formActionOrigin, injectThemeBridge, injectNavBridge, nonce, cspOverride } = input;
   const csp = cspOverride ?? buildBaselineCsp(formActionOrigin);
 
   const { css, body } = extractAndSanitizeStyles(unwrapFullDocument(html ?? ''), allowedAssetHosts, nonce);
@@ -366,6 +400,7 @@ export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
     `<meta http-equiv="Content-Security-Policy" content="${csp}">` +
     `<style>${BASELINE_RESET}${css}</style>` +
     (injectThemeBridge ? (nonce ? stampScriptNonce(THEME_BRIDGE_SCRIPT, nonce) : THEME_BRIDGE_SCRIPT) : '') +
+    (injectNavBridge ? (nonce ? stampScriptNonce(NAV_BRIDGE_SCRIPT, nonce) : NAV_BRIDGE_SCRIPT) : '') +
     '</head><body>' +
     body +
     '</body></html>'
