@@ -71,11 +71,27 @@
  * one machine and never aborts the rest of the batch; it does not eliminate
  * the residual double-bill risk, which would need the charge and the
  * watermark update to commit atomically to close entirely.
+ *
+ * PHASE 7 (Dev → Agents rebuild, billing/storage re-point) adds a FIFTH row
+ * source, `agent_sessions` (`listAgentSessionSprites`) — ADDED ALONGSIDE the
+ * four machine-tree sources above, which keep metering unchanged until the
+ * Phase 8 teardown deletes the machine-tree tables outright. An agent-session
+ * Sprite is metered on IDENTICAL terms (its own watermark, its own
+ * measurement, never-wake, per-row isolation) with exactly one structural
+ * difference: its attribution target may be a page (`agentPageId` set) OR the
+ * session's own `ownerId` directly (a global-assistant session, `agentPageId`
+ * null — there is no page to group its usage under). `storageBillingTarget`
+ * (`machine-storage-attribution.ts`) is the one place that branches on this;
+ * `resolveAgentSessionPayerId` in the deps seam resolves the payer for the
+ * `ownerId` case with no page lookup at all — mirroring
+ * `billing/machine-payer.ts`'s function of the same name, which the real IO
+ * composition (`machine-storage-billing.ts`) delegates to directly so the
+ * nullable-payer fallback is written exactly once.
  */
 
 import { calculateMachineStorageCostDollars } from '../../monitoring/machine-pricing';
 import { bytesToGB } from './machine-storage-measure';
-import { storageAttributionPageId, type StorageSubject } from './machine-storage-attribution';
+import { storageBillingTarget, type StorageSubject } from './machine-storage-attribution';
 import { loggers } from '../../logging/logger-config';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -218,6 +234,32 @@ export interface AgentTerminalStorageRow {
   lastActiveAt: Date;
 }
 
+/**
+ * An `agent_sessions` row's own Sprite (Phase 7) — a FIFTH persistent-filesystem
+ * source, added ALONGSIDE the four machine-tree kinds above (see module doc).
+ * Unlike them, its attribution is not unconditionally a page: `agentPageId` is
+ * carried directly (nullable) rather than requiring a second lookup, and
+ * `ownerId` is carried too since it is the fallback (and, for a
+ * global-assistant session, the ONLY) payer. Rows without a live Sprite
+ * (`sandboxId` null) or torn down are expected to be filtered out by the row
+ * source, not billed at 0 here — identical contract to the other four kinds.
+ */
+export interface AgentSessionStorageRow {
+  /** The `agent_sessions` row's PK — ≡ sessionId ≡ conversationId. Where THIS Sprite's measurement/watermark are persisted. */
+  sessionId: string;
+  /** The session's backing agent page; null for a global-assistant session (see `storageBillingTarget`). */
+  agentPageId: string | null;
+  /** The session's own owner — the payer of last resort, and the ONLY payer when `agentPageId` is null. */
+  ownerId: string;
+  storageLastBilledAt: Date;
+  /** Last opportunistically-measured used bytes on the SESSION Sprite; null when never measured. */
+  measuredBytes: number | null;
+  /** When `measuredBytes` was captured; null when never measured. */
+  measuredAt: Date | null;
+  /** The session's own last real-work activity (unlike the machine-tree kinds, no join needed — `agent_sessions.lastActiveAt` is a first-class column). Used solely for the staleness health flag, never for billing. */
+  lastActiveAt: Date;
+}
+
 /** One metered filesystem, kind-agnostic: what to bill, and who to bill it to. */
 interface BillableStorage {
   subject: StorageSubject;
@@ -248,10 +290,25 @@ export interface ReconcileMachineStorageDeps {
    * Machine page. Same never-wake rule: this reads persisted measurements only.
    */
   listAgentTerminalSprites: () => Promise<AgentTerminalStorageRow[]>;
-  /** Resolves a page's owning drive's ownerId; null when it can't be resolved (e.g. an orphaned row). */
+  /**
+   * Every LIVE `agent_sessions` Sprite to meter (Phase 7) — a FIFTH persistent
+   * filesystem source, added ALONGSIDE the four above (see module doc). Same
+   * never-wake rule: reads persisted measurements only.
+   */
+  listAgentSessionSprites: () => Promise<AgentSessionStorageRow[]>;
+  /**
+   * Resolves a page's owning drive's ownerId; null when it can't be resolved
+   * (e.g. an orphaned row). Used for the four legacy machine-tree kinds AND for
+   * an `agent-session` subject whose `agentPageId` is set — that case is
+   * "unchanged" (Phase 7 spec): a resolution failure skips the row exactly like
+   * every other page-attributed kind, with no separate agent-session fallback
+   * (the `agentPageId === null` case bypasses this entirely — see
+   * `storageBillingTarget`, whose `{ ownerId }` branch is already resolved,
+   * pure data with no IO needed).
+   */
   lookupPageOwnerId: (pageId: string) => Promise<string | null>;
-  /** Charges the payer for this machine's accrued storage cost. Not hold-gated — a background reconcile charge, mirroring reconcile-ai-cost. */
-  chargeStorage: (input: { payerId: string; pageId: string; costDollars: number; gbMonths: number }) => Promise<void>;
+  /** Charges the payer for this machine's accrued storage cost. Not hold-gated — a background reconcile charge, mirroring reconcile-ai-cost. `pageId` is omitted for a global-assistant agent-session (no page to attribute usage-breakdown to). */
+  chargeStorage: (input: { payerId: string; pageId?: string; costDollars: number; gbMonths: number }) => Promise<void>;
   /** Persists the new watermark so the next run only bills the following window. */
   advanceWatermark: (input: { pageId: string; billedThrough: Date }) => Promise<void>;
   /**
@@ -264,6 +321,8 @@ export interface ReconcileMachineStorageDeps {
   advanceProjectWatermark: (input: { machineProjectId: string; billedThrough: Date }) => Promise<void>;
   /** The same watermark advance for a per-session AGENT-TERMINAL Sprite, on its own `machine_agent_terminals` row. */
   advanceAgentTerminalWatermark: (input: { machineAgentTerminalId: string; billedThrough: Date }) => Promise<void>;
+  /** The same watermark advance for an `agent_sessions` Sprite (Phase 7), on the ROW ITSELF — the per-row watermark the design calls for, no separate tracking table needed. */
+  advanceAgentSessionWatermark: (input: { sessionId: string; billedThrough: Date }) => Promise<void>;
   now: () => Date;
 }
 
@@ -295,11 +354,12 @@ export async function reconcileMachineStorage(
   // rule than a machine's own. Only two things vary by kind: which row the
   // watermark advance writes to, and nothing else (the charge always keys on
   // the attribution page — see machine-storage-attribution.ts).
-  const [machines, branches, projects, agentTerminals] = await Promise.all([
+  const [machines, branches, projects, agentTerminals, agentSessions] = await Promise.all([
     deps.listMachines(),
     deps.listBranchSprites(),
     deps.listProjectSprites(),
     deps.listAgentTerminalSprites(),
+    deps.listAgentSessionSprites(),
   ]);
   const now = deps.now();
 
@@ -336,6 +396,13 @@ export async function reconcileMachineStorage(
       measuredAt: a.measuredAt,
       lastActiveAt: a.lastActiveAt,
     })),
+    ...agentSessions.map((s) => ({
+      subject: { kind: 'agent-session', sessionId: s.sessionId, agentPageId: s.agentPageId, ownerId: s.ownerId } as const,
+      storageLastBilledAt: s.storageLastBilledAt,
+      measuredBytes: s.measuredBytes,
+      measuredAt: s.measuredAt,
+      lastActiveAt: s.lastActiveAt,
+    })),
   ];
 
   const advanceWatermark = (subject: StorageSubject, billedThrough: Date): Promise<void> => {
@@ -351,6 +418,8 @@ export async function reconcileMachineStorage(
           machineAgentTerminalId: subject.machineAgentTerminalId,
           billedThrough,
         });
+      case 'agent-session':
+        return deps.advanceAgentSessionWatermark({ sessionId: subject.sessionId, billedThrough });
     }
   };
 
@@ -361,10 +430,13 @@ export async function reconcileMachineStorage(
   let totalCostDollars = 0;
 
   for (const machine of billable) {
-    // The page this filesystem bills to — the machine's own page, or, for a
-    // branch Sprite, its OWNING machine page. One key for the payer lookup, the
-    // charge's `pageId`, and therefore the per-machine usage breakdown.
-    const attributionPageId = storageAttributionPageId(machine.subject);
+    // The billing target this filesystem attributes to — a page (the machine's
+    // own page; a branch/project/agent-terminal's OWNING machine page; an
+    // agent-session's `agentPageId` when set) OR, for a global-assistant
+    // agent-session, the session's own `ownerId` directly (see
+    // `storageBillingTarget`'s doc — the one place this fork exists).
+    const target = storageBillingTarget(machine.subject);
+    const attributionPageId = 'pageId' in target ? target.pageId : undefined;
     try {
       const elapsedMs = now.getTime() - machine.storageLastBilledAt.getTime();
       const lastMeasuredGB = machine.measuredBytes === null ? null : bytesToGB(machine.measuredBytes);
@@ -401,7 +473,11 @@ export async function reconcileMachineStorage(
         continue;
       }
 
-      const ownerId = await deps.lookupPageOwnerId(attributionPageId);
+      // `ownerId` in the target means an agent-session with no page at all —
+      // `resolveAgentSessionPayerId` ALWAYS succeeds there (it IS the payer of
+      // last resort), so only the page-lookup branch can leave this unresolved.
+      const ownerId =
+        'ownerId' in target ? target.ownerId : await deps.lookupPageOwnerId(target.pageId);
       if (!ownerId) {
         // Can't resolve who to bill (e.g. the page/drive vanished). Leave the
         // watermark untouched so this window keeps accruing until it either

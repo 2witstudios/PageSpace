@@ -100,6 +100,12 @@ export function makeAgentSessionStore(seed: AgentSessionRecord[] = []): FakeAgen
       });
     },
 
+    async countLive(ownerId) {
+      return [...rows.values()].filter(
+        (row) => row.ownerId === ownerId && row.sandboxId !== null && row.spriteTornDownAt === null,
+      ).length;
+    },
+
     async updateSpriteIdentity(input) {
       calls.updateSpriteIdentity += 1;
       const row = rows.get(input.sessionId);

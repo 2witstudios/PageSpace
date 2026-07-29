@@ -11,6 +11,7 @@ import {
   type BranchStorageRow,
   type ProjectStorageRow,
   type AgentTerminalStorageRow,
+  type AgentSessionStorageRow,
 } from '../machine-storage-reconcile';
 
 describe('computeElapsedGbMonths', () => {
@@ -118,22 +119,25 @@ describe('pickBillableGB', () => {
 
 function makeDeps(over: Partial<ReconcileMachineStorageDeps> = {}): {
   deps: ReconcileMachineStorageDeps;
-  chargeCalls: Array<{ payerId: string; pageId: string; costDollars: number; gbMonths: number }>;
+  chargeCalls: Array<{ payerId: string; pageId?: string; costDollars: number; gbMonths: number }>;
   advanceCalls: Array<{ pageId: string; billedThrough: Date }>;
   branchAdvanceCalls: Array<{ machineBranchId: string; billedThrough: Date }>;
   projectAdvanceCalls: Array<{ machineProjectId: string; billedThrough: Date }>;
   agentTerminalAdvanceCalls: Array<{ machineAgentTerminalId: string; billedThrough: Date }>;
+  agentSessionAdvanceCalls: Array<{ sessionId: string; billedThrough: Date }>;
 } {
-  const chargeCalls: Array<{ payerId: string; pageId: string; costDollars: number; gbMonths: number }> = [];
+  const chargeCalls: Array<{ payerId: string; pageId?: string; costDollars: number; gbMonths: number }> = [];
   const advanceCalls: Array<{ pageId: string; billedThrough: Date }> = [];
   const branchAdvanceCalls: Array<{ machineBranchId: string; billedThrough: Date }> = [];
   const projectAdvanceCalls: Array<{ machineProjectId: string; billedThrough: Date }> = [];
   const agentTerminalAdvanceCalls: Array<{ machineAgentTerminalId: string; billedThrough: Date }> = [];
+  const agentSessionAdvanceCalls: Array<{ sessionId: string; billedThrough: Date }> = [];
   const deps: ReconcileMachineStorageDeps = {
     listMachines: async () => [],
     listBranchSprites: async () => [],
     listProjectSprites: async () => [],
     listAgentTerminalSprites: async () => [],
+    listAgentSessionSprites: async () => [],
     lookupPageOwnerId: async () => 'owner-1',
     chargeStorage: async (input) => {
       chargeCalls.push(input);
@@ -150,10 +154,21 @@ function makeDeps(over: Partial<ReconcileMachineStorageDeps> = {}): {
     advanceAgentTerminalWatermark: async (input) => {
       agentTerminalAdvanceCalls.push(input);
     },
+    advanceAgentSessionWatermark: async (input) => {
+      agentSessionAdvanceCalls.push(input);
+    },
     now: () => new Date('2026-07-01T00:00:00.000Z'),
     ...over,
   };
-  return { deps, chargeCalls, advanceCalls, branchAdvanceCalls, projectAdvanceCalls, agentTerminalAdvanceCalls };
+  return {
+    deps,
+    chargeCalls,
+    advanceCalls,
+    branchAdvanceCalls,
+    projectAdvanceCalls,
+    agentTerminalAdvanceCalls,
+    agentSessionAdvanceCalls,
+  };
 }
 
 /** A measured PROMOTED-project Sprite: 1GB written, measured just before `now`, owned by `machine-page-1`. */
@@ -187,6 +202,20 @@ function agentTerminal(over: Partial<AgentTerminalStorageRow> = {}): AgentTermin
   return {
     machineAgentTerminalId: 'agt-1',
     machinePageId: 'machine-page-1',
+    storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
+    measuredBytes: 1_000_000_000, // 1 GB
+    measuredAt: new Date('2026-06-30T23:00:00.000Z'),
+    lastActiveAt: new Date('2026-06-30T23:59:00.000Z'),
+    ...over,
+  };
+}
+
+/** A measured agent-session Sprite: 1GB written, measured just before `now`, backed by `agent-page-1`. */
+function agentSession(over: Partial<AgentSessionStorageRow> = {}): AgentSessionStorageRow {
+  return {
+    sessionId: 'session-1',
+    agentPageId: 'agent-page-1',
+    ownerId: 'session-owner-1',
     storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
     measuredBytes: 1_000_000_000, // 1 GB
     measuredAt: new Date('2026-06-30T23:00:00.000Z'),
@@ -280,6 +309,7 @@ describe('reconcileMachineStorage', () => {
       listBranchSprites: async () => [],
       listProjectSprites: async () => [],
       listAgentTerminalSprites: async () => [],
+      listAgentSessionSprites: async () => [],
       lookupPageOwnerId: async () => 'owner-1',
       chargeStorage: async (input) => {
         chargeCalls.push(input);
@@ -291,6 +321,7 @@ describe('reconcileMachineStorage', () => {
       advanceBranchWatermark: async () => {},
       advanceProjectWatermark: async () => {},
       advanceAgentTerminalWatermark: async () => {},
+      advanceAgentSessionWatermark: async () => {},
       now: () => now,
     };
 
@@ -325,6 +356,7 @@ describe('reconcileMachineStorage', () => {
       listBranchSprites: async () => [],
       listProjectSprites: async () => [],
       listAgentTerminalSprites: async () => [],
+      listAgentSessionSprites: async () => [],
       lookupPageOwnerId: async () => 'owner-1',
       chargeStorage: async (input) => {
         chargeCalls.push(input);
@@ -335,6 +367,7 @@ describe('reconcileMachineStorage', () => {
       advanceBranchWatermark: async () => {},
       advanceProjectWatermark: async () => {},
       advanceAgentTerminalWatermark: async () => {},
+      advanceAgentSessionWatermark: async () => {},
       now: () => now,
     };
 
@@ -375,6 +408,7 @@ describe('reconcileMachineStorage', () => {
       listBranchSprites: async () => [],
       listProjectSprites: async () => [],
       listAgentTerminalSprites: async () => [],
+      listAgentSessionSprites: async () => [],
       lookupPageOwnerId: async () => 'owner-1',
       chargeStorage: async (input) => {
         chargeCalls.push(input);
@@ -385,6 +419,7 @@ describe('reconcileMachineStorage', () => {
       advanceBranchWatermark: async () => {},
       advanceProjectWatermark: async () => {},
       advanceAgentTerminalWatermark: async () => {},
+      advanceAgentSessionWatermark: async () => {},
       now: () => now,
     };
 
@@ -413,6 +448,7 @@ describe('reconcileMachineStorage', () => {
       listBranchSprites: async () => [],
       listProjectSprites: async () => [],
       listAgentTerminalSprites: async () => [],
+      listAgentSessionSprites: async () => [],
       lookupPageOwnerId: async () => 'owner-1',
       chargeStorage: async (input) => {
         chargeCalls.push({ gbMonths: input.gbMonths });
@@ -423,6 +459,7 @@ describe('reconcileMachineStorage', () => {
       advanceBranchWatermark: async () => {},
       advanceProjectWatermark: async () => {},
       advanceAgentTerminalWatermark: async () => {},
+      advanceAgentSessionWatermark: async () => {},
       now: () => new Date(nowIso),
     };
 
@@ -468,6 +505,7 @@ describe('reconcileMachineStorage', () => {
       listBranchSprites: async () => [],
       listProjectSprites: async () => [],
       listAgentTerminalSprites: async () => [],
+      listAgentSessionSprites: async () => [],
       lookupPageOwnerId: async () => 'owner-1',
       chargeStorage: async (input) => {
         chargeCalls.push({ gbMonths: input.gbMonths });
@@ -478,6 +516,7 @@ describe('reconcileMachineStorage', () => {
       advanceBranchWatermark: async () => {},
       advanceProjectWatermark: async () => {},
       advanceAgentTerminalWatermark: async () => {},
+      advanceAgentSessionWatermark: async () => {},
       now: () => new Date(nowIso),
     };
 
@@ -920,5 +959,141 @@ describe('reconcileMachineStorage — per-session agent-terminal Sprites (sessio
       charged: 1,
       failed: 1,
     });
+  });
+});
+
+describe('reconcileMachineStorage — agent-session Sprite attribution (Phase 7, added alongside the machine-tree kinds)', () => {
+  it('bills an agent-session Sprite to its backing agent page, exactly like a branch/project/agent-terminal Sprite', async () => {
+    const { deps, chargeCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ sessionId: 'session-1', agentPageId: 'agent-page-1' })],
+    });
+
+    const result = await reconcileMachineStorage(deps);
+
+    assert({
+      given: 'an agent-session Sprite with a backing agent page and a measured 1GB footprint',
+      should: 'charge its agent page — the key the usage breakdown groups on',
+      actual: { charged: result.charged, pageId: chargeCalls[0]?.pageId },
+      expected: { charged: 1, pageId: 'agent-page-1' },
+    });
+    expect(chargeCalls[0].gbMonths).toBeCloseTo(1, 5);
+    expect(chargeCalls[0].costDollars).toBeGreaterThan(0);
+  });
+
+  it('resolves the payer via lookupPageOwnerId when agentPageId is set (unchanged from the machine-tree kinds)', async () => {
+    const lookup = vi.fn(async (pageId: string) => `owner-of-${pageId}`);
+    const { deps, chargeCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ agentPageId: 'agent-page-9', ownerId: 'session-owner-9' })],
+      lookupPageOwnerId: lookup,
+    });
+
+    await reconcileMachineStorage(deps);
+
+    expect(lookup).toHaveBeenCalledWith('agent-page-9');
+    expect(chargeCalls[0]).toMatchObject({ payerId: 'owner-of-agent-page-9', pageId: 'agent-page-9' });
+  });
+
+  it('bills a global-assistant session (null agentPageId) straight to its ownerId, with no page lookup and no pageId on the charge', async () => {
+    const lookup = vi.fn(async () => 'should-not-be-called');
+    const { deps, chargeCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ agentPageId: null, ownerId: 'global-owner-1' })],
+      lookupPageOwnerId: lookup,
+    });
+
+    const result = await reconcileMachineStorage(deps);
+
+    expect(lookup).not.toHaveBeenCalled();
+    assert({
+      given: 'a global-assistant agent-session Sprite (no backing page)',
+      should: 'charge the session ownerId directly, with pageId omitted from the charge',
+      actual: { charged: result.charged, payerId: chargeCalls[0]?.payerId, pageId: chargeCalls[0]?.pageId },
+      expected: { charged: 1, payerId: 'global-owner-1', pageId: undefined },
+    });
+  });
+
+  it('advances the SESSION row watermark only — never a machine, branch, project or agent-terminal watermark', async () => {
+    const { deps, advanceCalls, branchAdvanceCalls, projectAdvanceCalls, agentTerminalAdvanceCalls, agentSessionAdvanceCalls } =
+      makeDeps({
+        listAgentSessionSprites: async () => [agentSession({ sessionId: 'session-7' })],
+      });
+
+    await reconcileMachineStorage(deps);
+
+    assert({
+      given: 'a charged agent-session Sprite',
+      should: 'advance only its own agent_sessions watermark',
+      actual: {
+        agentSessionAdvanceCalls,
+        machineAdvanceCalls: advanceCalls.length,
+        branchAdvanceCalls: branchAdvanceCalls.length,
+        projectAdvanceCalls: projectAdvanceCalls.length,
+        agentTerminalAdvanceCalls: agentTerminalAdvanceCalls.length,
+      },
+      expected: {
+        agentSessionAdvanceCalls: [{ sessionId: 'session-7', billedThrough: new Date('2026-07-01T00:00:00.000Z') }],
+        machineAdvanceCalls: 0,
+        branchAdvanceCalls: 0,
+        projectAdvanceCalls: 0,
+        agentTerminalAdvanceCalls: 0,
+      },
+    });
+  });
+
+  it('meters a machine and an unrelated agent-session as independent footprints, each billed to its own target', async () => {
+    const { deps, chargeCalls } = makeDeps({
+      listMachines: async () => [machine({ pageId: 'machine-page-1' })],
+      listAgentSessionSprites: async () => [agentSession({ sessionId: 'session-a', agentPageId: 'agent-page-a' })],
+    });
+
+    const result = await reconcileMachineStorage(deps);
+
+    expect(result.processed).toBe(2);
+    expect(result.charged).toBe(2);
+    expect(chargeCalls.map((c) => c.pageId).sort()).toEqual(['agent-page-a', 'machine-page-1']);
+  });
+
+  it('bills the never-measured 0 floor for a just-provisioned session and still advances its own watermark', async () => {
+    const { deps, chargeCalls, agentSessionAdvanceCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ measuredBytes: null, measuredAt: null })],
+    });
+
+    const result = await reconcileMachineStorage(deps);
+
+    assert({
+      given: 'an agent-session whose Sprite has never been measured',
+      should: 'charge nothing (the 0 floor, never a provisioned cap) but still advance its watermark',
+      actual: { charged: result.charged, charges: chargeCalls.length, advanced: agentSessionAdvanceCalls.length },
+      expected: { charged: 0, charges: 0, advanced: 1 },
+    });
+  });
+
+  it('skips (and does not advance the watermark for) a page-backed session whose page owner cannot be resolved', async () => {
+    const { deps, chargeCalls, agentSessionAdvanceCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ agentPageId: 'orphaned-page' })],
+      lookupPageOwnerId: async () => null,
+    });
+
+    const result = await reconcileMachineStorage(deps);
+
+    expect(result).toMatchObject({ processed: 1, charged: 0, skipped: 1 });
+    expect(chargeCalls).toEqual([]);
+    expect(agentSessionAdvanceCalls).toEqual([]);
+  });
+
+  it('reports a session failure distinguishably rather than aborting the batch', async () => {
+    const { deps, chargeCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ sessionId: 'boom' }), agentSession({ sessionId: 'fine' })],
+      advanceAgentSessionWatermark: async ({ sessionId }) => {
+        if (sessionId === 'boom') throw new Error('watermark write failed');
+      },
+    });
+
+    const result = await reconcileMachineStorage(deps);
+
+    // 'boom' is charged (chargeStorage succeeds) but its advance throws before
+    // `charged` increments — counted as failed, not charged, mirroring the
+    // branch/project/agent-terminal isolation tests above.
+    expect(result).toMatchObject({ processed: 2, charged: 1, failed: 1 });
+    expect(chargeCalls).toHaveLength(2);
   });
 });

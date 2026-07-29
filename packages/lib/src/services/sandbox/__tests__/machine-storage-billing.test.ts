@@ -57,6 +57,19 @@ vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id', driveId: 'pages.driveId' },
   drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
 }));
+vi.mock('@pagespace/db/schema/agent-sessions', () => ({
+  agentSessions: {
+    conversationId: 'agent_sessions.conversationId',
+    agentPageId: 'agent_sessions.agentPageId',
+    ownerId: 'agent_sessions.ownerId',
+    sandboxId: 'agent_sessions.sandboxId',
+    spriteTornDownAt: 'agent_sessions.spriteTornDownAt',
+    storageLastBilledAt: 'agent_sessions.storageLastBilledAt',
+    storageMeasuredBytes: 'agent_sessions.storageMeasuredBytes',
+    storageMeasuredAt: 'agent_sessions.storageMeasuredAt',
+    lastActiveAt: 'agent_sessions.lastActiveAt',
+  },
+}));
 
 const mockTrackUsage = vi.hoisted(() => vi.fn());
 vi.mock('../../../monitoring/ai-monitoring', () => ({ AIMonitoring: { trackUsage: mockTrackUsage } }));
@@ -496,12 +509,14 @@ describe('reconcileMachineStorageSerialized', () => {
       listBranchSprites: vi.fn(async () => []),
       listProjectSprites: vi.fn(async () => []),
       listAgentTerminalSprites: vi.fn(async () => []),
+      listAgentSessionSprites: vi.fn(async () => []),
       lookupPageOwnerId: vi.fn(async () => null),
       chargeStorage: vi.fn(async () => {}),
       advanceWatermark: vi.fn(async () => {}),
       advanceBranchWatermark: vi.fn(async () => {}),
       advanceProjectWatermark: vi.fn(async () => {}),
       advanceAgentTerminalWatermark: vi.fn(async () => {}),
+      advanceAgentSessionWatermark: vi.fn(async () => {}),
       now: () => new Date('2026-07-13T00:00:00.000Z'),
       ...overrides,
     };
@@ -1030,6 +1045,91 @@ describe('defaultReconcileMachineStorageDeps.advanceAgentTerminalWatermark', () 
 
     expect(setCalls).toEqual([{ storageLastBilledAt: new Date('2026-07-01T00:00:00.000Z') }]);
     expect(whereCalls).toEqual([{ op: 'eq', a: 'machine_agent_terminals.id', b: 'agt-3' }]);
+  });
+});
+
+describe('defaultReconcileMachineStorageDeps.listAgentSessionSprites (Phase 7)', () => {
+  it("selects each session's own measurement/watermark, agentPageId and ownerId directly — no join, no de-fan needed", async () => {
+    const rows = [
+      {
+        sessionId: 'session-1',
+        agentPageId: 'agent-page-1',
+        ownerId: 'owner-1',
+        storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
+        measuredBytes: 1_000_000_000,
+        measuredAt: new Date('2026-06-30T00:00:00.000Z'),
+        lastActiveAt: new Date('2026-06-30T12:00:00.000Z'),
+      },
+    ];
+    let selectedShape: Record<string, unknown> | undefined;
+    let whereArg: unknown;
+    mockDb.select.mockImplementation((shape: Record<string, unknown>) => {
+      selectedShape = shape;
+      return {
+        from: () => ({
+          where: (w: unknown) => {
+            whereArg = w;
+            return rows;
+          },
+        }),
+      };
+    });
+
+    await expect(defaultReconcileMachineStorageDeps.listAgentSessionSprites()).resolves.toEqual(rows);
+
+    expect(Object.keys(selectedShape ?? {}).sort()).toEqual(
+      ['agentPageId', 'lastActiveAt', 'measuredAt', 'measuredBytes', 'ownerId', 'sessionId', 'storageLastBilledAt'].sort(),
+    );
+    expect(whereArg).toEqual({
+      op: 'and',
+      parts: [
+        { op: 'isNotNull', a: 'agent_sessions.sandboxId' },
+        { op: 'isNull', a: 'agent_sessions.spriteTornDownAt' },
+      ],
+    });
+  });
+
+  it('falls back a null lastActiveAt to the epoch — the same honest "not awake" reading the other listers use', async () => {
+    mockDb.select.mockReturnValue({
+      from: () => ({
+        where: async () => [
+          {
+            sessionId: 'session-1',
+            agentPageId: null,
+            ownerId: 'owner-1',
+            storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
+            measuredBytes: null,
+            measuredAt: null,
+            lastActiveAt: null,
+          },
+        ],
+      }),
+    });
+
+    const rows = await defaultReconcileMachineStorageDeps.listAgentSessionSprites();
+
+    expect(rows[0]).toMatchObject({ agentPageId: null, lastActiveAt: new Date(0) });
+  });
+});
+
+describe('defaultReconcileMachineStorageDeps.advanceAgentSessionWatermark (Phase 7)', () => {
+  it("updates the SESSION row's own storageLastBilledAt, keyed by conversationId", async () => {
+    const setCalls: unknown[] = [];
+    const whereCalls: unknown[] = [];
+    mockDb.update.mockReturnValue({
+      set: (values: unknown) => {
+        setCalls.push(values);
+        return { where: async (w: unknown) => { whereCalls.push(w); } };
+      },
+    });
+
+    await defaultReconcileMachineStorageDeps.advanceAgentSessionWatermark({
+      sessionId: 'session-3',
+      billedThrough: new Date('2026-07-01T00:00:00.000Z'),
+    });
+
+    expect(setCalls).toEqual([{ storageLastBilledAt: new Date('2026-07-01T00:00:00.000Z') }]);
+    expect(whereCalls).toEqual([{ op: 'eq', a: 'agent_sessions.conversationId', b: 'session-3' }]);
   });
 });
 

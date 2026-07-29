@@ -85,6 +85,14 @@ export interface AgentSessionStore {
   insertIfAbsent(input: NewAgentSessionInput): Promise<void>;
   list(filter: AgentSessionListFilter): Promise<AgentSessionRecord[]>;
   /**
+   * Count this owner's LIVE sessions — `sandboxId IS NOT NULL AND
+   * spriteTornDownAt IS NULL` — for the agent-session concurrency quota
+   * (Phase 7, `quota.ts`'s `checkAgentSessionConcurrency`). Deliberately a
+   * COUNT, not `list(...).length`: a quota check on a hot path should not pull
+   * every column of every live row just to learn how many there are.
+   */
+  countLive(ownerId: string): Promise<number>;
+  /**
    * Record a freshly-provisioned (or adopted) Sprite identity onto the row under
    * a compare-and-swap on the CURRENT `sandboxId`, together with the verdict's
    * stamps — ONE atomic write, so a row can never be seen carrying a new
@@ -216,7 +224,7 @@ export function revivedAgentSessionColumns(input: {
  * DB module graph.
  */
 export async function createDbAgentSessionStore(): Promise<AgentSessionStore> {
-  const [{ db }, { eq, and, eqOrIsNull, sql }, { agentSessions }, { machineSpriteReclaims }, { pages }] =
+  const [{ db }, { eq, and, eqOrIsNull, isNotNull, isNull, sql, count }, { agentSessions }, { machineSpriteReclaims }, { pages }] =
     await Promise.all([
       import('@pagespace/db/db'),
       import('@pagespace/db/operators'),
@@ -275,6 +283,20 @@ export async function createDbAgentSessionStore(): Promise<AgentSessionStore> {
       }
       const rows = await db.select().from(agentSessions).where(and(...conditions));
       return rows as AgentSessionRecord[];
+    },
+
+    async countLive(ownerId) {
+      const [row] = await db
+        .select({ n: count() })
+        .from(agentSessions)
+        .where(
+          and(
+            eq(agentSessions.ownerId, ownerId),
+            isNotNull(agentSessions.sandboxId),
+            isNull(agentSessions.spriteTornDownAt),
+          ),
+        );
+      return row?.n ?? 0;
     },
 
     async updateSpriteIdentity({
