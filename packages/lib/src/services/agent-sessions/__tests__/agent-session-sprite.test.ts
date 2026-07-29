@@ -823,7 +823,11 @@ describe('ensureAgentSessionSandbox — concurrency ceiling', () => {
       actor: { userId: OWNER_ID, tenantId: TENANT_ID },
       deps: makeDeps(
         { store, host },
-        { checkConcurrency: async () => ({ allowed: false, reason: 'live agent-session limit reached' }) },
+        // The real `checkAgentSessionConcurrency` answers with a CODE, not prose
+        // — the fixture said otherwise, and a fixture that misstates its
+        // supplier is how `detail` came to be treated as user copy and rendered
+        // into the product as `{"error":"concurrency_limit"}`.
+        { checkConcurrency: async () => ({ allowed: false, reason: 'concurrency_limit' }) },
       ),
     });
 

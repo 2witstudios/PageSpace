@@ -25,6 +25,9 @@ vi.mock('../useResolvedAgent', () => ({
   useResolvedAgent: () => resolvedAgent.current,
 }));
 
+const toastMock = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
+vi.mock('sonner', () => ({ toast: toastMock }));
+
 const sessionState = vi.hoisted(() => ({
   current: {
     session: null,
@@ -103,6 +106,8 @@ beforeEach(() => {
     removeShell: vi.fn(async () => {}),
     mutate: vi.fn(),
   };
+  toastMock.error.mockClear();
+  toastMock.success.mockClear();
 });
 
 describe('AgentView', () => {
@@ -163,6 +168,60 @@ describe('AgentView', () => {
     fireEvent.click(screen.getByRole('button', { name: /Add shell/ }));
 
     await waitFor(() => expect(shellsState.current.addShell).toHaveBeenCalled());
+  });
+
+  it('given the server refuses to add a shell, should tell the user why instead of failing silently', async () => {
+    // The refusal this most often carries is the plan's sandbox limit. `post()`
+    // rethrows the 429 body's `error` as the Error message, so the sentence the
+    // API wrote for a human is already in hand — it just had nowhere to go: the
+    // handler was try/finally with no catch, so the rejection escaped an onClick
+    // as an unhandled rejection and the user got a spinner that stopped and no
+    // tab. A limit the product enforces but never states reads as a bug.
+    shellsState.current.addShell = vi.fn(async () => {
+      throw new Error("Your plan's limit for running sandboxes is already in use — stop one before starting another.");
+    });
+    render(<AgentView agentId="agent-1" conversationId="conv-1" context="console" />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Add shell/ }));
+
+    await waitFor(() =>
+      expect(toastMock.error).toHaveBeenCalledWith('Could not add a shell', {
+        description: "Your plan's limit for running sandboxes is already in use — stop one before starting another.",
+      }),
+    );
+  });
+
+  it('given adding a shell fails, should re-enable the button rather than latch it disabled', async () => {
+    shellsState.current.addShell = vi.fn(async () => {
+      throw new Error('nope');
+    });
+    render(<AgentView agentId="agent-1" conversationId="conv-1" context="console" />);
+    const button = screen.getByRole('button', { name: /Add shell/ });
+
+    fireEvent.click(button);
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalled());
+    // The `finally` must survive the new catch: a permanently disabled button
+    // would strand the user even after the condition that refused them clears.
+    await waitFor(() => expect(button).not.toBeDisabled());
+  });
+
+  it('given closing a shell fails, should say so — the tab silently comes back', async () => {
+    // Removal is optimistic with `rollbackOnError`, so a failure restores the
+    // tab. Unexplained, that reads as a click that did not register.
+    shellsState.current.shells = [shellFixture({ shellId: 'shell-a', name: 'shell-a' })];
+    shellsState.current.removeShell = vi.fn(async () => {
+      throw new Error('sandbox unreachable');
+    });
+    render(<AgentView agentId="agent-1" conversationId="conv-1" context="console" />);
+
+    fireEvent.click(screen.getByLabelText('Close shell-a'));
+
+    await waitFor(() =>
+      expect(toastMock.error).toHaveBeenCalledWith('Could not close that shell', {
+        description: 'sandbox unreachable',
+      }),
+    );
   });
 
   it('shows Starting on the chip while the first shell provisions the sandbox', async () => {

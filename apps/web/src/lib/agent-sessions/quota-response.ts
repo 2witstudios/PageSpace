@@ -36,7 +36,19 @@ export function sessionQuotaExceeded(
   sessionId: string,
   /** Which route refused, for the audit trail only — never shown to the caller. */
   route: string,
-  /** A more specific message from the provisioner, when it had one. */
+  /**
+   * The provisioner's DIAGNOSTIC CODE for the refusal (`'concurrency_limit'`),
+   * recorded in the audit trail and never shown to the caller.
+   *
+   * It used to be the response body — `{ error: detail ?? SESSION_QUOTA_MESSAGE }`
+   * — on the reading that a provisioner would supply something "more specific".
+   * It supplies `quota.reason`, an enum, and always: so the `??` never fell
+   * through, both human strings on this path were unreachable, and a user who hit
+   * their plan limit got `{"error":"concurrency_limit"}` rendered into the
+   * product. The socket surface printed the real sentence for the same refusal —
+   * the exact three-ways-to-say-one-thing this module exists to prevent, hidden
+   * because the copy had a test and the PATH to it did not.
+   */
   detail?: string,
 ): NextResponse {
   auditRequest(request, {
@@ -44,8 +56,8 @@ export function sessionQuotaExceeded(
     userId,
     resourceType: 'agent_session',
     resourceId: sessionId,
-    details: { reason: 'session_limit_reached', route },
+    details: { reason: 'session_limit_reached', route, detail },
     riskScore: 0,
   });
-  return NextResponse.json({ error: detail ?? SESSION_QUOTA_MESSAGE }, { status: 429 });
+  return NextResponse.json({ error: SESSION_QUOTA_MESSAGE }, { status: 429 });
 }

@@ -426,9 +426,13 @@ export async function ensureAgentSessionSandbox({
           ok: false,
           reason: 'denied',
           denial: 'session_limit_reached',
-          detail:
-            quota.reason ??
-            'live agent-session limit reached for your plan — end an existing session before starting another',
+          // A diagnostic CODE, never user copy. The prose that used to sit here
+          // was unreachable (`quota.reason` is always set) and, worse, it taught
+          // every caller that `detail` was a human sentence — which is how it
+          // ended up rendered into the product as `{"error":"concurrency_limit"}`.
+          // The one user-facing string for this refusal lives at the edge, in
+          // `SESSION_QUOTA_MESSAGE`; this layer says only what happened.
+          detail: quota.reason ?? 'concurrency_limit',
         };
       }
 

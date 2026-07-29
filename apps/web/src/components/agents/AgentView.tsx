@@ -23,6 +23,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { AlertCircle, Bot, ExternalLink, Loader2, Plus, X } from 'lucide-react';
+import { toast } from 'sonner';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { useResolvedAgent } from './useResolvedAgent';
@@ -79,6 +80,17 @@ export default function AgentView({
     try {
       const shell = await shells.addShell();
       if (shell) setActiveTab(`shell:${shell.shellId}`);
+    } catch (error) {
+      // The refusal this most often carries is the plan's sandbox limit, whose
+      // 429 body is written to be read by a human. Without this catch the
+      // rejection escaped an onClick handler as an unhandled rejection: the
+      // spinner stopped, no tab appeared, and the message explaining why —
+      // and naming the one action that clears it — reached nothing. A limit
+      // the product enforces but never states is indistinguishable from a bug.
+      console.error('Failed to add shell:', error);
+      toast.error('Could not add a shell', {
+        description: error instanceof Error ? error.message : 'Please try again.',
+      });
     } finally {
       setIsAddingShell(false);
     }
@@ -86,7 +98,17 @@ export default function AgentView({
 
   const handleCloseShell = useCallback(
     async (shellId: string) => {
-      await shells.removeShell(shellId);
+      try {
+        await shells.removeShell(shellId);
+      } catch (error) {
+        // Closing is optimistic — the tab is already gone from the UI, so a
+        // failure silently RESTORES it via SWR rollback. Saying so beats a tab
+        // that reappears for no stated reason.
+        console.error('Failed to close shell:', error);
+        toast.error('Could not close that shell', {
+          description: error instanceof Error ? error.message : 'Please try again.',
+        });
+      }
     },
     [shells],
   );
