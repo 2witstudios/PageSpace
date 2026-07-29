@@ -245,9 +245,12 @@ function safeLogWarn(
 
 // Acquisition reasons that represent expected policy/authz outcomes (warn-level)
 // vs infra failures that are genuinely unexpected (error-level).
+// Refusals that are the system working as intended — logged at warn, because an
+// error-level line for every free-tier user hitting their own plan ceiling is
+// noise that trains the on-call to ignore this logger.
 const AUTHZ_DENY_REASONS = new Set([
   'no_drive_access', 'insufficient_role', 'no_agent_access', 'app_admin_required', 'kill_switch_off', 'no_machine',
-  'machine_runtime_exceeded',
+  'machine_runtime_exceeded', 'session_limit_reached',
 ]);
 
 
@@ -261,6 +264,7 @@ export type SandboxToolDenialReason =
   | 'machine_runtime_exceeded'
   | 'credit_exhausted'
   | 'concurrency_limit'
+  | 'session_limit_reached'
   | 'empty_command'
   | 'command_too_large'
   | 'blocked_metadata_access'
@@ -290,7 +294,7 @@ export type EditFileToolResult =
   | { success: true; path: string; replacements: number }
   | { success: false; error: string; reason: SandboxToolDenialReason };
 
-const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
+export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   kill_switch_off: 'Code execution is disabled.',
   app_admin_required: 'Code execution is currently restricted to application administrators.',
   no_drive_access: 'You do not have access to run code in this drive.',
@@ -301,6 +305,12 @@ const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
     'This machine has been running continuously for too long. Wait for it to go idle, or switch to a different machine.',
   credit_exhausted: 'Insufficient credits to run this machine.',
   concurrency_limit: 'Too many concurrent runs. Wait for a run to finish and retry.',
+  // A different limit from `concurrency_limit`, and the distinction is the
+  // whole point: that one clears on its own when a sibling run finishes, this
+  // one does not clear until somebody ENDS a session. Telling an agent to
+  // "wait and retry" for this one is telling it to spin forever.
+  session_limit_reached:
+    'The owner is at their plan limit for live agent sessions. Retrying will not help — an existing session has to be ended first.',
   empty_command: 'No command was provided.',
   command_too_large: 'The command is too large.',
   blocked_metadata_access: 'This command is blocked by policy.',
@@ -380,7 +390,17 @@ async function safeNotifyTerminalActivity(
 }
 
 // Map a denial from the lifecycle acquire onto the tool-facing reason set.
-function reasonFromAcquire(result: Extract<SandboxAcquireResult, { ok: false }>): SandboxToolDenialReason {
+/**
+ * Narrow a generic acquisition failure to the specific thing that went wrong,
+ * when the acquirer said. A plan-ceiling refusal arrives as `provision_failed`
+ * with the ceiling named in `cause`; without this it reached the agent as
+ * "Could not provision a sandbox for this run" — indistinguishable from a
+ * provider outage, and so retried on a limit that no amount of retrying moves.
+ */
+export function reasonFromAcquire(result: Extract<SandboxAcquireResult, { ok: false }>): SandboxToolDenialReason {
+  if (result.reason === 'provision_failed' && result.cause === 'session_limit_reached') {
+    return 'session_limit_reached';
+  }
   return result.reason;
 }
 

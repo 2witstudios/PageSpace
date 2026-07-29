@@ -2,6 +2,7 @@ import { SANDBOX_TIMEOUT_MS, SANDBOX_MAX_OUTPUT_BYTES } from './execution-policy
 import { truncateToBytes } from './output-limit';
 import { SANDBOX_ROOT, resolveSandboxPath } from './sandbox-paths';
 import type { SandboxActorContext, SandboxRunDeps, BashToolResult } from './tool-runners';
+import { DENIAL_MESSAGES, reasonFromAcquire } from './tool-runners';
 
 export interface GitSandboxRunDeps extends SandboxRunDeps {
   /** Fetches the user's GitHub OAuth access token from their integration connection. */
@@ -150,7 +151,11 @@ export async function runGitInSandbox({
       conversationId: ctx.conversationId,
     });
     if (!acquired.ok) {
-      return { success: false, error: 'Could not provision a sandbox.', reason: 'provision_failed' };
+      // Same narrowing the bash path does: a plan-ceiling refusal must not
+      // reach a git tool as a generic provisioning fault, or the agent retries
+      // a limit that only ending a session clears.
+      const reason = reasonFromAcquire(acquired);
+      return { success: false, error: DENIAL_MESSAGES[reason], reason };
     }
 
     const sandbox = await deps.reconnect(acquired.sandboxId);

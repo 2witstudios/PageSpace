@@ -194,6 +194,31 @@ describe('runBashInSandbox', () => {
     expect(slots.released).toBe(1);
   });
 
+  it('given a plan-ceiling refusal, should name the ceiling rather than a generic provisioning fault', async () => {
+    const { deps, slots } = makeDeps({
+      acquireSandbox: async () => ({ ok: false as const, reason: 'provision_failed' as const, cause: 'session_limit_reached' }),
+    });
+
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
+    expect(result).toMatchObject({ success: false, reason: 'session_limit_reached' });
+    // The distinction that matters to the agent reading this: a provisioning
+    // fault is worth retrying, a plan ceiling is not.
+    if (result.success) throw new Error('unreachable');
+    expect(result.error).toContain('Retrying will not help');
+    expect(slots.released).toBe(1);
+  });
+
+  it('given a provisioning failure with NO stated cause, should stay generic', async () => {
+    const { deps } = makeDeps({
+      acquireSandbox: async () => ({ ok: false as const, reason: 'provision_failed' as const }),
+    });
+
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
+    expect(result).toMatchObject({ success: false, reason: 'provision_failed' });
+  });
+
   it('given a successful run, should return output, audit the run, and release the slot', async () => {
     const { deps, audits, slots } = makeDeps();
     const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
