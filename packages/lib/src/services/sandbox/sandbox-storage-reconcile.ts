@@ -60,7 +60,7 @@
  * (`agentPageId` set) OR the session's own `ownerId` directly (a
  * global-assistant session, `agentPageId` null — there is no page to group
  * its usage under). `storageBillingTarget` (`sandbox-storage-attribution.ts`)
- * is the one place that branches on this; `resolveAgentSessionPayerId` in the
+ * is the one place that branches on this for ATTRIBUTION; `resolveAgentSessionPayerId` in the
  * deps seam resolves the payer for the `ownerId` case with no page lookup at
  * all — mirroring `billing/sandbox-payer.ts`'s function of the same name,
  * which the real IO composition (`sandbox-storage-billing.ts`) delegates to
@@ -239,9 +239,17 @@ export async function reconcileSandboxStorage(
         continue;
       }
 
-      // `ownerId` in the target means an agent-session with no page at all —
-      // `resolveAgentSessionPayerId` ALWAYS succeeds there (it IS the payer of
-      // last resort), so only the page-lookup branch can leave this unresolved.
+      // `ownerId` in the target means an agent-session with no page at all, so
+      // only the page-lookup branch can leave this unresolved.
+      //
+      // Deliberately NOT `resolveAgentSessionPayerId` (billing/sandbox-payer.ts),
+      // even though the two agree on every other input: that function falls back
+      // to the session owner when the page lookup fails, which is right at CHARGE
+      // time (someone must pay for compute already consumed) and wrong here. A
+      // failed lookup during a storage sweep usually means a stale read of a page
+      // mid-delete; billing it to an owner who may not be the drive owner would
+      // be a misattributed money movement we cannot take back, whereas skipping
+      // costs one cycle of accrual and self-corrects on the next tick.
       const ownerId =
         'ownerId' in target ? target.ownerId : await deps.lookupPageOwnerId(target.pageId);
       if (!ownerId) {

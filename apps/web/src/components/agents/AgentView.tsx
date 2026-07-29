@@ -134,6 +134,9 @@ export default function AgentView({
         <span
           data-testid="sandbox-status-chip"
           title={statusCopy.description}
+          // The description was reachable only by hovering for a tooltip —
+          // invisible to a screen reader and to anyone not using a mouse.
+          aria-label={`Sandbox: ${statusCopy.label}. ${statusCopy.description}`}
           className="shrink-0 rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground"
         >
           {statusCopy.label}
@@ -215,7 +218,7 @@ export default function AgentView({
               forceMount
               className="mt-0 flex min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden"
             >
-              <Shell shellId={tab.shellId} />
+              <Shell shellId={tab.shellId} name={tab.label} />
             </TabsContent>
           ))}
 

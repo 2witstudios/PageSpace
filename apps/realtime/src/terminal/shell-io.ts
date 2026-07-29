@@ -93,6 +93,24 @@ export interface ShellIoDeps {
    * module deliberately knows about neither. Absent -> no re-arm.
    */
   rearmIdleReap?: (session: TerminalSession) => void;
+  /**
+   * Re-authorize a caller-supplied `userId` against a session it did not just
+   * start.
+   *
+   * `session.lastViewerUserId` is what the periodic re-auth tick evicts on, so
+   * whoever is recorded there is who the session's continued right to run is
+   * checked against. On the START path that identity is authorized by
+   * `startSession` in the same request. On a plain send it is not: the field
+   * arrives from the caller, and while this endpoint is HMAC-gated (only the web
+   * tier can reach it), "the transport is trusted" is not the same as "this
+   * user is authorized for THIS session" — the signature says who is calling,
+   * not on whose behalf.
+   *
+   * Absent -> the identity is left alone rather than trusted, which fails closed:
+   * an un-refreshed identity can cause a spurious eviction, whereas a forged one
+   * would keep a revoked user's session alive.
+   */
+  reauthorizeViewer?: (input: { shellId: string; userId: string }) => Promise<boolean>;
 }
 
 /**
@@ -259,7 +277,16 @@ export async function handleShellSendRequest(
     // authorized to run, and revoking the current user does nothing at all.
     // A send is real, authenticated use — updating this is exactly as safe
     // as it was for that identity to be recorded at create time.
-    if (payload.userId !== undefined) session.lastViewerUserId = payload.userId;
+    // Only ever refresh the eviction identity to a user this request has
+    // ESTABLISHED authorization for: `started` means `startSession` just
+    // authorized them, otherwise an injected re-check must say so. Without
+    // either, the field is ignored — see `reauthorizeViewer`.
+    if (payload.userId !== undefined && payload.userId !== session.lastViewerUserId) {
+      const authorized = started
+        ? true
+        : ((await deps.reauthorizeViewer?.({ shellId: payload.shellId, userId: payload.userId })) ?? false);
+      if (authorized) session.lastViewerUserId = payload.userId;
+    }
     deps.rearmIdleReap?.(session);
   }
 

@@ -12,7 +12,9 @@
  * no backing page), so `storageBillingTarget` falls through to the session's
  * own `ownerId` — the payer of last resort, and the ONLY payer for a
  * global-assistant session — with no page lookup at all (mirrors
- * `resolveAgentSessionPayerId` in `billing/sandbox-payer.ts`).
+ * `resolveAgentSessionPayerId` in `billing/sandbox-payer.ts`, which applies the
+ * same rule at charge time with one deliberate difference — it falls back to the
+ * session owner on a failed page lookup, where the storage reconcile skips).
  */
 
 /** A billable agent-session Sprite. */

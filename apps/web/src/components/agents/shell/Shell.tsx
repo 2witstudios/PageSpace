@@ -21,6 +21,8 @@ import { useSocket } from '@/hooks/useSocket';
 import XtermTerminal from './XtermTerminal';
 
 export interface ShellProps {
+  /** The shell's display label, used to name the terminal region so multiple shells are distinguishable to a screen reader. */
+  name?: string;
   /** The whole address — everything connect/resize/kill/editing-store needs. */
   shellId: string;
   initialInput?: string;
@@ -29,7 +31,7 @@ export interface ShellProps {
   onError?(message: string): void;
 }
 
-export default function Shell({ shellId, initialInput, onInitialInputSent, onReady, onError }: ShellProps) {
+export default function Shell({ shellId, name, initialInput, onInitialInputSent, onReady, onError }: ShellProps) {
   const socket = useSocket();
 
   if (!socket) {
@@ -52,6 +54,7 @@ export default function Shell({ shellId, initialInput, onInitialInputSent, onRea
       onInitialInputSent={onInitialInputSent}
       onReady={onReady}
       onError={onError}
+      ariaLabel={name ? `Shell ${name}` : undefined}
     />
   );
 }

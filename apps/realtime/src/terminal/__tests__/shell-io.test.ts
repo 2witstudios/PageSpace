@@ -363,6 +363,28 @@ describe('shell IO — headless start', () => {
   }
 
   describe('handleShellSendRequest', () => {
+    it('given a start that authorizes a NEW identity, should adopt it without a separate re-auth seam', async () => {
+      // The start path re-decides authorization for this userId in the same
+      // request (that is what `startSession` does), so no `reauthorizeViewer` is
+      // needed to trust it — unlike a plain send, which has established nothing.
+      const { session } = writableSession();
+      session.viewers.clear();
+      session.lastViewerUserId = 'creator';
+      const start = starter(session);
+
+      await handleShellSendRequest(
+        { ...deps(), startSession: start.startSession },
+        sendBody({ start: true, userId: 'starter-user' }),
+      );
+
+      assert({
+        given: 'a send that STARTS the session for a different user',
+        should: 'track that user, since the start itself authorized them',
+        actual: session.lastViewerUserId,
+        expected: 'starter-user',
+      });
+    });
+
     it('given input for a reserved session and a start seam, should start the PTY and deliver into it', async () => {
       const { session, written } = writableSession();
       const start = starter(session);
@@ -486,12 +508,50 @@ describe('shell IO — headless start', () => {
       });
     });
 
-    it('given delivered input from a DIFFERENT user than the session was created for, should become the tracked identity', async () => {
+    it('given a RE-AUTHORIZED different user, should become the tracked identity', async () => {
       // The detached re-auth tick checks ONLY `lastViewerUserId` while nobody
       // is attached — leaving it pinned to the creator while a different
       // authorized user goes on sending would let revoking the creator kill
       // work this user is still authorized to run, and revoking THIS user do
-      // nothing at all.
+      // nothing at all. So it must refresh — but only for a user this request
+      // established authorization for.
+      const { session } = writableSession();
+      session.viewers.clear();
+      session.lastViewerUserId = 'user-1';
+      await handleShellSendRequest(
+        { ...deps({ 'k:sh': session }), reauthorizeViewer: async () => true },
+        sendBody({ userId: 'user-2' }),
+      );
+
+      assert({
+        given: 'a viewer-less session sent to by a different, re-authorized user',
+        should: 'track the sender as the identity the re-auth tick checks',
+        actual: session.lastViewerUserId,
+        expected: 'user-2',
+      });
+    });
+
+    it('given a different user who FAILS re-authorization, should leave the identity alone', async () => {
+      const { session } = writableSession();
+      session.viewers.clear();
+      session.lastViewerUserId = 'user-1';
+      await handleShellSendRequest(
+        { ...deps({ 'k:sh': session }), reauthorizeViewer: async () => false },
+        sendBody({ userId: 'attacker' }),
+      );
+
+      assert({
+        given: 'a caller-supplied identity that does not re-authorize',
+        should: 'keep the established identity so revocation still evicts the right user',
+        actual: session.lastViewerUserId,
+        expected: 'user-1',
+      });
+    });
+
+    it('given NO re-auth seam wired, should fail closed rather than trust the caller-supplied identity', async () => {
+      // The endpoint is HMAC-gated, but the signature says WHO IS CALLING, not
+      // on whose behalf — a forged identity here would keep a revoked user's
+      // session alive, which is strictly worse than a spurious eviction.
       const { session } = writableSession();
       session.viewers.clear();
       session.lastViewerUserId = 'user-1';
@@ -501,10 +561,10 @@ describe('shell IO — headless start', () => {
       );
 
       assert({
-        given: 'a viewer-less session created for one user, sent to by another',
-        should: 'track the sender as the identity the re-auth tick checks',
+        given: 'no reauthorizeViewer dep and a different caller-supplied userId',
+        should: 'leave the tracked identity untouched',
         actual: session.lastViewerUserId,
-        expected: 'user-2',
+        expected: 'user-1',
       });
     });
 

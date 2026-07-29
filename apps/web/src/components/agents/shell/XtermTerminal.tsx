@@ -39,6 +39,8 @@ export const RECONNECTING_NOTICE = '\r\n\x1b[90mConnection lost — reconnecting
 const PROMPT_BACKSTOP_MS = 3000;
 
 interface XtermTerminalProps {
+  /** Accessible name for the terminal region — the pane's own label (e.g. "shell-1"), so multiple shells are distinguishable. */
+  ariaLabel?: string;
   socket: Socket;
   /** The whole address — everything connect/resize/kill/editing-store needs. Callers
    *  should key their component with this same value so switching shells re-mounts
@@ -51,7 +53,7 @@ interface XtermTerminalProps {
   onError?(message: string): void;
 }
 
-export default function XtermTerminal({ socket, shellId, initialInput, onInitialInputSent, onReady, onError }: XtermTerminalProps) {
+export default function XtermTerminal({ socket, shellId, initialInput, onInitialInputSent, onReady, onError, ariaLabel }: XtermTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<XtermTerminalInstance | null>(null);
   // Read at ready-time, not captured in the connect effect's deps — same reason
@@ -410,5 +412,18 @@ export default function XtermTerminal({ socket, shellId, initialInput, onInitial
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket, shellId]);
 
-  return <div ref={containerRef} className="w-full h-full" />;
+  // Named and announced: xterm renders into a bare div, so without a role and
+  // label a screen reader has no way to say what this region is, and no way to
+  // report output that arrives without a focus change. `aria-live="polite"`
+  // rather than assertive — shell output is a stream, and interrupting the user
+  // on every chunk would be worse than silence.
+  return (
+    <div
+      ref={containerRef}
+      className="w-full h-full"
+      role="log"
+      aria-live="polite"
+      aria-label={ariaLabel ?? 'Shell output'}
+    />
+  );
 }
