@@ -641,6 +641,35 @@ describe('XtermTerminal — PTY binding across socket reconnects', () => {
     });
   });
 
+  test('a RECOVERABLE refusal leaves the pane alive — an over-cap paste must not cost the user their session', async () => {
+    // `shell:error` otherwise means "this binding is finished": the pane goes
+    // dead, drops its editing-store registration, and refuses to re-bind. Some
+    // refusals leave the shell perfectly alive — an over-cap paste is rejected
+    // before the PTY sees it — and killing the pane for one of those is strictly
+    // worse than the silent drop the message replaced.
+    //
+    // Asserted because a mutation removing the `recoverable` branch entirely
+    // passed this whole file: nothing here distinguished advisory from fatal.
+    const fake = fakeSocket();
+    render(<XtermTerminal socket={fake.socket} shellId="shell-1" />);
+    await waitFor(() => expect(fake.connectionIds().length).toBe(1));
+    const connectionId = fake.connectionId();
+
+    fake.server('shell:error', { message: 'Input too large (limit 65536 bytes).', connectionId, recoverable: true });
+    const connectsAfterAdvisory = fake.connectionIds().length;
+    fake.reconnect();
+
+    assert({
+      given: 'an advisory refusal that leaves the PTY running, followed by a transport cycle',
+      should: 'print the notice and STILL re-bind — the shell never died',
+      actual: {
+        printedNotice: written.some((line) => line.includes('Input too large')),
+        rebound: fake.connectionIds().length > connectsAfterAdvisory,
+      },
+      expected: { printedNotice: true, rebound: true },
+    });
+  });
+
   test('output racing ahead of a re-bind’s ready is never typed at — the OLD binding’s ready does not vouch for the NEW agent', async () => {
     const fake = fakeSocket();
     const onSent = vi.fn();

@@ -1103,6 +1103,26 @@ describe('buildShellHandlers', () => {
       expect(shell.write).not.toHaveBeenCalled();
     });
 
+    it('given an over-cap paste, should mark the error RECOVERABLE so the pane survives it', async () => {
+      // `shell:error` is the client's "this binding is finished" signal: it sets
+      // `dead`, drops the editing-store registration, and refuses to re-bind. An
+      // oversized paste is a refusal, not a death — without this flag the pane is
+      // permanently bricked until the tab is closed, which is strictly worse than
+      // the silent drop this message replaced.
+      //
+      // Asserted explicitly because a mutation flipping `recoverable` to `false`
+      // passed the entire suite: every other over-cap test checks the message or
+      // the dropped write, and none of them the flag that keeps the shell alive.
+      const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+      socket.emit.mockClear();
+
+      onInput({ data: 'x'.repeat(MAX_INPUT_BYTES + 1) });
+
+      const errors = socket.emit.mock.calls.filter(([event]) => event === 'shell:error');
+      expect(errors[0][1]).toMatchObject({ recoverable: true });
+    });
+
     it('given input over MAX_INPUT_BYTES, should drop it', async () => {
       const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
       await onConnect(validPayload);
