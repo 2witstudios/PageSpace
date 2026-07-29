@@ -31,6 +31,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { sessionAnchorForConversation } from '@/lib/agent-sessions/session-anchor';
+import { sessionQuotaExceeded } from '@/lib/agent-sessions/quota-response';
 import {
   checkAccessForSubject,
   checkSessionAccess,
@@ -48,33 +49,6 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 type RouteContext = { params: Promise<{ sessionId: string }> };
 
-/**
- * A plan-limit refusal, which is NOT an authorization failure: the caller has
- * every right to this session and has simply run out of allowance. Kept apart
- * from `denied()` so the user is told what actually happened (with the limit in
- * the message), and so routine quota events stop being filed as
- * `authz.access.denied` — a free-tier user clicking "new session" should not
- * read as repeated access violations in the security audit.
- *
- * 429, not 403: it is a rate/quantity limit, and it clears by ending a session.
- */
-function quotaExceeded(request: Request, userId: string, sessionId: string, detail?: string): NextResponse {
-  auditRequest(request, {
-    // A quantity limit, not a data access — `data.read` would file every
-    // "new session" click of a free-tier user into data-access forensics for a
-    // request that read nothing and provisioned nothing.
-    eventType: 'security.rate.limited',
-    userId,
-    resourceType: 'agent_session',
-    resourceId: sessionId,
-    details: { reason: 'session_limit_reached', route: 'agent-sessions/[sessionId]' },
-    riskScore: 0,
-  });
-  return NextResponse.json(
-    { error: detail ?? 'Live agent-session limit reached for your plan — end an existing session before starting another.' },
-    { status: 429 },
-  );
-}
 
 function denied(request: Request, userId: string, sessionId: string, reason: string): NextResponse {
   auditRequest(request, {
@@ -157,7 +131,7 @@ export async function POST(request: Request, context: RouteContext) {
       // A plan-limit refusal is not an access denial — separate response and
       // separate audit event (see quotaExceeded).
       if (provisioned.denial === 'session_limit_reached') {
-        return quotaExceeded(request, auth.userId, sessionId, provisioned.detail);
+        return sessionQuotaExceeded(request, auth.userId, sessionId, 'agent-sessions/[sessionId]', provisioned.detail);
       }
       return denied(request, auth.userId, sessionId, provisioned.denial ?? 'denied');
     }

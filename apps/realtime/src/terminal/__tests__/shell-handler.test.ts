@@ -3112,9 +3112,10 @@ describe('connectFailureMessage', () => {
   it('given a PLAN-LIMIT refusal, should not call it an access denial', () => {
     assert({
       given: 'an owner at their concurrent-session ceiling',
-      should: 'name the limit, not permissions — "access denied" sends them hunting a sharing bug they do not have',
+      should:
+        'name the limit in the UI\'s words — "access denied" sends them hunting a sharing bug they do not have, and "session" is the backend\'s word for what this reader sees labelled a sandbox',
       actual: connectFailureMessage({ kind: 'failed', reason: 'denied', message: 'session_limit_reached' }),
-      expected: 'Live agent-session limit reached for your plan — end an existing session before opening another.',
+      expected: "Your plan's limit for running sandboxes is already in use — stop one before starting another.",
     });
   });
 

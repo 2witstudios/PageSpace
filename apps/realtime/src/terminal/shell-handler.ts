@@ -1382,8 +1382,16 @@ export function connectFailureMessage(failure: Extract<EnsureShellSessionResult,
       // to this shell and has run out of allowance, so telling them "access
       // denied" sends them looking for a permissions problem that does not
       // exist. Same distinction the HTTP routes draw (429 vs 403).
+      //
+      // Worded in the UI's vocabulary, not the backend's. This string is written
+      // straight into a terminal pane a HUMAN is reading, and the project's
+      // vocabulary rule is that "session" is the AI/tool/backend word while the
+      // UI says agents, conversations and sandboxes — the same object the status
+      // chip beside this pane calls a sandbox. The tool-facing version of this
+      // refusal (`DENIAL_MESSAGES.session_limit_reached`) does say "session",
+      // correctly: its reader is an agent.
       return failure.message === 'session_limit_reached'
-        ? 'Live agent-session limit reached for your plan — end an existing session before opening another.'
+        ? 'Your plan\'s limit for running sandboxes is already in use — stop one before starting another.'
         : `Shell access denied: ${failure.message ?? 'unknown'}`;
     case 'insolvent':
       return 'Insufficient credits to open a shell session.';
