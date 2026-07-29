@@ -14,7 +14,7 @@
  * settings display) is filled in from the already-loaded drive list rather
  * than a third fetch.
  */
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import useSWR from 'swr';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useDriveStore } from '@/hooks/useDrive';
@@ -49,6 +49,8 @@ export interface UseResolvedAgentResult {
   agent: AgentInfo | null;
   isLoading: boolean;
   error: Error | undefined;
+  /** Re-fetch after a failure. SWR stops retrying on its own, so a UI that shows an error needs a way to ask again. */
+  retry: () => void;
 }
 
 export function useResolvedAgent(agentId: string | null | undefined): UseResolvedAgentResult {
@@ -61,9 +63,10 @@ export function useResolvedAgent(agentId: string | null | undefined): UseResolve
     data: pageInfo,
     error: pageError,
     isLoading: pageLoading,
+    mutate: mutatePage,
   } = useSWR(pageKey, pageInfoFetcher, { revalidateOnFocus: false, dedupingInterval: 5_000 });
 
-  const { data: config, error: configError } = useSWR(configKey, agentConfigFetcher, {
+  const { data: config, error: configError, mutate: mutateConfig } = useSWR(configKey, agentConfigFetcher, {
     revalidateOnFocus: false,
     dedupingInterval: 5_000,
   });
@@ -83,10 +86,16 @@ export function useResolvedAgent(agentId: string | null | undefined): UseResolve
     };
   }, [agentId, pageInfo, config, drives]);
 
+  const retry = useCallback(() => {
+    void mutatePage();
+    void mutateConfig();
+  }, [mutatePage, mutateConfig]);
+
   return {
     agent,
     // Config is nice-to-have (defaults are fine): only the page fetch gates loading.
     isLoading: pageLoading && !agent,
     error: (pageError ?? configError) as Error | undefined,
+    retry,
   };
 }

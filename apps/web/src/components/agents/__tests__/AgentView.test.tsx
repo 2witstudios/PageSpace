@@ -14,7 +14,12 @@ import type { AgentInfo } from '@/types/agent';
 import type { ShellDTO } from '@pagespace/lib/agent-sessions/contract';
 
 const resolvedAgent = vi.hoisted(() => ({
-  current: { agent: null as AgentInfo | null, isLoading: false, error: undefined as Error | undefined },
+  current: {
+    agent: null as AgentInfo | null,
+    isLoading: false,
+    error: undefined as Error | undefined,
+    retry: vi.fn() as () => void,
+  } as { agent: AgentInfo | null; isLoading: boolean; error: Error | undefined; retry: () => void },
 }));
 vi.mock('../useResolvedAgent', () => ({
   useResolvedAgent: () => resolvedAgent.current,
@@ -81,7 +86,7 @@ function shellFixture(overrides: Partial<ShellDTO> = {}): ShellDTO {
 }
 
 beforeEach(() => {
-  resolvedAgent.current = { agent: agentFixture(), isLoading: false, error: undefined };
+  resolvedAgent.current = { agent: agentFixture(), isLoading: false, error: undefined , retry: vi.fn() };
   sessionState.current = {
     session: null,
     status: 'none',
@@ -102,7 +107,7 @@ beforeEach(() => {
 
 describe('AgentView', () => {
   it('shows a loading state while the agent is still resolving', () => {
-    resolvedAgent.current = { agent: null, isLoading: true, error: undefined };
+    resolvedAgent.current = { agent: null, isLoading: true, error: undefined , retry: vi.fn() };
     render(<AgentView agentId="agent-1" conversationId="conv-1" context="console" />);
     expect(screen.getByTestId('agent-view-loading')).toBeInTheDocument();
   });
@@ -187,5 +192,54 @@ describe('AgentView', () => {
   it('hides Add shell and disables edits in read-only mode', () => {
     render(<AgentView agentId="agent-1" conversationId="conv-1" context="page" isReadOnly />);
     expect(screen.queryByRole('button', { name: /Add shell/ })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * A failed agent load must be visibly distinguishable from a slow one. SWR stops
+ * retrying after a genuine failure, so a combined `isLoading || !agent` guard
+ * left the user watching a spinner that would never resolve — no error text, no
+ * retry, nothing to do but reload the page.
+ */
+describe('AgentView — failed agent load', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('given loading finished with no agent, should show an error with a retry rather than spin forever', async () => {
+    resolvedAgent.current = {
+      agent: null,
+      isLoading: false,
+      error: new Error('Failed to load agent page: 500'),
+      retry: vi.fn(),
+    };
+
+    render(<AgentView agentId="agent-1" conversationId="conv-1" context="console" />);
+
+    expect(screen.queryByTestId('agent-view-loading')).toBeNull();
+    const error = screen.getByTestId('agent-view-error');
+    expect(error).toBeTruthy();
+    // The server's reason is surfaced, not swallowed behind a generic message.
+    expect(error.textContent).toContain('Failed to load agent page: 500');
+    expect(screen.getByRole('button', { name: /try again/i })).toBeTruthy();
+  });
+
+  it('given the retry button is pressed, should ask the hook to re-fetch', async () => {
+    const retry = vi.fn();
+    resolvedAgent.current = { agent: null, isLoading: false, error: undefined, retry  };
+
+    render(<AgentView agentId="agent-1" conversationId="conv-1" context="console" />);
+    fireEvent.click(screen.getByRole('button', { name: /try again/i }));
+
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it('given still loading, should show the spinner and no error', () => {
+    resolvedAgent.current = { agent: null, isLoading: true, error: undefined, retry: vi.fn()  };
+
+    render(<AgentView agentId="agent-1" conversationId="conv-1" context="console" />);
+
+    expect(screen.getByTestId('agent-view-loading')).toBeTruthy();
+    expect(screen.queryByTestId('agent-view-error')).toBeNull();
   });
 });

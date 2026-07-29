@@ -26,6 +26,7 @@ import { machineSpriteReclaims } from '@pagespace/db/schema/machine-sprite-recla
 import type { ReconcileOrphanSpritesDeps, SpriteOrphanRow } from '@pagespace/lib/services/sandbox/sprite-orphan-reconcile';
 import { SandboxSpriteReplacedError } from '@pagespace/lib/services/sandbox/sandbox-host';
 import { getAgentSessionStore, getSandboxHost } from './agent-sessions-runtime';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 /**
  * Cap on how many candidate rows each source contributes to one reconcile
@@ -39,7 +40,12 @@ const LOOKAHEAD = MAX_CANDIDATES_PER_TABLE + 1;
 
 export const defaultReconcileAgentSessionOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
   async listOrphanCandidates() {
-    const [reclaimRows, sessionRows] = await Promise.all([
+    // allSettled, not all: the two candidate sources are INDEPENDENT (the
+    // FK-less reclaim outbox, and rows carrying a teardown intent). A failure
+    // reading one must not stop the other's Sprites from being reclaimed —
+    // otherwise a single degraded query parks every reclaim until it recovers,
+    // and those are billing VMs nobody is using.
+    const [reclaimResult, sessionResult] = await Promise.allSettled([
       db
         .select({
           sandboxId: machineSpriteReclaims.sandboxId,
@@ -71,6 +77,21 @@ export const defaultReconcileAgentSessionOrphanSpritesDeps: ReconcileOrphanSprit
         .orderBy(asc(agentSessions.teardownRequestedAt))
         .limit(LOOKAHEAD),
     ]);
+
+    if (reclaimResult.status === 'rejected') {
+      loggers.ai.error(
+        'Orphan reconcile: reclaim-outbox listing failed; continuing with session rows only',
+        reclaimResult.reason instanceof Error ? reclaimResult.reason : new Error(String(reclaimResult.reason)),
+      );
+    }
+    if (sessionResult.status === 'rejected') {
+      loggers.ai.error(
+        'Orphan reconcile: session-row listing failed; continuing with reclaim rows only',
+        sessionResult.reason instanceof Error ? sessionResult.reason : new Error(String(sessionResult.reason)),
+      );
+    }
+    const reclaimRows = reclaimResult.status === 'fulfilled' ? reclaimResult.value : [];
+    const sessionRows = sessionResult.status === 'fulfilled' ? sessionResult.value : [];
 
     return {
       rows: [

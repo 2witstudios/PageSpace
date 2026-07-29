@@ -50,6 +50,7 @@ import {
   type LiveSpriteInstance,
 } from '../../agent-sessions/plan-session-lifecycle';
 import type { AgentSessionRecord, AgentSessionStore } from './agent-sessions-store';
+import { loggers } from '../../logging/logger-config';
 
 /** The actor a provision runs as. Only what the Sprite key and the authorization gate need — a session has no clone to audit and no git token to resolve. */
 export interface AgentSessionActorContext {
@@ -152,8 +153,19 @@ async function killUnreferencedOrEnqueue(
     if (error instanceof SandboxSpriteReplacedError) return;
     await deps.store
       .enqueueReclaim({ sandboxId: handle.sandboxId, spriteInstanceId: handle.spriteInstanceId ?? null })
-      .catch(() => {
-        /* best-effort: the outbox insert failed too; the provisioning failure is still reported. */
+      .catch((outboxError: unknown) => {
+        // BOTH recovery routes are now exhausted: the VM would not die and its
+        // pointer could not be parked for the reconciler. Nothing else in the
+        // system knows this Sprite exists — no row points at it, so no trigger
+        // and no cross-check will ever find it. It bills until an operator
+        // notices, which they can only do if this is LOUD. Swallowing it
+        // silently made the one path built to catch a permanently leaked VM the
+        // one path that produced no signal at all.
+        loggers.ai.error(
+          'LEAKED SANDBOX: kill failed and reclaim-outbox insert failed; this VM is now unreferenced and will bill until reclaimed manually',
+          outboxError instanceof Error ? outboxError : new Error(String(outboxError)),
+          { sandboxId: handle.sandboxId, spriteInstanceId: handle.spriteInstanceId ?? null, killError: String(error) },
+        );
       });
   }
 }

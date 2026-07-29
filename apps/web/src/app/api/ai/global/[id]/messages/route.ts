@@ -805,7 +805,12 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
       drivePromptSection;
 
     // Build agent awareness prompt - lists visible AI agents for consultation
-    const agentAwarenessPrompt = await buildAgentAwarenessPrompt(userId);
+    // `canDelegate` mirrors the session-tool gate below: spawn_session only
+    // exists when code execution is enabled, and a prompt that names a tool the
+    // model does not have makes it attempt delegation that silently fails.
+    const agentAwarenessPrompt = await buildAgentAwarenessPrompt(userId, {
+      canDelegate: isCodeExecutionEnabled(),
+    });
 
     // Build page tree context if enabled
     let pageTreePrompt = '';
