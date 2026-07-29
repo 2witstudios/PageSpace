@@ -89,13 +89,38 @@ export function useInboxSocket({ cacheKey, scope, driveId, hasLoadedRef: externa
             // independently for the same socket event. mutate()'s functional
             // updater applies synchronously, so the second call's
             // currentData already reflects the first call's write — visible
-            // here as lastMessageAt already matching the incoming payload.
-            // Without this guard, one message double-increments unreadCount
-            // (0 -> 1 -> 2). payload.unreadCount (an explicit value from the
-            // server) and read_status_changed's reset to 0 are naturally
-            // idempotent already, so only the +1 fallback needs guarding.
+            // here as lastMessageAt (+ preview, see below) already matching
+            // the incoming payload. Without this guard, one message
+            // double-increments unreadCount (0 -> 1 -> 2). payload.unreadCount
+            // (an explicit value from the server) and read_status_changed's
+            // reset to 0 are naturally idempotent already, so only the +1
+            // fallback needs guarding.
+            //
+            // The payload carries no per-message id (only the conversation's
+            // id, reused across all its messages), so lastMessageAt is the
+            // only identity signal available without a server-side payload
+            // change (out of scope here — see packages/lib/, owned by a
+            // sibling PR). lastMessageAt alone has a real, if narrow,
+            // collision risk: two distinct messages in the same conversation
+            // sent within the same millisecond serialize to an identical
+            // toISOString() value. When the payload carries preview text,
+            // also requiring it to match narrows that risk further, to two
+            // messages colliding on both timestamp and exact text. When
+            // there's no preview to compare (e.g. an attachment-only
+            // message), previewMatches falls back to true rather than
+            // comparing against existingItem's (unrelated, unchanged-by-this-
+            // payload) previous preview value, which would otherwise never
+            // match and silently defeat the guard for every no-preview
+            // message.
             const willIncrement = payload.unreadCount === undefined && payload.operation !== 'read_status_changed';
-            if (willIncrement && payload.lastMessageAt !== undefined && payload.lastMessageAt === existingItem.lastMessageAt) {
+            const previewMatches = payload.lastMessagePreview
+              ? payload.lastMessagePreview === existingItem.lastMessagePreview
+              : true;
+            const isDuplicateOfSiblingHandler = willIncrement
+              && payload.lastMessageAt !== undefined
+              && payload.lastMessageAt === existingItem.lastMessageAt
+              && previewMatches;
+            if (isDuplicateOfSiblingHandler) {
               return currentData;
             }
 

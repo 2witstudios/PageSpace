@@ -318,6 +318,36 @@ describe('useInboxSocket', () => {
       expect(afterFirstHandler.items[0].unreadCount).toBe(5);
       expect(afterSecondHandler.items[0].unreadCount).toBe(5);
     });
+
+    it('two distinct messages that collide on the same millisecond timestamp still each increment (flagged in PR #2247 review)', () => {
+      // toISOString() is millisecond-precision, so two genuinely distinct
+      // messages sent in rapid succession can share an identical
+      // lastMessageAt. Distinct preview text is what tells them apart here.
+      const collidingTimestamp = '2026-07-28T13:00:00.000Z';
+      const firstPayload = dmPayload({ id: 'dm-1', lastMessageAt: collidingTimestamp, lastMessagePreview: 'first message', unreadCount: undefined });
+      const { afterFirstHandler: afterFirstMessage } = runUpdaterTwice(firstPayload, seedData);
+      expect(afterFirstMessage.items[0].unreadCount).toBe(1);
+
+      const secondPayload = dmPayload({ id: 'dm-1', lastMessageAt: collidingTimestamp, lastMessagePreview: 'second message', unreadCount: undefined });
+      const { afterFirstHandler, afterSecondHandler } = runUpdaterTwice(secondPayload, afterFirstMessage);
+
+      expect(afterFirstHandler.items[0].unreadCount).toBe(2);
+      expect(afterSecondHandler.items[0].unreadCount).toBe(2);
+      expect(afterSecondHandler.items[0].lastMessagePreview).toBe('second message');
+    });
+
+    it('a preview-less payload (e.g. an attachment-only message) still dedupes correctly across two handlers', () => {
+      // Regression guard for the previewMatches fallback: comparing
+      // payload.lastMessagePreview directly against existingItem's (instead
+      // of falling back to true when the payload has none) would make
+      // every no-preview message look like a "different" message to the
+      // second handler and double-increment it.
+      const payload = dmPayload({ id: 'dm-1', lastMessageAt: '2026-07-28T13:00:00.000Z', lastMessagePreview: undefined, unreadCount: undefined });
+      const { afterFirstHandler, afterSecondHandler } = runUpdaterTwice(payload, seedData);
+
+      expect(afterFirstHandler.items[0].unreadCount).toBe(1);
+      expect(afterSecondHandler.items[0].unreadCount).toBe(1);
+    });
   });
 
   // -------------------------------------------------------------------------
