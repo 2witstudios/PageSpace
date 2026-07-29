@@ -669,6 +669,60 @@ describe('ensureAgentSessionSandbox — refusals', () => {
     expect(host.calls.provision).toHaveLength(0);
   });
 
+  it('given the quota check THROWS, should mint nothing — the ceiling fails closed', async () => {
+    // A transient DB failure in `countLive` must not become an open door. There
+    // is no try/catch here today and the throw propagates, which is correct —
+    // but "correct by absence" is exactly what a well-meaning later `catch`
+    // defaulting to `{ allowed: true }` would quietly undo, and a ceiling that
+    // fails open under load is a ceiling that fails open exactly when it
+    // matters. Pinned on the observable effect: no VM.
+    const store = makeAgentSessionStore([makeSessionRecord()]);
+    const host = makeSpriteHost();
+
+    await expect(
+      ensureAgentSessionSandbox({
+        row: toSpriteRow(makeSessionRecord()),
+        intent: 'ensure',
+        actor,
+        deps: makeDeps(
+          { store, host },
+          {
+            checkConcurrency: async () => {
+              throw new Error('connection terminated');
+            },
+          },
+        ),
+      }),
+    ).rejects.toThrow('connection terminated');
+
+    expect(host.calls.provision).toHaveLength(0);
+  });
+
+  it('given the egress gate THROWS, should mint nothing — containment fails closed too', async () => {
+    // Same reasoning for the other gate that stands between a request and a
+    // live VM with network access.
+    const store = makeAgentSessionStore([makeSessionRecord()]);
+    const host = makeSpriteHost();
+
+    await expect(
+      ensureAgentSessionSandbox({
+        row: toSpriteRow(makeSessionRecord()),
+        intent: 'ensure',
+        actor,
+        deps: makeDeps(
+          { store, host },
+          {
+            checkFullEgressEnablement: async () => {
+              throw new Error('flag service unreachable');
+            },
+          },
+        ),
+      }),
+    ).rejects.toThrow('flag service unreachable');
+
+    expect(host.calls.provision).toHaveLength(0);
+  });
+
   it('given a resume, should NOT re-run the egress gate — the lockdown is already proven for that VM', async () => {
     const provisioned = makeSessionRecord({ sessionKey: SESSION_KEY, sandboxId: SESSION_KEY, spriteInstanceId: 'i' });
     const store = makeAgentSessionStore([provisioned]);
