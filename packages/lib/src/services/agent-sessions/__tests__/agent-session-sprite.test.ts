@@ -779,6 +779,33 @@ describe('ensureAgentSessionSandbox — concurrency ceiling', () => {
     expect(store.rows.get(SESSION_ID)?.sandboxId).toBeNull();
   });
 
+  it('given an ENDED session re-provisioning, should NOT claim the exemption — its allocation is not counted', async () => {
+    // The exemption must track `countLive` exactly (sandboxId set AND not torn
+    // down). Teardown leaves `sandboxId` in place, so testing that column alone
+    // would exempt every ended session: end N, re-provision all N, and the
+    // owner holds N live sandboxes past their ceiling.
+    const ended = makeSessionRecord({
+      sandboxId: 'sbx-dead',
+      sessionKey: SESSION_KEY,
+      spriteInstanceId: 'i-dead',
+      spriteTornDownAt: NOW,
+    });
+    const store = makeAgentSessionStore([ended]);
+    const host = makeSpriteHost();
+    const seen: Array<{ ownerId: string; alreadyProvisioned: boolean }> = [];
+
+    await ensureAgentSessionSandbox({
+      row: toSpriteRow(ended),
+      intent: 'ensure',
+      actor: { userId: OWNER_ID, tenantId: TENANT_ID },
+      deps: makeDeps({ store, host }, {
+        checkConcurrency: async (input) => { seen.push(input); return { allowed: true }; },
+      }),
+    });
+
+    expect(seen).toEqual([{ ownerId: OWNER_ID, alreadyProvisioned: false }]);
+  });
+
   it('given a re-provision of a row that already holds a sandbox, should tell the ceiling it is already provisioned', async () => {
     const provisioned = makeSessionRecord({ sandboxId: 'sbx-live', sessionKey: SESSION_KEY, spriteInstanceId: 'i' });
     const store = makeAgentSessionStore([provisioned]);

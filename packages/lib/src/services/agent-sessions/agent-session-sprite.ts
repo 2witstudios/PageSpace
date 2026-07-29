@@ -411,7 +411,15 @@ export async function ensureAgentSessionSandbox({
       // proven for its Sprite.
       const quota = await deps.checkConcurrency({
         ownerId: row.ownerId,
-        alreadyProvisioned: row.sandboxId !== null,
+        // MUST match `AgentSessionStore.countLive`'s predicate exactly
+        // (`sandboxId IS NOT NULL AND spriteTornDownAt IS NULL`). Teardown
+        // stamps `spriteTornDownAt` and deliberately LEAVES `sandboxId` in
+        // place, so a `sandboxId !== null` test alone would treat every ENDED
+        // session as already-counted and exempt it — letting an owner end N
+        // sessions, re-provision them all, and hold N live sandboxes past their
+        // ceiling. The exemption is only sound for an allocation the count can
+        // actually see.
+        alreadyProvisioned: row.sandboxId !== null && row.spriteTornDownAt === null,
       });
       if (!quota.allowed) {
         return {
