@@ -104,7 +104,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
     apiValidation: {
       optionalFields: ['systemPrompt', 'enabledTools', 'aiProvider', 'aiModel'],
     },
-    uiComponent: 'AiChatView',
+    uiComponent: 'AgentPageView',
     layoutViewType: 'ai',
   },
   [PageType.CANVAS]: {

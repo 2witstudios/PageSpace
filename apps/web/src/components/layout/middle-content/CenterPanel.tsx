@@ -160,10 +160,7 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   // Dynamic component selection using centralized config
   const componentMap = {
     FolderView,
-    // Config's uiComponent string is still 'AiChatView' (packages/lib) —
-    // AgentPageView (AgentView, unified with the Agents console) is what it
-    // resolves to now; AiChatView.tsx no longer exists.
-    AiChatView: AgentPageView,
+    AgentPageView,
     ChannelView,
     DocumentView,
     CanvasPageView,
@@ -197,7 +194,7 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   } else if (componentName === 'SheetView') {
     // SheetView should remount per page to isolate undo/redo history
     pageComponent = <SheetView key={`sheet-${page.id}`} page={page} />;
-  } else if (componentName === 'AiChatView') {
+  } else if (componentName === 'AgentPageView') {
     // AgentPageView should remount per page: conversation identity is scoped
     // to a single agent page and must reset on switch.
     pageComponent = <AgentPageView key={`ai-chat-${page.id}`} page={page} />;

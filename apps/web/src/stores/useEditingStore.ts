@@ -6,7 +6,13 @@
  *
  * This is a pure state-based solution (no refs) that integrates with:
  * - Document editing (DocumentView)
- * - AI streaming (AiChatView, GlobalAssistantView, SidebarChatTab)
+ * - AI streaming — registered CENTRALLY, not per surface: `GlobalChatProvider`
+ *   mounts `DerivedStreamingRegistrations`, which derives one session per
+ *   conversation with a pending send or a live stream. Chat surfaces
+ *   deliberately do not register their own; two owners would disagree about
+ *   when to end it. (This line used to name the surfaces instead, one of which
+ *   no longer exists — which reads as "each surface registers" and is exactly
+ *   the wrong conclusion.)
  * - Auth refresh protection (auth-store)
  * - SWR isPaused() conditions (UserDropdown)
  */
