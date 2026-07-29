@@ -25,6 +25,7 @@ import useSWR from 'swr';
 import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
 import { post, patch, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { refetchNotificationsIfMarkedRead } from '@/stores/useNotificationStore';
 import { Check, MessageSquareText, X } from 'lucide-react';
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
 import { ThreadOriginBadge } from '@/components/messages/ThreadOriginBadge';
@@ -160,7 +161,7 @@ export default function InboxDMPage() {
   const conversation = conversationData?.conversation;
 
   // Fetch messages
-  const { data: messagesData } = useSWR<{ messages: Message[] }>(
+  const { data: messagesData } = useSWR<{ messages: Message[]; notificationsMarkedRead?: number }>(
     conversationId ? `/api/messages/${conversationId}` : null,
     fetcher,
     {
@@ -173,6 +174,13 @@ export default function InboxDMPage() {
       setMessages(messagesData.messages);
     }
   }, [messagesData]);
+
+  // The GET above marks the conversation read server-side; when it actually
+  // cleared unread notifications, refetch so the bell/nav badge correct
+  // without a page reload (useSidebarBadges watches unreadCount for this).
+  useEffect(() => {
+    refetchNotificationsIfMarkedRead(messagesData?.notificationsMarkedRead);
+  }, [messagesData?.notificationsMarkedRead]);
 
   // Socket room join and updates
   useEffect(() => {
@@ -190,7 +198,11 @@ export default function InboxDMPage() {
         setMessages((prev) => reconcileMessage(prev, message));
 
         if (message.senderId !== user.id) {
-          patch(`/api/messages/${conversationId}`);
+          patch<{ success: boolean; notificationsMarkedRead: number }>(`/api/messages/${conversationId}`)
+            .then((res) => refetchNotificationsIfMarkedRead(res.notificationsMarkedRead))
+            .catch(() => {
+              // Silently ignore errors - marking as read is not critical
+            });
         }
       }
     };

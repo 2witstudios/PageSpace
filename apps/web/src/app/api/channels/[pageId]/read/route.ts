@@ -6,6 +6,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
+import { markPageNotificationsRead } from '@pagespace/lib/notifications/notifications';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -43,16 +44,22 @@ export async function POST(
     DO UPDATE SET "lastReadAt" = NOW()
   `);
 
-  // Broadcast read status change to user's inbox
-  await broadcastInboxEvent(userId, {
-    operation: 'read_status_changed',
-    type: 'channel',
-    id: pageId,
-    driveId: channel.driveId,
-    unreadCount: 0,
-  });
+  // Broadcast read status change and clear MENTION (and other) notifications
+  // tied to this page in parallel — independent writes, no dependency between
+  // them. Skipping the notification clear would leave the nav Channels badge
+  // lit even though the channel itself is read.
+  const [, notificationsMarkedRead] = await Promise.all([
+    broadcastInboxEvent(userId, {
+      operation: 'read_status_changed',
+      type: 'channel',
+      id: pageId,
+      driveId: channel.driveId,
+      unreadCount: 0,
+    }),
+    markPageNotificationsRead(userId, pageId),
+  ]);
 
-  loggers.api.debug('Channel marked as read', { channelId: pageId, userId });
+  loggers.api.debug('Channel marked as read', { channelId: pageId, userId, notificationsMarkedRead });
 
-  return NextResponse.json({ success: true });
+  return NextResponse.json({ success: true, notificationsMarkedRead });
 }

@@ -31,6 +31,7 @@ import type { QuotedMessageSnapshot } from '@pagespace/lib/services/quote-enrich
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { post, del, patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useSocketStore } from '@/stores/useSocketStore';
+import { refetchNotificationsIfMarkedRead } from '@/stores/useNotificationStore';
 import { useThreadPanelStore } from '@/stores/useThreadPanelStore';
 import { ThreadPanel } from '@/components/layout/middle-content/page-views/thread/ThreadPanel';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
@@ -188,9 +189,11 @@ function ChannelView({ page }: ChannelViewProps) {
       setNextCursor(data.nextCursor ?? null);
 
       // Mark channel as read when viewed
-      post(`/api/channels/${page.id}/read`, {}).catch(() => {
-        // Silently ignore errors - marking as read is not critical
-      });
+      post<{ success: boolean; notificationsMarkedRead: number }>(`/api/channels/${page.id}/read`, {})
+        .then((res) => refetchNotificationsIfMarkedRead(res.notificationsMarkedRead))
+        .catch(() => {
+          // Silently ignore errors - marking as read is not critical
+        });
     };
     fetchMessages();
   }, [page.id]);
