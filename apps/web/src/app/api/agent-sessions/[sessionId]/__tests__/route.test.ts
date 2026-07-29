@@ -141,6 +141,35 @@ describe('POST /api/agent-sessions/[sessionId]', () => {
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
   });
 
+  it('given a PLAN-LIMIT refusal, should 429 — not the 403 an authorization failure gets', async () => {
+    // The distinction this PR spent several rounds getting right, finally pinned
+    // at the route: a quota refusal is a quantity limit (429, `security.rate.limited`,
+    // worded in the UI's vocabulary), never an access denial. The `route` tag is
+    // asserted because extracting the duplicated helper made it a parameter.
+    mockProvisionSessionSandbox.mockResolvedValue({
+      ok: false,
+      reason: 'denied',
+      denial: 'session_limit_reached',
+    });
+
+    const response = await post();
+
+    expect(response.status).toBe(429);
+    const body = await response.json();
+    expect(body.error).toContain('sandbox');
+    expect(body.error.toLowerCase()).not.toContain('session');
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        eventType: 'security.rate.limited',
+        details: expect.objectContaining({
+          reason: 'session_limit_reached',
+          route: 'agent-sessions/[sessionId]',
+        }),
+      }),
+    );
+  });
+
   it('given a provisioning denial, should 403 with the audit trail', async () => {
     mockProvisionSessionSandbox.mockResolvedValue({ ok: false, reason: 'denied', denial: 'not_authorized' });
     const response = await post();

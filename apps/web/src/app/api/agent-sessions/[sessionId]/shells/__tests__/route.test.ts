@@ -191,6 +191,37 @@ describe('POST /api/agent-sessions/[sessionId]/shells', () => {
     expect(response.status).toBe(400);
   });
 
+  it('given a PLAN-LIMIT refusal, should 429 with the user-facing message and a rate-limit audit', async () => {
+    // Untested until now, on a path this PR reworked repeatedly. Three things
+    // matter and none was pinned: the status (429, not the 403 this started as
+    // — a quota refusal is not an authorization failure), the audit event
+    // (`security.rate.limited`, not `data.read`, so a free-tier user hitting
+    // their ceiling is not filed as data-access forensics), and the route tag,
+    // which became a PARAMETER when the duplicated helper was extracted and can
+    // therefore now be passed wrong.
+    mockProvisionSessionSandbox.mockResolvedValue({
+      ok: false,
+      reason: 'denied',
+      denial: 'session_limit_reached',
+    });
+
+    const response = await post({});
+
+    expect(response.status).toBe(429);
+    expect((await response.json()).error).toContain('sandbox');
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        eventType: 'security.rate.limited',
+        details: expect.objectContaining({
+          reason: 'session_limit_reached',
+          route: 'agent-sessions/[sessionId]/shells',
+        }),
+      }),
+    );
+    expect(mockSpawnShell).not.toHaveBeenCalled();
+  });
+
   it('given a provisioning failure, should 502 and never spawn a row pointing at nothing', async () => {
     mockProvisionSessionSandbox.mockResolvedValue({ ok: false, reason: 'provision_failed' });
     const response = await post({});
