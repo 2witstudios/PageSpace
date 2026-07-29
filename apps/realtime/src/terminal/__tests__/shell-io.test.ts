@@ -779,17 +779,17 @@ describe('shell IO — headless start', () => {
       });
     });
 
-    it('given a deliberate read from a DIFFERENT user than the session was created for, should become the tracked identity', async () => {
+    it('given a deliberate read from a DIFFERENT, RE-AUTHORIZED user, should become the tracked identity', async () => {
       const { session } = writableSession();
       session.viewers.clear();
       session.lastViewerUserId = 'user-1';
       await handleShellReadRequest(
-        { ...deps({ 'k:sh': session }) },
+        { ...deps({ 'k:sh': session }), reauthorizeViewer: async () => true },
         readBody({ shellIds: ['sh'], start: true, userId: 'user-2' }),
       );
 
       assert({
-        given: 'a viewer-less session created for one user, read by another',
+        given: 'a viewer-less session read by another user who re-authorizes',
         should: 'track the reader as the identity the detached re-auth tick checks',
         actual: session.lastViewerUserId,
         expected: 'user-2',
@@ -846,5 +846,51 @@ describe('planSessionStart', () => {
       actual: planSessionStart({ userId: '' }, { addressable: true, hasStarter: true }),
       expected: { ok: false, error: 'Missing or invalid userId' },
     });
+  });
+});
+
+/**
+ * The read path shares the send path's trust boundary: `start: true` on an
+ * already-live session lets a caller propose a new tracked identity, so an
+ * ungated read would make the send-path re-auth bypassable by asking to READ.
+ */
+describe('handleShellReadRequest — viewer identity re-authorization', () => {
+  it('given a re-authorized reader, should adopt them as the tracked identity', async () => {
+    const { session } = writableSession();
+    session.viewers.clear();
+    session.lastViewerUserId = 'user-1';
+
+    await handleShellReadRequest(
+      { ...deps({ 'k:sh': session }), reauthorizeViewer: async () => true },
+      JSON.stringify({ shellIds: ['sh'], start: true, userId: 'user-2' }),
+    );
+
+    expect(session.lastViewerUserId).toBe('user-2');
+  });
+
+  it('given a reader who fails re-authorization, should keep the established identity', async () => {
+    const { session } = writableSession();
+    session.viewers.clear();
+    session.lastViewerUserId = 'user-1';
+
+    await handleShellReadRequest(
+      { ...deps({ 'k:sh': session }), reauthorizeViewer: async () => false },
+      JSON.stringify({ shellIds: ['sh'], start: true, userId: 'attacker' }),
+    );
+
+    expect(session.lastViewerUserId).toBe('user-1');
+  });
+
+  it('given NO re-auth seam, should fail closed rather than trust the caller', async () => {
+    const { session } = writableSession();
+    session.viewers.clear();
+    session.lastViewerUserId = 'user-1';
+
+    await handleShellReadRequest(
+      { ...deps({ 'k:sh': session }) },
+      JSON.stringify({ shellIds: ['sh'], start: true, userId: 'user-2' }),
+    );
+
+    expect(session.lastViewerUserId).toBe('user-1');
   });
 });

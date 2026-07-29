@@ -425,7 +425,7 @@ export async function ensureAgentSessionSandbox({
         return {
           ok: false,
           reason: 'denied',
-          denial: 'not_authorized',
+          denial: 'session_limit_reached',
           detail:
             quota.reason ??
             'live agent-session limit reached for your plan — end an existing session before starting another',

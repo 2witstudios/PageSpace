@@ -425,10 +425,19 @@ export async function handleShellReadRequest(
       // attached, so a DIFFERENT authorized user reading an already-live
       // session must become that identity — otherwise revoking the stale one
       // kills work the current reader is still authorized to run, and
-      // revoking the current reader does nothing. `payload.userId` is
-      // guaranteed present here: `planSessionStart` requires it whenever
-      // `payload.start === true`.
-      if (payload.userId !== undefined) session.lastViewerUserId = payload.userId;
+      // revoking the current reader does nothing.
+      //
+      // Gated exactly as the send path is, and for the same reason: this is the
+      // same trust boundary, so leaving it open would make the send-path check
+      // bypassable by asking to READ instead. `payload.userId` is guaranteed
+      // present here (`planSessionStart` requires it whenever `start === true`),
+      // but it is still a caller-supplied identity, and an HMAC signature says
+      // who is calling, not on whose behalf.
+      if (payload.userId !== undefined && payload.userId !== session.lastViewerUserId) {
+        const authorized =
+          (await deps.reauthorizeViewer?.({ shellId, userId: payload.userId })) ?? false;
+        if (authorized) session.lastViewerUserId = payload.userId;
+      }
       deps.rearmIdleReap?.(session);
     }
     return {

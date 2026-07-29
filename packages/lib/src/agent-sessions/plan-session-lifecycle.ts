@@ -107,6 +107,15 @@ export type AgentSessionDenyReason =
   | 'session_torn_down'
   /** `attach` found a session that has never acquired a sandbox — provisioning is `ensure`'s job. */
   | 'sandbox_not_provisioned'
+  /**
+   * The owner is at their plan's live-session ceiling. Deliberately NOT
+   * `not_authorized`: the actor has every right to this session, they have run
+   * out of allowance. Conflating the two tells a paying user they lack
+   * permission (with no mention of the limit or how to clear it) and files
+   * routine quota events as authorization denials in the security audit, where
+   * a free-tier user clicking "new session" reads as repeated access violations.
+   */
+  | 'session_limit_reached'
   /** The live VM's identity moved but the row carries no key to CAS against — reconcile, never resume on a stale identity. */
   | 'missing_session_key';
 

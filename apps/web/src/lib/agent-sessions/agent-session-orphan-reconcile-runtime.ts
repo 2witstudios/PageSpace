@@ -107,6 +107,9 @@ export const defaultReconcileAgentSessionOrphanSpritesDeps: ReconcileOrphanSprit
           ),
       ],
       capped: reclaimRows.length > MAX_CANDIDATES_PER_TABLE || sessionRows.length > MAX_CANDIDATES_PER_TABLE,
+      // A source we could not read at all. Distinct from `capped`: this run did
+      // not merely leave a backlog, it never saw part of the field.
+      incomplete: reclaimResult.status === 'rejected' || sessionResult.status === 'rejected',
     };
   },
 

@@ -125,9 +125,10 @@ describe('listOrphanCandidates', () => {
         ]),
       );
 
-    const { rows, capped } = await deps.listOrphanCandidates();
+    const { rows, capped, incomplete } = await deps.listOrphanCandidates();
 
     expect(capped).toBe(false);
+    expect(incomplete).toBe(false);
     expect(rows).toEqual([
       { kind: 'reclaim', sandboxId: 'sbx-reclaim', spriteInstanceId: 'i-r' },
       { kind: 'agent-session', sessionId: 'conv-1', sandboxId: 'sbx-session', spriteInstanceId: 'i-s' },
@@ -145,11 +146,14 @@ describe('listOrphanCandidates', () => {
         ]),
       );
 
-    const { rows } = await deps.listOrphanCandidates();
+    const { rows, incomplete } = await deps.listOrphanCandidates();
 
     expect(rows).toEqual([
       { kind: 'agent-session', sessionId: 'conv-1', sandboxId: 'sbx-session', spriteInstanceId: 'i-s' },
     ]);
+    // Reported, not swallowed: a source that fails every tick would otherwise
+    // produce a clean-looking run while its Sprites bill indefinitely.
+    expect(incomplete).toBe(true);
   });
 
   it('given the session-row query fails, should still return the outbox candidates', async () => {
@@ -157,9 +161,10 @@ describe('listOrphanCandidates', () => {
       .mockImplementationOnce(selectResolving([{ sandboxId: 'sbx-reclaim', spriteInstanceId: null }]))
       .mockImplementationOnce(selectRejecting('sessions unreachable'));
 
-    const { rows } = await deps.listOrphanCandidates();
+    const { rows, incomplete } = await deps.listOrphanCandidates();
 
     expect(rows).toEqual([{ kind: 'reclaim', sandboxId: 'sbx-reclaim', spriteInstanceId: null }]);
+    expect(incomplete).toBe(true);
   });
 
   it('given more rows than the cap, should truncate and report the backlog', async () => {

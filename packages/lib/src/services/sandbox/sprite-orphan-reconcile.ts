@@ -98,7 +98,14 @@ export interface ReconcileOrphanSpritesDeps {
    * can tell whether a backlog remains (one source can cap while the other comes
    * back empty).
    */
-  listOrphanCandidates: () => Promise<{ rows: SpriteOrphanRow[]; capped: boolean }>;
+  /**
+   * `incomplete` reports that a candidate SOURCE could not be read at all (as
+   * opposed to `capped`, which means "read fine, more remain"). Without it a
+   * source that fails every tick yields an empty list, and the run reports a
+   * clean `{ capped: false, torndown: 0 }` — indistinguishable from "nothing
+   * left to reclaim" while its Sprites bill indefinitely.
+   */
+  listOrphanCandidates: () => Promise<{ rows: SpriteOrphanRow[]; capped: boolean; incomplete?: boolean }>;
   /**
    * Fresh re-read of the session's teardown intent, immediately before the kill.
    * A session REVIVED since listing (a concurrent `ensure` clears the request as
@@ -140,6 +147,12 @@ export interface ReconcileOrphanSpritesResult {
    * oldest first.
    */
   capped: boolean;
+  /**
+   * True when at least one candidate SOURCE could not be listed this run. A
+   * clean-looking result with this set is NOT a clean run: the reclaimable
+   * Sprites behind that source were never even considered.
+   */
+  incomplete: boolean;
   /** Rows whose Sprite is now confirmed gone AND whose pointer was released/stamped. */
   torndown: number;
   /** Rows left alone because their session was revived mid-run, or because the CAS lost to a concurrent re-provision. Benign — see module doc. */
@@ -151,7 +164,7 @@ export interface ReconcileOrphanSpritesResult {
 export async function reconcileOrphanSprites(
   deps: ReconcileOrphanSpritesDeps,
 ): Promise<ReconcileOrphanSpritesResult> {
-  const { rows, capped } = await deps.listOrphanCandidates();
+  const { rows, capped, incomplete = false } = await deps.listOrphanCandidates();
 
   let torndown = 0;
   let skipped = 0;
@@ -236,5 +249,5 @@ export async function reconcileOrphanSprites(
     }
   }
 
-  return { processed: rows.length, capped, torndown, skipped, failed };
+  return { processed: rows.length, capped, incomplete, torndown, skipped, failed };
 }

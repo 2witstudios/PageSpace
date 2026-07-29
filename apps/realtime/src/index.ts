@@ -423,6 +423,17 @@ const shellIoDeps = {
   startSession: startHeadlessShell,
   rearmIdleReap: (session: TerminalSession) =>
     armShellIdleReap(shellSessionDeps, agentTerminalSessionMap, session),
+  // Whether a caller-supplied userId may become the identity the detached
+  // re-auth tick evicts on. The SAME decision the socket connect makes, so a
+  // user who could not open this shell cannot become its tracked owner through
+  // the IO endpoints either. Without this wired the seam fails closed and the
+  // identity is never refreshed — correct but useless, since revocation would
+  // then evict whoever happened to create the session rather than whoever is
+  // driving it.
+  reauthorizeViewer: async ({ shellId, userId }: { shellId: string; userId: string }) => {
+    const decision = await shellCheckAuth({ userId, shellId });
+    return decision.ok;
+  },
 };
 
 /**

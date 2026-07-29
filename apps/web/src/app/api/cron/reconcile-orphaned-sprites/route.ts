@@ -47,7 +47,7 @@ export async function GET(request: Request) {
     const run = await reconcileOrphanSprites(defaultReconcileAgentSessionOrphanSpritesDeps);
 
     console.log(
-      `[Cron] Orphan sprite reconcile: processed ${run.processed}, torndown ${run.torndown}, skipped ${run.skipped}, failed ${run.failed}${run.capped ? ' (CAPPED — backlog remains, draining next tick)' : ''}`,
+      `[Cron] Orphan sprite reconcile: processed ${run.processed}, torndown ${run.torndown}, skipped ${run.skipped}, failed ${run.failed}${run.capped ? ' (CAPPED — backlog remains, draining next tick)' : ''}${run.incomplete ? ' (INCOMPLETE — a candidate source could not be listed; its Sprites were not considered)' : ''}`,
     );
 
     audit({
@@ -60,6 +60,7 @@ export async function GET(request: Request) {
         skipped: run.skipped,
         failed: run.failed,
         capped: run.capped,
+        incomplete: run.incomplete,
       },
     });
 
@@ -70,6 +71,7 @@ export async function GET(request: Request) {
       skipped: run.skipped,
       failed: run.failed,
       capped: run.capped,
+      incomplete: run.incomplete,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {

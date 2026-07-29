@@ -1062,6 +1062,47 @@ describe('buildShellHandlers', () => {
       expect(shell.write).not.toHaveBeenCalled();
     });
 
+    it('given a non-string data payload, should ignore it without emitting an error', async () => {
+      // A malformed frame is not the user pasting too much — telling them their
+      // "input was too large" would be a lie, and the shell should simply not act.
+      const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+      socket.emit.mockClear();
+
+      onInput({ data: 12345 });
+
+      expect(socket.emit.mock.calls.filter(([e]) => e === 'shell:error')).toHaveLength(0);
+      expect(shell.write).not.toHaveBeenCalled();
+    });
+
+    it('given an over-cap paste from a MULTIPLEXED pane, should tag the error with that pane', async () => {
+      // Same reason the connect error is tagged: an untagged shell:error is
+      // claimed by every pane on the socket, so a paste that is too large in ONE
+      // pane must not report itself in the others.
+      const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect({ ...validPayload, connectionId: 'conn-X' });
+      socket.emit.mockClear();
+
+      onInput({ connectionId: 'conn-X', data: 'x'.repeat(MAX_INPUT_BYTES + 1) });
+
+      const errors = socket.emit.mock.calls.filter(([e]) => e === 'shell:error');
+      expect(errors).toHaveLength(1);
+      expect(errors[0][1]).toMatchObject({ connectionId: 'conn-X' });
+    });
+
+    it('given input over the cap, should tell the caller rather than silently swallow the paste', async () => {
+      const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+      socket.emit.mockClear();
+
+      onInput({ data: 'x'.repeat(MAX_INPUT_BYTES + 1) });
+
+      const errors = socket.emit.mock.calls.filter(([event]) => event === 'shell:error');
+      expect(errors).toHaveLength(1);
+      expect(errors[0][1].message).toContain('Input too large');
+      expect(shell.write).not.toHaveBeenCalled();
+    });
+
     it('given input over MAX_INPUT_BYTES, should drop it', async () => {
       const { onConnect, onInput } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
       await onConnect(validPayload);

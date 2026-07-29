@@ -1744,7 +1744,20 @@ export function buildShellHandlers({
       const session = sessionMap.getBySocket(socketKey(connectionId));
       if (!session) return;
       const p = payload as { data?: string };
-      if (typeof p?.data === 'string' && Buffer.byteLength(p.data, 'utf8') <= MAX_INPUT_BYTES) {
+      if (typeof p?.data !== 'string') return;
+      // Over-cap input is REFUSED, and the caller is told. Silently dropping it
+      // is the worst option: a pasted block simply vanishes with no echo and no
+      // error, and the user cannot tell that from a shell that ignored them.
+      // Refusing rather than truncating is deliberate — half a pasted command is
+      // a command nobody wrote, and the PTY would run it.
+      if (Buffer.byteLength(p.data, 'utf8') > MAX_INPUT_BYTES) {
+        socket.emit('shell:error', {
+          message: `Input too large (limit ${MAX_INPUT_BYTES} bytes). Paste it in smaller pieces.`,
+          ...(connectionId !== socket.id ? { connectionId } : {}),
+        });
+        return;
+      }
+      {
         // Input is activity for the task hold: a typed prompt is work in
         // progress even before the agent's first byte of output.
         session.lastInputAt = Date.now();
