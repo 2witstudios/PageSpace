@@ -207,23 +207,6 @@ export interface AgentConfigUpdate {
   toolExposureMode?: 'upfront' | 'search';
 }
 
-/**
- * Canonical page-agent configuration shape — the contract sibling PRs
- * (tool-group, settings UI) build against.
- */
-export interface PageAgentConfig {
-  systemPrompt: string | null;
-  enabledTools: string[] | null;
-  aiProvider: string | null;
-  aiModel: string | null;
-  includeDrivePrompt: boolean;
-  agentDefinition: string | null;
-  visibleToGlobalAssistant: boolean;
-  includePageTree: boolean;
-  pageTreeScope: 'children' | 'drive';
-  toolExposureMode: 'upfront' | 'search';
-}
-
 export interface UpdatedAgent {
   id: string;
   title: string;

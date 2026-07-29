@@ -47,7 +47,11 @@ import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { createSandboxTools, type ResolveSandboxContext, type SandboxGate } from './sandbox-tools';
-import { ensureSession, provisionSessionSandbox } from '@/lib/agent-sessions/agent-sessions-runtime';
+import {
+  ensureSession,
+  provisionSessionSandbox,
+  measureWarmSessionStorage,
+} from '@/lib/agent-sessions/agent-sessions-runtime';
 import type { ToolExecutionContext } from '../core/types';
 
 // The Sprites client is a process-wide stateless singleton, built lazily so
@@ -139,6 +143,28 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
       }
 
       recordMachineActivity({ machineKey: sessionId, now: nowMs });
+
+      // Opportunistic storage measurement, at the one moment that is both cheap
+      // and REPRESENTATIVE: the sandbox is awake and an agent is about to do
+      // real work in it. The provisioner's own hook only fires on `create`,
+      // against an empty disk, so without this every session would bill the
+      // baseline forever while the reconcile advanced its watermark. Throttled
+      // per session and deliberately not awaited — a billing observation must
+      // never delay or fail a tool call.
+      void measureWarmSessionStorage({
+        sessionId,
+        attach: async () => {
+          try {
+            const sandbox = await (await getSandboxClient()).get({ sandboxId: provisioned.sandboxId });
+            // The exec client exposes `runCommand`; the measurement seam speaks
+            // the host's `exec`. One adapter here beats widening either contract.
+            return sandbox ? { exec: (args) => sandbox.runCommand(args) } : null;
+          } catch {
+            return null;
+          }
+        },
+      });
+
       return {
         ok: true,
         sandboxId: provisioned.sandboxId,

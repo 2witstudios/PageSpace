@@ -22,9 +22,13 @@ import { eq } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { checkAgentSessionConcurrency } from '@pagespace/lib/services/sandbox/quota';
-import { refreshSessionStorageMeasurement } from '@pagespace/lib/services/sandbox/sandbox-storage-measure';
+import {
+  refreshSessionStorageMeasurement,
+  shouldRefreshMeasurement,
+  SESSION_STORAGE_MEASUREMENT_THROTTLE_MS,
+} from '@pagespace/lib/services/sandbox/sandbox-storage-measure';
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
-import type { SandboxHost } from '@pagespace/lib/services/sandbox/sandbox-host';
+import type { SandboxHandle, SandboxHost } from '@pagespace/lib/services/sandbox/sandbox-host';
 import { canRunCode, isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import {
   decideFullEgressEnablement,
@@ -355,7 +359,13 @@ export async function provisionSessionSandbox(
         await refreshSessionStorageMeasurement({
           handle,
           sessionId,
-          lastMeasuredAt: row.storageMeasuredAt ?? null,
+          // NULL, not the row's value: this callback only fires on the `create`
+          // arm, where the same operation resets the measurement columns (a new
+          // Sprite generation is an empty filesystem). Passing the pre-provision
+          // timestamp would let the throttle skip the baseline measurement of a
+          // session re-provisioned inside the window, leaving the row null with
+          // no other trigger to fix it.
+          lastMeasuredAt: null,
           now: new Date(),
           persist: (measurement) => store.recordStorageMeasurement(measurement),
         });
@@ -363,6 +373,50 @@ export async function provisionSessionSandbox(
       now: () => new Date(),
     },
   });
+}
+
+/**
+ * Opportunistically measure a WARM session's storage.
+ *
+ * The provisioner's own `measureSessionStorage` only fires on `create`, against
+ * a filesystem that is empty by definition — so on its own it pins every session
+ * at the baseline forever while the reconcile keeps advancing the watermark. The
+ * figure that actually matters is the one taken while the agent is doing real
+ * work, which is what this is for: call it where a sandbox is already awake and
+ * a handle is cheap. Throttled per session (default 1h), so a burst of tool
+ * calls costs at most one `du`.
+ *
+ * Fire-and-forget by contract: a billing observation must never fail, delay, or
+ * be awaited by the work that triggered it.
+ */
+export async function measureWarmSessionStorage(input: {
+  sessionId: string;
+  attach: () => Promise<{ exec: SandboxHandle['exec'] } | null>;
+}): Promise<void> {
+  try {
+    const store = await getAgentSessionStore();
+    const row = await store.findById(input.sessionId);
+    // Only a live row is worth measuring, and only when the throttle has elapsed
+    // — checked BEFORE attaching so the common case costs one indexed read.
+    if (!row || row.sandboxId === null || row.spriteTornDownAt !== null) return;
+    if (!shouldRefreshMeasurement({
+      lastMeasuredAt: row.storageMeasuredAt ?? null,
+      now: new Date(),
+      throttleMs: SESSION_STORAGE_MEASUREMENT_THROTTLE_MS,
+    })) return;
+
+    const handle = await input.attach();
+    if (!handle) return;
+    await refreshSessionStorageMeasurement({
+      handle,
+      sessionId: input.sessionId,
+      lastMeasuredAt: row.storageMeasuredAt ?? null,
+      now: new Date(),
+      persist: (measurement) => store.recordStorageMeasurement(measurement),
+    });
+  } catch {
+    // Best-effort: never let a billing observation surface as a tool failure.
+  }
 }
 
 export async function endSession(sessionId: string): Promise<EndAgentSessionResult> {

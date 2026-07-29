@@ -22,12 +22,11 @@
 export const AGENT_DISPATCH_DEPTH_HEADER = 'X-Agent-Dispatch-Depth';
 
 /**
- * Parse the dispatch-depth header into a non-negative integer.
- *
- * @param raw - The raw header value (`Headers.get` returns `null` when absent).
- * @returns A positive integer depth, or 0 for anything else.
+ * Parse the raw header value into a non-negative integer. Internal: callers get
+ * `readAgentDispatchDepth`, so there is exactly one way to obtain a depth and no
+ * second entry point that could grow a different clamp.
  */
-export function parseAgentDispatchDepth(raw: string | null | undefined): number {
+function parseAgentDispatchDepth(raw: string | null | undefined): number {
   const parsed = Number.parseInt(raw ?? '', 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
 }
