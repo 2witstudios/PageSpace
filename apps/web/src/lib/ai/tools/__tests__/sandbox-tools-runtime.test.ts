@@ -291,6 +291,21 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: false });
   });
 
+  it('should WIRE the activity-feed seam — an unwired optional dep is a silently dead feature', async () => {
+    // `notifyShellActivity` is optional on `SandboxRunDeps`, and the runner
+    // no-ops when it is absent. That is precisely how this feature spent the
+    // whole rebuild dead: the realtime handler was implemented, tested and
+    // wired with real deps, its doc said "apps/web posts here after a
+    // successful bash run" — and nothing here supplied the dep, so nothing ever
+    // posted. Deleting the wiring line passed every other test in this file.
+    //
+    // Asserting presence rather than behaviour is the point: the behaviour is
+    // covered in `tool-runners`, and the only thing that was ever missing was
+    // the connection between the two.
+    const deps = buildRealSandboxRunDeps();
+    expect(typeof deps.notifyShellActivity).toBe('function');
+  });
+
   it('given no conversationId, should fail as provision_failed/missing_conversation_id without touching the session runtime', async () => {
     const deps = buildRealSandboxRunDeps();
     const result = await deps.acquireSandbox(baseInput({ conversationId: undefined }));

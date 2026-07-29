@@ -274,6 +274,23 @@ vi.mock('../terminal/shell-handler', () => ({
   }),
 }));
 
+// Captures the deps object index.ts builds for the shell-IO bridge, so the
+// WIRING can be asserted. `reauthorizeViewer` is optional on `ShellIoDeps` and
+// the module fails closed without it — which is exactly how it shipped for a
+// while: declared, defaulted to `?? false`, and never supplied, so a revoked
+// user's identity was never refreshed and their running work never evicted.
+const capturedShellIoDeps: Record<string, unknown>[] = [];
+vi.mock('../terminal/shell-io', () => ({
+  handleShellReadRequest: (deps: Record<string, unknown>) => {
+    capturedShellIoDeps.push(deps);
+    return Promise.resolve({ status: 200, body: { success: true, shells: [] } });
+  },
+  handleShellSendRequest: (deps: Record<string, unknown>) => {
+    capturedShellIoDeps.push(deps);
+    return Promise.resolve({ status: 200, body: { success: true } });
+  },
+}));
+
 vi.mock('socket.io', () => ({
   Server: vi.fn().mockImplementation(() => mockIo),
 }));
@@ -2117,5 +2134,35 @@ describe('requestListener - dispatch fallthrough', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(res.writeHead).toHaveBeenCalled();
+  });
+});
+
+describe('requestListener - shell bridge wiring', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capturedShellIoDeps.length = 0;
+  });
+
+  it('should supply reauthorizeViewer to the shell-IO bridge', async () => {
+    // Not a behaviour test — `shell-io`'s own suite covers what the dep does.
+    // This pins that index.ts CONNECTS it, which is the only part that was ever
+    // missing. The dep is optional and fails closed, so an unwired build denies
+    // nothing loudly: it simply stops re-authorizing, and a revoked user keeps
+    // typing into a live shell until someone notices.
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    const req = createMockReq({
+      method: 'POST',
+      url: '/api/shell-read',
+      headers: { 'x-broadcast-signature': 'valid-sig' },
+    });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(JSON.stringify({ shellIds: ['sh-1'], limit: 10 })));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(capturedShellIoDeps).toHaveLength(1);
+    expect(typeof capturedShellIoDeps[0].reauthorizeViewer).toBe('function');
   });
 });
