@@ -7,21 +7,25 @@
  * Two semantic invariants govern everything downstream, and this module is where
  * they are written down once:
  *
- * 1. **sessionId ≡ conversationId.** A session and a conversation are ONE
- *    object with two audiences: "session" is the tool/backend word (it owns a
- *    sandbox, it is the Sprite-key fold, `agent_sessions.conversationId` is the
- *    primary key), "conversation" is the UI word (what a user opens, `?c=` in
- *    the URL, what `chat_messages` key on). There is therefore NO
- *    session-binding field anywhere in this contract, and none may be added:
- *    the chat body's `conversationId` IS the session address. A DTO that
- *    carried both would immediately raise the "which id?" question this design
- *    exists to delete. User-facing copy says only "conversation" — "session"
- *    never appears in it.
+ * 1. **A session is NOT a conversation — it OWNS conversations.** A session is
+ *    a drive-level workspace with its own id (`agent_sessions.id`): it owns the
+ *    one sandbox, its id is the Sprite-key fold, and it hosts MANY
+ *    conversations (with any of the drive's agents, or the global assistant)
+ *    plus any number of shells. `conversations.sessionId` is the binding — set
+ *    at creation, permanent, and nullable (a plain chat has no session). A
+ *    conversation-derived id must never become a session address again: the
+ *    first cut had `sessionId ≡ conversationId`, which forced one environment
+ *    per chat thread and made it structurally impossible for two conversations
+ *    to share a working context. The old "which id?" worry inverts cleanly:
+ *    a DTO carries `sessionId` when it means the workspace and
+ *    `conversationId` when it means the thread, and the two are different
+ *    kinds of thing, not two names for one. Sessions are USER-VISIBLE — the
+ *    sidebar lists them — and the user-facing word is simply "session".
  *
  * 2. **Ids address, names label.** `sessionId` and `shellId` are the addresses:
  *    every wire payload, every tool argument after the spawn, and every Sprite
  *    key folds one of them. `name` is a display label with no addressing role —
- *    worker-session names carry no uniqueness constraint at all, and the
+ *    session names carry no uniqueness constraint at all, and the
  *    shell-name uniqueness that does exist (`(sessionId, name)`) is there for
  *    unambiguous tab titles, never for lookups. Renaming can therefore never
  *    break a connection, and two identically-named things are never ambiguous.
@@ -60,22 +64,25 @@ const isoTimestamp = z.string().datetime();
 /**
  * One agent session as served to any client.
  *
- * `sessionId` IS the conversation id (invariant 1). `agentPageId` is nullable:
- * null means a global-assistant session, which has no agent page to derive
- * access or billing from — those paths fall back to `ownerId`.
+ * `sessionId` is the session's OWN id (invariant 1) — the workspace address,
+ * never a conversation id. `driveId` is nullable: null means a
+ * global-assistant session, which lives outside any drive — access and
+ * billing fall back to `ownerId`. There is deliberately no agent field: a
+ * session hosts conversations with MANY agents, so the agent association
+ * lives on each conversation.
  */
 export const agentSessionDtoSchema = z.object({
-  /** ≡ the conversation id. The tool address, the `?c=` URL value, and the Sprite-key fold. */
+  /** `agent_sessions.id` — the tool address, the `?session=` URL value, and the Sprite-key fold. */
   sessionId: z.string().min(1),
+  /** The drive this workspace belongs to, or null for a global-assistant session. */
+  driveId: z.string().min(1).nullable(),
   ownerId: z.string().min(1),
-  /** The AI_CHAT page this session belongs to, or null for a global-assistant session. */
-  agentPageId: z.string().min(1).nullable(),
   /** Display label only — no uniqueness, never an address. */
   name: z.string(),
   sandboxStatus: sandboxStatusSchema,
   createdAt: isoTimestamp,
   lastActiveAt: isoTimestamp.nullable(),
-  /** Stamped when the session was explicitly ended; the row survives for re-provisioning. */
+  /** Stamped when the session ended; the row survives so its conversations stay readable history. */
   endedAt: isoTimestamp.nullable(),
 });
 
@@ -92,7 +99,7 @@ export type AgentSessionDTO = z.infer<typeof agentSessionDtoSchema>;
 export const shellDtoSchema = z.object({
   /** The wire address. Everything after the spawn addresses a shell by this and nothing else. */
   shellId: z.string().min(1),
-  /** ≡ the conversation id of the owning session. */
+  /** The owning session's id (`agent_sessions.id`). */
   sessionId: z.string().min(1),
   ownerId: z.string().min(1),
   /** Tab label. Unique within a session for tab clarity — still not an address. */
