@@ -4,6 +4,7 @@ import {
   rewriteDashboardFileViewLinks,
   extractInterPageLinks,
   rewriteInterPageLinks,
+  isDashboardPageLink,
 } from '../file-view-links';
 
 describe('extractDashboardFileViewRefs', () => {
@@ -144,5 +145,34 @@ describe('rewriteInterPageLinks', () => {
     const out = rewriteInterPageLinks(html, map, SUB);
     expect(out).toContain('href="https://acme.pagespace.site/p"');
     expect(out).toContain('href="/dashboard/drive-1/priv"');
+  });
+});
+
+describe('isDashboardPageLink', () => {
+  it('given plain dashboard page links, with or without trailing slash/query/hash, should accept them', () => {
+    expect(isDashboardPageLink('/dashboard/d1/p1')).toBe(true);
+    expect(isDashboardPageLink('/dashboard/d1/p1/')).toBe(true);
+    expect(isDashboardPageLink('/dashboard/d1/p1?x=1')).toBe(true);
+    expect(isDashboardPageLink('/dashboard/d1/p1#h')).toBe(true);
+  });
+
+  it('given the /view (file-embed) form, should reject it — that is a separate embed mechanism', () => {
+    expect(isDashboardPageLink('/dashboard/d1/p1/view')).toBe(false);
+  });
+
+  it('given a same-page anchor, should reject it', () => {
+    expect(isDashboardPageLink('#foo')).toBe(false);
+  });
+
+  it('given an absolute URL to a different origin, should reject it', () => {
+    expect(isDashboardPageLink('https://evil.com/dashboard/d1/p1')).toBe(false);
+  });
+
+  it('given a single-segment dashboard path, should reject it', () => {
+    expect(isDashboardPageLink('/dashboard/d1')).toBe(false);
+  });
+
+  it('given a non-dashboard internal path, should reject it', () => {
+    expect(isDashboardPageLink('/pricing')).toBe(false);
   });
 });

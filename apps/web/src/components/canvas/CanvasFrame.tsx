@@ -1,12 +1,14 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useTheme } from 'next-themes';
 import { renderCanvasDocument } from '@pagespace/lib/canvas/render-document';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import {
   extractDashboardFileViewRefs,
   rewriteDashboardFileViewLinks,
+  isDashboardPageLink,
 } from '@/lib/canvas/file-view-links';
 import { useNonce } from '@/contexts/NonceContext';
 
@@ -46,6 +48,7 @@ export const CANVAS_IFRAME_SANDBOX = 'allow-scripts allow-popups allow-popups-to
  */
 export function CanvasFrame({ html, title }: CanvasFrameProps) {
   const nonce = useNonce();
+  const router = useRouter();
   const [previewHtml, setPreviewHtml] = useState(html);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const { resolvedTheme } = useTheme();
@@ -95,8 +98,11 @@ export function CanvasFrame({ html, title }: CanvasFrameProps) {
   // so default links to a new tab (works with the iframe's allow-popups).
   // injectThemeBridge: true injects a script that listens for theme messages
   // so the canvas iframe's dark/light state matches the app's current theme.
+  // navigationBridge: true injects a script that intercepts clicks on internal
+  // dashboard page links and hands them to the message handler below, so they
+  // route in-app instead of falling through to baseTarget's new-tab behavior.
   const srcDoc = useMemo(
-    () => renderCanvasDocument({ html: previewHtml, title, baseTarget: '_blank', injectThemeBridge: true, nonce }),
+    () => renderCanvasDocument({ html: previewHtml, title, baseTarget: '_blank', injectThemeBridge: true, navigationBridge: true, nonce }),
     [previewHtml, title, nonce],
   );
 
@@ -115,20 +121,33 @@ export function CanvasFrame({ html, title }: CanvasFrameProps) {
     );
   }, [resolvedTheme, srcDoc]);
 
-  // Respond to the iframe's initial theme request, which fires on load before
-  // the resolvedTheme effect above catches it.
+  // Respond to the iframe's initial theme request (fires on load before the
+  // resolvedTheme effect above catches it) and handle in-app navigation
+  // requests from the injected click-interceptor script (navigationBridge).
   useEffect(() => {
     function handleMessage(e: MessageEvent) {
       if (e.source !== iframeRef.current?.contentWindow) return;
-      if (e.data?.type !== 'pagespace-theme-request') return;
-      iframeRef.current?.contentWindow?.postMessage(
-        { type: 'pagespace-theme', isDark: resolvedTheme === 'dark' },
-        '*',
-      );
+
+      if (e.data?.type === 'pagespace-theme-request') {
+        iframeRef.current?.contentWindow?.postMessage(
+          { type: 'pagespace-theme', isDark: resolvedTheme === 'dark' },
+          '*',
+        );
+        return;
+      }
+
+      // Independently re-validate: the injected click-interceptor's own
+      // regex check (render-document.ts) is a UX nicety, not a trust
+      // boundary — author JS in the sandboxed-but-scripted iframe can post
+      // this message type directly, so we must not route on an unvalidated
+      // href.
+      if (e.data?.type === 'pagespace-navigate' && typeof e.data.href === 'string' && isDashboardPageLink(e.data.href)) {
+        router.push(e.data.href);
+      }
     }
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [resolvedTheme]);
+  }, [resolvedTheme, router]);
 
   return (
     <iframe

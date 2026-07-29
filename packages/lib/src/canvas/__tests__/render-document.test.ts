@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderCanvasDocument, deriveDescription, escapeHtml, BASELINE_CSP, BASELINE_RESET, THEME_BRIDGE_SCRIPT } from '../render-document';
+import { renderCanvasDocument, deriveDescription, escapeHtml, BASELINE_CSP, BASELINE_RESET, THEME_BRIDGE_SCRIPT, NAVIGATION_BRIDGE_SCRIPT } from '../render-document';
 
 describe('renderCanvasDocument', () => {
   it('given any input, should return a full HTML document', () => {
@@ -196,6 +196,33 @@ describe('renderCanvasDocument — theme bridge', () => {
   // script" for the theme bridge specifically.
   it('given injectThemeBridge: true AND a nonce, should stamp the nonce onto the theme-bridge script too', () => {
     const out = renderCanvasDocument({ html: '<p>x</p>', injectThemeBridge: true, nonce: 'app-nonce==' });
+    expect(out).toContain('<script nonce="app-nonce==">(function(){');
+  });
+});
+
+describe('renderCanvasDocument — navigation bridge', () => {
+  it('given navigationBridge: true, should inject the bridge script inside <head>', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', navigationBridge: true });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain(NAVIGATION_BRIDGE_SCRIPT);
+  });
+
+  it('given no navigationBridge, should NOT inject the bridge script (covers the published-page default)', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>' });
+    expect(out).not.toContain('pagespace-navigate');
+  });
+
+  it('given navigationBridge: true, the bridge should click-intercept dashboard page links and postMessage', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', navigationBridge: true });
+    expect(out).toContain("postMessage({type:'pagespace-navigate',href:href}");
+    expect(out).toContain('/^\\/dashboard\\/');
+  });
+
+  it('given navigationBridge: true AND a nonce, should stamp the nonce onto the navigation-bridge script too', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', navigationBridge: true, nonce: 'app-nonce==' });
+    // Both injected scripts (theme + navigation) would need the nonce if both
+    // were present; here only navigationBridge is set, so exactly one stamped
+    // inline script should carry it.
     expect(out).toContain('<script nonce="app-nonce==">(function(){');
   });
 });

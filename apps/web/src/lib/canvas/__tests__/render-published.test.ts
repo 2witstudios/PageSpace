@@ -160,6 +160,16 @@ describe('renderPublishedPage — SEO + social passthrough', () => {
     expect(out).toContain('prefers-color-scheme');
     expect(out).toContain('pagespace-theme');
   });
+
+  // The in-app navigation bridge (CanvasFrame.tsx passing navigationBridge:
+  // true) must never reach the published artifact — published pages are
+  // top-level documents with no listening parent, so shipping the
+  // click-interceptor there would be dead weight at best. renderPublishedPage
+  // never sets the field, so this should stay true structurally, not by luck.
+  it('given a published page, should NEVER inject the navigation-bridge script', () => {
+    const out = renderPublishedPage({ html: '<a href="/dashboard/d1/p1">go</a>', pageUrl });
+    expect(out).not.toContain('pagespace-navigate');
+  });
 });
 
 describe('renderPublishedDocument', () => {
