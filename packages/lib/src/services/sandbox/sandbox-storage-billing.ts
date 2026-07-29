@@ -30,7 +30,7 @@ import { eq, and, isNotNull, isNull } from '@pagespace/db/operators';
 import { db, getAdvisoryLockPool } from '@pagespace/db/db';
 import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
 import { agentSessions } from '@pagespace/db/schema/agent-sessions';
-import { lookupPageOwnerId } from '../../billing/sandbox-payer';
+import { lookupDriveOwnerId } from '../../billing/sandbox-payer';
 import { MACHINE_MARKUP_BPS } from '../../billing/credit-pricing';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
 import {
@@ -43,8 +43,8 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
   async listAgentSessionSprites() {
     const rows = await db
       .select({
-        sessionId: agentSessions.conversationId,
-        agentPageId: agentSessions.agentPageId,
+        sessionId: agentSessions.id,
+        driveId: agentSessions.driveId,
         ownerId: agentSessions.ownerId,
         storageLastBilledAt: agentSessions.storageLastBilledAt,
         measuredBytes: agentSessions.storageMeasuredBytes,
@@ -59,19 +59,19 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
     return rows.map((row) => ({ ...row, lastActiveAt: row.lastActiveAt ?? new Date(0) }));
   },
 
-  lookupPageOwnerId,
+  lookupDriveOwnerId,
 
-  async chargeStorage({ payerId, pageId, costDollars, gbMonths }) {
+  async chargeStorage({ payerId, driveId, sessionId, costDollars, gbMonths }) {
     await AIMonitoring.trackUsage({
       userId: payerId,
       provider: 'sprites',
       model: 'terminal-machine-storage',
       source: 'terminal',
-      // The ATTRIBUTION page (sandbox-storage-attribution.ts): the session's
-      // agent page, when it has one. Undefined for a global-assistant
-      // agent-session — there is no page to group it under; `trackUsage`
-      // treats a missing `pageId` as unattributed-to-a-page, not an error.
-      pageId,
+      // No pageId: a session is a drive-level workspace, not page-anchored, so
+      // there is no page to group its storage under. `trackUsage` treats a
+      // missing pageId as unattributed-to-a-page, not an error; the drive and
+      // session ride in metadata for forensics.
+      pageId: undefined,
       providerCostDollars: costDollars,
       // Not a wall-clock duration (this is a background storage charge, not a
       // single timed run) — 0 mirrors the shape of every other non-timed
@@ -84,7 +84,7 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       // Same 1.5x substrate floor as active-runtime billing (machine-billing.ts),
       // independent of the shared AI MARKUP_BPS default.
       markupBpsOverride: MACHINE_MARKUP_BPS,
-      metadata: { type: 'terminal_storage', pageId, gbMonths },
+      metadata: { type: 'terminal_storage', driveId, sessionId, gbMonths },
     });
   },
 
@@ -95,7 +95,7 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
     await db
       .update(agentSessions)
       .set({ storageLastBilledAt: billedThrough })
-      .where(eq(agentSessions.conversationId, sessionId));
+      .where(eq(agentSessions.id, sessionId));
   },
 
   now: () => new Date(),

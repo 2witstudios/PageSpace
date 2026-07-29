@@ -1,16 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import {
-  ensureAgentSession,
+  spawnAgentSession,
   endAgentSession,
   listAgentSessions,
   toAgentSessionDTO,
-  type EnsureAgentSessionDeps,
+  type SpawnAgentSessionDeps,
 } from '../agent-sessions';
 import { ensureAgentSessionSandbox, type AgentSessionSpriteRow } from '../agent-session-sprite';
 import { agentSessionDtoSchema } from '../../../agent-sessions/contract';
 import { deriveAgentSessionSpriteKey } from '../../../agent-sessions/session-sprite-key';
 import {
-  AGENT_PAGE_ID,
+  DRIVE_ID,
   NOW,
   OWNER_ID,
   SECRET,
@@ -23,171 +23,98 @@ import {
 
 const SESSION_KEY = deriveAgentSessionSpriteKey({ tenantId: TENANT_ID, sessionId: SESSION_ID, secret: SECRET });
 
-function makeEnsureDeps(
+function makeSpawnDeps(
   store: ReturnType<typeof makeAgentSessionStore>,
-  over: Partial<EnsureAgentSessionDeps> = {},
-): EnsureAgentSessionDeps {
+  over: Partial<SpawnAgentSessionDeps> = {},
+): SpawnAgentSessionDeps {
   return {
     store: store.store,
-    ensureConversation: async () => {},
     now: () => NOW,
     ...over,
   };
 }
 
-describe('ensureAgentSession', () => {
-  it('given a conversation with no session, should create the row and return it', async () => {
+describe('spawnAgentSession', () => {
+  it('should mint a session row with its OWN id — never a conversation id', async () => {
     const store = makeAgentSessionStore();
-    const result = await ensureAgentSession({
-      userId: OWNER_ID,
-      agentPageId: AGENT_PAGE_ID,
-      conversationId: SESSION_ID,
-      deps: makeEnsureDeps(store),
-    });
+    const result = await spawnAgentSession({ ownerId: OWNER_ID, driveId: DRIVE_ID, deps: makeSpawnDeps(store) });
 
     expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error('unreachable');
-    expect(result.session.conversationId).toBe(SESSION_ID);
+    if (!result.ok) return;
+    expect(result.session.id).toBeTruthy();
+    expect(result.session.driveId).toBe(DRIVE_ID);
     expect(result.session.ownerId).toBe(OWNER_ID);
-    expect(result.session.agentPageId).toBe(AGENT_PAGE_ID);
-    // Lazily acquired means exactly that: a row exists, a sandbox does not.
+    expect(store.rows.get(result.session.id)).toBeDefined();
+  });
+
+  it('should spawn WITHOUT provisioning — spawn is instant and free', async () => {
+    // Lazy provisioning is the invariant: no sandbox exists until first real
+    // use, so a spawned session must carry no Sprite identity at all.
+    const store = makeAgentSessionStore();
+    const result = await spawnAgentSession({ ownerId: OWNER_ID, driveId: DRIVE_ID, deps: makeSpawnDeps(store) });
+    if (!result.ok) throw new Error('expected ok');
     expect(result.session.sandboxId).toBeNull();
+    expect(result.session.sessionKey).toBeNull();
   });
 
-  it('should ensure the CONVERSATION row first — the session PK is a FK onto it', async () => {
-    const order: string[] = [];
+  it('given two spawns, should mint two sessions — two spawns MEAN two workspaces', async () => {
     const store = makeAgentSessionStore();
-    const wrapped = {
-      ...store,
-      store: {
-        ...store.store,
-        insertIfAbsent: async (input: Parameters<typeof store.store.insertIfAbsent>[0]) => {
-          order.push('session');
-          return store.store.insertIfAbsent(input);
-        },
-      },
+    const a = await spawnAgentSession({ ownerId: OWNER_ID, driveId: DRIVE_ID, deps: makeSpawnDeps(store) });
+    const b = await spawnAgentSession({ ownerId: OWNER_ID, driveId: DRIVE_ID, deps: makeSpawnDeps(store) });
+    if (!a.ok || !b.ok) throw new Error('expected ok');
+    expect(a.session.id).not.toBe(b.session.id);
+    expect(store.rows.size).toBe(2);
+  });
+
+  it('given a null driveId, should spawn a user-scoped global-assistant session', async () => {
+    const store = makeAgentSessionStore();
+    const result = await spawnAgentSession({ ownerId: OWNER_ID, driveId: null, deps: makeSpawnDeps(store) });
+    if (!result.ok) throw new Error('expected ok');
+    expect(result.session.driveId).toBeNull();
+  });
+
+  it('should carry the display name as a LABEL, defaulting to null', async () => {
+    const store = makeAgentSessionStore();
+    const named = await spawnAgentSession({ ownerId: OWNER_ID, driveId: DRIVE_ID, name: 'api refactor', deps: makeSpawnDeps(store) });
+    const unnamed = await spawnAgentSession({ ownerId: OWNER_ID, driveId: DRIVE_ID, deps: makeSpawnDeps(store) });
+    if (!named.ok || !unnamed.ok) throw new Error('expected ok');
+    expect(named.session.name).toBe('api refactor');
+    expect(unnamed.session.name).toBeNull();
+  });
+
+  it('given the store insert throwing (e.g. a dead driveId FK), should report spawn_failed', async () => {
+    const store = makeAgentSessionStore();
+    store.store.create = async () => {
+      throw new Error('violates foreign key constraint');
     };
-    await ensureAgentSession({
-      userId: OWNER_ID,
-      agentPageId: AGENT_PAGE_ID,
-      conversationId: SESSION_ID,
-      deps: makeEnsureDeps(wrapped, {
-        store: wrapped.store,
-        ensureConversation: async () => {
-          order.push('conversation');
-        },
-      }),
-    });
+    const result = await spawnAgentSession({ ownerId: OWNER_ID, driveId: 'no-such-drive', deps: makeSpawnDeps(store) });
+    expect(result).toMatchObject({ ok: false, reason: 'spawn_failed' });
+  });
+});
 
-    expect(order).toEqual(['conversation', 'session']);
+describe('findByConversation — how a thread resolves its working context', () => {
+  it('given two conversations bound to ONE session, both should resolve the SAME row', async () => {
+    // The payoff of the un-conflation at the store contract: sandbox sharing is
+    // structural. Both threads resolve one session, whose id folds ONE Sprite
+    // key — so their tool calls land in one sandbox by construction.
+    const store = makeAgentSessionStore([makeSessionRecord({ sessionKey: SESSION_KEY })]);
+    store.conversationBindings.set('conv-a', SESSION_ID);
+    store.conversationBindings.set('conv-b', SESSION_ID);
+
+    const a = await store.store.findByConversation('conv-a');
+    const b = await store.store.findByConversation('conv-b');
+
+    expect(a?.id).toBe(SESSION_ID);
+    expect(b?.id).toBe(SESSION_ID);
+    expect(a?.sessionKey).toBe(b?.sessionKey);
   });
 
-  it('should route conversation creation through the injected squat-guarded path, carrying the agent page', async () => {
-    const store = makeAgentSessionStore();
-    const seen: unknown[] = [];
-    await ensureAgentSession({
-      userId: OWNER_ID,
-      agentPageId: AGENT_PAGE_ID,
-      conversationId: SESSION_ID,
-      deps: makeEnsureDeps(store, {
-        ensureConversation: async (input) => {
-          seen.push(input);
-        },
-      }),
-    });
-
-    expect(seen).toEqual([{ conversationId: SESSION_ID, userId: OWNER_ID, agentPageId: AGENT_PAGE_ID }]);
-  });
-
-  it('given CONCURRENT ensures for one conversation, should end up with exactly ONE row', async () => {
-    // The PK is the conversation id, so the insert conflict IS the concurrency
-    // control — neither caller errors and neither has to know it lost.
-    const store = makeAgentSessionStore();
-    const deps = makeEnsureDeps(store);
-    const [first, second] = await Promise.all([
-      ensureAgentSession({ userId: OWNER_ID, agentPageId: AGENT_PAGE_ID, conversationId: SESSION_ID, deps }),
-      ensureAgentSession({ userId: OWNER_ID, agentPageId: AGENT_PAGE_ID, conversationId: SESSION_ID, deps }),
-    ]);
-
-    expect(first.ok).toBe(true);
-    expect(second.ok).toBe(true);
-    expect(store.rows.size).toBe(1);
-    expect(store.calls.insertIfAbsent).toBe(2);
-  });
-
-  it('given an existing session, should return it unchanged rather than reset it', async () => {
-    const existing = makeSessionRecord({ name: 'my shell work', sandboxId: SESSION_KEY, lastActiveAt: NOW });
-    const store = makeAgentSessionStore([existing]);
-    const result = await ensureAgentSession({
-      userId: OWNER_ID,
-      agentPageId: AGENT_PAGE_ID,
-      conversationId: SESSION_ID,
-      name: 'a different label',
-      deps: makeEnsureDeps(store),
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error('unreachable');
-    expect(result.session.name).toBe('my shell work');
-    expect(result.session.sandboxId).toBe(SESSION_KEY);
-  });
-
-  it('given a global-assistant session, should create it with a null agent page', async () => {
-    const store = makeAgentSessionStore();
-    const result = await ensureAgentSession({
-      userId: OWNER_ID,
-      agentPageId: null,
-      conversationId: SESSION_ID,
-      deps: makeEnsureDeps(store),
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error('unreachable');
-    expect(result.session.agentPageId).toBeNull();
-  });
-
-  it('given a conversation the squat guard refuses to claim, should report it unavailable', async () => {
-    // The guard returns silently, so the FK insert is what fails — either way the
-    // caller learns the same fact: this id cannot host a session.
-    const store = makeAgentSessionStore();
-    const result = await ensureAgentSession({
-      userId: OWNER_ID,
-      agentPageId: AGENT_PAGE_ID,
-      conversationId: SESSION_ID,
-      deps: makeEnsureDeps(store, {
-        store: { ...store.store, insertIfAbsent: async () => { throw new Error('violates foreign key constraint'); } },
-      }),
-    });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error('unreachable');
-    expect(result.reason).toBe('conversation_unavailable');
-    expect(result.detail).toContain('foreign key');
-  });
-
-  it('given an insert that silently does not land, should report it unavailable rather than invent a row', async () => {
-    const store = makeAgentSessionStore();
-    const result = await ensureAgentSession({
-      userId: OWNER_ID,
-      agentPageId: AGENT_PAGE_ID,
-      conversationId: SESSION_ID,
-      deps: makeEnsureDeps(store, { store: { ...store.store, insertIfAbsent: async () => {} } }),
-    });
-
-    expect(result).toEqual({ ok: false, reason: 'conversation_unavailable' });
-  });
-
-  it('given the conversation ensure itself failing, should not create an orphan session row', async () => {
-    const store = makeAgentSessionStore();
-    const result = await ensureAgentSession({
-      userId: OWNER_ID,
-      agentPageId: AGENT_PAGE_ID,
-      conversationId: SESSION_ID,
-      deps: makeEnsureDeps(store, { ensureConversation: async () => { throw new Error('db down'); } }),
-    });
-
-    expect(result.ok).toBe(false);
-    expect(store.rows.size).toBe(0);
+  it('given a thread with NO session, should resolve null — never a fallback', async () => {
+    // The tool layer's no-session denial depends on this honesty: a plain chat
+    // must not lazily mint a per-conversation environment, which is exactly the
+    // conflation that was removed.
+    const store = makeAgentSessionStore([makeSessionRecord()]);
+    expect(await store.store.findByConversation('unbound-conv')).toBeNull();
   });
 });
 
@@ -344,7 +271,6 @@ describe('end then ensure — the same session key comes back', () => {
         options: {},
         secret: SECRET,
         authorize: async () => ({ ok: true }),
-        resolveDriveId: async () => 'drive-1',
         checkFullEgressEnablement: async () => ({ ok: true }),
         checkConcurrency: async () => ({ allowed: true }),
         now: () => NOW,
@@ -363,7 +289,7 @@ describe('end then ensure — the same session key comes back', () => {
 });
 
 describe('toAgentSessionDTO', () => {
-  it('should address the session by its conversation id — there is no second id', () => {
+  it('should address the session by its OWN id and carry its drive', () => {
     const dto = toAgentSessionDTO(makeSessionRecord());
     expect(dto.sessionId).toBe(SESSION_ID);
     expect(Object.keys(dto)).not.toContain('conversationId');
@@ -380,7 +306,7 @@ describe('toAgentSessionDTO', () => {
     expect(() => agentSessionDtoSchema.parse(toAgentSessionDTO(makeSessionRecord()))).not.toThrow();
     expect(() =>
       agentSessionDtoSchema.parse(
-        toAgentSessionDTO(makeSessionRecord({ agentPageId: null, name: 'labelled', sandboxId: SESSION_KEY })),
+        toAgentSessionDTO(makeSessionRecord({ driveId: null, name: 'labelled', sandboxId: SESSION_KEY })),
       ),
     ).not.toThrow();
   });
@@ -400,37 +326,37 @@ describe('toAgentSessionDTO', () => {
 
 describe('listAgentSessions', () => {
   const rows = [
-    makeSessionRecord({ conversationId: 'conv-a', sandboxId: SESSION_KEY }),
-    makeSessionRecord({ conversationId: 'conv-b', agentPageId: 'page-other' }),
-    makeSessionRecord({ conversationId: 'conv-c', ownerId: 'user-2' }),
+    makeSessionRecord({ id: 'ses-a', sandboxId: SESSION_KEY }),
+    makeSessionRecord({ id: 'ses-b', driveId: 'drive-other' }),
+    makeSessionRecord({ id: 'ses-c', ownerId: 'user-2' }),
   ];
 
-  it('given an agent page filter, should return only that agent\'s sessions, as DTOs', async () => {
+  it('given a drive filter, should return only that drive\'s sessions, as DTOs', async () => {
     const store = makeAgentSessionStore(rows);
     const sessions = await listAgentSessions({
-      filter: { agentPageId: AGENT_PAGE_ID },
+      filter: { driveId: DRIVE_ID },
       deps: { store: store.store },
     });
 
-    expect(sessions.map((session) => session.sessionId).sort()).toEqual(['conv-a', 'conv-c']);
+    expect(sessions.map((session) => session.sessionId).sort()).toEqual(['ses-a', 'ses-c']);
     expect(sessions.every((session) => agentSessionDtoSchema.safeParse(session).success)).toBe(true);
   });
 
   it('given an owner filter, should return only that owner\'s sessions', async () => {
     const store = makeAgentSessionStore(rows);
     const sessions = await listAgentSessions({ filter: { ownerId: 'user-2' }, deps: { store: store.store } });
-    expect(sessions.map((session) => session.sessionId)).toEqual(['conv-c']);
+    expect(sessions.map((session) => session.sessionId)).toEqual(['ses-c']);
   });
 
   it('should report each session\'s sandbox status', async () => {
     const store = makeAgentSessionStore(rows);
     const sessions = await listAgentSessions({
-      filter: { agentPageId: AGENT_PAGE_ID },
+      filter: { driveId: DRIVE_ID },
       deps: { store: store.store },
     });
     const byId = new Map(sessions.map((session) => [session.sessionId, session.sandboxStatus]));
-    expect(byId.get('conv-a')).toBe('running');
-    expect(byId.get('conv-c')).toBe('none');
+    expect(byId.get('ses-a')).toBe('running');
+    expect(byId.get('ses-c')).toBe('none');
   });
 
   it('given no sessions, should return an empty list rather than fail', async () => {
