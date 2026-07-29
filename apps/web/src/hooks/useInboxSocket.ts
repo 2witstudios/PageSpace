@@ -13,6 +13,15 @@ interface UseInboxSocketOptions {
   cacheKey: string;
   /** Item types this cache holds. Payloads of other types are ignored. */
   scope: 'dm' | 'channel' | 'all';
+  /**
+   * Set when this subscription's cache is scoped to one drive (e.g. a
+   * drive's channel list). Payloads for other drives are ignored — without
+   * this, a channel event from an unrelated drive still passes the `scope`
+   * check, fails to match any item in this drive-scoped cache, and falls
+   * through to a full-revalidation refetch for every other active drive.
+   * Omit for cross-drive views (e.g. "all channels").
+   */
+  driveId?: string;
   hasLoadedRef?: React.MutableRefObject<boolean>;
 }
 
@@ -23,11 +32,12 @@ interface UseInboxSocketOptions {
  * @param cacheKey - The exact string the consumer passes to useSWR. SWR keys by value, so
  *                   this must match verbatim or writes land in a cache entry with no subscriber.
  * @param scope - Restricts which payload types this subscription writes to its cache.
+ * @param driveId - Restricts to payloads for one drive, for drive-scoped caches.
  * @param hasLoadedRef - Optional ref to track if initial data has loaded. When provided,
  *                       socket updates will only be processed after hasLoadedRef.current is true.
  *                       This prevents socket events from racing with initial data fetches.
  */
-export function useInboxSocket({ cacheKey, scope, hasLoadedRef: externalRef }: UseInboxSocketOptions) {
+export function useInboxSocket({ cacheKey, scope, driveId, hasLoadedRef: externalRef }: UseInboxSocketOptions) {
   const socket = useSocket();
   const { mutate } = useSWRConfig();
   const internalRef = useRef(false);
@@ -43,6 +53,10 @@ export function useInboxSocket({ cacheKey, scope, hasLoadedRef: externalRef }: U
       // cache (and vice versa), finds no match, and falls through to a full
       // revalidation fallback per mounted list.
       if (scope !== 'all' && payload.type !== scope) return;
+
+      // Same reasoning for drive scope: a channel event from another drive
+      // will never match an item in this drive-scoped cache.
+      if (driveId && payload.driveId !== driveId) return;
 
       // Skip updates if we haven't loaded yet (race guard against the initial fetch).
       if (!hasLoadedRef.current) return;
@@ -126,7 +140,7 @@ export function useInboxSocket({ cacheKey, scope, hasLoadedRef: externalRef }: U
       socket.off('inbox:read_status_changed', handleInboxUpdate);
       socket.off('inbox:thread_updated', handleThreadUpdated);
     };
-  }, [socket, cacheKey, scope, mutate, hasLoadedRef]);
+  }, [socket, cacheKey, scope, driveId, mutate, hasLoadedRef]);
 
   // Replay path: an update dropped while editing was active is never lost —
   // once every editing session ends, revalidate the cache from the server.

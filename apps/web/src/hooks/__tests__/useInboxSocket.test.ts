@@ -101,19 +101,17 @@ describe('useInboxSocket', () => {
   // cacheKey it hands to useInboxSocket, checked directly against each
   // consumer's current source. This is the assertion that catches the
   // b922d5643 regression class: any divergence between the two means
-  // mutate() writes into a cache entry with no subscriber. It also fails if
-  // `driveId` is reintroduced as a useInboxSocket prop (the old, reconstructed
-  // key), since a passing pair requires cacheKey without it.
+  // mutate() writes into a cache entry with no subscriber.
   // -------------------------------------------------------------------------
   describe('consumer cache-key parity', () => {
     const CONSUMERS = [
-      { file: 'components/layout/left-sidebar/ChannelsSidebar.tsx', scope: 'channel' },
-      { file: 'components/layout/left-sidebar/DMSidebar.tsx', scope: 'dm' },
-      { file: 'components/inbox/ChannelsCenterList.tsx', scope: 'channel' },
-      { file: 'components/inbox/DMCenterList.tsx', scope: 'dm' },
+      { file: 'components/layout/left-sidebar/ChannelsSidebar.tsx', scope: 'channel', expectsDriveId: true },
+      { file: 'components/layout/left-sidebar/DMSidebar.tsx', scope: 'dm', expectsDriveId: false },
+      { file: 'components/inbox/ChannelsCenterList.tsx', scope: 'channel', expectsDriveId: true },
+      { file: 'components/inbox/DMCenterList.tsx', scope: 'dm', expectsDriveId: false },
     ] as const;
 
-    it.each(CONSUMERS)('$file passes useInboxSocket the exact key it passes to useSWR', ({ file, scope }) => {
+    it.each(CONSUMERS)('$file passes useInboxSocket the exact key it passes to useSWR', ({ file, scope, expectsDriveId }) => {
       const source = readSource(file);
 
       const swrMatch = source.match(/useSWR<InboxResponse>\(\s*([\w$]+)\s*,\s*fetcher/);
@@ -124,15 +122,21 @@ describe('useInboxSocket', () => {
       expect(socketCallMatch, `${file}: could not find a useInboxSocket({ ... }) call`).toBeTruthy();
       const socketCallArgs = socketCallMatch![1];
 
-      // The old, reconstructed-key shape passed driveId instead of cacheKey —
-      // asserting its absence is what would fail if getCacheKey were restored.
-      expect(socketCallArgs).not.toMatch(/driveId/);
-
       const cacheKeyMatch = socketCallArgs.match(/cacheKey:\s*([\w$]+)/);
       expect(cacheKeyMatch, `${file}: useInboxSocket call has no cacheKey`).toBeTruthy();
       expect(cacheKeyMatch![1]).toBe(swrKey);
 
       expect(socketCallArgs).toMatch(new RegExp(`scope:\\s*'${scope}'`));
+
+      // Channel views scoped to one drive must forward driveId, or a channel
+      // event from an unrelated drive passes the scope check, misses every
+      // item in this cache, and triggers a spurious full-revalidation
+      // refetch. DM views have no per-drive cache, so driveId must be absent.
+      if (expectsDriveId) {
+        expect(socketCallArgs, `${file}: channel view should scope by driveId`).toMatch(/driveId/);
+      } else {
+        expect(socketCallArgs, `${file}: dm view has no per-drive cache`).not.toMatch(/driveId/);
+      }
     });
 
     it('the four consumers each enable revalidateOnFocus (self-healing on missed events)', () => {
@@ -178,6 +182,53 @@ describe('useInboxSocket', () => {
 
       act(() => {
         mockSocket._trigger('inbox:channel_updated', channelPayload());
+      });
+
+      expect(mockMutate).toHaveBeenCalledWith(
+        CHANNEL_KEY,
+        expect.any(Function),
+        { revalidate: false }
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Drive scoping: a channel event for a drive other than the one this cache
+  // is scoped to must not be treated as belonging here (flagged in PR #2247
+  // review — a drive-scoped channels view otherwise refetches on every other
+  // active drive's channel traffic, the same class of bug the scope filter
+  // above fixes, one dimension deeper).
+  // -------------------------------------------------------------------------
+  describe('drive scoping', () => {
+    it('given a driveId, a channel payload for a different drive causes zero cache writes', () => {
+      renderInboxSocket({ driveId: 'drive-a' });
+
+      act(() => {
+        mockSocket._trigger('inbox:channel_updated', channelPayload({ driveId: 'drive-b' }));
+      });
+
+      expect(mockMutate).not.toHaveBeenCalled();
+    });
+
+    it('given a driveId, a channel payload for the same drive is written to the cache', () => {
+      renderInboxSocket({ driveId: 'drive-a' });
+
+      act(() => {
+        mockSocket._trigger('inbox:channel_updated', channelPayload({ driveId: 'drive-a' }));
+      });
+
+      expect(mockMutate).toHaveBeenCalledWith(
+        CHANNEL_KEY,
+        expect.any(Function),
+        { revalidate: false }
+      );
+    });
+
+    it('without a driveId (a cross-drive view), a channel payload for any drive is written', () => {
+      renderInboxSocket();
+
+      act(() => {
+        mockSocket._trigger('inbox:channel_updated', channelPayload({ driveId: 'drive-a' }));
       });
 
       expect(mockMutate).toHaveBeenCalledWith(

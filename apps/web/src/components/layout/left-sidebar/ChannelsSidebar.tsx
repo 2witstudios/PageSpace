@@ -55,7 +55,7 @@ export default function ChannelsSidebar({ className }: SidebarProps) {
     ? `/api/inbox?type=channel&driveId=${driveId}&limit=20`
     : '/api/inbox?type=channel&limit=20';
 
-  const { hasLoadedRef } = useInboxSocket({ cacheKey: apiUrl, scope: 'channel' });
+  const { hasLoadedRef } = useInboxSocket({ cacheKey: apiUrl, scope: 'channel', driveId });
 
   const { data, error } = useSWR<InboxResponse>(apiUrl, fetcher, {
     refreshInterval: 0,

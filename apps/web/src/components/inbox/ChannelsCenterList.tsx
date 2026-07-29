@@ -39,7 +39,7 @@ export default function ChannelsCenterList({ driveId }: ChannelsCenterListProps)
     ? `/api/inbox?type=channel&driveId=${driveId}&limit=20`
     : '/api/inbox?type=channel&limit=20';
 
-  useInboxSocket({ cacheKey: apiUrl, scope: 'channel', hasLoadedRef });
+  useInboxSocket({ cacheKey: apiUrl, scope: 'channel', driveId, hasLoadedRef });
 
   const { data, error, isLoading } = useSWR<InboxResponse>(apiUrl, fetcher, {
     refreshInterval: 0,
