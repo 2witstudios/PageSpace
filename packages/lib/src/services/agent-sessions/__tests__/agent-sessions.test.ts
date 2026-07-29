@@ -346,6 +346,7 @@ describe('end then ensure — the same session key comes back', () => {
         authorize: async () => ({ ok: true }),
         resolveDriveId: async () => 'drive-1',
         checkFullEgressEnablement: async () => ({ ok: true }),
+        checkConcurrency: async () => ({ allowed: true }),
         now: () => NOW,
       },
     });

@@ -83,6 +83,24 @@ export interface AgentSessionSpriteDeps {
   /** REQUIRED full-egress enablement gate — a session Sprite runs open egress. */
   checkFullEgressEnablement: () => Promise<FullEgressEnablement>;
   /**
+   * REQUIRED per-owner live-session ceiling, applied where a VM is actually
+   * MINTED. Required for the same reason as the egress gate above: this is the
+   * one function every first touch funnels through — web routes, the sandbox and
+   * session tools, AND the realtime shell bridge, which calls this module
+   * directly rather than through the web app's wrapper. A gate placed at any
+   * single call site would leave the others free to provision past the tier
+   * ceiling, so it is a dep of the shared provisioner and not optional: a future
+   * caller cannot forget what it cannot omit.
+   *
+   * Returning `{ allowed: false }` refuses the provision; a resume is exempt
+   * (the row's sandbox is already counted), which the quota module itself
+   * decides from `alreadyProvisioned`.
+   */
+  checkConcurrency: (input: {
+    ownerId: string;
+    alreadyProvisioned: boolean;
+  }) => Promise<{ allowed: boolean; reason?: string }>;
+  /**
    * Optional opportunistic storage measurement. While the Sprite is ALREADY
    * awake right after a provision, capture its used bytes onto the session row so
    * the storage reconcile can bill them — without ever waking a hibernating
@@ -259,7 +277,11 @@ async function probeRecordedSprite(
 
 /** The row slice this module needs — the lifecycle columns, plus who to authorize against. */
 export type AgentSessionSpriteRow = AgentSessionLifecycleRow &
-  Pick<AgentSessionRecord, 'agentPageId' | 'egressPolicyToken'>;
+  // `ownerId` is here for the concurrency ceiling: the quota counts an OWNER's
+  // live sessions, and the owner is a fact of the row, never of the actor
+  // (a drive member provisioning inside someone else's agent still consumes the
+  // session owner's allocation, not their own).
+  Pick<AgentSessionRecord, 'agentPageId' | 'egressPolicyToken' | 'ownerId'>;
 
 /**
  * Ensure this session's sandbox exists (or resume/adopt the one it has), and
@@ -372,8 +394,24 @@ export async function ensureAgentSessionSandbox({
     }
 
     case 'create': {
-      // Gate egress only where a VM is actually minted — a resume/adopt inherits
-      // the lockdown already proven for its Sprite.
+      // Both gates sit HERE, where a VM is actually minted — a resume/adopt
+      // inherits an allocation that is already counted and a lockdown already
+      // proven for its Sprite.
+      const quota = await deps.checkConcurrency({
+        ownerId: row.ownerId,
+        alreadyProvisioned: row.sandboxId !== null,
+      });
+      if (!quota.allowed) {
+        return {
+          ok: false,
+          reason: 'denied',
+          denial: 'not_authorized',
+          detail:
+            quota.reason ??
+            'live agent-session limit reached for your plan — end an existing session before starting another',
+        };
+      }
+
       const enablement = await deps.checkFullEgressEnablement();
       if (!enablement.ok) return { ok: false, reason: 'egress_denied', detail: enablement.reason };
 

@@ -41,6 +41,7 @@ function makeDeps(
     authorize: async () => ({ ok: true }),
     resolveDriveId: async () => 'drive-1',
     checkFullEgressEnablement: async () => ({ ok: true }),
+    checkConcurrency: async () => ({ allowed: true }),
     now: () => NOW,
     ...over,
   };
@@ -678,6 +679,7 @@ describe('ensureAgentSessionSandbox — refusals', () => {
       deps: makeDeps(
         { store, host: makeSpriteHost({ seed: { [SESSION_KEY]: { instanceId: 'i' } } }) },
         {
+          checkConcurrency: async () => ({ allowed: true }),
           checkFullEgressEnablement: async () => {
             throw new Error('must not gate a resume');
           },
@@ -746,5 +748,57 @@ describe('intentForProbeOutcome', () => {
   it('given an explicit reprovision, should stay a reprovision whatever the probe said', () => {
     expect(intentForProbeOutcome('reprovision', { kind: 'vanished' })).toBe('reprovision');
     expect(intentForProbeOutcome('reprovision', { kind: 'unprobed' })).toBe('reprovision');
+  });
+});
+
+/**
+ * The per-owner live-session ceiling is a dep of THIS module rather than of any
+ * one caller, because every first touch funnels through here — the web routes,
+ * the sandbox and session tools, and the realtime shell bridge, which calls this
+ * module directly rather than through the web app's wrapper. A gate at a single
+ * call site would leave the socket path as a way around the tier limit.
+ */
+describe('ensureAgentSessionSandbox — concurrency ceiling', () => {
+  it('given the owner is at their ceiling, should refuse BEFORE minting a VM', async () => {
+    const store = makeAgentSessionStore([makeSessionRecord()]);
+    const host = makeSpriteHost();
+
+    const result = await ensureAgentSessionSandbox({
+      row: toSpriteRow(makeSessionRecord()),
+      intent: 'ensure',
+      actor: { userId: OWNER_ID, tenantId: TENANT_ID },
+      deps: makeDeps(
+        { store, host },
+        { checkConcurrency: async () => ({ allowed: false, reason: 'live agent-session limit reached' }) },
+      ),
+    });
+
+    expect(result).toMatchObject({ ok: false, reason: 'denied', denial: 'not_authorized' });
+    // The point of gating before the mint: no VM exists to leak or bill.
+    expect(host.calls.provision).toHaveLength(0);
+    expect(store.rows.get(SESSION_ID)?.sandboxId).toBeNull();
+  });
+
+  it('given a re-provision of a row that already holds a sandbox, should tell the ceiling it is already provisioned', async () => {
+    const provisioned = makeSessionRecord({ sandboxId: 'sbx-live', sessionKey: SESSION_KEY, spriteInstanceId: 'i' });
+    const store = makeAgentSessionStore([provisioned]);
+    const host = makeSpriteHost({ seed: { [SESSION_KEY]: { instanceId: 'i' } } });
+    const seen: Array<{ ownerId: string; alreadyProvisioned: boolean }> = [];
+
+    await ensureAgentSessionSandbox({
+      row: toSpriteRow(provisioned),
+      intent: 'ensure',
+      actor: { userId: OWNER_ID, tenantId: TENANT_ID },
+      deps: makeDeps({ store, host }, {
+        checkConcurrency: async (input) => { seen.push(input); return { allowed: true }; },
+      }),
+    });
+
+    // A row whose Sprite vanished re-provisions under the SAME key, so it does
+    // reach the create arm — and this is precisely the case the exemption
+    // exists for: the ceiling is told the row already holds an allocation, so
+    // an owner sitting at their limit can still recover their own session
+    // rather than being locked out of a Sprite they are already paying for.
+    expect(seen).toEqual([{ ownerId: OWNER_ID, alreadyProvisioned: true }]);
   });
 });

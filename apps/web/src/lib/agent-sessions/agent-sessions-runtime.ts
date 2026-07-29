@@ -316,35 +316,6 @@ export async function provisionSessionSandbox(
     resolveSessionTenantId(row),
   ]);
 
-  // Per-owner live-session ceiling. Enforced HERE because this is the one path
-  // every first touch funnels through (a chat tool call, a POST to the session
-  // route, opening a shell) — checking at any single caller would leave the
-  // others free to provision past the tier limit.
-  //
-  // Resumes are exempt (see `alreadyProvisioned` below) — that judgement lives
-  // in the quota module so the ceiling has one place it can be wrong.
-  const owner = await db.query.users.findFirst({
-    where: eq(users.id, row.ownerId),
-    columns: { subscriptionTier: true },
-  });
-  const quota = await checkAgentSessionConcurrency({
-    ownerId: row.ownerId,
-    tier: toSubscriptionTier(owner?.subscriptionTier),
-    countLiveAgentSessions: (ownerId) => store.countLive(ownerId),
-    // A row already carrying a sandbox is a RESUME, already counted by
-    // countLive; the skip itself is decided inside the quota module.
-    alreadyProvisioned: row.sandboxId !== null,
-  });
-  if (!quota.allowed) {
-    return {
-      ok: false,
-      reason: 'denied',
-      denial: 'not_authorized',
-      detail:
-        'live agent-session limit reached for your plan — end an existing session before starting another',
-    };
-  }
-
   return ensureAgentSessionSandbox({
     row: { ...row, sessionId: row.conversationId },
     intent: 'ensure',
@@ -362,6 +333,18 @@ export async function provisionSessionSandbox(
           adminGateEnabled: isCodeExecutionEnabled(),
           containment: isContainmentVerified() ? { contained: true } : null,
         }),
+      checkConcurrency: async ({ ownerId, alreadyProvisioned }) => {
+        const owner = await db.query.users.findFirst({
+          where: eq(users.id, ownerId),
+          columns: { subscriptionTier: true },
+        });
+        return checkAgentSessionConcurrency({
+          ownerId,
+          tier: toSubscriptionTier(owner?.subscriptionTier),
+          countLiveAgentSessions: (id) => store.countLive(id),
+          alreadyProvisioned,
+        });
+      },
       // Opportunistic storage measurement, captured while the Sprite is still
       // awake right after provisioning — the one moment its bytes are free to
       // read. Without this the reconcile has no writer for
