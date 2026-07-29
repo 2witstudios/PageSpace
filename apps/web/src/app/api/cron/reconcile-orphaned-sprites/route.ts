@@ -1,8 +1,10 @@
-import { reconcileOrphanSprites } from '@pagespace/lib/services/machines/machine-orphan-reconcile';
+import { reconcileOrphanSprites as reconcileMachineTreeOrphanSprites } from '@pagespace/lib/services/machines/machine-orphan-reconcile';
+import { reconcileOrphanSprites as reconcileAgentSessionOrphanSprites } from '@pagespace/lib/services/sandbox/sprite-orphan-reconcile';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { NextResponse } from 'next/server';
 import { defaultReconcileOrphanSpritesDeps } from '@/lib/machines/machine-orphan-reconcile-runtime';
+import { defaultReconcileAgentSessionOrphanSpritesDeps } from '@/lib/agent-sessions/agent-session-orphan-reconcile-runtime';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
 /**
@@ -35,6 +37,17 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
  * non-idempotent money movement): the kill is idempotent and every row write is
  * concurrency-safe, so overlapping runs converge. The crontab's flock is enough.
  *
+ * PHASE 7 (Dev → Agents billing/storage re-point) adds a SECOND reconcile pass,
+ * `reconcileAgentSessionOrphanSprites`, run ALONGSIDE the machine-tree pass
+ * above rather than instead of it — the machine-tree world keeps reclaiming its
+ * own orphans unchanged until the Phase 8 teardown. The agent-sessions pass
+ * cross-checks `agent_sessions` rows whose teardown was requested but never
+ * confirmed, and drains the SAME `machine_sprite_reclaims` outbox (one
+ * AFTER-DELETE trigger now feeds both `agent_sessions` and the machine-tree
+ * tables) — safe to run twice in one tick since both `killSprite` and the
+ * outbox release are idempotent; whichever pass's write commits first "wins"
+ * a shared row, and the other's release is then a harmless no-op.
+ *
  * Authentication: HMAC-signed request with X-Cron-Timestamp, X-Cron-Nonce,
  * X-Cron-Signature headers.
  */
@@ -45,10 +58,16 @@ export async function GET(request: Request) {
   }
 
   try {
-    const run = await reconcileOrphanSprites(defaultReconcileOrphanSpritesDeps);
+    const [machineRun, agentSessionRun] = await Promise.all([
+      reconcileMachineTreeOrphanSprites(defaultReconcileOrphanSpritesDeps),
+      reconcileAgentSessionOrphanSprites(defaultReconcileAgentSessionOrphanSpritesDeps),
+    ]);
 
     console.log(
-      `[Cron] Orphan sprite reconcile: processed ${run.processed}, torndown ${run.torndown}, skipped ${run.skipped}, failed ${run.failed}${run.capped ? ' (CAPPED — backlog remains, draining next tick)' : ''}`,
+      `[Cron] Orphan sprite reconcile (machine-tree): processed ${machineRun.processed}, torndown ${machineRun.torndown}, skipped ${machineRun.skipped}, failed ${machineRun.failed}${machineRun.capped ? ' (CAPPED — backlog remains, draining next tick)' : ''}`,
+    );
+    console.log(
+      `[Cron] Orphan sprite reconcile (agent-sessions): processed ${agentSessionRun.processed}, torndown ${agentSessionRun.torndown}, skipped ${agentSessionRun.skipped}, failed ${agentSessionRun.failed}${agentSessionRun.capped ? ' (CAPPED — backlog remains, draining next tick)' : ''}`,
     );
 
     audit({
@@ -56,21 +75,37 @@ export async function GET(request: Request) {
       resourceType: 'cron_job',
       resourceId: 'reconcile_orphaned_sprites',
       details: {
-        processed: run.processed,
-        torndown: run.torndown,
-        skipped: run.skipped,
-        failed: run.failed,
-        capped: run.capped,
+        processed: machineRun.processed,
+        torndown: machineRun.torndown,
+        skipped: machineRun.skipped,
+        failed: machineRun.failed,
+        capped: machineRun.capped,
+        agentSessions: {
+          processed: agentSessionRun.processed,
+          torndown: agentSessionRun.torndown,
+          skipped: agentSessionRun.skipped,
+          failed: agentSessionRun.failed,
+          capped: agentSessionRun.capped,
+        },
       },
     });
 
     return NextResponse.json({
       success: true,
-      processed: run.processed,
-      torndown: run.torndown,
-      skipped: run.skipped,
-      failed: run.failed,
-      capped: run.capped,
+      // Legacy top-level fields stay the machine-tree run's — unchanged shape
+      // for any existing monitoring reading this response.
+      processed: machineRun.processed,
+      torndown: machineRun.torndown,
+      skipped: machineRun.skipped,
+      failed: machineRun.failed,
+      capped: machineRun.capped,
+      agentSessions: {
+        processed: agentSessionRun.processed,
+        torndown: agentSessionRun.torndown,
+        skipped: agentSessionRun.skipped,
+        failed: agentSessionRun.failed,
+        capped: agentSessionRun.capped,
+      },
       timestamp: new Date().toISOString(),
     });
   } catch (error) {

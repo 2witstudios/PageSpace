@@ -16,6 +16,7 @@ import { machineSessions } from '@pagespace/db/schema/machine-sessions';
 import { machineBranches } from '@pagespace/db/schema/machine-branches';
 import { machineProjects } from '@pagespace/db/schema/machine-projects';
 import { machineAgentTerminals } from '@pagespace/db/schema/machine-agent-terminals';
+import { agentSessions } from '@pagespace/db/schema/agent-sessions';
 import { lookupPageOwnerId } from '../../billing/machine-payer';
 import { MACHINE_MARKUP_BPS } from '../../billing/credit-pricing';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
@@ -32,7 +33,7 @@ import {
   type ReconcileMachineStorageDeps,
   type ReconcileMachineStorageResult,
 } from './machine-storage-reconcile';
-import { storageSubjectKey, type StorageSubject } from './machine-storage-attribution';
+import { storageSubjectKey, type PageAttributedStorageSubject } from './machine-storage-attribution';
 
 export const defaultReconcileMachineStorageDeps: ReconcileMachineStorageDeps = {
   async listMachines() {
@@ -167,6 +168,35 @@ export const defaultReconcileMachineStorageDeps: ReconcileMachineStorageDeps = {
     return [...byTerminal.values()].map((row) => ({ ...row, lastActiveAt: row.lastActiveAt ?? new Date(0) }));
   },
 
+  /**
+   * Every LIVE `agent_sessions` Sprite (Phase 7) — the ONE enumeration that
+   * replaces the branch/project/agent-terminal pattern for sessions going
+   * forward, added ALONGSIDE the four listers above rather than instead of
+   * them (the old machine-tree world keeps metering unchanged until the
+   * Phase 8 teardown deletes it). No de-fan join needed: `agent_sessions` is
+   * the row itself, not one of several tables joined to a shared
+   * `machine_sessions` for its `lastActiveAt` — the column is first-class here.
+   */
+  async listAgentSessionSprites() {
+    const rows = await db
+      .select({
+        sessionId: agentSessions.conversationId,
+        agentPageId: agentSessions.agentPageId,
+        ownerId: agentSessions.ownerId,
+        storageLastBilledAt: agentSessions.storageLastBilledAt,
+        measuredBytes: agentSessions.storageMeasuredBytes,
+        measuredAt: agentSessions.storageMeasuredAt,
+        lastActiveAt: agentSessions.lastActiveAt,
+      })
+      .from(agentSessions)
+      .where(and(isNotNull(agentSessions.sandboxId), isNull(agentSessions.spriteTornDownAt)));
+    // `lastActiveAt` is nullable on `agent_sessions` ("reported only, never
+    // acted on") — a row that has never recorded activity falls back to the
+    // epoch, the same honest-conservative "not awake" reading the other four
+    // listers use for their joined `lastActiveAt`.
+    return rows.map((row) => ({ ...row, lastActiveAt: row.lastActiveAt ?? new Date(0) }));
+  },
+
   lookupPageOwnerId,
 
   async chargeStorage({ payerId, pageId, costDollars, gbMonths }) {
@@ -176,11 +206,13 @@ export const defaultReconcileMachineStorageDeps: ReconcileMachineStorageDeps = {
       model: 'terminal-machine-storage',
       source: 'terminal',
       // The ATTRIBUTION page (machine-storage-attribution.ts): the machine's own
-      // identifying page, or — for a branch-terminal or promoted-project Sprite
-      // — its OWNING machine's. The usage-breakdown's per-machine view groups on
-      // this (see machine-billing.ts's trackUsage for the same field), so a
-      // branch's or promoted project's storage lands under the Terminal the user
-      // actually sees.
+      // identifying page, or — for a branch-terminal, promoted-project or
+      // agent-session Sprite — its OWNING machine/agent page. The usage-breakdown's
+      // per-machine view groups on this (see machine-billing.ts's trackUsage for
+      // the same field), so a branch's or promoted project's storage lands under
+      // the Terminal the user actually sees. Undefined for a global-assistant
+      // agent-session (Phase 7) — there is no page to group it under; `trackUsage`
+      // treats a missing `pageId` as unattributed-to-a-page, not an error.
       pageId,
       providerCostDollars: costDollars,
       // Not a wall-clock duration (this is a background storage charge, not a
@@ -236,6 +268,18 @@ export const defaultReconcileMachineStorageDeps: ReconcileMachineStorageDeps = {
       .update(machineAgentTerminals)
       .set({ storageLastBilledAt: billedThrough })
       .where(eq(machineAgentTerminals.id, machineAgentTerminalId));
+  },
+
+  // The `agent_sessions` Sprite's OWN watermark — directly on the row itself
+  // (Phase 7), unlike the four listers above which each need their own
+  // tracking table. The design's "per-row watermark" made literal: no faked
+  // watermark through a shared `machine_sessions` join, since the row IS the
+  // Sprite's own identity.
+  async advanceAgentSessionWatermark({ sessionId, billedThrough }) {
+    await db
+      .update(agentSessions)
+      .set({ storageLastBilledAt: billedThrough })
+      .where(eq(agentSessions.conversationId, sessionId));
   },
 
   now: () => new Date(),
@@ -391,7 +435,7 @@ export function __resetStorageMeasurementCachesForTests(): void {
  * the machine's own bytes).
  */
 async function readMeasurementState(
-  subject: StorageSubject,
+  subject: PageAttributedStorageSubject,
 ): Promise<{ found: boolean; lastMeasuredAt: Date | null }> {
   if (subject.kind === 'machine') {
     const [row] = await db
@@ -457,7 +501,7 @@ async function readMeasurementState(
  * only ever called for a sprite the caller already holds/attached).
  */
 async function measureStorageOpportunistically(input: {
-  subject: StorageSubject;
+  subject: PageAttributedStorageSubject;
   handle?: Pick<MachineHandle, 'exec'>;
   resolveHandle?: () => Promise<Pick<MachineHandle, 'exec'> | null>;
   /**

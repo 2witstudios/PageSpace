@@ -23,7 +23,7 @@
  */
 
 import type { MachineHandle } from './machine-host';
-import type { StorageSubject } from './machine-storage-attribution';
+import type { PageAttributedStorageSubject } from './machine-storage-attribution';
 import { SANDBOX_ROOT } from './sandbox-paths';
 
 /** Parse a non-negative integer env override; fall back on absence/garbage (mirrors credit-pricing.ts). */
@@ -106,8 +106,8 @@ export function shouldRefreshMeasurement(input: {
 }
 
 export type PersistStorageMeasurement = (input: {
-  /** WHICH filesystem was measured — selects the row the writer updates (see machine-storage-attribution.ts). */
-  subject: StorageSubject;
+  /** WHICH filesystem was measured — selects the row the writer updates (see machine-storage-attribution.ts). Scoped to the legacy machine-tree kinds; opportunistic measurement is not (yet) wired for agent-sessions. */
+  subject: PageAttributedStorageSubject;
   measuredBytes: number;
   measuredAt: Date;
 }) => Promise<void>;
@@ -120,7 +120,7 @@ export interface RefreshStorageMeasurementInput {
    * separate one. Only ever decides WHERE the bytes are persisted — who pays is
    * resolved from the same subject at billing time, never here.
    */
-  subject: StorageSubject;
+  subject: PageAttributedStorageSubject;
   /** Last persisted measurement time for this subject (null = never measured). */
   lastMeasuredAt: Date | null;
   now: Date;

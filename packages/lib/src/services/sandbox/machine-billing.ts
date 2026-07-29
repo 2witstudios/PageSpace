@@ -40,6 +40,30 @@ async function resolvePayerTier(payerId: string): Promise<SubscriptionTier> {
 }
 
 export const defaultSandboxBillingDeps: SandboxBillingDeps = {
+  // PHASE 7 NOTE (Dev → Agents billing re-point, verified not re-plumbed —
+  // flagged for Phase 8 cleanup, not changed here): this resolves `machinePageId`
+  // via `resolveMachinePageId({ agentPageId: ctx.agentPageId, activeMachine:
+  // ctx.activeMachine })` in `tool-runners.ts`'s `withMachineBilling`, the
+  // SAME legacy chain the machine-tree world uses — it is NOT sandboxId-keyed
+  // and carries no `agent_sessions` awareness. It happens to resolve CORRECTLY
+  // for the new agent-session world too, but coincidentally rather than by
+  // design: `ctx.activeMachine` is always undefined there, so `machinePageId`
+  // falls through to `ctx.agentPageId` (payer via the page's owning drive —
+  // correct) or, when that is null (a global-assistant session), `tenantId`
+  // (which `sandbox-tools-runtime.ts`'s actor-context resolver sets to
+  // `userId` for a driveless global session — also correct, since a
+  // global-assistant conversation is single-user by construction, so `userId`
+  // and the session's `ownerId` coincide). `resolveAgentSessionPayerId`
+  // (`billing/machine-payer.ts`) is the explicit, `agent_sessions`-row-aware
+  // version of this fallback (used by the storage reconcile in
+  // `machine-storage-billing.ts`); re-pointing THIS runtime seam to it too
+  // would need `SandboxBillingDeps`/`ToolExecutionContext` to carry the
+  // session's real `ownerId` end-to-end, which the machine-tree world's
+  // `activeMachine`-shaped context does not carry and which the current
+  // request-side wiring supplies no cleaner value for than the `tenantId`
+  // already in use. Left as-is rather than risk this well-tested runtime-billing
+  // path for no behavioral gain; do the plumbing in Phase 8, alongside
+  // deleting `activeMachine`/`resolveMachinePageId` themselves.
   async resolvePayerId({ tenantId, machinePageId }) {
     return resolveMachinePayerId({ tenantId, machinePageId, lookupPageOwnerId });
   },
