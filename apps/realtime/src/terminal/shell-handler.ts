@@ -1751,8 +1751,14 @@ export function buildShellHandlers({
       // Refusing rather than truncating is deliberate — half a pasted command is
       // a command nobody wrote, and the PTY would run it.
       if (Buffer.byteLength(p.data, 'utf8') > MAX_INPUT_BYTES) {
+        // `recoverable`: the shell is untouched — the PTY never saw this input, so
+        // the binding is still good. Without the flag the client's `handleError`
+        // marks the pane DEAD and refuses to re-bind, which would turn an
+        // oversized paste (a stack trace, a spec) into a permanently broken
+        // terminal — strictly worse than the silent drop this replaced.
         socket.emit('shell:error', {
           message: `Input too large (limit ${MAX_INPUT_BYTES} bytes). Paste it in smaller pieces.`,
+          recoverable: true,
           ...(connectionId !== socket.id ? { connectionId } : {}),
         });
         return;

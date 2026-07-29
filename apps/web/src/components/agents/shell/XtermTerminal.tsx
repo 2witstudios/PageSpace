@@ -263,8 +263,18 @@ export default function XtermTerminal({ socket, shellId, initialInput, onInitial
           useEditingStore.getState().endEditing(shellId);
           terminal.writeln(`\r\n\x1b[90mProcess exited with code ${payload.exitCode}\x1b[0m`);
         };
-        const handleError = (payload: { message: string; connectionId?: string }) => {
+        const handleError = (payload: { message: string; connectionId?: string; recoverable?: boolean }) => {
           if (!isMine(payload)) return;
+          // ADVISORY vs FATAL. `shell:error` is otherwise the server saying "this
+          // binding is finished", so marking the pane dead is right — it stops a
+          // doomed reconnect loop. But some refusals leave the shell perfectly
+          // alive (an over-cap paste is rejected; the PTY never saw it), and
+          // killing the pane for one of those loses the user's live session over
+          // a recoverable mistake. Those arrive flagged, and only get printed.
+          if (payload.recoverable) {
+            terminal.writeln(`\r\n\x1b[33m${payload.message}\x1b[0m`);
+            return;
+          }
           dead = true;
           useEditingStore.getState().endEditing(shellId);
           terminal.writeln(`\r\n\x1b[31mError: ${payload.message}\x1b[0m`);

@@ -894,3 +894,48 @@ describe('handleShellReadRequest — viewer identity re-authorization', () => {
     expect(session.lastViewerUserId).toBe('user-1');
   });
 });
+
+/**
+ * The re-auth check runs AFTER the input has already been written to the PTY on
+ * the send path. If it rejects, the request 500s for a command that already ran
+ * — and a caller reading 500 as "nothing happened" retries, double-executing it.
+ */
+describe('reauthorizeViewer failure handling', () => {
+  it('given the re-auth check THROWS, should not reject the request', async () => {
+    const { session, written } = writableSession();
+    session.viewers.clear();
+    session.lastViewerUserId = 'user-1';
+
+    const result = await handleShellSendRequest(
+      {
+        ...deps({ 'k:sh': session }),
+        reauthorizeViewer: async () => { throw new Error('db blip'); },
+      },
+      sendBody({ userId: 'user-2' }),
+    );
+
+    // The write happened and the caller gets a normal answer — no 500, so no
+    // retry, so no double execution.
+    expect(result.status).toBe(200);
+    expect(written).toEqual(['ls\n']);
+    // Fails closed: the identity is left alone rather than trusted.
+    expect(session.lastViewerUserId).toBe('user-1');
+  });
+
+  it('given the re-auth check throws on the READ path, should still answer', async () => {
+    const { session } = writableSession();
+    session.viewers.clear();
+    session.lastViewerUserId = 'user-1';
+
+    const result = await handleShellReadRequest(
+      {
+        ...deps({ 'k:sh': session }),
+        reauthorizeViewer: async () => { throw new Error('db blip'); },
+      },
+      JSON.stringify({ shellIds: ['sh'], start: true, userId: 'user-2' }),
+    );
+
+    expect(result.status).toBe(200);
+    expect(session.lastViewerUserId).toBe('user-1');
+  });
+});

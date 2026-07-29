@@ -14,6 +14,11 @@ import { userProfiles } from '@pagespace/db/schema/members';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { canRunCode, isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { checkAgentSessionConcurrency } from '@pagespace/lib/services/sandbox/quota';
+import {
+  refreshSessionStorageMeasurement,
+  shouldRefreshMeasurement,
+  SESSION_STORAGE_MEASUREMENT_THROTTLE_MS,
+} from '@pagespace/lib/services/sandbox/sandbox-storage-measure';
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import {
   decideFullEgressEnablement,
@@ -208,6 +213,25 @@ async function ensureShellSessionSandbox({ sessionId, userId }: { sessionId: str
       // the web tier's: a shell opened over the socket mints a Sprite exactly
       // like a chat tool call does, so gating only the HTTP routes would leave
       // the socket as a way around the tier limit.
+      // Storage measurement on THIS path too. A session whose only work is PTY
+      // shells over the socket — the primary workload — otherwise never gets
+      // measured at all: the web tool path is the only other trigger, and a
+      // shell-only session never touches it. The reconcile maps a null
+      // measurement to 0 GB and advances the watermark regardless, so those
+      // sessions would bill $0 for storage permanently.
+      measureSessionStorage: async ({ sessionId, handle }) => {
+        await refreshSessionStorageMeasurement({
+          handle,
+          sessionId,
+          // Null for the same reason as the web tier: this fires on the create
+          // arm, whose own stamps reset the measurement columns.
+          lastMeasuredAt: null,
+          now: new Date(),
+          persist: async ({ measuredBytes, measuredAt }) => {
+            await store.recordStorageMeasurement({ sessionId, measuredBytes, measuredAt });
+          },
+        });
+      },
       checkConcurrency: async ({ ownerId, alreadyProvisioned }) => {
         const tier = await resolveOwnerTier(ownerId);
         return checkAgentSessionConcurrency({
@@ -221,7 +245,51 @@ async function ensureShellSessionSandbox({ sessionId, userId }: { sessionId: str
     },
   });
   if (!result.ok) return { ok: false, reason: result.denial ?? result.reason };
+
+  // Opportunistic measurement for a RESUMED session. The create-arm hook above
+  // only ever sees an empty disk; this is the moment a shell-only session — one
+  // that never makes a chat tool call, and so never reaches the web tier's
+  // measurement path — is both awake and worth measuring. Throttled per session,
+  // and deliberately not awaited: a billing observation must never delay opening
+  // a shell.
+  void measureWarmSessionStorageOnResume(row.conversationId, result.sandboxId);
+
   return { ok: true, sandboxId: result.sandboxId };
+}
+
+/**
+ * Measure a warm session's storage if the throttle has elapsed. Mirrors the web
+ * tier's `measureWarmSessionStorage`; kept here rather than imported because the
+ * two tiers construct their sandbox clients differently.
+ */
+async function measureWarmSessionStorageOnResume(sessionId: string, sandboxId: string): Promise<void> {
+  try {
+    const store = await dbAgentSessionStorePromise;
+    const row = await store.findById(sessionId);
+    if (!row || row.sandboxId === null || row.spriteTornDownAt !== null) return;
+    if (!shouldRefreshMeasurement({
+      lastMeasuredAt: row.storageMeasuredAt ?? null,
+      now: new Date(),
+      throttleMs: SESSION_STORAGE_MEASUREMENT_THROTTLE_MS,
+    })) return;
+
+    const sdk = createSpriteHandleCache(await getRealtimeSpritesSdk());
+    const client = createSpritesSandboxClient({ sdk });
+    const sandbox = await client.get({ sandboxId });
+    if (!sandbox) return;
+
+    await refreshSessionStorageMeasurement({
+      handle: { exec: (args) => sandbox.runCommand(args) },
+      sessionId,
+      lastMeasuredAt: row.storageMeasuredAt ?? null,
+      now: new Date(),
+      persist: async ({ measuredBytes, measuredAt }) => {
+        await store.recordStorageMeasurement({ sessionId, measuredBytes, measuredAt });
+      },
+    });
+  } catch {
+    // Best-effort: a billing observation must never break opening a shell.
+  }
 }
 
 /**

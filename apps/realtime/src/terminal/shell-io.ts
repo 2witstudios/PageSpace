@@ -218,6 +218,29 @@ async function resolveOrStartSession(
  * are interpolated into a display line an xterm renders (an ESC sequence could
  * forge output) rather than delivered to a program's stdin.
  */
+/**
+ * Re-authorize a viewer identity, treating a THROW as "not authorized".
+ *
+ * The check runs several DB queries and a field decrypt, and on the send path it
+ * runs AFTER the input has already been written to the PTY. Letting it reject
+ * would turn a transient database blip into a 500 for a request whose command
+ * has already executed — and a caller that reads 500 as "nothing happened" would
+ * retry, double-executing it. Failing closed here costs at most a stale eviction
+ * identity, which the 60s re-auth tick corrects on its own; the same fail-open-
+ * on-throw discipline that tick already documents.
+ */
+async function reauthorizeSafely(
+  deps: Pick<ShellIoDeps, 'reauthorizeViewer'>,
+  shellId: string,
+  userId: string,
+): Promise<boolean> {
+  try {
+    return (await deps.reauthorizeViewer?.({ shellId, userId })) ?? false;
+  } catch {
+    return false;
+  }
+}
+
 export async function handleShellSendRequest(
   deps: ShellIoDeps,
   body: string,
@@ -282,9 +305,7 @@ export async function handleShellSendRequest(
     // authorized them, otherwise an injected re-check must say so. Without
     // either, the field is ignored — see `reauthorizeViewer`.
     if (payload.userId !== undefined && payload.userId !== session.lastViewerUserId) {
-      const authorized = started
-        ? true
-        : ((await deps.reauthorizeViewer?.({ shellId: payload.shellId, userId: payload.userId })) ?? false);
+      const authorized = started ? true : await reauthorizeSafely(deps, payload.shellId, payload.userId);
       if (authorized) session.lastViewerUserId = payload.userId;
     }
     deps.rearmIdleReap?.(session);
@@ -434,8 +455,7 @@ export async function handleShellReadRequest(
       // but it is still a caller-supplied identity, and an HMAC signature says
       // who is calling, not on whose behalf.
       if (payload.userId !== undefined && payload.userId !== session.lastViewerUserId) {
-        const authorized =
-          (await deps.reauthorizeViewer?.({ shellId, userId: payload.userId })) ?? false;
+        const authorized = await reauthorizeSafely(deps, shellId, payload.userId);
         if (authorized) session.lastViewerUserId = payload.userId;
       }
       deps.rearmIdleReap?.(session);
