@@ -25,40 +25,26 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
+import { createMockSocket } from '@/test/socket-mocks';
 import { useEditingStore } from '@/stores/useEditingStore';
 
 const srcRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const readSource = (relPath: string) => readFileSync(resolve(srcRoot, relPath), 'utf8');
+const sourceCache = new Map<string, string>();
+const readSource = (relPath: string) => {
+  const cached = sourceCache.get(relPath);
+  if (cached !== undefined) return cached;
+  const content = readFileSync(resolve(srcRoot, relPath), 'utf8');
+  sourceCache.set(relPath, content);
+  return content;
+};
 
 // ---------------------------------------------------------------------------
-// Hoisted mocks shared across all tests
+// Hoisted mocks shared across all tests. `mockSocket` is built from the real
+// (unmocked) `createMockSocket`, so it must stay out of vi.hoisted — that
+// callback runs before other imports are initialized.
 // ---------------------------------------------------------------------------
-const { mockSocket, mockMutate } = vi.hoisted(() => {
-  const handlers: Record<string, ((...args: unknown[]) => void)[]> = {};
-
-  const mockSocket = {
-    connected: true,
-    on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
-      if (!handlers[event]) handlers[event] = [];
-      handlers[event].push(handler);
-    }),
-    off: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
-      if (handlers[event]) {
-        handlers[event] = handlers[event].filter((h) => h !== handler);
-      }
-    }),
-    _trigger: (event: string, payload: unknown) => {
-      handlers[event]?.slice().forEach((h) => h(payload));
-    },
-    _reset: () => {
-      Object.keys(handlers).forEach((k) => { handlers[k] = []; });
-    },
-  };
-
-  const mockMutate = vi.fn();
-
-  return { mockSocket, mockMutate };
-});
+const { mockMutate } = vi.hoisted(() => ({ mockMutate: vi.fn() }));
+const mockSocket = createMockSocket();
 
 vi.mock('../useSocket', () => ({
   useSocket: () => mockSocket,
@@ -70,6 +56,17 @@ vi.mock('swr', () => ({
 
 import { useInboxSocket } from '../useInboxSocket';
 import type { InboxEventPayload } from '@/lib/websocket/socket-utils';
+
+const CHANNEL_KEY = '/api/inbox?type=channel&limit=20';
+const DM_KEY = '/api/inbox?type=dm&limit=20';
+
+const renderInboxSocket = (overrides: Partial<Parameters<typeof useInboxSocket>[0]> = {}) =>
+  renderHook(() => useInboxSocket({
+    cacheKey: CHANNEL_KEY,
+    scope: 'channel',
+    hasLoadedRef: { current: true },
+    ...overrides,
+  }));
 
 const channelPayload = (overrides: Partial<InboxEventPayload> = {}): InboxEventPayload => ({
   operation: 'channel_updated',
@@ -91,7 +88,6 @@ const dmPayload = (overrides: Partial<InboxEventPayload> = {}): InboxEventPayloa
 
 describe('useInboxSocket', () => {
   beforeEach(() => {
-    mockSocket._reset();
     vi.clearAllMocks();
     useEditingStore.setState({ activeSessions: new Map(), pendingSends: new Set() });
   });
@@ -158,8 +154,7 @@ describe('useInboxSocket', () => {
   // -------------------------------------------------------------------------
   describe('scope filtering', () => {
     it('given scope "channel", a dm-typed payload causes zero cache writes', () => {
-      const hasLoadedRef = { current: true };
-      renderHook(() => useInboxSocket({ cacheKey: '/api/inbox?type=channel&limit=20', scope: 'channel', hasLoadedRef }));
+      renderInboxSocket();
 
       act(() => {
         mockSocket._trigger('inbox:dm_updated', dmPayload());
@@ -169,8 +164,7 @@ describe('useInboxSocket', () => {
     });
 
     it('given scope "dm", a channel-typed payload causes zero cache writes', () => {
-      const hasLoadedRef = { current: true };
-      renderHook(() => useInboxSocket({ cacheKey: '/api/inbox?type=dm&limit=20', scope: 'dm', hasLoadedRef }));
+      renderInboxSocket({ cacheKey: DM_KEY, scope: 'dm' });
 
       act(() => {
         mockSocket._trigger('inbox:channel_updated', channelPayload());
@@ -180,15 +174,14 @@ describe('useInboxSocket', () => {
     });
 
     it('given a matching scope, the payload is written to the cache', () => {
-      const hasLoadedRef = { current: true };
-      renderHook(() => useInboxSocket({ cacheKey: '/api/inbox?type=channel&limit=20', scope: 'channel', hasLoadedRef }));
+      renderInboxSocket();
 
       act(() => {
         mockSocket._trigger('inbox:channel_updated', channelPayload());
       });
 
       expect(mockMutate).toHaveBeenCalledWith(
-        '/api/inbox?type=channel&limit=20',
+        CHANNEL_KEY,
         expect.any(Function),
         { revalidate: false }
       );
@@ -200,8 +193,7 @@ describe('useInboxSocket', () => {
   // -------------------------------------------------------------------------
   describe('stale-replay on editing end', () => {
     it('replays a dropped update once editing ends, with no page reload', () => {
-      const hasLoadedRef = { current: true };
-      renderHook(() => useInboxSocket({ cacheKey: '/api/inbox?type=channel&limit=20', scope: 'channel', hasLoadedRef }));
+      renderInboxSocket();
 
       act(() => {
         useEditingStore.getState().startEditing('doc-1', 'document');
@@ -220,12 +212,11 @@ describe('useInboxSocket', () => {
 
       // Editing store subscription replays via a full revalidation of the
       // same key once every editing session ends.
-      expect(mockMutate).toHaveBeenCalledWith('/api/inbox?type=channel&limit=20');
+      expect(mockMutate).toHaveBeenCalledWith(CHANNEL_KEY);
     });
 
     it('does not replay while any other editing session remains active', () => {
-      const hasLoadedRef = { current: true };
-      renderHook(() => useInboxSocket({ cacheKey: '/api/inbox?type=channel&limit=20', scope: 'channel', hasLoadedRef }));
+      renderInboxSocket();
 
       act(() => {
         useEditingStore.getState().startEditing('doc-1', 'document');
@@ -247,12 +238,11 @@ describe('useInboxSocket', () => {
         useEditingStore.getState().endEditing('doc-2');
       });
 
-      expect(mockMutate).toHaveBeenCalledWith('/api/inbox?type=channel&limit=20');
+      expect(mockMutate).toHaveBeenCalledWith(CHANNEL_KEY);
     });
 
     it('does not replay when no update was dropped', () => {
-      const hasLoadedRef = { current: true };
-      renderHook(() => useInboxSocket({ cacheKey: '/api/inbox?type=channel&limit=20', scope: 'channel', hasLoadedRef }));
+      renderInboxSocket();
 
       act(() => {
         useEditingStore.getState().startEditing('doc-1', 'document');
@@ -267,8 +257,7 @@ describe('useInboxSocket', () => {
 
   describe('hasLoadedRef race guard', () => {
     it('ignores events until hasLoadedRef.current is true', () => {
-      const hasLoadedRef = { current: false };
-      renderHook(() => useInboxSocket({ cacheKey: '/api/inbox?type=channel&limit=20', scope: 'channel', hasLoadedRef }));
+      renderInboxSocket({ hasLoadedRef: { current: false } });
 
       act(() => {
         mockSocket._trigger('inbox:channel_updated', channelPayload());
