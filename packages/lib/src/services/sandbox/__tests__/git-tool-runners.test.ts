@@ -104,7 +104,7 @@ describe('runGitInSandbox', () => {
     expect(runCommandCalls[0].args).toEqual(['status']);
   });
 
-  it('given a ctx with an activeMachine set, should thread it onto the acquireSandbox request', async () => {
+  it('given a ctx, should thread agentPageId/conversationId onto the acquireSandbox request', async () => {
     const seen: unknown[] = [];
     const { deps } = makeDeps({
       acquireSandbox: async (input) => {
@@ -115,11 +115,11 @@ describe('runGitInSandbox', () => {
     await runGitInSandbox({
       cmd: 'git',
       args: ['status'],
-      ctx: makeCtx({ activeMachine: { kind: 'existing', machineId: 't1' } }),
+      ctx: makeCtx({ agentPageId: 'agent-1', conversationId: 'c1' }),
       deps,
     });
     expect(seen).toEqual([
-      expect.objectContaining({ activeMachine: { kind: 'existing', machineId: 't1' } }),
+      expect.objectContaining({ agentPageId: 'agent-1', conversationId: 'c1' }),
     ]);
   });
 

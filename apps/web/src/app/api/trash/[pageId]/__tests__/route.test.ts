@@ -1,11 +1,5 @@
 /**
- * Permanent page delete — the machine-ref repair (issue #2156).
- *
- * This route is one of the paths that makes a MachineRef permanently dangling:
- * it hard-deletes the page rows, and nothing FK-cascades the denormalized
- * `machines` blobs on agent pages / the global assistant config. The MACHINE
- * page ids must therefore be snapshotted BEFORE the delete (afterwards the rows
- * are gone and the set is unrecoverable), and swept afterwards.
+ * Permanent page delete.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -16,23 +10,16 @@ const {
   mockCanDelete,
   mockAuthenticate,
   mockReapOrphanedFiles,
-  mockCollectMachineIds,
-  mockSweepMachineRefs,
-  callOrder,
-} = vi.hoisted(() => {
-  const order: string[] = [];
-  return {
-    mockFindPage: vi.fn(),
-    mockTransaction: vi.fn(),
-    mockExecute: vi.fn(),
-    mockCanDelete: vi.fn(),
-    mockAuthenticate: vi.fn(),
-    mockReapOrphanedFiles: vi.fn(),
-    mockCollectMachineIds: vi.fn(),
-    mockSweepMachineRefs: vi.fn(),
-    callOrder: order,
-  };
-});
+  mockAuditRequest,
+} = vi.hoisted(() => ({
+  mockFindPage: vi.fn(),
+  mockTransaction: vi.fn(),
+  mockExecute: vi.fn(),
+  mockCanDelete: vi.fn(),
+  mockAuthenticate: vi.fn(),
+  mockReapOrphanedFiles: vi.fn(),
+  mockAuditRequest: vi.fn(),
+}));
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
@@ -60,17 +47,13 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } },
 }));
-vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: (...args: unknown[]) => mockAuditRequest(...args) }));
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   getActorInfo: vi.fn(async () => ({ actorEmail: 'a@x.test', actorDisplayName: 'A' })),
   logPageActivity: vi.fn(),
 }));
 vi.mock('@/lib/storage/reap-orphaned-files', () => ({
   reapOrphanedFiles: (...args: unknown[]) => mockReapOrphanedFiles(...args),
-}));
-vi.mock('@/lib/machines/machine-ref-sweep-runtime', () => ({
-  collectMachinePageIdsInSubtree: (...args: unknown[]) => mockCollectMachineIds(...args),
-  sweepDanglingMachineRefs: (...args: unknown[]) => mockSweepMachineRefs(...args),
 }));
 vi.mock('next/server', () => ({
   NextResponse: Object.assign(
@@ -94,59 +77,62 @@ const params = Promise.resolve({ pageId: 'page-1' });
 
 beforeEach(() => {
   vi.clearAllMocks();
-  callOrder.length = 0;
   mockAuthenticate.mockResolvedValue({ userId: 'user-1' });
   mockCanDelete.mockResolvedValue(true);
   mockFindPage.mockResolvedValue({ id: 'page-1', title: 'Folder', driveId: 'drive-1', isTrashed: true });
   mockExecute.mockResolvedValue({ rows: [] });
-  mockTransaction.mockImplementation(async () => {
-    callOrder.push('delete');
-  });
+  mockTransaction.mockImplementation(async () => {});
   mockReapOrphanedFiles.mockResolvedValue({ dbRecordsDeleted: 0 });
-  mockCollectMachineIds.mockImplementation(async () => {
-    callOrder.push('collect');
-    return ['machine-1'];
-  });
-  mockSweepMachineRefs.mockImplementation(async () => {
-    callOrder.push('sweep');
-    return { deadMachineIds: ['machine-1'], agentsUpdated: 1, globalConfigsUpdated: 0, failures: 0 };
-  });
 });
 
 describe('DELETE /api/trash/[pageId]', () => {
-  it('snapshots the subtree MACHINE ids before deleting and sweeps their refs after', async () => {
+  it('given an authenticated, authorized delete of a trashed page, should permanently delete it', async () => {
     const response = await DELETE(makeRequest(), { params });
+    const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(mockCollectMachineIds).toHaveBeenCalledWith('page-1');
-    expect(mockSweepMachineRefs).toHaveBeenCalledWith(['machine-1']);
-    // Order is the whole point: after the delete the rows are gone, so a
-    // snapshot taken then would come back empty.
-    expect(callOrder).toEqual(['collect', 'delete', 'sweep']);
+    expect(body.message).toBe('Page permanently deleted.');
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'data.delete', userId: 'user-1', resourceType: 'page', resourceId: 'page-1' }),
+    );
   });
 
-  it('skips the sweep entirely when the subtree held no machines', async () => {
-    mockCollectMachineIds.mockResolvedValue([]);
-
-    await DELETE(makeRequest(), { params });
-
-    expect(mockSweepMachineRefs).not.toHaveBeenCalled();
-  });
-
-  it('still reports success when the sweep fails', async () => {
-    mockSweepMachineRefs.mockRejectedValue(new Error('deadlock detected'));
+  it('given no access, should return 403 and never delete', async () => {
+    mockCanDelete.mockResolvedValue(false);
 
     const response = await DELETE(makeRequest(), { params });
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(403);
+    expect(mockTransaction).not.toHaveBeenCalled();
   });
 
-  it('does not sweep when the page is not in the trash', async () => {
+  it('given a page that is not in the trash, should reject with 400 and never delete', async () => {
     mockFindPage.mockResolvedValue({ id: 'page-1', isTrashed: false, driveId: 'drive-1' });
 
     const response = await DELETE(makeRequest(), { params });
 
     expect(response.status).toBe(400);
-    expect(mockSweepMachineRefs).not.toHaveBeenCalled();
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
+  it('given orphaned files left by the delete, should reap them inline and log the count', async () => {
+    mockExecute.mockResolvedValue({ rows: [{ id: 'file-1' }] });
+    mockReapOrphanedFiles.mockResolvedValue({ dbRecordsDeleted: 1 });
+
+    const response = await DELETE(makeRequest(), { params });
+
+    expect(response.status).toBe(200);
+    expect(mockReapOrphanedFiles).toHaveBeenCalledWith(expect.anything(), { fileIds: ['file-1'] });
+  });
+
+  it('given the inline reap fails, should still report success (the weekly cron retries)', async () => {
+    mockExecute.mockResolvedValue({ rows: [{ id: 'file-1' }] });
+    mockReapOrphanedFiles.mockRejectedValue(new Error('processor down'));
+
+    const response = await DELETE(makeRequest(), { params });
+
+    expect(response.status).toBe(200);
   });
 });

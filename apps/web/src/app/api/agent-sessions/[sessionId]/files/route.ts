@@ -44,7 +44,7 @@ import {
 } from '@pagespace/lib/services/sandbox/machine-fs';
 import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
 import { resolvePathWithinSync } from '@pagespace/lib/security/path-validator';
-import type { MachineHandle } from '@pagespace/lib/services/sandbox/machine-host';
+import type { SandboxHandle } from '@pagespace/lib/services/sandbox/sandbox-host';
 import { checkSessionAccess } from '@/lib/agent-sessions/agent-sessions-runtime';
 import { resolveSessionSandboxHandle } from '@/lib/agent-sessions/session-sandbox-runtime';
 
@@ -141,7 +141,7 @@ function confineScopedPath(
 
 /** Second confinement pass, ON the sandbox — see the machines route's symlink rationale. */
 async function requireSandboxPathsWithinScope(
-  handle: MachineHandle,
+  handle: SandboxHandle,
   scopeRoot: string,
   checks: ReadonlyArray<{ field: string; path: string }>,
 ): Promise<NextResponse | null> {

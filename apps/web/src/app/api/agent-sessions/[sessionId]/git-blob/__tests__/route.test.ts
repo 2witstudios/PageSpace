@@ -50,7 +50,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockAuthenticateRequest.mockResolvedValue(AUTH_USER);
   mockCheckSessionAccess.mockResolvedValue({ allowed: true });
-  mockResolveHandle.mockResolvedValue({ ok: true, handle: { machineId: 'sb-1' } });
+  mockResolveHandle.mockResolvedValue({ ok: true, handle: { sandboxId: 'sb-1' } });
   mockReadGitBlob.mockResolvedValue({ ok: true, content: 'old content', truncated: false });
 });
 

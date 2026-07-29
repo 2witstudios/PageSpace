@@ -28,7 +28,7 @@ import {
   screenToolOutput,
   heuristicInjectionClassifier,
 } from '@pagespace/lib/services/sandbox/injection-seam';
-import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/machine-billing';
+import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/sandbox-billing';
 import {
   isCheckpointBeforeAgentBatchEnabled,
   getCheckpointState,

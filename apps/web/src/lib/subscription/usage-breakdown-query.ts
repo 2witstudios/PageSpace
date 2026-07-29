@@ -13,17 +13,17 @@ import { pages } from '@pagespace/db/schema/core';
 import { aggregateUsageBreakdown, resolveUsageWindow, type UsageBreakdown } from './usage-breakdown';
 
 /**
- * Spend-by-feature, spend-by-model, and (for source:'terminal') spend-by-machine for
- * the user's current billing period. Spend is the ledger's precise charged amount
+ * Spend-by-feature, spend-by-model, and (for source:'terminal') spend-by-agent-session
+ * for the user's current billing period. Spend is the ledger's precise charged amount
  * (`chargeMillicents`, post-markup) — never the raw provider `cost`. The join drops
  * usage rows whose AI log has been purged by retention, which is acceptable for a
  * "recent usage" view.
  *
- * `byMachine` needs no separate drive-ownership filter: `creditLedger.userId` IS the
- * PAYER (`resolveMachinePayerId` in machine-payer.ts always resolves to the backing
- * page's drive owner, falling back to the acting tenant only when unresolvable), so
- * every row this query returns for `userId` is already scoped to a machine they own
- * or a run they footed the bill for directly.
+ * `byAgentSession` needs no separate drive-ownership filter: `creditLedger.userId` IS
+ * the PAYER (`resolveSandboxPayerId` in sandbox-payer.ts always resolves to the
+ * backing page's drive owner, falling back to the acting tenant only when
+ * unresolvable), so every row this query returns for `userId` is already scoped to
+ * a session they own or a run they footed the bill for directly.
  */
 export async function getUserUsageBreakdown(userId: string): Promise<UsageBreakdown> {
   const [balance] = await db
@@ -50,11 +50,11 @@ export async function getUserUsageBreakdown(userId: string): Promise<UsageBreakd
       provider: aiUsageLogs.provider,
       totalTokens: aiUsageLogs.totalTokens,
       chargeMillicents: creditLedger.chargeMillicents,
-      // Per-machine attribution (Terminal Epic 3): pageId + its active-window
+      // Per-agent-session attribution (Terminal Epic 3): pageId + its active-window
       // duration are only ever set on source:'terminal' rows; the pure
       // aggregator ignores them for every other source. `pages` is left-joined
       // (not inner) so a deleted/unresolvable page still surfaces its spend,
-      // under a "Untitled machine" label, rather than disappearing.
+      // under a "Untitled agent" label, rather than disappearing.
       pageId: aiUsageLogs.pageId,
       pageTitle: pages.title,
       durationMs: aiUsageLogs.duration,

@@ -166,8 +166,6 @@ const mockPage = {
   includePageTree: false,
   pageTreeScope: 'children',
   toolExposureMode: 'search',
-  machineAccess: true,
-  machines: [{ kind: 'own' }],
   revision: 5,
 };
 
@@ -294,8 +292,6 @@ describe('GET /api/pages/[pageId]/agent-config', () => {
       expect(body.includePageTree).toBe(false);
       expect(body.pageTreeScope).toBe('children');
       expect(body.toolExposureMode).toBe('search');
-      expect(body.machineAccess).toBe(true);
-      expect(body.machines).toEqual([{ kind: 'own' }]);
     });
 
     it('returns available tools list', async () => {
@@ -322,8 +318,6 @@ describe('GET /api/pages/[pageId]/agent-config', () => {
           visibleToGlobalAssistant: null,
           includePageTree: null,
           pageTreeScope: null,
-          machineAccess: null,
-          machines: null,
         }],
         [{ drivePrompt: null }]
       );
@@ -341,22 +335,6 @@ describe('GET /api/pages/[pageId]/agent-config', () => {
       expect(body.visibleToGlobalAssistant).toBe(true);
       expect(body.includePageTree).toBe(false);
       expect(body.pageTreeScope).toBe('children');
-      expect(body.machineAccess).toBe(false);
-      expect(body.machines).toEqual([]);
-    });
-
-    it('back-reads a pre-existing config (fields absent entirely) with terminal defaults', async () => {
-      // A row created before this PR has no machineAccess/machines columns
-      // populated yet — undefined, not null, until backfilled.
-      const { machineAccess: _machineAccess, machines: _machines, ...legacyPage } = mockPage;
-      setupGetSelectChain([legacyPage], [{ drivePrompt: null }]);
-
-      const response = await GET(createGetRequest(), mockParams);
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.machineAccess).toBe(false);
-      expect(body.machines).toEqual([]);
     });
 
     it('handles drive prompt fetch error gracefully', async () => {
@@ -381,58 +359,6 @@ describe('GET /api/pages/[pageId]/agent-config', () => {
 
       expect(response.status).toBe(200);
       expect(body.drivePrompt).toBeNull();
-    });
-
-    it('returns an empty availableMachines list by default', async () => {
-      const response = await GET(createGetRequest(), mockParams);
-      const body = await response.json();
-
-      expect(body.availableMachines).toEqual([]);
-    });
-
-    it('returns configured machineAccess and machines', async () => {
-      setupGetSelectChain(
-        [{ ...mockPage, machineAccess: true, machines: [{ kind: 'own' }] }],
-        [{ drivePrompt: 'Drive system prompt' }]
-      );
-
-      const response = await GET(createGetRequest(), mockParams);
-      const body = await response.json();
-
-      expect(body.machineAccess).toBe(true);
-      expect(body.machines).toEqual([{ kind: 'own' }]);
-    });
-
-    it('returns availableMachines filtered to MACHINE pages the user can access', async () => {
-      mockGetUserAccessiblePagesInDrive.mockResolvedValue(['term_1', 'term_2']);
-      let callCount = 0;
-      mockDbSelect.mockImplementation(() => ({
-        from: () => ({
-          where: () => {
-            callCount++;
-            if (callCount === 1) return Promise.resolve([mockPage]); // page fetch
-            if (callCount === 2) {
-              return { limit: () => Promise.resolve([{ drivePrompt: 'Drive system prompt' }]) }; // drive fetch
-            }
-            return Promise.resolve([{ id: 'term_1', title: 'Terminal One' }]); // terminal listing
-          },
-        }),
-      }));
-
-      const response = await GET(createGetRequest(), mockParams);
-      const body = await response.json();
-
-      expect(body.availableMachines).toEqual([{ id: 'term_1', title: 'Terminal One' }]);
-    });
-
-    it('returns an empty availableMachines list when the accessible-pages lookup throws', async () => {
-      mockGetUserAccessiblePagesInDrive.mockRejectedValue(new Error('permissions error'));
-
-      const response = await GET(createGetRequest(), mockParams);
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.availableMachines).toEqual([]);
     });
   });
 
@@ -706,67 +632,6 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
       );
     });
 
-    it('updates machineAccess as boolean', async () => {
-      await PATCH(createPatchRequest({ machineAccess: 1 }), mockParams);
-
-      expect(mockApplyPageMutation).toHaveBeenCalledWith(
-        expect.objectContaining({
-          updates: expect.objectContaining({
-            machineAccess: true,
-          }),
-        })
-      );
-    });
-
-    it('updates machines with a valid MachineRef array', async () => {
-      // Own-machine entries only — the "existing" machineId path (which also
-      // needs an accessibility check) is covered in "machines validation" below.
-      const machines = [{ kind: 'own' }];
-      await PATCH(createPatchRequest({ machines }), mockParams);
-
-      expect(mockApplyPageMutation).toHaveBeenCalledWith(
-        expect.objectContaining({
-          updates: expect.objectContaining({
-            machines,
-          }),
-        })
-      );
-    });
-
-    it('preserves an empty machines array', async () => {
-      await PATCH(createPatchRequest({ machines: [] }), mockParams);
-
-      expect(mockApplyPageMutation).toHaveBeenCalledWith(
-        expect.objectContaining({
-          updates: expect.objectContaining({
-            machines: [],
-          }),
-        })
-      );
-    });
-
-    it('returns 400 for a malformed machines array and does not mutate', async () => {
-      const response = await PATCH(
-        createPatchRequest({ machines: [{ kind: 'existing' }] }),
-        mockParams
-      );
-      const body = await response.json();
-
-      expect(response.status).toBe(400);
-      expect(body.error).toMatch(/machines/i);
-      expect(mockApplyPageMutation).not.toHaveBeenCalled();
-    });
-
-    it('returns 400 when machines is not an array', async () => {
-      const response = await PATCH(
-        createPatchRequest({ machines: { kind: 'own' } }),
-        mockParams
-      );
-
-      expect(response.status).toBe(400);
-      expect(mockApplyPageMutation).not.toHaveBeenCalled();
-    });
-
     it('updates includePageTree as boolean', async () => {
       await PATCH(createPatchRequest({ includePageTree: true }), mockParams);
 
@@ -868,147 +733,6 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
       );
     });
 
-    it('updates machineAccess as boolean', async () => {
-      await PATCH(createPatchRequest({ machineAccess: 1 }), mockParams);
-
-      expect(mockApplyPageMutation).toHaveBeenCalledWith(
-        expect.objectContaining({
-          updates: expect.objectContaining({
-            machineAccess: true,
-          }),
-        })
-      );
-    });
-  });
-
-  describe('machines validation', () => {
-    it('returns 400 for malformed machine entries', async () => {
-      const response = await PATCH(
-        createPatchRequest({ machines: [{ kind: 'bogus' }] }),
-        mockParams
-      );
-      const body = await response.json();
-
-      expect(response.status).toBe(400);
-      expect(body.error).toMatch(/machines must be an array/i);
-      expect(mockApplyPageMutation).not.toHaveBeenCalled();
-    });
-
-    it('returns 400 when machines is not an array', async () => {
-      const response = await PATCH(
-        createPatchRequest({ machines: 'not-an-array' }),
-        mockParams
-      );
-      const body = await response.json();
-
-      expect(response.status).toBe(400);
-      expect(body.error).toMatch(/machines must be an array/i);
-    });
-
-    it('accepts an own-machine entry with no extra DB lookup', async () => {
-      const response = await PATCH(
-        createPatchRequest({ machines: [{ kind: 'own' }] }),
-        mockParams
-      );
-
-      expect(response.status).toBe(200);
-      expect(mockApplyPageMutation).toHaveBeenCalledWith(
-        expect.objectContaining({
-          updates: expect.objectContaining({
-            machines: [{ kind: 'own' }],
-          }),
-        })
-      );
-    });
-
-    it('updates machines when an existing machineId resolves to a MACHINE page the user can access', async () => {
-      mockGetUserAccessiblePagesInDrive.mockResolvedValue(['term_1']);
-      let callCount = 0;
-      mockDbSelect.mockImplementation(() => ({
-        from: () => ({
-          where: () => {
-            callCount++;
-            if (callCount === 1) return Promise.resolve([mockPage]); // page fetch
-            if (callCount === 2) return Promise.resolve([{ id: 'term_1' }]); // terminal validation
-            return { limit: () => Promise.resolve([{ ...mockPage, machines: [{ kind: 'existing', machineId: 'term_1' }] }]) }; // refetch
-          },
-        }),
-      }));
-
-      const response = await PATCH(
-        createPatchRequest({ machines: [{ kind: 'own' }, { kind: 'existing', machineId: 'term_1' }] }),
-        mockParams
-      );
-
-      expect(response.status).toBe(200);
-      expect(mockApplyPageMutation).toHaveBeenCalledWith(
-        expect.objectContaining({
-          updates: expect.objectContaining({
-            machines: [{ kind: 'own' }, { kind: 'existing', machineId: 'term_1' }],
-          }),
-        })
-      );
-    });
-
-    it('returns 400 when an existing machine references a terminal that cannot be found', async () => {
-      mockGetUserAccessiblePagesInDrive.mockResolvedValue(['missing_term']);
-      let callCount = 0;
-      mockDbSelect.mockImplementation(() => ({
-        from: () => ({
-          where: () => {
-            callCount++;
-            if (callCount === 1) return Promise.resolve([mockPage]); // page fetch
-            return Promise.resolve([]); // terminal validation finds nothing
-          },
-        }),
-      }));
-
-      const response = await PATCH(
-        createPatchRequest({ machines: [{ kind: 'existing', machineId: 'missing_term' }] }),
-        mockParams
-      );
-      const body = await response.json();
-
-      expect(response.status).toBe(400);
-      expect(body.error).toMatch(/invalid terminal reference/i);
-      expect(mockApplyPageMutation).not.toHaveBeenCalled();
-    });
-
-    it('returns 400 when an existing machine references a real MACHINE page the user cannot access', async () => {
-      // getUserAccessiblePagesInDrive resolves without this machineId — the page
-      // exists (and the DB query would find it) but is outside the user's access.
-      mockGetUserAccessiblePagesInDrive.mockResolvedValue([]);
-      let callCount = 0;
-      mockDbSelect.mockImplementation(() => ({
-        from: () => ({
-          where: () => {
-            callCount++;
-            if (callCount === 1) return Promise.resolve([mockPage]); // page fetch
-            return Promise.resolve([{ id: 'other_drive_term' }]); // terminal exists, but inaccessible
-          },
-        }),
-      }));
-
-      const response = await PATCH(
-        createPatchRequest({ machines: [{ kind: 'existing', machineId: 'other_drive_term' }] }),
-        mockParams
-      );
-      const body = await response.json();
-
-      expect(response.status).toBe(400);
-      expect(body.error).toMatch(/invalid terminal reference/i);
-      expect(mockApplyPageMutation).not.toHaveBeenCalled();
-    });
-
-    it('returns 400 when machines exceeds the maximum length', async () => {
-      const machines = Array.from({ length: 21 }, () => ({ kind: 'own' as const }));
-      const response = await PATCH(createPatchRequest({ machines }), mockParams);
-      const body = await response.json();
-
-      expect(response.status).toBe(400);
-      expect(body.error).toMatch(/machines must be an array/i);
-      expect(mockApplyPageMutation).not.toHaveBeenCalled();
-    });
   });
 
   describe('model validation', () => {
@@ -1122,26 +846,6 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
       const body = await response.json();
 
       expect(body.systemPrompt).toBe('Updated prompt');
-    });
-
-    it('round-trips machineAccess and machines in the response', async () => {
-      // Own-machine entries only — the "existing" machineId path is covered
-      // in "machines validation" below.
-      const machines = [{ kind: 'own' }];
-      setupPatchSelectChain(
-        [mockPage],
-        [{ ...mockPage, machineAccess: true, machines }]
-      );
-
-      const response = await PATCH(
-        createPatchRequest({ machineAccess: true, machines }),
-        mockParams
-      );
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.machineAccess).toBe(true);
-      expect(body.machines).toEqual(machines);
     });
 
     it('falls back to original page when refetch returns empty', async () => {

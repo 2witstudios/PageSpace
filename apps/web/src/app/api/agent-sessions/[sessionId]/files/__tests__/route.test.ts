@@ -56,7 +56,7 @@ import { GET, POST, DELETE } from '../route';
 
 const AUTH_USER = { userId: 'user-1', role: 'admin' };
 const SESSION_ID = 'conv-1';
-const HANDLE = { machineId: 'sb-1' };
+const HANDLE = { sandboxId: 'sb-1' };
 const params = { params: Promise.resolve({ sessionId: SESSION_ID }) };
 
 const get = (query: string) =>

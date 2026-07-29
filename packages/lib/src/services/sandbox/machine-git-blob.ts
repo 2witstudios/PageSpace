@@ -3,7 +3,7 @@
  *
  * `readMachineGitBlob` reads ONE file's content as it existed at a given git
  * ref — via `git show <ref>:<path>` run through the hardened `runGitInSandbox`
- * path (./git-tool-runners.ts) — NOT `MachineHandle.readFile`, which only ever
+ * path (./git-tool-runners.ts) — NOT `SandboxHandle.readFile`, which only ever
  * reads the CURRENT working tree (see machine-fs.ts's scope-boundary note).
  * This is the git-object-store counterpart to machine-fs.ts's working-tree
  * `readMachineFile`: a DIFFERENT backend (git's object store vs. the live

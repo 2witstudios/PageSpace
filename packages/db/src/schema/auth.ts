@@ -57,8 +57,7 @@ export const users = pgTable('users', {
   // (.github/workflows/docker-images.yml: "Run migrations" precedes "Deploy
   // web"), so dropping it in the SAME migration as this cutover would 500
   // every upload presign/complete/cancel request served by the still-running
-  // OLD image during the rollout window (same constraint documented on
-  // `machineAccess` in schema/core.ts). Drop in a follow-up migration once
+  // OLD image during the rollout window. Drop in a follow-up migration once
   // this deploy has fully rolled out and no old image can still write it.
   activeUploads: integer('activeUploads').default(0).notNull(),
   lastStorageCalculated: timestamp('lastStorageCalculated', { mode: 'date' }),

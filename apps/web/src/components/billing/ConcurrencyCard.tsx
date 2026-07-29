@@ -19,11 +19,12 @@ const fetcher = async (url: string): Promise<ConcurrencyResponse> => {
 
 /**
  * Live in-flight AI-call count — the number the `too_many_in_flight` gate
- * checks against MACHINE_MAX_INFLIGHT on your next Machine run. Covers ALL
- * in-flight AI activity (chat/voice/machine alike), not machine sessions
- * specifically — credit_holds has no per-source column to split them.
- * Polled rather than socket-driven because `credits:updated` never fires on
- * hold creation (only release/settle), so it would miss increments.
+ * checks against MACHINE_MAX_INFLIGHT on your next agent-session sandbox run.
+ * Covers ALL in-flight AI activity (chat/voice/agent-session alike), not
+ * agent sessions specifically — credit_holds has no per-source column to
+ * split them. Polled rather than socket-driven because `credits:updated`
+ * never fires on hold creation (only release/settle), so it would miss
+ * increments.
  */
 export function ConcurrencyCard() {
   const { data, error, isLoading } = useSWR<ConcurrencyResponse>(
@@ -57,9 +58,10 @@ export function ConcurrencyCard() {
               </span>
             </div>
             <p className="text-xs text-muted-foreground">
-              Includes chat, voice, and Machine runs combined — this is what a Machine run
-              checks against before starting. Your tier&apos;s separate code-execution ceiling is{' '}
-              {data.codeExecutionLimit} concurrent runs (enforced per server instance).
+              Includes chat, voice, and agent-session sandbox runs combined — this is what an
+              agent-session run checks against before starting. Your tier&apos;s separate
+              code-execution ceiling is {data.codeExecutionLimit} concurrent runs (enforced per
+              server instance).
             </p>
           </div>
         )}

@@ -21,8 +21,8 @@
  * module executes verdicts and writes what they say to write.
  */
 
-import type { MachineHost } from '../sandbox/machine-host';
-import { MachineSpriteReplacedError } from '../sandbox/machine-host';
+import type { SandboxHost } from '../sandbox/sandbox-host';
+import { SandboxSpriteReplacedError } from '../sandbox/sandbox-host';
 import { planAgentSessionLifecycle } from '../../agent-sessions/plan-session-lifecycle';
 import type { AgentSessionDTO } from '../../agent-sessions/contract';
 import { deriveSandboxStatus } from './session-status';
@@ -118,7 +118,7 @@ export async function ensureAgentSession({
 
 export interface EndAgentSessionDeps {
   store: Pick<AgentSessionStore, 'findById' | 'applyStamps' | 'requestTeardown' | 'stampSpriteTornDown'>;
-  host: MachineHost;
+  host: SandboxHost;
   now: () => Date;
 }
 
@@ -182,12 +182,12 @@ export async function endAgentSession({
   });
 
   try {
-    await deps.host.kill({ machineId: plan.sandboxId, expectedInstanceId: plan.expectedInstanceId });
+    await deps.host.kill({ sandboxId: plan.sandboxId, expectedInstanceId: plan.expectedInstanceId });
   } catch (error) {
     // A DIFFERENT VM holds this name now, so the one we targeted is already gone
     // — a confirmed-enough death to stamp (the CAS below still refuses if the row
     // has moved on to that replacement).
-    if (!(error instanceof MachineSpriteReplacedError)) {
+    if (!(error instanceof SandboxSpriteReplacedError)) {
       // A real failure: the VM may still be running. The row keeps its teardown
       // request, so the orphan reconciler retries — which is why this is reported
       // rather than swallowed.

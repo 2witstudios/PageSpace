@@ -19,7 +19,7 @@ const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: fal
  * Messages are returned in UIMessage format compatible with the Vercel AI SDK,
  * including tool calls and tool results if present.
  *
- * @param agentId - The conversation-hosting page id (AI_CHAT agent or MACHINE page)
+ * @param agentId - The conversation-hosting AI_CHAT agent page id
  * @param conversationId - The unique identifier of the conversation session
  *
  * Query Parameters:
@@ -66,13 +66,11 @@ export async function GET(
 
     const { agentId, conversationId } = await context.params;
 
-    // Verify the conversation-hosting page exists: an AI_CHAT agent, or a
-    // MACHINE page (machine panes anchor terminal conversations there —
-    // same widening as conversationRepository.getAiAgent, #2166 Phase 11).
+    // Verify the conversation-hosting AI_CHAT agent page exists.
     const agent = await db.query.pages.findFirst({
       where: and(
         eq(pages.id, agentId),
-        inArray(pages.type, ['AI_CHAT', 'MACHINE']),
+        inArray(pages.type, ['AI_CHAT']),
         eq(pages.isTrashed, false)
       ),
     });

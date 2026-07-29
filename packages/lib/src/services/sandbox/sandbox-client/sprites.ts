@@ -158,7 +158,7 @@ export interface SpriteCommandLike {
  * holds even for a cwd full of shell metacharacters.
  *
  * This is the one place that self-heal is defined: the batch path
- * ({@link wrap}'s `runCommand`), the `MachineHost` PTY (`sprite-machine-host`),
+ * ({@link wrap}'s `runCommand`), the `SandboxHost` PTY (`sprite-sandbox-host`),
  * and the realtime terminal (`apps/realtime/src/terminal/sprites-shell.ts`) all
  * spawn through it. It is also why the egress lockdown's `mkdir` no longer needs
  * to run on every hand-back — see `../egress-lockdown.ts`.
@@ -319,7 +319,7 @@ export interface SpriteInstanceLike {
    * {@link killSpriteSession} for the driver. Unlike `SpriteCommandLike.kill()`
    * (a signal delivered over that command's OWN WebSocket, which reaches the
    * remote process only while that socket happens to be open — see
-   * `sprite-machine-host.ts`'s note on the private, unreachable
+   * `sprite-sandbox-host.ts`'s note on the private, unreachable
    * `WSCommand.close()`), this reaches a session regardless of whether we hold
    * a live connection to it: a detachable TTY session has
    * `max_run_after_disconnect: 0` and keeps running server-side long after its
@@ -866,7 +866,7 @@ async function attemptKillSpriteSession(
  * against (docs.sprites.dev/concepts/lifecycle: there is no wake API, so this
  * REST call may itself be what wakes a hibernating Sprite), costs nothing and
  * only improves the odds a genuine termination actually lands. This is the
- * caller-visible guarantee: `killAgentTerminal`'s `MachineHandle.killSession`
+ * caller-visible guarantee: `killAgentTerminal`'s `SandboxHandle.killSession`
  * and `PtyShell.kill`'s fire-and-forget REST call both inherit it for free,
  * without either needing its own retry logic.
  */

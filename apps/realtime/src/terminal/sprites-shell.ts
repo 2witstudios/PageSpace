@@ -395,7 +395,7 @@ export function planWatchdogResponse({
  * Deliberately NOT named `user-kill`/`user-*`: an explicit, human-initiated
  * "kill this terminal" request never reaches this type at all — that flow is
  * `killAgentTerminal` (`packages/lib/src/services/machines/agent-terminals.ts`),
- * which calls `MachineHandle.killSession` directly, bypassing `PtyShell` and
+ * which calls `SandboxHandle.killSession` directly, bypassing `PtyShell` and
  * this enum entirely. `forced-teardown`'s only real callers
  * (`agent-terminal-handler.ts`'s `teardownAgentTerminalSession`) are the
  * PLATFORM ending a session on the user's behalf — revoked access, or an
@@ -429,7 +429,7 @@ export interface TeardownPlan {
    * Signal the currently-wired exec command via `SpriteCommandLike.kill()`.
    * The SDK exposes no side-effect-free way to drop only OUR side of the
    * connection — `kill()` IS `signal()`, delivered to the REMOTE PROCESS
-   * whenever the socket happens to be open (see `sprite-machine-host.ts`'s
+   * whenever the socket happens to be open (see `sprite-sandbox-host.ts`'s
    * note on the private, unreachable `WSCommand.close()`) — so this is only
    * ever true alongside `killSession`. For a trigger that must NOT terminate
    * the remote (a mere detach), signalling would be exactly the bug this leaf

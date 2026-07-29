@@ -297,7 +297,7 @@ describe('killSessionShellById', () => {
       host: {
         ...host.host,
         attach: async () => ({
-          ...(await host.host.attach({ machineId: SANDBOX_ID }))!,
+          ...(await host.host.attach({ sandboxId: SANDBOX_ID }))!,
           killSession: async () => {
             throw new Error('kill endpoint failed');
           },

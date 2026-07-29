@@ -20,7 +20,7 @@
  * module executes those verdicts.
  */
 
-import type { MachineHost } from '../sandbox/machine-host';
+import type { SandboxHost } from '../sandbox/sandbox-host';
 import { SANDBOX_ROOT } from '../sandbox/sandbox-paths';
 import { planSpawnShell, planKillTarget } from '../../agent-sessions/plan-spawn-session';
 import type { ShellAgentType, ShellDTO } from '../../agent-sessions/contract';
@@ -154,7 +154,7 @@ export interface KillSessionShellDeps {
   store: Pick<SessionShellStore, 'findById' | 'remove'>;
   /** Resolves the OWNING session's live Sprite pointer — a shell has none of its own. `null` when the session has no sandbox (then there is no PTY to kill). */
   resolveSessionSandboxId: (sessionId: string) => Promise<string | null>;
-  host: MachineHost;
+  host: SandboxHost;
 }
 
 export type KillSessionShellResult =
@@ -190,7 +190,7 @@ export async function killSessionShellById({
     if (sandboxId !== null) {
       let handle;
       try {
-        handle = await deps.host.attach({ machineId: sandboxId });
+        handle = await deps.host.attach({ sandboxId });
       } catch {
         // The control plane itself is unreachable — we learned NOTHING about the
         // process. Keep the row so a retry can find it again; dropping it now

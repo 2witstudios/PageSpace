@@ -26,9 +26,4 @@ describe('page-service PageType — drift guard vs the canonical PageType enum',
     const fileType: ServicePageType = 'FILE';
     expect(fileType).toBe('FILE');
   });
-
-  it('admits MACHINE', () => {
-    const machineType: ServicePageType = 'MACHINE';
-    expect(machineType).toBe('MACHINE');
-  });
 });

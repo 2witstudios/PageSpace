@@ -28,7 +28,7 @@ vi.mock('@pagespace/lib/services/sandbox/quota', () => ({
   checkMachineRuntimeGuardrail: mockCheckMachineRuntimeGuardrail,
   recordMachineActivity: mockRecordMachineActivity,
 }));
-vi.mock('@pagespace/lib/services/sandbox/machine-billing', () => ({
+vi.mock('@pagespace/lib/services/sandbox/sandbox-billing', () => ({
   defaultSandboxBillingDeps: {
     resolvePayerId: vi.fn(),
     gate: vi.fn(),

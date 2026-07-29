@@ -420,7 +420,7 @@ describe('ensureAgentSessionSandbox — resumed Sprite identity (ABA)', () => {
     });
 
     expect(result).toEqual({ ok: false, reason: 'race_lost' });
-    expect(host.calls.kill).toEqual([{ machineId: SESSION_KEY, expectedInstanceId: 'inst-new' }]);
+    expect(host.calls.kill).toEqual([{ sandboxId: SESSION_KEY, expectedInstanceId: 'inst-new' }]);
   });
 
   it('given an adoption whose Sprite vanishes between the probe and the adopt, should report it rather than record a dead identity', async () => {
@@ -498,7 +498,7 @@ describe('ensureAgentSessionSandbox — resumed Sprite identity (ABA)', () => {
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('unreachable');
     expect(result.reason).toBe('persist_failed');
-    expect(host.calls.kill).toEqual([{ machineId: SESSION_KEY, expectedInstanceId: 'inst-new' }]);
+    expect(host.calls.kill).toEqual([{ sandboxId: SESSION_KEY, expectedInstanceId: 'inst-new' }]);
   });
 
   it('given a row with no session key that still needs one derived, should derive the same deterministic name', async () => {

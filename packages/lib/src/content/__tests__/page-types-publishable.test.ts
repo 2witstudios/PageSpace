@@ -13,8 +13,8 @@ const assert = ({ given, should, actual, expected }: { given: string; should: st
  * Publishing is lifted from a CANVAS-only hard gate to a per-type capability.
  * Publishable types are exactly the ones whose content lives in
  * `pages.content` and can be rendered standalone: CANVAS, DOCUMENT, CODE,
- * SHEET. The rest (folders, chat, tasks, files, machines) store their real
- * content in other tables or object storage and cannot be published.
+ * SHEET. The rest (folders, chat, tasks, files) store their real content in
+ * other tables or object storage and cannot be published.
  */
 const PUBLISHABLE_TYPES = [
   PageType.CANVAS,
@@ -29,7 +29,6 @@ const NON_PUBLISHABLE_TYPES = [
   PageType.AI_CHAT,
   PageType.FILE,
   PageType.TASK_LIST,
-  PageType.MACHINE,
 ] as const;
 
 describe('publishable page-type capability', () => {
@@ -58,7 +57,7 @@ describe('publishable page-type capability', () => {
   it('marks types whose content lives outside pages.content as not publishable', () => {
     for (const type of NON_PUBLISHABLE_TYPES) {
       assert({
-        given: `page type ${type} (content in chat/tasks tables, object storage, or machine state)`,
+        given: `page type ${type} (content in chat/tasks tables or object storage)`,
         should: 'not be publishable',
         actual: PAGE_TYPE_CONFIGS[type].capabilities.publishable,
         expected: false,

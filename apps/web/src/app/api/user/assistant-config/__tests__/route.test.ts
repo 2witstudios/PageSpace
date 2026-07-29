@@ -6,8 +6,6 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const mockGetOrCreateConfig = vi.hoisted(() => vi.fn());
 const mockUpdateConfig = vi.hoisted(() => vi.fn());
-const mockGetAvailableMachines = vi.hoisted(() => vi.fn());
-const mockValidateMachines = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
@@ -34,14 +32,6 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 vi.mock('@pagespace/lib/integrations/repositories/config-repository', () => ({
   getOrCreateConfig: mockGetOrCreateConfig,
   updateConfig: mockUpdateConfig,
-}));
-
-vi.mock('@/lib/repositories/global-machine-config-repository', () => ({
-  MAX_MACHINES: 20,
-  globalMachineConfigRepository: {
-    getAvailableMachines: mockGetAvailableMachines,
-    validateMachines: mockValidateMachines,
-  },
 }));
 
 import { GET, PUT } from '../route';
@@ -74,7 +64,6 @@ describe('GET /api/user/assistant-config audit', () => {
     vi.clearAllMocks();
     mockAuth();
     mockGetOrCreateConfig.mockResolvedValue(mockConfig);
-    mockGetAvailableMachines.mockResolvedValue([]);
   });
 
   it('logs read audit event on successful config retrieval', async () => {
@@ -86,36 +75,12 @@ describe('GET /api/user/assistant-config audit', () => {
       { eventType: 'data.read', userId: mockUserId, resourceType: 'assistant_config', resourceId: 'self' }
     );
   });
-});
 
-describe('GET /api/user/assistant-config terminal access', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockAuth();
-    mockGetAvailableMachines.mockResolvedValue([{ id: 't1', title: 'Shared Terminal' }]);
-  });
-
-  it('given machineAccess is unset (legacy row), should default to false with an empty machines array', async () => {
-    mockGetOrCreateConfig.mockResolvedValue(mockConfig);
+  it('returns the config fields', async () => {
     const request = new Request('http://localhost/api/user/assistant-config');
     const response = await GET(request);
     const body = await response.json();
-    expect(body.config.machineAccess).toBe(false);
-    expect(body.config.machines).toEqual([]);
-  });
-
-  it('given a configured machineAccess/machines row, should return them plus availableMachines', async () => {
-    mockGetOrCreateConfig.mockResolvedValue({
-      ...mockConfig,
-      machineAccess: true,
-      machines: [{ kind: 'own' }, { kind: 'existing', machineId: 't1' }],
-    });
-    const request = new Request('http://localhost/api/user/assistant-config');
-    const response = await GET(request);
-    const body = await response.json();
-    expect(body.config.machineAccess).toBe(true);
-    expect(body.config.machines).toEqual([{ kind: 'own' }, { kind: 'existing', machineId: 't1' }]);
-    expect(body.config.availableMachines).toEqual([{ id: 't1', title: 'Shared Terminal' }]);
+    expect(body.config.inheritDriveIntegrations).toBe(true);
   });
 });
 
@@ -140,76 +105,21 @@ describe('PUT /api/user/assistant-config audit', () => {
       { eventType: 'data.write', userId: mockUserId, resourceType: 'assistant_config', resourceId: 'self' }
     );
   });
-});
 
-describe('PUT /api/user/assistant-config terminal access', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockAuth();
-  });
-
-  it('given valid machines, should validate against the Home drive and persist machineAccess/machines', async () => {
-    mockValidateMachines.mockResolvedValue({ ok: true });
-    mockUpdateConfig.mockResolvedValue({
-      ...mockConfig,
-      machineAccess: true,
-      machines: [{ kind: 'own' }],
-    });
+  it('persists driveOverrides merged with existing', async () => {
+    mockGetOrCreateConfig.mockResolvedValue(mockConfig);
     const request = new Request('http://localhost/api/user/assistant-config', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ machineAccess: true, machines: [{ kind: 'own' }] }),
+      body: JSON.stringify({ driveOverrides: { drive1: { enabled: true } } }),
     });
 
-    const response = await PUT(request);
-    const body = await response.json();
+    await PUT(request);
 
-    expect(mockValidateMachines).toHaveBeenCalledWith(mockUserId, [{ kind: 'own' }]);
     expect(mockUpdateConfig).toHaveBeenCalledWith(
       expect.anything(),
       mockUserId,
-      expect.objectContaining({ machineAccess: true, machines: [{ kind: 'own' }] }),
+      expect.objectContaining({ driveOverrides: { drive1: { enabled: true } } }),
     );
-    expect(body.config.machineAccess).toBe(true);
-    expect(body.config.machines).toEqual([{ kind: 'own' }]);
-  });
-
-  it('given an existing machineId outside the user\'s Home drive, should reject with 400 and not persist', async () => {
-    mockValidateMachines.mockResolvedValue({ ok: false, invalidIds: ['not-mine'] });
-    const request = new Request('http://localhost/api/user/assistant-config', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ machines: [{ kind: 'existing', machineId: 'not-mine' }] }),
-    });
-
-    const response = await PUT(request);
-    const body = await response.json();
-
-    expect(response.status).toBe(400);
-    expect(body.error).toContain('not-mine');
-    expect(mockUpdateConfig).not.toHaveBeenCalled();
-  });
-
-  it('given a machines array over MAX_MACHINES, should reject with a validation error', async () => {
-    const request = new Request('http://localhost/api/user/assistant-config', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ machines: Array.from({ length: 21 }, () => ({ kind: 'own' })) }),
-    });
-
-    const response = await PUT(request);
-    expect(response.status).toBe(400);
-    expect(mockValidateMachines).not.toHaveBeenCalled();
-  });
-
-  it('given a malformed machine entry, should reject with a validation error', async () => {
-    const request = new Request('http://localhost/api/user/assistant-config', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ machines: [{ kind: 'existing' }] }),
-    });
-
-    const response = await PUT(request);
-    expect(response.status).toBe(400);
   });
 });

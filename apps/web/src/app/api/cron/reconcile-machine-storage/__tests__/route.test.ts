@@ -14,9 +14,9 @@ vi.mock('@/lib/auth/cron-auth', () => ({
   validateSignedCronRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/services/sandbox/machine-storage-billing', () => ({
-  defaultReconcileMachineStorageDeps: {},
-  reconcileMachineStorageSerialized: mockReconcile,
+vi.mock('@pagespace/lib/services/sandbox/sandbox-storage-billing', () => ({
+  defaultReconcileSandboxStorageDeps: {},
+  reconcileSandboxStorageSerialized: mockReconcile,
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({

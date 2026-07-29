@@ -211,7 +211,7 @@ describe('endAgentSession', () => {
     const result = await endAgentSession({ sessionId: SESSION_ID, deps: makeEndDeps(store, host) });
 
     expect(result).toEqual({ ok: true, spriteTornDown: true });
-    expect(host.calls.kill).toEqual([{ machineId: SESSION_KEY, expectedInstanceId: 'inst-live' }]);
+    expect(host.calls.kill).toEqual([{ sandboxId: SESSION_KEY, expectedInstanceId: 'inst-live' }]);
     const row = store.rows.get(SESSION_ID)!;
     expect(row.spriteTornDownAt).toEqual(NOW);
     expect(row.endedAt).toEqual(NOW);

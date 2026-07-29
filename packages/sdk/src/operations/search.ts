@@ -44,7 +44,6 @@ export const GLOB_SEARCH_PAGE_TYPES = [
   'SHEET',
   'TASK_LIST',
   'CODE',
-  'MACHINE',
 ] as const;
 const globSearchPageTypeSchema = z.enum(GLOB_SEARCH_PAGE_TYPES);
 

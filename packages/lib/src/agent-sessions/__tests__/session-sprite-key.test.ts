@@ -1,7 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { deriveAgentSessionSpriteKey } from '../session-sprite-key';
-import { deriveAgentTerminalSessionSpriteKey } from '../../services/machines/agent-terminal-sprite-session';
-import { deriveMachineSessionKey } from '../../services/sandbox/machine-session-manager';
 
 const SECRET = 'test-secret-at-least-32-chars-long-xxxxx';
 const base = { tenantId: 'tenant-1', sessionId: 'conv-1', secret: SECRET };
@@ -30,33 +28,6 @@ describe('deriveAgentSessionSpriteKey', () => {
   it('given a different secret, should derive a different key', () => {
     const rotated = deriveAgentSessionSpriteKey({ ...base, secret: `${SECRET}-rotated` });
     expect(rotated).not.toBe(deriveAgentSessionSpriteKey(base));
-  });
-
-  it('should not collide with the legacy pgs-agt-* per-terminal namespace', () => {
-    const legacy = deriveAgentTerminalSessionSpriteKey({
-      tenantId: base.tenantId,
-      machineId: base.sessionId,
-      terminalId: base.sessionId,
-      secret: SECRET,
-    });
-    const fresh = deriveAgentSessionSpriteKey(base);
-    expect(fresh.startsWith('pgs-ses-')).toBe(true);
-    expect(legacy.startsWith('pgs-agt-')).toBe(true);
-    expect(fresh).not.toBe(legacy);
-    expect(fresh.slice('pgs-ses-'.length)).not.toBe(legacy.slice('pgs-agt-'.length));
-  });
-
-  it('should not collide with the legacy pgs-sbx-* machine-session namespace', () => {
-    const legacy = deriveMachineSessionKey({
-      tenantId: base.tenantId,
-      driveId: base.sessionId,
-      pageId: base.sessionId,
-      secret: SECRET,
-    });
-    const fresh = deriveAgentSessionSpriteKey(base);
-    expect(legacy.startsWith('pgs-sbx-')).toBe(true);
-    expect(fresh).not.toBe(legacy);
-    expect(fresh.slice('pgs-ses-'.length)).not.toBe(legacy.slice('pgs-sbx-'.length));
   });
 
   it('should not let a (tenant, session) pair be re-spelled into another pair (delimited fold)', () => {

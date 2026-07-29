@@ -8,7 +8,6 @@ export enum PageType {
   SHEET = 'SHEET',
   TASK_LIST = 'TASK_LIST',
   CODE = 'CODE',
-  MACHINE = 'MACHINE',
 }
 
 /**
@@ -22,7 +21,7 @@ export type PageTypeValue = `${PageType}`;
 /**
  * Every page type, as runtime values. Prefer this over hand-written arrays —
  * see #2150, where three separate re-declarations had drifted and silently
- * dropped FILE and MACHINE.
+ * dropped FILE.
  */
 export const PAGE_TYPE_VALUES: readonly PageTypeValue[] = Object.values(PageType);
 

@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation';
 import {
   ArrowLeft, Upload,
   FileText, FileCode, FileSpreadsheet, FileImage, File,
-  Folder, BotMessageSquare, MessagesSquare, SquareCheckBig, SquareTerminal,
+  Folder, BotMessageSquare, MessagesSquare, SquareCheckBig,
   type LucideIcon,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -26,7 +26,6 @@ import { uploadFileToS3 } from '@/lib/upload/orchestrator';
 import { useUIStore } from '@/stores/useUIStore';
 import { usePageNavigation } from '@/hooks/usePageNavigation';
 import { useBreadcrumbs } from '@/hooks/useBreadcrumbs';
-import { useAuth } from '@/hooks/useAuth';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import { matchesKeyEvent, getEffectiveBinding } from '@/stores/useHotkeyStore';
 import { isEditingActive } from '@/stores/useEditingStore';
@@ -52,12 +51,11 @@ const PAGE_TYPE_COLORS: Partial<Record<PageType, string>> = {
   [PageType.CANVAS]:    '#f472b6',
   [PageType.CODE]:      '#a78bfa',
   [PageType.FILE]:      '#94a3b8',
-  [PageType.MACHINE]:  '#6ee7b7',
 };
 
 const PAGE_TYPE_ICON_COMPONENTS: Record<string, LucideIcon> = {
   FileText, FileCode, FileSpreadsheet, FileImage, File,
-  Folder, BotMessageSquare, MessagesSquare, SquareCheckBig, SquareTerminal,
+  Folder, BotMessageSquare, MessagesSquare, SquareCheckBig,
 };
 
 function getPageTypeIconData(type: PageType): { Icon: LucideIcon; color: string } {
@@ -132,7 +130,6 @@ export default function QuickCreatePalette() {
   const closeQuickCreate = useUIStore((s) => s.closeQuickCreate);
 
   const { navigateToPage } = usePageNavigation();
-  const { user } = useAuth();
   const { preferences } = useDisplayPreferences();
   const { data: tree } = useCachedPageTree(driveId);
 
@@ -268,10 +265,7 @@ export default function QuickCreatePalette() {
     [handleCreate]
   );
 
-  const creatableTypes = useMemo(() => {
-    const types = getCreatablePageTypes();
-    return user?.role === 'admin' ? [...types, PageType.MACHINE] : types;
-  }, [user?.role]);
+  const creatableTypes = useMemo(() => getCreatablePageTypes(), []);
 
   if (!quickCreateOpen) return null;
 

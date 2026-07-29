@@ -72,14 +72,14 @@ async function fetchActingPageRow(agentPageId: string) {
  * chatter's reach, never its owner's.
  *
  * "Not a page-agent" is a claim about the PAGE, not just about whether a
- * chatSource carries an id: a machine-pane conversation carries the MACHINE
- * page as agentPageId (api/ai/chat/route.ts sets it for every page chat), and a
+ * chatSource carries an id: a chat on any non-AI_CHAT page carries THAT page
+ * as agentPageId (api/ai/chat/route.ts sets it for every page chat), and a
  * non-agent page must not be treated as an acting agent — no driveAgentMembers
  * row can ever exist for it, so every getAgentAccessLevel lookup returned null
- * and denied. Falling through to the authenticated user is the honest actor and
- * matches the PTY path; the chat route already authorized that user against the
- * machine page. A missing page row is a non-agent for the same reason (and the
- * user's own ACL still denies a page that does not exist).
+ * and denied. Falling through to the authenticated user is the honest actor —
+ * the chat route already authorized that user against the page. A missing
+ * page row is a non-agent for the same reason (and the user's own ACL still
+ * denies a page that does not exist).
  *
  * Nested (ask_agent) runs inherit the PARENT's actor identity by design —
  * agent-communication-tools.ts spreads the caller's context, and

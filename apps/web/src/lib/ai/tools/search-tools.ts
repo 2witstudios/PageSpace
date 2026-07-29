@@ -362,8 +362,8 @@ export const searchTools = {
       driveId: z.string().optional().describe('The unique ID of the drive to search in. Omit to search the workspace currently in view (see LOCATION context).'),
       pattern: z.string().describe('Glob pattern to match page titles/paths (e.g., "**/README*", "docs/**/*.md", "meeting-*")'),
       // Derived from the canonical PageType enum: a hand-written list here
-      // omitted FILE and MACHINE, so agents filtering for those page types
-      // were rejected by zod before execute() ever ran (#2150).
+      // omitted FILE, so agents filtering for that page type were rejected by
+      // zod before execute() ever ran (#2150).
       includeTypes: z.array(z.enum(PageType)).optional().describe('Filter by page types'),
       maxResults: z.number().optional().default(100).describe('Maximum number of results to return'),
     }),

@@ -20,7 +20,7 @@
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
-import type { MachineHost } from '@pagespace/lib/services/sandbox/machine-host';
+import type { SandboxHost } from '@pagespace/lib/services/sandbox/sandbox-host';
 import { canRunCode, isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import {
   decideFullEgressEnablement,
@@ -93,13 +93,13 @@ function assertSandboxRuntime(): void {
   }
 }
 
-let machineHostPromise: Promise<MachineHost> | null = null;
+let machineHostPromise: Promise<SandboxHost> | null = null;
 
-export function getMachineHost(): Promise<MachineHost> {
+export function getSandboxHost(): Promise<SandboxHost> {
   machineHostPromise ??= (async () => {
     assertSandboxRuntime();
-    const { createProductionMachineHost } = await import('@/lib/sandbox/sprites-client');
-    return createProductionMachineHost();
+    const { createProductionSandboxHost } = await import('@/lib/sandbox/sprites-client');
+    return createProductionSandboxHost();
   })().catch((error) => {
     machineHostPromise = null;
     throw error;
@@ -308,7 +308,7 @@ export async function provisionSessionSandbox(
 ): Promise<EnsureAgentSessionSandboxResult> {
   const [store, host, tenantId] = await Promise.all([
     getAgentSessionStore(),
-    getMachineHost(),
+    getSandboxHost(),
     resolveSessionTenantId(row),
   ]);
   return ensureAgentSessionSandbox({
@@ -334,7 +334,7 @@ export async function provisionSessionSandbox(
 }
 
 export async function endSession(sessionId: string): Promise<EndAgentSessionResult> {
-  const [store, host] = await Promise.all([getAgentSessionStore(), getMachineHost()]);
+  const [store, host] = await Promise.all([getAgentSessionStore(), getSandboxHost()]);
   return endAgentSession({ sessionId, deps: { store, host, now: () => new Date() } });
 }
 
