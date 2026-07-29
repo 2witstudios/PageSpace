@@ -62,6 +62,31 @@
       "import": "./dist/ai/global-channel-id.js",
       "require": "./dist/ai/global-channel-id.js"
     },
+    "./agent-sessions/contract": {
+      "types": "./dist/agent-sessions/contract.d.ts",
+      "import": "./dist/agent-sessions/contract.js",
+      "require": "./dist/agent-sessions/contract.js"
+    },
+    "./agent-sessions/session-sprite-key": {
+      "types": "./dist/agent-sessions/session-sprite-key.d.ts",
+      "import": "./dist/agent-sessions/session-sprite-key.js",
+      "require": "./dist/agent-sessions/session-sprite-key.js"
+    },
+    "./agent-sessions/plan-session-lifecycle": {
+      "types": "./dist/agent-sessions/plan-session-lifecycle.d.ts",
+      "import": "./dist/agent-sessions/plan-session-lifecycle.js",
+      "require": "./dist/agent-sessions/plan-session-lifecycle.js"
+    },
+    "./agent-sessions/decide-session-access": {
+      "types": "./dist/agent-sessions/decide-session-access.d.ts",
+      "import": "./dist/agent-sessions/decide-session-access.js",
+      "require": "./dist/agent-sessions/decide-session-access.js"
+    },
+    "./agent-sessions/plan-spawn-session": {
+      "types": "./dist/agent-sessions/plan-spawn-session.d.ts",
+      "import": "./dist/agent-sessions/plan-spawn-session.js",
+      "require": "./dist/agent-sessions/plan-spawn-session.js"
+    },
     "./ai/model-defaults": {
       "types": "./dist/ai/model-defaults.d.ts",
       "import": "./dist/ai/model-defaults.js",
@@ -756,6 +781,56 @@
       "types": "./dist/services/machines/machine-orphan-reconcile.d.ts",
       "import": "./dist/services/machines/machine-orphan-reconcile.js",
       "require": "./dist/services/machines/machine-orphan-reconcile.js"
+    },
+    "./services/agent-sessions/agent-session-access": {
+      "types": "./dist/services/agent-sessions/agent-session-access.d.ts",
+      "import": "./dist/services/agent-sessions/agent-session-access.js",
+      "require": "./dist/services/agent-sessions/agent-session-access.js"
+    },
+    "./services/agent-sessions/agent-session-sprite": {
+      "types": "./dist/services/agent-sessions/agent-session-sprite.d.ts",
+      "import": "./dist/services/agent-sessions/agent-session-sprite.js",
+      "require": "./dist/services/agent-sessions/agent-session-sprite.js"
+    },
+    "./services/agent-sessions/agent-sessions": {
+      "types": "./dist/services/agent-sessions/agent-sessions.d.ts",
+      "import": "./dist/services/agent-sessions/agent-sessions.js",
+      "require": "./dist/services/agent-sessions/agent-sessions.js"
+    },
+    "./services/agent-sessions/agent-sessions-store": {
+      "types": "./dist/services/agent-sessions/agent-sessions-store.d.ts",
+      "import": "./dist/services/agent-sessions/agent-sessions-store.js",
+      "require": "./dist/services/agent-sessions/agent-sessions-store.js"
+    },
+    "./services/agent-sessions/session-scrollback": {
+      "types": "./dist/services/agent-sessions/session-scrollback.d.ts",
+      "import": "./dist/services/agent-sessions/session-scrollback.js",
+      "require": "./dist/services/agent-sessions/session-scrollback.js"
+    },
+    "./services/agent-sessions/session-shells": {
+      "types": "./dist/services/agent-sessions/session-shells.d.ts",
+      "import": "./dist/services/agent-sessions/session-shells.js",
+      "require": "./dist/services/agent-sessions/session-shells.js"
+    },
+    "./services/agent-sessions/session-shells-store": {
+      "types": "./dist/services/agent-sessions/session-shells-store.d.ts",
+      "import": "./dist/services/agent-sessions/session-shells-store.js",
+      "require": "./dist/services/agent-sessions/session-shells-store.js"
+    },
+    "./services/agent-sessions/session-status": {
+      "types": "./dist/services/agent-sessions/session-status.d.ts",
+      "import": "./dist/services/agent-sessions/session-status.js",
+      "require": "./dist/services/agent-sessions/session-status.js"
+    },
+    "./services/agent-sessions/shell-types": {
+      "types": "./dist/services/agent-sessions/shell-types.d.ts",
+      "import": "./dist/services/agent-sessions/shell-types.js",
+      "require": "./dist/services/agent-sessions/shell-types.js"
+    },
+    "./services/sandbox/sprite-orphan-reconcile": {
+      "types": "./dist/services/sandbox/sprite-orphan-reconcile.d.ts",
+      "import": "./dist/services/sandbox/sprite-orphan-reconcile.js",
+      "require": "./dist/services/sandbox/sprite-orphan-reconcile.js"
     },
     "./services/machines/machine-list": {
       "types": "./dist/services/machines/machine-list.d.ts",

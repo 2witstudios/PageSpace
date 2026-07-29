@@ -105,7 +105,7 @@ function buildTaskManagement(availableTools?: string[]): string {
 
 const AGENTS = `AGENTS:
 • Discover available agents first — each has its own system prompt, tools, and expertise; list_agents reveals what's configured
-• Pass conversationId to continue an existing conversation — without it a new thread starts every time; save the id from each response for follow-ups
+• Delegate with spawn_session (pass the agent's id as \`agent\`); send_session continues the same worker — save the sessionId from the spawn for follow-ups
 • The target agent does its own discovery and tool use — give it a clear question with context, not a pre-solved spec
 • Never guess a model ID when configuring an agent — call list_models first`;
 
@@ -173,7 +173,7 @@ function hasAny(availableTools: string[] | undefined, toolNames: string[]): bool
  */
 export function buildInlineInstructions(availableTools?: string[]): string {
   const includeTaskManagement = hasAny(availableTools, ['create_task', 'update_task', 'delete_task', 'create_task_status', 'reorder_task', 'get_assigned_tasks']);
-  const includeAgents = hasAny(availableTools, ['ask_agent', 'list_agents', 'multi_drive_list_agents', 'update_agent_config', 'list_models']);
+  const includeAgents = hasAny(availableTools, ['spawn_session', 'list_agents', 'multi_drive_list_agents', 'update_agent_config', 'list_models']);
   const includeAutomation = hasAny(availableTools, ['set_task_trigger', 'delete_task_trigger', 'set_calendar_trigger', 'delete_calendar_trigger', 'create_workflow', 'list_workflows']);
   const includeSearch = hasAny(availableTools, ['glob_search', 'regex_search', 'multi_drive_search', 'web_search', 'web_fetch']);
   const includeAskUser = hasAny(availableTools, ['ask_user']);

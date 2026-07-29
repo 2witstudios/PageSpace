@@ -119,7 +119,7 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { SidebarLoading, SidebarNotice } from '../tabs/tab-states';
+import { SidebarLoading, SidebarNotice } from '@/components/layout/left-sidebar/sidebar-states';
 import { readErrorBody } from '../tabs/checkout-states';
 import { type FilesScope, filesScopeKey, filesScopeSearchParams } from '../tabs/files-scope';
 import FileNameDialog from './FileNameDialog';

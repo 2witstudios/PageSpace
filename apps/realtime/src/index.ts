@@ -65,6 +65,25 @@ import {
   type AgentTerminalMachineSandboxResult,
 } from '@pagespace/lib/services/machines/agent-terminals';
 import {
+  buildShellHandlers,
+  ensureShellSession,
+  armIdleReap as armShellIdleReap,
+  type ShellSessionDeps,
+  type SocketLike as ShellSocketLike,
+} from './terminal/shell-handler';
+import { buildShellCheckAuth } from './terminal/shell-access';
+import { deriveShellSessionKey } from './terminal/shell-session-key';
+import { handleShellReadRequest, handleShellSendRequest } from './terminal/shell-io';
+import { handleShellActivityRequest } from './terminal/shell-activity';
+import { checkAgentSessionAccess } from '@pagespace/lib/services/agent-sessions/agent-session-access';
+import { resolveSessionShellById } from '@pagespace/lib/services/agent-sessions/session-shells';
+import { createDbSessionShellStore } from '@pagespace/lib/services/agent-sessions/session-shells-store';
+import { createDbAgentSessionStore } from '@pagespace/lib/services/agent-sessions/agent-sessions-store';
+import { ensureAgentSessionSandbox } from '@pagespace/lib/services/agent-sessions/agent-session-sprite';
+import { resolveSandboxNetworkOptions } from '@pagespace/lib/services/sandbox/network-options';
+import { getConfiguredEgressIpTag } from '@pagespace/lib/services/sandbox/egress-ip';
+import { conversations } from '@pagespace/db/schema/conversations';
+import {
   validatePageId,
   validateDriveId,
   validateConversationId,
@@ -117,6 +136,10 @@ const dbMachineSessionStorePromise = createDbMachineSessionStore();
 const dbMachineBranchStorePromise = createDbMachineBranchStore();
 const dbMachineAgentTerminalStorePromise = createDbMachineAgentTerminalStore();
 const dbMachineProjectStorePromise = createDbMachineProjectStore();
+// The shell:* family's stores (agent sessions + their shells) — created once,
+// exactly like the machine stores above they will outlive (Phase 8 sweep).
+const dbAgentSessionStorePromise = createDbAgentSessionStore();
+const dbSessionShellStorePromise = createDbSessionShellStore();
 
 /** The conventional name for a machine's plain shell — a machine-scope agent terminal of `agentType: 'shell'` (see `agent-terminal-types.ts`), the retired human `terminal:*` family's replacement. */
 const SHELL_AGENT_TERMINAL_NAME = 'shell';
@@ -599,6 +622,237 @@ const sessionIoDeps = {
     armIdleReap(agentTerminalSessionDeps, agentTerminalSessionMap, session),
 };
 
+// ---------------------------------------------------------------------------
+// shell:* family — the PTY bridge re-keyed onto agent sessions (Phase 3).
+//
+// A shell's whole wire address is `{shellId}`: the bridge resolves shell row →
+// session → sandbox. Authorization is the SAME pure `decideAgentSessionAccess`
+// verdict the web API routes enforce (via `checkAgentSessionAccess`), and
+// provisioning is the SAME `ensureAgentSessionSandbox` path the web tier uses —
+// one code path, so concurrent provisioners CAS against one store instead of
+// fighting. The legacy `agent-terminal:*` family above stays registered (the
+// pre-Phase-6 web client still emits it) until the Phase 8 sweep deletes it.
+// ---------------------------------------------------------------------------
+
+/**
+ * Ensure (create/resume/adopt) the session's ONE shared sandbox — the
+ * `ensureSessionSandbox` seam of `buildShellCheckAuth`, backed by the shared
+ * packages/lib provisioner and NEVER a realtime-local one. `tenantId` (the
+ * Sprite-key fold's tenant and the billing account) is the agent page's drive
+ * owner, falling back to the session's own owner for a global-assistant
+ * session — the same `agentPageId ?? ownerId` attribution rule billing uses.
+ */
+async function ensureShellSessionSandbox({ sessionId, userId }: { sessionId: string; userId: string }): Promise<
+  { ok: true; sandboxId: string } | { ok: false; reason: string }
+> {
+  const store = await dbAgentSessionStorePromise;
+  const row = await store.findById(sessionId);
+  if (!row) return { ok: false, reason: 'session_not_found' };
+
+  let tenantId: string;
+  if (row.agentPageId === null) {
+    tenantId = row.ownerId;
+  } else {
+    const context = await resolveDriveOwnerContext(row.agentPageId);
+    if (!context.ok) return { ok: false, reason: context.reason };
+    tenantId = context.tenantId;
+  }
+
+  const sdk = createSpriteHandleCache(await getRealtimeSpritesSdk());
+  const host = createSpriteMachineHost({ sdk, client: createSpritesSandboxClient({ sdk }) });
+
+  const result = await ensureAgentSessionSandbox({
+    row: { ...row, sessionId: row.conversationId },
+    intent: 'ensure',
+    actor: { userId, tenantId },
+    deps: {
+      store,
+      host,
+      substrate: { kind: 'sprite' },
+      options: resolveSandboxNetworkOptions({ surface: 'machine', egressIpTag: getConfiguredEgressIpTag() }),
+      secret: getSandboxSessionSecret(),
+      // SECURITY: the centralized code-execution gate, applied inside the
+      // shared provisioner before any Sprite is provisioned OR handed back —
+      // the same fail-closed checker the access half already consulted.
+      authorize: canRunCode,
+      resolveDriveId: async (agentPageId) => {
+        const context = await resolveDriveOwnerContext(agentPageId);
+        return context.ok ? context.driveId : null;
+      },
+      checkFullEgressEnablement: async () =>
+        decideFullEgressEnablement({
+          adminGateEnabled: isCodeExecutionEnabled(),
+          containment: isContainmentVerified() ? { contained: true } : null,
+        }),
+      now: () => new Date(),
+    },
+  });
+  if (!result.ok) return { ok: false, reason: result.denial ?? result.reason };
+  return { ok: true, sandboxId: result.sandboxId };
+}
+
+/**
+ * Auth for a shell connect: shell row → owning session → the ONE session access
+ * decision, with the Sprite half handed back as an uncalled thunk (see
+ * `shell-access.ts`). Every dep here is DB-only except the thunk's own
+ * provisioning pair.
+ */
+const shellCheckAuth = buildShellCheckAuth({
+  resolveShell: async (shellId) => {
+    const store = await dbSessionShellStorePromise;
+    return resolveSessionShellById({ shellId, deps: { store } });
+  },
+  checkSessionAccess: async ({ requesterId, sessionId }) => {
+    const store = await dbAgentSessionStorePromise;
+    const row = await store.findById(sessionId);
+    if (!row) return { allowed: false, reason: 'session_not_found' };
+    const subject = { sessionId: row.conversationId, ownerId: row.ownerId, agentPageId: row.agentPageId };
+    const decision = await checkAgentSessionAccess({
+      requesterId,
+      sessionId,
+      deps: {
+        // The row was just read; hand the wrapper the same subject rather than
+        // paying a second lookup for the identical answer.
+        findSession: async () => subject,
+        resolveConversationOwnership: async ({ conversationId, requesterId: rid }) => {
+          const [conversation] = await db
+            .select({ userId: conversations.userId, isShared: conversations.isShared })
+            .from(conversations)
+            .where(eq(conversations.id, conversationId))
+            .limit(1);
+          if (!conversation) return 'none';
+          if (conversation.userId === rid) return 'owner';
+          return conversation.isShared ? 'shared' : 'none';
+        },
+        resolvePagePermission: async ({ userId, agentPageId }) => {
+          const level = await getUserAccessLevel(userId, agentPageId);
+          if (!level) return null;
+          return level.canEdit ? 'edit' : 'view';
+        },
+        canRunCode: async ({ userId, agentPageId }) => {
+          // Drive-scoped for a page session; global (no driveId) otherwise. An
+          // unresolvable drive fails closed.
+          const context = agentPageId === null ? null : await resolveDriveOwnerContext(agentPageId);
+          if (agentPageId !== null && !context?.ok) return false;
+          const verdict = await canRunCode({
+            userId,
+            driveId: context?.ok ? context.driveId : undefined,
+            requestOrigin: 'user',
+          });
+          return verdict.ok;
+        },
+      },
+    });
+    return decision.allowed ? { allowed: true, session: subject } : decision;
+  },
+  resolvePayer: async (session) => {
+    // Payer = the agent page's drive owner; a global-assistant session (or an
+    // orphaned page) attributes to the session owner instead.
+    if (session.agentPageId === null) return { payerId: session.ownerId, driveId: null };
+    const context = await resolveDriveOwnerContext(session.agentPageId);
+    if (!context.ok) return { payerId: session.ownerId, driveId: null };
+    return { payerId: context.tenantId, driveId: context.driveId };
+  },
+  getUser: async (userId) => {
+    const [userRow] = await db
+      .select({ subscriptionTier: users.subscriptionTier, email: users.email })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    return userRow;
+  },
+  resolveActorEmail,
+  acquireSlot: ({ userId, tier }) => acquireCodeExecutionSlot({ userId, tier }),
+  releaseSlot: (userId) => releaseCodeExecutionSlot({ userId }),
+  ensureSessionSandbox: ensureShellSessionSandbox,
+  getSprite: async (sandboxId) => (await getRealtimeSpritesSdk()).getSprite(sandboxId),
+  // Write code execution audit record (shell PTY session open) — this launches
+  // an arbitrary program (the resolved command, or a per-shell override)
+  // inside the session's Sprite. `driveId` is null for a global-assistant
+  // session, which the audit record type carries as-is.
+  writeAudit: ({ userId, actorEmail, driveId, command }) => {
+    writeCodeExecutionAudit({
+      input: {
+        userId,
+        actorEmail,
+        driveId,
+        requestOrigin: 'user',
+        profile: 'pty',
+        code: `[Shell session opened: ${command}]`,
+        exitCode: null,
+        durationMs: 0,
+        timestamp: new Date(),
+      },
+    }).catch(() => {});
+  },
+  buildSessionKey: ({ shellId }) => deriveShellSessionKey({ shellId }),
+  logDenied: (reason, context) => loggers.realtime.warn('Shell auth denied', { reason, ...context }),
+  logSandboxLookupFailed: (context) => loggers.realtime.warn('Shell sandbox lookup failed', { reason: 'provision_failed', ...context }),
+});
+
+/**
+ * Everything it takes to START a shell PTY, wired once for BOTH callers: a
+ * viewer's `shell:connect` and a headless start driven by agent IO over signed
+ * HTTP (`startHeadlessShell`). Shares the ONE process-wide session map with the
+ * legacy family — the two key namespaces cannot collide (see
+ * `deriveShellSessionKey`) — and the same billing + task-hold seams.
+ */
+const shellSessionDeps: ShellSessionDeps = {
+  sessionMap: agentTerminalSessionMap,
+  openShell: openPtyShell,
+  checkAuth: shellCheckAuth,
+  persistStreamSessionId: async ({ shellId, sessionId }) => {
+    const store = await dbSessionShellStorePromise;
+    await store.updateStreamSessionId({ id: shellId, streamSessionId: sessionId, now: new Date() });
+  },
+  persistColdTail: async ({ shellId, tail, hasOutput, endedAt }) => {
+    const store = await dbSessionShellStorePromise;
+    await store.recordColdTail({ id: shellId, tail, hasOutput, endedAt });
+  },
+  billing: defaultSandboxBillingDeps,
+  createTaskHold: agentTerminalSessionDeps.createTaskHold,
+};
+
+/**
+ * Start a PTY for an agent reading or typing into a shell whose session has
+ * never run (issue #2206) — the `startSession` seam of `shell-io.ts`.
+ * Authorization is decided HERE, against the userId the (signed) request
+ * names: starting a sandbox process reserves that user's concurrency slot,
+ * bills the session's payer, and writes a code-execution audit row.
+ */
+const startHeadlessShell = async (
+  { shellId, userId }: { shellId: string; userId: string },
+  abandoned: () => boolean,
+) => {
+  const access = await shellCheckAuth({ userId, shellId });
+  if (!access.ok) return undefined;
+
+  const outcome = await ensureShellSession(shellSessionDeps, {
+    access,
+    target: { shellId },
+    userId,
+    cols: HEADLESS_COLS,
+    rows: HEADLESS_ROWS,
+    abandoned,
+  });
+  if (outcome.kind === 'failed') return undefined;
+  loggers.realtime.info('Shell session started headlessly', {
+    sessionKey: access.sessionKey,
+    sandboxId: outcome.session.sandboxId,
+    reused: outcome.kind === 'existing',
+  });
+  return outcome.session;
+};
+
+/** The shell-IO deps both HTTP verbs share — the map, the key derivation, and the two effects. */
+const shellIoDeps = {
+  sessionMap: agentTerminalSessionMap,
+  sessionKeyFor: (shellId: string) => deriveShellSessionKey({ shellId }),
+  startSession: startHeadlessShell,
+  rearmIdleReap: (session: TerminalSession) =>
+    armShellIdleReap(shellSessionDeps, agentTerminalSessionMap, session),
+};
+
 /**
  * Origin Validation for WebSocket Connections (Defense-in-Depth with Blocking)
  *
@@ -1040,6 +1294,85 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                 res.end(JSON.stringify(result.body));
             }).catch((error: unknown) => {
                 loggers.realtime.error('Session input request failed', error instanceof Error ? error : new Error(String(error)));
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Internal error' }));
+            });
+        });
+    } else if (req.method === 'POST' && req.url === '/api/shell-read') {
+        // read_shell (shell:* family) + the liveness sweep, re-keyed to
+        // {shellId}. The bytes live in THIS process's session map, so the web
+        // tier — which has already authorized the shell against the shared
+        // session access decision — asks for them over a signed POST.
+        readCappedBody(body => {
+            const signatureHeader = req.headers['x-broadcast-signature'] as string;
+            if (!verifySignature(signatureHeader, body)) {
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Authentication failed' }));
+                return;
+            }
+
+            handleShellReadRequest(shellIoDeps, body, trackRequestAbandonment()).then((result) => {
+                res.writeHead(result.status, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result.body));
+            }).catch((error: unknown) => {
+                loggers.realtime.error('Shell read request failed', error instanceof Error ? error : new Error(String(error)));
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Internal error' }));
+            });
+        });
+    } else if (req.method === 'POST' && req.url === '/api/shell-input') {
+        // send_shell (shell:* family): types stdin into a live shell PTY
+        // through the same `session.command.write` a human viewer's keystroke
+        // takes, so anyone watching sees it echoed exactly as they would see a
+        // teammate type.
+        readCappedBody(body => {
+            const signatureHeader = req.headers['x-broadcast-signature'] as string;
+            if (!verifySignature(signatureHeader, body)) {
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Authentication failed' }));
+                return;
+            }
+
+            handleShellSendRequest(shellIoDeps, body, undefined, trackRequestAbandonment()).then((result) => {
+                res.writeHead(result.status, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result.body));
+            }).catch((error: unknown) => {
+                loggers.realtime.error('Shell input request failed', error instanceof Error ? error : new Error(String(error)));
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Internal error' }));
+            });
+        });
+    } else if (req.method === 'POST' && req.url === '/api/shell-activity') {
+        // Streams an agent's bash run into the live shell feeds of its SESSION
+        // (the shell:* successor to /api/terminal-activity, addressed by
+        // sessionId). Best-effort: no live shell (nobody watching) is not an
+        // error.
+        readCappedBody(body => {
+            const signatureHeader = req.headers['x-broadcast-signature'] as string;
+            if (!verifySignature(signatureHeader, body)) {
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Authentication failed' }));
+                return;
+            }
+
+            handleShellActivityRequest(
+                {
+                    sessionMap: agentTerminalSessionMap,
+                    // A DB-only listing of the session's shells composed with the
+                    // pure key derivation — no Sprite is resolved or woken to
+                    // answer "is anyone watching".
+                    resolveShellKeys: async (sessionId) => {
+                        const store = await dbSessionShellStorePromise;
+                        const rows = await store.list(sessionId);
+                        return rows.map((row) => deriveShellSessionKey({ shellId: row.id }));
+                    },
+                },
+                body,
+            ).then((result) => {
+                res.writeHead(result.status, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result.body));
+            }).catch((error: unknown) => {
+                loggers.realtime.error('Shell activity request failed', error instanceof Error ? error : new Error(String(error)));
                 res.writeHead(500, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: false, error: 'Internal error' }));
             });
@@ -1632,8 +1965,42 @@ io.on('connection', (socket: AuthSocket) => {
   socket.on('agent-terminal:resize', (payload) => agentTerminalHandlers.onResize(payload));
   socket.on('agent-terminal:disconnect', (payload) => agentTerminalHandlers.onDisconnect(payload));
 
+  // Shell PTY handlers (shell:* — the re-keyed family): a named PTY inside its
+  // agent session's ONE shared sandbox, addressed by `{shellId}` alone. Billing
+  // meters every connection's active-runtime cost against the session's payer
+  // (agent page's drive owner, or the session owner for a global-assistant
+  // session).
+  const shellHandlers = buildShellHandlers({
+    ...shellSessionDeps,
+    socket: socket as unknown as ShellSocketLike,
+  });
+
+  socket.on('shell:connect', (payload) => {
+    shellHandlers.onConnect(payload).then(() => {
+      // Same `connectionId ?? socket.id` fallback `onConnect` itself uses —
+      // several panes can share this one socket, each under its own
+      // connectionId, so a bare `socket.id` lookup would only ever find
+      // whichever pane never sent one.
+      const payloadConnectionId =
+        payload !== null && typeof payload === 'object' && typeof (payload as { connectionId?: unknown }).connectionId === 'string'
+          ? (payload as { connectionId: string }).connectionId
+          : undefined;
+      const session = agentTerminalSessionMap.getBySocket(`${socket.id}\u0000${payloadConnectionId ?? socket.id}`);
+      if (session) {
+        loggers.realtime.info('Shell session opened', { userId: user?.id, sessionKey: session.sessionKey, sandboxId: session.sandboxId });
+      }
+    }).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : 'Internal error';
+      socket.emit('shell:error', { message: msg });
+    });
+  });
+  socket.on('shell:input', (payload) => shellHandlers.onInput(payload));
+  socket.on('shell:resize', (payload) => shellHandlers.onResize(payload));
+  socket.on('shell:disconnect', (payload) => shellHandlers.onDisconnect(payload));
+
   socket.on('disconnect', (reason) => {
     agentTerminalHandlers.onDisconnect();
+    shellHandlers.onDisconnect();
     // Clean up presence tracking and broadcast updates for affected pages
     const affectedPages = presenceTracker.removeSocket(socket.id);
     for (const { pageId, driveId } of affectedPages) {

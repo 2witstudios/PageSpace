@@ -288,6 +288,13 @@ export async function POST(
     const { id: urlConversationId } = await context.params;
     loggers.api.debug('Global Assistant Chat API: Authentication successful', { userId });
 
+    // Agent-dispatch depth (spawn_session/send_session): a worker's turn rides
+    // this same route; the header carries the chain depth across the HTTP hop
+    // so the depth cap still terminates A→B→C. Safe untrusted — forging it low
+    // is the default, forging it high only restricts the forger.
+    const rawDispatchDepth = Number.parseInt(request.headers.get('X-Agent-Dispatch-Depth') ?? '', 10);
+    const agentDispatchDepth = Number.isInteger(rawDispatchDepth) && rawDispatchDepth > 0 ? rawDispatchDepth : 0;
+
     // Body size guard — reject payloads over 25MB before parsing
     const contentLength = parseInt(request.headers.get('content-length') || '0', 10);
     if (contentLength > 25 * 1024 * 1024) {
@@ -1297,6 +1304,11 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
               subscriptionTier: userSubscriptionTier,
               imageGenerationModel: userImageGenerationModel ?? DEFAULT_IMAGE_MODEL,
               chatSource: { type: 'global' as const },
+              // Worker-dispatch chain depth (spawn_session/send_session) — the
+              // X-Agent-Dispatch-Depth header is how depth survives the HTTP
+              // hop; forging it low is the default, forging it high only
+              // restricts the forger. 0 for a direct user request.
+              agentCallDepth: agentDispatchDepth,
             },
             maxRetries: 20,
             onChunk: ({ chunk }) => {

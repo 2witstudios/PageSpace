@@ -122,26 +122,26 @@ describe('conversationRepository.getAiAgent', () => {
   const findFirstMock = () =>
     mockDb.query.pages.findFirst as unknown as ReturnType<typeof vi.fn>;
 
-  // #2166 Phase 11: MACHINE pages host machine-pane conversations (Phase 4
-  // pre-creates them), so the conversation routes' host-page lookup must
-  // accept both types. Agent-only routes do their own AI_CHAT checks.
-  it('queries for conversation-hosting page types: AI_CHAT and MACHINE', async () => {
+  // The MACHINE widening (#2166 Phase 11) is REVERTED: agent sessions anchor
+  // to the conversation itself, so AI_CHAT pages are the only conversation
+  // hosts again.
+  it('queries for conversation-hosting page types: AI_CHAT only', async () => {
     findFirstMock().mockResolvedValue({
-      id: 'machine_1',
-      title: 'Build box',
-      type: 'MACHINE',
+      id: 'agent_1',
+      title: 'Research Agent',
+      type: 'AI_CHAT',
       driveId: 'drive_1',
     });
 
-    const result = await conversationRepository.getAiAgent('machine_1');
+    const result = await conversationRepository.getAiAgent('agent_1');
 
     expect(result).toEqual(
-      expect.objectContaining({ id: 'machine_1', type: 'MACHINE' }),
+      expect.objectContaining({ id: 'agent_1', type: 'AI_CHAT' }),
     );
     const call = findFirstMock().mock.calls[0][0] as { where: { conds: unknown[] } };
     expect(call.where.conds).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ kind: 'inArray', values: ['AI_CHAT', 'MACHINE'] }),
+        expect.objectContaining({ kind: 'inArray', values: ['AI_CHAT'] }),
       ]),
     );
   });

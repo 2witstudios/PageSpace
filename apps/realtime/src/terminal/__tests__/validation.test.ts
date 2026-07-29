@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { validateTerminalConnectPayload, validateAgentTerminalConnectPayload, clampTerminalDimensions } from '../validation';
+import { validateTerminalConnectPayload, validateAgentTerminalConnectPayload, clampTerminalDimensions, parseShellConnectPayload } from '../validation';
 
 describe('validateTerminalConnectPayload', () => {
   it('given a valid payload, should return ok:true with typed value', () => {
@@ -196,5 +196,47 @@ describe('clampTerminalDimensions', () => {
 
   it('given both at minimums, should return minimums', () => {
     expect(clampTerminalDimensions({ cols: 0, rows: 0 })).toEqual({ cols: 10, rows: 5 });
+  });
+});
+
+describe('parseShellConnectPayload — the SHARED contract schema', () => {
+  it('given a valid payload, should parse and pass the dimensions through', () => {
+    const result = parseShellConnectPayload({ shellId: 'shl-1', cols: 80, rows: 24 });
+    expect(result).toEqual({ ok: true, value: { shellId: 'shl-1', cols: 80, rows: 24 } });
+  });
+
+  it('given out-of-range dimensions, should CLAMP them on parse — a caller never has to remember to', () => {
+    const result = parseShellConnectPayload({ shellId: 'shl-1', cols: 9999, rows: 2 });
+    expect(result).toEqual({ ok: true, value: { shellId: 'shl-1', cols: 500, rows: 5 } });
+  });
+
+  it('given nonsense dimensions (zero, negative, non-finite, non-numeric), should REJECT rather than clamp', () => {
+    const results = [
+      parseShellConnectPayload({ shellId: 'shl-1', cols: 0, rows: 24 }),
+      parseShellConnectPayload({ shellId: 'shl-1', cols: 80, rows: -1 }),
+      parseShellConnectPayload({ shellId: 'shl-1', cols: Infinity, rows: 24 }),
+      parseShellConnectPayload({ shellId: 'shl-1', cols: '80', rows: 24 }),
+    ];
+    expect(results.every((r) => r.ok === false)).toBe(true);
+  });
+
+  it('given a missing shellId, should reject naming the field', () => {
+    const result = parseShellConnectPayload({ cols: 80, rows: 24 });
+    expect(result).toEqual({ ok: false, error: 'invalid shellId' });
+  });
+
+  it('given a null payload, should reject with a payload-level error', () => {
+    const result = parseShellConnectPayload(null);
+    expect(result.ok).toBe(false);
+  });
+
+  it('given an optional connectionId, should carry it through', () => {
+    const result = parseShellConnectPayload({ shellId: 'shl-1', cols: 80, rows: 24, connectionId: 'pane-a' });
+    expect(result).toEqual({ ok: true, value: { shellId: 'shl-1', cols: 80, rows: 24, connectionId: 'pane-a' } });
+  });
+
+  it('given unknown extra keys (a stale client field), should STRIP them rather than reject — a session-binding field cannot sneak in', () => {
+    const result = parseShellConnectPayload({ shellId: 'shl-1', cols: 80, rows: 24, machineId: 'm1', sessionBinding: 'x' });
+    expect(result).toEqual({ ok: true, value: { shellId: 'shl-1', cols: 80, rows: 24 } });
   });
 });

@@ -39,11 +39,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 
 vi.mock('@/lib/ai/tools/agent-communication-tools', () => ({
-  agentCommunicationTools: {
-    ask_agent: {
-      execute: vi.fn(),
-    },
-  },
+  executeAskAgent: vi.fn(),
 }));
 
 vi.mock('@/lib/ai/tools/channel-tools', () => ({
@@ -83,7 +79,7 @@ vi.mock('@/lib/websocket/socket-utils', () => ({
 
 import { db } from '@pagespace/db/db';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
-import { agentCommunicationTools } from '@/lib/ai/tools/agent-communication-tools';
+import { executeAskAgent } from '@/lib/ai/tools/agent-communication-tools';
 import { channelTools } from '@/lib/ai/tools/channel-tools';
 import {
   isAskAgentResult,
@@ -95,14 +91,13 @@ const mockPagesFindMany = db.query.pages.findMany as unknown as Mock;
 const mockChannelMessagesFindMany = db.query.channelMessages.findMany as unknown as Mock;
 const mockCanUserViewPage = vi.mocked(canUserViewPage);
 
-const askAgentExecute = agentCommunicationTools.ask_agent.execute;
 const sendChannelExecute = channelTools.send_channel_message.execute;
 
-if (!askAgentExecute || !sendChannelExecute) {
+if (!sendChannelExecute) {
   throw new Error('Agent mention responder tool mocks are unavailable');
 }
 
-const mockAskAgentExecute = askAgentExecute as unknown as Mock;
+const mockAskAgentExecute = executeAskAgent as unknown as Mock;
 const mockSendChannelExecute = sendChannelExecute as unknown as Mock;
 
 const createAskAgentSuccess = (response: string) => ({

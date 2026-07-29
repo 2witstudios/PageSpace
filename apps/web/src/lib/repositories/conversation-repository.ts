@@ -180,15 +180,13 @@ export const conversationRepository = {
    * Get an AI_CHAT agent by ID
    */
   async getAiAgent(agentId: string): Promise<AiAgent | null> {
-    // Conversation-hosting pages: AI_CHAT agents, and MACHINE pages — machine
-    // panes anchor their terminal conversations to the machine page (Phase 4
-    // pre-creates them, Phase 11's pane lists/loads them, #2166). Agent-only
-    // routes (config, drives, consult) do their own AI_CHAT checks and are
-    // unaffected by this widening.
+    // Conversation-hosting pages: AI_CHAT agents only. (The MACHINE widening
+    // is reverted — agent sessions anchor to the conversation itself, and the
+    // MACHINE page type is on its way out entirely.)
     const agent = await db.query.pages.findFirst({
       where: and(
         eq(pages.id, agentId),
-        inArray(pages.type, ['AI_CHAT', 'MACHINE']),
+        inArray(pages.type, ['AI_CHAT']),
         eq(pages.isTrashed, false)
       ),
       columns: {

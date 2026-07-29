@@ -9,11 +9,17 @@
  * both the zod schema and the execute path. This shell only builds the effect
  * seams (open / withToken / git / gitR) and injects them into the generator.
  *
+ * The sandbox handle source is the CONVERSATION SESSION: `ctx.conversationId`
+ * IS the session id, and the injected `acquireSandbox` (shared with
+ * bash/readFile/writeFile) lazily ensures the session + its Sprite from it.
+ * The predecessor's active-machine resolution is gone — a session has exactly
+ * one sandbox, so `open` is: resolve actor → gate → go.
+ *
  * Each generated tool's execute handler:
  *   1. Validates input (defense-in-depth; schema validation happens at the AI layer).
  *   2. Builds argv from the pure command spec (may deny path_escape).
- *   3. Resolves the actor context + runs the call-time gate + resolves the ACTIVE
- *      machine (same gate as bash/writeFile/readFile).
+ *   3. Resolves the actor context + runs the call-time gate (same gate as
+ *      bash/writeFile/readFile).
  *   4. For remote/gh tools: pre-checks the GitHub token (fails fast, no quota).
  *   5. Delegates to `runGitInSandbox` with cmd + args[] (never sh -c).
  *
@@ -26,17 +32,7 @@ import type { Tool } from 'ai';
 import type { SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';
 import type { GitSandboxRunDeps } from '@pagespace/lib/services/sandbox/git-tool-runners';
 import { runGitInSandbox } from '@pagespace/lib/services/sandbox/git-tool-runners';
-import {
-  machineAccessDeniedError,
-  resolveActiveMachine,
-  type MachineDirectoryDeps,
-  type ResolveSandboxContext,
-  type SandboxGate,
-} from './sandbox-tools';
-import {
-  type MachineNodeHandle,
-} from '@pagespace/lib/services/machines/machine-pane-binding';
-import type { MachineRef } from '@/lib/repositories/page-agent-repository';
+import type { ResolveSandboxContext, SandboxGate } from './sandbox-tools';
 import type { ToolExecutionContext } from '../core/types';
 import {
   generateSandboxGitTools,
@@ -56,7 +52,6 @@ export interface GitSandboxToolsDeps {
   gitRunDeps: GitSandboxRunDeps;
   resolveContext: ResolveSandboxContext;
   gate: SandboxGate;
-  machines: MachineDirectoryDeps;
 }
 
 function readContext(options: unknown): ToolExecutionContext | undefined {
@@ -70,12 +65,11 @@ const NO_CONNECTION_ERROR = {
   reason: 'error' as const,
 };
 
-export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machines }: GitSandboxToolsDeps): Record<string, Tool> {
+export function createSandboxGitTools({ gitRunDeps, resolveContext, gate }: GitSandboxToolsDeps): Record<string, Tool> {
   /**
-   * Resolve context + gate check shared by every tool. Also resolves the
-   * ACTIVE machine and threads it onto ctx — the same seam bash/file tools
-   * use in sandbox-tools.ts, so git commands run against the same active
-   * machine as the rest of the terminal tool group.
+   * Resolve context + gate check shared by every tool — the same seam
+   * bash/file tools use in sandbox-tools.ts, so git commands run against the
+   * same session sandbox as the rest of the code-execution tool group.
    */
   const open = async (options: unknown): Promise<OpenResult> => {
     const rawContext = readContext(options);
@@ -83,66 +77,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
     if ('error' in ctx) return { ok: false, error: { success: false, error: ctx.error } };
     const decision = await gate(ctx);
     if (!decision.ok) return { ok: false, error: { success: false, error: decision.error } };
-    // resolveActiveMachine re-verifies access on EVERY call, mirroring
-    // sandbox-tools.ts — the actual execution boundary must not trust a
-    // machine reference that was accessible only at a past switch_machine
-    // call (OWASP A01).
-    const resolution = await resolveActiveMachine(rawContext, machines);
-    if (!resolution) {
-      return {
-        ok: false,
-        error: {
-          success: false,
-          error: 'Terminal access is not enabled for this agent. Ask an admin to turn on Terminal Access in this agent\'s settings.',
-        },
-      };
-    }
-    if (!resolution.access.allowed) {
-      return { ok: false, error: machineAccessDeniedError(resolution.access, resolution.machine) };
-    }
-    const activeMachine = resolution.machine;
-    // Mirror sandbox-tools.ts's driveId/tenantId resolution: an 'existing'
-    // machine can reference a Terminal page outside the ambient drive/tenant
-    // (global assistant, or a switched active machine in a shared drive).
-    // Leaving these ambient would derive a different session key here than
-    // bash/writeFile/readFile derive for the SAME active machine.
-    const driveId = machines.resolveDriveId
-      ? await machines.resolveDriveId(rawContext, activeMachine, ctx.driveId)
-      : ctx.driveId;
-    const tenantId = machines.resolveTenantId
-      ? await machines.resolveTenantId(rawContext, activeMachine, ctx.tenantId)
-      : ctx.tenantId;
-    // Node resolution, identical to sandbox-tools.ts's `open()`: git always
-    // runs at the conversation's OWN node. Threading `branchSandbox` here is
-    // what routes git through the attach-only branch seam — without it every
-    // bound conversation, branch or not, ran git against the machine's own
-    // checkout while bash ran against the branch's.
-    const binding = rawContext?.machineBinding;
-    if (!binding) {
-      return {
-        ok: true,
-        userId: ctx.userId,
-        ctx: { ...ctx, driveId, tenantId, activeMachine, branchSandbox: undefined, projectSandbox: undefined } as SandboxActorContext & {
-          activeMachine: MachineRef;
-        },
-      };
-    }
-    const node = binding.self;
-    const branchSandbox = node.branchSandbox
-      ? { machineId: node.machineId, machineBranchId: node.branchSandbox.machineBranchId }
-      : undefined;
-    // Same flip for a PROMOTED project — its repo is on its own Sprite.
-    const projectSandbox = node.projectSandbox
-      ? { machineId: node.machineId, machineProjectId: node.projectSandbox.machineProjectId }
-      : undefined;
-    return {
-      ok: true,
-      userId: ctx.userId,
-      node,
-      ctx: { ...ctx, driveId, tenantId, activeMachine, branchSandbox, projectSandbox } as SandboxActorContext & {
-        activeMachine: MachineRef;
-      },
-    };
+    return { ok: true, userId: ctx.userId, ctx };
   };
 
   /** Direct-exec seam for local git commands (no token needed). */
@@ -155,13 +90,13 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
    */
   const withToken = async (
     options: unknown,
-    run: (ctx: SandboxActorContext, token: string, node?: MachineNodeHandle) => Promise<unknown>,
+    run: (ctx: SandboxActorContext, token: string) => Promise<unknown>,
   ) => {
     const opened = await open(options);
     if (!opened.ok) return opened.error;
     const token = await gitRunDeps.resolveGitHubToken(opened.userId);
     if (!token) return NO_CONNECTION_ERROR;
-    return run(opened.ctx, token, opened.node);
+    return run(opened.ctx, token);
   };
 
   /** Remote-exec seam: passes the pre-resolved token to skip the second DB lookup. */
