@@ -118,10 +118,6 @@ export function validatePageCreation(
       // Code pages can start empty
       break;
 
-    case PageType.MACHINE:
-      // Terminal pages start with empty session history
-      break;
-
     case PageType.SHEET:
       if (data.content) {
         if (typeof data.content !== 'string' || !isValidSheetContent(data.content)) {
@@ -188,13 +184,12 @@ export function validatePageUpdate(
       
       case PageType.CHANNEL:
       case PageType.AI_CHAT:
-      case PageType.MACHINE:
         // These types use structured JSON content
         if (typeof data.content === 'string') {
           try {
             JSON.parse(data.content);
           } catch {
-            errors.push('Content must be valid JSON for channel/chat/terminal pages');
+            errors.push('Content must be valid JSON for channel/chat pages');
           }
         }
         break;

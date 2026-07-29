@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { validateTerminalConnectPayload, validateAgentTerminalConnectPayload, clampTerminalDimensions } from '../validation';
+import { validateTerminalConnectPayload, clampTerminalDimensions, parseShellConnectPayload } from '../validation';
 
 describe('validateTerminalConnectPayload', () => {
   it('given a valid payload, should return ok:true with typed value', () => {
@@ -103,72 +103,6 @@ describe('validateTerminalConnectPayload', () => {
   });
 });
 
-describe('validateAgentTerminalConnectPayload', () => {
-  const valid = { machineId: 't1', projectName: 'repo', branchName: 'feature-x', name: 'cli', cols: 80, rows: 24 };
-
-  it('given a valid payload, should return ok:true with typed value', () => {
-    expect(validateAgentTerminalConnectPayload(valid)).toEqual({ ok: true, value: valid });
-  });
-
-  it('given null payload, should return ok:false', () => {
-    const result = validateAgentTerminalConnectPayload(null);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toBe('invalid payload');
-  });
-
-  for (const field of ['machineId', 'name']) {
-    it(`given ${field} is missing, should return ok:false`, () => {
-      const { [field]: _omit, ...rest } = valid;
-      const result = validateAgentTerminalConnectPayload(rest);
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.error).toBe(`invalid ${field}`);
-    });
-
-    it(`given ${field} is an empty string, should return ok:false`, () => {
-      const result = validateAgentTerminalConnectPayload({ ...valid, [field]: '' });
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.error).toBe(`invalid ${field}`);
-    });
-  }
-
-  for (const field of ['projectName', 'branchName']) {
-    it(`given ${field} is an empty string, should return ok:false`, () => {
-      const result = validateAgentTerminalConnectPayload({ ...valid, [field]: '' });
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.error).toBe(`invalid ${field}`);
-    });
-  }
-
-  it('given neither projectName nor branchName (machine scope), should return ok:true with both undefined', () => {
-    const { projectName: _p, branchName: _b, ...machineScoped } = valid;
-    const result = validateAgentTerminalConnectPayload(machineScoped);
-    expect(result).toEqual({ ok: true, value: { ...machineScoped, projectName: undefined, branchName: undefined } });
-  });
-
-  it('given only projectName (project scope), should return ok:true with branchName undefined', () => {
-    const { branchName: _b, ...projectScoped } = valid;
-    const result = validateAgentTerminalConnectPayload(projectScoped);
-    expect(result).toEqual({ ok: true, value: { ...projectScoped, branchName: undefined } });
-  });
-
-  it('given cols is invalid, should return ok:false', () => {
-    const result = validateAgentTerminalConnectPayload({ ...valid, cols: -1 });
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toBe('invalid cols');
-  });
-
-  it('given rows is invalid, should return ok:false', () => {
-    const result = validateAgentTerminalConnectPayload({ ...valid, rows: NaN });
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toBe('invalid rows');
-  });
-
-  it('given extra unknown fields, should ignore them and return ok:true', () => {
-    const result = validateAgentTerminalConnectPayload({ ...valid, extra: 'ignored' });
-    expect(result).toEqual({ ok: true, value: valid });
-  });
-});
-
 describe('clampTerminalDimensions', () => {
   it('given normal dimensions, should return unchanged', () => {
     expect(clampTerminalDimensions({ cols: 80, rows: 24 })).toEqual({ cols: 80, rows: 24 });
@@ -196,5 +130,47 @@ describe('clampTerminalDimensions', () => {
 
   it('given both at minimums, should return minimums', () => {
     expect(clampTerminalDimensions({ cols: 0, rows: 0 })).toEqual({ cols: 10, rows: 5 });
+  });
+});
+
+describe('parseShellConnectPayload — the SHARED contract schema', () => {
+  it('given a valid payload, should parse and pass the dimensions through', () => {
+    const result = parseShellConnectPayload({ shellId: 'shl-1', cols: 80, rows: 24 });
+    expect(result).toEqual({ ok: true, value: { shellId: 'shl-1', cols: 80, rows: 24 } });
+  });
+
+  it('given out-of-range dimensions, should CLAMP them on parse — a caller never has to remember to', () => {
+    const result = parseShellConnectPayload({ shellId: 'shl-1', cols: 9999, rows: 2 });
+    expect(result).toEqual({ ok: true, value: { shellId: 'shl-1', cols: 500, rows: 5 } });
+  });
+
+  it('given nonsense dimensions (zero, negative, non-finite, non-numeric), should REJECT rather than clamp', () => {
+    const results = [
+      parseShellConnectPayload({ shellId: 'shl-1', cols: 0, rows: 24 }),
+      parseShellConnectPayload({ shellId: 'shl-1', cols: 80, rows: -1 }),
+      parseShellConnectPayload({ shellId: 'shl-1', cols: Infinity, rows: 24 }),
+      parseShellConnectPayload({ shellId: 'shl-1', cols: '80', rows: 24 }),
+    ];
+    expect(results.every((r) => r.ok === false)).toBe(true);
+  });
+
+  it('given a missing shellId, should reject naming the field', () => {
+    const result = parseShellConnectPayload({ cols: 80, rows: 24 });
+    expect(result).toEqual({ ok: false, error: 'invalid shellId' });
+  });
+
+  it('given a null payload, should reject with a payload-level error', () => {
+    const result = parseShellConnectPayload(null);
+    expect(result.ok).toBe(false);
+  });
+
+  it('given an optional connectionId, should carry it through', () => {
+    const result = parseShellConnectPayload({ shellId: 'shl-1', cols: 80, rows: 24, connectionId: 'pane-a' });
+    expect(result).toEqual({ ok: true, value: { shellId: 'shl-1', cols: 80, rows: 24, connectionId: 'pane-a' } });
+  });
+
+  it('given unknown extra keys (a stale client field), should STRIP them rather than reject — a session-binding field cannot sneak in', () => {
+    const result = parseShellConnectPayload({ shellId: 'shl-1', cols: 80, rows: 24, machineId: 'm1', sessionBinding: 'x' });
+    expect(result).toEqual({ ok: true, value: { shellId: 'shl-1', cols: 80, rows: 24 } });
   });
 });

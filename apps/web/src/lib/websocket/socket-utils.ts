@@ -3,6 +3,7 @@
  */
 
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
+import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-sessions/contract';
 import { browserLoggers } from '@pagespace/lib/logging/logger-browser';
 import { isNodeEnvironment } from '@pagespace/lib/utils/environment';
 import type { AttachmentMeta } from '@pagespace/lib/types';
@@ -660,49 +661,6 @@ export async function broadcastThreadReplyCountUpdated(
   }
 }
 
-/**
- * Broadcasts a `machine-workspace:*` event to a Machine's page-id room (see
- * apps/realtime's `join_channel`/`getUserAccessLevel` — a Machine's identity
- * IS its backing page id, so this reaches every browser/user currently
- * viewing that Machine). Generic over `event`/`payload` rather than one
- * function per event, unlike most broadcasters in this file, since the four
- * `machine-workspace:*` events (`created`/`updated`/`deleted`/`bootstrapped`)
- * share nothing beyond "something about this machine's workspace list
- * changed" — modeled on `broadcastThreadReplyCountUpdated`'s raw-channelId
- * shape rather than inventing four near-identical wrapper functions.
- *
- * Failures are logged and swallowed — the originating DB write has already
- * committed, and a missed broadcast just means other browsers catch up on
- * their next `GET /api/machines/workspaces` instead of live.
- */
-export async function broadcastMachineWorkspaceEvent(
-  machineId: string,
-  event: string,
-  payload: unknown
-): Promise<void> {
-  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
-  if (!realtimeUrl) {
-    realtimeLogger.warn('Realtime URL not configured, skipping machine workspace broadcast', { event });
-    return;
-  }
-
-  try {
-    const requestBody = JSON.stringify({ channelId: machineId, event, payload });
-
-    await fetch(`${realtimeUrl}/api/broadcast`, {
-      method: 'POST',
-      headers: createSignedBroadcastHeaders(requestBody),
-      body: requestBody,
-      signal: AbortSignal.timeout(5000),
-    });
-  } catch (error) {
-    realtimeLogger.error('Failed to broadcast machine workspace event', error instanceof Error ? error : undefined, {
-      event,
-      channel: maskIdentifier(machineId),
-    });
-  }
-}
-
 // ============================================================================
 // AI Stream Events
 // ============================================================================
@@ -1287,13 +1245,12 @@ export async function broadcastActivityEvent(payload: ActivityEventPayload): Pro
 }
 
 // ============================================================================
-// Terminal Activity Feed (Terminal Epic 1 T1.5, activity visibility)
+// Shell Activity Feed (activity visibility)
 // ============================================================================
 
-export interface TerminalActivityEventPayload {
-  tenantId: string;
-  driveId?: string;
-  pageId: string;
+export interface ShellActivityEventPayload {
+  /** The session whose sandbox the agent acted on — ≡ its conversation id. */
+  sessionId: string;
   command: string;
   output: string;
   exitCode: number;
@@ -1301,13 +1258,13 @@ export interface TerminalActivityEventPayload {
 }
 
 /**
- * Streams a successful agent bash run into the referenced Terminal's live
- * PTY/output feed, via a dedicated (non-broadcast-room) realtime endpoint —
- * the human viewer's live session is looked up by derived session key, not
- * by Socket.IO room membership. Best-effort: a failure (or nobody watching)
- * must never affect the tool call that already succeeded.
+ * Streams a successful agent bash run into the live PTY feed of every shell in
+ * that session, via a dedicated (non-broadcast-room) realtime endpoint — live
+ * shells are resolved from the session id, not from Socket.IO room membership.
+ * Best-effort: a failure (or nobody watching) must never affect the tool call
+ * that already succeeded.
  */
-export async function notifyTerminalAgentActivity(payload: TerminalActivityEventPayload): Promise<void> {
+export async function notifyShellAgentActivity(payload: ShellActivityEventPayload): Promise<void> {
   const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
   if (!realtimeUrl) {
     return;
@@ -1315,7 +1272,7 @@ export async function notifyTerminalAgentActivity(payload: TerminalActivityEvent
 
   try {
     const requestBody = JSON.stringify(payload);
-    await fetch(`${realtimeUrl}/api/terminal-activity`, {
+    await fetch(`${realtimeUrl}${SHELL_BRIDGE_ROUTES.activity}`, {
       method: 'POST',
       headers: createSignedBroadcastHeaders(requestBody),
       body: requestBody,
@@ -1323,11 +1280,11 @@ export async function notifyTerminalAgentActivity(payload: TerminalActivityEvent
     });
   } catch (error) {
     realtimeLogger.error(
-      'Failed to notify terminal agent activity',
+      'Failed to notify shell agent activity',
       error instanceof Error ? error : undefined,
       {
-        event: 'terminal_activity',
-        pageId: maskIdentifier(payload.pageId),
+        event: 'shell_activity',
+        sessionId: maskIdentifier(payload.sessionId),
       }
     );
   }

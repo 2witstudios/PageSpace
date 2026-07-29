@@ -1,14 +1,18 @@
 /**
  * Tests for the canonical `PageType` list and the `includeTypes` query-param
  * parser (issue #2150). Three hand re-declarations of the page-type list had
- * drifted from this enum, silently dropping FILE and MACHINE from glob search
- * and the AI `glob_search` tool; every consumer now derives from here.
+ * drifted from this enum, silently dropping FILE from glob search and the AI
+ * `glob_search` tool; every consumer now derives from here.
  *
- * The `AssertExact` line below is a compile-time-only drift guard against the
- * DB `pgEnum` (`packages/db/src/schema/core.ts`): if the two ever diverge,
- * `tsc` fails right here with "Type 'false' is not assignable to type 'true'"
- * before any test runs. Same pattern as
- * `packages/sdk/src/operations/__tests__/roles-pageperm-drift-guard.test.ts`.
+ * The `AssertSubset` line below is a compile-time-only drift guard against the
+ * DB `pgEnum` (`packages/db/src/schema/core.ts`): every application-level
+ * `PageTypeValue` must be a valid DB `PageTypeEnum` value, so `tsc` fails right
+ * here if a new TS-level type is ever added without a matching migration. It is
+ * deliberately ONE-DIRECTIONAL, not exact: the Phase 8 teardown deleted the
+ * MACHINE page type from this TS enum (and every validator/config that governs
+ * what a page's `type` can be SET to) while leaving the dead `MACHINE` value in
+ * the pg enum itself — Postgres cannot `DROP VALUE` — so `PageTypeEnum` (DB) is
+ * now a strict superset of `PageTypeValue` (app) by exactly that one value.
  */
 import { describe, it, expect } from 'vitest';
 import type { PageTypeEnum } from '@pagespace/db/schema/core';
@@ -20,15 +24,15 @@ import {
   type PageTypeValue,
 } from '../enums';
 
-type AssertExact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
-const matchesDbEnum: AssertExact<PageTypeValue, PageTypeEnum> = true;
+type AssertSubset<A, B> = A extends B ? true : false;
+const everyAppTypeIsAValidDbEnumValue: AssertSubset<PageTypeValue, PageTypeEnum> = true;
 
 describe('PAGE_TYPE_VALUES', () => {
   it('is exactly the members of the PageType enum', () => {
     expect(PAGE_TYPE_VALUES).toEqual(Object.values(PageType));
   });
 
-  it('contains all ten page types, including FILE and MACHINE (#2150)', () => {
+  it('contains all nine page types, including FILE (#2150)', () => {
     expect([...PAGE_TYPE_VALUES].sort()).toEqual(
       [
         'AI_CHAT',
@@ -38,15 +42,18 @@ describe('PAGE_TYPE_VALUES', () => {
         'DOCUMENT',
         'FILE',
         'FOLDER',
-        'MACHINE',
         'SHEET',
         'TASK_LIST',
       ].sort()
     );
   });
 
-  it('does not drift from the DB pgEnum (enforced at compile time above)', () => {
-    expect(matchesDbEnum).toBe(true);
+  it('no longer contains MACHINE — deleted from the TS enum in the Phase 8 teardown', () => {
+    expect(PAGE_TYPE_VALUES).not.toContain('MACHINE');
+  });
+
+  it('is a subset of the DB pgEnum (enforced at compile time above)', () => {
+    expect(everyAppTypeIsAValidDbEnumValue).toBe(true);
   });
 });
 
@@ -55,9 +62,12 @@ describe('isPageTypeValue', () => {
     expect(isPageTypeValue('FOLDER')).toBe(true);
   });
 
-  it('accepts FILE and MACHINE', () => {
+  it('accepts FILE', () => {
     expect(isPageTypeValue('FILE')).toBe(true);
-    expect(isPageTypeValue('MACHINE')).toBe(true);
+  });
+
+  it('rejects MACHINE — a dead DB-only value nothing may write anymore', () => {
+    expect(isPageTypeValue('MACHINE')).toBe(false);
   });
 
   it('rejects an unknown value', () => {
@@ -86,8 +96,12 @@ describe('parsePageTypesParam', () => {
     expect(parsePageTypesParam('FOLDER')).toEqual(['FOLDER']);
   });
 
-  it('parses FILE and MACHINE, the two types that used to be dropped (#2150)', () => {
-    expect(parsePageTypesParam('FILE,MACHINE')).toEqual(['FILE', 'MACHINE']);
+  it('parses FILE, the type that used to be dropped (#2150)', () => {
+    expect(parsePageTypesParam('FILE')).toEqual(['FILE']);
+  });
+
+  it('silently drops MACHINE — a dead value, not an app-level page type', () => {
+    expect(parsePageTypesParam('FILE,MACHINE')).toEqual(['FILE']);
   });
 
   it('parses every page type', () => {

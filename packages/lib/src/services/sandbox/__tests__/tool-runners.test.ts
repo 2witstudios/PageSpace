@@ -128,7 +128,7 @@ describe('runBashInSandbox', () => {
     expect(slots.released).toBe(1);
   });
 
-  it('given a ctx with an activeMachine set, should thread it onto the acquireSandbox request', async () => {
+  it('given a ctx, should thread agentPageId/conversationId onto the acquireSandbox request', async () => {
     const seen: unknown[] = [];
     const { deps } = makeDeps({
       acquireSandbox: async (input) => {
@@ -138,15 +138,15 @@ describe('runBashInSandbox', () => {
     });
     await runBashInSandbox({
       command: 'echo hi',
-      ctx: makeCtx({ activeMachine: { kind: 'existing', machineId: 't1' } }),
+      ctx: makeCtx({ agentPageId: 'agent-1', conversationId: 'c1' }),
       deps,
     });
     expect(seen).toEqual([
-      expect.objectContaining({ activeMachine: { kind: 'existing', machineId: 't1' } }),
+      expect.objectContaining({ agentPageId: 'agent-1', conversationId: 'c1' }),
     ]);
   });
 
-  it('given no_machine from acquire (e.g. an "own" machine with no backing page), should deny no_machine and release the slot', async () => {
+  it('given no_machine from acquire (e.g. a session with no backing page), should deny no_machine and release the slot', async () => {
     const { deps, slots } = makeDeps({
       acquireSandbox: async () => ({ ok: false, reason: 'no_machine' }),
     });
@@ -194,6 +194,31 @@ describe('runBashInSandbox', () => {
     expect(slots.released).toBe(1);
   });
 
+  it('given a plan-ceiling refusal, should name the ceiling rather than a generic provisioning fault', async () => {
+    const { deps, slots } = makeDeps({
+      acquireSandbox: async () => ({ ok: false as const, reason: 'provision_failed' as const, cause: 'session_limit_reached' }),
+    });
+
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
+    expect(result).toMatchObject({ success: false, reason: 'session_limit_reached' });
+    // The distinction that matters to the agent reading this: a provisioning
+    // fault is worth retrying, a plan ceiling is not.
+    if (result.success) throw new Error('unreachable');
+    expect(result.error).toContain('Retrying will not help');
+    expect(slots.released).toBe(1);
+  });
+
+  it('given a provisioning failure with NO stated cause, should stay generic', async () => {
+    const { deps } = makeDeps({
+      acquireSandbox: async () => ({ ok: false as const, reason: 'provision_failed' as const }),
+    });
+
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
+    expect(result).toMatchObject({ success: false, reason: 'provision_failed' });
+  });
+
   it('given a successful run, should return output, audit the run, and release the slot', async () => {
     const { deps, audits, slots } = makeDeps();
     const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
@@ -202,11 +227,11 @@ describe('runBashInSandbox', () => {
     expect(slots.released).toBe(1);
   });
 
-  it('given a successful run and a resolved machine pageId, should notify the terminal activity feed', async () => {
+  it('given a successful run, should notify the session\'s shell activity feed', async () => {
     const notified: unknown[] = [];
     const { deps } = makeDeps({
       acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
-      notifyTerminalActivity: async (input) => {
+      notifyShellActivity: async (input) => {
         notified.push(input);
       },
     });
@@ -218,9 +243,7 @@ describe('runBashInSandbox', () => {
     expect(result).toMatchObject({ success: true });
     expect(notified).toEqual([
       {
-        pageId: 'terminal-page-1',
-        driveId: 'd1',
-        tenantId: 't1',
+        sessionId: 'c1',
         command: 'echo hi',
         output: 'ok',
         exitCode: 0,
@@ -229,8 +252,8 @@ describe('runBashInSandbox', () => {
     ]);
   });
 
-  it('given a successful session and a resolved pageId, should opportunistically measure storage with the live sandbox', async () => {
-    const measured: Array<{ sandbox: unknown; pageId: string }> = [];
+  it('given a successful run, should measure the SESSION\'s storage with the live sandbox', async () => {
+    const measured: Array<{ sandbox: unknown; sessionId: string }> = [];
     const { deps } = makeDeps({
       acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
       measureStorage: async (input) => {
@@ -242,10 +265,53 @@ describe('runBashInSandbox', () => {
     // Fire-and-forget: give the microtask a tick to run.
     await Promise.resolve();
     expect(measured).toHaveLength(1);
-    expect(measured[0].pageId).toBe('terminal-page-1');
+    expect(measured[0].sessionId).toBe('c1');
   });
 
-  it('given no resolved machine pageId, should never measure storage', async () => {
+  it('should measure AFTER the command runs, not before — the whole point of the seam', async () => {
+    // The bytes worth billing are the ones the op just wrote. Measuring first
+    // records the pre-write footprint and then lets the per-session throttle
+    // suppress the post-write measurement, so a run that writes gigabytes stays
+    // invisible until the throttle lapses. This ordering is why the seam fires
+    // from `release` (a `finally`, after the op) rather than from acquisition.
+    const order: string[] = [];
+    const { deps } = makeDeps({
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'p1' }),
+      reconnect: async () =>
+        makeSandbox({
+          runCommand: async () => {
+            order.push('command');
+            return { exitCode: 0, stdout: 'ok', stderr: '' };
+          },
+        }),
+      measureStorage: async () => {
+        order.push('measure');
+      },
+    });
+
+    await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    await Promise.resolve();
+
+    expect(order).toEqual(['command', 'measure']);
+  });
+
+  it('given a GLOBAL-ASSISTANT session (no agent page), should still measure — its bytes bill too', async () => {
+    // Same page-shaped assumption that had excluded these sessions from the
+    // activity feed: the old gate was `acquired.pageId`, which they never have.
+    const measured: Array<{ sessionId: string }> = [];
+    const { deps } = makeDeps({
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+      measureStorage: async (input) => {
+        measured.push(input);
+      },
+    });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ agentPageId: undefined }), deps });
+    expect(result).toMatchObject({ success: true });
+    await Promise.resolve();
+    expect(measured[0]?.sessionId).toBe('c1');
+  });
+
+  it('given no conversation id, should never measure — there is no session to attribute bytes to', async () => {
     const measured: unknown[] = [];
     const { deps } = makeDeps({
       acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
@@ -253,7 +319,7 @@ describe('runBashInSandbox', () => {
         measured.push(input);
       },
     });
-    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ conversationId: undefined }), deps });
     expect(result).toMatchObject({ success: true });
     await Promise.resolve();
     expect(measured).toEqual([]);
@@ -271,23 +337,39 @@ describe('runBashInSandbox', () => {
     await Promise.resolve();
   });
 
-  it('given no resolved machine pageId, should never call the terminal activity feed', async () => {
-    const notified: unknown[] = [];
+  it('given a GLOBAL-ASSISTANT session (no agent page), should still notify — it has a sandbox too', async () => {
+    // The old gate was the agent pageId, which a global-assistant session does
+    // not have, so this whole class of session was silently excluded from the
+    // feed. The session id is the address now, and every session has one.
+    const notified: Array<{ sessionId: string }> = [];
     const { deps } = makeDeps({
       acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
-      notifyTerminalActivity: async (input) => {
+      notifyShellActivity: async (input) => {
         notified.push(input);
       },
     });
-    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ agentPageId: undefined }), deps });
+    expect(result).toMatchObject({ success: true });
+    expect(notified[0]?.sessionId).toBe('c1');
+  });
+
+  it('given no conversation id, should never call the activity feed — there is nothing to address', async () => {
+    const notified: unknown[] = [];
+    const { deps } = makeDeps({
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+      notifyShellActivity: async (input) => {
+        notified.push(input);
+      },
+    });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ conversationId: undefined }), deps });
     expect(result).toMatchObject({ success: true });
     expect(notified).toEqual([]);
   });
 
-  it('given a throwing terminal activity feed, should still return the successful result', async () => {
+  it('given a throwing activity feed, should still return the successful result', async () => {
     const { deps } = makeDeps({
       acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
-      notifyTerminalActivity: async () => {
+      notifyShellActivity: async () => {
         throw new Error('feed down');
       },
     });
@@ -295,14 +377,14 @@ describe('runBashInSandbox', () => {
     expect(result).toEqual({ success: true, stdout: 'ok', stderr: '', exitCode: 0, truncated: false });
   });
 
-  it('given a slow-to-resolve terminal activity feed, should NOT block the tool result on it (fire-and-forget)', async () => {
+  it('given a slow-to-resolve activity feed, should NOT block the tool result on it (fire-and-forget)', async () => {
     let releaseFeed: (() => void) | undefined;
     const feedGate = new Promise<void>((resolve) => {
       releaseFeed = resolve;
     });
     const { deps } = makeDeps({
       acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
-      notifyTerminalActivity: async () => {
+      notifyShellActivity: async () => {
         await feedGate; // Never resolves during this test unless we release it.
       },
     });
@@ -313,13 +395,13 @@ describe('runBashInSandbox', () => {
     releaseFeed?.(); // Avoid leaving a dangling unresolved promise after the test.
   });
 
-  it('given both stdout and stderr, should combine them for the terminal activity feed instead of dropping stderr', async () => {
+  it('given both stdout and stderr, should combine them for the activity feed instead of dropping stderr', async () => {
     const notified: Array<{ output: string }> = [];
     const { deps } = makeDeps({
       acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
       reconnect: async () =>
         makeSandbox({ runCommand: async () => ({ exitCode: 0, stdout: 'out-line', stderr: 'err-line' }) }),
-      notifyTerminalActivity: async (input) => {
+      notifyShellActivity: async (input) => {
         notified.push(input);
       },
     });
@@ -331,7 +413,7 @@ describe('runBashInSandbox', () => {
     const notified: Array<{ agentLabel: string }> = [];
     const { deps } = makeDeps({
       acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
-      notifyTerminalActivity: async (input) => {
+      notifyShellActivity: async (input) => {
         notified.push(input);
       },
     });
@@ -998,12 +1080,12 @@ function makeMutableClock(startMs: number) {
 
 function makeBilling(over: Partial<SandboxRunDeps['billing']> = {}): {
   billing: NonNullable<SandboxRunDeps['billing']>;
-  resolvePayerIdCalls: Array<{ tenantId: string; machinePageId?: string }>;
+  resolvePayerIdCalls: Array<{ tenantId: string; agentPageId?: string }>;
   gateCalls: Array<{ payerId: string }>;
   trackUsageCalls: Array<{ payerId: string; holdId?: string; activeSeconds: number; pageId?: string }>;
   releaseHoldCalls: string[];
 } {
-  const resolvePayerIdCalls: Array<{ tenantId: string; machinePageId?: string }> = [];
+  const resolvePayerIdCalls: Array<{ tenantId: string; agentPageId?: string }> = [];
   const gateCalls: Array<{ payerId: string }> = [];
   const trackUsageCalls: Array<{ payerId: string; holdId?: string; activeSeconds: number; pageId?: string }> = [];
   const releaseHoldCalls: string[] = [];
@@ -1106,7 +1188,7 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
     expect(releaseHoldCalls).toEqual(['hold-1']);
   });
 
-  it("for an 'own' machine, resolves machinePageId from agentPageId and forwards both to billing.resolvePayerId", async () => {
+  it("resolves agentPageId from ctx.agentPageId and forwards both to billing.resolvePayerId", async () => {
     const { billing, resolvePayerIdCalls } = makeBilling();
     const { deps } = makeDeps({ billing });
 
@@ -1116,29 +1198,10 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
       deps,
     });
 
-    expect(resolvePayerIdCalls).toEqual([{ tenantId: 'owner-1', machinePageId: 'own-agent-page' }]);
+    expect(resolvePayerIdCalls).toEqual([{ tenantId: 'owner-1', agentPageId: 'own-agent-page' }]);
   });
 
-  it("for an 'existing' machine, resolves machinePageId from the ACTIVE machine's machineId (not the agent's own page)", async () => {
-    const { billing, resolvePayerIdCalls } = makeBilling();
-    const { deps } = makeDeps({ billing });
-
-    await runBashInSandbox({
-      command: 'echo hi',
-      ctx: makeCtx({
-        tenantId: 'acting-user',
-        agentPageId: 'own-agent-page',
-        activeMachine: { kind: 'existing', machineId: 'other-terminal-page' },
-      }),
-      deps,
-    });
-
-    expect(resolvePayerIdCalls).toEqual([
-      { tenantId: 'acting-user', machinePageId: 'other-terminal-page' },
-    ]);
-  });
-
-  it("forwards the resolved machinePageId as pageId to trackUsage, so usage-breakdown can attribute cost to the right machine", async () => {
+  it("forwards the resolved agentPageId as pageId to trackUsage, so usage-breakdown can attribute cost to the right agent page", async () => {
     const clock = makeMutableClock(new Date('2026-06-01T12:00:00.000Z').getTime());
     const sandbox = makeSandbox({
       runCommand: async () => {
@@ -1153,7 +1216,7 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
       command: 'echo hi',
       ctx: makeCtx({
         tenantId: 'acting-user',
-        activeMachine: { kind: 'existing', machineId: 'other-terminal-page' },
+        agentPageId: 'other-terminal-page',
       }),
       deps,
     });
@@ -1163,7 +1226,7 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
     ]);
   });
 
-  it("gates and settles usage against the PAYER resolvePayerId returns, not the raw tenantId, when they differ (owner-pays for a machine owned by someone else)", async () => {
+  it("gates and settles usage against the PAYER resolvePayerId returns, not the raw tenantId, when they differ (owner-pays for a page owned by someone else)", async () => {
     const clock = makeMutableClock(new Date('2026-06-01T12:00:00.000Z').getTime());
     const sandbox = makeSandbox({
       runCommand: async () => {
@@ -1180,7 +1243,7 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
       command: 'echo hi',
       ctx: makeCtx({
         tenantId: 'acting-user',
-        activeMachine: { kind: 'existing', machineId: 'other-terminal-page' },
+        agentPageId: 'other-terminal-page',
       }),
       deps,
     });

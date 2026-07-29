@@ -422,29 +422,29 @@ describe('user-scoped agents (userScopedAccess fallback to the invoking user)', 
   });
 });
 
-// Field bug (pagespace.ai prod): a machine-pane conversation carries the
-// MACHINE page as `chatSource.agentPageId` (chat/route.ts sets it for EVERY
-// page chat), so the acting-agent gate used to authorize as a page that is not
-// an agent at all — no driveAgentMembers row exists, so every canActor* check
+// Field bug (pagespace.ai prod): a non-agent-page conversation carries that
+// page as `chatSource.agentPageId` (chat/route.ts sets it for EVERY page
+// chat), so the acting-agent gate used to authorize as a page that is not an
+// agent at all — no driveAgentMembers row exists, so every canActor* check
 // denied. The honest actor is the user the chat route already authorized.
-describe('machine-pane conversations (agentPageId is a MACHINE page, not an agent)', () => {
+describe('non-agent-page conversations (agentPageId is not an AI_CHAT agent)', () => {
   const FULL = { canView: true, canEdit: true, canShare: true, canDelete: true };
-  const machinePaneCtx = {
+  const nonAgentPaneCtx = {
     userId: 'user-1',
-    chatSource: { type: 'page', agentPageId: 'machine-1' },
+    chatSource: { type: 'page', agentPageId: 'doc-1' },
   } as ToolExecutionContext;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDbWhere.mockResolvedValue([{ type: 'MACHINE', userScopedAccess: false }]);
+    mockDbWhere.mockResolvedValue([{ type: 'DOCUMENT', userScopedAccess: false }]);
   });
 
-  it('canActorViewPage authorizes as the invoking user (the prod repro: bash/git_* denied by isMachineAccessible)', async () => {
+  it('canActorViewPage authorizes as the invoking user (the prod repro: tools denied by the phantom-agent gate)', async () => {
     const { getUserAccessLevel } = await import('@pagespace/lib/permissions/permissions');
     vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
 
-    expect(await canActorViewPage(machinePaneCtx, 'machine-1')).toBe(true);
-    expect(vi.mocked(getUserAccessLevel)).toHaveBeenCalledWith('user-1', 'machine-1');
+    expect(await canActorViewPage(nonAgentPaneCtx, 'doc-1')).toBe(true);
+    expect(vi.mocked(getUserAccessLevel)).toHaveBeenCalledWith('user-1', 'doc-1');
     expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
   });
 
@@ -452,7 +452,7 @@ describe('machine-pane conversations (agentPageId is a MACHINE page, not an agen
     const { getUserAccessLevel } = await import('@pagespace/lib/permissions/permissions');
     vi.mocked(getUserAccessLevel).mockResolvedValue(null);
 
-    expect(await canActorViewPage(machinePaneCtx, 'machine-1')).toBe(false);
+    expect(await canActorViewPage(nonAgentPaneCtx, 'doc-1')).toBe(false);
   });
 
   it('canActorEditPage / canActorAccessDrive authorize as the user too (page & drive tools, silently broken before)', async () => {
@@ -460,9 +460,9 @@ describe('machine-pane conversations (agentPageId is a MACHINE page, not an agen
     vi.mocked(canUserEditPage).mockResolvedValue(true);
     mockGetUserDriveAccess.mockResolvedValue(true);
 
-    expect(await canActorEditPage(machinePaneCtx, 'page-x')).toBe(true);
+    expect(await canActorEditPage(nonAgentPaneCtx, 'page-x')).toBe(true);
     expect(vi.mocked(canUserEditPage)).toHaveBeenCalledWith('user-1', 'page-x');
-    expect(await canActorAccessDrive(machinePaneCtx, DRIVE)).toBe(true);
+    expect(await canActorAccessDrive(nonAgentPaneCtx, DRIVE)).toBe(true);
     expect(mockGetUserDriveAccess).toHaveBeenCalledWith('user-1', DRIVE);
     expect(mockHasAgentDriveMembership).not.toHaveBeenCalled();
   });
@@ -471,7 +471,7 @@ describe('machine-pane conversations (agentPageId is a MACHINE page, not an agen
     const { getUserAccessLevel } = await import('@pagespace/lib/permissions/permissions');
     vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
 
-    await canActorViewPage(machinePaneCtx, 'machine-1');
+    await canActorViewPage(nonAgentPaneCtx, 'doc-1');
     expect(mockDbWhere).toHaveBeenCalledTimes(1);
   });
 
@@ -480,35 +480,35 @@ describe('machine-pane conversations (agentPageId is a MACHINE page, not an agen
     const { getUserAccessLevel } = await import('@pagespace/lib/permissions/permissions');
     vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
 
-    expect(await canActorViewPage(machinePaneCtx, 'page-x')).toBe(true);
+    expect(await canActorViewPage(nonAgentPaneCtx, 'page-x')).toBe(true);
     expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
   });
 
   it('ANY non-agent page type falls through to the user — never to a phantom agent, never beyond the user', async () => {
-    // Not just MACHINE panes: a chat on a DOCUMENT (or any future page type)
-    // carries that page as agentPageId too. Before the type gate it acted as a
-    // phantom agent that denied everything; now it acts as the INVOKING USER —
-    // an authority that user already has in any Global Assistant conversation,
+    // A chat on a FOLDER (or any other non-agent page type) carries that page
+    // as agentPageId too. Before the type gate it acted as a phantom agent
+    // that denied everything; now it acts as the INVOKING USER — an
+    // authority that user already has in any Global Assistant conversation,
     // so the fall-through grants nothing beyond their own reach.
-    mockDbWhere.mockResolvedValue([{ type: 'DOCUMENT', userScopedAccess: false }]);
+    mockDbWhere.mockResolvedValue([{ type: 'FOLDER', userScopedAccess: false }]);
     const { getUserAccessLevel } = await import('@pagespace/lib/permissions/permissions');
     vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
 
-    expect(await canActorViewPage(machinePaneCtx, 'page-x')).toBe(true);
+    expect(await canActorViewPage(nonAgentPaneCtx, 'page-x')).toBe(true);
     expect(vi.mocked(getUserAccessLevel)).toHaveBeenCalledWith('user-1', 'page-x');
     expect(mockGetAgentAccessLevel).not.toHaveBeenCalled();
   });
 
   // A consulted agent (ask_agent) inherits the PARENT's actor identity — the
-  // nested context spreads the caller's chatSource — so from a machine pane it
-  // resolves to the invoking user and can never exceed that user's own ACL.
-  it('a nested ask_agent run from a machine pane stays bounded by the invoking user', async () => {
+  // nested context spreads the caller's chatSource — so from a non-agent pane
+  // it resolves to the invoking user and can never exceed that user's own ACL.
+  it('a nested ask_agent run from a non-agent pane stays bounded by the invoking user', async () => {
     const { getUserAccessLevel } = await import('@pagespace/lib/permissions/permissions');
     vi.mocked(getUserAccessLevel).mockResolvedValue(null);
     const nestedCtx = {
-      ...machinePaneCtx,
+      ...nonAgentPaneCtx,
       agentCallDepth: 1,
-      parentAgentId: 'machine-1',
+      parentAgentId: 'doc-1',
       requestOrigin: 'agent',
     } as ToolExecutionContext;
 
@@ -546,10 +546,9 @@ describe('hasAgentUserScopedAccess', () => {
 
   it('a non-agent page is never user-scoped, even with the column set — lockstep with resolveActingAgentId', async () => {
     // The two seams answer the same question ("is this an agent acting with
-    // the user's reach?") and MachineDirectoryRuntimeDeps.isUserScopedAgent is
-    // documented as mirroring them — a MACHINE page row that somehow carries
+    // the user's reach?") — a non-AI_CHAT page row that somehow carries
     // userScopedAccess: true must not diverge the answers.
-    mockDbWhere.mockResolvedValue([{ type: 'MACHINE', userScopedAccess: true }]);
-    expect(await hasAgentUserScopedAccess('machine-page')).toBe(false);
+    mockDbWhere.mockResolvedValue([{ type: 'DOCUMENT', userScopedAccess: true }]);
+    expect(await hasAgentUserScopedAccess('doc-page')).toBe(false);
   });
 });

@@ -31,7 +31,7 @@ describe('resolveWebhookHandler', () => {
   });
 
   it('resolves every page type without a default action to none', () => {
-    for (const type of ['DOCUMENT', 'FOLDER', 'AI_CHAT', 'CANVAS', 'FILE', 'SHEET', 'TASK_LIST', 'CODE', 'MACHINE']) {
+    for (const type of ['DOCUMENT', 'FOLDER', 'AI_CHAT', 'CANVAS', 'FILE', 'SHEET', 'TASK_LIST', 'CODE']) {
       expect(resolveWebhookHandler(type)).toBe('none');
     }
   });

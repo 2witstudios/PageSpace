@@ -22,7 +22,7 @@ export interface UsageLedgerRow {
   provider: string | null;
   chargeMillicents: number | null;
   totalTokens: number | null;
-  /** The machine's backing Terminal page (source:'terminal' rows only; null for every other source). */
+  /** The agent session's backing agent page (source:'terminal' rows only; null for every other source, and for a global-assistant session). */
   pageId: string | null;
   /** The backing page's title, pre-joined by the query — null when the page was deleted or unresolvable. */
   pageTitle: string | null;
@@ -88,14 +88,14 @@ export interface UsageModelRow {
   sharePct: number;
 }
 
-export interface UsageMachineRow {
+export interface UsageAgentSessionRow {
   /** Null when the row predates pageId attribution or has no backing page (e.g. the global assistant). */
   pageId: string | null;
   label: string;
   activeSeconds: number;
   spendCents: number;
   calls: number;
-  /** Share of TERMINAL spend (not overall spend) this machine accounts for. */
+  /** Share of TERMINAL spend (not overall spend) this agent session accounts for. */
   sharePct: number;
 }
 
@@ -103,7 +103,7 @@ export interface UsageBreakdown extends UsageBreakdownPeriod {
   totalSpendCents: number;
   byFeature: UsageFeatureRow[];
   byModel: UsageModelRow[];
-  byMachine: UsageMachineRow[];
+  byAgentSession: UsageAgentSessionRow[];
 }
 
 /** Internal accumulator (spend tracked in millicents for precision). */
@@ -129,9 +129,9 @@ export function aggregateUsageBreakdown(
 ): UsageBreakdown {
   const featureBuckets = new Map<AIUsageSource, Bucket>();
   const modelBuckets = new Map<string, Bucket & { model: string; provider: string }>();
-  const machineBuckets = new Map<string, { millicents: number; calls: number; activeSeconds: number; pageId: string | null; label: string }>();
+  const agentSessionBuckets = new Map<string, { millicents: number; calls: number; activeSeconds: number; pageId: string | null; label: string }>();
   let totalMillicents = 0;
-  let machineMillicents = 0;
+  let agentSessionMillicents = 0;
 
   for (const r of rows) {
     const charge = r.chargeMillicents ?? 0;
@@ -156,17 +156,18 @@ export function aggregateUsageBreakdown(
     modelBuckets.set(key, mb);
 
     if (source === 'terminal') {
-      machineMillicents += charge;
-      // Rows without a resolvable page (pre-attribution history, or a machine with
-      // no backing page e.g. the global assistant) collapse into one bucket rather
-      // than being dropped, so terminal spend is never silently under-reported.
-      const machineKey = r.pageId ?? '__unattributed__';
-      const label = r.pageId ? (r.pageTitle ?? 'Untitled machine') : 'Unattributed machine';
-      const mkb = machineBuckets.get(machineKey) ?? { millicents: 0, calls: 0, activeSeconds: 0, pageId: r.pageId, label };
-      mkb.millicents += charge;
-      mkb.calls += 1;
-      mkb.activeSeconds += (r.durationMs ?? 0) / 1000;
-      machineBuckets.set(machineKey, mkb);
+      agentSessionMillicents += charge;
+      // Rows without a resolvable page (pre-attribution history, or a session
+      // with no backing page e.g. the global assistant) collapse into one
+      // bucket rather than being dropped, so terminal spend is never
+      // silently under-reported.
+      const sessionKey = r.pageId ?? '__unattributed__';
+      const label = r.pageId ? (r.pageTitle ?? 'Untitled agent') : 'Unattributed agent';
+      const askb = agentSessionBuckets.get(sessionKey) ?? { millicents: 0, calls: 0, activeSeconds: 0, pageId: r.pageId, label };
+      askb.millicents += charge;
+      askb.calls += 1;
+      askb.activeSeconds += (r.durationMs ?? 0) / 1000;
+      agentSessionBuckets.set(sessionKey, askb);
     }
   }
 
@@ -192,14 +193,14 @@ export function aggregateUsageBreakdown(
     }))
     .sort((a, b) => b.spendCents - a.spendCents);
 
-  const byMachine: UsageMachineRow[] = Array.from(machineBuckets.values())
+  const byAgentSession: UsageAgentSessionRow[] = Array.from(agentSessionBuckets.values())
     .map((b) => ({
       pageId: b.pageId,
       label: b.label,
       activeSeconds: Math.round(b.activeSeconds),
       spendCents: millicentsToCents(b.millicents),
       calls: b.calls,
-      sharePct: sharePct(b.millicents, machineMillicents),
+      sharePct: sharePct(b.millicents, agentSessionMillicents),
     }))
     .sort((a, b) => b.spendCents - a.spendCents);
 
@@ -209,6 +210,6 @@ export function aggregateUsageBreakdown(
     totalSpendCents: millicentsToCents(totalMillicents),
     byFeature,
     byModel,
-    byMachine,
+    byAgentSession,
   };
 }

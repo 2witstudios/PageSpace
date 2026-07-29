@@ -10,6 +10,7 @@ import {
   type ToolSet,
 } from 'ai';
 import { ONPREM_ALLOWED_PROVIDERS, DEFAULT_PROVIDER, DEFAULT_MODEL, resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
+import { readAgentDispatchDepth } from '@/lib/ai/core/agent-dispatch-depth';
 import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
 import { ALL_PROVIDER_NAMES } from '@/lib/ai/core/ai-utils';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
@@ -68,12 +69,8 @@ import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
 import {
   filterToolsForReadOnly,
   filterToolsForMcpScope,
-  filterToolsForMachineBinding,
   filterToolsForAgentAllowlist,
-  withSessionFamilyTools,
 } from '@/lib/ai/core/tool-filtering';
-import { deriveMachinePaneBinding } from '@pagespace/lib/services/machines/machine-pane-binding';
-import { buildMachinePaneBindingDeps } from '@/lib/ai/machine-pane/machine-pane-binding-runtime';
 import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
 import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/core/model-capabilities';
 import { getPageTreeContext } from '@/lib/ai/core/page-tree-context';
@@ -122,7 +119,6 @@ import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import { buildMachineBindingPrompt } from '@/lib/ai/machines/machine-binding-prompt';
 
 
 // Allow streaming responses up to 5 minutes for complex AI agent interactions
@@ -576,32 +572,12 @@ export async function POST(request: Request) {
       isNewConversation: !requestConversationId
     });
 
-    // Machine Pane binding (Phase 5's deriveMachinePaneBinding pure core): a
-    // conversation whose id is a machine_agent_terminals row bound to THIS
-    // page is pinned to that machine for the rest of the request — tools,
-    // system prompt, and default active machine all follow from it below.
-    // No additional access check is needed here: canPrincipalViewPage /
-    // canPrincipalEditPage against chatId (above) already authorizes the
-    // acting user for this page, which is the precondition the pure core's
-    // own docstring requires of its caller. A non-bound conversation (a
-    // brand-new cuid, or any conversation not backed by a machine_agent_terminals
-    // row) derives to null and leaves everything below byte-identical to today.
-    const machinePaneBindingResult = await deriveMachinePaneBinding(
-      { chatId: chatId!, conversationId: conversationId! },
-      buildMachinePaneBindingDeps()
-    );
-    if (machinePaneBindingResult && !machinePaneBindingResult.ok) {
-      loggers.ai.warn('AI Chat API: machine-pane binding rejected', {
-        chatId: maskedChatId,
-        conversationId,
-        reason: machinePaneBindingResult.reason,
-      });
-      return NextResponse.json({ error: 'This conversation is not bound to this machine' }, { status: 400 });
-    }
-    // The derived handle set IS the binding: every handle already carries the
-    // owning machine page id (checked against `chatId` inside the pure core),
-    // so nothing is re-stamped here.
-    const machineBinding = machinePaneBindingResult?.ok ? machinePaneBindingResult.binding : undefined;
+    // Agent-dispatch depth (spawn_session/send_session): a worker's turn rides
+    // this same route, and the header is how the chain depth survives the HTTP
+    // hop so the depth cap (MAX_AGENT_DEPTH) still terminates A→B→C. Untrusted
+    // by design and safe untrusted: forging it LOW yields the default any
+    // client already has, forging it HIGH only restricts the forger.
+    const agentDispatchDepth = readAgentDispatchDepth(request.headers);
 
     // Process @mentions in the user's message
     let mentionSystemPrompt = '';
@@ -909,36 +885,14 @@ export async function POST(request: Request) {
     const webSearchMode = webSearchEnabled === true;
     loggers.ai.debug('AI Page Chat API: Tool modes', { isReadOnly: readOnlyMode, webSearchEnabled: webSearchMode });
 
-    // Step 1: Apply isReadOnly filter, hide account-level-only tools
-    // (e.g. create_drive) from drive-scoped MCP tokens' tool list, then drop
-    // switch_machine/list_machines when this conversation is bound to one
-    // machine (see machinePaneBindingResult above) and register the SESSION
-    // FAMILY in their place.
-    //
-    // The family is added HERE, not in `pageSpaceTools`, on purpose: this is
-    // the one composition site that knows about the binding, and every other
-    // consumer of that registry (the global assistant, /v1 completions,
-    // consult, workflows, the agent-config listings) must keep its tool set
-    // byte-unchanged. The runtime module is loaded DYNAMICALLY, and only on
-    // this branch: it reaches the agent-terminal and workspace stores (and,
-    // through them, the Sprites driver seam), none of which an unbound
-    // request has any business pulling into its module graph.
-    //
-    // The read-only filter is applied LAST, to the COMPOSED set (issue #2204
-    // follow-up, F3). The session family is registered by ADDITION, so a filter
-    // applied to the baseline alone never saw it — and add/move/kill/send all
-    // mutate state, with send_session running a full agent loop in the target.
-    // Filtering the final set is the only placement a later addition cannot
-    // slip past.
+    // Step 1: Apply isReadOnly filter, and hide account-level-only tools
+    // (e.g. create_drive) from drive-scoped MCP tokens' tool list. The session
+    // + shell families ride `pageSpaceTools` itself (registered behind the
+    // CODE_EXECUTION kill-switch alongside bash/git — see buildPageSpaceTools),
+    // so no per-request registration happens here anymore: a conversation IS a
+    // session, there is no binding to compose by.
     const baseTools = filterToolsForReadOnly(
-      withSessionFamilyTools(
-        filterToolsForMachineBinding(
-          filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(authResult)),
-          machineBinding != null
-        ),
-        machineBinding != null ? (await import('@/lib/ai/tools/session-tools-runtime')).buildSessionTools() : {},
-        machineBinding != null
-      ),
+      filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(authResult)),
       readOnlyMode
     );
 
@@ -1241,13 +1195,6 @@ export async function POST(request: Request) {
     // volatile block.
     systemPrompt += buildBuiltinSkillCatalog(allowedToolNames);
 
-    // Machine binding section — applies uniformly (custom or default system
-    // prompt) for the same reason as memberDriveContextPrefix above. Fixed
-    // for the conversation's lifetime, so it belongs in the STABLE section,
-    // not the per-turn locationPrompt below.
-    if (machineBinding) {
-      systemPrompt += buildMachineBindingPrompt(machineBinding);
-    }
 
     // Build timestamp system prompt for temporal awareness
     const userTimezone = user?.timezone ?? undefined;
@@ -1602,15 +1549,11 @@ export async function POST(request: Request) {
                 // exceed its own membership role — via the agent's broader ACL.
                 mcpAllowedDriveIds: getAllowedDriveIds(authResult),
                 mcpTokenId: isMCPAuthResult(authResult) ? authResult.tokenId : undefined,
-                // Computed once above from deriveMachinePaneBinding — undefined
-                // for every conversation that isn't a machine-bound pagespace
-                // pane. activeMachine seeds the default-mode sandbox tools'
-                // active machine so they operate on the bound machine from the
-                // first tool call, without waiting for a switch_machine call.
-                machineBinding,
-                activeMachine: machineBinding
-                  ? { kind: 'existing' as const, machineId: machineBinding.self.machineId }
-                  : undefined,
+                // How deep in an agent-dispatch chain this turn already runs —
+                // 0 for a direct user request, N for a worker turn dispatched
+                // by spawn_session/send_session (the X-Agent-Dispatch-Depth
+                // header parsed above). The session tools' depth cap reads it.
+                agentCallDepth: agentDispatchDepth,
               }, // Pass userId, timezone, AI context, location context, model capabilities, and chat source to tools
               maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
               onChunk: ({ chunk }) => {

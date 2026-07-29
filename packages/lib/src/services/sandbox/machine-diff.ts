@@ -12,10 +12,10 @@
  *   git-object ('original'/'modified' blob) sides — `readMachineGitBlob`
  *     (./machine-git-blob.ts).
  *   working-tree sides — `readMachineFile` (./machine-fs.ts) against an
- *     injected `MachineHandle`.
+ *     injected `SandboxHandle`.
  *
  * Like those siblings, everything here takes `GitSandboxRunDeps` +
- * `SandboxActorContext` (+ a `MachineHandle` where a working-tree side
+ * `SandboxActorContext` (+ a `SandboxHandle` where a working-tree side
  * exists) as injected params, so the whole service is unit-testable against a
  * scripted fake sandbox with zero real Sprite/git calls.
  *
@@ -32,7 +32,7 @@
 import { runGitInSandbox, type GitSandboxRunDeps } from './git-tool-runners';
 import { readMachineGitBlob } from './machine-git-blob';
 import { readMachineFile } from './machine-fs';
-import type { MachineHandle } from './machine-host';
+import type { SandboxHandle } from './sandbox-host';
 import type { SandboxActorContext } from './tool-runners';
 import {
   diffScopeSides,
@@ -244,7 +244,7 @@ export async function readMachineDiffPair({
   /** Absolute working-tree path, ALREADY confined under the checkout root by the caller. */
   workingTreePath: string;
   cwd: string;
-  handle: MachineHandle;
+  handle: SandboxHandle;
   ctx: SandboxActorContext;
   deps: GitSandboxRunDeps;
 }): Promise<ReadMachineDiffPairResult> {

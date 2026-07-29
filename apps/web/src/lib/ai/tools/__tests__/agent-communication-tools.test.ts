@@ -178,7 +178,7 @@ vi.mock('../../core/ai-providers-config', () => ({
   DEFAULT_MODEL: 'openai/gpt-5.3-chat',
 }));
 
-import { agentCommunicationTools } from '../agent-communication-tools';
+import { agentCommunicationTools, executeAskAgent } from '../agent-communication-tools';
 import { db } from '@pagespace/db/db';
 import { canActorViewPage, isMcpScoped, resolveActingAgentId, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope } from '../actor-permissions';
 import { listAgentDrives, getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
@@ -192,7 +192,6 @@ import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { prepareHistoryForModel, finishModelRequest } from '../../core/context-assembly';
 import { runCompaction } from '../../core/compaction/compaction-service';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import type { z } from 'zod';
 
 const mockDb = vi.mocked(db);
 const mockCanActorViewPage = vi.mocked(canActorViewPage);
@@ -349,7 +348,7 @@ describe('agent-communication-tools', () => {
 
   });
 
-  describe('ask_agent', () => {
+  describe('executeAskAgent', () => {
     beforeEach(() => {
       mockCanActorViewPage.mockResolvedValue(true);
       vi.mocked(mockDb.select).mockReturnValue({
@@ -373,16 +372,11 @@ describe('agent-communication-tools', () => {
       vi.mocked(AIMonitoring.trackUsage).mockClear();
     });
 
-    it('has correct tool definition', () => {
-      expect(agentCommunicationTools.ask_agent).toBeDefined();
-      expect(agentCommunicationTools.ask_agent.description).toContain('Consult');
-    });
-
     it('requires user authentication', async () => {
       const context = { toolCallId: '1', messages: [], experimental_context: {} };
 
       await expect(
-        agentCommunicationTools.ask_agent!.execute!(
+        executeAskAgent(
           {
             agentPath: '/drive/agent',
             agentId: 'agent-1',
@@ -401,7 +395,7 @@ describe('agent-communication-tools', () => {
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      const result = await agentCommunicationTools.ask_agent!.execute!(
+      const result = await executeAskAgent(
         {
           agentPath: '/drive/agent',
           agentId: 'non-existent',
@@ -433,7 +427,7 @@ describe('agent-communication-tools', () => {
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      const result = await agentCommunicationTools.ask_agent!.execute!(
+      const result = await executeAskAgent(
         {
           agentPath: '/drive/agent',
           agentId: 'agent-1',
@@ -465,7 +459,7 @@ describe('agent-communication-tools', () => {
       };
 
       await expect(
-        agentCommunicationTools.ask_agent!.execute!(
+        executeAskAgent(
           {
             agentPath: '/drive/agent',
             agentId: 'agent-1',
@@ -502,7 +496,7 @@ describe('agent-communication-tools', () => {
           } as ToolExecutionContext,
         };
 
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           {
             agentPath: '/test/agent',
             agentId: 'agent-1',
@@ -541,7 +535,7 @@ describe('agent-communication-tools', () => {
           } as ToolExecutionContext,
         };
 
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           {
             agentPath: '/test/agent',
             agentId: 'agent-1',
@@ -570,7 +564,7 @@ describe('agent-communication-tools', () => {
           } as ToolExecutionContext,
         };
 
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           {
             agentPath: '/test/agent',
             agentId: 'agent-1',
@@ -598,7 +592,7 @@ describe('agent-communication-tools', () => {
           } as ToolExecutionContext,
         };
 
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           {
             agentPath: '/test/agent',
             agentId: 'agent-1',
@@ -627,7 +621,7 @@ describe('agent-communication-tools', () => {
           } as ToolExecutionContext,
         };
 
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           {
             agentPath: '/test/agent',
             agentId: 'agent-1',
@@ -657,7 +651,7 @@ describe('agent-communication-tools', () => {
           } as ToolExecutionContext,
         };
 
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           {
             agentPath: '/test/agent',
             agentId: 'agent-1',
@@ -686,7 +680,7 @@ describe('agent-communication-tools', () => {
           } as ToolExecutionContext,
         };
 
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           {
             agentPath: '/test/agent',
             agentId: 'agent-1',
@@ -714,7 +708,7 @@ describe('agent-communication-tools', () => {
           } as ToolExecutionContext & { agentCallDepth: number },
         };
 
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           {
             agentPath: '/test/agent',
             agentId: 'agent-1',
@@ -764,7 +758,7 @@ describe('agent-communication-tools', () => {
           } as ToolExecutionContext,
         };
 
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           {
             agentPath: '/test/agent',
             agentId: 'target-agent-1',
@@ -797,7 +791,7 @@ describe('agent-communication-tools', () => {
           } as ToolExecutionContext,
         };
 
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           {
             agentPath: '/test/agent',
             agentId: 'target-agent-1',
@@ -827,7 +821,7 @@ describe('agent-communication-tools', () => {
           } as ToolExecutionContext,
         };
 
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           {
             agentPath: '/test/agent',
             agentId: 'target-agent-1',
@@ -872,7 +866,7 @@ describe('agent-communication-tools', () => {
           experimental_context: { userId: 'user-123' } as ToolExecutionContext,
         };
 
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           {
             agentPath: '/test/agent',
             agentId: 'target-agent-1',
@@ -895,7 +889,7 @@ describe('agent-communication-tools', () => {
           experimental_context: { userId: 'user-123' } as ToolExecutionContext,
         };
 
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           {
             agentPath: '/test/agent',
             agentId: 'target-agent-1',
@@ -971,7 +965,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1', messages: [],
           experimental_context: { userId: 'user-123' } as ToolExecutionContext,
         };
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },
           context
         );
@@ -1022,7 +1016,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1', messages: [],
           experimental_context: { userId: 'user-123' } as ToolExecutionContext,
         };
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },
           context
         );
@@ -1060,7 +1054,7 @@ describe('agent-communication-tools', () => {
           experimental_context: { userId: 'user-123' } as ToolExecutionContext,
         };
 
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           { agentPath: '/drive/agent', agentId: 'agent-1', question: 'List my repos' },
           context
         );
@@ -1085,7 +1079,7 @@ describe('agent-communication-tools', () => {
 
         // Should not throw — error is caught and logged
         await expect(
-          agentCommunicationTools.ask_agent!.execute!(
+          executeAskAgent(
             { agentPath: '/drive/agent', agentId: 'agent-1', question: 'Test' },
             context
           )
@@ -1139,7 +1133,7 @@ describe('agent-communication-tools', () => {
           experimental_context: { userId: 'user-123' } as ToolExecutionContext,
         };
 
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           { agentPath: '/drive/agent', agentId: 'agent-1', question: 'What does this image show?' },
           context
         );
@@ -1168,7 +1162,7 @@ describe('agent-communication-tools', () => {
           experimental_context: { userId: 'user-123' } as ToolExecutionContext,
         };
 
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           { agentPath: '/drive/agent', agentId: 'agent-1', question: 'What does this image show?' },
           context
         );
@@ -1215,7 +1209,7 @@ describe('agent-communication-tools', () => {
           } as ToolExecutionContext,
         };
 
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           { agentPath: '/drive/agent', agentId: 'agent-1', question: 'Make me a new drive' },
           context
         );
@@ -1236,7 +1230,7 @@ describe('agent-communication-tools', () => {
           experimental_context: { userId: 'user-123' } as ToolExecutionContext,
         };
 
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           { agentPath: '/drive/agent', agentId: 'agent-1', question: 'Make me a new drive' },
           context
         );
@@ -1245,50 +1239,6 @@ describe('agent-communication-tools', () => {
         const toolsArg = vi.mocked(generateText).mock.calls[0][0].tools as Record<string, unknown> | undefined;
         expect(toolsArg?.create_drive).toBeDefined();
         expect(toolsArg?.list_drives).toBeDefined();
-      });
-    });
-
-    describe('imageAttachments input schema', () => {
-      // ask_agent is itself an LLM-callable tool, so this schema is the only
-      // gate on untrusted model-supplied input (not just the trusted channel
-      // responder). The AI SDK parses tool-call args against inputSchema
-      // before execute ever runs, so we exercise the schema directly here.
-      const baseInput = { agentPath: '/test/agent', agentId: 'agent-1', question: 'What is this?' };
-
-      it('rejects a non-https, non-data image URL (e.g. an internal/metadata endpoint)', () => {
-        const result = (agentCommunicationTools.ask_agent!.inputSchema as unknown as z.ZodTypeAny).safeParse({
-          ...baseInput,
-          imageAttachments: [{ url: 'http://169.254.169.254/latest/meta-data/', mediaType: 'image/png' }],
-        });
-        expect(result.success).toBe(false);
-      });
-
-      it('accepts an https:// image URL', () => {
-        const result = (agentCommunicationTools.ask_agent!.inputSchema as unknown as z.ZodTypeAny).safeParse({
-          ...baseInput,
-          imageAttachments: [{ url: 'https://example.com/x.png', mediaType: 'image/png' }],
-        });
-        expect(result.success).toBe(true);
-      });
-
-      it('accepts a data: image URL', () => {
-        const result = (agentCommunicationTools.ask_agent!.inputSchema as unknown as z.ZodTypeAny).safeParse({
-          ...baseInput,
-          imageAttachments: [{ url: 'data:image/png;base64,iVBORw0KGgo=', mediaType: 'image/png' }],
-        });
-        expect(result.success).toBe(true);
-      });
-
-      it('rejects more than the single-message image cap', () => {
-        const tooMany = Array.from({ length: 6 }, (_, i) => ({
-          url: `https://example.com/${i}.png`,
-          mediaType: 'image/png',
-        }));
-        const result = (agentCommunicationTools.ask_agent!.inputSchema as unknown as z.ZodTypeAny).safeParse({
-          ...baseInput,
-          imageAttachments: tooMany,
-        });
-        expect(result.success).toBe(false);
       });
     });
 
@@ -1316,7 +1266,7 @@ describe('agent-communication-tools', () => {
           experimental_context: { userId: 'user-123' } as ToolExecutionContext,
         };
 
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           {
             agentPath: '/test/agent',
             agentId: 'agent-1',
@@ -1371,7 +1321,7 @@ describe('agent-communication-tools', () => {
           experimental_context: { userId: 'user-123' } as ToolExecutionContext,
         };
 
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           {
             agentPath: '/test/agent',
             agentId: 'agent-2',
@@ -1414,7 +1364,7 @@ describe('agent-communication-tools', () => {
           experimental_context: { userId: 'user-123' } as ToolExecutionContext,
         };
 
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           {
             agentPath: '/test/agent',
             agentId: 'agent-1',
@@ -1462,7 +1412,7 @@ describe('agent-communication-tools', () => {
           experimental_context: { userId: 'user-123' } as ToolExecutionContext,
         };
 
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           { agentPath: '/drive/agent', agentId: 'agent-1', question: 'What do you think?' },
           context
         );
@@ -1480,7 +1430,7 @@ describe('agent-communication-tools', () => {
           experimental_context: { userId: 'user-123' } as ToolExecutionContext,
         };
 
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           { agentPath: '/drive/agent', agentId: 'agent-1', question: 'What do you think?' },
           context
         );
@@ -1504,7 +1454,7 @@ describe('agent-communication-tools', () => {
           } as ToolExecutionContext,
         };
 
-        await agentCommunicationTools.ask_agent!.execute!(
+        await executeAskAgent(
           { agentPath: '/drive/agent', agentId: 'agent-1', question: 'What do you think?' },
           context
         );

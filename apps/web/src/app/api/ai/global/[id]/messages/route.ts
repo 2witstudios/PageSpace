@@ -5,6 +5,7 @@ import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { askUserTools, ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
 import { resolveMessageId } from '@/lib/ai/streams/resolveMessageId';
 import { canUseAskUser } from '@/lib/ai/core/ask-user-gating';
+import { readAgentDispatchDepth } from '@/lib/ai/core/agent-dispatch-depth';
 import { ASK_USER_SECTION, buildGlobalAssistantInstructions } from '@/lib/ai/core/inline-instructions';
 import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
 import {
@@ -287,6 +288,12 @@ export async function POST(
 
     const { id: urlConversationId } = await context.params;
     loggers.api.debug('Global Assistant Chat API: Authentication successful', { userId });
+
+    // Agent-dispatch depth (spawn_session/send_session): a worker's turn rides
+    // this same route; the header carries the chain depth across the HTTP hop
+    // so the depth cap still terminates A→B→C. Safe untrusted — forging it low
+    // is the default, forging it high only restricts the forger.
+    const agentDispatchDepth = readAgentDispatchDepth(request.headers);
 
     // Body size guard — reject payloads over 25MB before parsing
     const contentLength = parseInt(request.headers.get('content-length') || '0', 10);
@@ -798,7 +805,16 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
       drivePromptSection;
 
     // Build agent awareness prompt - lists visible AI agents for consultation
-    const agentAwarenessPrompt = await buildAgentAwarenessPrompt(userId);
+    // `canDelegate` mirrors the session-tool gate below: spawn_session only
+    // exists when code execution is enabled, and a prompt that names a tool the
+    // model does not have makes it attempt delegation that silently fails.
+    const agentAwarenessPrompt = await buildAgentAwarenessPrompt(userId, {
+      // BOTH gates, because the tool set applies both: registration is gated on
+      // CODE_EXECUTION_ENABLED, and `filterToolsForReadOnly` then strips
+      // spawn_session again as a write tool. Checking only the first told a
+      // read-only agent to delegate with a tool it does not have.
+      canDelegate: isCodeExecutionEnabled() && !readOnlyMode,
+    });
 
     // Build page tree context if enabled
     let pageTreePrompt = '';
@@ -1297,6 +1313,11 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
               subscriptionTier: userSubscriptionTier,
               imageGenerationModel: userImageGenerationModel ?? DEFAULT_IMAGE_MODEL,
               chatSource: { type: 'global' as const },
+              // Worker-dispatch chain depth (spawn_session/send_session) — the
+              // X-Agent-Dispatch-Depth header is how depth survives the HTTP
+              // hop; forging it low is the default, forging it high only
+              // restricts the forger. 0 for a direct user request.
+              agentCallDepth: agentDispatchDepth,
             },
             maxRetries: 20,
             onChunk: ({ chunk }) => {

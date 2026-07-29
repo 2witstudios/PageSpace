@@ -2,14 +2,19 @@
  * Production wiring for the agent code-execution tools.
  *
  * Binds the provider-agnostic factory (`createSandboxTools`) to the real
- * implementations: the DB-backed session store, the Fly Sprites driver, the
- * quota/concurrency surface, the call-time authz/quota gate, the audit writer,
- * and the chat-context → actor resolver. Kept in its own module so the factory
- * (and its tests) never import the backing-provider SDK (`@fly/sprites` is
- * ESM/node24-only).
+ * implementations: the session-anchored sandbox acquisition, the Fly Sprites
+ * driver, the quota/concurrency surface, the call-time authz/quota gate, the
+ * audit writer, and the chat-context → actor resolver. Kept in its own module
+ * so the factory (and its tests) never import the backing-provider SDK
+ * (`@fly/sprites` is ESM/node24-only).
  *
- * Importing this module does not expose anything: PR4 calls `buildSandboxTools`
- * and registers the result behind the default-OFF feature flag.
+ * THE HANDLE SOURCE: `acquireSandbox` lazily ensures the conversation's agent
+ * session row and its Sprite from `conversationId` alone — the session id IS
+ * the conversation id (contract.ts invariant 1), and this is one of the two
+ * sanctioned first-touch provisioning sites (the other is a shell open). It
+ * runs through the SAME `ensureSession`/`provisionSessionSandbox` path the API
+ * routes and the realtime bridge use, so the CAS in `agent-session-sprite.ts`
+ * actually serializes every concurrent provisioner.
  */
 
 import type { Tool } from 'ai';
@@ -18,27 +23,12 @@ import { db } from '@pagespace/db/db';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { defaultBuildEnv, type SandboxRunDeps } from '@pagespace/lib/services/sandbox/tool-runners';
-import { isCodeExecutionEnabled, canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
-import {
-  decideFullEgressEnablement,
-  isContainmentVerified,
-} from '@pagespace/lib/services/sandbox/containment';
+import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import {
   screenToolOutput,
   heuristicInjectionClassifier,
 } from '@pagespace/lib/services/sandbox/injection-seam';
-import {
-  getSandboxSessionSecret,
-  createDbMachineSessionStore,
-} from '@pagespace/lib/services/sandbox/machine-session-manager';
-import { acquireMachineSandbox } from '@pagespace/lib/services/sandbox/machine-session';
-import { acquireBranchSandbox } from '@pagespace/lib/services/sandbox/branch-session';
-import { acquireProjectSandbox } from '@pagespace/lib/services/sandbox/project-session';
-import { createDbMachineProjectStore } from '@pagespace/lib/services/machines/machine-projects-store';
-import { createDbMachineBranchStore } from '@pagespace/lib/services/machines/machine-branches-store';
-import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/machine-billing';
-import { measureMachineStorageOpportunistically } from '@pagespace/lib/services/sandbox/machine-storage-billing';
-import { lookupPageOwnerId } from '@pagespace/lib/billing/machine-payer';
+import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/sandbox-billing';
 import {
   isCheckpointBeforeAgentBatchEnabled,
   getCheckpointState,
@@ -55,43 +45,19 @@ import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import { gateSandboxToolCall } from '@pagespace/lib/services/sandbox/tool-gate';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { isMachinePage } from '@pagespace/lib/content/page-types.config';
-import { decideMachineToggleAccess } from '@pagespace/lib/services/machines/machine-access';
-import type { MachineSettings } from '@pagespace/lib/services/machines/machine-settings';
-import type { PageType } from '@pagespace/lib/utils/enums';
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
-import { createSandboxTools, type MachineDirectoryDeps, type ResolveSandboxContext } from './sandbox-tools';
-import { canActorViewPage, getAgentPageId, hasAgentUserScopedAccess } from './actor-permissions';
-import { pageAgentRepository, type MachineRef } from '@/lib/repositories/page-agent-repository';
-import { globalMachineConfigRepository } from '@/lib/repositories/global-machine-config-repository';
-import type { MachineNodeHandleSet } from '@pagespace/lib/services/machines/machine-pane-binding';
+import { createSandboxTools, type ResolveSandboxContext, type SandboxGate } from './sandbox-tools';
+import {
+  ensureSession,
+  provisionSessionSandbox,
+  measureWarmSessionStorage,
+} from '@/lib/agent-sessions/agent-sessions-runtime';
 import type { ToolExecutionContext } from '../core/types';
-import { notifyTerminalAgentActivity } from '@/lib/websocket/socket-utils';
+import { notifyShellAgentActivity } from '@/lib/websocket/socket-utils';
 
-// The session store and Sprites client are process-wide singletons: the store
-// reconnects to one DB pool and the client is stateless. Both are built lazily
-// so importing this module does no DB or SDK work at load.
-let storePromise: ReturnType<typeof createDbMachineSessionStore> | null = null;
+// The Sprites client is a process-wide stateless singleton, built lazily so
+// importing this module does no SDK work at load.
 let sandboxClientPromise: Promise<ExecSandboxClient> | null = null;
-
-function getStore() {
-  storePromise ??= createDbMachineSessionStore();
-  return storePromise;
-}
-
-let branchStorePromise: ReturnType<typeof createDbMachineBranchStore> | null = null;
-
-function getBranchStore() {
-  branchStorePromise ??= createDbMachineBranchStore();
-  return branchStorePromise;
-}
-
-let projectStorePromise: ReturnType<typeof createDbMachineProjectStore> | null = null;
-
-function getProjectStore() {
-  projectStorePromise ??= createDbMachineProjectStore();
-  return projectStorePromise;
-}
 
 // The Fly Sprites driver is loaded via a DYNAMIC import, never a static one.
 // @fly/sprites is ESM-only and @pagespace/lib compiles to CJS, so a static
@@ -135,72 +101,60 @@ function getSandboxClient(): Promise<ExecSandboxClient> {
   return sandboxClientPromise;
 }
 
-/** Wire the real lib deps for the runners (DB-backed store + real Sprites driver). */
+/** Wire the real lib deps for the runners (session-anchored acquire + real Sprites driver). */
 export function buildRealSandboxRunDeps(): SandboxRunDeps {
   return {
     isEnabled: isCodeExecutionEnabled,
-    // Branch-scoped "PageSpace Agent" panes (issue #2166 phase 8) route to the
-    // attach-only branch seam instead of the machine's own persistent
-    // session — a branch's Sprite is provisioned exclusively by the
-    // branch-spawn path, never lazily here.
-    acquireSandbox: async ({ branchSandbox, projectSandbox, ...input }) =>
-      // A PROMOTED project (issue #2204 phase 7) routes to its OWN Sprite the
-      // same attach-only way a branch does — its repo is no longer on the
-      // machine's filesystem at all. An unpromoted project carries neither key
-      // and still falls through to the machine session below.
-      projectSandbox
-        ? acquireProjectSandbox({
-            driveId: input.driveId,
-            userId: input.userId,
-            requestOrigin: input.requestOrigin,
-            agentPageId: input.agentPageId,
-            machineId: projectSandbox.machineId,
-            machineProjectId: projectSandbox.machineProjectId,
-            deps: {
-              authorize: canRunCode,
-              now: () => new Date(),
-              checkMachineRuntimeGuardrail,
-              recordMachineActivity,
-              findProject: async (machineProjectId) => (await getProjectStore()).findById(machineProjectId),
-            },
-          })
-      : branchSandbox
-        ? acquireBranchSandbox({
-            driveId: input.driveId,
-            userId: input.userId,
-            requestOrigin: input.requestOrigin,
-            agentPageId: input.agentPageId,
-            machineId: branchSandbox.machineId,
-            machineBranchId: branchSandbox.machineBranchId,
-            deps: {
-              authorize: canRunCode,
-              now: () => new Date(),
-              checkMachineRuntimeGuardrail,
-              recordMachineActivity,
-              findBranch: async (machineBranchId) => (await getBranchStore()).findById(machineBranchId),
-            },
-          })
-        : acquireMachineSandbox({
-            ...input,
-            deps: {
-              store: await getStore(),
-              client: await getSandboxClient(),
-              authorize: canRunCode,
-              now: () => new Date(),
-              secret: getSandboxSessionSecret(),
-              // Full-egress G-gate: the agent sandbox runs OPEN egress, so refuse to
-              // provision unless containment is verified for the live topology
-              // (SANDBOX_CONTAINMENT_VERIFIED=true after the G1 probes pass). Admin
-              // gate has precedence. Fail-closed when unset.
-              checkFullEgressEnablement: async () =>
-                decideFullEgressEnablement({
-                  adminGateEnabled: isCodeExecutionEnabled(),
-                  containment: isContainmentVerified() ? { contained: true } : null,
-                }),
-              checkMachineRuntimeGuardrail,
-              recordMachineActivity,
-            },
-          }),
+    // The session-anchored acquisition: ensure the conversation's session row,
+    // then ensure its Sprite — both through the shared agent-sessions runtime,
+    // never a local copy (the CAS only serializes provisioners that all run it).
+    acquireSandbox: async (input) => {
+      const sessionId = input.conversationId;
+      if (!sessionId) {
+        // No conversation, no session address — nothing to fold a Sprite key
+        // off. resolveSandboxActorContext already refuses this upstream.
+        return { ok: false, reason: 'provision_failed', cause: 'missing_conversation_id' };
+      }
+
+      // The per-sandbox continuous-runtime backstop, keyed by the session id —
+      // the exact discipline the machine path keyed by page id.
+      const nowMs = Date.now();
+      const guardrail = checkMachineRuntimeGuardrail({ machineKey: sessionId, now: nowMs });
+      if (!guardrail.allowed) return { ok: false, reason: guardrail.reason };
+
+      const ensured = await ensureSession({
+        conversationId: sessionId,
+        userId: input.userId,
+        agentPageId: input.agentPageId ?? null,
+      });
+      if (!ensured.ok) {
+        return { ok: false, reason: 'provision_failed', cause: ensured.reason };
+      }
+
+      const provisioned = await provisionSessionSandbox(ensured.session, input.userId);
+      if (!provisioned.ok) {
+        if (provisioned.reason === 'denied') {
+          // `not_authorized` is the capability denial the runners already speak
+          // (canRunCode's vocabulary); everything else is a provisioning fault.
+          return provisioned.denial === 'not_authorized'
+            ? { ok: false, reason: 'no_drive_access' }
+            : { ok: false, reason: 'provision_failed', cause: provisioned.denial };
+        }
+        return { ok: false, reason: 'provision_failed', cause: provisioned.detail ?? provisioned.reason };
+      }
+
+      recordMachineActivity({ machineKey: sessionId, now: nowMs });
+
+      return {
+        ok: true,
+        sandboxId: provisioned.sandboxId,
+        resumed: provisioned.resumed,
+        // The billing/attribution key: the session's agent page when it has
+        // one. A global-assistant session has none; the payer resolution's
+        // tenant fallback covers it.
+        pageId: input.agentPageId,
+      };
+    },
     reconnect: async (sandboxId) => (await getSandboxClient()).get({ sandboxId }),
     quota: {
       acquireSlot: acquireCodeExecutionSlot,
@@ -208,19 +162,27 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
     },
     buildEnv: defaultBuildEnv,
     audit: (input) => writeCodeExecutionAudit({ input }),
-    // Activity-visibility seam (Terminal Epic 1 T1.5): stream a successful bash
-    // run into the referenced Terminal's live PTY feed. Best-effort — errors are
-    // handled inside notifyTerminalAgentActivity itself (logged, never thrown).
-    notifyTerminalActivity: (input) =>
-      notifyTerminalAgentActivity({
-        tenantId: input.tenantId,
-        driveId: input.driveId,
-        pageId: input.pageId,
-        command: input.command,
-        output: input.output,
-        exitCode: input.exitCode,
-        agentLabel: input.agentLabel,
+    // Activity-visibility seam: stream a successful bash run into the live PTY
+    // feed of every shell in this session, so a human watching one of them sees
+    // what the agent just did on the sandbox they share. The realtime handler
+    // for this has been in place (and tested) since the bridge re-key; this
+    // wiring is what makes it reachable. Best-effort — `notifyShellAgentActivity`
+    // logs and swallows its own errors, and the runner fires it unawaited.
+    // Opportunistic storage measurement. Supplied HERE rather than called from
+    // `acquireSandbox`, because the runner fires this seam from `release` — in a
+    // `finally`, AFTER the op — and the timing is the whole point: measuring
+    // before the op records the pre-write footprint and then lets the throttle
+    // suppress the post-write one, so an agent that writes 5 GB stays invisible
+    // until the throttle lapses. The seam's own comment says so; an earlier pass
+    // of this PR wired a pre-op call anyway and reintroduced exactly that.
+    measureStorage: ({ sandbox, sessionId }) =>
+      measureWarmSessionStorage({
+        sessionId,
+        // The exec client exposes `runCommand`; the measurement seam speaks the
+        // host's `exec`. One adapter here beats widening either contract.
+        attach: async () => ({ exec: (args) => sandbox.runCommand(args) }),
       }),
+    notifyShellActivity: (input) => notifyShellAgentActivity(input),
     // Injection seam (DEFENSE-IN-DEPTH, fail-open): screen untrusted tool output
     // through the built-in heuristic classifier before it becomes a model message.
     // Annotates flagged content (never blocks); a classifier error fails open. A
@@ -241,18 +203,9 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
       }),
     now: () => new Date(),
     logger: loggers.ai,
-    // Terminal Epic 3: meter this run's active-runtime cost against the machine's
-    // payer (the drive owner by default — see resolveMachinePayerId).
+    // Meter this run's active-runtime cost against the session's payer (the
+    // agent page's drive owner, or the acting tenant for a global session).
     billing: defaultSandboxBillingDeps,
-    // Sprites Platform Alignment 6-1: while the sprite is awake for this op,
-    // opportunistically (throttled, best-effort) measure its used storage bytes
-    // so the storage reconcile bills MEASURED usage — never waking a paused one.
-    // ExecutableSandbox.runCommand shares MachineHandle.exec's signature.
-    measureStorage: ({ sandbox, pageId }) =>
-      measureMachineStorageOpportunistically({
-        handle: { exec: (args) => sandbox.runCommand(args) },
-        pageId,
-      }),
     // Sprites Platform Alignment 5-2: checkpoint the sandbox filesystem before
     // an agent bash batch runs (fail-open, at most once per turn — see
     // checkpoint-policy.ts). State is in-process, keyed by sandboxId; a
@@ -270,11 +223,10 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
 /**
  * Lazily stamp a stable turn id onto `context` the first time it's read, then
  * return it. `context` is the SAME object reference for every tool call
- * within one streamText run (see `ToolExecutionContext.activeMachine`'s doc —
- * same guarantee, same mutate-in-place pattern), so this stamps once per
- * agent turn and every later bash call in the run sees the value already set.
- * Undefined `context` (no tool-execution context at all) stays undefined —
- * there is nothing to stamp onto.
+ * within one streamText run, so this stamps once per agent turn and every
+ * later bash call in the run sees the value already set. Undefined `context`
+ * (no tool-execution context at all) stays undefined — there is nothing to
+ * stamp onto.
  */
 function stampTurnId(context: ToolExecutionContext | undefined): string | undefined {
   if (!context) return undefined;
@@ -376,10 +328,6 @@ export function createResolveSandboxActorContext(
 
     // Global AI without a drive: user is their own isolation boundary.
     // tenantId = userId keeps the session key and quota scopes user-owned.
-    // Side-effect: the tenant quota bucket becomes code-exec:tenant:<userId>,
-    // a second user-keyed window alongside code-exec:user:<userId>. This
-    // over-counts conservatively (only tightens budget) and is acceptable while
-    // the feature is admin-gated. Revisit if tenant-scope quota semantics matter.
     return { ...base, tenantId: userId };
   };
 }
@@ -396,280 +344,31 @@ export function createResolveSandboxActorContext(
 export const resolveSandboxActorContext: ResolveSandboxContext =
   createResolveSandboxActorContext();
 
-/**
- * The page row the machine directory needs: identity/routing fields plus the
- * two Machine Settings access toggles (their canonical shape/docs live on
- * `MachineSettings` in @pagespace/lib machines/machine-settings.ts).
- */
-export type MachineDirectoryPage = {
-  title: string;
-  type: string;
-  driveId: string;
-  isTrashed: boolean;
-} & Pick<MachineSettings, 'allowPageAgents' | 'visibleToGlobalAssistant'>;
+/** The shared call-time gate binding — kill-switch, canRunCode, quota preflight. */
+export const productionSandboxGate: SandboxGate = (ctx) =>
+  gateSandboxToolCall({
+    userId: ctx.userId,
+    driveId: ctx.driveId,
+    tenantId: ctx.tenantId,
+    requestOrigin: ctx.requestOrigin,
+    agentPageId: ctx.agentPageId,
+    tier: ctx.tier,
+  });
 
 /**
- * IO dependencies for the machine directory. Injected so it can be unit-tested
- * without a real database connection.
- */
-export interface MachineDirectoryRuntimeDeps {
-  findPage: (pageId: string) => Promise<MachineDirectoryPage | undefined>;
-  canViewPage: (rawContext: ToolExecutionContext, pageId: string) => Promise<boolean>;
-  /** `PageAgentConfig.machineAccess`/`machines` — the canonical config source. */
-  getAgentConfig: (agentPageId: string) => Promise<{ machineAccess: boolean; machines: MachineRef[] } | null>;
-  /** The global assistant's user-level parallel of `getAgentConfig` (globalAssistantConfig). */
-  getGlobalConfig: (userId: string) => Promise<{ machineAccess: boolean; machines: MachineRef[] }>;
-  /** Lazily provision (or reuse) the personal Terminal page backing a user's global "own" machine. */
-  getOrCreateOwnMachinePageId: (userId: string) => Promise<string>;
-  /** A page's owning drive's `ownerId` — the same lookup `resolveMachinePayerId` uses for billing attribution. */
-  lookupPageOwnerId: (pageId: string) => Promise<string | null>;
-  /**
-   * Whether the page agent identified by `ownAgentPageId` (its OWN chatSource
-   * agent id — NOT a sub-agent's `parentAgentId`) has opted into user-scoped
-   * reach (`pages.userScopedAccess`). Mirrors the exact seam `canActorViewPage`
-   * already uses (`resolveActingAgentId`/`hasAgentUserScopedAccess` in
-   * actor-permissions.ts): such an agent acts with the INVOKING USER's own
-   * reach for view permissions, so it is exempt from the `allowPageAgents`
-   * toggle too — that toggle targets narrower, embedded page agents, not a
-   * personal/global-style assistant a user already has full page access to.
-   */
-  isUserScopedAgent: (ownAgentPageId: string) => Promise<boolean>;
-}
-
-const defaultMachineDirectoryDeps: MachineDirectoryRuntimeDeps = {
-  findPage: async (pageId) =>
-    db.query.pages.findFirst({
-      where: eq(pages.id, pageId),
-      columns: {
-        title: true,
-        type: true,
-        driveId: true,
-        isTrashed: true,
-        allowPageAgents: true,
-        visibleToGlobalAssistant: true,
-      },
-    }),
-  canViewPage: canActorViewPage,
-  getAgentConfig: (agentPageId) => pageAgentRepository.getAgentById(agentPageId),
-  getGlobalConfig: (userId) => globalMachineConfigRepository.getConfig(userId),
-  getOrCreateOwnMachinePageId: (userId) => globalMachineConfigRepository.getOrCreateOwnMachinePageId(userId),
-  lookupPageOwnerId,
-  isUserScopedAgent: hasAgentUserScopedAccess,
-};
-
-/**
- * Resolves the global assistant's configured machine list: gated by the
- * user's own `machineAccess` (default off → no machines), same as a page
- * agent. Its 'own' machine has no agent page to serve as its identity
- * (machine-session.ts's resolveMachinePageId doc comment), so it is resolved
- * transparently here into the user's lazily-provisioned personal Terminal
- * page — everything downstream (routing, permissions, activity) then treats
- * it exactly like any other 'existing' machine.
- *
- * Machines hidden by `visibleToGlobalAssistant` are deliberately NOT filtered
- * here: `isMachineAccessible` is the single policy site (it denies them with
- * the toggle's reason on every call, so list_machines omits them,
- * switch_machine explains them, and resolveActiveMachine's accessible-first
- * fallback skips them as a default).
- */
-async function resolveGlobalConfiguredMachines(
-  userId: string,
-  deps: MachineDirectoryRuntimeDeps,
-): Promise<MachineRef[]> {
-  const config = await deps.getGlobalConfig(userId);
-  if (!config.machineAccess) return [];
-  const configured = config.machines.length > 0 ? config.machines : [{ kind: 'own' as const }];
-  return Promise.all(
-    configured.map(async (m) =>
-      m.kind === 'own'
-        ? { kind: 'existing' as const, machineId: await deps.getOrCreateOwnMachinePageId(userId) }
-        : m,
-    ),
-  );
-}
-
-/**
- * Resolves an agent's configured machine list for `listMachines`. A page
- * agent's list is gated by `machineAccess` (default off → no machines);
- * `machines[0]` is the default active machine, falling back to 'own' if
- * `machineAccess` is on but no machine has been configured yet. No
- * `agentPageId` means the global assistant — see resolveGlobalConfiguredMachines.
- */
-async function resolveConfiguredMachines(
-  agentPageId: string | undefined,
-  userId: string | undefined,
-  deps: MachineDirectoryRuntimeDeps,
-): Promise<MachineRef[]> {
-  if (agentPageId) {
-    const agent = await deps.getAgentConfig(agentPageId);
-    if (!agent?.machineAccess) return [];
-    return agent.machines.length > 0 ? agent.machines : [{ kind: 'own' }];
-  }
-  if (!userId) return [];
-  return resolveGlobalConfiguredMachines(userId, deps);
-}
-
-function activeMachineAgentPageId(rawContext: ToolExecutionContext | undefined): string | undefined {
-  return rawContext?.chatSource?.agentPageId ?? rawContext?.parentAgentId;
-}
-
-/**
- * The distinct machines a derived handle set reaches, in first-seen order
- * (self's machine first). Today every handle of a set names the SAME machine
- * page — a project/branch node lives on its machine — so this is a one-element
- * list; it is written as a projection of the set rather than of `self` so the
- * set stays the single source of truth as promotion (phase 7) extends handle
- * resolution.
- */
-function machinesOfHandleSet(binding: MachineNodeHandleSet): MachineRef[] {
-  const seen = new Set<string>();
-  const machines: MachineRef[] = [];
-  for (const handle of binding.handles) {
-    if (seen.has(handle.machineId)) continue;
-    seen.add(handle.machineId);
-    machines.push({ kind: 'existing', machineId: handle.machineId });
-  }
-  return machines;
-}
-
-/**
- * Whether `machineId` is reachable through the bound conversation's derived
- * handle set. THE membership test behind the binding exemption in
- * `isMachineAccessible` — the one policy site for machine access.
- */
-function handleSetContainsMachine(
-  binding: MachineNodeHandleSet | undefined,
-  machineId: string,
-): boolean {
-  return binding?.handles.some((handle) => handle.machineId === machineId) ?? false;
-}
-
-/**
- * Factory for the machine directory, with injected deps for testing. The
- * default export (`machineDirectory`) wires the real DB.
- */
-export function createMachineDirectory(
-  deps: MachineDirectoryRuntimeDeps = defaultMachineDirectoryDeps,
-): MachineDirectoryDeps {
-  return {
-    listMachines: (rawContext) => {
-      // A machine-bound "PageSpace Agent" pane (issue #2166 phase 7): the
-      // binding IS the entitlement (established by the route's page-edit
-      // check before deriveMachinePaneBinding ran), so the agent's/global
-      // assistant's own configured machine list is never consulted — the
-      // DERIVED HANDLE SET is the only machine list this run may ever see.
-      // Read from `handles`, not from `self`: the set is the single
-      // authorization fact, and a node deeper in the tree must never be
-      // reachable through a machine this list doesn't report.
-      if (rawContext?.machineBinding) {
-        return Promise.resolve(machinesOfHandleSet(rawContext.machineBinding));
-      }
-      return resolveConfiguredMachines(activeMachineAgentPageId(rawContext), rawContext?.userId, deps);
-    },
-    describeMachine: async (_rawContext, machine) => {
-      if (machine.kind === 'own') return { name: 'My Machine' };
-      const page = await deps.findPage(machine.machineId);
-      return { name: page?.title ?? 'Terminal' };
-    },
-    isMachineAccessible: async (rawContext, machine) => {
-      // A page agent's 'own' machine is keyed off its own AI_CHAT page
-      // (resolveMachinePageId, machine-session.ts) — not a MACHINE page, so
-      // there are no Settings toggles to consult. The global assistant's
-      // 'own' machine never reaches here as 'own': it is resolved into an
-      // 'existing' ref (resolveGlobalConfiguredMachines) and fully checked.
-      if (machine.kind === 'own') return { allowed: true };
-      if (!rawContext) return { allowed: false };
-      const page = await deps.findPage(machine.machineId);
-      if (!page || page.isTrashed || !isMachinePage(page.type as PageType)) return { allowed: false };
-      const canView = await deps.canViewPage(rawContext, machine.machineId);
-      if (!canView) return { allowed: false };
-      // A machine-bound "PageSpace Agent" pane (issue #2166 phase 7): any
-      // machine IN THE DERIVED HANDLE SET is exempt from the Settings-toggle
-      // decision below — same rationale as the user-scoped-agent exemption
-      // just below (the binding IS the entitlement, established by the route's
-      // page-edit check before deriveMachinePaneBinding ran) — but existence/
-      // trash/type/canActorViewPage above are NEVER bypassed. A machine
-      // OUTSIDE the set (an attempted switch away from the bound tree, or a
-      // sibling node's machine) still gets the full toggle check below.
-      //
-      // This membership test is THE policy site for the cascade: `open()`'s
-      // `target` resolution (sandbox-tools.ts) addresses nodes out of the same
-      // set, so a node this check would deny is a node the set never contained.
-      // Adding a second place that decides node access is the review
-      // failure-mode for every later phase of this epic.
-      if (handleSetContainsMachine(rawContext.machineBinding, machine.machineId)) return { allowed: true };
-      // Machine access toggles (Settings tab): pure policy in @pagespace/lib
-      // machines/machine-access.ts. An agentPageId — the agent's own page or
-      // the parent's for a sub-agent — marks the actor page-scoped; without
-      // one the actor is the global assistant (the SAME discriminator
-      // resolveConfiguredMachines uses to pick whose machine list applies).
-      // EXCEPT: a page agent with userScopedAccess=true acts with the
-      // INVOKING USER's own reach for view permissions (canActorViewPage,
-      // just checked above, already resolved through that fallthrough) — such
-      // an agent is exempt from BOTH toggles. It isn't literally the global
-      // assistant (visibleToGlobalAssistant would apply an unrelated gate:
-      // its machine list comes from its own agent config, not
-      // globalMachineConfigRepository), so it bypasses the toggle decision
-      // entirely rather than being reclassified as 'global-assistant'.
-      // Checked AFTER canViewPage so a toggle reason (which names the
-      // machine) is never surfaced to an actor who can't view the page.
-      const ownAgentPageId = rawContext ? getAgentPageId(rawContext) : undefined;
-      const isUserScoped = ownAgentPageId ? await deps.isUserScopedAgent(ownAgentPageId) : false;
-      if (isUserScoped) return { allowed: true };
-      const actor = activeMachineAgentPageId(rawContext) ? ('page-agent' as const) : ('global-assistant' as const);
-      const decision = decideMachineToggleAccess({ actor, settings: page });
-      if (!decision.allowed) {
-        return {
-          allowed: false,
-          code: decision.code,
-          reason:
-            decision.code === 'page_agents_disabled'
-              ? `The machine "${page.title}" does not allow page agents ("Allow page agents" is turned off in its settings), so this agent cannot run terminal tools on it.`
-              : `The machine "${page.title}" is not visible to the global assistant ("Visible to global assistant" is turned off in its settings).`,
-        };
-      }
-      return { allowed: true };
-    },
-    resolveDriveId: async (_rawContext, machine, ambientDriveId) => {
-      if (machine.kind === 'own') return ambientDriveId;
-      const page = await deps.findPage(machine.machineId);
-      return page?.driveId ?? ambientDriveId;
-    },
-    resolveTenantId: async (_rawContext, machine, ambientTenantId) => {
-      if (machine.kind === 'own') return ambientTenantId;
-      const ownerId = await deps.lookupPageOwnerId(machine.machineId);
-      return ownerId ?? ambientTenantId;
-    },
-  };
-}
-
-export const machineDirectory: MachineDirectoryDeps = createMachineDirectory();
-
-/**
- * Production sandbox tools, fully wired. Exported for PR4 to register behind the
- * default-OFF feature flag — importing this object does not expose anything by
- * itself.
+ * Production sandbox tools, fully wired. Registered behind the default-OFF
+ * CODE_EXECUTION kill-switch — importing this object does not expose anything
+ * by itself.
  */
 export function buildSandboxTools(): {
   bash: Tool;
   writeFile: Tool;
   readFile: Tool;
   editFile: Tool;
-  switch_machine: Tool;
-  list_machines: Tool;
 } {
   return createSandboxTools({
     runDeps: buildRealSandboxRunDeps(),
     resolveContext: resolveSandboxActorContext,
-    gate: (ctx) =>
-      gateSandboxToolCall({
-        userId: ctx.userId,
-        driveId: ctx.driveId,
-        tenantId: ctx.tenantId,
-        requestOrigin: ctx.requestOrigin,
-        agentPageId: ctx.agentPageId,
-        tier: ctx.tier,
-      }),
-    machines: machineDirectory,
+    gate: productionSandboxGate,
   });
 }

@@ -47,7 +47,6 @@ vi.mock('@pagespace/lib/utils/enums', () => ({
     TASK_LIST: 'TASK_LIST',
     FILE: 'FILE',
     CODE: 'CODE',
-    MACHINE: 'MACHINE',
   },
 }));
 vi.mock('@pagespace/lib/content/page-types.config', () => ({

@@ -11,17 +11,9 @@ import { tool, type Tool } from 'ai';
 import { z } from 'zod';
 import type { GitToolRow } from './tools/types';
 import type { SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';
-import type { MachineNodeHandle } from '@pagespace/lib/services/machines/machine-pane-binding';
-import type { MachineRef } from '@/lib/repositories/page-agent-repository';
 
 export type OpenResult =
-  | {
-      ok: true;
-      userId: string;
-      ctx: SandboxActorContext & { activeMachine: MachineRef };
-      /** The machine-tree node this call resolved to; its `cwd` is the default working directory. */
-      node?: MachineNodeHandle;
-    }
+  | { ok: true; userId: string; ctx: SandboxActorContext }
   | { ok: false; error: { success: false; error: string } };
 
 /**
@@ -33,7 +25,7 @@ export interface GeneratorSeams {
   git: (cmd: 'git' | 'gh', args: string[], ctx: SandboxActorContext, cwd?: string) => Promise<unknown>;
   withToken: (
     options: unknown,
-    run: (ctx: SandboxActorContext, token: string, node?: MachineNodeHandle) => Promise<unknown>,
+    run: (ctx: SandboxActorContext, token: string) => Promise<unknown>,
   ) => Promise<unknown>;
   gitR: (
     cmd: 'git' | 'gh',
@@ -86,15 +78,14 @@ export function generateSandboxGitTools(
       }
       // 3. Effect seam, chosen by exec kind. cmd is the row's literal; args string[].
       //    An explicit `cwd` still wins; absent one, the command runs at the
-      //    conversation's OWN node checkout instead of silently falling back to
-      //    the machine root.
+      //    sandbox root.
       if (row.exec === 'local') {
         const opened = await seams.open(options);
         if (!opened.ok) return opened.error;
-        return seams.git(row.cmd, built.args, opened.ctx, cwdOf(input) ?? opened.node?.cwd);
+        return seams.git(row.cmd, built.args, opened.ctx, cwdOf(input));
       }
-      return seams.withToken(options, (ctx, token, node) =>
-        seams.gitR(row.cmd, built.args, ctx, token, cwdOf(input) ?? node?.cwd),
+      return seams.withToken(options, (ctx, token) =>
+        seams.gitR(row.cmd, built.args, ctx, token, cwdOf(input)),
       );
     };
 

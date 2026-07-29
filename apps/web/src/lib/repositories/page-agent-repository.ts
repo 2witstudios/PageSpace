@@ -116,8 +116,7 @@ export const pageAgentRepository = {
 
     if (!agent) return null;
 
-    // Cast enabledTools/machines from unknown (jsonb) to their typed shapes
-    const machines = agent.machines;
+    // Cast enabledTools from unknown (jsonb) to its typed shape
     return {
       id: agent.id,
       title: agent.title,
@@ -130,8 +129,6 @@ export const pageAgentRepository = {
       aiModel: agent.aiModel,
       toolExposureMode: agent.toolExposureMode,
       isTrashed: agent.isTrashed,
-      machineAccess: agent.machineAccess ?? false,
-      machines: isMachineRefArray(machines) ? machines : [],
     };
   },
 
@@ -195,8 +192,6 @@ export interface AgentDetails {
   aiModel: string | null;
   toolExposureMode: 'upfront' | 'search' | null;
   isTrashed: boolean;
-  machineAccess: boolean;
-  machines: MachineRef[];
 }
 
 export interface AgentConfigUpdate {
@@ -210,48 +205,6 @@ export interface AgentConfigUpdate {
   includePageTree?: boolean;
   pageTreeScope?: 'children' | 'drive';
   toolExposureMode?: 'upfront' | 'search';
-  machineAccess?: boolean;
-  machines?: MachineRef[];
-}
-
-/**
- * A machine a page agent (or the global assistant) can run its terminal
- * tools on: either its own dedicated machine, or an existing Terminal page's
- * machine shared with it. `machines[0]` is the default active machine.
- */
-export type MachineRef =
-  | { kind: 'own' }
-  | { kind: 'existing'; machineId: string };
-
-export function isMachineRef(value: unknown): value is MachineRef {
-  if (typeof value !== 'object' || value === null) return false;
-  const { kind, machineId } = value as { kind?: unknown; machineId?: unknown };
-  if (kind === 'own') return true;
-  if (kind === 'existing') return typeof machineId === 'string' && machineId.length > 0;
-  return false;
-}
-
-export function isMachineRefArray(value: unknown): value is MachineRef[] {
-  return Array.isArray(value) && value.every(isMachineRef);
-}
-
-/**
- * Canonical page-agent configuration shape — the contract sibling Terminal
- * PRs (tool-group, settings UI, session routing) build against.
- */
-export interface PageAgentConfig {
-  systemPrompt: string | null;
-  enabledTools: string[] | null;
-  aiProvider: string | null;
-  aiModel: string | null;
-  includeDrivePrompt: boolean;
-  agentDefinition: string | null;
-  visibleToGlobalAssistant: boolean;
-  includePageTree: boolean;
-  pageTreeScope: 'children' | 'drive';
-  toolExposureMode: 'upfront' | 'search';
-  machineAccess: boolean;
-  machines: MachineRef[];
 }
 
 export interface UpdatedAgent {

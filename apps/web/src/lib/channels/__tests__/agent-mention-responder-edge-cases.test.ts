@@ -64,7 +64,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   },
 }));
 vi.mock('@/lib/ai/tools/agent-communication-tools', () => ({
-  agentCommunicationTools: { ask_agent: { execute: vi.fn() } },
+  executeAskAgent: vi.fn(),
 }));
 vi.mock('@/lib/ai/tools/channel-tools', () => ({
   channelTools: { send_channel_message: { execute: vi.fn() } },
@@ -89,7 +89,7 @@ vi.mock('@pagespace/lib/services/preview', () => ({
 
 import { db } from '@pagespace/db/db';
 import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
-import { agentCommunicationTools } from '@/lib/ai/tools/agent-communication-tools';
+import { executeAskAgent } from '@/lib/ai/tools/agent-communication-tools';
 import { channelTools } from '@/lib/ai/tools/channel-tools';
 import { triggerMentionedAgentResponses } from '../agent-mention-responder';
 
@@ -98,7 +98,7 @@ const mockChannelMessagesFindMany = db.query.channelMessages.findMany as unknown
 const mockCommandsFindFirst = db.query.commands.findFirst as unknown as Mock;
 const mockCanUserViewPage = vi.mocked(canUserViewPage);
 const mockIsUserDriveMember = vi.mocked(isUserDriveMember);
-const mockAskAgentExecute = agentCommunicationTools.ask_agent.execute as unknown as Mock;
+const mockAskAgentExecute = executeAskAgent as unknown as Mock;
 const mockSendChannelExecute = channelTools.send_channel_message.execute as unknown as Mock;
 
 const SENDER = 'usr9zmbrgj3atz4a98xxat96';

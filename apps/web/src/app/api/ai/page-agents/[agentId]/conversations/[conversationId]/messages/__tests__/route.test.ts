@@ -53,6 +53,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: {
     getConversation: vi.fn(),
+    getAiAgent: vi.fn(),
   },
 }));
 
@@ -82,7 +83,6 @@ vi.mock('@/lib/ai/core/message-utils', () => ({ convertDbMessageToUIMessage: vi.
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
-import { db } from '@pagespace/db/db';
 
 const mockUserId = 'user_123';
 const mockAgentId = 'agent_123';
@@ -135,8 +135,10 @@ describe('GET /api/ai/page-agents/[agentId]/conversations/[conversationId]/messa
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(checkMCPPageScope).mockResolvedValue(null);
     vi.mocked(canUserViewPage).mockResolvedValue(true);
-    vi.mocked(db.query.pages.findFirst).mockResolvedValue(
-      mockAgent() as unknown as Awaited<ReturnType<typeof db.query.pages.findFirst>>
+    // The route resolves the agent through the repository (same as its two
+    // sibling routes), not an inline pages query.
+    vi.mocked(conversationRepository.getAiAgent).mockResolvedValue(
+      mockAgent() as unknown as Awaited<ReturnType<typeof conversationRepository.getAiAgent>>
     );
 
     // Default: user owns conversation

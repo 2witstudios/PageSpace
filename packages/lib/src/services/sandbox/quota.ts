@@ -116,6 +116,50 @@ export async function checkCodeExecutionQuota({
 }
 
 /**
+ * checkAgentSessionConcurrency — the agent-sessions twin of
+ * `checkCodeExecutionQuota` above (Phase 7). Where that check is an in-process,
+ * per-user semaphore over ACTIVE RUNS (acquired at run start, released at run
+ * end), this is a DB-backed count of an owner's LIVE `agent_sessions` rows
+ * (`sandboxId` set, `spriteTornDownAt` still null) — a distinct axis: a
+ * hibernating sandbox holds no active run yet still counts here, exactly as a
+ * live Sprite still bills storage while idle. Per-tier ceilings are the SAME
+ * `CONCURRENCY_LIMITS` the run semaphore uses — one set of tier numbers, two
+ * independent things they cap.
+ *
+ * `countLiveAgentSessions` is injected (the real implementation is
+ * `AgentSessionStore.countLive`, wired by the app) so this stays testable
+ * with no database.
+ */
+export interface CheckAgentSessionConcurrencyInput {
+  ownerId: string;
+  tier: SubscriptionTier;
+  countLiveAgentSessions: (ownerId: string) => Promise<number>;
+  /**
+   * Whether this session ALREADY holds a live sandbox (its row carries a
+   * `sandboxId`). Such a session is already counted by `countLive`, so gating it
+   * would refuse an owner sitting at the ceiling access to a Sprite they are
+   * already paying for — a resume is not a new allocation. The caller passes the
+   * fact; the decision to skip lives here, not at the call site, so the ceiling
+   * has exactly ONE place it can be wrong.
+   */
+  alreadyProvisioned?: boolean;
+}
+
+export async function checkAgentSessionConcurrency({
+  ownerId,
+  tier,
+  countLiveAgentSessions,
+  alreadyProvisioned = false,
+}: CheckAgentSessionConcurrencyInput): Promise<CodeExecutionQuotaDecision> {
+  if (alreadyProvisioned) return { allowed: true };
+  const liveCount = await countLiveAgentSessions(ownerId);
+  if (liveCount >= CONCURRENCY_LIMITS[tier]) {
+    return { allowed: false, reason: 'concurrency_limit' };
+  }
+  return { allowed: true };
+}
+
+/**
  * Per-machine active-runtime guardrail (Terminal Epic 1 T1.5).
  *
  * A pulled-forward, minimal cost backstop ahead of Epic 3's full usage

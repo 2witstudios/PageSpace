@@ -19,6 +19,7 @@ import { type ToolDefinitionForExtraction, extractToolSchemas, calculateTotalToo
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
 import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
+import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree-context';
 import { buildInlineInstructions, buildGlobalAssistantInstructions } from '@/lib/ai/core/inline-instructions';
 import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
@@ -221,7 +222,11 @@ async function handleGlobalPrompt(
     // If no drive selected (or invalid), locationContext remains undefined (dashboard context)
 
     // Build async context sections (require DB queries, shared across modes)
-    const agentAwarenessPrompt = await buildAgentAwarenessPrompt(adminUser.id);
+    // Same gate as the live chat route — this preview must show the operator the
+    // prompt the model will ACTUALLY receive, delegation line included or not.
+    const agentAwarenessPrompt = await buildAgentAwarenessPrompt(adminUser.id, {
+      canDelegate: isCodeExecutionEnabled(),
+    });
 
     let pageTreePrompt = '';
     if (showPageTree) {

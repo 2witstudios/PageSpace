@@ -8,8 +8,8 @@
  * `packages/lib/src/utils/enums.ts` — the same pattern
  * `./roles-pageperm-drift-guard.test.ts` uses for `PagePerm`.
  *
- * Filed as #2150: the inlined list had drifted to 8 of 10 members, so SDK and
- * CLI callers could not filter glob search for FILE or MACHINE pages.
+ * Filed as #2150: the inlined list had drifted to 8 of 9 members, so SDK and
+ * CLI callers could not filter glob search for FILE pages.
  *
  * The `AssertExact` line is a compile-time-only check: if the two lists ever
  * diverge, `tsc` (this package's `typecheck`/`pretest` script) fails right
@@ -35,8 +35,7 @@ describe('operations/search.ts GLOB_SEARCH_PAGE_TYPES — drift guard vs the can
     expect([...GLOB_SEARCH_PAGE_TYPES].sort()).toEqual([...PAGE_TYPE_VALUES].sort());
   });
 
-  it('includes FILE and MACHINE, the two members it had drifted away from (#2150)', () => {
+  it('includes FILE, the member it had drifted away from (#2150)', () => {
     expect(GLOB_SEARCH_PAGE_TYPES).toContain('FILE');
-    expect(GLOB_SEARCH_PAGE_TYPES).toContain('MACHINE');
   });
 });
