@@ -106,6 +106,62 @@ beforeEach(() => {
   chatState.current = baseChatState();
 });
 
+describe('SessionChat — onTurnComplete', () => {
+  it('should fire on the streaming → idle edge, once', () => {
+    const onTurnComplete = vi.fn();
+    chatState.current = baseChatState({ displayIsStreaming: true });
+    const { rerender } = render(
+      <SessionChat agent={agentFixture()} conversationId="conv-1" context="console" onTurnComplete={onTurnComplete} />,
+    );
+    expect(onTurnComplete).not.toHaveBeenCalled();
+
+    chatState.current = baseChatState({ displayIsStreaming: false });
+    rerender(
+      <SessionChat agent={agentFixture()} conversationId="conv-1" context="console" onTurnComplete={onTurnComplete} />,
+    );
+
+    expect(onTurnComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('should NOT fire on mount while idle — nothing has happened yet', () => {
+    // The obvious mistake is to notify whenever `displayIsStreaming` is false,
+    // which is its resting value: every consumer would then re-fetch on every
+    // render, forever, for a turn that never ran.
+    const onTurnComplete = vi.fn();
+    chatState.current = baseChatState({ displayIsStreaming: false });
+    render(
+      <SessionChat agent={agentFixture()} conversationId="conv-1" context="console" onTurnComplete={onTurnComplete} />,
+    );
+    expect(onTurnComplete).not.toHaveBeenCalled();
+  });
+
+  it('should not re-fire while idle across later renders', () => {
+    const onTurnComplete = vi.fn();
+    chatState.current = baseChatState({ displayIsStreaming: true });
+    const { rerender } = render(
+      <SessionChat agent={agentFixture()} conversationId="conv-1" context="console" onTurnComplete={onTurnComplete} />,
+    );
+    chatState.current = baseChatState({ displayIsStreaming: false });
+    rerender(
+      <SessionChat agent={agentFixture()} conversationId="conv-1" context="console" onTurnComplete={onTurnComplete} />,
+    );
+    rerender(
+      <SessionChat agent={agentFixture()} conversationId="conv-1" context="console" onTurnComplete={onTurnComplete} />,
+    );
+
+    expect(onTurnComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('should be optional — a surface that does not care omits it', () => {
+    chatState.current = baseChatState({ displayIsStreaming: true });
+    const { rerender } = render(<SessionChat agent={agentFixture()} conversationId="conv-1" context="page" />);
+    chatState.current = baseChatState({ displayIsStreaming: false });
+    expect(() =>
+      rerender(<SessionChat agent={agentFixture()} conversationId="conv-1" context="page" />),
+    ).not.toThrow();
+  });
+});
+
 describe('SessionChat', () => {
   it("renders the full messages area (ChatMessagesArea) in 'page' context", () => {
     render(<SessionChat agent={agentFixture()} conversationId="conv-1" context="page" />);

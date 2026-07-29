@@ -53,8 +53,15 @@ vi.mock('../useSessionShells', () => ({
   useSessionShells: () => shellsState.current,
 }));
 
+// Captures `onTurnComplete` so the wiring can be exercised: the prop is the
+// only thing that tells this view an AGENT changed the shell set, and a mock
+// that swallowed it would let the wiring be deleted with every test still green.
+const sessionChatProps = vi.hoisted(() => ({ current: {} as { onTurnComplete?: () => void } }));
 vi.mock('../chat/SessionChat', () => ({
-  default: ({ context }: { context: string }) => <div data-testid="session-chat">{context}</div>,
+  default: ({ context, onTurnComplete }: { context: string; onTurnComplete?: () => void }) => {
+    sessionChatProps.current = { onTurnComplete };
+    return <div data-testid="session-chat">{context}</div>;
+  },
 }));
 
 vi.mock('../shell/Shell', () => ({
@@ -138,6 +145,20 @@ describe('AgentView', () => {
   it('renders the chat tab with the SessionChat component in the right context', () => {
     render(<AgentView agentId="agent-1" conversationId="conv-1" context="page" />);
     expect(screen.getByTestId('session-chat')).toHaveTextContent('page');
+  });
+
+  it('should re-read the shell list when a turn ends, so agent-opened shells become tabs', async () => {
+    // `spawn_shell`/`kill_shell` write shell rows server-side and never touch
+    // this view's add/remove handlers. The SWR entry has no polling, no socket
+    // invalidation, and focus revalidation disabled — and shell socket events
+    // are connection-tagged rather than broadcast — so without this the tab
+    // simply never appears, and an agent-killed shell never goes away.
+    render(<AgentView agentId="agent-1" conversationId="conv-1" context="console" />);
+    expect(shellsState.current.mutate).not.toHaveBeenCalled();
+
+    sessionChatProps.current.onTurnComplete?.();
+
+    expect(shellsState.current.mutate).toHaveBeenCalledTimes(1);
   });
 
   it('renders a tab per shell, force-mounted, hiding the inactive one via data-state', async () => {

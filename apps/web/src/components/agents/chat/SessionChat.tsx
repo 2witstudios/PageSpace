@@ -14,7 +14,7 @@
  * via props, no layout props) so a future pane grid can embed this unchanged —
  * see the design doc's "v1 = tabs, not split panes" note.
  */
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ChatInput } from '@/components/ai/chat/input';
@@ -36,6 +36,18 @@ export interface SessionChatProps {
   context: 'page' | 'console';
   /** Read-only viewers get history but no send/edit/delete/retry affordances. */
   isReadOnly?: boolean;
+  /**
+   * Fired once each time a turn finishes streaming.
+   *
+   * The agent can change session state through its tools — `spawn_shell` and
+   * `kill_shell` write `agent_session_shells` server-side — and none of those
+   * writes pass through the client caches that render them. There is also no
+   * event to listen for: every shell socket event is connection-tagged rather
+   * than broadcast, by design. End-of-turn is therefore the one moment the
+   * client knows the agent may have acted, which makes it the honest place to
+   * re-read anything the agent could have changed.
+   */
+  onTurnComplete?: () => void;
 }
 
 export default function SessionChat({
@@ -43,12 +55,24 @@ export default function SessionChat({
   conversationId,
   context,
   isReadOnly = false,
+  onTurnComplete,
 }: SessionChatProps) {
   const [input, setInput] = useState('');
   const [showError, setShowError] = useState(true);
   const [undoMessageId, setUndoMessageId] = useState<string | null>(null);
 
   const chat = useAgentSessionChat({ agent, conversationId });
+
+  // Fire on the streaming → idle EDGE, not on every render where it is false:
+  // otherwise a component that re-renders while idle would re-notify forever.
+  // The ref holds the previous value rather than component state so observing
+  // the transition cannot itself cause a render.
+  const wasStreamingRef = useRef(false);
+  useEffect(() => {
+    const wasStreaming = wasStreamingRef.current;
+    wasStreamingRef.current = chat.displayIsStreaming;
+    if (wasStreaming && !chat.displayIsStreaming) onTurnComplete?.();
+  }, [chat.displayIsStreaming, onTurnComplete]);
 
   const handleSendClick = useCallback(async () => {
     const text = input;

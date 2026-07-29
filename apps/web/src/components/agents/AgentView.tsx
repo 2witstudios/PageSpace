@@ -213,7 +213,19 @@ export default function AgentView({
         </TabsList>
 
         <TabsContent value={CHAT_TAB_ID} className="mt-0 flex min-h-0 flex-1 flex-col overflow-hidden">
-          <SessionChat agent={agent} conversationId={conversationId} context={context} isReadOnly={isReadOnly} />
+          <SessionChat
+            agent={agent}
+            conversationId={conversationId}
+            context={context}
+            isReadOnly={isReadOnly}
+            // The agent's `spawn_shell`/`kill_shell` write shell rows directly,
+            // never through this view's add/remove handlers, so nothing here
+            // learns of them: the SWR entry has no polling, no socket
+            // invalidation, and focus revalidation off. Re-reading the list when
+            // a turn ends is what makes an agent-opened shell appear as a tab —
+            // and an agent-closed one stop being one.
+            onTurnComplete={shells.mutate}
+          />
         </TabsContent>
 
         {tabs
