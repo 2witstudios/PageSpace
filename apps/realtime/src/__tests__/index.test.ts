@@ -2165,4 +2165,37 @@ describe('requestListener - shell bridge wiring', () => {
     expect(capturedShellIoDeps).toHaveLength(1);
     expect(typeof capturedShellIoDeps[0].reauthorizeViewer).toBe('function');
   });
+
+  it('should supply every OPTIONAL seam the bridge degrades silently without', async () => {
+    // Each of these is optional on `ShellIoDeps` with a benign default, so an
+    // unwired one produces no error anywhere — just a quietly missing feature:
+    //
+    //   startSession    absent → an agent can never start a shell that has
+    //                   never run; `read_shell`/`send_shell` answer "not live"
+    //                   forever (the whole of issue #2206, undone)
+    //   rearmIdleReap   absent → a viewer-less session's idle reap keeps the
+    //                   clock it started with, so a long agent-driven build is
+    //                   killed mid-run by the very timer its own activity
+    //                   should have pushed back
+    //
+    // Asserting presence, not behaviour: both are covered in `shell-io`'s own
+    // suite, and the connection is the only part that has ever gone missing in
+    // this PR — three times.
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    const req = createMockReq({
+      method: 'POST',
+      url: '/api/shell-read',
+      headers: { 'x-broadcast-signature': 'valid-sig' },
+    });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(JSON.stringify({ shellIds: ['sh-1'], limit: 10 })));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const deps = capturedShellIoDeps[0];
+    expect(typeof deps.startSession).toBe('function');
+    expect(typeof deps.rearmIdleReap).toBe('function');
+  });
 });
