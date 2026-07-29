@@ -345,11 +345,16 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
 
     countActiveSessions: async (ownerId) => {
       const store = await getAgentSessionStore();
-      const rows = await store.list({ ownerId });
-      // "Live" = holding a VM right now: a torn-down or never-provisioned row
-      // costs nothing and must not count against the compute quota.
-      return rows.filter((row) => row.sandboxId !== null && row.spriteTornDownAt === null && row.endedAt === null)
-        .length;
+      // The SAME count the provisioner's ceiling uses, by calling the same
+      // function rather than restating its predicate. This used to re-derive it
+      // in JS with an extra `endedAt === null` clause, which undercounts: a
+      // session whose kill failed keeps its VM (and its bill) with `endedAt`
+      // set and `spriteTornDownAt` still null, so the teardown stays queued in
+      // the reclaim outbox. This pre-check would wave those through while the
+      // provisioner — counting them, correctly — refused every resulting spawn.
+      // Two counters enforcing one ceiling is a disagreement waiting to happen;
+      // there is now one.
+      return store.countLive(ownerId);
     },
 
     concurrencyLimit: async (ownerId) => {

@@ -33,7 +33,9 @@ const conversationIds: string[] = [];
 let store: Awaited<ReturnType<typeof createDbAgentSessionStore>>;
 
 /** A conversation row (the FK/PK target) plus its session row. */
-async function seedSession(over: Partial<{ sandboxId: string; spriteInstanceId: string; spriteTornDownAt: Date }> = {}) {
+async function seedSession(
+  over: Partial<{ sandboxId: string; spriteInstanceId: string; spriteTornDownAt: Date; endedAt: Date }> = {},
+) {
   const conversationId = createId();
   conversationIds.push(conversationId);
   await db.insert(conversations).values({
@@ -50,6 +52,7 @@ async function seedSession(over: Partial<{ sandboxId: string; spriteInstanceId: 
     sandboxId: over.sandboxId ?? null,
     spriteInstanceId: over.spriteInstanceId ?? null,
     spriteTornDownAt: over.spriteTornDownAt ?? null,
+    endedAt: over.endedAt ?? null,
   });
   return conversationId;
 }
@@ -225,6 +228,19 @@ describe('countLive', () => {
     await seedSession({ sandboxId: 'sbx-live', spriteInstanceId: 'i' });
     await seedSession({ sandboxId: 'sbx-dead', spriteInstanceId: 'i', spriteTornDownAt: new Date() });
     await seedSession(); // never provisioned
+
+    expect(await store.countLive(ownerId)).toBe(before + 1);
+  });
+
+  it('given a row ENDED but not yet torn down, should still count it — the VM is still billing', async () => {
+    // `endedAt` records the user's intent; `spriteTornDownAt` records the VM
+    // actually being gone. They diverge whenever a kill fails and teardown falls
+    // back to the reclaim outbox, and during that window the Sprite is still
+    // running and still charging. A counter that stops at `endedAt` undercounts
+    // exactly then — which is how a second count of this ceiling, derived
+    // independently in the spawn pre-check, came to disagree with this one.
+    const before = await store.countLive(ownerId);
+    await seedSession({ sandboxId: 'sbx-ended-live', spriteInstanceId: 'i', endedAt: new Date() });
 
     expect(await store.countLive(ownerId)).toBe(before + 1);
   });
