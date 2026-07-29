@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { Bot } from 'lucide-react';
 
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
+import AgentView from './AgentView';
 
 /**
  * The Agents console: mounted for the lifetime of the route, whatever is
@@ -18,8 +19,10 @@ import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
  * route tree just to survive its own navigation; that component has no successor
  * here because it has no problem to solve.
  *
- * This phase ships the shell and the empty state. The session view — the agent
- * header, the sandbox chip, chat, and the shell tabs — mounts here next.
+ * `AgentView` is keyed by `conversationId`: switching conversations remounts
+ * only the keyed internals underneath (chat/shell state) — the PTYs persist
+ * server-side and replay their scrollback, and this surface itself never
+ * remounts.
  */
 export default function AgentsSurface({ driveId }: { driveId?: string }) {
   const hydrateFromSearch = useAgentSurfaceStore((state) => state.hydrateFromSearch);
@@ -38,7 +41,9 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
 
   return (
     <div className="flex h-full flex-col">
-      {selectedConversationId || selectedAgentId ? (
+      {selectedAgentId && selectedConversationId ? (
+        <AgentView key={selectedConversationId} agentId={selectedAgentId} conversationId={selectedConversationId} context="console" />
+      ) : selectedConversationId || selectedAgentId ? (
         <SelectionPlaceholder />
       ) : (
         <EmptyState
@@ -51,16 +56,16 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
 }
 
 /**
- * The resting state of a selection that has nothing to render yet. Distinct from
- * the "nothing selected" empty state on purpose: a user who just clicked an
- * agent should see that the click landed, not the same prompt telling them to
- * click one.
+ * The resting state of a selection that has nothing to render yet — an agent
+ * is picked but no conversation under it is (yet). Distinct from the "nothing
+ * selected" empty state on purpose: a user who just clicked an agent should
+ * see that the click landed, not the same prompt telling them to click one.
  */
 function SelectionPlaceholder() {
   return (
     <EmptyState
-      title="Conversation view coming next"
-      description="The chat and shells for this conversation land in the next phase."
+      title="Select a conversation"
+      description="Expand the agent in the sidebar and pick a conversation, or start a new one."
     />
   );
 }

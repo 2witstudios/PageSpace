@@ -8,7 +8,7 @@ import { findNodeAndParent } from '@/lib/tree/tree-utils';
 import { AlertCircle, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import FolderView from './page-views/folder/FolderView';
-import AiChatView from './page-views/ai-page/AiChatView';
+import AgentPageView from '@/components/agents/AgentPageView';
 import ChannelView from './page-views/channel/ChannelView';
 import DocumentView from './page-views/document/DocumentView';
 import FileViewer from './page-views/file/FileViewer';
@@ -161,7 +161,10 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   // Dynamic component selection using centralized config
   const componentMap = {
     FolderView,
-    AiChatView,
+    // Config's uiComponent string is still 'AiChatView' (packages/lib) —
+    // AgentPageView (AgentView, unified with the Agents console) is what it
+    // resolves to now; AiChatView.tsx no longer exists.
+    AiChatView: AgentPageView,
     ChannelView,
     DocumentView,
     CanvasPageView,
@@ -202,9 +205,9 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
     // SheetView should remount per page to isolate undo/redo history
     pageComponent = <SheetView key={`sheet-${page.id}`} page={page} />;
   } else if (componentName === 'AiChatView') {
-    // AiChatView should remount per page: conversation identity, drafts, and
-    // attachments are all scoped to a single page and must reset on switch.
-    pageComponent = <AiChatView key={`ai-chat-${page.id}`} page={page} />;
+    // AgentPageView should remount per page: conversation identity is scoped
+    // to a single agent page and must reset on switch.
+    pageComponent = <AgentPageView key={`ai-chat-${page.id}`} page={page} />;
   } else {
     // Other components still accept full page object
     // Type assertion: we've excluded DocumentView above, so ViewComponent here
