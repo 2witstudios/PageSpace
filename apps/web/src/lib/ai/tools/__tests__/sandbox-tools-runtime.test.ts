@@ -8,11 +8,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const {
   mockEnsureSession,
   mockProvisionSessionSandbox,
+  mockMeasureWarmSessionStorage,
   mockCheckMachineRuntimeGuardrail,
   mockRecordMachineActivity,
 } = vi.hoisted(() => ({
   mockEnsureSession: vi.fn(),
   mockProvisionSessionSandbox: vi.fn(),
+  mockMeasureWarmSessionStorage: vi.fn(async () => {}),
   mockCheckMachineRuntimeGuardrail: vi.fn(),
   mockRecordMachineActivity: vi.fn(),
 }));
@@ -21,6 +23,11 @@ vi.mock('@pagespace/db/db', () => ({ db: {} }));
 vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
   ensureSession: mockEnsureSession,
   provisionSessionSandbox: mockProvisionSessionSandbox,
+  // Opportunistic storage measurement rides this path fire-and-forget. Stubbed
+  // so the module loads; the assertions below deliberately do not await it,
+  // which is the property that matters — a billing observation must never delay
+  // or fail a tool call.
+  measureWarmSessionStorage: mockMeasureWarmSessionStorage,
 }));
 vi.mock('@pagespace/lib/services/sandbox/quota', () => ({
   acquireCodeExecutionSlot: vi.fn(() => true),
