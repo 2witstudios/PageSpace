@@ -225,12 +225,14 @@ async function ensureShellSessionSandbox({ sessionId, userId }: { sessionId: str
         await refreshSessionStorageMeasurement({
           handle,
           sessionId,
+          // The generation just minted, for the writer's CAS (see the web tier).
+          spriteInstanceId: handle.spriteInstanceId ?? null,
           // Null for the same reason as the web tier: this fires on the create
           // arm, whose own stamps reset the measurement columns.
           lastMeasuredAt: null,
           now: new Date(),
-          persist: async ({ measuredBytes, measuredAt }) => {
-            await store.recordStorageMeasurement({ sessionId, measuredBytes, measuredAt });
+          persist: async ({ spriteInstanceId, measuredBytes, measuredAt }) => {
+            await store.recordStorageMeasurement({ sessionId, spriteInstanceId, measuredBytes, measuredAt });
           },
         });
       },
@@ -283,10 +285,13 @@ async function measureWarmSessionStorageOnResume(sessionId: string, sandboxId: s
     await refreshSessionStorageMeasurement({
       handle: { exec: (args) => sandbox.runCommand(args) },
       sessionId,
+      // The generation read above, before the walk — a re-provision mid-`du`
+      // moves the row on and the stale write is dropped (see the web tier).
+      spriteInstanceId: row.spriteInstanceId ?? null,
       lastMeasuredAt: row.storageMeasuredAt ?? null,
       now: new Date(),
-      persist: async ({ measuredBytes, measuredAt }) => {
-        await store.recordStorageMeasurement({ sessionId, measuredBytes, measuredAt });
+      persist: async ({ spriteInstanceId, measuredBytes, measuredAt }) => {
+        await store.recordStorageMeasurement({ sessionId, spriteInstanceId, measuredBytes, measuredAt });
       },
     });
   } catch {

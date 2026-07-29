@@ -359,6 +359,9 @@ export async function provisionSessionSandbox(
         await refreshSessionStorageMeasurement({
           handle,
           sessionId,
+          // The generation just minted — the CAS target for the write. Taken
+          // from the handle, not the row: this is the VM the `du` runs on.
+          spriteInstanceId: handle.spriteInstanceId ?? null,
           // NULL, not the row's value: this callback only fires on the `create`
           // arm, where the same operation resets the measurement columns (a new
           // Sprite generation is an empty filesystem). Passing the pre-provision
@@ -410,6 +413,11 @@ export async function measureWarmSessionStorage(input: {
     await refreshSessionStorageMeasurement({
       handle,
       sessionId: input.sessionId,
+      // The generation observed at the top of this function, before the `du`.
+      // If a teardown + re-provision lands while the walk runs, the row's
+      // instance moves on and the write is dropped rather than billing the new
+      // Sprite for the old one's disk.
+      spriteInstanceId: row.spriteInstanceId ?? null,
       lastMeasuredAt: row.storageMeasuredAt ?? null,
       now: new Date(),
       persist: (measurement) => store.recordStorageMeasurement(measurement),

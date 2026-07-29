@@ -67,19 +67,30 @@ describe('shouldRefreshMeasurement', () => {
 
 describe('refreshSessionStorageMeasurement', () => {
   it('given a never-measured session, should run du on the workspace and persist the bytes', async () => {
-    const persisted: Array<{ sessionId: string; measuredBytes: number; measuredAt: Date }> = [];
+    const persisted: Array<{
+      sessionId: string;
+      spriteInstanceId: string | null;
+      measuredBytes: number;
+      measuredAt: Date;
+    }> = [];
     const { handle, calls } = fakeHandle({ stdout: '2048\t/workspace\n' });
 
     const result = await refreshSessionStorageMeasurement({
       handle,
       sessionId: 'conv_1',
+      spriteInstanceId: 'instance-A',
       lastMeasuredAt: null,
       now: NOW,
       persist: async (m) => { persisted.push(m); },
     });
 
     expect(result).toEqual({ measured: true, bytes: 2048 });
-    expect(persisted).toEqual([{ sessionId: 'conv_1', measuredBytes: 2048, measuredAt: NOW }]);
+    // The instance travels WITH the bytes: the write is fire-and-forget, so the
+    // writer needs to know which generation's disk this number describes before
+    // it commits to a row that may have moved on.
+    expect(persisted).toEqual([
+      { sessionId: 'conv_1', spriteInstanceId: 'instance-A', measuredBytes: 2048, measuredAt: NOW },
+    ]);
     // -B1 (allocated bytes, not apparent size) and -x (don't cross mounts) are
     // the whole reason this bills what was written rather than the allocation.
     expect(calls[0]).toEqual({ cmd: 'du', args: ['-sxB1', '--', SESSION_STORAGE_MEASURE_PATH] });
@@ -90,6 +101,7 @@ describe('refreshSessionStorageMeasurement', () => {
     const result = await refreshSessionStorageMeasurement({
       handle,
       sessionId: 'conv_1',
+      spriteInstanceId: 'instance-A',
       lastMeasuredAt: new Date(NOW.getTime() - 5),
       now: NOW,
       throttleMs: 60_000,
@@ -104,6 +116,7 @@ describe('refreshSessionStorageMeasurement', () => {
     const result = await refreshSessionStorageMeasurement({
       handle,
       sessionId: 'conv_1',
+      spriteInstanceId: 'instance-A',
       lastMeasuredAt: null,
       now: NOW,
       persist: async () => { throw new Error('must not persist'); },
@@ -117,6 +130,7 @@ describe('refreshSessionStorageMeasurement', () => {
     const result = await refreshSessionStorageMeasurement({
       handle,
       sessionId: 'conv_1',
+      spriteInstanceId: 'instance-A',
       lastMeasuredAt: null,
       now: NOW,
       persist: async (m) => { persisted.push(m.measuredBytes); },
@@ -130,6 +144,7 @@ describe('refreshSessionStorageMeasurement', () => {
     const result = await refreshSessionStorageMeasurement({
       handle,
       sessionId: 'conv_1',
+      spriteInstanceId: 'instance-A',
       lastMeasuredAt: null,
       now: NOW,
       persist: async () => { throw new Error('must not persist'); },
