@@ -2,6 +2,7 @@ import { SANDBOX_TIMEOUT_MS, SANDBOX_MAX_OUTPUT_BYTES } from './execution-policy
 import { truncateToBytes } from './output-limit';
 import { SANDBOX_ROOT, resolveSandboxPath } from './sandbox-paths';
 import type { SandboxActorContext, SandboxRunDeps, BashToolResult } from './tool-runners';
+import type { ExecutableSandbox } from './sandbox-client/types';
 import { DENIAL_MESSAGES, reasonFromAcquire } from './tool-runners';
 
 export interface GitSandboxRunDeps extends SandboxRunDeps {
@@ -138,6 +139,9 @@ export async function runGitInSandbox({
     };
   }
 
+  // Held across the try/finally so the post-op storage measurement can reach the
+  // sandbox handle; null whenever the run never got one.
+  let measurable: ExecutableSandbox | null = null;
   // Slot held — every exit path below must release it.
   try {
     const acquired = await deps.acquireSandbox({
@@ -162,6 +166,9 @@ export async function runGitInSandbox({
     if (!sandbox) {
       return { success: false, error: 'Could not provision a sandbox.', reason: 'provision_failed' };
     }
+    // Held for the `finally`'s post-op measurement, which cannot see this
+    // block's scope.
+    measurable = sandbox;
 
     const startedAt = deps.now();
 
@@ -205,6 +212,23 @@ export async function runGitInSandbox({
     };
   } finally {
     deps.quota.releaseSlot({ userId: ctx.userId });
+    // Same opportunistic measurement the bash path does, in the same `finally`
+    // and for the same reason: the bytes worth billing are the ones the command
+    // just wrote. It matters MORE here — `git_clone` is the largest writer in
+    // the system, and a session that only ever runs git tools would otherwise
+    // never be measured at all, billing its empty-disk baseline while the
+    // reconcile advanced its watermark over gigabytes of checkout.
+    //
+    // Throttled per session inside the supplier, never awaited, and its own
+    // failures are swallowed — a billing observation must not affect the tool
+    // result that already succeeded.
+    if (measurable && ctx.conversationId && deps.measureStorage) {
+      const sessionId = ctx.conversationId;
+      void deps.measureStorage({ sandbox: measurable, sessionId }).catch(() => {
+        // Best-effort by contract; the bash path logs, and this path has no
+        // logger seam of its own to log through.
+      });
+    }
   }
 }
 

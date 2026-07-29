@@ -8,11 +8,22 @@
  * machine-tree row sources (a Machine's own Sprite, every live branch
  * Sprite, every promoted project Sprite, every per-session agent-terminal
  * Sprite) and exposed the opportunistic per-op storage-measurement writers
- * for them (`measureMachineStorageOpportunistically` and its three
- * siblings). Those tables are dropped, and opportunistic measurement was
- * never wired for `agent_sessions` — both die with this sweep. Re-wiring
- * opportunistic measurement for agent-session Sprites is a follow-up, not
- * done here.
+ * for them (`measureMachineStorageOpportunistically` and its three siblings).
+ * Those tables and those writers are gone.
+ *
+ * **Where the measurements come from now.** This module only ever READS
+ * `storageMeasuredBytes`; something else has to write it, and without a writer
+ * every session bills its empty-disk baseline forever while the watermark
+ * advances over whatever it actually wrote. Three writers exist:
+ *
+ *  - the provisioner's `measureSessionStorage`, on `create` — a baseline
+ *    against a disk that is empty by definition, so useful only as a floor;
+ *  - `measureStorage` on the bash path, fired from `release` AFTER the op;
+ *  - the same seam on the git path, likewise post-op — the one that matters
+ *    most, since `git_clone` is the largest writer in the system.
+ *
+ * All three are throttled per session and best-effort: a billing observation
+ * must never wake a paused Sprite, delay a tool call, or fail one.
  */
 
 import { eq, and, isNotNull, isNull } from '@pagespace/db/operators';

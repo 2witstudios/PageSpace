@@ -364,3 +364,53 @@ describe('buildGitToolEnv (pure)', () => {
     });
   });
 });
+
+describe('opportunistic storage measurement', () => {
+  it('should measure the session AFTER the git command — clone is the biggest writer here', async () => {
+    // A session that only ever ran git tools was never measured at all: the bash
+    // path fires this seam from its `release`, and the git path has its own
+    // acquire/release which did not. So an agent that cloned a large repo and
+    // did nothing else billed its empty-disk baseline while the reconcile
+    // advanced the watermark over gigabytes of checkout.
+    //
+    // Ordering asserted, not just the call: measuring before the command records
+    // the pre-write footprint and then lets the per-session throttle suppress
+    // the real one.
+    const order: string[] = [];
+    const { deps } = makeDeps({
+      reconnect: async () => ({
+        sandboxId: 'sbx-1',
+        spriteInstanceId: null,
+        runCommand: async (): Promise<SandboxRunResult> => {
+          order.push('command');
+          return { exitCode: 0, stdout: 'ok', stderr: '' };
+        },
+        writeFiles: async () => {},
+        readFileToBuffer: async () => Buffer.from(''),
+        createCheckpoint: async () => {},
+      }),
+      measureStorage: async ({ sessionId }) => {
+        order.push(`measure:${sessionId}`);
+      },
+    });
+
+    await runGitInSandbox({ cmd: 'git', args: ['status'], ctx: makeCtx({ conversationId: 'c1' }), deps });
+    await Promise.resolve();
+
+    expect(order).toEqual(['command', 'measure:c1']);
+  });
+
+  it('given no conversation id, should not measure — there is no session to attribute bytes to', async () => {
+    const measured: unknown[] = [];
+    const { deps } = makeDeps({
+      measureStorage: async (input) => {
+        measured.push(input);
+      },
+    });
+
+    await runGitInSandbox({ cmd: 'git', args: ['status'], ctx: makeCtx({ conversationId: undefined }), deps });
+    await Promise.resolve();
+
+    expect(measured).toEqual([]);
+  });
+});
