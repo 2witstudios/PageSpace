@@ -56,8 +56,22 @@ const COLD_START_TIMEOUT_MS = 25_000;
  */
 export type RealtimeShellReadPayload = ShellReadPayload;
 export type RealtimeShellReadResponse = ShellReadResult;
-export type RealtimeShellSendPayload = ShellSendPayload;
 export type RealtimeShellSendResponse = ShellSendResult;
+
+/**
+ * The wire type with this client's own invariant put back on top.
+ *
+ * `start`/`userId` are optional on the wire because the endpoint also serves
+ * the liveness sweep, which legitimately sends neither. Every send from HERE is
+ * an agent typing into a shell it may need started, so both are required — and
+ * required at compile time, because omitting `userId` does not fail loudly: the
+ * bridge would simply decline to start the PTY and answer "not live", which
+ * reads exactly like a shell that genuinely could not start.
+ *
+ * Narrowing the alias rather than re-declaring the shape keeps one wire
+ * definition while restoring the guarantee the local declaration used to carry.
+ */
+export type RealtimeShellSendPayload = ShellSendPayload & { start: true; userId: string };
 
 /**
  * The signed HTTP hop, injected so the tool logic is unit-tested without a
