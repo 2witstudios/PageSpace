@@ -252,8 +252,8 @@ describe('runBashInSandbox', () => {
     ]);
   });
 
-  it('given a successful session and a resolved pageId, should opportunistically measure storage with the live sandbox', async () => {
-    const measured: Array<{ sandbox: unknown; pageId: string }> = [];
+  it('given a successful run, should measure the SESSION\'s storage with the live sandbox', async () => {
+    const measured: Array<{ sandbox: unknown; sessionId: string }> = [];
     const { deps } = makeDeps({
       acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
       measureStorage: async (input) => {
@@ -265,10 +265,53 @@ describe('runBashInSandbox', () => {
     // Fire-and-forget: give the microtask a tick to run.
     await Promise.resolve();
     expect(measured).toHaveLength(1);
-    expect(measured[0].pageId).toBe('terminal-page-1');
+    expect(measured[0].sessionId).toBe('c1');
   });
 
-  it('given no resolved machine pageId, should never measure storage', async () => {
+  it('should measure AFTER the command runs, not before — the whole point of the seam', async () => {
+    // The bytes worth billing are the ones the op just wrote. Measuring first
+    // records the pre-write footprint and then lets the per-session throttle
+    // suppress the post-write measurement, so a run that writes gigabytes stays
+    // invisible until the throttle lapses. This ordering is why the seam fires
+    // from `release` (a `finally`, after the op) rather than from acquisition.
+    const order: string[] = [];
+    const { deps } = makeDeps({
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'p1' }),
+      reconnect: async () =>
+        makeSandbox({
+          runCommand: async () => {
+            order.push('command');
+            return { exitCode: 0, stdout: 'ok', stderr: '' };
+          },
+        }),
+      measureStorage: async () => {
+        order.push('measure');
+      },
+    });
+
+    await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    await Promise.resolve();
+
+    expect(order).toEqual(['command', 'measure']);
+  });
+
+  it('given a GLOBAL-ASSISTANT session (no agent page), should still measure — its bytes bill too', async () => {
+    // Same page-shaped assumption that had excluded these sessions from the
+    // activity feed: the old gate was `acquired.pageId`, which they never have.
+    const measured: Array<{ sessionId: string }> = [];
+    const { deps } = makeDeps({
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+      measureStorage: async (input) => {
+        measured.push(input);
+      },
+    });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ agentPageId: undefined }), deps });
+    expect(result).toMatchObject({ success: true });
+    await Promise.resolve();
+    expect(measured[0]?.sessionId).toBe('c1');
+  });
+
+  it('given no conversation id, should never measure — there is no session to attribute bytes to', async () => {
     const measured: unknown[] = [];
     const { deps } = makeDeps({
       acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
@@ -276,7 +319,7 @@ describe('runBashInSandbox', () => {
         measured.push(input);
       },
     });
-    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ conversationId: undefined }), deps });
     expect(result).toMatchObject({ success: true });
     await Promise.resolve();
     expect(measured).toEqual([]);

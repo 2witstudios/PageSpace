@@ -213,7 +213,7 @@ export interface SandboxRunDeps {
    * MEASURED usage without ever waking a paused sprite. Best-effort — a failure
    * must never affect the tool result; omitting it disables measurement.
    */
-  measureStorage?: (input: { sandbox: ExecutableSandbox; pageId: string }) => Promise<void>;
+  measureStorage?: (input: { sandbox: ExecutableSandbox; sessionId: string }) => Promise<void>;
   /**
    * Optional pre-batch checkpoint seam (Sprites Platform Alignment 5-2). Omitted
    * → no checkpointing (the seam is fully optional, matching every other
@@ -512,11 +512,16 @@ async function openSession(
         // the op, would persist the pre-write footprint and let the throttle
         // suppress the post-write one) and runs sequentially after the op rather
         // than contending with it. Never blocks or fails the op.
-        if (acquired.pageId && deps.measureStorage) {
-          const pageId = acquired.pageId;
-          void deps.measureStorage({ sandbox, pageId }).catch((error) => {
+        // Gated on the SESSION, not the agent page. The sandbox whose bytes
+        // these are belongs to the session, and a global-assistant session has
+        // no page at all — keying on `pageId` silently excluded that whole class
+        // from measurement, the same page-shaped assumption that had excluded it
+        // from the activity feed.
+        if (ctx.conversationId && deps.measureStorage) {
+          const sessionId = ctx.conversationId;
+          void deps.measureStorage({ sandbox, sessionId }).catch((error) => {
             safeLogWarn(deps.logger, 'Opportunistic storage measurement failed', {
-              pageId,
+              sessionId,
               error: error instanceof Error ? error.message : String(error),
             });
           });

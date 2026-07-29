@@ -145,27 +145,6 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
 
       recordMachineActivity({ machineKey: sessionId, now: nowMs });
 
-      // Opportunistic storage measurement, at the one moment that is both cheap
-      // and REPRESENTATIVE: the sandbox is awake and an agent is about to do
-      // real work in it. The provisioner's own hook only fires on `create`,
-      // against an empty disk, so without this every session would bill the
-      // baseline forever while the reconcile advanced its watermark. Throttled
-      // per session and deliberately not awaited — a billing observation must
-      // never delay or fail a tool call.
-      void measureWarmSessionStorage({
-        sessionId,
-        attach: async () => {
-          try {
-            const sandbox = await (await getSandboxClient()).get({ sandboxId: provisioned.sandboxId });
-            // The exec client exposes `runCommand`; the measurement seam speaks
-            // the host's `exec`. One adapter here beats widening either contract.
-            return sandbox ? { exec: (args) => sandbox.runCommand(args) } : null;
-          } catch {
-            return null;
-          }
-        },
-      });
-
       return {
         ok: true,
         sandboxId: provisioned.sandboxId,
@@ -189,6 +168,20 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
     // for this has been in place (and tested) since the bridge re-key; this
     // wiring is what makes it reachable. Best-effort — `notifyShellAgentActivity`
     // logs and swallows its own errors, and the runner fires it unawaited.
+    // Opportunistic storage measurement. Supplied HERE rather than called from
+    // `acquireSandbox`, because the runner fires this seam from `release` — in a
+    // `finally`, AFTER the op — and the timing is the whole point: measuring
+    // before the op records the pre-write footprint and then lets the throttle
+    // suppress the post-write one, so an agent that writes 5 GB stays invisible
+    // until the throttle lapses. The seam's own comment says so; an earlier pass
+    // of this PR wired a pre-op call anyway and reintroduced exactly that.
+    measureStorage: ({ sandbox, sessionId }) =>
+      measureWarmSessionStorage({
+        sessionId,
+        // The exec client exposes `runCommand`; the measurement seam speaks the
+        // host's `exec`. One adapter here beats widening either contract.
+        attach: async () => ({ exec: (args) => sandbox.runCommand(args) }),
+      }),
     notifyShellActivity: (input) => notifyShellAgentActivity(input),
     // Injection seam (DEFENSE-IN-DEPTH, fail-open): screen untrusted tool output
     // through the built-in heuristic classifier before it becomes a model message.
