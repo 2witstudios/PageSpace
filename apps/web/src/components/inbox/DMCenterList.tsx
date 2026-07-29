@@ -35,13 +35,13 @@ export default function DMCenterList() {
   const [hasLoadedMore, setHasLoadedMore] = useState(false);
   const hasLoadedRef = useRef(false);
 
-  useInboxSocket({ hasLoadedRef });
+  useInboxSocket({ cacheKey: API_URL, scope: 'dm', hasLoadedRef });
 
   const { data, error, isLoading } = useSWR<InboxResponse>(API_URL, fetcher, {
     refreshInterval: 0,
     isPaused: () => hasLoadedRef.current && useEditingStore.getState().isAnyEditing(),
     onSuccess: () => { hasLoadedRef.current = true; },
-    revalidateOnFocus: false,
+    revalidateOnFocus: true,
   });
 
   useEffect(() => {
