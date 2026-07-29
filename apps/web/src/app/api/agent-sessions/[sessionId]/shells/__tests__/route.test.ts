@@ -173,6 +173,18 @@ describe('POST /api/agent-sessions/[sessionId]/shells', () => {
     expect(await response.json()).toEqual(expect.objectContaining({ reason: 'name_taken' }));
   });
 
+  it('given NO requested name, should not report it as a name collision', async () => {
+    // "A shell with that name already exists" names a name the caller never
+    // chose — with no name supplied this can only be a lost auto-label race.
+    mockSpawnShell.mockResolvedValue({ ok: false, reason: 'name_taken' });
+    const response = await post({});
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    expect(body.reason).toBe('name_taken');
+    expect(body.error).not.toContain('that name');
+    expect(body.error).toContain('Try again');
+  });
+
   it('given an invalid name, should 400 with the reason token', async () => {
     mockSpawnShell.mockResolvedValue({ ok: false, reason: 'invalid_name' });
     const response = await post({ name: '-bad' });

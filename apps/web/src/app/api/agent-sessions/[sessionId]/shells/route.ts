@@ -177,7 +177,17 @@ export async function POST(request: Request, context: RouteContext) {
   const spawned = await spawnShell({ sessionId, ownerId: auth.userId, name: rawName });
   if (!spawned.ok) {
     return NextResponse.json(
-      { error: SPAWN_DENIAL_MESSAGE[spawned.reason], reason: spawned.reason },
+      {
+        // Same split the tool surface draws: with no requested name, a
+        // `name_taken` can only mean a concurrent spawn won the auto-label
+        // race, and "a shell with that name already exists" names a name the
+        // caller never chose.
+        error:
+          spawned.reason === 'name_taken' && rawName === undefined
+            ? 'Another shell was created at the same moment. Try again.'
+            : SPAWN_DENIAL_MESSAGE[spawned.reason],
+        reason: spawned.reason,
+      },
       { status: SPAWN_DENIAL_STATUS[spawned.reason] ?? 500 },
     );
   }

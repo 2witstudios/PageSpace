@@ -599,7 +599,16 @@ export function createSessionTools(deps: SessionToolsDeps): {
             success: false,
             error:
               spawned.reason === 'name_taken'
-                ? `A shell named "${name}" already exists in this session. Pick another name, or omit name for an auto label.`
+                // Split on whether the CALLER chose the name. On the auto-label
+                // path `name` is undefined, so the single message interpolated
+                // `"undefined"` and then advised omitting a name — which is
+                // exactly what the caller had already done. An auto-label only
+                // collides by losing a race to a concurrent spawn, and the fix
+                // for that really is to try again: the next attempt counts the
+                // winner and picks the label after it.
+                ? name === undefined
+                  ? 'Another shell was created at the same moment and took the auto-generated name. Try again — the next attempt picks the following label.'
+                  : `A shell named "${name}" already exists in this session. Pick another name, or omit name for an auto label.`
                 : `Could not open a shell (${spawned.reason}).`,
             reason: spawned.reason,
           };

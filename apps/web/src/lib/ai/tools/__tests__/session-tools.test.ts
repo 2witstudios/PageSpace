@@ -360,6 +360,20 @@ describe('spawn_shell', () => {
     const tools = createSessionTools(deps);
     const result = await run(tools.spawn_shell, { name: 'build' }, contextOptions());
     expect(result).toEqual(expect.objectContaining({ success: false, reason: 'name_taken' }));
+    expect((result as { error: string }).error).toContain('"build"');
+  });
+
+  it('given NO requested name, should not blame a name the caller never chose', async () => {
+    // The auto-label path only collides by losing a race. The single message
+    // interpolated `"undefined"` and then advised omitting a name — the exact
+    // thing the caller had already done.
+    const deps = makeDeps({ spawnShell: vi.fn(async () => ({ ok: false as const, reason: 'name_taken' })) });
+    const tools = createSessionTools(deps);
+    const result = await run(tools.spawn_shell, {}, contextOptions());
+    const error = (result as { error: string }).error;
+    expect(error).not.toContain('undefined');
+    expect(error).not.toContain('omit name');
+    expect(error).toContain('Try again');
   });
 
   it('given a provisioning failure, should surface it and never reserve a row', async () => {
