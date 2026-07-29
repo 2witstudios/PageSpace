@@ -59,18 +59,36 @@ import { createShellIo, realtimeShellIoTransport } from './shell-io';
 const FORWARDED_HEADERS = ['cookie', 'x-csrf-token', 'origin', 'referer'] as const;
 
 /**
- * The self base URL for the internal hop, from the live request's own routing
- * headers (host is authoritative behind the proxy), falling back to the
- * configured app URL for exotic topologies.
+ * The self base URL for the internal hop.
+ *
+ * The CONFIGURED origin is authoritative, never the request's routing headers,
+ * for two reasons:
+ *
+ *  1. **Correctness.** Deriving the scheme from `x-forwarded-proto` breaks the
+ *     documented plain-HTTP deployment: `host` is present but the forwarded
+ *     proto is not, so a header-first resolver builds `https://localhost:3000`
+ *     and every dispatch fails before it reaches the chat pipeline.
+ *  2. **Safety.** This hop forwards the caller's own cookie and CSRF token
+ *     (see `FORWARDED_HEADERS`). Letting a client-supplied `x-forwarded-host`
+ *     choose the destination would let a forged header steer those credentials
+ *     at an attacker-chosen origin. The configured URL is validated at boot
+ *     (`env-validation.ts`) and cannot be influenced per-request.
+ *
+ * Same precedence as every other self-URL consumer in the repo (see
+ * `services/email-service.ts`): `WEB_APP_URL`, then `NEXT_PUBLIC_APP_URL`.
  */
-function resolveSelfBaseUrl(incoming: Headers): string | null {
-  const host = incoming.get('x-forwarded-host') ?? incoming.get('host');
-  if (host) {
-    const proto = incoming.get('x-forwarded-proto') ?? 'https';
-    return `${proto}://${host}`;
+export function resolveSelfBaseUrl(): string | null {
+  const configured = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL;
+  if (!configured) return null;
+  const normalized = configured.replace(/\/$/, '');
+  // Absolute-URL guard: a relative or malformed value would otherwise turn the
+  // dispatch URL into a same-process path that never reaches the route.
+  try {
+    new URL(normalized);
+  } catch {
+    return null;
   }
-  const configured = process.env.WEB_APP_URL ?? process.env.NEXT_PUBLIC_APP_URL;
-  return configured ? configured.replace(/\/$/, '') : null;
+  return normalized;
 }
 
 /**
@@ -141,8 +159,14 @@ async function dispatchThroughChatPipeline(input: {
     };
   }
 
-  const base = resolveSelfBaseUrl(incoming);
-  if (!base) return { ok: false, reason: 'failed', detail: 'could not resolve the app\'s own URL' };
+  const base = resolveSelfBaseUrl();
+  if (!base) {
+    return {
+      ok: false,
+      reason: 'failed',
+      detail: 'the app\'s own URL is not configured (set WEB_APP_URL or NEXT_PUBLIC_APP_URL)',
+    };
+  }
   if (!incoming.get('cookie')) {
     return { ok: false, reason: 'failed', detail: 'the calling request carries no session credentials to dispatch with' };
   }

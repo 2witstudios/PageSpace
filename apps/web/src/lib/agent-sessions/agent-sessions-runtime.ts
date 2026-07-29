@@ -20,6 +20,10 @@
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
+import { users } from '@pagespace/db/schema/auth';
+import { checkAgentSessionConcurrency } from '@pagespace/lib/services/sandbox/quota';
+import { refreshSessionStorageMeasurement } from '@pagespace/lib/services/sandbox/sandbox-storage-measure';
+import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import type { SandboxHost } from '@pagespace/lib/services/sandbox/sandbox-host';
 import { canRunCode, isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import {
@@ -311,6 +315,36 @@ export async function provisionSessionSandbox(
     getSandboxHost(),
     resolveSessionTenantId(row),
   ]);
+
+  // Per-owner live-session ceiling. Enforced HERE because this is the one path
+  // every first touch funnels through (a chat tool call, a POST to the session
+  // route, opening a shell) — checking at any single caller would leave the
+  // others free to provision past the tier limit.
+  //
+  // Resumes are exempt (see `alreadyProvisioned` below) — that judgement lives
+  // in the quota module so the ceiling has one place it can be wrong.
+  const owner = await db.query.users.findFirst({
+    where: eq(users.id, row.ownerId),
+    columns: { subscriptionTier: true },
+  });
+  const quota = await checkAgentSessionConcurrency({
+    ownerId: row.ownerId,
+    tier: toSubscriptionTier(owner?.subscriptionTier),
+    countLiveAgentSessions: (ownerId) => store.countLive(ownerId),
+    // A row already carrying a sandbox is a RESUME, already counted by
+    // countLive; the skip itself is decided inside the quota module.
+    alreadyProvisioned: row.sandboxId !== null,
+  });
+  if (!quota.allowed) {
+    return {
+      ok: false,
+      reason: 'denied',
+      denial: 'not_authorized',
+      detail:
+        'live agent-session limit reached for your plan — end an existing session before starting another',
+    };
+  }
+
   return ensureAgentSessionSandbox({
     row: { ...row, sessionId: row.conversationId },
     intent: 'ensure',
@@ -328,6 +362,21 @@ export async function provisionSessionSandbox(
           adminGateEnabled: isCodeExecutionEnabled(),
           containment: isContainmentVerified() ? { contained: true } : null,
         }),
+      // Opportunistic storage measurement, captured while the Sprite is still
+      // awake right after provisioning — the one moment its bytes are free to
+      // read. Without this the reconcile has no writer for
+      // `storageMeasuredBytes` and prices every session at the never-measured
+      // 0 floor while still advancing its watermark, silently discarding the
+      // interval. Fire-and-forget inside the seam; throttled per session.
+      measureSessionStorage: async ({ sessionId, handle }) => {
+        await refreshSessionStorageMeasurement({
+          handle,
+          sessionId,
+          lastMeasuredAt: row.storageMeasuredAt ?? null,
+          now: new Date(),
+          persist: (measurement) => store.recordStorageMeasurement(measurement),
+        });
+      },
       now: () => new Date(),
     },
   });

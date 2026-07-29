@@ -1406,22 +1406,30 @@ io.on('connection', (socket: AuthSocket) => {
   });
 
   socket.on('shell:connect', (payload) => {
+    // Parsed ONCE, before dispatch, so BOTH outcomes can tag their emit.
+    const payloadConnectionId =
+      payload !== null && typeof payload === 'object' && typeof (payload as { connectionId?: unknown }).connectionId === 'string'
+        ? (payload as { connectionId: string }).connectionId
+        : undefined;
     shellHandlers.onConnect(payload).then(() => {
       // Same `connectionId ?? socket.id` fallback `onConnect` itself uses —
-      // several panes can share this one socket, each under its own
-      // connectionId, so a bare `socket.id` lookup would only ever find
-      // whichever pane never sent one.
-      const payloadConnectionId =
-        payload !== null && typeof payload === 'object' && typeof (payload as { connectionId?: unknown }).connectionId === 'string'
-          ? (payload as { connectionId: string }).connectionId
-          : undefined;
+      // several panes share this socket, each under its own connectionId, so a
+      // bare `socket.id` lookup would only ever find whichever pane sent none.
       const session = agentTerminalSessionMap.getBySocket(`${socket.id}\u0000${payloadConnectionId ?? socket.id}`);
       if (session) {
         loggers.realtime.info('Shell session opened', { userId: user?.id, sessionKey: session.sessionKey, sandboxId: session.sandboxId });
       }
     }).catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : 'Internal error';
-      socket.emit('shell:error', { message: msg });
+      // MUST echo the connectionId: the client's `isMine` deliberately accepts
+      // untagged events, so an untagged `shell:error` is claimed by EVERY shell
+      // multiplexed on this socket — one pane's billing/database failure would
+      // mark them all dead and suppress their reconnects. Tagging scopes the
+      // kill to the pane that actually failed.
+      socket.emit('shell:error', {
+        message: msg,
+        ...(payloadConnectionId ? { connectionId: payloadConnectionId } : {}),
+      });
     });
   });
   socket.on('shell:input', (payload) => shellHandlers.onInput(payload));

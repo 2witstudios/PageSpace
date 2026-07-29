@@ -300,3 +300,37 @@ describe('machine runtime guardrail', () => {
     expect(machineActivityMapSize()).toBe(1);
   });
 });
+
+/**
+ * The RESUME exemption. A session already holding a live sandbox is already
+ * counted by `countLive`, so gating it would refuse an owner sitting at their
+ * ceiling access to a Sprite they are already paying for — while a COLD session
+ * must still be gated, or the ceiling means nothing.
+ */
+describe('checkAgentSessionConcurrency — resume exemption', () => {
+  it('given a session already holding a sandbox at the ceiling, should allow without counting', async () => {
+    const countLiveAgentSessions = vi.fn(async () => 99);
+
+    const decision = await checkAgentSessionConcurrency({
+      ownerId: 'user-1',
+      tier: 'free',
+      countLiveAgentSessions,
+      alreadyProvisioned: true,
+    });
+
+    expect(decision).toEqual({ allowed: true });
+    // Not merely allowed — the count is not even taken, so a resume costs no query.
+    expect(countLiveAgentSessions).not.toHaveBeenCalled();
+  });
+
+  it('given a COLD session at the ceiling, should still refuse', async () => {
+    const decision = await checkAgentSessionConcurrency({
+      ownerId: 'user-1',
+      tier: 'free',
+      countLiveAgentSessions: async () => 99,
+      alreadyProvisioned: false,
+    });
+
+    expect(decision).toEqual({ allowed: false, reason: 'concurrency_limit' });
+  });
+});

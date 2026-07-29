@@ -106,6 +106,15 @@ export function makeAgentSessionStore(seed: AgentSessionRecord[] = []): FakeAgen
       ).length;
     },
 
+    async recordStorageMeasurement({ sessionId, measuredBytes, measuredAt }) {
+      const row = rows.get(sessionId);
+      // Mirrors the real store's live-row guard: a measurement landing after
+      // teardown describes a filesystem that no longer exists.
+      if (!row || row.spriteTornDownAt !== null) return;
+      row.storageMeasuredBytes = measuredBytes;
+      row.storageMeasuredAt = measuredAt;
+    },
+
     async updateSpriteIdentity(input) {
       calls.updateSpriteIdentity += 1;
       const row = rows.get(input.sessionId);

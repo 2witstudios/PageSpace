@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { buildShellHandlers, MAX_INPUT_BYTES, SETTLE_HEARTBEAT_MS, resolveShellCommand, planConnect, ensureShellSession, connectFailureMessage, armIdleReap, planColdTailPersist } from '../shell-handler';
+import { buildShellHandlers, MAX_INPUT_BYTES, SETTLE_HEARTBEAT_MS, resolveShellCommand, planConnect, ensureShellSession, connectFailureMessage, armIdleReap, planColdTailPersist, latestActivityAt } from '../shell-handler';
 import { createTerminalSessionMap, DETACHED_IDLE_MS } from '../terminal-session-map';
 import type { ShellCheckAuthFn, OpenShellFn, SocketLike } from '../shell-handler';
 import type { TerminalSession } from '../terminal-session-map';
@@ -92,6 +92,8 @@ function makeAuthSuccess(over: Partial<{
   commandOverride: string | null;
   cwd: string;
   payerId: string;
+  /** null models a GLOBAL-ASSISTANT session: no agent page, so usage attributes to the owner alone. */
+  agentPageId: string | null;
 }> = {}) {
   const sprite = makeSprite(over.sessions ?? []);
   const releaseSlot = vi.fn();
@@ -112,7 +114,7 @@ function makeAuthSuccess(over: Partial<{
     ok: true as const,
     sessionKey: over.sessionKey ?? 'shell:shl-1',
     payerId: over.payerId ?? 'owner-1',
-    agentPageId: 'page-1',
+    agentPageId: over.agentPageId === undefined ? 'page-1' : over.agentPageId,
     resolveSandbox: vi.fn(async () => sandbox),
     sprite,
     releaseSlot,
@@ -1614,6 +1616,33 @@ describe('buildShellHandlers', () => {
       expect(sessionMap.getByKey('shell:shl-1')).toBeUndefined();
     });
 
+    it('given a GLOBAL-ASSISTANT session (no agent page), settles usage with no pageId so it attributes to the owner alone', async () => {
+      // agentPageId is nullable by design: a global-assistant conversation has
+      // no agent page to attribute against, and the payer falls back to the
+      // session owner. Attaching someone else's pageId here would misattribute
+      // the usage on the billing dashboard.
+      const globalCheckAuth = vi.fn(async () => makeAuthSuccess({ agentPageId: null }));
+      const billing = makeBilling();
+      const { onConnect } = buildShellHandlers({
+        sessionMap,
+        openShell,
+        checkAuth: globalCheckAuth as unknown as ShellCheckAuthFn,
+        socket,
+        persistStreamSessionId,
+        billing,
+      });
+      await onConnect(validPayload);
+
+      const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
+      await vi.advanceTimersByTimeAsync(3_000);
+      onExitArg(0);
+
+      expect(billing.trackUsage).toHaveBeenCalledTimes(1);
+      const call = billing.trackUsage.mock.calls[0][0];
+      expect(call).toMatchObject({ payerId: 'owner-1', holdId: 'hold-1' });
+      expect(call.pageId).toBeUndefined();
+    });
+
     it('on natural shell exit, settles the hold to the real connected-window seconds and never releases it separately', async () => {
       const billing = makeBilling();
       const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
@@ -2781,6 +2810,28 @@ describe('ensureShellSession — headless start', () => {
     });
   });
 
+  it('given a viewer who leaves while the billing gate is resolving, should release the hold it already placed', async () => {
+    // A pane closed during a cold boot. The hold exists by the time the abandon
+    // check fires, so returning without releasing it would strand the hold
+    // against the payer until some unrelated settle happened to clear it.
+    let leftDuringBoot = false;
+    const bootBilling = makeBilling();
+    bootBilling.gate.mockImplementation(async () => {
+      leftDuringBoot = true;
+      return { allowed: true, holdId: 'hold-1' };
+    });
+    const abandonedWithHold = await ensureShellSession(
+      { sessionMap, openShell, checkAuth, persistStreamSessionId, billing: bootBilling },
+      { ...headlessRequest(makeAuthSuccess()), abandoned: () => leftDuringBoot },
+    );
+    assert({
+      given: 'a viewer who left while the billing gate was resolving',
+      should: 'release the hold rather than strand it against the payer',
+      actual: { result: abandonedWithHold, released: bootBilling.releaseHold.mock.calls.length > 0 },
+      expected: { result: { kind: 'failed', reason: 'abandoned' }, released: true },
+    });
+  });
+
   it('given two headless starts racing the same key, should open exactly one PTY', async () => {
     // Two `send_session` calls landing together on a reserved shell. Without the
     // per-key create claim both would open a PTY against the SAME persisted Sprite
@@ -2994,5 +3045,30 @@ describe('connectFailureMessage', () => {
       actual: connectFailureMessage({ kind: 'failed', reason: 'open_failed' }),
       expected: 'Failed to open shell session',
     });
+  });
+});
+
+/**
+ * `latestActivityAt` decides the idle-reap clock. Its three arms matter: a
+ * silent-but-typed run must count as active from the keystroke (not from the
+ * agent's first byte), and a never-touched session must report undefined rather
+ * than a bogus 0 that would read as "active at the epoch".
+ */
+describe('latestActivityAt', () => {
+  it('given only output, should report the output time', () => {
+    expect(latestActivityAt({ lastOutputAt: 500, lastInputAt: undefined })).toBe(500);
+  });
+
+  it('given only input, should report the input time (a typed-but-silent run is active)', () => {
+    expect(latestActivityAt({ lastOutputAt: undefined, lastInputAt: 700 })).toBe(700);
+  });
+
+  it('given both, should report the later of the two', () => {
+    expect(latestActivityAt({ lastOutputAt: 500, lastInputAt: 900 })).toBe(900);
+    expect(latestActivityAt({ lastOutputAt: 1200, lastInputAt: 900 })).toBe(1200);
+  });
+
+  it('given neither, should report undefined rather than 0', () => {
+    expect(latestActivityAt({ lastOutputAt: undefined, lastInputAt: undefined })).toBeUndefined();
   });
 });

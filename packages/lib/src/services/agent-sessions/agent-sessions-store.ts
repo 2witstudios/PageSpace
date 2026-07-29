@@ -93,6 +93,22 @@ export interface AgentSessionStore {
    */
   countLive(ownerId: string): Promise<number>;
   /**
+   * Persist an opportunistic storage measurement (see
+   * `services/sandbox/sandbox-storage-measure.ts`). Separate from
+   * `updateSpriteIdentity` because it is a pure billing observation, not a
+   * lifecycle transition: it carries no CAS and must never disturb identity or
+   * teardown stamps.
+   *
+   * Guarded on the row still being live (`spriteTornDownAt IS NULL`): a
+   * measurement that lands after teardown describes a filesystem that no longer
+   * exists, and writing it would bill the next generation against a dead disk.
+   */
+  recordStorageMeasurement(input: {
+    sessionId: string;
+    measuredBytes: number;
+    measuredAt: Date;
+  }): Promise<void>;
+  /**
    * Record a freshly-provisioned (or adopted) Sprite identity onto the row under
    * a compare-and-swap on the CURRENT `sandboxId`, together with the verdict's
    * stamps — ONE atomic write, so a row can never be seen carrying a new
@@ -297,6 +313,18 @@ export async function createDbAgentSessionStore(): Promise<AgentSessionStore> {
           ),
         );
       return row?.n ?? 0;
+    },
+
+    async recordStorageMeasurement({ sessionId, measuredBytes, measuredAt }) {
+      await db
+        .update(agentSessions)
+        .set({ storageMeasuredBytes: measuredBytes, storageMeasuredAt: measuredAt })
+        .where(
+          and(
+            eq(agentSessions.conversationId, sessionId),
+            isNull(agentSessions.spriteTornDownAt),
+          ),
+        );
     },
 
     async updateSpriteIdentity({

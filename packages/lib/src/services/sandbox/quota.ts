@@ -134,13 +134,24 @@ export interface CheckAgentSessionConcurrencyInput {
   ownerId: string;
   tier: SubscriptionTier;
   countLiveAgentSessions: (ownerId: string) => Promise<number>;
+  /**
+   * Whether this session ALREADY holds a live sandbox (its row carries a
+   * `sandboxId`). Such a session is already counted by `countLive`, so gating it
+   * would refuse an owner sitting at the ceiling access to a Sprite they are
+   * already paying for — a resume is not a new allocation. The caller passes the
+   * fact; the decision to skip lives here, not at the call site, so the ceiling
+   * has exactly ONE place it can be wrong.
+   */
+  alreadyProvisioned?: boolean;
 }
 
 export async function checkAgentSessionConcurrency({
   ownerId,
   tier,
   countLiveAgentSessions,
+  alreadyProvisioned = false,
 }: CheckAgentSessionConcurrencyInput): Promise<CodeExecutionQuotaDecision> {
+  if (alreadyProvisioned) return { allowed: true };
   const liveCount = await countLiveAgentSessions(ownerId);
   if (liveCount >= CONCURRENCY_LIMITS[tier]) {
     return { allowed: false, reason: 'concurrency_limit' };

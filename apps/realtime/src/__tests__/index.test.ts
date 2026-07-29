@@ -251,6 +251,29 @@ const mockIo = {
   }),
 };
 
+// The session map is consulted at exactly ONE place in index.ts — the
+// `shell:connect` success path — so a controllable `getBySocket` exercises both
+// its found/not-found branches without a live PTY.
+const mockGetBySocket = vi.fn<(key: string) => unknown>().mockReturnValue(undefined);
+vi.mock('../terminal/terminal-session-map', () => ({
+  createTerminalSessionMap: () => ({
+    getBySocket: (key: string) => mockGetBySocket(key),
+  }),
+}));
+
+// Shell handlers: the connect path is driven directly so both outcomes of
+// index.ts's `shell:connect` wrapper (success lookup, tagged error emit) are
+// exercised without a live Sprite.
+const mockShellOnConnect = vi.fn<(payload: unknown) => Promise<void>>().mockResolvedValue(undefined);
+vi.mock('../terminal/shell-handler', () => ({
+  buildShellHandlers: () => ({
+    onConnect: (payload: unknown) => mockShellOnConnect(payload),
+    onInput: vi.fn(),
+    onResize: vi.fn(),
+    onDisconnect: vi.fn(),
+  }),
+}));
+
 vi.mock('socket.io', () => ({
   Server: vi.fn().mockImplementation(() => mockIo),
 }));
@@ -1920,5 +1943,175 @@ describe('resolveActorEmail', () => {
 
     expect(decryptField).not.toHaveBeenCalled();
     expect(result).toBe('');
+  });
+});
+
+/**
+ * A `shell:error` emitted WITHOUT the failing pane's `connectionId` is claimed by
+ * every shell multiplexed on the socket, because the client's `isMine`
+ * deliberately accepts untagged events. One pane's billing/database failure
+ * would then mark all of them dead and suppress their reconnects, so the tag is
+ * what scopes the kill to the pane that actually failed.
+ */
+describe('shell:connect error scoping', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('given onConnect rejects for a pane, should emit shell:error tagged with that pane connectionId', async () => {
+    const socket = createMockSocket({
+      id: 'socket-shell-1',
+      data: { user: { id: 'user-shell-1', name: 'Shell User', avatarUrl: null } },
+    });
+
+    mockShellOnConnect.mockRejectedValueOnce(new Error('billing ledger unreachable'));
+    capturedIoConnectionCallback!(socket);
+
+    await socket._trigger('shell:connect', { shellId: 'shell_1', connectionId: 'conn-A', cols: 80, rows: 24 });
+    // Let the rejection settle through .then().catch().
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const errorEmits = socket.emit.mock.calls.filter(([event]) => event === 'shell:error');
+    expect(errorEmits.length).toBeGreaterThan(0);
+    for (const [, payload] of errorEmits) {
+      expect(payload).toMatchObject({ connectionId: 'conn-A' });
+    }
+  });
+
+  it('given a payload with no connectionId, should emit an untagged error rather than inventing one', async () => {
+    const socket = createMockSocket({
+      id: 'socket-shell-2',
+      data: { user: { id: 'user-shell-2', name: 'Shell User', avatarUrl: null } },
+    });
+
+    mockShellOnConnect.mockRejectedValueOnce(new Error('billing ledger unreachable'));
+    capturedIoConnectionCallback!(socket);
+
+    await socket._trigger('shell:connect', { shellId: 'shell_1', cols: 80, rows: 24 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const errorEmits = socket.emit.mock.calls.filter(([event]) => event === 'shell:error');
+    expect(errorEmits.length).toBeGreaterThan(0);
+    for (const [, payload] of errorEmits) {
+      expect(payload).not.toHaveProperty('connectionId');
+    }
+  });
+});
+
+describe('shell:connect success path', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockShellOnConnect.mockResolvedValue(undefined);
+  });
+
+  it('given a resolved connect whose session is found, should log it under the pane connectionId key', async () => {
+    const socket = createMockSocket({ id: 'socket-shell-3', data: { user: { id: 'user-shell-3', name: 'U', avatarUrl: null } } });
+    mockGetBySocket.mockReturnValueOnce({ sessionKey: 'pgs-ses-abc', sandboxId: 'sbx-1' });
+
+    capturedIoConnectionCallback!(socket);
+    await socket._trigger('shell:connect', { shellId: 'shell_1', connectionId: 'conn-B', cols: 80, rows: 24 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Keyed by the PANE's connectionId, not the shared socket id — several
+    // panes multiplex this socket and a bare socket.id would only ever find
+    // whichever pane sent none.
+    expect(mockGetBySocket).toHaveBeenCalledWith('socket-shell-3\u0000conn-B');
+    expect(socket.emit).not.toHaveBeenCalledWith('shell:error', expect.anything());
+  });
+
+  it('given a resolved connect with no tracked session, should stay silent rather than emit', async () => {
+    const socket = createMockSocket({ id: 'socket-shell-4', data: { user: { id: 'user-shell-4', name: 'U', avatarUrl: null } } });
+    mockGetBySocket.mockReturnValueOnce(undefined);
+
+    capturedIoConnectionCallback!(socket);
+    await socket._trigger('shell:connect', { shellId: 'shell_1', cols: 80, rows: 24 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // No connectionId on the payload → falls back to the socket id for lookup.
+    expect(mockGetBySocket).toHaveBeenCalledWith('socket-shell-4\u0000socket-shell-4');
+    expect(socket.emit).not.toHaveBeenCalledWith('shell:error', expect.anything());
+  });
+});
+
+describe('shell:connect error coercion and connection metadata', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockShellOnConnect.mockResolvedValue(undefined);
+  });
+
+  it('given a NON-Error rejection, should coerce it to a generic message rather than leak the raw value', async () => {
+    const socket = createMockSocket({ id: 'socket-shell-5', data: { user: { id: 'user-shell-5', name: 'U', avatarUrl: null } } });
+    // A driver can reject with a plain string/object; the emit must stay a
+    // well-formed { message } payload either way.
+    mockShellOnConnect.mockRejectedValueOnce('raw string blip');
+
+    capturedIoConnectionCallback!(socket);
+    await socket._trigger('shell:connect', { shellId: 'shell_1', connectionId: 'conn-C', cols: 80, rows: 24 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const [, payload] = socket.emit.mock.calls.find(([event]) => event === 'shell:error')!;
+    expect(payload).toEqual({ message: 'Internal error', connectionId: 'conn-C' });
+  });
+
+  it('given a socket with no user-agent or cookie headers, should still complete the connection handshake', async () => {
+    // Exercises the optional-chain / present-missing metadata branches that a
+    // fully-populated handshake never reaches.
+    const socket = createMockSocket({
+      id: 'socket-shell-6',
+      data: { user: { id: 'user-shell-6', name: 'U', avatarUrl: null } },
+      handshake: {
+        auth: { token: 'ps_sess_test' },
+        headers: { origin: undefined, cookie: undefined, 'user-agent': undefined },
+        address: '127.0.0.1',
+      },
+    });
+
+    expect(() => capturedIoConnectionCallback!(socket)).not.toThrow();
+    expect(socket.on).toHaveBeenCalledWith('shell:connect', expect.any(Function));
+  });
+});
+
+/**
+ * The HTTP dispatch chain: `/api/broadcast`, then the three signed shell
+ * endpoints, then a fallthrough. An unmatched POST must reach the fallthrough
+ * rather than being swallowed by a shell route, and a GET to a shell path must
+ * not be served just because the URL matches.
+ */
+describe('requestListener - dispatch fallthrough', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('given POST to an unknown path, should fall through every shell route to a 404', async () => {
+    const req = createMockReq({ method: 'POST', url: '/api/definitely-not-a-route', headers: {} });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('end');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(404);
+  });
+
+  it('given GET to a shell endpoint path, should not serve it (POST-only routes)', async () => {
+    const req = createMockReq({ method: 'GET', url: '/api/shell-read', headers: {} });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('end');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(404);
+  });
+
+  it('given GET to the health path, should respond without falling through', async () => {
+    const req = createMockReq({ method: 'GET', url: '/health', headers: {} });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('end');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalled();
   });
 });

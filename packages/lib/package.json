@@ -557,6 +557,11 @@
       "import": "./dist/services/sandbox/sandbox-billing.js",
       "require": "./dist/services/sandbox/sandbox-billing.js"
     },
+    "./services/sandbox/sandbox-storage-measure": {
+      "types": "./dist/services/sandbox/sandbox-storage-measure.d.ts",
+      "import": "./dist/services/sandbox/sandbox-storage-measure.js",
+      "require": "./dist/services/sandbox/sandbox-storage-measure.js"
+    },
     "./services/sandbox/sandbox-storage-reconcile": {
       "types": "./dist/services/sandbox/sandbox-storage-reconcile.d.ts",
       "import": "./dist/services/sandbox/sandbox-storage-reconcile.js",
