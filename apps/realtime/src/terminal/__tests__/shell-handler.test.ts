@@ -3089,6 +3089,15 @@ describe('connectFailureMessage', () => {
     });
   });
 
+  it('given a PLAN-LIMIT refusal, should not call it an access denial', () => {
+    assert({
+      given: 'an owner at their concurrent-session ceiling',
+      should: 'name the limit, not permissions — "access denied" sends them hunting a sharing bug they do not have',
+      actual: connectFailureMessage({ kind: 'failed', reason: 'denied', message: 'session_limit_reached' }),
+      expected: 'Live agent-session limit reached for your plan — end an existing session before opening another.',
+    });
+  });
+
   it('given an insolvent payer, should name credits', () => {
     assert({
       given: 'a create refused by the billing gate',

@@ -1378,7 +1378,13 @@ export function connectFailureMessage(failure: Extract<EnsureShellSessionResult,
     case 'abandoned':
       return undefined;
     case 'denied':
-      return `Shell access denied: ${failure.message ?? 'unknown'}`;
+      // A plan-limit refusal is not an access denial. The user has every right
+      // to this shell and has run out of allowance, so telling them "access
+      // denied" sends them looking for a permissions problem that does not
+      // exist. Same distinction the HTTP routes draw (429 vs 403).
+      return failure.message === 'session_limit_reached'
+        ? 'Live agent-session limit reached for your plan — end an existing session before opening another.'
+        : `Shell access denied: ${failure.message ?? 'unknown'}`;
     case 'insolvent':
       return 'Insufficient credits to open a shell session.';
     case 'open_failed':

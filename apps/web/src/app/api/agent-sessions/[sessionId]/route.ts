@@ -60,7 +60,10 @@ type RouteContext = { params: Promise<{ sessionId: string }> };
  */
 function quotaExceeded(request: Request, userId: string, sessionId: string, detail?: string): NextResponse {
   auditRequest(request, {
-    eventType: 'data.read',
+    // A quantity limit, not a data access — `data.read` would file every
+    // "new session" click of a free-tier user into data-access forensics for a
+    // request that read nothing and provisioned nothing.
+    eventType: 'security.rate.limited',
     userId,
     resourceType: 'agent_session',
     resourceId: sessionId,

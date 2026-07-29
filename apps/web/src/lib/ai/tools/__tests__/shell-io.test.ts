@@ -114,6 +114,26 @@ describe('send', () => {
     expect(result.error).toContain('Nothing was delivered');
   });
 
+  it('given a refusal WITH a reason, should state it instead of guessing between two causes', async () => {
+    const io = createShellIo(
+      makeTransport({
+        send: vi.fn(async () => ({
+          success: true,
+          live: false,
+          delivered: false,
+          reason: 'Live agent-session limit reached for your plan.',
+        })),
+      }),
+    );
+    const result = await io.send({ shellId: SHELL_ID, keystrokes: 'x', userId: USER_ID });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.error).toContain('Live agent-session limit reached for your plan.');
+    // The old text offered "out of credits OR at the limit" — an agent cannot
+    // act on a disjunction where only one arm is worth waiting out.
+    expect(result.error).not.toContain('may be out of credits');
+  });
+
   it('given a transport non-answer, should report the input was NOT delivered', async () => {
     const io = createShellIo(makeTransport({ send: vi.fn(async () => null) }));
     const result = await io.send({ shellId: SHELL_ID, keystrokes: 'x', userId: USER_ID });

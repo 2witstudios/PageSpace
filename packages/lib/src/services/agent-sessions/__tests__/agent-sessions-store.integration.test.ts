@@ -66,13 +66,29 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // agent_sessions cascades from conversations, but delete explicitly: the DB is
-  // shared, so a leaked row is the next run's mystery, not this one's.
+  // Read the sandbox pointers back OUT before deleting anything. Dropping a
+  // session row fires the AFTER-DELETE trigger, which enqueues a reclaim row
+  // for every live sandbox — and the outbox is FK-less by design, so nothing
+  // cascades those away. Reading them from the DB rather than tracking a
+  // literal list is what makes this correct no matter which test wrote them
+  // (`seedSession` overrides, `updateSpriteIdentity` CAS swaps, or a future
+  // case not yet written). A leaked row is not cosmetic: the orphan-reconcile
+  // cron picks it up and tries to destroy a Sprite name.
+  const sandboxIds = new Set(['sbx-integration-outbox']);
   if (conversationIds.length > 0) {
+    const rows = await db
+      .select({ sandboxId: agentSessions.sandboxId })
+      .from(agentSessions)
+      .where(inArray(agentSessions.conversationId, conversationIds));
+    for (const row of rows) {
+      if (row.sandboxId) sandboxIds.add(row.sandboxId);
+    }
+    // agent_sessions cascades from conversations, but delete explicitly: the DB
+    // is shared, so a leaked row is the next run's mystery, not this one's.
     await db.delete(agentSessions).where(inArray(agentSessions.conversationId, conversationIds));
     await db.delete(conversations).where(inArray(conversations.id, conversationIds));
   }
-  await db.delete(machineSpriteReclaims).where(eq(machineSpriteReclaims.sandboxId, 'sbx-integration-outbox'));
+  await db.delete(machineSpriteReclaims).where(inArray(machineSpriteReclaims.sandboxId, [...sandboxIds]));
   await db.delete(pages).where(eq(pages.id, agentPageId));
   await db.delete(drives).where(eq(drives.id, driveId));
   await db.delete(users).where(eq(users.id, ownerId));

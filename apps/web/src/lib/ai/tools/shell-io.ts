@@ -61,6 +61,8 @@ export interface RealtimeShellReadResponse {
   output: string;
   /** Present only when THIS call started the PTY. */
   started?: true;
+  /** Why no PTY is live, when the start refused with a stateable reason. */
+  reason?: string;
 }
 
 export interface RealtimeShellSendResponse {
@@ -68,6 +70,8 @@ export interface RealtimeShellSendResponse {
   live?: boolean;
   delivered?: boolean;
   started?: true;
+  /** Why no PTY is live, when the start refused with a stateable reason. */
+  reason?: string;
 }
 
 /**
@@ -87,9 +91,14 @@ const UNREACHABLE_READ =
 const UNREACHABLE_SEND =
   'Could not reach the terminal service, so this input was NOT delivered. Nothing was typed into the shell.';
 
-const UNSTARTABLE_SEND = (shellId: string) =>
+// The service now says WHY when it knows (plan ceiling, insolvency); the
+// parenthetical guess is the fallback for refusals that carry no reason —
+// an agent told "may be out of credits or at the limit" cannot tell which of
+// the two it is, and only one of them is worth retrying later.
+const UNSTARTABLE_SEND = (shellId: string, reason?: string) =>
   `Nothing was typed: shell "${shellId}" has no running terminal, and one could not be started ` +
-  '(the payer may be out of credits or at the concurrent terminal limit). Nothing was delivered.';
+  `${reason ? `— ${reason}` : '(the payer may be out of credits or at the concurrent terminal limit)'}. ` +
+  'Nothing was delivered.';
 
 /** Apply a reader's line limit to an already-normalized stored cold tail. */
 function limitColdTail(tail: string, limit: number): string {
@@ -105,9 +114,12 @@ function limitColdTail(tail: string, limit: number): string {
 export function planColdShellReadAnswer({
   lines,
   cold,
+  reason,
 }: {
   lines: number;
   cold?: { tail: string; at: Date; hasOutput: boolean };
+  /** The service's own account of why nothing is live, when it gave one. */
+  reason?: string;
 }): Extract<ShellReadOutcome, { ok: true }> {
   if (!cold) {
     return {
@@ -115,7 +127,9 @@ export function planColdShellReadAnswer({
       live: false,
       hasOutput: false,
       output: '',
-      note: 'This shell has no running terminal right now — either it has ended, or one could not be started for this read (the payer may be out of credits or at the terminal limit). This is NOT the same as it having produced no output.',
+      note: reason
+        ? `This shell has no running terminal right now — ${reason} This is NOT the same as it having produced no output.`
+        : 'This shell has no running terminal right now — either it has ended, or one could not be started for this read (the payer may be out of credits or at the terminal limit). This is NOT the same as it having produced no output.',
     };
   }
 
@@ -165,7 +179,7 @@ export function createShellIo(transport: RealtimeShellIoTransport): {
       if (!answer?.success) return { ok: false, error: UNREACHABLE_READ };
 
       // A cold tail is history, never consulted while the PTY is live.
-      if (!answer.live) return planColdShellReadAnswer({ lines, cold });
+      if (!answer.live) return planColdShellReadAnswer({ lines, cold, reason: answer.reason });
 
       return {
         ok: true,
@@ -201,7 +215,9 @@ export function createShellIo(transport: RealtimeShellIoTransport): {
       });
 
       if (!answer?.success) return { ok: false, error: UNREACHABLE_SEND };
-      if (!answer.live || !answer.delivered) return { ok: false, error: UNSTARTABLE_SEND(shellId) };
+      if (!answer.live || !answer.delivered) {
+        return { ok: false, error: UNSTARTABLE_SEND(shellId, answer.reason) };
+      }
 
       return { ok: true, delivered: true, ...(answer.started ? { started: true } : {}) };
     },

@@ -84,7 +84,7 @@ export interface ShellIoDeps {
   startSession?: (
     address: { shellId: string; userId: string },
     abandoned: () => boolean,
-  ) => Promise<TerminalSession | undefined>;
+  ) => Promise<TerminalSession | ShellStartRefusal | undefined>;
   /**
    * Push a viewer-less session's idle reap back, because an agent just used it.
    *
@@ -146,12 +146,27 @@ export interface ShellReadEntry {
   /** How many humans are watching right now. Zero does not mean not running. */
   viewers: number;
   output: string;
+  /** Why nothing is live, when the start refused with a stateable reason. */
+  reason?: string;
   /**
    * Did THIS read start the PTY? Present only when it did. The reader needs it:
    * an empty tail from a shell that booted a moment ago is the boot, not the
    * silence of a command that produced nothing.
    */
   started?: true;
+}
+
+/**
+ * A headless start that refused, WITH a reason the caller can act on.
+ *
+ * `undefined` already meant "no PTY", but it conflated "the caller abandoned
+ * the request" with "you are at your plan's session limit" — and an agent that
+ * gets `{live: false, delivered: false}` and no reason has no way to tell a
+ * transient miss from a wall it will hit on every retry. Returning a reason is
+ * optional precisely because most misses genuinely have nothing to say.
+ */
+export interface ShellStartRefusal {
+  reason: string;
 }
 
 export interface ShellReadResult {
@@ -171,6 +186,8 @@ export interface ShellSendResult {
   delivered?: boolean;
   /** Did THIS send start the PTY? Present only when it did. */
   started?: true;
+  /** Why nothing is live, when the start refused with a stateable reason. */
+  reason?: string;
   error?: string;
 }
 
@@ -190,15 +207,21 @@ async function resolveOrStartSession(
   shellId: string,
   startPlan: Extract<ReturnType<typeof planSessionStart>, { ok: true }>,
   abandoned: () => boolean,
-): Promise<{ session: TerminalSession | undefined; started: boolean }> {
+): Promise<{ session: TerminalSession | undefined; started: boolean; reason?: string }> {
   const live = deps.sessionMap.getByKey(deps.sessionKeyFor(shellId));
   // A shell that has never run is not a refusal — it is a shell to START, so
   // long as the caller asked for one. This is the whole of issue #2206: the PTY
   // begins at the first agent IO, not at the first human to open the pane.
-  const started = live === undefined && startPlan.start
+  const outcome = live === undefined && startPlan.start
     ? await deps.startSession?.({ shellId, userId: startPlan.userId }, abandoned)
     : undefined;
-  return { session: live ?? started, started: started !== undefined };
+  const refused = outcome !== undefined && 'reason' in outcome;
+  const started = refused ? undefined : (outcome as TerminalSession | undefined);
+  return {
+    session: live ?? started,
+    started: started !== undefined,
+    ...(refused ? { reason: (outcome as ShellStartRefusal).reason } : {}),
+  };
 }
 
 /**
@@ -268,14 +291,16 @@ export async function handleShellSendRequest(
   const startPlan = planSessionStart(payload, { addressable: true, hasStarter: deps.startSession !== undefined });
   if (!startPlan.ok) return { status: 400, body: { success: false, error: startPlan.error } };
 
-  const { session, started } = await resolveOrStartSession(deps, payload.shellId, startPlan, abandoned);
+  const { session, started, reason } = await resolveOrStartSession(deps, payload.shellId, startPlan, abandoned);
   // Nothing running, and nothing we could start: say so. Swallowing the
   // keystrokes with a 200 would let the caller believe a command it never ran
   // is running. This also covers the caller having ABANDONED the request
   // mid-start (see `startSession`'s doc) — `started` comes back `undefined`
   // exactly as it would for a denied or insolvent start, and nothing is
   // written on their behalf.
-  if (!session) return { status: 200, body: { success: true, live: false, delivered: false } };
+  if (!session) {
+    return { status: 200, body: { success: true, live: false, delivered: false, ...(reason ? { reason } : {}) } };
+  }
 
   session.lastInputAt = now();
   // A keystroke also RESUMES a quiesced shell (and with it the Sprite), so the
@@ -425,8 +450,10 @@ export async function handleShellReadRequest(
     // no other way to get one going, and answering "never started" to a caller
     // that just asked to read it is the dead end this removes. Only ever
     // reached for a single-id read.
-    const { session, started } = await resolveOrStartSession(deps, shellId, startPlan, abandoned);
-    if (!session) return { shellId, live: false, hasOutput: false, viewers: 0, output: '' };
+    const { session, started, reason } = await resolveOrStartSession(deps, shellId, startPlan, abandoned);
+    if (!session) {
+      return { shellId, live: false, hasOutput: false, viewers: 0, output: '', ...(reason ? { reason } : {}) };
+    }
     // A deliberate single-shell read is USE, exactly like a delivered send
     // (see `armIdleReap`) — an agent polling `read_shell` on a long build is
     // as real a consumer of this session as one typing into it, and letting

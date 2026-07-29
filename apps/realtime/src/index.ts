@@ -41,6 +41,7 @@ import { openPtyShell } from './terminal/sprites-shell';
 import { getRealtimeSpritesSdk } from './terminal/realtime-sprites-client';
 import {
   buildShellHandlers,
+  connectFailureMessage,
   ensureShellSession,
   armIdleReap as armShellIdleReap,
   type ShellSessionDeps,
@@ -475,7 +476,13 @@ const startHeadlessShell = async (
     rows: HEADLESS_ROWS,
     abandoned,
   });
-  if (outcome.kind === 'failed') return undefined;
+  // A refusal with something to say comes back as a reason rather than a bare
+  // `undefined`, so an agent at its plan ceiling is told that instead of
+  // receiving a silent `{live: false, delivered: false}` it would retry forever.
+  if (outcome.kind === 'failed') {
+    const reason = connectFailureMessage(outcome);
+    return reason ? { reason } : undefined;
+  }
   loggers.realtime.info('Shell session started headlessly', {
     sessionKey: access.sessionKey,
     sandboxId: outcome.session.sandboxId,

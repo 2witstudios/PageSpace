@@ -421,6 +421,25 @@ describe('shell IO — headless start', () => {
       });
     });
 
+    it('given a start that refuses WITH a reason, should pass the reason to the caller', async () => {
+      const result = await handleShellSendRequest(
+        { ...deps(), startSession: async () => ({ reason: 'Live agent-session limit reached for your plan.' }) },
+        sendBody({ start: true, userId: 'user-1' }),
+      );
+
+      assert({
+        given: 'an agent that hit its plan ceiling',
+        should: 'say so, so it can stop retrying a wall it will hit every time',
+        actual: result.body,
+        expected: {
+          success: true,
+          live: false,
+          delivered: false,
+          reason: 'Live agent-session limit reached for your plan.',
+        },
+      });
+    });
+
     it('given a start that fails, should report nothing delivered rather than claim a live session', async () => {
       const result = await handleShellSendRequest(
         { ...deps(), startSession: async () => undefined },
@@ -715,6 +734,30 @@ describe('shell IO — headless start', () => {
           starts: start.calls.length,
         },
         expected: { live: [false, false], starts: 0 },
+      });
+    });
+
+    it('given a read whose start refuses WITH a reason, should carry the reason on the entry', async () => {
+      const result = await handleShellReadRequest(
+        { ...deps(), startSession: async () => ({ reason: 'Live agent-session limit reached for your plan.' }) },
+        readBody({ start: true, userId: 'user-1' }),
+      );
+
+      assert({
+        given: 'a read that could not boot a PTY because the owner is at their ceiling',
+        should: 'report the reason rather than an unexplained not-live',
+        actual: result.body,
+        expected: {
+          success: true,
+          shells: [{
+            shellId: 'sh',
+            live: false,
+            hasOutput: false,
+            viewers: 0,
+            output: '',
+            reason: 'Live agent-session limit reached for your plan.',
+          }],
+        },
       });
     });
 
