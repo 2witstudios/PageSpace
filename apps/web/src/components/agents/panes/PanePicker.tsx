@@ -33,6 +33,17 @@ export interface PanePickerProps {
    * hunt for.
    */
   autoFocus?: boolean;
+  /**
+   * Whether the global assistant is offerable yet.
+   *
+   * Defaults to FALSE, and that default is the point: a global-assistant
+   * conversation has no agent page, and the chat surface currently resolves its
+   * identity from one — so until that path exists, offering the choice would be
+   * a menu item that resolves to nothing. Offering a pick with no supplier is
+   * the exact shape of bug this rebuild is being corrected for; the option is
+   * built and tested, and the flag turns it on when the surface can render it.
+   */
+  canPickAssistant?: boolean;
   /** `null` starts a global-assistant conversation, which has no agent page. */
   onPickAgent(agentPageId: string | null): void;
   onPickShell(): void;
@@ -42,6 +53,7 @@ export default function PanePicker({
   agents,
   isLoading = false,
   autoFocus = false,
+  canPickAssistant = false,
   onPickAgent,
   onPickShell,
 }: PanePickerProps) {
@@ -71,16 +83,18 @@ export default function PanePicker({
           Shell
         </Button>
 
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-8 justify-start gap-2 px-2"
-          onClick={() => onPickAgent(null)}
-          data-testid="pick-global-assistant"
-        >
-          <Bot className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-          Assistant
-        </Button>
+        {canPickAssistant && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 justify-start gap-2 px-2"
+            onClick={() => onPickAgent(null)}
+            data-testid="pick-global-assistant"
+          >
+            <Bot className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+            Assistant
+          </Button>
+        )}
       </div>
 
       {/* The agents of this drive. Listed BELOW the two fixed choices rather than

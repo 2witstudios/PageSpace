@@ -35,13 +35,21 @@ describe('PanePicker', () => {
     expect(onPickAgent).toHaveBeenCalledWith('agent-2');
   });
 
-  it('should offer the global assistant as a null agent page', async () => {
-    // A global-assistant conversation has no agent page — the session row's
-    // agentPageId is nullable precisely for this.
+  it('should offer the global assistant as a null agent page — when enabled', async () => {
+    // A global-assistant conversation has no agent page; a null pick is how the
+    // session model already expresses that.
     const onPickAgent = vi.fn();
-    render(<PanePicker agents={agents} onPickAgent={onPickAgent} onPickShell={vi.fn()} />);
+    render(<PanePicker agents={agents} canPickAssistant onPickAgent={onPickAgent} onPickShell={vi.fn()} />);
     await userEvent.click(screen.getByTestId('pick-global-assistant'));
     expect(onPickAgent).toHaveBeenCalledWith(null);
+  });
+
+  it('should NOT offer the assistant by default — a pick with no renderer is a dead menu item', () => {
+    // The chat surface resolves identity from an agent page today; until the
+    // assistant identity path lands, offering the choice would resolve to
+    // nothing. Off by default, flipped when that path exists.
+    render(<PanePicker agents={agents} onPickAgent={vi.fn()} onPickShell={vi.fn()} />);
+    expect(screen.queryByTestId('pick-global-assistant')).not.toBeInTheDocument();
   });
 
   it('should report a shell pick', async () => {
@@ -69,8 +77,8 @@ describe('PanePicker', () => {
     expect(screen.getByTestId('pane-picker-loading')).toBeInTheDocument();
   });
 
-  it('given a drive with no agents, should still offer a shell and the assistant', () => {
-    render(<PanePicker agents={[]} onPickAgent={vi.fn()} onPickShell={vi.fn()} />);
+  it('given a drive with no agents, should still offer a shell (and the assistant when enabled)', () => {
+    render(<PanePicker agents={[]} canPickAssistant onPickAgent={vi.fn()} onPickShell={vi.fn()} />);
     expect(screen.queryByTestId('pane-picker-loading')).not.toBeInTheDocument();
     expect(screen.getByTestId('pick-shell')).toBeInTheDocument();
     expect(screen.getByTestId('pick-global-assistant')).toBeInTheDocument();
