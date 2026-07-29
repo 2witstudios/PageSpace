@@ -61,4 +61,19 @@ describe('resolveSelfBaseUrl', () => {
     delete process.env.NEXT_PUBLIC_APP_URL;
     expect(resolveSelfBaseUrl()).toBeNull();
   });
+
+  it('given a bare host:port, should return null — it parses as a URL but is not one', () => {
+    // `new URL('localhost:3000')` succeeds with protocol `localhost:`, so the
+    // most common misconfiguration would otherwise pass the guard and fail deep
+    // inside fetch instead of reporting a config problem.
+    process.env.WEB_APP_URL = 'localhost:3000';
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    expect(resolveSelfBaseUrl()).toBeNull();
+  });
+
+  it('given a non-HTTP scheme, should return null', () => {
+    process.env.WEB_APP_URL = 'file:///etc/passwd';
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    expect(resolveSelfBaseUrl()).toBeNull();
+  });
 });

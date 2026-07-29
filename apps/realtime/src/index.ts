@@ -144,14 +144,6 @@ async function resolveDriveOwnerContext(pageId: string): Promise<DriveOwnerConte
 // PTYs) was deleted in the Phase 8 teardown.
 // ---------------------------------------------------------------------------
 
-/**
- * Ensure (create/resume/adopt) the session's ONE shared sandbox — the
- * `ensureSessionSandbox` seam of `buildShellCheckAuth`, backed by the shared
- * packages/lib provisioner and NEVER a realtime-local one. `tenantId` (the
- * Sprite-key fold's tenant and the billing account) is the agent page's drive
- * owner, falling back to the session's own owner for a global-assistant
- * session — the same `agentPageId ?? ownerId` attribution rule billing uses.
- */
 /** The owner's plan tier, for the live-session ceiling. Unknown/missing rows fall to the free-tier limit. */
 async function resolveOwnerTier(ownerId: string) {
   const [row] = await db
@@ -162,6 +154,14 @@ async function resolveOwnerTier(ownerId: string) {
   return toSubscriptionTier(row?.subscriptionTier);
 }
 
+/**
+ * Ensure (create/resume/adopt) the session's ONE shared sandbox — the
+ * `ensureSessionSandbox` seam of `buildShellCheckAuth`, backed by the shared
+ * packages/lib provisioner and NEVER a realtime-local one. `tenantId` (the
+ * Sprite-key fold's tenant and the billing account) is the agent page's drive
+ * owner, falling back to the session's own owner for a global-assistant
+ * session — the same `agentPageId ?? ownerId` attribution rule billing uses.
+ */
 async function ensureShellSessionSandbox({ sessionId, userId }: { sessionId: string; userId: string }): Promise<
   { ok: true; sandboxId: string } | { ok: false; reason: string }
 > {

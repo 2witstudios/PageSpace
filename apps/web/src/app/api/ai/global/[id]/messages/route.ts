@@ -809,7 +809,11 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
     // exists when code execution is enabled, and a prompt that names a tool the
     // model does not have makes it attempt delegation that silently fails.
     const agentAwarenessPrompt = await buildAgentAwarenessPrompt(userId, {
-      canDelegate: isCodeExecutionEnabled(),
+      // BOTH gates, because the tool set applies both: registration is gated on
+      // CODE_EXECUTION_ENABLED, and `filterToolsForReadOnly` then strips
+      // spawn_session again as a write tool. Checking only the first told a
+      // read-only agent to delegate with a tool it does not have.
+      canDelegate: isCodeExecutionEnabled() && !readOnlyMode,
     });
 
     // Build page tree context if enabled

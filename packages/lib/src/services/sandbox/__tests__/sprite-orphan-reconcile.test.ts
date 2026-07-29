@@ -69,7 +69,7 @@ describe('reconcileOrphanSprites — the reclaim outbox (a pointer whose row is 
 
     const result = await reconcileOrphanSprites(deps);
 
-    expect(result).toEqual({ processed: 1, capped: false, torndown: 1, skipped: 0, failed: 0 });
+    expect(result).toEqual({ processed: 1, capped: false, incomplete: false, torndown: 1, skipped: 0, failed: 0 });
     expect(killed).toEqual(['pgs-ses-orphaned']);
     expect(releasedReclaims).toEqual(['pgs-ses-orphaned']);
     // The row was hard-deleted (conversation deleted, page purged, drive deleted,
@@ -102,7 +102,7 @@ describe('reconcileOrphanSprites — the reclaim outbox (a pointer whose row is 
 
     const result = await reconcileOrphanSprites(deps);
 
-    expect(result).toEqual({ processed: 1, capped: false, torndown: 0, skipped: 0, failed: 1 });
+    expect(result).toEqual({ processed: 1, capped: false, incomplete: false, torndown: 0, skipped: 0, failed: 1 });
     expect(releasedReclaims).toEqual([]); // and the pointer survives
   });
 });
@@ -118,7 +118,7 @@ describe('reconcileOrphanSprites — agent-session rows whose teardown never con
 
     const result = await reconcileOrphanSprites(deps);
 
-    expect(result).toEqual({ processed: 1, capped: false, torndown: 1, skipped: 0, failed: 0 });
+    expect(result).toEqual({ processed: 1, capped: false, incomplete: false, torndown: 1, skipped: 0, failed: 0 });
     expect(killed).toEqual(['pgs-ses-1']);
     expect(stampedSessions).toEqual(['conv-1']);
   });
@@ -137,7 +137,7 @@ describe('reconcileOrphanSprites — agent-session rows whose teardown never con
 
     const result = await reconcileOrphanSprites(deps);
 
-    expect(result).toEqual({ processed: 2, capped: false, torndown: 1, skipped: 1, failed: 0 });
+    expect(result).toEqual({ processed: 2, capped: false, incomplete: false, torndown: 1, skipped: 1, failed: 0 });
     expect(killSprite).toHaveBeenCalledTimes(1);
     expect(killSprite).toHaveBeenCalledWith({ sandboxId: 'pgs-ses-1', spriteInstanceId: 'inst-1' });
     expect(stampedSessions).toEqual(['conv-1']);
@@ -154,7 +154,7 @@ describe('reconcileOrphanSprites — agent-session rows whose teardown never con
 
     const result = await reconcileOrphanSprites(deps);
 
-    expect(result).toEqual({ processed: 1, capped: false, torndown: 0, skipped: 1, failed: 0 });
+    expect(result).toEqual({ processed: 1, capped: false, incomplete: false, torndown: 0, skipped: 1, failed: 0 });
   });
 
   it('stamps the row for a Sprite that is ALREADY gone — the idempotent kill reports ok', async () => {
@@ -179,7 +179,7 @@ describe('reconcileOrphanSprites — agent-session rows whose teardown never con
 
     const result = await reconcileOrphanSprites(deps);
 
-    expect(result).toEqual({ processed: 2, capped: false, torndown: 1, skipped: 0, failed: 1 });
+    expect(result).toEqual({ processed: 2, capped: false, incomplete: false, torndown: 1, skipped: 0, failed: 1 });
     expect(stampedSessions).toEqual(['conv-2']); // the failed row keeps its pointer for the next run
   });
 
@@ -202,7 +202,7 @@ describe('reconcileOrphanSprites — agent-session rows whose teardown never con
 
     const result = await reconcileOrphanSprites(deps);
 
-    expect(result).toEqual({ processed: 3, capped: false, torndown: 2, skipped: 0, failed: 1 });
+    expect(result).toEqual({ processed: 3, capped: false, incomplete: false, torndown: 2, skipped: 0, failed: 1 });
     expect(killSprite).toHaveBeenCalledTimes(3);
     expect(stampedSessions).toEqual(['conv-a', 'conv-b']);
   });
@@ -217,7 +217,7 @@ describe('reconcileOrphanSprites — agent-session rows whose teardown never con
 
     const result = await reconcileOrphanSprites(deps);
 
-    expect(result).toEqual({ processed: 1, capped: false, torndown: 0, skipped: 0, failed: 1 });
+    expect(result).toEqual({ processed: 1, capped: false, incomplete: false, torndown: 0, skipped: 0, failed: 1 });
     // The Sprite IS dead; the next run's kill is idempotent, so it simply stamps then.
     expect(killed).toEqual(['pgs-ses-1']);
   });
@@ -229,7 +229,7 @@ describe('reconcileOrphanSprites — agent-session rows whose teardown never con
 
     const result = await reconcileOrphanSprites(deps);
 
-    expect(result).toEqual({ processed: 2, capped: false, torndown: 2, skipped: 0, failed: 0 });
+    expect(result).toEqual({ processed: 2, capped: false, incomplete: false, torndown: 2, skipped: 0, failed: 0 });
     expect(killed).toEqual(['pgs-ses-orphaned', 'pgs-ses-1']);
     expect(releasedReclaims).toEqual(['pgs-ses-orphaned']);
     expect(stampedSessions).toEqual(['conv-1']);
@@ -268,7 +268,7 @@ describe('reconcileOrphanSprites — agent-session rows whose teardown never con
 
     const result = await reconcileOrphanSprites(deps);
 
-    expect(result).toEqual({ processed: 0, capped: false, torndown: 0, skipped: 0, failed: 0 });
+    expect(result).toEqual({ processed: 0, capped: false, incomplete: false, torndown: 0, skipped: 0, failed: 0 });
     expect(killed).toEqual([]);
     expect(stampedSessions).toEqual([]);
     expect(releasedReclaims).toEqual([]);

@@ -71,8 +71,10 @@ const FORWARDED_HEADERS = ['cookie', 'x-csrf-token', 'origin', 'referer'] as con
  *  2. **Safety.** This hop forwards the caller's own cookie and CSRF token
  *     (see `FORWARDED_HEADERS`). Letting a client-supplied `x-forwarded-host`
  *     choose the destination would let a forged header steer those credentials
- *     at an attacker-chosen origin. The configured URL is validated at boot
- *     (`env-validation.ts`) and cannot be influenced per-request.
+ *     at an attacker-chosen origin. The configured value cannot be influenced
+ *     per-request either way; note that only `WEB_APP_URL` is in the boot schema
+ *     (`env-validation.ts`), so the `NEXT_PUBLIC_APP_URL` fallback is validated
+ *     here rather than at startup — which is why this guard is not redundant.
  *
  * Same precedence as every other self-URL consumer in the repo (see
  * `services/email-service.ts`): `WEB_APP_URL`, then `NEXT_PUBLIC_APP_URL`.
@@ -81,10 +83,14 @@ export function resolveSelfBaseUrl(): string | null {
   const configured = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL;
   if (!configured) return null;
   const normalized = configured.replace(/\/$/, '');
-  // Absolute-URL guard: a relative or malformed value would otherwise turn the
-  // dispatch URL into a same-process path that never reaches the route.
+  // Absolute HTTP(S) guard. `new URL()` alone is not enough: `localhost:3000` —
+  // the single most common way to misconfigure this — parses happily with
+  // protocol `localhost:`, so a bare-hostname value would sail through and then
+  // fail deep inside `fetch` with an opaque error instead of the actionable
+  // "not configured" message this branch exists to produce.
   try {
-    new URL(normalized);
+    const parsed = new URL(normalized);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
   } catch {
     return null;
   }

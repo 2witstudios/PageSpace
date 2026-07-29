@@ -2,13 +2,19 @@
  * Encoding a picker prompt for a PTY — pure, so the rules below are testable
  * without a socket.
  *
- * The realtime bridge (`agent-terminal-handler.ts`, `onInput`) writes a payload
- * only when `data.length <= MAX_INPUT_BYTES` and **silently drops the whole
- * write otherwise** — a 5KB pasted spec would vanish with no error anywhere.
- * So a prompt is split into chunks that each fit, rather than sent as one write.
+ * The realtime bridge (`shell-handler.ts`, `onInput`) refuses a payload whose
+ * UTF-8 BYTE length exceeds `MAX_INPUT_BYTES` — refuses rather than truncates,
+ * because half a pasted command is a command nobody wrote. It now reports the
+ * refusal as a `shell:error`, but a rejected prompt is still a prompt that did
+ * not run, so this splits one into chunks that each fit instead of relying on a
+ * single oversized write.
+ *
+ * Bytes, not `String.length`: the two differ up to 4x on multi-byte input, and
+ * chunking by UTF-16 units against a byte cap would produce chunks that still
+ * get refused.
  */
 
-/** Mirrors `MAX_INPUT_BYTES` in `apps/realtime/src/terminal/agent-terminal-handler.ts`. */
+/** Mirrors `MAX_INPUT_BYTES` in `apps/realtime/src/terminal/shell-handler.ts`. */
 export const PTY_MAX_INPUT_BYTES = 4096;
 
 /** Carriage return: what a tty sees when a human presses Enter. */

@@ -1978,6 +1978,10 @@ describe('shell:connect error scoping', () => {
     }
   });
 
+  // The one case where an error is still socket-wide. Acceptable because
+  // XtermTerminal ALWAYS sends a connectionId, so this is unreachable from the
+  // real client — and inventing an id would be worse: it would tag the error for
+  // a pane that does not exist, silently dropping the failure entirely.
   it('given a payload with no connectionId, should emit an untagged error rather than inventing one', async () => {
     const socket = createMockSocket({
       id: 'socket-shell-2',

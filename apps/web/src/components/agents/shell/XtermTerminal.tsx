@@ -412,17 +412,21 @@ export default function XtermTerminal({ socket, shellId, initialInput, onInitial
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket, shellId]);
 
-  // Named and announced: xterm renders into a bare div, so without a role and
-  // label a screen reader has no way to say what this region is, and no way to
-  // report output that arrives without a focus change. `aria-live="polite"`
-  // rather than assertive — shell output is a stream, and interrupting the user
-  // on every chunk would be worse than silence.
+  // NAMED, not announced. xterm renders into a bare div, so without a role and
+  // label a screen reader cannot say what this region is or let the user jump to
+  // it — that part this fixes, and it is why each pane carries its own label.
+  //
+  // Deliberately NO `aria-live`: xterm marks its own row container
+  // `aria-hidden`, so a live region here would have nothing announceable inside
+  // it — the attribute would read as an accessibility guarantee we do not
+  // actually provide. Announcing output is xterm's `screenReaderMode` option,
+  // which builds its own live region and carries a real rendering cost; turning
+  // it on belongs with a user-facing preference, not on by default for everyone.
   return (
     <div
       ref={containerRef}
       className="w-full h-full"
       role="log"
-      aria-live="polite"
       aria-label={ariaLabel ?? 'Shell output'}
     />
   );
