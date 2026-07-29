@@ -3,7 +3,7 @@ import { truncateToBytes } from './output-limit';
 import { SANDBOX_ROOT, resolveSandboxPath } from './sandbox-paths';
 import type { SandboxActorContext, SandboxRunDeps, BashToolResult } from './tool-runners';
 import type { ExecutableSandbox } from './sandbox-client/types';
-import { DENIAL_MESSAGES, reasonFromAcquire } from './tool-runners';
+import { DENIAL_MESSAGES, reasonFromAcquire, safeLogWarn } from './tool-runners';
 
 export interface GitSandboxRunDeps extends SandboxRunDeps {
   /** Fetches the user's GitHub OAuth access token from their integration connection. */
@@ -224,9 +224,17 @@ export async function runGitInSandbox({
     // result that already succeeded.
     if (measurable && ctx.conversationId && deps.measureStorage) {
       const sessionId = ctx.conversationId;
-      void deps.measureStorage({ sandbox: measurable, sessionId }).catch(() => {
-        // Best-effort by contract; the bash path logs, and this path has no
-        // logger seam of its own to log through.
+      void deps.measureStorage({ sandbox: measurable, sessionId }).catch((error) => {
+        // Logged, not swallowed. Best-effort must not mean invisible: if the
+        // measurement throws on EVERY git call — a bad exec adapter, a missing
+        // `du` — the largest writer in the system silently stops being measured,
+        // which is the bug this seam was just wired to fix, reappearing with no
+        // symptom at all. Same wrapper and same message as the bash path, which
+        // logs the identical failure.
+        safeLogWarn(deps.logger, 'Opportunistic storage measurement failed', {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
       });
     }
   }

@@ -400,6 +400,39 @@ describe('opportunistic storage measurement', () => {
     expect(order).toEqual(['command', 'measure:c1']);
   });
 
+  it('given a THROWING measurement, should log it rather than swallow it silently', async () => {
+    // "Best-effort" must not mean invisible. If this throws on every git call —
+    // a bad exec adapter, a missing `du` — the largest writer in the system
+    // stops being measured with no symptom whatsoever, which is exactly the bug
+    // the seam was wired to fix, back again and now undetectable.
+    const warnings: Array<{ message: string; meta?: Record<string, unknown> }> = [];
+    const { deps } = makeDeps({
+      measureStorage: async () => {
+        throw new Error('du: command not found');
+      },
+      logger: {
+        warn: (message: string, meta?: Record<string, unknown>) => {
+          warnings.push({ message, meta });
+        },
+        error: () => {},
+      },
+    });
+
+    const result = await runGitInSandbox({
+      cmd: 'git',
+      args: ['status'],
+      ctx: makeCtx({ conversationId: 'c1' }),
+      deps,
+    });
+
+    // The tool result is untouched — a billing observation never fails the op.
+    expect(result).toMatchObject({ success: true });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].meta).toMatchObject({ sessionId: 'c1' });
+  });
+
   it('given no conversation id, should not measure — there is no session to attribute bytes to', async () => {
     const measured: unknown[] = [];
     const { deps } = makeDeps({

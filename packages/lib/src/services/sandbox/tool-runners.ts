@@ -240,7 +240,7 @@ function asError(value: unknown): Error | undefined {
   return new Error(String(value));
 }
 
-function safeLogWarn(
+export function safeLogWarn(
   logger: SandboxRunDeps['logger'],
   message: string,
   metadata?: Record<string, unknown>,
