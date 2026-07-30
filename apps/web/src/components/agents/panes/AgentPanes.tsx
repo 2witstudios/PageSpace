@@ -515,13 +515,16 @@ export default function AgentPanes({
         // Local optimistic update for THIS component's own switch/close
         // decisions (instant, no network)...
         recordMintedConversation(conversationId, agentPageId);
-        // ...and a broader revalidate for every OTHER `/api/agent-sessions**`
-        // consumer (the sidebar, other panes) sharing a differently-scoped
-        // cache key that the local update above doesn't touch. Without this,
-        // `decideClosePane`'s `activeConversations` (a 20s poll) can still
-        // lack this brand-new row elsewhere — closing this exact pane before
-        // the next poll then reads it as "not in the open listing" and takes
-        // the pure layout-close path instead of the DELETE one, leaving an
+        // ...and a broader revalidate covering every OTHER `/api/agent-sessions**`
+        // consumer (the sidebar, other panes) whose differently-scoped cache
+        // key the local update above can't reach — it also re-fetches THIS
+        // component's own key, which just confirms the optimistic patch above
+        // moments later rather than conflicting with it. Without the
+        // revalidate, `decideClosePane`'s `activeConversations` (a 20s poll)
+        // can still lack this brand-new row elsewhere — closing this exact
+        // pane before the next poll then reads it as "not in the open
+        // listing" and takes the pure layout-close path instead of the
+        // DELETE one, leaving an
         // orphaned conversation that holds a cap slot forever (caught in
         // review).
         void mutate(isAgentSessionsKey);
