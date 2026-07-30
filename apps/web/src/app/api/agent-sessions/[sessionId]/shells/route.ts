@@ -26,24 +26,14 @@ import {
 } from '@/lib/agent-sessions/agent-sessions-runtime';
 import { listShells, spawnShell } from '@/lib/agent-sessions/session-shells-runtime';
 import { sessionQuotaExceeded } from '@/lib/agent-sessions/quota-response';
+import { auditSessionAccessDenial, sessionNotFoundOrDenied } from '@/lib/agent-sessions/session-unavailable-response';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
+const ROUTE = 'agent-sessions/[sessionId]/shells';
+
 type RouteContext = { params: Promise<{ sessionId: string }> };
-
-
-function denied(request: Request, userId: string, sessionId: string, reason: string): NextResponse {
-  auditRequest(request, {
-    eventType: 'authz.access.denied',
-    userId,
-    resourceType: 'agent_session',
-    resourceId: sessionId,
-    details: { reason, route: 'agent-sessions/[sessionId]/shells' },
-    riskScore: 0.5,
-  });
-  return NextResponse.json({ error: 'You do not have access to this session' }, { status: 403 });
-}
 
 export async function GET(request: Request, context: RouteContext) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
@@ -52,11 +42,31 @@ export async function GET(request: Request, context: RouteContext) {
 
   const access = await checkSessionAccess(auth.userId, sessionId);
   if (!access.allowed) {
-    if (access.reason === 'session_not_found') return NextResponse.json({ shells: [] });
-    return denied(request, auth.userId, sessionId, access.reason);
+    // Not found and denied answer THE SAME empty list (family policy, review
+    // #2261/5) — never a 403 that would tell a caller the session is real.
+    auditSessionAccessDenial(request, auth.userId, sessionId, access.reason, ROUTE);
+    return NextResponse.json({ shells: [] });
   }
 
   return NextResponse.json({ shells: await listShells(sessionId) });
+}
+
+/**
+ * A denial AFTER the not-found/denied family gate has already passed — the
+ * caller already knows this session exists. This is `ensureAgentSessionSandbox`'s
+ * OWN authorization, re-checked at provision time, and leaks nothing new by
+ * staying a genuine 403.
+ */
+function provisioningDenied(request: Request, userId: string, sessionId: string, reason: string): NextResponse {
+  auditRequest(request, {
+    eventType: 'authz.access.denied',
+    userId,
+    resourceType: 'agent_session',
+    resourceId: sessionId,
+    details: { reason, route: ROUTE },
+    riskScore: 0.5,
+  });
+  return NextResponse.json({ error: 'You do not have access to this session' }, { status: 403 });
 }
 
 const SPAWN_DENIAL_STATUS: Record<string, number> = {
@@ -96,10 +106,7 @@ export async function POST(request: Request, context: RouteContext) {
   // route, and a session is born with its first conversation, not a shell).
   const access = await checkSessionAccess(auth.userId, sessionId);
   if (!access.allowed) {
-    if (access.reason === 'session_not_found') {
-      return NextResponse.json({ error: 'Session not found' }, { status: 404 });
-    }
-    return denied(request, auth.userId, sessionId, access.reason);
+    return sessionNotFoundOrDenied(request, auth.userId, sessionId, access.reason, ROUTE);
   }
 
   const row = await findSessionRecord(sessionId);
@@ -113,11 +120,11 @@ export async function POST(request: Request, context: RouteContext) {
       // A plan-limit refusal is not an access denial — separate response and
       // separate audit event (see quotaExceeded).
       if (provisioned.denial === 'session_limit_reached') {
-        return sessionQuotaExceeded(request, auth.userId, sessionId, 'agent-sessions/[sessionId]/shells', {
+        return sessionQuotaExceeded(request, auth.userId, sessionId, ROUTE, {
           reasonCode: provisioned.detail,
         });
       }
-      return denied(request, auth.userId, sessionId, provisioned.denial ?? 'denied');
+      return provisioningDenied(request, auth.userId, sessionId, provisioned.denial ?? 'denied');
     }
     loggers.api.error('Shell spawn: session sandbox provision failed', undefined, {
       sessionId,

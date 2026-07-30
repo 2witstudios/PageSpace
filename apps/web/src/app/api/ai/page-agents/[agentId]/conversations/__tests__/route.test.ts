@@ -684,4 +684,31 @@ describe('POST session binding (sessionId in body)', () => {
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({ error: 'That conversation id is not available' });
   });
+
+  it('404s an unknown session id — a conversation joins a workspace, never mints one', async () => {
+    const runtime = await import('@/lib/agent-sessions/agent-sessions-runtime');
+    vi.mocked(runtime.checkSessionAccess).mockResolvedValue({ allowed: false, reason: 'session_not_found' });
+    const request = createRequest(mockAgentId, 'POST', { sessionId: 'ses-1' });
+    const response = await POST(request, createContext(mockAgentId));
+    expect(response.status).toBe(404);
+    expect(runtime.createConversationInSession).not.toHaveBeenCalled();
+  });
+
+  it('404s a session the requester cannot reach — SAME as not-found (review #2261/5)', async () => {
+    const runtime = await import('@/lib/agent-sessions/agent-sessions-runtime');
+    vi.mocked(runtime.checkSessionAccess).mockResolvedValue({ allowed: false, reason: 'drive_access_denied' });
+    const request = createRequest(mockAgentId, 'POST', { sessionId: 'ses-1' });
+    const response = await POST(request, createContext(mockAgentId));
+    expect(response.status).toBe(404);
+    expect(runtime.createConversationInSession).not.toHaveBeenCalled();
+  });
+
+  it('400s an agent from a DIFFERENT drive than the session — a caller mistake, not a service failure (review #2261/6)', async () => {
+    const runtime = await import('@/lib/agent-sessions/agent-sessions-runtime');
+    const { AgentNotInSessionDriveError } = await import('@/lib/agent-sessions/create-conversation-in-session');
+    vi.mocked(runtime.createConversationInSession).mockRejectedValue(new AgentNotInSessionDriveError());
+    const request = createRequest(mockAgentId, 'POST', { sessionId: 'ses-1' });
+    const response = await POST(request, createContext(mockAgentId));
+    expect(response.status).toBe(400);
+  });
 });

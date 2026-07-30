@@ -92,10 +92,11 @@ describe('GET /api/agent-sessions/[sessionId]/shells', () => {
     expect(mockListShells).not.toHaveBeenCalled();
   });
 
-  it('given a denial, should 403 and audit', async () => {
+  it('given a denial, should answer an EMPTY list too — SAME as not-found (review #2261/5), but still audit', async () => {
     mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'code_execution_denied' });
     const response = await get();
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ shells: [] });
     expect(mockListShells).not.toHaveBeenCalled();
     expect(mockAuditRequest).toHaveBeenCalledWith(
       expect.anything(),
@@ -148,10 +149,10 @@ describe('POST /api/agent-sessions/[sessionId]/shells', () => {
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
   });
 
-  it('given an access denial, should 403 and never provision or spawn', async () => {
+  it('given an access denial, should 404 (SAME as not-found, review #2261/5) and never provision or spawn', async () => {
     mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'drive_access_denied' });
     const response = await post({});
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(404);
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
     expect(mockSpawnShell).not.toHaveBeenCalled();
   });

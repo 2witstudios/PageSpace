@@ -75,6 +75,16 @@ import { createConversationInSessionWith } from '@/lib/agent-sessions/create-con
 
 export { isCodeExecutionEnabled };
 
+/**
+ * The most NOT-ENDED sessions one owner may hold. Spawn is deliberately
+ * instant and free (no sandbox), which meant the live-sandbox concurrency
+ * quota never applied to it — an authorized caller could mint unbounded rows
+ * (review M6/F4). The single source of truth: `spawnSession` below passes it
+ * as `spawnAgentSession`'s REQUIRED `maxActiveSessions` dep (review
+ * #2261/2), and the route imports it for its own advisory pre-check.
+ */
+export const MAX_ACTIVE_SESSIONS_PER_OWNER = 100;
+
 // ---------------------------------------------------------------------------
 // Lazy singletons — the store reconnects to one DB pool; the host is stateless.
 // Both are built on first use so importing this module does no DB or SDK work.
@@ -264,7 +274,7 @@ export async function spawnSession(input: {
     ownerId: input.userId,
     driveId: input.driveId,
     name: input.name,
-    deps: { store, now: () => new Date() },
+    deps: { store, now: () => new Date(), maxActiveSessions: MAX_ACTIVE_SESSIONS_PER_OWNER },
   });
 }
 

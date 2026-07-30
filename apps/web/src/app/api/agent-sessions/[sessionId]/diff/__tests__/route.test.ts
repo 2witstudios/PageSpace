@@ -113,10 +113,11 @@ describe('GET /api/agent-sessions/[sessionId]/diff', () => {
     );
   });
 
-  it('given an access denial, should uniform-403 before parsing scope params, and audit', async () => {
+  it('given an access denial, should answer not_started 404 (SAME as not-found, review #2261/5) before parsing scope params, and audit', async () => {
     mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'code_execution_denied' });
     const response = await get('?bogus=1');
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(404);
+    expect((await response.json()).reason).toBe('not_started');
     expect(mockAuditRequest).toHaveBeenCalled();
   });
 

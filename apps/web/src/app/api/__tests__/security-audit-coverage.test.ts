@@ -18,10 +18,13 @@ const API_DIR = join(__dirname, '..');
 /**
  * Regex matching any form of security audit call used across the codebase.
  * Covers: direct securityAudit.* calls, logAuditEvent helper, logAuthEvent
- * adapter, logSecurityEvent adapter, and withAdminAuth wrapper.
+ * adapter, logSecurityEvent adapter, withAdminAuth wrapper, and the
+ * `agent-sessions/[sessionId]` family's shared not-found/denied helpers
+ * (`session-unavailable-response.ts`, review #2261/5) — both call
+ * `auditRequest` internally, one hop removed from the route file.
  */
 const AUDIT_CALL_PATTERN =
-  /securityAudit\.|logAuditEvent\(|logAuthEvent\(|logSecurityEvent\(|withAdminAuth[<(]|audit\(|auditRequest\(/;
+  /securityAudit\.|logAuditEvent\(|logAuthEvent\(|logSecurityEvent\(|withAdminAuth[<(]|audit\(|auditRequest\(|auditSessionAccessDenial\(|sessionNotFoundOrDenied\(/;
 
 /**
  * Routes explicitly exempt from audit coverage.

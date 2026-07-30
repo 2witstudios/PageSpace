@@ -47,6 +47,7 @@ vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
   listSessions: (...args: unknown[]) => mockListSessions(...args),
   listSessionConversationsBulk: (...args: unknown[]) => mockListSessionConversationsBulk(...args),
   countActiveSessionsForOwner: (...args: unknown[]) => mockCountActiveSessionsForOwner(...args),
+  MAX_ACTIVE_SESSIONS_PER_OWNER: 100,
   checkAccessForSubject: (...args: unknown[]) => mockCheckAccessForSubject(...args),
   createConversationInSession: (...args: unknown[]) => mockCreateConversationInSession(...args),
   endSession: (...args: unknown[]) => mockEndSession(...args),
@@ -298,5 +299,19 @@ describe('POST /api/agent-sessions — spawn ceiling (review M6/F4)', () => {
     const response = await spawn({ driveId: 'drive-1', agentPageId: 'agent-1' });
     expect(response.status).toBe(429);
     expect(mockSpawnSession).not.toHaveBeenCalled();
+  });
+
+  it('429s on the ATOMIC backstop when a concurrent spawn wins the race the pre-check missed (review #2261/2)', async () => {
+    // The pre-check above is advisory (TOCTOU-racy on its own) — spawnSession
+    // itself is the authoritative, atomically-enforced ceiling, and its
+    // refusal must reach the caller the same way the pre-check's does.
+    mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+    mockGetAiAgent.mockResolvedValue({ id: 'agent-1', title: 'Agent', type: 'AI_CHAT', driveId: 'drive-1' });
+    mockCanPrincipalViewPage.mockResolvedValue(true);
+    mockCountActiveSessionsForOwner.mockResolvedValue(0);
+    mockSpawnSession.mockResolvedValue({ ok: false, reason: 'session_limit_reached' });
+    const response = await spawn({ driveId: 'drive-1', agentPageId: 'agent-1' });
+    expect(response.status).toBe(429);
+    expect(mockCreateConversationInSession).not.toHaveBeenCalled();
   });
 });

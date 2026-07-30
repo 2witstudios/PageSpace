@@ -18,8 +18,11 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkSessionEndAccess } from '@/lib/agent-sessions/agent-sessions-runtime';
 import { killShellById, resolveShellById } from '@/lib/agent-sessions/session-shells-runtime';
+import { sessionNotFoundOrDenied } from '@/lib/agent-sessions/session-unavailable-response';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
+
+const ROUTE = 'agent-sessions/[sessionId]/shells/[shellId]';
 
 type RouteContext = { params: Promise<{ sessionId: string; shellId: string }> };
 
@@ -36,20 +39,12 @@ export async function DELETE(request: Request, context: RouteContext) {
     return NextResponse.json({ error: 'Shell not found' }, { status: 404 });
   }
 
+  // Not found and denied answer THE SAME 404 (family policy, review #2261/5)
+  // — "Shell not found" for both, so a caller cannot distinguish "no such
+  // shell" from "not yours".
   const access = await checkSessionEndAccess(auth.userId, resolved.shell.sessionId);
   if (!access.allowed) {
-    if (access.reason === 'session_not_found') {
-      return NextResponse.json({ error: 'Shell not found' }, { status: 404 });
-    }
-    auditRequest(request, {
-      eventType: 'authz.access.denied',
-      userId: auth.userId,
-      resourceType: 'agent_session',
-      resourceId: sessionId,
-      details: { reason: access.reason, route: 'agent-sessions/[sessionId]/shells/[shellId]', shellId },
-      riskScore: 0.5,
-    });
-    return NextResponse.json({ error: 'You do not have access to this session' }, { status: 403 });
+    return sessionNotFoundOrDenied(request, auth.userId, sessionId, access.reason, ROUTE, 'Shell not found');
   }
 
   const killed = await killShellById(shellId);

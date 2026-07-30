@@ -76,10 +76,11 @@ describe('GET /api/agent-sessions/[sessionId]/git-blob', () => {
     expect((await get('?repoPath=c&ref=a')).status).toBe(400);
   });
 
-  it('given a denial, should uniform-403 before parsing ref/path, and audit', async () => {
+  it('given a denial, should answer not_started 404 (SAME as not-found, review #2261/5) before parsing ref/path, and audit', async () => {
     mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'not_shared' });
     const response = await get('');
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(404);
+    expect((await response.json()).reason).toBe('not_started');
     expect(mockAuditRequest).toHaveBeenCalled();
   });
 

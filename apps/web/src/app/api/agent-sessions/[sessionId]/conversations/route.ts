@@ -30,25 +30,20 @@ import {
   checkSessionAccess,
   createConversationInSession,
 } from '@/lib/agent-sessions/agent-sessions-runtime';
-import { ConversationUnavailableError, SessionFullError } from '@/lib/agent-sessions/create-conversation-in-session';
+import {
+  AgentNotInSessionDriveError,
+  ConversationUnavailableError,
+  SessionFullError,
+} from '@/lib/agent-sessions/create-conversation-in-session';
 import { sessionConversationLimitExceeded } from '@/lib/agent-sessions/quota-response';
+import { sessionNotFoundOrDenied } from '@/lib/agent-sessions/session-unavailable-response';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
-type RouteContext = { params: Promise<{ sessionId: string }> };
+const ROUTE = 'agent-sessions/[sessionId]/conversations';
 
-function denied(request: Request, userId: string, sessionId: string, reason: string): NextResponse {
-  auditRequest(request, {
-    eventType: 'authz.access.denied',
-    userId,
-    resourceType: 'agent_session',
-    resourceId: sessionId,
-    details: { reason, route: 'agent-sessions/[sessionId]/conversations' },
-    riskScore: 0.5,
-  });
-  return NextResponse.json({ error: 'You do not have access to this session' }, { status: 403 });
-}
+type RouteContext = { params: Promise<{ sessionId: string }> };
 
 export async function POST(request: Request, context: RouteContext) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
@@ -65,13 +60,11 @@ export async function POST(request: Request, context: RouteContext) {
     typeof body.agentPageId === 'string' && body.agentPageId.length > 0 ? body.agentPageId : null;
 
   // The session must already EXIST — a conversation joins a workspace, it
-  // never mints one (spawning a session is the collection route's act).
+  // never mints one (spawning a session is the collection route's act). Not
+  // found and denied answer THE SAME 404 (family policy, review #2261/5).
   const access = await checkSessionAccess(auth.userId, sessionId);
   if (!access.allowed) {
-    if (access.reason === 'session_not_found') {
-      return NextResponse.json({ error: 'Session not found' }, { status: 404 });
-    }
-    return denied(request, auth.userId, sessionId, access.reason);
+    return sessionNotFoundOrDenied(request, auth.userId, sessionId, access.reason, ROUTE);
   }
 
   if (agentPageId !== null) {
@@ -127,10 +120,17 @@ export async function POST(request: Request, context: RouteContext) {
         userId: auth.userId,
         resourceType: 'agent_session',
         resourceId: sessionId,
-        details: { reason: 'conversation_unavailable', conversationId, route: 'agent-sessions/[sessionId]/conversations' },
+        details: { reason: 'conversation_unavailable', conversationId, route: ROUTE },
         riskScore: 0.5,
       });
       return NextResponse.json({ error: 'That conversation id is not available' }, { status: 409 });
+    }
+    if (error instanceof AgentNotInSessionDriveError) {
+      // A caller mistake (an agent page from a DIFFERENT drive than this
+      // session), not a service failure (review #2261/6) — was falling
+      // through to the generic 502 below, which logged it as a server error
+      // and told the caller to retry a request that can never succeed.
+      return NextResponse.json({ error: error.message }, { status: 400 });
     }
     loggers.api.error(
       'Session conversation create failed',

@@ -124,10 +124,11 @@ describe('GET /api/agent-sessions/[sessionId]/files', () => {
     expect(response.status).toBe(503);
   });
 
-  it('given an access denial, should uniform-403 BEFORE parsing any params, and audit', async () => {
+  it('given an access denial, should answer not_started 404 (SAME as not-found, review #2261/5) BEFORE parsing any params, and audit', async () => {
     mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'page_access_denied' });
     const response = await get('?path=../escape&mode=bogus');
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual(expect.objectContaining({ reason: 'not_started' }));
     expect(mockAuditRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ eventType: 'authz.access.denied' }),
@@ -176,10 +177,10 @@ describe('DELETE /api/agent-sessions/[sessionId]/files', () => {
     expect(mockDeleteMachinePath).toHaveBeenCalledWith({ handle: HANDLE, path: '/workspace/clone/tmp' });
   });
 
-  it('given an access denial, should 403 and delete nothing', async () => {
+  it('given an access denial, should 404 (SAME as not-found, review #2261/5) and delete nothing', async () => {
     mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'not_shared' });
     const response = await DELETE(jsonRequest('DELETE', { path: 'tmp' }), params);
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(404);
     expect(mockDeleteMachinePath).not.toHaveBeenCalled();
   });
 });
