@@ -8,7 +8,7 @@ import {
 import { deriveAgentSessionSpriteKey } from '../../../agent-sessions/session-sprite-key';
 import type { AgentSessionRecord } from '../agent-sessions-store';
 import {
-  AGENT_PAGE_ID,
+  DRIVE_ID,
   NOW,
   OWNER_ID,
   SECRET,
@@ -25,7 +25,7 @@ const actor = { userId: OWNER_ID, tenantId: TENANT_ID };
 const SESSION_KEY = deriveAgentSessionSpriteKey({ tenantId: TENANT_ID, sessionId: SESSION_ID, secret: SECRET });
 
 function toSpriteRow(record: AgentSessionRecord): AgentSessionSpriteRow {
-  return { ...record, sessionId: record.conversationId };
+  return { ...record, sessionId: record.id };
 }
 
 function makeDeps(
@@ -39,7 +39,6 @@ function makeDeps(
     options: {},
     secret: SECRET,
     authorize: async () => ({ ok: true }),
-    resolveDriveId: async () => 'drive-1',
     checkFullEgressEnablement: async () => ({ ok: true }),
     checkConcurrency: async () => ({ allowed: true }),
     now: () => NOW,
@@ -84,8 +83,8 @@ describe('ensureAgentSessionSandbox — first provision', () => {
     expect(host.calls.kill).toHaveLength(0);
   });
 
-  it('given a global-assistant session (no agent page), should authorize without a drive and still provision', async () => {
-    const record = makeSessionRecord({ agentPageId: null });
+  it('given a global-assistant session (no drive), should authorize without a drive and still provision', async () => {
+    const record = makeSessionRecord({ driveId: null });
     const store = makeAgentSessionStore([record]);
     const host = makeSpriteHost();
     const seen: Array<string | undefined> = [];
@@ -96,9 +95,6 @@ describe('ensureAgentSessionSandbox — first provision', () => {
       deps: makeDeps(
         { store, host },
         {
-          resolveDriveId: async () => {
-            throw new Error('must not resolve a drive for a session with no agent page');
-          },
           authorize: async (input) => {
             seen.push(input.driveId);
             return { ok: true };
@@ -177,7 +173,7 @@ describe('ensureAgentSessionSandbox — first provision', () => {
 
   it('should measure storage while the fresh Sprite is awake, without awaiting it', async () => {
     const store = makeAgentSessionStore([makeSessionRecord()]);
-    const seen: Array<{ sessionId: string; agentPageId: string | null }> = [];
+    const seen: Array<{ sessionId: string }> = [];
     await ensureAgentSessionSandbox({
       row: toSpriteRow(makeSessionRecord()),
       intent: 'ensure',
@@ -185,14 +181,14 @@ describe('ensureAgentSessionSandbox — first provision', () => {
       deps: makeDeps(
         { store, host: makeSpriteHost() },
         {
-          measureSessionStorage: async ({ sessionId, agentPageId }) => {
-            seen.push({ sessionId, agentPageId });
+          measureSessionStorage: async ({ sessionId }) => {
+            seen.push({ sessionId });
           },
         },
       ),
     });
     await Promise.resolve();
-    expect(seen).toEqual([{ sessionId: SESSION_ID, agentPageId: AGENT_PAGE_ID }]);
+    expect(seen).toEqual([{ sessionId: SESSION_ID }]);
   });
 
   it('given a measurement seam that rejects, should still report a successful provision', async () => {
@@ -758,7 +754,11 @@ describe('ensureAgentSessionSandbox — refusals', () => {
     expect(store.rows.get(SESSION_ID)!.sandboxId).toBeNull();
   });
 
-  it('given an unresolvable drive, should let authorization fail closed', async () => {
+  it('given authorization refuses, should provision NOTHING — no VM exists to leak or bill', async () => {
+    // The old variant of this test made resolveDriveId fail; that dep died
+    // with the un-conflation (the drive is a fact of the ROW now, nothing to
+    // resolve). The invariant it protected survives: a refused authorize must
+    // reach the host zero times.
     const store = makeAgentSessionStore([makeSessionRecord()]);
     const host = makeSpriteHost();
     const result = await ensureAgentSessionSandbox({
@@ -768,14 +768,33 @@ describe('ensureAgentSessionSandbox — refusals', () => {
       deps: makeDeps(
         { store, host },
         {
-          resolveDriveId: async () => null,
-          authorize: async (input) => (input.driveId ? { ok: true } : { ok: false, reason: 'no_drive_access' }),
+          authorize: async () => ({ ok: false, reason: 'no_drive_access' }),
         },
       ),
     });
 
     expect(result.ok).toBe(false);
     expect(host.calls.provision).toHaveLength(0);
+  });
+
+  it('should authorize against the ROW driveId — the session decides its drive, never the caller', async () => {
+    const seen: Array<string | undefined> = [];
+    const store = makeAgentSessionStore([makeSessionRecord()]);
+    await ensureAgentSessionSandbox({
+      row: toSpriteRow(makeSessionRecord({ driveId: 'drive-from-row' })),
+      intent: 'ensure',
+      actor,
+      deps: makeDeps(
+        { store, host: makeSpriteHost() },
+        {
+          authorize: async (input) => {
+            seen.push(input.driveId);
+            return { ok: true };
+          },
+        },
+      ),
+    });
+    expect(seen).toEqual(['drive-from-row']);
   });
 });
 

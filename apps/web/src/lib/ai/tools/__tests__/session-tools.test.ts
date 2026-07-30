@@ -125,6 +125,8 @@ describe('spawn_session', () => {
     );
     expect(deps.createWorkerSession).toHaveBeenCalledWith({
       sessionId: 'new-session-id',
+      // The worker joins its SPAWNER's workspace — same session, same sandbox.
+      callerConversationId: CALLER_CONVERSATION,
       ownerId: USER_ID,
       agentPageId: CALLER_AGENT,
       name: 'worker',

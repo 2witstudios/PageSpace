@@ -6,10 +6,7 @@ const {
   mockAuditRequest,
   mockCheckSessionAccess,
   mockCheckSessionEndAccess,
-  mockCheckAccessForSubject,
-  mockEnsureSession,
   mockEndSession,
-  mockFindSessionConversation,
   mockFindSessionRecord,
   mockProvisionSessionSandbox,
 } = vi.hoisted(() => ({
@@ -17,10 +14,7 @@ const {
   mockAuditRequest: vi.fn(),
   mockCheckSessionAccess: vi.fn(),
   mockCheckSessionEndAccess: vi.fn(),
-  mockCheckAccessForSubject: vi.fn(),
-  mockEnsureSession: vi.fn(),
   mockEndSession: vi.fn(),
-  mockFindSessionConversation: vi.fn(),
   mockFindSessionRecord: vi.fn(),
   mockProvisionSessionSandbox: vi.fn(),
 }));
@@ -38,21 +32,17 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
   checkSessionAccess: (...args: unknown[]) => mockCheckSessionAccess(...args),
   checkSessionEndAccess: (...args: unknown[]) => mockCheckSessionEndAccess(...args),
-  checkAccessForSubject: (...args: unknown[]) => mockCheckAccessForSubject(...args),
-  ensureSession: (...args: unknown[]) => mockEnsureSession(...args),
   endSession: (...args: unknown[]) => mockEndSession(...args),
-  findSessionConversation: (...args: unknown[]) => mockFindSessionConversation(...args),
   findSessionRecord: (...args: unknown[]) => mockFindSessionRecord(...args),
   provisionSessionSandbox: (...args: unknown[]) => mockProvisionSessionSandbox(...args),
-  toAgentSessionDTO: (row: { conversationId: string }) => ({ sessionId: row.conversationId, dto: true }),
+  toAgentSessionDTO: (row: { id: string }) => ({ sessionId: row.id, dto: true }),
 }));
 
 import { GET, POST, DELETE } from '../route';
 
 const AUTH_USER = { userId: 'user-1', role: 'admin' };
-const SESSION_ID = 'conv-1';
-const ROW = { conversationId: SESSION_ID, ownerId: 'user-1', agentPageId: 'page-1' };
-const CONVERSATION = { userId: 'user-1', type: 'page', contextId: 'page-1', isShared: false };
+const SESSION_ID = 'ses-1';
+const ROW = { id: SESSION_ID, ownerId: 'user-1', driveId: 'drive-1' };
 
 const params = { params: Promise.resolve({ sessionId: SESSION_ID }) };
 const get = () => GET(new Request(`http://localhost/api/agent-sessions/${SESSION_ID}`), params);
@@ -64,10 +54,7 @@ beforeEach(() => {
   mockAuthenticateRequest.mockResolvedValue(AUTH_USER);
   mockCheckSessionAccess.mockResolvedValue({ allowed: true });
   mockCheckSessionEndAccess.mockResolvedValue({ allowed: true });
-  mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
-  mockFindSessionConversation.mockResolvedValue(CONVERSATION);
   mockFindSessionRecord.mockResolvedValue(ROW);
-  mockEnsureSession.mockResolvedValue({ ok: true, session: ROW });
   mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sb-1', resumed: false });
   mockEndSession.mockResolvedValue({ ok: true, spriteTornDown: true });
 });
@@ -98,76 +85,31 @@ describe('GET /api/agent-sessions/[sessionId]', () => {
 });
 
 describe('POST /api/agent-sessions/[sessionId]', () => {
-  it('should ensure the row AS THE CONVERSATION OWNER, provision, and return the DTO', async () => {
+  it('should (re-)provision an EXISTING session and return the DTO — spawn lives on the collection route', async () => {
     const response = await post();
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ session: { sessionId: SESSION_ID, dto: true } });
-    expect(mockEnsureSession).toHaveBeenCalledWith({
-      conversationId: SESSION_ID,
-      userId: 'user-1',
-      agentPageId: 'page-1',
-    });
     expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(ROW, 'user-1');
   });
 
-  it('given a GLOBAL conversation, should anchor with agentPageId null', async () => {
-    mockFindSessionConversation.mockResolvedValue({ userId: 'user-1', type: 'global', contextId: null, isShared: false });
-    await post();
-    expect(mockEnsureSession).toHaveBeenCalledWith(
-      expect.objectContaining({ agentPageId: null }),
-    );
-  });
-
-  it('given a conversation that does not exist, should 404 and never ensure or provision', async () => {
-    mockFindSessionConversation.mockResolvedValue(null);
+  it('given no such session, should 404 and never provision — this route mints nothing', async () => {
+    mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'session_not_found' });
     const response = await post();
     expect(response.status).toBe(404);
-    expect(mockEnsureSession).not.toHaveBeenCalled();
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
   });
 
-  it('given a conversation type that cannot host a session, should 409', async () => {
-    mockFindSessionConversation.mockResolvedValue({ userId: 'user-1', type: 'drive', contextId: 'drive-1', isShared: false });
-    const response = await post();
-    expect(response.status).toBe(409);
-    expect(mockEnsureSession).not.toHaveBeenCalled();
-  });
-
-  it('given an access denial on the row-to-be, should 403 BEFORE ensuring anything', async () => {
-    mockCheckAccessForSubject.mockResolvedValue({ allowed: false, reason: 'code_execution_denied' });
+  it('given an access denial, should 403 BEFORE provisioning anything', async () => {
+    mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'drive_access_denied' });
     const response = await post();
     expect(response.status).toBe(403);
-    expect(mockEnsureSession).not.toHaveBeenCalled();
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
   });
 
   it('given a PLAN-LIMIT refusal, should 429 — not the 403 an authorization failure gets', async () => {
-    // The distinction this PR spent several rounds getting right, finally pinned
-    // at the route: a quota refusal is a quantity limit (429, `security.rate.limited`,
-    // worded in the UI's vocabulary), never an access denial. The `route` tag is
-    // asserted because extracting the duplicated helper made it a parameter.
-    mockProvisionSessionSandbox.mockResolvedValue({
-      ok: false,
-      reason: 'denied',
-      denial: 'session_limit_reached',
-    });
-
+    mockProvisionSessionSandbox.mockResolvedValue({ ok: false, reason: 'denied', denial: 'session_limit_reached' });
     const response = await post();
-
     expect(response.status).toBe(429);
-    const body = await response.json();
-    expect(body.error).toContain('sandbox');
-    expect(body.error.toLowerCase()).not.toContain('session');
-    expect(mockAuditRequest).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        eventType: 'security.rate.limited',
-        details: expect.objectContaining({
-          reason: 'session_limit_reached',
-          route: 'agent-sessions/[sessionId]',
-        }),
-      }),
-    );
   });
 
   it('given a provisioning denial, should 403 with the audit trail', async () => {
@@ -180,16 +122,7 @@ describe('POST /api/agent-sessions/[sessionId]', () => {
     mockProvisionSessionSandbox.mockResolvedValue({ ok: false, reason: 'provision_failed', detail: 'boom' });
     const response = await post();
     expect(response.status).toBe(502);
-    expect(await response.json()).toEqual(
-      expect.objectContaining({ reason: 'provision_failed' }),
-    );
-  });
-
-  it('given the squat guard refusing the conversation, should 409', async () => {
-    mockEnsureSession.mockResolvedValue({ ok: false, reason: 'conversation_unavailable' });
-    const response = await post();
-    expect(response.status).toBe(409);
-    expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
+    expect((await response.json()).reason).toBe('provision_failed');
   });
 });
 

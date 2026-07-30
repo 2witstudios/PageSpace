@@ -17,9 +17,9 @@ import {
 } from '../contract';
 
 const session = {
-  sessionId: 'conv-1',
+  sessionId: 'ses-1',
+  driveId: 'drive-1',
   ownerId: 'user-1',
-  agentPageId: 'page-1',
   name: 'Refactor the parser',
   sandboxStatus: 'running',
   createdAt: '2026-07-28T10:00:00.000Z',
@@ -29,7 +29,7 @@ const session = {
 
 const shell = {
   shellId: 'shell-row-1',
-  sessionId: 'conv-1',
+  sessionId: 'ses-1',
   ownerId: 'user-1',
   name: 'shell-1',
   agentType: 'shell',
@@ -56,8 +56,8 @@ describe('agentSessionDtoSchema', () => {
     expect(agentSessionDtoSchema.parse(session)).toEqual(session);
   });
 
-  it('given a null agentPageId (global-assistant session), should parse', () => {
-    expect(agentSessionDtoSchema.parse({ ...session, agentPageId: null }).agentPageId).toBeNull();
+  it('given a null driveId (global-assistant session, user-scoped), should parse', () => {
+    expect(agentSessionDtoSchema.parse({ ...session, driveId: null }).driveId).toBeNull();
   });
 
   it('given an empty sessionId, should fail (ids address — an empty one addresses nothing)', () => {
@@ -78,10 +78,19 @@ describe('agentSessionDtoSchema', () => {
     expect(parsed.endedAt).toBe('2026-07-28T11:00:00.000Z');
   });
 
-  it('should NOT accept a session-binding field — conversationId IS the session address', () => {
+  it('should strip a conversation id — a session is not addressed by any thread', () => {
+    // The inversion of the old rule: sessionId used to BE the conversation id.
+    // A session hosts many conversations, so a conversationId on the session
+    // DTO would be a claim about which thread "is" the session — a category
+    // error the schema strips rather than models.
     const parsed = agentSessionDtoSchema.parse({ ...session, conversationId: 'conv-1' }) as Record<string, unknown>;
     expect(parsed.conversationId).toBeUndefined();
-    expect(parsed.sessionId).toBe('conv-1');
+    expect(parsed.sessionId).toBe('ses-1');
+  });
+
+  it('should NOT accept an agent field — the agent belongs to each conversation, never the session', () => {
+    const parsed = agentSessionDtoSchema.parse({ ...session, agentPageId: 'page-1' }) as Record<string, unknown>;
+    expect(parsed.agentPageId).toBeUndefined();
   });
 });
 
@@ -172,7 +181,7 @@ describe('shellConnectPayloadSchema', () => {
       machineId: 'm1',
       projectName: 'p',
       branchName: 'b',
-      sessionId: 'conv-1',
+      sessionId: 'ses-1',
     }) as Record<string, unknown>;
     expect(parsed.machineId).toBeUndefined();
     expect(parsed.projectName).toBeUndefined();

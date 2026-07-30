@@ -29,6 +29,7 @@ const ownerId = createId();
 const driveId = createId();
 const agentPageId = createId();
 const conversationIds: string[] = [];
+const sessionIds: string[] = [];
 /**
  * Every sandbox id this file lets reach the DB, recorded AS IT IS WRITTEN.
  *
@@ -46,30 +47,34 @@ const sandboxIds = new Set<string>(['sbx-integration-outbox']);
 
 let store: Awaited<ReturnType<typeof createDbAgentSessionStore>>;
 
-/** A conversation row (the FK/PK target) plus its session row. */
+/** A session row (its own id), plus one conversation BOUND to it via conversations.sessionId. */
 async function seedSession(
-  over: Partial<{ sandboxId: string; spriteInstanceId: string; spriteTornDownAt: Date; endedAt: Date }> = {},
+  over: Partial<{ sandboxId: string; spriteInstanceId: string | null; spriteTornDownAt: Date; endedAt: Date }> = {},
 ) {
+  const sessionId = createId();
+  sessionIds.push(sessionId);
+  if (over.sandboxId) sandboxIds.add(over.sandboxId);
+  await db.insert(agentSessions).values({
+    id: sessionId,
+    ownerId,
+    driveId,
+    sandboxId: over.sandboxId ?? null,
+    spriteInstanceId: over.spriteInstanceId ?? null,
+    spriteTornDownAt: over.spriteTornDownAt ?? null,
+    endedAt: over.endedAt ?? null,
+    updatedAt: new Date(),
+  });
   const conversationId = createId();
   conversationIds.push(conversationId);
-  if (over.sandboxId) sandboxIds.add(over.sandboxId);
   await db.insert(conversations).values({
     id: conversationId,
     userId: ownerId,
     title: 'integration',
     type: 'page',
     contextId: agentPageId,
+    sessionId,
   });
-  await db.insert(agentSessions).values({
-    conversationId,
-    ownerId,
-    agentPageId,
-    sandboxId: over.sandboxId ?? null,
-    spriteInstanceId: over.spriteInstanceId ?? null,
-    spriteTornDownAt: over.spriteTornDownAt ?? null,
-    endedAt: over.endedAt ?? null,
-  });
-  return conversationId;
+  return sessionId;
 }
 
 beforeAll(async () => {
@@ -96,13 +101,13 @@ afterAll(async () => {
     const rows = await db
       .select({ sandboxId: agentSessions.sandboxId })
       .from(agentSessions)
-      .where(inArray(agentSessions.conversationId, conversationIds));
+      .where(inArray(agentSessions.id, sessionIds));
     for (const row of rows) {
       if (row.sandboxId) sandboxIds.add(row.sandboxId);
     }
     // agent_sessions cascades from conversations, but delete explicitly: the DB
     // is shared, so a leaked row is the next run's mystery, not this one's.
-    await db.delete(agentSessions).where(inArray(agentSessions.conversationId, conversationIds));
+    await db.delete(agentSessions).where(inArray(agentSessions.id, sessionIds));
     await db.delete(conversations).where(inArray(conversations.id, conversationIds));
   }
   await db.delete(machineSpriteReclaims).where(inArray(machineSpriteReclaims.sandboxId, [...sandboxIds]));
@@ -115,28 +120,54 @@ beforeEach(async () => {
   await db.delete(machineSpriteReclaims).where(eq(machineSpriteReclaims.sandboxId, 'sbx-integration-outbox'));
 });
 
-describe('insertIfAbsent (PK = conversationId)', () => {
-  it('given two inserts for one conversation, should keep exactly one row and neither should throw', async () => {
+describe('create + findByConversation', () => {
+  it('mints a session with its own id, and two bound conversations resolve the SAME row', async () => {
+    const created = await store.create({ ownerId, driveId, name: 'api refactor', now: new Date() });
+    sessionIds.push(created.id);
+
+    for (const convName of ['conv-x', 'conv-y']) {
+      const conversationId = createId();
+      conversationIds.push(conversationId);
+      await db.insert(conversations).values({
+        id: conversationId,
+        userId: ownerId,
+        title: convName,
+        type: 'page',
+        contextId: agentPageId,
+        sessionId: created.id,
+      });
+      // The payoff of the un-conflation, proven against real Postgres: every
+      // thread in a session resolves the one row whose id folds the ONE
+      // Sprite key.
+      const resolved = await store.findByConversation(conversationId);
+      expect(resolved?.id).toBe(created.id);
+    }
+  });
+
+  it('a thread with no session resolves null — never a fallback', async () => {
     const conversationId = createId();
     conversationIds.push(conversationId);
     await db.insert(conversations).values({
       id: conversationId,
       userId: ownerId,
-      title: 'dupe',
+      title: 'plain chat',
       type: 'page',
       contextId: agentPageId,
     });
+    expect(await store.findByConversation(conversationId)).toBeNull();
+  });
 
-    const input = { conversationId, ownerId, agentPageId, name: null, now: new Date() };
-    await store.insertIfAbsent(input);
-    // The whole concurrency contract of ensureAgentSession: the SECOND caller
-    // must not error, because both are legitimate first touches racing.
-    await expect(store.insertIfAbsent({ ...input, name: 'second' })).resolves.toBeUndefined();
+  it('deleting a session NULLs the binding and the thread survives as history', async () => {
+    const sessionId = await seedSession();
+    const [bound] = await db.select().from(conversations).where(eq(conversations.sessionId, sessionId));
+    expect(bound).toBeDefined();
 
-    const rows = await db.select().from(agentSessions).where(eq(agentSessions.conversationId, conversationId));
-    expect(rows).toHaveLength(1);
-    // ON CONFLICT DO NOTHING — the first writer's row stands.
-    expect(rows[0].name).toBeNull();
+    await db.delete(agentSessions).where(eq(agentSessions.id, sessionId));
+
+    const [after] = await db.select().from(conversations).where(eq(conversations.id, bound.id));
+    expect(after).toBeDefined();
+    expect(after.sessionId).toBeNull();
+    expect(await store.findByConversation(bound.id)).toBeNull();
   });
 });
 
@@ -156,7 +187,7 @@ describe('updateSpriteIdentity — CAS on the previous pointer', () => {
     });
 
     expect(ok).toBe(true);
-    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.conversationId, conversationId));
+    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.id, conversationId));
     expect(row.sandboxId).toBe('sbx-1');
     expect(row.spriteInstanceId).toBe('i-1');
   });
@@ -179,7 +210,7 @@ describe('updateSpriteIdentity — CAS on the previous pointer', () => {
     });
 
     expect(ok).toBe(false);
-    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.conversationId, conversationId));
+    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.id, conversationId));
     expect(row.sandboxId).toBe('sbx-existing');
   });
 
@@ -198,7 +229,7 @@ describe('updateSpriteIdentity — CAS on the previous pointer', () => {
     });
 
     expect(ok).toBe(true);
-    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.conversationId, conversationId));
+    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.id, conversationId));
     expect(row.sandboxId).toBe('sbx-new');
     expect(row.spriteTornDownAt).toBeNull();
   });
@@ -216,7 +247,7 @@ describe('stampSpriteTornDown — CAS on the INSTANCE', () => {
     });
 
     expect(ok).toBe(true);
-    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.conversationId, conversationId));
+    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.id, conversationId));
     expect(row.spriteTornDownAt).not.toBeNull();
   });
 
@@ -231,7 +262,7 @@ describe('stampSpriteTornDown — CAS on the INSTANCE', () => {
     });
 
     expect(ok).toBe(false);
-    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.conversationId, conversationId));
+    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.id, conversationId));
     expect(row.spriteTornDownAt).toBeNull();
   });
 });
@@ -267,7 +298,7 @@ describe('recordStorageMeasurement', () => {
 
     await store.recordStorageMeasurement({ sessionId: conversationId, measuredBytes: 4096, measuredAt });
 
-    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.conversationId, conversationId));
+    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.id, conversationId));
     expect(Number(row.storageMeasuredBytes)).toBe(4096);
     expect(row.storageMeasuredAt).not.toBeNull();
   });
@@ -281,7 +312,7 @@ describe('recordStorageMeasurement', () => {
 
     await store.recordStorageMeasurement({ sessionId: conversationId, measuredBytes: 999, measuredAt: new Date() });
 
-    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.conversationId, conversationId));
+    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.id, conversationId));
     expect(row.storageMeasuredBytes).toBeNull();
   });
 });
@@ -338,16 +369,20 @@ describe('reclaim trigger — every cascade path that can strand a live Sprite',
       type: over.withPage ? 'page' : 'global',
       contextId: over.withPage ? probePageId : null,
     });
+    const probeSessionId = createId();
     await db.insert(agentSessions).values({
-      conversationId,
+      id: probeSessionId,
       ownerId: probeUserId,
-      agentPageId: over.withPage ? probePageId : null,
+      // A drive-scoped session unless the probe wants a user-scoped one (the
+      // global-assistant shape) — withPage doubles as "drive-scoped" here.
+      driveId: over.withPage ? probeDriveId : null,
       sandboxId: over.sandboxId,
       spriteInstanceId: 'i',
       spriteTornDownAt: over.spriteTornDownAt ?? null,
+      updatedAt: new Date(),
     });
     sandboxIds.add(over.sandboxId);
-    return { probeUserId, probeDriveId, probePageId, conversationId };
+    return { probeUserId, probeDriveId, probePageId, conversationId, probeSessionId };
   }
 
   async function reclaimed(sandboxId: string): Promise<boolean> {
@@ -358,14 +393,19 @@ describe('reclaim trigger — every cascade path that can strand a live Sprite',
     return rows.length > 0;
   }
 
-  it('given the AGENT PAGE is deleted, should rescue the pointer', async () => {
+  it('given the AGENT PAGE is deleted, should NOT touch the session — sessions are not page-anchored', async () => {
+    // The old model cascaded sessions off their agent page. A session hosts
+    // many agents' conversations now, so a page delete must leave it alive.
     const probe = await seedProbe({ suffix: 'page', sandboxId: 'sbx-cascade-page', withPage: true });
     await db.delete(pages).where(eq(pages.id, probe.probePageId));
-    expect(await reclaimed('sbx-cascade-page')).toBe(true);
+    const rows = await db.select().from(agentSessions).where(eq(agentSessions.id, probe.probeSessionId));
+    expect(rows).toHaveLength(1);
+    expect(await reclaimed('sbx-cascade-page')).toBe(false);
     await db.delete(users).where(eq(users.id, probe.probeUserId));
+    expect(await reclaimed('sbx-cascade-page')).toBe(true);
   });
 
-  it('given the DRIVE is deleted, should rescue the pointer through two cascade hops', async () => {
+  it('given the DRIVE is deleted, should rescue the pointer — the direct driveId cascade', async () => {
     const probe = await seedProbe({ suffix: 'drive', sandboxId: 'sbx-cascade-drive', withPage: true });
     await db.delete(drives).where(eq(drives.id, probe.probeDriveId));
     expect(await reclaimed('sbx-cascade-drive')).toBe(true);
@@ -392,15 +432,26 @@ describe('reclaim trigger — every cascade path that can strand a live Sprite',
   });
 });
 
-describe('conversation delete cascade', () => {
-  it('given the conversation row is deleted, should take the session row with it', async () => {
-    // The PK-is-the-FK design in one assertion: no orphan cleanup code exists
-    // anywhere because this cascade is what removes sessions.
-    const conversationId = await seedSession({ sandboxId: 'sbx-cascade', spriteInstanceId: 'i' });
+describe('conversation delete', () => {
+  it('given a bound conversation is deleted, should leave the session ALIVE — threads do not own workspaces', async () => {
+    // The inversion of the old PK-is-the-FK design: a session hosts many
+    // threads, so one thread's deletion says nothing about the workspace.
+    const sessionId = await seedSession({ sandboxId: 'sbx-conv-delete', spriteInstanceId: 'i' });
+    const [bound] = await db.select().from(conversations).where(eq(conversations.sessionId, sessionId));
 
-    await db.delete(conversations).where(eq(conversations.id, conversationId));
+    await db.delete(conversations).where(eq(conversations.id, bound.id));
 
-    const rows = await db.select().from(agentSessions).where(eq(agentSessions.conversationId, conversationId));
-    expect(rows).toHaveLength(0);
+    const rows = await db.select().from(agentSessions).where(eq(agentSessions.id, sessionId));
+    expect(rows).toHaveLength(1);
+    expect(await reclaimedOutside('sbx-conv-delete')).toBe(false);
   });
 });
+
+/** Outbox lookup usable outside the cascade describe's closure. */
+async function reclaimedOutside(sandboxId: string): Promise<boolean> {
+  const rows = await db
+    .select()
+    .from(machineSpriteReclaims)
+    .where(eq(machineSpriteReclaims.sandboxId, sandboxId));
+  return rows.length > 0;
+}

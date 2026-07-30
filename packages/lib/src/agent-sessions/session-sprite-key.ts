@@ -10,28 +10,34 @@
  * and a distinct name is what makes it impossible to hand two sessions the same
  * underlying VM.
  *
- * The fold is the SESSION id — which IS the conversation id (see `contract.ts`):
- * one id addresses the tool target, the `?c=` URL, the chat anchor, and this
- * Sprite. It is a client-minted cuid2, which is fine as HMAC input: the key's
- * unguessability comes from the server-held secret, not from the id.
+ * The fold is the SESSION's OWN id (`agent_sessions.id`) — a server-minted
+ * cuid2, NOT a conversation id. That is what makes sandbox sharing structural:
+ * every conversation and shell in a session resolves the same Sprite because
+ * they resolve the same session, not because anything threads a "shared" id
+ * around. (v1 folded the conversation id, back when a session WAS a
+ * conversation — the conflation this model removes.) A cuid is fine as HMAC
+ * input: the key's unguessability comes from the server-held secret, not from
+ * the id.
  *
- * The namespace is FRESH (`agent-session-sprite:v1`, prefix `pgs-ses-`), so no
- * derivation can collide with the legacy `pgs-agt-*` (per-terminal) or
- * `pgs-sbx-*` (per-machine-page) names still in the wild — even for inputs that
- * happen to coincide.
+ * The namespace is BUMPED (`agent-session-sprite:v2`), keeping the `pgs-ses-`
+ * prefix: v1 folded conversation cuids and v2 folds session cuids, and the two
+ * live in the SAME keyspace — same-namespace reuse could let a v2 session
+ * derive the name of a v1 Sprite still awaiting reclaim. The bump makes every
+ * v2 name fresh by construction, exactly as v1's fresh namespace protected it
+ * from the legacy `pgs-agt-*`/`pgs-sbx-*` names.
  */
 
 import { createHmac } from 'crypto';
 
 export interface AgentSessionSpriteKeyInput {
   tenantId: string;
-  /** ≡ the conversation id — the per-session identity fold. */
+  /** The session's OWN id (`agent_sessions.id`) — the identity fold. Never a conversation id. */
   sessionId: string;
   /** The server-held `SANDBOX_SESSION_SECRET`; never user input. */
   secret: string;
 }
 
-const NAMESPACE_VERSION = 'agent-session-sprite:v1';
+const NAMESPACE_VERSION = 'agent-session-sprite:v2';
 
 /**
  * The web env schema enforces >=32 chars, but the realtime service bypasses full

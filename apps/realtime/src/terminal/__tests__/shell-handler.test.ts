@@ -93,7 +93,7 @@ function makeAuthSuccess(over: Partial<{
   cwd: string;
   payerId: string;
   /** null models a GLOBAL-ASSISTANT session: no agent page, so usage attributes to the owner alone. */
-  agentPageId: string | null;
+  driveId: string | null;
 }> = {}) {
   const sprite = makeSprite(over.sessions ?? []);
   const releaseSlot = vi.fn();
@@ -114,7 +114,7 @@ function makeAuthSuccess(over: Partial<{
     ok: true as const,
     sessionKey: over.sessionKey ?? 'shell:shl-1',
     payerId: over.payerId ?? 'owner-1',
-    agentPageId: over.agentPageId === undefined ? 'page-1' : over.agentPageId,
+    driveId: over.driveId === undefined ? 'drive-1' : over.driveId,
     resolveSandbox: vi.fn(async () => sandbox),
     sprite,
     releaseSlot,
@@ -1697,11 +1697,11 @@ describe('buildShellHandlers', () => {
     });
 
     it('given a GLOBAL-ASSISTANT session (no agent page), settles usage with no pageId so it attributes to the owner alone', async () => {
-      // agentPageId is nullable by design: a global-assistant conversation has
+      // driveId is nullable by design: a global-assistant conversation has
       // no agent page to attribute against, and the payer falls back to the
       // session owner. Attaching someone else's pageId here would misattribute
       // the usage on the billing dashboard.
-      const globalCheckAuth = vi.fn(async () => makeAuthSuccess({ agentPageId: null }));
+      const globalCheckAuth = vi.fn(async () => makeAuthSuccess({ driveId: null }));
       const billing = makeBilling();
       const { onConnect } = buildShellHandlers({
         sessionMap,
@@ -1734,7 +1734,9 @@ describe('buildShellHandlers', () => {
 
       expect(billing.trackUsage).toHaveBeenCalledTimes(1);
       const call = billing.trackUsage.mock.calls[0][0];
-      expect(call).toMatchObject({ payerId: 'owner-1', holdId: 'hold-1', pageId: 'page-1' });
+      // No pageId: a session is drive-scoped, not page-anchored — usage has no page grouping.
+      expect(call).toMatchObject({ payerId: 'owner-1', holdId: 'hold-1' });
+      expect((call as { pageId?: string }).pageId).toBeUndefined();
       expect(call.activeSeconds).toBeCloseTo(7, 0);
       expect(billing.releaseHold).not.toHaveBeenCalled();
       expect(sessionMap.getByKey('shell:shl-1')).toBeUndefined();
@@ -1756,7 +1758,8 @@ describe('buildShellHandlers', () => {
       expect(calls.reduce((s, c) => s + c.activeSeconds, 0)).toBeCloseTo(DETACHED_IDLE_MS / 1000, 0);
       for (const call of calls) {
         expect(call.payerId).toBe('owner-1');
-        expect(call.pageId).toBe('page-1');
+        // No page grouping: a session is drive-scoped, not page-anchored.
+        expect(call.pageId).toBeUndefined();
       }
       expect(calls[0].holdId).toBe('hold-1');
       expect(billing.releaseHold).not.toHaveBeenCalled();
@@ -1775,7 +1778,8 @@ describe('buildShellHandlers', () => {
 
         expect(billing.trackUsage).toHaveBeenCalledTimes(1);
         const first = billing.trackUsage.mock.calls[0][0];
-        expect(first).toMatchObject({ payerId: 'owner-1', holdId: 'hold-1', pageId: 'page-1' });
+        expect(first).toMatchObject({ payerId: 'owner-1', holdId: 'hold-1' });
+        expect((first as { pageId?: string }).pageId).toBeUndefined();
         expect(first.activeSeconds).toBeCloseTo(SETTLE_HEARTBEAT_MS / 1000, 0);
         // The session survives the heartbeat with a fresh hold in place.
         expect(shell.kill).not.toHaveBeenCalled();
