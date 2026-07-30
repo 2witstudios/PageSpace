@@ -16,12 +16,30 @@ import { usePageAgents, type AgentSummary } from '@/hooks/page-agents';
 import { type AgentInfo } from '@/stores/page-agents';
 import { cn } from '@/lib/utils';
 
+/** A minimal, already-scoped agent — for a caller that has its own list rather than a drive to fetch. */
+export interface AISelectorAgentOption {
+  id: string;
+  title: string;
+}
+
 interface AISelectorProps {
   selectedAgent: AgentInfo | null;
   onSelectAgent: (agent: AgentInfo | null) => void;
   driveId?: string;
   disabled?: boolean;
   className?: string;
+  /**
+   * A pre-resolved, already-scoped agent list — when provided, replaces the
+   * internal cross-drive fetch entirely. `driveId` alone cannot express "no
+   * drive" (an absent `driveId` means "every drive" to `usePageAgents`), so a
+   * caller scoped to a single session — which may own no drive at all, in
+   * the global-assistant case — supplies its own list instead.
+   */
+  agents?: readonly AISelectorAgentOption[];
+  /** Loading state for `agents`, when provided. */
+  agentsLoading?: boolean;
+  /** Whether the Global Assistant is offerable. Defaults to true (existing behavior). */
+  canPickAssistant?: boolean;
 }
 
 /**
@@ -37,11 +55,20 @@ export function AISelector({
   driveId,
   disabled = false,
   className,
+  agents: agentsOverride,
+  agentsLoading = false,
+  canPickAssistant = true,
 }: AISelectorProps) {
-  const { agentsByDrive, isLoading, toAgentInfo } = usePageAgents(driveId);
+  const usingOverride = agentsOverride !== undefined;
+  const { agentsByDrive, isLoading: fetchedIsLoading, toAgentInfo } = usePageAgents(driveId, {
+    enabled: !usingOverride,
+  });
 
-  const hasAgents = agentsByDrive.some(drive => drive.agents.length > 0);
-  const showDriveLabels = !driveId && agentsByDrive.length > 1;
+  const isLoading = usingOverride ? agentsLoading : fetchedIsLoading;
+  const hasAgents = usingOverride
+    ? agentsOverride.length > 0
+    : agentsByDrive.some(drive => drive.agents.length > 0);
+  const showDriveLabels = !usingOverride && !driveId && agentsByDrive.length > 1;
 
   const handleSelectGlobal = () => {
     onSelectAgent(null);
@@ -49,6 +76,10 @@ export function AISelector({
 
   const handleSelectAgent = (agent: AgentSummary) => {
     onSelectAgent(toAgentInfo(agent));
+  };
+
+  const handleSelectOverrideAgent = (agent: AISelectorAgentOption) => {
+    onSelectAgent({ id: agent.id, title: agent.title, driveId: driveId ?? '', driveName: '' });
   };
 
   return (
@@ -69,20 +100,22 @@ export function AISelector({
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align="start" className="w-[280px]">
-        {/* Global Assistant - always first */}
-        <DropdownMenuItem
-          onClick={handleSelectGlobal}
-          className={cn(
-            'flex items-center gap-2 cursor-pointer',
-            !selectedAgent && 'bg-accent/50'
-          )}
-          aria-current={!selectedAgent ? 'true' : undefined}
-        >
-          <span className="font-medium">Global Assistant</span>
-          {!selectedAgent && (
-            <span className="ml-auto text-xs text-muted-foreground">Active</span>
-          )}
-        </DropdownMenuItem>
+        {/* Global Assistant - always first, when offerable */}
+        {canPickAssistant && (
+          <DropdownMenuItem
+            onClick={handleSelectGlobal}
+            className={cn(
+              'flex items-center gap-2 cursor-pointer',
+              !selectedAgent && 'bg-accent/50'
+            )}
+            aria-current={!selectedAgent ? 'true' : undefined}
+          >
+            <span className="font-medium">Global Assistant</span>
+            {!selectedAgent && (
+              <span className="ml-auto text-xs text-muted-foreground">Active</span>
+            )}
+          </DropdownMenuItem>
+        )}
 
         {/* Agents section */}
         {isLoading ? (
@@ -97,40 +130,65 @@ export function AISelector({
           <>
             <DropdownMenuSeparator />
 
-            {agentsByDrive.map((drive) => {
-              if (drive.agents.length === 0) return null;
+            {usingOverride ? (
+              <DropdownMenuGroup>
+                {agentsOverride.map((agent) => {
+                  const isSelected = selectedAgent?.id === agent.id;
 
-              return (
-                <DropdownMenuGroup key={drive.driveId}>
-                  {showDriveLabels && (
-                    <DropdownMenuLabel className="text-xs text-muted-foreground">
-                      {drive.driveName}
-                    </DropdownMenuLabel>
-                  )}
+                  return (
+                    <DropdownMenuItem
+                      key={agent.id}
+                      onClick={() => handleSelectOverrideAgent(agent)}
+                      className={cn(
+                        'flex items-center gap-2 cursor-pointer',
+                        isSelected && 'bg-accent/50'
+                      )}
+                      aria-current={isSelected ? 'true' : undefined}
+                    >
+                      <span className="truncate">{agent.title || 'Unnamed Agent'}</span>
+                      {isSelected && (
+                        <span className="ml-auto text-xs text-muted-foreground">Active</span>
+                      )}
+                    </DropdownMenuItem>
+                  );
+                })}
+              </DropdownMenuGroup>
+            ) : (
+              agentsByDrive.map((drive) => {
+                if (drive.agents.length === 0) return null;
 
-                  {drive.agents.map((agent) => {
-                    const isSelected = selectedAgent?.id === agent.id;
+                return (
+                  <DropdownMenuGroup key={drive.driveId}>
+                    {showDriveLabels && (
+                      <DropdownMenuLabel className="text-xs text-muted-foreground">
+                        {drive.driveName}
+                      </DropdownMenuLabel>
+                    )}
 
-                    return (
-                      <DropdownMenuItem
-                        key={agent.id}
-                        onClick={() => handleSelectAgent(agent)}
-                        className={cn(
-                          'flex items-center gap-2 cursor-pointer',
-                          isSelected && 'bg-accent/50'
-                        )}
-                        aria-current={isSelected ? 'true' : undefined}
-                      >
-                        <span className="truncate">{agent.title || 'Unnamed Agent'}</span>
-                        {isSelected && (
-                          <span className="ml-auto text-xs text-muted-foreground">Active</span>
-                        )}
-                      </DropdownMenuItem>
-                    );
-                  })}
-                </DropdownMenuGroup>
-              );
-            })}
+                    {drive.agents.map((agent) => {
+                      const isSelected = selectedAgent?.id === agent.id;
+
+                      return (
+                        <DropdownMenuItem
+                          key={agent.id}
+                          onClick={() => handleSelectAgent(agent)}
+                          className={cn(
+                            'flex items-center gap-2 cursor-pointer',
+                            isSelected && 'bg-accent/50'
+                          )}
+                          aria-current={isSelected ? 'true' : undefined}
+                        >
+                          <span className="truncate">{agent.title || 'Unnamed Agent'}</span>
+                          {isSelected && (
+                            <span className="ml-auto text-xs text-muted-foreground">Active</span>
+                          )}
+                        </DropdownMenuItem>
+                      );
+                    })}
+                  </DropdownMenuGroup>
+                );
+              })
+            )}
           </>
         ) : driveId ? (
           <>

@@ -119,4 +119,81 @@ describe('AISelector', () => {
       })
     );
   });
+
+  describe('agents override (session-scoped panes)', () => {
+    it('renders the supplied list instead of the internal cross-drive fetch', async () => {
+      const user = userEvent.setup();
+      render(
+        <AISelector
+          selectedAgent={null}
+          onSelectAgent={mockOnSelectAgent}
+          agents={[{ id: 'pane-agent-1', title: 'Pane Agent' }]}
+        />
+      );
+      await user.click(screen.getByRole('button'));
+
+      expect(screen.getByRole('menuitem', { name: 'Pane Agent' })).toBeInTheDocument();
+      // The fetched fixture agent ("Test Agent") must not leak in — an
+      // override means the internal drive fetch is skipped entirely.
+      expect(screen.queryByText('Test Agent')).not.toBeInTheDocument();
+    });
+
+    it('skips the internal fetch when an override is supplied', () => {
+      render(
+        <AISelector
+          selectedAgent={null}
+          onSelectAgent={mockOnSelectAgent}
+          agents={[{ id: 'pane-agent-1', title: 'Pane Agent' }]}
+        />
+      );
+
+      expect(usePageAgents).toHaveBeenCalledWith(undefined, { enabled: false });
+    });
+
+    it('shows an empty override (a global-assistant session, which owns no drive agents) as just the Assistant', async () => {
+      const user = userEvent.setup();
+      render(<AISelector selectedAgent={null} onSelectAgent={mockOnSelectAgent} agents={[]} />);
+      await user.click(screen.getByRole('button'));
+
+      expect(screen.getByRole('menuitem', { name: /Global Assistant/ })).toBeInTheDocument();
+      expect(screen.queryByText('Test Agent')).not.toBeInTheDocument();
+    });
+
+    it('calls onSelectAgent with the picked override entry', async () => {
+      const user = userEvent.setup();
+      render(
+        <AISelector
+          selectedAgent={null}
+          onSelectAgent={mockOnSelectAgent}
+          driveId="drive_123"
+          agents={[{ id: 'pane-agent-1', title: 'Pane Agent' }]}
+        />
+      );
+
+      await user.click(screen.getByRole('button'));
+      await user.click(screen.getByRole('menuitem', { name: 'Pane Agent' }));
+
+      expect(mockOnSelectAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'pane-agent-1', title: 'Pane Agent' })
+      );
+    });
+  });
+
+  describe('canPickAssistant', () => {
+    it('hides the Global Assistant menu item when false', async () => {
+      const user = userEvent.setup();
+      render(<AISelector selectedAgent={null} onSelectAgent={mockOnSelectAgent} canPickAssistant={false} />);
+      await user.click(screen.getByRole('button'));
+
+      expect(screen.queryByRole('menuitem', { name: /Global Assistant/ })).not.toBeInTheDocument();
+    });
+
+    it('defaults to showing the Global Assistant menu item', async () => {
+      const user = userEvent.setup();
+      render(<AISelector selectedAgent={null} onSelectAgent={mockOnSelectAgent} />);
+      await user.click(screen.getByRole('button'));
+
+      expect(screen.getByRole('menuitem', { name: /Global Assistant/ })).toBeInTheDocument();
+    });
+  });
 });
