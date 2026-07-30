@@ -171,9 +171,12 @@ describe('AgentPageView', () => {
     render(<AgentPageView page={pageFixture()} />);
     await waitFor(() => expect(screen.getByTestId('agent-view-conversation')).toHaveTextContent('conv-1'));
 
+    // No `session` param yet: a page conversation isn't bound into a session
+    // until the agent-page pane story (R3) lands, so the console degrades to
+    // its prompt rather than opening a grid for an unbound conversation.
     expect(screen.getByText('Open in Agents')).toHaveAttribute(
       'href',
-      '/dashboard/drive-1/agents?agent=agent-1&c=conv-1',
+      '/dashboard/drive-1/agents?c=conv-1&agent=agent-1',
     );
   });
 

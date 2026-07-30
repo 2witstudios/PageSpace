@@ -1,15 +1,17 @@
 /**
- * Agent Sessions list API — ONE flat route family (`/api/agent-sessions/**`),
- * deliberately NOT nested under page-agents/conversations: the session row
- * knows its agent (`agentPageId`), so auth derives from the row, and the
- * sessionId in every deeper segment IS the conversation id (contract.ts
- * invariant 1 — there is no second id to nest by).
+ * Agent Sessions API — ONE flat route family (`/api/agent-sessions/**`),
+ * deliberately NOT nested under page-agents/conversations: a session is a
+ * DRIVE-level workspace hosting many conversations (contract.ts invariant 1),
+ * so no single agent or conversation exists to nest it under. Auth derives
+ * from the session row's drive.
  *
- * GET ?driveId=<id> | ?agentId=<id> | (none = mine)
- *   → { sessions: [{ …AgentSessionDTO, shells: ShellDTO[] }] }
+ * GET ?driveId=<id> | (none = mine)
+ *   → { sessions: [{ …AgentSessionDTO, shells: ShellDTO[], conversations }] }
+ * POST { driveId, agentPageId, name? }
+ *   → 201 { session, conversationId } — spawn (see below)
  *
  * Every listing is scoped to the REQUESTER's own sessions (`ownerId` rides
- * every filter): `driveId`/`agentId` narrow *where*, never *whose*. Admin gate
+ * every filter): `driveId` narrows *where*, never *whose*. Admin gate
  * first, 403 without enumerating anything — the agents surface is admin-only +
  * CODE_EXECUTION, same population `/api/machines` served.
  */
@@ -24,6 +26,7 @@ import {
   createConversationInSession,
   endSession,
   listSessions,
+  listSessionConversations,
   spawnSession,
   toAgentSessionDTO,
   type AgentSessionListFilter,
@@ -61,13 +64,15 @@ export async function GET(request: Request) {
 
   try {
     const sessions = await listSessions(filter);
-    const withShells = await Promise.all(
+    const withChildren = await Promise.all(
       sessions.map(async (session) => ({
         ...session,
         shells: await listShells(session.sessionId),
+        // The sidebar's expansion list: the threads living in this workspace.
+        conversations: await listSessionConversations(session.sessionId),
       })),
     );
-    return NextResponse.json({ sessions: withShells });
+    return NextResponse.json({ sessions: withChildren });
   } catch (error) {
     loggers.api.error(
       'Agent sessions list failed',

@@ -18,7 +18,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq, isNotNull } from '@pagespace/db/operators';
+import { and, desc, eq, isNotNull } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { conversations } from '@pagespace/db/schema/conversations';
@@ -320,6 +320,36 @@ export async function spawnSession(input: {
 /** Resolve a conversation's session — how a chat turn finds its working context. Null = a plain chat. */
 export async function findSessionForConversation(conversationId: string): Promise<AgentSessionRecord | null> {
   return (await getAgentSessionStore()).findByConversation(conversationId);
+}
+
+export interface SessionConversationEntry {
+  conversationId: string;
+  title: string | null;
+  /** The thread's agent page (`contextId` for a page chat), or null for a global-assistant thread. */
+  agentPageId: string | null;
+  lastMessageAt: Date | null;
+}
+
+/** The conversations living in one session, newest activity first — the sidebar's expansion list. */
+export async function listSessionConversations(sessionId: string): Promise<SessionConversationEntry[]> {
+  const rows = await db
+    .select({
+      conversationId: conversations.id,
+      title: conversations.title,
+      type: conversations.type,
+      contextId: conversations.contextId,
+      lastMessageAt: conversations.lastMessageAt,
+    })
+    .from(conversations)
+    .where(and(eq(conversations.sessionId, sessionId), eq(conversations.isActive, true)))
+    .orderBy(desc(conversations.lastMessageAt))
+    .limit(100);
+  return rows.map((row) => ({
+    conversationId: row.conversationId,
+    title: row.title,
+    agentPageId: row.type === 'page' ? row.contextId : null,
+    lastMessageAt: row.lastMessageAt,
+  }));
 }
 
 /**

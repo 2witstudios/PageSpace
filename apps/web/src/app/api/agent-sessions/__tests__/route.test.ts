@@ -6,6 +6,7 @@ const {
   mockAuditRequest,
   mockListSessions,
   mockListShells,
+  mockListSessionConversations,
   mockCheckAccessForSubject,
   mockCreateConversationInSession,
   mockEndSession,
@@ -15,6 +16,7 @@ const {
   mockAuditRequest: vi.fn(),
   mockListSessions: vi.fn(),
   mockListShells: vi.fn(),
+  mockListSessionConversations: vi.fn(),
   mockCheckAccessForSubject: vi.fn(),
   mockCreateConversationInSession: vi.fn(),
   mockEndSession: vi.fn(),
@@ -33,6 +35,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
   listSessions: (...args: unknown[]) => mockListSessions(...args),
+  listSessionConversations: (...args: unknown[]) => mockListSessionConversations(...args),
   checkAccessForSubject: (...args: unknown[]) => mockCheckAccessForSubject(...args),
   createConversationInSession: (...args: unknown[]) => mockCreateConversationInSession(...args),
   endSession: (...args: unknown[]) => mockEndSession(...args),
@@ -49,9 +52,9 @@ const AUTH_ADMIN = { userId: 'user-1', role: 'admin' };
 const AUTH_NON_ADMIN = { userId: 'user-2', role: 'user' };
 
 const SESSION_DTO = {
-  sessionId: 'conv-1',
+  sessionId: 'ses-1',
+  driveId: 'drive-1',
   ownerId: 'user-1',
-  agentPageId: 'page-1',
   name: 'worker',
   sandboxStatus: 'running',
   createdAt: '2026-07-28T00:00:00.000Z',
@@ -61,7 +64,7 @@ const SESSION_DTO = {
 
 const SHELL_DTO = {
   shellId: 'shell-row-1',
-  sessionId: 'conv-1',
+  sessionId: 'ses-1',
   ownerId: 'user-1',
   name: 'shell-1',
   agentType: 'shell',
@@ -69,19 +72,30 @@ const SHELL_DTO = {
   createdAt: '2026-07-28T00:00:00.000Z',
 };
 
+const CONVERSATION_ENTRY = {
+  conversationId: 'conv-1',
+  title: 'First chat',
+  agentPageId: 'agent-1',
+  lastMessageAt: '2026-07-28T00:00:00.000Z',
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockAuthenticateRequest.mockResolvedValue(AUTH_ADMIN);
   mockListSessions.mockResolvedValue([SESSION_DTO]);
   mockListShells.mockResolvedValue([SHELL_DTO]);
+  mockListSessionConversations.mockResolvedValue([CONVERSATION_ENTRY]);
 });
 
 describe('GET /api/agent-sessions', () => {
-  it('given an admin with no filter, should list THEIR sessions with shells attached', async () => {
+  it('given an admin with no filter, should list THEIR sessions with shells AND conversations attached', async () => {
     const response = await GET(new Request('http://localhost/api/agent-sessions'));
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ sessions: [{ ...SESSION_DTO, shells: [SHELL_DTO] }] });
+    expect(await response.json()).toEqual({
+      sessions: [{ ...SESSION_DTO, shells: [SHELL_DTO], conversations: [CONVERSATION_ENTRY] }],
+    });
     expect(mockListSessions).toHaveBeenCalledWith({ ownerId: 'user-1' });
+    expect(mockListSessionConversations).toHaveBeenCalledWith('ses-1');
   });
 
   it('given ?driveId=, should narrow WHERE but never WHOSE (ownerId still rides the filter)', async () => {
