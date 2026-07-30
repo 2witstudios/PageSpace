@@ -164,39 +164,51 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   // issue #2263, finding 4) and prune the pane that was showing the old id,
   // wherever it lives in the grid (not necessarily the active pane: the
   // grid's own selection and this page's `current` are independent state).
-  const mintReplacementForCurrent = useCallback(() => {
-    const staleConversationId = currentRef.current?.conversationId ?? null;
-    const sessionId = currentRef.current?.sessionId ?? null;
-    void (async () => {
-      // `applyOverride: false` — this mint has its OWN async gap (the POST
-      // below), and the user can select a different thread while it's in
-      // flight. Applying `newConversation`'s default unconditional override
-      // after that gap would silently replace whatever they picked in the
-      // meantime (caught in review) — checked explicitly below instead.
-      const created = await newConversation(sessionId, { applyOverride: false });
-      if (sessionId && staleConversationId) {
-        // The grid's pane binding is repointed regardless: a pane still
-        // showing the now-gone `staleConversationId` is a dangling reference
-        // no matter what this page's OWN `current` has moved on to.
-        useAgentWorkspaceStore.getState().replaceConversation(sessionId, staleConversationId, {
-          kind: 'chat',
-          name: 'New conversation',
-          targetId: created.conversationId,
-          agentPageId: page.id,
-        });
-      }
-      // Only follow the replacement as THIS page's own view if the user
-      // hasn't already navigated elsewhere while the mint was in flight.
-      // Uses `created.sessionId`, not the outer `sessionId` — a session-less
-      // stale conversation (sessionId null) can still mint INTO a fresh
-      // session when `canUseSessions` is true, and this must reflect that
-      // real result, not the pre-mint guess (caught in adversarial review).
-      if (currentRef.current?.conversationId === staleConversationId) {
-        setOverride({ conversationId: created.conversationId, sessionId: created.sessionId });
-        setActiveTab('chat');
-      }
-    })();
-  }, [newConversation, page.id, currentRef]);
+  const mintReplacementForCurrent = useCallback(
+    (deletedConversationId: string) => {
+      // `deletedConversationId` is the ACTUAL id the caller confirmed is gone
+      // (from `useConversations`, matched against `currentConversationId` at
+      // CLICK time) — not necessarily what `current` still is NOW. If the
+      // user already switched to a different thread while this delete was
+      // in flight, `current` no longer names the deleted conversation, and
+      // minting a replacement (into whatever session `current` now belongs
+      // to) would wrongly repoint that OTHER conversation's pane instead
+      // (caught in review). Bail rather than guess.
+      if (currentRef.current?.conversationId !== deletedConversationId) return;
+      const staleConversationId = deletedConversationId;
+      const sessionId = currentRef.current?.sessionId ?? null;
+      void (async () => {
+        // `applyOverride: false` — this mint has its OWN async gap (the POST
+        // below), and the user can select a different thread while it's in
+        // flight. Applying `newConversation`'s default unconditional override
+        // after that gap would silently replace whatever they picked in the
+        // meantime (caught in review) — checked explicitly below instead.
+        const created = await newConversation(sessionId, { applyOverride: false });
+        if (sessionId && staleConversationId) {
+          // The grid's pane binding is repointed regardless: a pane still
+          // showing the now-gone `staleConversationId` is a dangling reference
+          // no matter what this page's OWN `current` has moved on to.
+          useAgentWorkspaceStore.getState().replaceConversation(sessionId, staleConversationId, {
+            kind: 'chat',
+            name: 'New conversation',
+            targetId: created.conversationId,
+            agentPageId: page.id,
+          });
+        }
+        // Only follow the replacement as THIS page's own view if the user
+        // hasn't already navigated elsewhere while the mint was in flight.
+        // Uses `created.sessionId`, not the outer `sessionId` — a session-less
+        // stale conversation (sessionId null) can still mint INTO a fresh
+        // session when `canUseSessions` is true, and this must reflect that
+        // real result, not the pre-mint guess (caught in adversarial review).
+        if (currentRef.current?.conversationId === staleConversationId) {
+          setOverride({ conversationId: created.conversationId, sessionId: created.sessionId });
+          setActiveTab('chat');
+        }
+      })();
+    },
+    [newConversation, page.id, currentRef],
+  );
 
   const {
     conversations,
@@ -232,7 +244,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
         setActiveTab('chat');
         return;
       }
-      mintReplacementForCurrent();
+      mintReplacementForCurrent(event.conversationId);
     },
     [mintReplacementForCurrent, currentRef, page.id],
   );

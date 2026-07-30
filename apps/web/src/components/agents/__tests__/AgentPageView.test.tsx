@@ -109,10 +109,10 @@ const conversationsState = vi.hoisted(() => ({
   // Captured so tests can trigger `onConversationDelete` directly — the real
   // hook fires it when the deleted id is the current conversation; this mock
   // stands in for the hook's own logic, not the callback wiring under test.
-  lastOnConversationDelete: null as (() => void) | null,
+  lastOnConversationDelete: null as ((conversationId: string) => void) | null,
 }));
 vi.mock('@/lib/ai/shared/hooks/useConversations', () => ({
-  useConversations: (opts: { onConversationDelete?: () => void }) => {
+  useConversations: (opts: { onConversationDelete?: (conversationId: string) => void }) => {
     conversationsState.lastOnConversationDelete = opts.onConversationDelete ?? null;
     return conversationsState.current;
   },
@@ -357,7 +357,7 @@ describe('AgentPageView', () => {
       render(<AgentPageView page={pageFixture()} />);
       await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
 
-      conversationsState.lastOnConversationDelete?.();
+      conversationsState.lastOnConversationDelete?.('conv-1');
 
       await waitFor(() =>
         expect(mockCreatePageConversation).toHaveBeenCalledWith(
@@ -385,7 +385,7 @@ describe('AgentPageView', () => {
       useAgentWorkspaceStore.getState().splitRight('ses-1', originalPaneId);
       useAgentWorkspaceStore.getState().selectPane('ses-1', originalPaneId);
 
-      conversationsState.lastOnConversationDelete?.();
+      conversationsState.lastOnConversationDelete?.('conv-1');
 
       await waitFor(() => {
         const pane = useAgentWorkspaceStore
@@ -402,7 +402,7 @@ describe('AgentPageView', () => {
       render(<AgentPageView page={pageFixture()} />);
       await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
 
-      conversationsState.lastOnConversationDelete?.();
+      conversationsState.lastOnConversationDelete?.('conv-1');
 
       await waitFor(() =>
         expect(mockCreatePageConversation).toHaveBeenCalledWith(
@@ -424,7 +424,7 @@ describe('AgentPageView', () => {
       render(<AgentPageView page={pageFixture()} />);
       await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
 
-      conversationsState.lastOnConversationDelete?.();
+      conversationsState.lastOnConversationDelete?.('conv-1');
 
       await waitFor(() =>
         expect(mockCreatePageConversation).toHaveBeenCalledWith(
@@ -434,6 +434,32 @@ describe('AgentPageView', () => {
       await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-new'));
       await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2'));
       expect(screen.queryByTestId('plain-chat')).not.toBeInTheDocument();
+    });
+
+    it('a stale History delete (captured before the user selected a different thread) does not mint an unwanted replacement', async () => {
+      // `useConversations` binds `onConversationDelete` to whichever id WAS
+      // current at click time (conv-1) and fires it whenever that DELETE
+      // resolves, however late — even after the user has already switched to
+      // a different thread. The callback must recover using conv-1, not
+      // whatever `current` has since become, or it mints a replacement into
+      // the WRONG (newly-current) conversation's session (caught in review).
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      conversationsState.current.conversations = [{ id: 'conv-2', sessionId: 'ses-1' }];
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      // The user selects a different history thread WHILE conv-1's own
+      // DELETE is still in flight.
+      await userEvent.click(screen.getByRole('tab', { name: /history/i }));
+      fireEvent.click(await screen.findByTestId('history-select-conv-2'));
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2'));
+
+      conversationsState.lastOnConversationDelete?.('conv-1');
+
+      // 'conv-1' no longer matches the CURRENT tracked conversation
+      // ('conv-2'), so the late-arriving delete must be a no-op.
+      expect(mockCreatePageConversation).not.toHaveBeenCalled();
+      expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2');
     });
 
     it('the History tab "New" button is unaffected — it always spawns a fresh session, never reuses', async () => {

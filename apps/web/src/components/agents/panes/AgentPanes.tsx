@@ -235,9 +235,17 @@ export default function AgentPanes({
   );
   // `decideClosePane` must not treat "not yet loaded" the same as "loaded and
   // empty" — a close must never act on an unverified fact, so it gets `null`
-  // until the fetch actually resolves. `selectPaneAgent`'s switch decision has
-  // no such restriction (worst case for an early switch is a redundant mint).
-  const closeDecisionListing: SessionConversationSummary[] | null = sessionsData ? sessionConversations : null;
+  // until the fetch actually resolves. Gated on `sessionKnownToConversationsCache`
+  // (THIS session's own entry having appeared), not merely `sessionsData`
+  // being truthy — a cache already warm from another session in the same
+  // drive answers with real (truthy) data that simply has no row for a
+  // brand-new session yet, which would otherwise read as a confirmed-empty
+  // listing and wrongly offer to end the session on its first pane close
+  // (caught in review). `selectPaneAgent`'s switch decision has no such
+  // restriction (worst case for an early switch is a redundant mint).
+  const closeDecisionListing: SessionConversationSummary[] | null = sessionKnownToConversationsCache
+    ? sessionConversations
+    : null;
 
   // Selection IS an instruction to show the conversation (review M1): on
   // mount this seeds the first pane; on a later selection within the same

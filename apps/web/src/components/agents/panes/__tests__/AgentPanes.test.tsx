@@ -183,6 +183,7 @@ describe('AgentPanes', () => {
 
   describe('closing the LAST pane (findings 1 + 2)', () => {
     it('asks for confirmation rather than closing immediately', async () => {
+      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
       renderPanes();
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
 
@@ -196,6 +197,7 @@ describe('AgentPanes', () => {
     });
 
     it('cancelling leaves the session and the grid untouched', async () => {
+      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
       renderPanes();
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
       const user = userEvent.setup();
@@ -210,6 +212,7 @@ describe('AgentPanes', () => {
     });
 
     it('confirming DELETEs the session, THEN drops the grid and reports it ended', async () => {
+      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
       mockDel.mockResolvedValue(undefined);
       const onSessionEnded = vi.fn();
       renderPanes({ onSessionEnded });
@@ -226,6 +229,7 @@ describe('AgentPanes', () => {
     });
 
     it('a failed DELETE leaves the grid exactly as it was — no rollback needed because nothing moved', async () => {
+      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
       mockDel.mockRejectedValue(new Error('sandbox teardown failed'));
       const onSessionEnded = vi.fn();
       renderPanes({ onSessionEnded });
@@ -240,6 +244,33 @@ describe('AgentPanes', () => {
       expect(onSessionEnded).not.toHaveBeenCalled();
       // The session is still live locally — no second session gets minted
       // because nothing here ever creates one.
+      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeDefined();
+      expect(screen.getByTestId('pane-chat')).toBeInTheDocument();
+    });
+
+    it("is a no-op on a brand-new session whose OWN entry hasn't appeared in an already-warm cache — never guesses confirmed-empty", async () => {
+      // The `/api/agent-sessions` cache can be warm from ANOTHER session in
+      // the same drive (so `sessionsData` is truthy) while THIS brand-new
+      // session's own row hasn't appeared in it yet — a real fact distinct
+      // from "loaded and confirmed to have no other conversations." Treating
+      // the former as the latter would offer to end a session whose actual
+      // membership is still unknown (caught in review).
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url.includes('/api/agent-sessions')) {
+          return jsonOk({ sessions: [{ sessionId: 'ses-other', conversations: [] }] });
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+
+      const user = userEvent.setup();
+      await user.click(screen.getByLabelText('Close pane'));
+
+      // No dialog, no DELETE, no local mutation — the fact is unverified so
+      // the close is a pure no-op rather than a guess in either direction.
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+      expect(mockDel).not.toHaveBeenCalled();
       expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeDefined();
       expect(screen.getByTestId('pane-chat')).toBeInTheDocument();
     });
