@@ -38,6 +38,7 @@ import {
   Webhook,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { mutate } from 'swr';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
@@ -62,6 +63,7 @@ import {
 import { useResolvedAgent } from './useResolvedAgent';
 import SessionChat from './chat/SessionChat';
 import AgentPanes from './panes/AgentPanes';
+import { isAgentSessionsKey } from './panes/session-conversations';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import type { TreePage } from '@/hooks/usePageTree';
 import type { AgentConfig } from '@/lib/ai/shared/chat-types';
@@ -186,6 +188,14 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
           // after that gap would silently replace whatever they picked in the
           // meantime (caught in review) — checked explicitly below instead.
           const created = await newConversation(sessionId, { applyOverride: false });
+          // Without this, `decideClosePane`'s `activeConversations` (a 20s
+          // poll) can still lack this brand-new row — closing the
+          // replacement pane before the next poll then reads it as "not in
+          // the open listing" and takes the pure layout-close path instead
+          // of the DELETE one, leaving it open server-side forever, holding
+          // a cap slot (the same class of bug `handlePickAgent` already
+          // guards against — caught in review).
+          void mutate(isAgentSessionsKey);
           if (sessionId && staleConversationId) {
             // The grid's pane binding is repointed regardless: a pane still
             // showing the now-gone `staleConversationId` is a dangling reference

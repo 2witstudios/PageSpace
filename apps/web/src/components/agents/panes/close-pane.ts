@@ -138,16 +138,24 @@ export function decideClosePane(params: {
 
   const otherOpenListings = (activeConversations ?? []).filter((c) => c.conversationId !== conversationId);
 
-  // This IS the session's last open listing — ending the session is the only
-  // correct act, even if terminal panes remain elsewhere in the grid: they
-  // belong to the session, and the session's lifecycle follows its last
-  // conversation, not its pane count.
-  if (otherOpenListings.length === 0) return { action: 'end-session' };
-
   if (!isGridLast) return { action: 'close-conversation', conversationId, rebindTo: null, rebindAgentPageId: null };
 
-  // Grid-last: the grid never empties, so this pane rebinds to the most
-  // recently active OTHER open listing instead of vanishing.
+  // Grid-last: attempt the scoped close and let the SERVER be the authority
+  // on whether this genuinely is the session's last open listing — a
+  // resolved (non-null) client snapshot showing no OTHER listings can still
+  // be STALE (another tab or a background worker created one since the last
+  // poll). Short-circuiting straight to `end-session` here would skip the
+  // server's own never-empty check entirely and let a confirm destroy a
+  // session that actually still has another live conversation (caught in
+  // review) — unlike this same case for a non-chat pane (`gridLastFallback`),
+  // a chat pane HAS a conversation of its own to attempt a real scoped close
+  // on, so there's no need to guess. The existing 409 `last_conversation`
+  // handling in `AgentPanes` already falls back to the confirm dialog
+  // correctly once the server actually says so.
+  if (otherOpenListings.length === 0) {
+    return { action: 'close-conversation', conversationId, rebindTo: null, rebindAgentPageId: null };
+  }
+  // A real candidate exists — rebind the grid to it instead of vanishing.
   const target = mostRecentlyActive(otherOpenListings);
   return {
     action: 'close-conversation',

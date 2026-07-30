@@ -57,7 +57,7 @@ import PanePicker, { type PickableAgent, type ReattachableShell } from './PanePi
 import { resolvePaneSurface, type PaneSurface } from './pane-surface';
 import { selectPaneAgent } from './select-pane-agent';
 import { decideClosePane } from './close-pane';
-import type { SessionConversationSummary } from './session-conversations';
+import { isAgentSessionsKey, type SessionConversationSummary } from './session-conversations';
 import PaneChat from './PaneChat';
 import Shell from '../shell/Shell';
 
@@ -118,11 +118,6 @@ async function sessionConversationsFetcher(url: string): Promise<{ sessions: Ses
   const response = await fetchWithAuth(url);
   if (!response.ok) throw new Error(`Failed to list sessions (${response.status})`);
   return response.json();
-}
-
-/** Every `/api/agent-sessions**` SWR entry — revalidated after a close so the sidebar reflects it instantly. */
-function isAgentSessionsKey(key: unknown): boolean {
-  return typeof key === 'string' && key.startsWith('/api/agent-sessions');
 }
 
 export default function AgentPanes({

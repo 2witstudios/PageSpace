@@ -23,6 +23,9 @@ vi.mock('../useResolvedConversation', () => ({
   createPageConversation: (...args: unknown[]) => mockCreatePageConversation(...args),
 }));
 
+const mockMutate = vi.hoisted(() => vi.fn());
+vi.mock('swr', () => ({ mutate: (...args: unknown[]) => mockMutate(...args) }));
+
 vi.mock('../useResolvedAgent', () => ({
   useResolvedAgent: () => ({
     agent: { id: 'agent-1', title: 'My Agent', driveId: 'drive-1', driveName: 'Drive' },
@@ -365,6 +368,26 @@ describe('AgentPageView', () => {
         ),
       );
       await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-2'));
+    });
+
+    it('revalidates the sessions-listing cache after minting the replacement, so a fast re-close sees the new row', async () => {
+      // Without this, `decideClosePane`'s `activeConversations` (a 20s poll)
+      // can still lack this brand-new row — closing the replacement pane
+      // before the next poll would then read it as absent and take the pure
+      // layout-close path instead of the DELETE one, leaving it open
+      // server-side forever (the same class of bug `handlePickAgent` already
+      // guards against — caught in review).
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: 'ses-1' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      conversationsState.lastOnConversationDelete?.('conv-1');
+
+      await waitFor(() => expect(mockMutate).toHaveBeenCalled());
+      const predicate = mockMutate.mock.calls[0][0] as (key: unknown) => boolean;
+      expect(predicate('/api/agent-sessions?driveId=drive-1')).toBe(true);
+      expect(predicate('/api/pages/agent-1')).toBe(false);
     });
 
     it('prunes the pane that was showing the deleted conversation, wherever it lived in the grid', async () => {

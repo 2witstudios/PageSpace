@@ -31,3 +31,14 @@ export function mostRecentlyActive<T extends { lastMessageAt: string | null }>(l
     return candidateAt > latestAt ? candidate : latest;
   });
 }
+
+/**
+ * Every `/api/agent-sessions**` SWR entry — an `useSWR`/`mutate` key
+ * predicate, not a fetch. Any action that mutates session-listing membership
+ * (mint, close, end-session) revalidates through this so every consumer of
+ * the shared listing (the sidebar, other panes, `AgentPageView`'s own
+ * replacement mint) sees it before its own poll interval, not after.
+ */
+export function isAgentSessionsKey(key: unknown): boolean {
+  return typeof key === 'string' && key.startsWith('/api/agent-sessions');
+}

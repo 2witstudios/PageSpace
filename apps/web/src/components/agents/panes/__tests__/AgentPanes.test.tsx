@@ -182,22 +182,31 @@ describe('AgentPanes', () => {
   });
 
   describe('closing the LAST pane (findings 1 + 2)', () => {
-    it('asks for confirmation rather than closing immediately', async () => {
+    // Since round 10 (caught in review): the decision layer never
+    // short-circuits straight to `end-session` from the client's own
+    // snapshot — it always attempts the scoped conversation DELETE first,
+    // and only the SERVER's authoritative 409 `last_conversation` response
+    // triggers the confirm dialog (via the exact same `beginEndSessionConfirm`
+    // the non-chat-pane path already used). Every test here mocks that 409
+    // to reach the dialog, exactly mirroring the real server contract.
+    it('asks for confirmation rather than closing immediately (after the server confirms this is the last listing)', async () => {
       mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+      mockDel.mockRejectedValue(new ApiRequestError('conflict', 409));
       renderPanes();
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
 
       const user = userEvent.setup();
       await user.click(screen.getByLabelText('Close pane'));
 
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'));
       expect(await screen.findByRole('alertdialog')).toBeInTheDocument();
-      expect(mockDel).not.toHaveBeenCalled();
-      // Nothing was mutated yet — the grid is still exactly what it was.
+      // Nothing was mutated — the grid is still exactly what it was.
       expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeDefined();
     });
 
     it('cancelling leaves the session and the grid untouched', async () => {
       mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+      mockDel.mockRejectedValue(new ApiRequestError('conflict', 409));
       renderPanes();
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
       const user = userEvent.setup();
@@ -206,14 +215,17 @@ describe('AgentPanes', () => {
 
       await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
 
-      expect(mockDel).not.toHaveBeenCalled();
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1');
       expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeDefined();
       expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     });
 
     it('confirming DELETEs the session, THEN drops the grid and reports it ended', async () => {
       mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-      mockDel.mockResolvedValue(undefined);
+      mockDel.mockImplementation(async (url: string) => {
+        if (url === '/api/agent-sessions/ses-1/conversations/conv-1') throw new ApiRequestError('conflict', 409);
+        return undefined;
+      });
       const onSessionEnded = vi.fn();
       renderPanes({ onSessionEnded });
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
@@ -230,7 +242,10 @@ describe('AgentPanes', () => {
 
     it('a failed DELETE leaves the grid exactly as it was — no rollback needed because nothing moved', async () => {
       mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-      mockDel.mockRejectedValue(new Error('sandbox teardown failed'));
+      mockDel.mockImplementation(async (url: string) => {
+        if (url === '/api/agent-sessions/ses-1/conversations/conv-1') throw new ApiRequestError('conflict', 409);
+        throw new Error('sandbox teardown failed');
+      });
       const onSessionEnded = vi.fn();
       renderPanes({ onSessionEnded });
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
@@ -461,7 +476,10 @@ describe('AgentPanes', () => {
 
     it("ends the session (via forgetWorkspace) when closing the session's LAST open listing, even with a terminal pane remaining", async () => {
       mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
-      mockDel.mockResolvedValue(undefined);
+      mockDel.mockImplementation(async (url: string) => {
+        if (url === '/api/agent-sessions/ses-1/conversations/conv-1') throw new ApiRequestError('conflict', 409);
+        return undefined;
+      });
       const onSessionEnded = vi.fn();
       renderPanes({ onSessionEnded });
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());

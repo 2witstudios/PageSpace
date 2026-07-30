@@ -213,21 +213,28 @@ describe('decideClosePane', () => {
     });
   });
 
-  describe('the session\'s LAST open listing', () => {
-    it('ends the session even though other (terminal) panes remain in the grid', () => {
+  describe("the session's LAST open listing (per the client's OWN snapshot)", () => {
+    // Never short-circuit straight to `end-session` here — the client's
+    // resolved-but-possibly-STALE snapshot showing no other listings must
+    // not itself trigger the destructive whole-session confirm. Always
+    // attempt the scoped close and let the SERVER's own never-empty guard be
+    // the authority; the existing 409 `last_conversation` handling in
+    // `AgentPanes` falls back to the confirm dialog once the server actually
+    // says so (caught in review).
+    it('attempts the scoped close (not a direct end-session) even though other (terminal) panes remain in the grid', () => {
       expect(
         decideClosePane({
           panes: [chatPane('p1', 'conv-1'), terminalPane('p2')],
           paneId: 'p1',
           activeConversations: [listing('conv-1')],
         }),
-      ).toEqual({ action: 'end-session' });
+      ).toEqual({ action: 'close-conversation', conversationId: 'conv-1', rebindTo: null, rebindAgentPageId: null });
     });
 
-    it('ends the session when it is also the grid\'s only pane', () => {
+    it('attempts the scoped close (not a direct end-session) when it is also the grid\'s only pane', () => {
       expect(
         decideClosePane({ panes: [chatPane('p1', 'conv-1')], paneId: 'p1', activeConversations: [listing('conv-1')] }),
-      ).toEqual({ action: 'end-session' });
+      ).toEqual({ action: 'close-conversation', conversationId: 'conv-1', rebindTo: null, rebindAgentPageId: null });
     });
   });
 });
