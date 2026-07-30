@@ -228,6 +228,31 @@ export default function AgentPanes({
     },
     [mutateSessionConversations, sessionId],
   );
+  // The mirror of `recordMintedConversation`, for the opposite direction: a
+  // successful close stamps `closedInSessionAt` server-side immediately, but
+  // this SWR cache only catches up on its next 20s poll (or a revalidate that
+  // is itself in flight and could be slow or fail). Left alone,
+  // `selectPaneAgent`'s switch decision — read by every OTHER pane's own
+  // selector — still sees the just-closed row as open, so picking that same
+  // agent elsewhere reads as `focus` and silently reopens a conversation the
+  // server already considers closed, outside the History reopen flow
+  // entirely (caught in review). Removing it here, locally, closes that
+  // window without waiting on the network — same treatment as the mint side.
+  const recordClosedConversation = useCallback(
+    (conversationId: string) => {
+      void mutateSessionConversations((current) => {
+        if (!current) return current;
+        return {
+          sessions: current.sessions.map((session) =>
+            session.sessionId === sessionId
+              ? { ...session, conversations: session.conversations.filter((c) => c.conversationId !== conversationId) }
+              : session,
+          ),
+        };
+      }, { revalidate: false });
+    },
+    [mutateSessionConversations, sessionId],
+  );
   // `decideClosePane` must not treat "not yet loaded" the same as "loaded and
   // empty" — a close must never act on an unverified fact, so it gets `null`
   // until the fetch actually resolves. Gated on `sessionKnownToConversationsCache`
@@ -385,11 +410,23 @@ export default function AgentPanes({
         // (caught in review).
         onConversationClosed?.({ conversationId, next: rebindTo, nextAgentPageId: rebindAgentPageId });
       }
+      // The DELETE succeeded — this is true regardless of whether THIS pane
+      // still shows it, so remove it from the local switch-decision cache
+      // unconditionally (see `recordClosedConversation`'s own doc).
+      recordClosedConversation(conversationId);
       // Instant sidebar freshness — the closed listing's row leaves every
       // open `/api/agent-sessions**` poll without waiting on its interval.
       void mutate(isAgentSessionsKey);
     },
-    [sessionId, paneStillShows, beginEndSessionConfirm, replaceConversation, closePane, onConversationClosed],
+    [
+      sessionId,
+      paneStillShows,
+      beginEndSessionConfirm,
+      replaceConversation,
+      closePane,
+      onConversationClosed,
+      recordClosedConversation,
+    ],
   );
 
   const handleClosePane = useCallback(

@@ -952,6 +952,66 @@ describe('AgentPanes', () => {
       expect(mockPost).toHaveBeenCalledTimes(1);
     });
 
+    it("records a closed conversation's removal locally, so another pane's selector mints fresh instead of silently reopening it", async () => {
+      // The mirror of the mint test above: without a local record of the
+      // close, `selectPaneAgent`'s switch decision (read from ANOTHER pane's
+      // own selector) still sees the just-closed row as open inside the SWR
+      // poll's 20s window — `focus` reopens a conversation the server
+      // already considers closed, outside the History reopen flow entirely
+      // (caught in review).
+      mockSessionConversations([
+        { conversationId: 'conv-1', agentPageId: 'agent-1' },
+        { conversationId: 'conv-2', agentPageId: 'agent-2' },
+      ]);
+      mockDel.mockResolvedValue(undefined);
+      mockPost.mockResolvedValue({});
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
+      const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
+      act(() =>
+        useAgentWorkspaceStore.getState().assignPane('ses-1', firstPaneId, {
+          kind: 'chat',
+          name: 'Conversation',
+          targetId: 'conv-2',
+          agentPageId: 'agent-2',
+        }),
+      );
+      const secondPaneId = useAgentWorkspaceStore
+        .getState()
+        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+        .find((p) => p.id !== firstPaneId)!.id;
+      act(() =>
+        useAgentWorkspaceStore.getState().assignPane('ses-1', secondPaneId, {
+          kind: 'chat',
+          name: 'Conversation',
+          targetId: 'conv-1',
+          agentPageId: 'agent-1',
+        }),
+      );
+      await waitFor(() => expect(screen.getAllByTestId('pane-chat')).toHaveLength(2));
+
+      // Close the pane showing conv-1 (agent-1) — the OTHER pane (conv-2)
+      // keeps the grid non-empty, so this is an ordinary scoped close.
+      const closeButtons = screen.getAllByLabelText('Close pane');
+      const user = userEvent.setup();
+      await user.click(closeButtons[1]);
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'));
+
+      // From the REMAINING pane, switch to agent-1 — the one whose
+      // conversation JUST closed. This must MINT a fresh one, not silently
+      // reopen conv-1 via a stale `focus` decision.
+      await user.click(await findEnabledSelector(/Writer/));
+      await user.click(await screen.findByRole('menuitem', { name: /Researcher/ }));
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-1/conversations', {
+          conversationId: 'new-id-1',
+          sessionId: 'ses-1',
+        }),
+      );
+    });
+
     it('records a freshly minted GLOBAL ASSISTANT conversation locally too (agentPageId: null), so switching back focuses rather than re-mints', async () => {
       mockPost.mockResolvedValue({});
       mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
