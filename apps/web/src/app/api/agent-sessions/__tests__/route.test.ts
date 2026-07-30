@@ -11,6 +11,8 @@ const {
   mockCreateConversationInSession,
   mockEndSession,
   mockSpawnSession,
+  mockGetAiAgent,
+  mockCanPrincipalViewPage,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
   mockAuditRequest: vi.fn(),
@@ -21,11 +23,17 @@ const {
   mockCreateConversationInSession: vi.fn(),
   mockEndSession: vi.fn(),
   mockSpawnSession: vi.fn(),
+  mockGetAiAgent: vi.fn(),
+  mockCanPrincipalViewPage: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: (...args: unknown[]) => mockAuthenticateRequest(...args),
   isAuthError: (result: unknown) => result != null && typeof result === 'object' && 'error' in result,
+  canPrincipalViewPage: (...args: unknown[]) => mockCanPrincipalViewPage(...args),
+}));
+vi.mock('@/lib/repositories/conversation-repository', () => ({
+  conversationRepository: { getAiAgent: (...args: unknown[]) => mockGetAiAgent(...args) },
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: (...args: unknown[]) => mockAuditRequest(...args),
@@ -152,6 +160,8 @@ describe('POST /api/agent-sessions — spawn', () => {
     mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-new' } });
     mockCreateConversationInSession.mockResolvedValue(undefined);
     mockEndSession.mockResolvedValue({ ok: true, spriteTornDown: false });
+    mockGetAiAgent.mockResolvedValue({ id: 'agent-1', title: 'Agent', type: 'AI_CHAT', driveId: 'drive-1' });
+    mockCanPrincipalViewPage.mockResolvedValue(true);
   });
 
   it('spawns ONE session with ONE bound conversation — and NO sandbox', async () => {
@@ -206,5 +216,57 @@ describe('POST /api/agent-sessions — spawn', () => {
     const response = await spawn({ driveId: 'drive-1', agentPageId: 'agent-1' });
     expect(response.status).toBe(502);
     expect(mockEndSession).toHaveBeenCalledWith('ses-new');
+  });
+});
+
+describe('POST /api/agent-sessions — spawn agent validation (review M6)', () => {
+  const spawn = (body: unknown) =>
+    POST(
+      new Request('http://localhost/api/agent-sessions', {
+        method: 'POST',
+        body: JSON.stringify(body),
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+  beforeEach(() => {
+    mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+    mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-new' } });
+    mockCreateConversationInSession.mockResolvedValue(undefined);
+    mockGetAiAgent.mockResolvedValue({ id: 'agent-1', title: 'Agent', type: 'AI_CHAT', driveId: 'drive-1' });
+    mockCanPrincipalViewPage.mockResolvedValue(true);
+  });
+
+  it('404s an unknown/non-agent page BEFORE minting anything', async () => {
+    mockGetAiAgent.mockResolvedValue(null);
+    const response = await spawn({ driveId: 'drive-1', agentPageId: 'ghost' });
+    expect(response.status).toBe(404);
+    expect(mockSpawnSession).not.toHaveBeenCalled();
+  });
+
+  it("400s an agent from a DIFFERENT drive — a session hosts only its own drive's agents", async () => {
+    mockGetAiAgent.mockResolvedValue({ id: 'agent-1', title: 'Agent', type: 'AI_CHAT', driveId: 'drive-other' });
+    const response = await spawn({ driveId: 'drive-1', agentPageId: 'agent-1' });
+    expect(response.status).toBe(400);
+    expect(mockSpawnSession).not.toHaveBeenCalled();
+  });
+
+  it('403s an agent the requester cannot view, and audits it', async () => {
+    mockCanPrincipalViewPage.mockResolvedValue(false);
+    const response = await spawn({ driveId: 'drive-1', agentPageId: 'agent-1' });
+    expect(response.status).toBe(403);
+    expect(mockSpawnSession).not.toHaveBeenCalled();
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'authz.access.denied' }),
+    );
+  });
+
+  it('caps the stored name — a label rendered everywhere must stay bounded', async () => {
+    const response = await spawn({ driveId: 'drive-1', agentPageId: 'agent-1', name: 'x'.repeat(500) });
+    expect(response.status).toBe(201);
+    expect(mockSpawnSession).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'x'.repeat(120) }),
+    );
   });
 });

@@ -17,7 +17,8 @@
  */
 
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, canPrincipalViewPage } from '@/lib/auth';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createId } from '@paralleldrive/cuid2';
@@ -32,6 +33,9 @@ import {
   type AgentSessionListFilter,
 } from '@/lib/agent-sessions/agent-sessions-runtime';
 import { listShells } from '@/lib/agent-sessions/session-shells-runtime';
+
+/** Bound on the stored display label — rendered everywhere the session appears. */
+const MAX_SESSION_NAME_LENGTH = 120;
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -120,7 +124,10 @@ export async function POST(request: Request) {
   const driveId = typeof body.driveId === 'string' && body.driveId.length > 0 ? body.driveId : null;
   const agentPageId =
     typeof body.agentPageId === 'string' && body.agentPageId.length > 0 ? body.agentPageId : null;
-  const name = typeof body.name === 'string' && body.name.trim().length > 0 ? body.name.trim() : null;
+  const rawName = typeof body.name === 'string' ? body.name.trim() : '';
+  // A label, never an address — but still bounded: it is stored, listed and
+  // rendered everywhere the session appears.
+  const name = rawName.length > 0 ? rawName.slice(0, MAX_SESSION_NAME_LENGTH) : null;
 
   if ((driveId === null) !== (agentPageId === null)) {
     // Half-specified: an agent without its drive is unresolvable, and a drive
@@ -130,6 +137,39 @@ export async function POST(request: Request) {
       { error: 'A session needs a drive and an agent to start with, or neither for the assistant' },
       { status: 400 },
     );
+  }
+
+  if (agentPageId !== null && driveId !== null) {
+    // The same checks the conversation routes make, BEFORE any row is minted
+    // (review M6): the page must BE an agent, the requester must be allowed
+    // to see it, and it must live in the drive being spawned into — the
+    // central binding gate would refuse the mismatch anyway, but failing here
+    // means no session row is created and then rolled back.
+    const agent = await conversationRepository.getAiAgent(agentPageId);
+    if (!agent) {
+      return NextResponse.json({ error: 'AI agent not found' }, { status: 404 });
+    }
+    if (agent.driveId !== driveId) {
+      return NextResponse.json(
+        { error: 'That agent belongs to a different drive than this session' },
+        { status: 400 },
+      );
+    }
+    const canView = await canPrincipalViewPage(auth, agentPageId);
+    if (!canView) {
+      auditRequest(request, {
+        eventType: 'authz.access.denied',
+        userId: auth.userId,
+        resourceType: 'page_agent_conversation',
+        resourceId: agentPageId,
+        details: { reason: 'no_view_permission', method: 'POST', route: 'agent-sessions' },
+        riskScore: 0.5,
+      });
+      return NextResponse.json(
+        { error: 'Insufficient permissions to use this agent' },
+        { status: 403 },
+      );
+    }
   }
 
   const access = await checkAccessForSubject(auth.userId, {
