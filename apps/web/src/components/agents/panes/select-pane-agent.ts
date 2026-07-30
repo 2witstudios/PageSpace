@@ -16,12 +16,9 @@
  * mints a new row") or a fresh one (mint, via the picker's own path).
  */
 
-export interface SessionConversationSummary {
-  conversationId: string;
-  agentPageId: string | null;
-  /** ISO timestamp, or null for a conversation with no messages yet. */
-  lastMessageAt: string | null;
-}
+import type { SessionConversationSummary } from './session-conversations';
+
+export type { SessionConversationSummary };
 
 export type SelectPaneAgentDecision =
   | { action: 'noop' }

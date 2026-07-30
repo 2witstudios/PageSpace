@@ -18,13 +18,38 @@ vi.mock('../panes/AgentPanes', () => ({
     sessionId,
     driveId,
     initialConversation,
+    onConversationClosed,
   }: {
     sessionId: string;
     driveId: string | null;
     initialConversation: { conversationId: string; agentPageId: string | null };
+    onConversationClosed?: (event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => void;
   }) => (
     <div data-testid="agent-panes" data-drive-id={driveId ?? 'none'}>
       {sessionId}/{initialConversation.conversationId}/{initialConversation.agentPageId ?? 'no-agent'}
+      <button
+        type="button"
+        data-testid="fire-conversation-closed-rebind"
+        onClick={() =>
+          onConversationClosed?.({
+            conversationId: initialConversation.conversationId,
+            next: 'conv-next',
+            nextAgentPageId: 'agent-next',
+          })
+        }
+      />
+      <button
+        type="button"
+        data-testid="fire-conversation-closed-no-rebind"
+        onClick={() =>
+          onConversationClosed?.({ conversationId: initialConversation.conversationId, next: null, nextAgentPageId: null })
+        }
+      />
+      <button
+        type="button"
+        data-testid="fire-conversation-closed-unrelated"
+        onClick={() => onConversationClosed?.({ conversationId: 'conv-other', next: 'conv-next', nextAgentPageId: 'agent-next' })}
+      />
     </div>
   ),
 }));
@@ -186,5 +211,41 @@ describe('the grid gets the SESSION\'s drive, not the surface\'s (review M5)', (
       expect(screen.getByTestId('agent-panes')).toHaveAttribute('data-drive-id', 'drive-7'),
     );
     expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-sessions/ses-m5');
+  });
+});
+
+describe('onConversationClosed — following the grid\'s own close/rebind', () => {
+  beforeEach(() => {
+    window.history.replaceState({}, '', '/dashboard/agents?session=ses-1&c=conv-1&agent=agent-1');
+    useAgentSurfaceStore.getState().hydrateFromSearch();
+  });
+
+  it('follows a rebind of the CURRENTLY selected conversation', async () => {
+    const { getByTestId } = render(<AgentsSurface />);
+    await waitFor(() => expect(getByTestId('agent-panes')).toBeInTheDocument());
+
+    act(() => getByTestId('fire-conversation-closed-rebind').click());
+
+    expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-next');
+    expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-next');
+    expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
+  });
+
+  it('leaves the selection untouched when there was nothing to rebind to (next: null)', async () => {
+    const { getByTestId } = render(<AgentsSurface />);
+    await waitFor(() => expect(getByTestId('agent-panes')).toBeInTheDocument());
+
+    act(() => getByTestId('fire-conversation-closed-no-rebind').click());
+
+    expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-1');
+  });
+
+  it('ignores a close for a conversation this surface was not showing', async () => {
+    const { getByTestId } = render(<AgentsSurface />);
+    await waitFor(() => expect(getByTestId('agent-panes')).toBeInTheDocument());
+
+    act(() => getByTestId('fire-conversation-closed-unrelated').click());
+
+    expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-1');
   });
 });

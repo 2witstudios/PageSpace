@@ -18,7 +18,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, count, eq, inArray, sql } from '@pagespace/db/operators';
+import { and, count, eq, inArray, isNull, sql } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
 import { checkAgentSessionConcurrency } from '@pagespace/lib/services/sandbox/quota';
@@ -72,6 +72,10 @@ import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-sessions/plan-sp
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { resolveOrCreateConversation } from '@/app/api/ai/global/[id]/messages/resolve-or-create-conversation';
 import { createConversationInSessionWith } from '@/lib/agent-sessions/create-conversation-in-session';
+import {
+  closeConversationInSessionWith,
+  type CloseConversationOutcome,
+} from '@/lib/agent-sessions/close-conversation-in-session';
 
 export { isCodeExecutionEnabled };
 
@@ -256,12 +260,74 @@ export async function createConversationInSession(input: {
         const [row] = await db
           .select({ n: count() })
           .from(conversations)
-          .where(and(eq(conversations.sessionId, sessionId), eq(conversations.isActive, true)));
+          .where(
+            and(
+              eq(conversations.sessionId, sessionId),
+              eq(conversations.isActive, true),
+              // A conversation closed OUT of the session's listing no longer
+              // holds a cap slot — closing one frees room for another.
+              isNull(conversations.closedInSessionAt),
+            ),
+          );
         return row?.n ?? 0;
       },
     },
     input,
   );
+}
+
+/**
+ * Close a conversation OUT of its session's listing — the transactional
+ * wiring for `close-conversation-in-session.ts`'s pure decision. A per-session
+ * advisory lock (the `agent-sessions-store.ts` `createIfUnderLimit` pattern)
+ * serializes concurrent closes of THIS session's listings, so two racing
+ * closes of the last two open conversations cannot both read "more than one
+ * open" and both succeed — the second sees the first's write and gets
+ * `last_conversation`.
+ */
+export async function closeConversationInSession(input: {
+  conversationId: string;
+  sessionId: string;
+}): Promise<CloseConversationOutcome> {
+  return db.transaction(async (tx) => {
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtext(${'agent-session-conversations:' + input.sessionId}))`,
+    );
+    return closeConversationInSessionWith(
+      {
+        findConversation: async (conversationId) => {
+          const [row] = await tx
+            .select({ sessionId: conversations.sessionId, closedInSessionAt: conversations.closedInSessionAt })
+            .from(conversations)
+            .where(eq(conversations.id, conversationId))
+            .limit(1);
+          return row ?? null;
+        },
+        countOpenConversations: async (sessionId) => {
+          const [row] = await tx
+            .select({ n: count() })
+            .from(conversations)
+            .where(
+              and(
+                eq(conversations.sessionId, sessionId),
+                eq(conversations.isActive, true),
+                isNull(conversations.closedInSessionAt),
+              ),
+            );
+          return row?.n ?? 0;
+        },
+        closeConversation: async (conversationId) => {
+          const updated = await tx
+            .update(conversations)
+            .set({ closedInSessionAt: new Date() })
+            .where(and(eq(conversations.id, conversationId), isNull(conversations.closedInSessionAt)))
+            .returning({ id: conversations.id });
+          return updated.length > 0 ? 'closed' : 'noop';
+        },
+      },
+      input,
+    );
+  });
 }
 
 export async function spawnSession(input: {
@@ -336,7 +402,16 @@ export async function listSessionConversationsBulk(
       ),
     })
     .from(conversations)
-    .where(and(inArray(conversations.sessionId, sessionIds), eq(conversations.isActive, true)))
+    .where(
+      and(
+        inArray(conversations.sessionId, sessionIds),
+        eq(conversations.isActive, true),
+        // Closed-from-the-session threads stay out of the listing — but their
+        // HISTORY is untouched (isActive alone still gates that), so a
+        // history-deleted thread stays excluded whichever column caused it.
+        isNull(conversations.closedInSessionAt),
+      ),
+    )
     .as('ranked_conversations');
 
   const rows = await db

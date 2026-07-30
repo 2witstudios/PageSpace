@@ -139,6 +139,29 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
     [page.id, page.driveId, canUseSessions],
   );
 
+  // Shared by the History-tab delete AND a session-grid listing close: both
+  // leave `current` pointing at a conversation that is no longer usable here,
+  // and both recover the SAME way — mint this agent's replacement INTO the
+  // same session (never spawn a new one, which would abandon a live session —
+  // issue #2263, finding 4) and prune the pane that was showing the old id,
+  // wherever it lives in the grid (not necessarily the active pane: the
+  // grid's own selection and this page's `current` are independent state).
+  const mintReplacementForCurrent = useCallback(() => {
+    const staleConversationId = current?.conversationId ?? null;
+    const sessionId = current?.sessionId ?? null;
+    void (async () => {
+      const created = await newConversation(sessionId);
+      if (sessionId && staleConversationId) {
+        useAgentWorkspaceStore.getState().replaceConversation(sessionId, staleConversationId, {
+          kind: 'chat',
+          name: 'New conversation',
+          targetId: created.conversationId,
+          agentPageId: page.id,
+        });
+      }
+    })();
+  }, [current, newConversation, page.id]);
+
   const {
     conversations,
     isLoading: isLoadingConversations,
@@ -150,29 +173,24 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
     // History needs the list; chat needs it too so a history-selected thread
     // can be looked up for its session.
     enabled: activeTab === 'history' || activeTab === 'chat',
-    onConversationDelete: () => {
-      // `onConversationDelete` only fires for the CURRENT conversation, so
-      // `current` here is exactly the deleted thread. If it was session-bound,
-      // mint the replacement INTO that session — never spawn a new one, which
-      // would abandon a live session (issue #2263, finding 4) — and prune the
-      // pane that was showing the now-deleted id, wherever it lives in the
-      // grid (not necessarily the active pane: the grid's own selection and
-      // this page's `current` are independent state).
-      const deletedConversationId = current?.conversationId ?? null;
-      const sessionId = current?.sessionId ?? null;
-      void (async () => {
-        const created = await newConversation(sessionId);
-        if (sessionId && deletedConversationId) {
-          useAgentWorkspaceStore.getState().replaceConversation(sessionId, deletedConversationId, {
-            kind: 'chat',
-            name: 'New conversation',
-            targetId: created.conversationId,
-            agentPageId: page.id,
-          });
-        }
-      })();
-    },
+    // `onConversationDelete` only fires for the CURRENT conversation, so
+    // `current` here is exactly the deleted thread.
+    onConversationDelete: mintReplacementForCurrent,
   });
+
+  // The session grid closed `current`'s listing (its last pane, in a pane
+  // this page-view tab wasn't itself driving — e.g. a split the user made).
+  // Closing a listing never mints a replacement on its own (it isn't a
+  // history delete), but THIS tab needs `current` to keep naming a usable
+  // conversation for its agent, so it recovers the same way History-delete
+  // does: mint a fresh one for this agent into the same session.
+  const handleConversationClosed = useCallback(
+    (event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => {
+      if (event.conversationId !== current?.conversationId) return;
+      mintReplacementForCurrent();
+    },
+    [current, mintReplacementForCurrent],
+  );
 
   const handleSelectConversation = useCallback(
     (id: string) => {
@@ -312,6 +330,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
               chatContext="page"
               isReadOnly={isReadOnly}
               onSessionEnded={() => void handleCreateNew()}
+              onConversationClosed={handleConversationClosed}
             />
           ) : agentLoading ? (
             <div className="flex h-full items-center justify-center">

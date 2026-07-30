@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 import { Bot } from 'lucide-react';
 import useSWR from 'swr';
 
@@ -46,6 +46,7 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
   const selectedConversationId = useAgentSurfaceStore((state) => state.selectedConversationId);
   const selectedAgentId = useAgentSurfaceStore((state) => state.selectedAgentId);
   const selectSession = useAgentSurfaceStore((state) => state.selectSession);
+  const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
   const storeDriveId = useAgentSurfaceStore((state) => state.driveId);
 
   const { data: sessionData } = useSWR(
@@ -80,6 +81,21 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
     return () => window.removeEventListener('popstate', onPopState);
   }, [hydrateFromSearch, driveId]);
 
+  // The grid closed the conversation THIS surface has selected (its last
+  // pane, closed) — follow its rebind so this surface's own selection (and
+  // the URL it mirrors to) stays truthful. A closed conversation this surface
+  // was NOT showing (some other pane in the grid) is none of its business.
+  // `next: null` means there was nothing to rebind to — leave the selection
+  // alone rather than clearing it, which would unmount a still-live pane for
+  // no reason (the grid itself never emptied).
+  const handleConversationClosed = useCallback(
+    (event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => {
+      if (event.conversationId !== selectedConversationId || event.next === null || !selectedSessionId) return;
+      selectConversation({ sessionId: selectedSessionId, conversationId: event.next, agentId: event.nextAgentPageId });
+    },
+    [selectedConversationId, selectedSessionId, selectConversation],
+  );
+
   return (
     <div className="flex h-full flex-col">
       {selectedSessionId && selectedConversationId ? (
@@ -93,6 +109,7 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
             name: 'Conversation',
           }}
           onSessionEnded={() => selectSession(null)}
+          onConversationClosed={handleConversationClosed}
         />
       ) : selectedSessionId ? (
         // A session is selected but its opening conversation has not resolved

@@ -39,12 +39,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createId } from '@paralleldrive/cuid2';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import useSWR from 'swr';
+import useSWR, { mutate } from 'swr';
 import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
-import { fetchWithAuth, post, del } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, post, del, ApiRequestError } from '@/lib/auth/auth-fetch';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
-import { panesOf, isLastPane, type PaneState } from '@/stores/agent-workspace/pane-reducer';
+import { panesOf, type PaneState } from '@/stores/agent-workspace/pane-reducer';
 import { usePageAgents } from '@/hooks/page-agents/usePageAgents';
 import { useAuth } from '@/hooks/useAuth';
 import { useConversationActiveStream } from '@/hooks/useActiveStream';
@@ -55,7 +55,9 @@ import SessionPanes from './SessionPanes';
 import PaneBar, { PaneSessionIdentity, PaneSplitCloseActions } from './PaneBar';
 import PanePicker, { type PickableAgent, type ReattachableShell } from './PanePicker';
 import { resolvePaneSurface, type PaneSurface } from './pane-surface';
-import { selectPaneAgent, type SessionConversationSummary } from './select-pane-agent';
+import { selectPaneAgent } from './select-pane-agent';
+import { decideClosePane } from './close-pane';
+import type { SessionConversationSummary } from './session-conversations';
 import PaneChat from './PaneChat';
 import Shell from '../shell/Shell';
 
@@ -71,6 +73,17 @@ export interface AgentPanesProps {
   initialConversation: { conversationId: string; agentPageId: string | null; name: string };
   /** Fired after the last pane closed and the session was ended — the host owns what renders next. */
   onSessionEnded?: () => void;
+  /**
+   * Fired after a conversation's LISTING closed (its last pane, closed) —
+   * `next` is the conversation the grid rebound its pane to, when closing
+   * emptied the grid (`null` otherwise, or when there was nothing to rebind
+   * to); `nextAgentPageId` is ITS agent, so a host tracking "current
+   * conversation" independently of the grid's panes (its own selection
+   * state, its own URL) can follow the rebind correctly rather than
+   * guessing an agent from stale state. The host decides for itself what a
+   * closed/rebound conversation means for whatever it is showing elsewhere.
+   */
+  onConversationClosed?: (event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => void;
   /**
    * Which message renderer chat panes use — the agent PAGE hosts the grid with
    * the full renderer, the console with the compact one. Layout is identical.
@@ -93,15 +106,23 @@ interface SessionListEntry {
 
 /**
  * The same bulk listing the sidebar polls (`AgentsSidebar`) — SWR dedupes an
- * identical key, so mounting both costs one request, not two. No dedicated
- * endpoint for "one session's conversations" exists, and none is needed: the
- * pane bar selector's decision (`selectPaneAgent`) only needs to know, for
- * THIS session, which agents already have a thread.
+ * identical key, so mounting both costs one request, not two. Shared by both
+ * pane-bar pure decisions: the pane bar selector's SWITCH decision
+ * (`selectPaneAgent`, which of the session's agents already has a thread) and
+ * the pane grid's CLOSE decision (`decideClosePane`, which needs it to tell
+ * "the only pane left showing this conversation" apart from "the session's
+ * only OPEN conversation" — the never-empty guard's client-side mirror; the
+ * server enforces the real invariant regardless).
  */
-async function sessionsFetcher(url: string): Promise<{ sessions: SessionListEntry[] }> {
+async function sessionConversationsFetcher(url: string): Promise<{ sessions: SessionListEntry[] }> {
   const response = await fetchWithAuth(url);
   if (!response.ok) throw new Error(`Failed to list sessions (${response.status})`);
   return response.json();
+}
+
+/** Every `/api/agent-sessions**` SWR entry — revalidated after a close so the sidebar reflects it instantly. */
+function isAgentSessionsKey(key: unknown): boolean {
+  return typeof key === 'string' && key.startsWith('/api/agent-sessions');
 }
 
 export default function AgentPanes({
@@ -109,6 +130,7 @@ export default function AgentPanes({
   driveId,
   initialConversation,
   onSessionEnded,
+  onConversationClosed,
   chatContext = 'console',
   isReadOnly = false,
 }: AgentPanesProps) {
@@ -120,6 +142,8 @@ export default function AgentPanes({
   const selectPane = useAgentWorkspaceStore((state) => state.selectPane);
   const assignPane = useAgentWorkspaceStore((state) => state.assignPane);
   const resetPane = useAgentWorkspaceStore((state) => state.resetPane);
+  const replaceConversation = useAgentWorkspaceStore((state) => state.replaceConversation);
+  const forgetWorkspace = useAgentWorkspaceStore((state) => state.forgetWorkspace);
 
   // The picker's agent list — the session's drive only. A global-assistant
   // session offers no drive agents (there is no drive to list).
@@ -152,12 +176,11 @@ export default function AgentPanes({
     return (shellsData?.shells ?? []).filter((shell) => !bound.has(shell.shellId));
   }, [shellsData, workspace]);
 
-  // The pane bar selector's switch decision needs to know which of the
-  // session's conversations already exist, per agent — the same list the
-  // sidebar's expansion already shows.
+  // This session's open conversation listings — shared by the pane bar
+  // selector's SWITCH decision and the pane grid's CLOSE decision.
   const { data: sessionsData, mutate: mutateSessionConversations } = useSWR(
     driveId !== null ? `/api/agent-sessions?driveId=${encodeURIComponent(driveId)}` : '/api/agent-sessions',
-    sessionsFetcher,
+    sessionConversationsFetcher,
     { revalidateOnFocus: false, refreshInterval: 20_000 },
   );
   // THIS session's own entry, looked up once and reused for both the
@@ -210,6 +233,11 @@ export default function AgentPanes({
     },
     [mutateSessionConversations, sessionId],
   );
+  // `decideClosePane` must not treat "not yet loaded" the same as "loaded and
+  // empty" — a close must never act on an unverified fact, so it gets `null`
+  // until the fetch actually resolves. `selectPaneAgent`'s switch decision has
+  // no such restriction (worst case for an early switch is a redundant mint).
+  const closeDecisionListing: SessionConversationSummary[] | null = sessionsData ? sessionConversations : null;
 
   // Selection IS an instruction to show the conversation (review M1): on
   // mount this seeds the first pane; on a later selection within the same
@@ -254,20 +282,110 @@ export default function AgentPanes({
     [closeShell],
   );
 
+  const paneStillExists = useCallback(
+    (paneId: string) => {
+      const current = useAgentWorkspaceStore.getState().workspaces[sessionId];
+      return current ? panesOf(current).some((pane) => pane.id === paneId) : false;
+    },
+    [sessionId],
+  );
+
+  /**
+   * Close conversation `conversationId`'s listing (the session-scoped DELETE)
+   * — silent on success, since closing a listing never touches history (a
+   * pane-close-lifecycle audit follow-up). `rebindTo` set means this pane was
+   * the grid's last, so the grid never empties: it repoints at that other
+   * open conversation instead of vanishing.
+   */
+  const closeConversationListing = useCallback(
+    async (paneId: string, conversationId: string, rebindTo: string | null) => {
+      try {
+        await del(
+          `/api/agent-sessions/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversationId)}`,
+        );
+      } catch (error) {
+        if (error instanceof ApiRequestError && error.status === 409) {
+          // The session's LAST open listing — the server is the authority on
+          // the never-empty invariant, so fall back to the same confirmed
+          // end-session flow the grid's own last-pane close uses.
+          if (!paneStillExists(paneId)) return;
+          const current = useAgentWorkspaceStore.getState().workspaces[sessionId];
+          const pane = current ? panesOf(current).find((p) => p.id === paneId) : undefined;
+          setPendingEndClose({ paneId, scope: pane?.scope ?? null });
+          return;
+        }
+        console.error('Failed to close this conversation:', error);
+        toast.error('Could not close this conversation', {
+          description: error instanceof Error ? error.message : 'Please try again.',
+        });
+        return;
+      }
+
+      const nextAgentPageId =
+        rebindTo !== null ? sessionConversations.find((c) => c.conversationId === rebindTo)?.agentPageId ?? null : null;
+      if (paneStillExists(paneId)) {
+        if (rebindTo !== null) {
+          replaceConversation(sessionId, conversationId, {
+            kind: 'chat',
+            name: 'Conversation',
+            targetId: rebindTo,
+            agentPageId: nextAgentPageId,
+          });
+        } else {
+          closePane(sessionId, paneId);
+        }
+      }
+      onConversationClosed?.({ conversationId, next: rebindTo, nextAgentPageId });
+      // Instant sidebar freshness — the closed listing's row leaves every
+      // open `/api/agent-sessions**` poll without waiting on its interval.
+      void mutate(isAgentSessionsKey);
+    },
+    [sessionId, paneStillExists, replaceConversation, closePane, onConversationClosed, sessionConversations],
+  );
+
   const handleClosePane = useCallback(
     (paneId: string) => {
       if (!workspace) return;
       const pane = panesOf(workspace).find((p) => p.id === paneId);
-      if (isLastPane(workspace, paneId)) {
+      const decision = decideClosePane({
+        panes: panesOf(workspace),
+        paneId,
+        activeConversations: closeDecisionListing,
+      });
+
+      if (decision.action === 'noop') return;
+
+      if (decision.action === 'end-session') {
         // Emptying the session ends it — ask first, same as the sidebar's
         // identical act, and don't touch the grid until the user confirms.
         setPendingEndClose({ paneId, scope: pane?.scope ?? null });
         return;
       }
-      closePane(sessionId, paneId);
-      closeTerminalShell(pane?.scope ?? null);
+
+      if (decision.action === 'close-pane') {
+        closePane(sessionId, paneId);
+        closeTerminalShell(pane?.scope ?? null);
+        return;
+      }
+
+      if (decision.action === 'rebind-pane') {
+        // This pane addressed no conversation of its own (a terminal, a
+        // picker, a still-minting chat) — nothing to DELETE, just a repoint.
+        // Still close whatever WAS live here (e.g. a terminal's shell),
+        // exactly as an ordinary close of it would.
+        closeTerminalShell(pane?.scope ?? null);
+        assignPane(sessionId, paneId, {
+          kind: 'chat',
+          name: 'Conversation',
+          targetId: decision.conversationId,
+          agentPageId: decision.agentPageId,
+        });
+        return;
+      }
+
+      void closeConversationListing(paneId, decision.conversationId, decision.rebindTo);
     },
-    [workspace, closePane, sessionId, closeTerminalShell],
+    [workspace, closePane, sessionId, closeTerminalShell, closeDecisionListing, closeConversationListing, assignPane],
   );
 
   const confirmEndSession = useCallback(async () => {
@@ -285,37 +403,36 @@ export default function AgentPanes({
       setEndingSession(false);
       return;
     }
-    // Server-confirmed: NOW the grid comes down, same as any other last-pane
-    // close, and its terminal (if any) is cleaned up alongside it.
-    closePane(sessionId, pendingEndClose.paneId);
+    // Server-confirmed: NOW the grid comes down. `forgetWorkspace` rather
+    // than `closePane` — this can fire with OTHER panes still in the grid
+    // (a terminal, say, when the closed listing was the session's last OPEN
+    // conversation rather than the grid's last pane), and ending the session
+    // tears down every one of them at once, not just the peeked pane's own.
+    forgetWorkspace(sessionId);
     closeTerminalShell(pendingEndClose.scope);
     setEndingSession(false);
     setPendingEndClose(null);
     onSessionEnded?.();
-  }, [pendingEndClose, sessionId, closePane, closeTerminalShell, onSessionEnded]);
+  }, [pendingEndClose, sessionId, forgetWorkspace, closeTerminalShell, onSessionEnded]);
 
-  const paneStillExists = useCallback(
-    (paneId: string) => {
-      const current = useAgentWorkspaceStore.getState().workspaces[sessionId];
-      return current ? panesOf(current).some((pane) => pane.id === paneId) : false;
+  const cleanupOrphanedConversation = useCallback(
+    async (conversationId: string) => {
+      // Best-effort: the pane that wanted this is already gone, so a failure
+      // here just leaves a harmless unbound row rather than blocking anything
+      // the user can see. Session-scoped close (not the history-deleting
+      // page-agent/global routes) — this orphan never had any history, and
+      // closing its listing also frees the conversation-cap slot it was
+      // otherwise holding forever (a pre-existing defect this fixes).
+      try {
+        await del(
+          `/api/agent-sessions/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversationId)}`,
+        );
+      } catch (error) {
+        console.error('Failed to clean up an orphaned conversation:', error);
+      }
     },
     [sessionId],
   );
-
-  const cleanupOrphanedConversation = useCallback(async (agentPageId: string | null, conversationId: string) => {
-    // Best-effort: the pane that wanted this is already gone, so a failure
-    // here just leaves a harmless unbound row rather than blocking anything
-    // the user can see.
-    try {
-      const url =
-        agentPageId === null
-          ? `/api/ai/global/${encodeURIComponent(conversationId)}`
-          : `/api/ai/page-agents/${encodeURIComponent(agentPageId)}/conversations/${encodeURIComponent(conversationId)}`;
-      await del(url);
-    } catch (error) {
-      console.error('Failed to clean up an orphaned conversation:', error);
-    }
-  }, []);
 
   const handlePickAgent = useCallback(
     async (paneId: string, agentPageId: string | null) => {
@@ -341,7 +458,7 @@ export default function AgentPanes({
           // server-side (the request was already in the air) — clean it up
           // rather than leaving an orphaned, unbound thread in the session's
           // history.
-          void cleanupOrphanedConversation(agentPageId, conversationId);
+          void cleanupOrphanedConversation(conversationId);
           return;
         }
         assignPane(sessionId, paneId, { kind: 'chat', name: 'New conversation', targetId: conversationId, agentPageId });
@@ -526,10 +643,10 @@ export default function AgentPanes({
 
 /**
  * A chat pane's bar identity: the `/development` AISelector, restored as a
- * first-class pane bar control (issue #2274 audit follow-up). Own component
- * (rather than inline in `renderPane`) so its hooks — resolving the pane's
- * agent, reading whether it's streaming — obey the rules of hooks across a
- * pane count that changes on every split/close.
+ * first-class pane bar control (a pane-close-lifecycle audit follow-up). Own
+ * component (rather than inline in `renderPane`) so its hooks — resolving the
+ * pane's agent, reading whether it's streaming — obey the rules of hooks
+ * across a pane count that changes on every split/close.
  *
  * `pickableAgents` is what scopes the dropdown to the session's own drive
  * (or to nothing, for a global-assistant session — see `AISelector`'s

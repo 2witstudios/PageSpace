@@ -40,22 +40,33 @@ vi.mock('../chat/SessionChat', () => ({
   ),
 }));
 
+const agentPanesState = vi.hoisted(() => ({
+  lastOnConversationClosed: null as
+    | ((event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => void)
+    | null,
+}));
+
 vi.mock('../panes/AgentPanes', () => ({
   default: ({
     sessionId,
     initialConversation,
     chatContext,
     isReadOnly,
+    onConversationClosed,
   }: {
     sessionId: string;
     initialConversation: { conversationId: string };
     chatContext?: string;
     isReadOnly?: boolean;
-  }) => (
-    <div data-testid="agent-panes" data-chat-context={chatContext} data-readonly={String(!!isReadOnly)}>
-      {sessionId}/{initialConversation.conversationId}
-    </div>
-  ),
+    onConversationClosed?: (event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => void;
+  }) => {
+    agentPanesState.lastOnConversationClosed = onConversationClosed ?? null;
+    return (
+      <div data-testid="agent-panes" data-chat-context={chatContext} data-readonly={String(!!isReadOnly)}>
+        {sessionId}/{initialConversation.conversationId}
+      </div>
+    );
+  },
 }));
 
 const { mockFetchWithAuth } = vi.hoisted(() => ({ mockFetchWithAuth: vi.fn() }));
@@ -158,6 +169,7 @@ beforeEach(() => {
     refreshConversations: vi.fn(),
   };
   conversationsState.lastOnConversationDelete = null;
+  agentPanesState.lastOnConversationClosed = null;
   useAgentWorkspaceStore.setState({ workspaces: {} });
   mockFetchWithAuth.mockImplementation(async (url: string) => {
     if (url.endsWith('/permissions/check')) return jsonResponse({ canEdit: true });
@@ -402,6 +414,35 @@ describe('AgentPageView', () => {
           expect.objectContaining({ agentId: 'agent-1', sessionId: null }),
         ),
       );
+    });
+  });
+
+  describe('onConversationClosed — a session-grid listing close, not a history delete', () => {
+    it("mints a fresh replacement for THIS agent when the grid closed current's listing", async () => {
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: 'ses-1' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      agentPanesState.lastOnConversationClosed?.({ conversationId: 'conv-1', next: null, nextAgentPageId: null });
+
+      await waitFor(() =>
+        expect(mockCreatePageConversation).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: 'agent-1', sessionId: 'ses-1' }),
+        ),
+      );
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-2'));
+    });
+
+    it('ignores a close for a conversation that is not the currently tracked one', async () => {
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      agentPanesState.lastOnConversationClosed?.({ conversationId: 'conv-other', next: null, nextAgentPageId: null });
+
+      expect(mockCreatePageConversation).not.toHaveBeenCalled();
+      expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-1');
     });
   });
 });
