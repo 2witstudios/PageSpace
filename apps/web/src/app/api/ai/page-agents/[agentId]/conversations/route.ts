@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { createId, isCuid } from '@paralleldrive/cuid2';
 import { checkSessionAccess, createConversationInSession } from '@/lib/agent-sessions/agent-sessions-runtime';
-import { ConversationUnavailableError } from '@/lib/agent-sessions/create-conversation-in-session';
+import { ConversationUnavailableError, SessionFullError } from '@/lib/agent-sessions/create-conversation-in-session';
+import { sessionConversationLimitExceeded } from '@/lib/agent-sessions/quota-response';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -217,6 +218,9 @@ export async function POST(
       try {
         await createConversationInSession({ conversationId, userId: auth.userId, agentPageId: agentId, sessionId });
       } catch (error) {
+        if (error instanceof SessionFullError) {
+          return sessionConversationLimitExceeded(request, auth.userId, sessionId, 'page-agents/conversations');
+        }
         if (error instanceof ConversationUnavailableError) {
           // The id cannot be claimed WITH this binding (someone else's row, a
           // legacy conflict, or a different session's thread) — a state

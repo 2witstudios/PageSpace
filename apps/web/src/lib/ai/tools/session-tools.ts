@@ -29,15 +29,20 @@
  * no DB, no SDK, unit-tested with fakes; production wiring lives in
  * `session-tools-runtime.ts`.
  *
- * ADDRESSING RULE, stated once: a session verb only ever acts on a session the
- * CALLER OWNS, and a shell verb only ever acts on a shell of the caller's OWN
- * session. There is no cross-user (or cross-session) reach to authorize away.
+ * ADDRESSING RULE, stated once: a session verb only ever acts on a
+ * conversation the CALLER OWNS that ALSO lives in the caller's OWN workspace
+ * session, and a shell verb only ever acts on a shell of that same workspace
+ * (issue #2262 finding 1 — ownership alone is not enough: `openOwnSession`
+ * resolves the caller's workspace via `findOwnWorkspace` and compares it
+ * against the target's, exactly as `openOwnShell` already did). There is no
+ * cross-user, cross-session, or cross-drive reach to authorize away.
  */
 
 import { tool, type Tool } from 'ai';
 import { z } from 'zod';
 import {
   MAX_AGENT_DEPTH,
+  MAX_SESSION_CONVERSATIONS,
   planSpawnWorkerSession,
 } from '@pagespace/lib/agent-sessions/plan-spawn-session';
 import type { SandboxStatus, ShellDTO } from '@pagespace/lib/agent-sessions/contract';
@@ -160,6 +165,15 @@ export interface SessionToolRow {
   agentPageId: string | null;
   name: string;
   endedAt: string | null;
+  /**
+   * The WORKSPACE (agent_sessions.id) this conversation is bound to, or null
+   * for a session-less conversation. Compared against the CALLER's own
+   * workspace so a worker verb only ever reaches a sibling in the caller's own
+   * session — ownership of the row alone is not enough (issue #2262 finding
+   * 1): a user's OWN conversation in a DIFFERENT session must still refuse,
+   * exactly as shells already require via `findOwnWorkspace`.
+   */
+  workspaceSessionId: string | null;
 }
 
 export type DispatchOutcome =
@@ -209,6 +223,13 @@ export interface SessionToolsDeps {
   countActiveSessions: (ownerId: string) => Promise<number>;
   /** The owner's concurrency ceiling. */
   concurrencyLimit: (ownerId: string) => Promise<number>;
+  /**
+   * ACTIVE conversations already living in the caller's session — what a spawn
+   * actually mints, and what `MAX_SESSION_CONVERSATIONS` bounds. A required
+   * dep, not optional: the sandbox-concurrency inputs above count VMs, which a
+   * worker spawn never creates, so without this the mint is unbounded.
+   */
+  countSessionConversations: (workspaceSessionId: string) => Promise<number>;
   /**
    * Whether the CALLER may spawn a worker under this agent page — the same
    * view permission any agent consult requires. Never called for null (global).
@@ -334,12 +355,22 @@ function truncateTranscriptMessage(content: string): string {
     : `${content.slice(0, MAX_TRANSCRIPT_MESSAGE_CHARS)}\n… [truncated — this message is longer than read_session returns]`;
 }
 
-const SPAWN_DENIALS: Record<'invalid_name' | 'missing_prompt' | 'depth_exceeded' | 'concurrency_exceeded', string> = {
+const SPAWN_DENIALS: Record<
+  'invalid_name' | 'missing_prompt' | 'depth_exceeded' | 'concurrency_exceeded' | 'session_full',
+  string
+> = {
   invalid_name: 'The worker needs a usable display name (1–200 characters).',
   missing_prompt: 'A worker session must be spawned WITH work — pass a non-empty prompt.',
   depth_exceeded: `This conversation is already ${MAX_AGENT_DEPTH} agent-dispatches deep, and a chain may not go deeper. Do the work here, or report back to the agent at the top of the chain.`,
+  // Truthful about the remedy (issue #2262 finding 2): kill_session only aborts
+  // a WORKER's in-flight run in the caller's OWN session — it tears down no
+  // sandbox and frees no counted slot, so the old copy's advice to call it and
+  // retry accomplished nothing. Freeing a slot means ending a whole SESSION
+  // (its sandbox), which is a workspace-lifecycle action outside this tool
+  // family's own reach — there is no tool here to point the caller at.
   concurrency_exceeded:
-    'You are at your concurrent session limit. Kill a session you no longer need (kill_session) and retry.',
+    'You are at your concurrent sandbox limit — a different session of yours must end (its sandbox stopped) before another can start. This cannot be done from here; report the limit rather than retrying.',
+  session_full: `This session already has ${MAX_SESSION_CONVERSATIONS} conversations, its maximum. Reuse an existing worker (send_session) instead of spawning another.`,
 };
 
 const DEPTH_DENIAL = {
@@ -379,7 +410,14 @@ export function createSessionTools(deps: SessionToolsDeps): {
   read_shell: Tool;
   kill_shell: Tool;
 } {
-  /** A session verb's shared open: the row must exist and be the CALLER's own. */
+  /**
+   * A session verb's shared open: the row must exist, be the CALLER's own,
+   * AND be a sibling in the CALLER's own workspace session (issue #2262
+   * finding 1 — H2 parity: ownership alone let a worker verb reach any
+   * conversation the calling user owned, including other sessions, other
+   * drives, or session-less threads; mirrors `openOwnShell`'s workspace
+   * comparison).
+   */
   const openOwnSession = async (
     context: ToolExecutionContext | undefined,
     sessionId: string,
@@ -389,11 +427,22 @@ export function createSessionTools(deps: SessionToolsDeps): {
   > => {
     const actor = readActor(context);
     if (!actor) return { ok: false, error: NEEDS_AUTH };
+    const conversationId = context?.conversationId;
+    if (!conversationId) return { ok: false, error: NEEDS_CONVERSATION };
+    const workspace = await deps.findOwnWorkspace(conversationId);
+    if (!workspace) return { ok: false, error: notYourSession(sessionId) };
     const row = await deps.findSession(sessionId);
-    // Someone else's session and a nonexistent one read identically — there is
-    // nothing to learn from the difference and nothing the caller could do
-    // with it.
-    if (!row || row.ownerId !== actor.userId) return { ok: false, error: notYourSession(sessionId) };
+    // Someone else's session, a nonexistent one, and a session outside the
+    // caller's own workspace all read identically — there is nothing to learn
+    // from the difference and nothing the caller could do with it.
+    if (
+      !row ||
+      row.ownerId !== actor.userId ||
+      row.workspaceSessionId === null ||
+      row.workspaceSessionId !== workspace.sessionId
+    ) {
+      return { ok: false, error: notYourSession(sessionId) };
+    }
     return { ok: true, actor, row };
   };
 
@@ -450,7 +499,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
             sandbox: 'none' as const,
             workers: [],
             shells: [],
-            note: 'This conversation has no session, so there are no workers or shells. spawn_session or spawn_shell will start its session.',
+            note: 'This conversation has no session, so there are no workers or shells, and spawn_session/spawn_shell will refuse here too — sessions are not started lazily from a plain conversation.',
           };
         }
         const listing = await deps.listSessionWorkers({
@@ -471,10 +520,20 @@ export function createSessionTools(deps: SessionToolsDeps): {
         const context = readContext(options);
         const actor = readActor(context);
         if (!actor) return NEEDS_AUTH;
+        const callerConversationId = context?.conversationId;
+        if (!callerConversationId) return NEEDS_CONVERSATION;
 
-        const [activeSessionCount, concurrencyLimit] = await Promise.all([
+        // The session-level cap (issue #2262 finding 2) counts what a spawn
+        // actually mints — a conversation in THIS workspace — so it is read
+        // against the caller's own workspace, not the account-wide sandbox
+        // count above it. A caller whose conversation has no session yet
+        // reads as zero here; createWorkerSession refuses that case with its
+        // own truthful reason once the plan clears.
+        const workspace = await deps.findOwnWorkspace(callerConversationId);
+        const [activeSessionCount, concurrencyLimit, sessionConversationCount] = await Promise.all([
           deps.countActiveSessions(actor.userId),
           deps.concurrencyLimit(actor.userId),
+          workspace ? deps.countSessionConversations(workspace.sessionId) : Promise.resolve(0),
         ]);
         const plan = planSpawnWorkerSession({
           name,
@@ -483,6 +542,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
           callerDepth: readDepth(context),
           activeSessionCount,
           concurrencyLimit,
+          sessionConversationCount,
         });
         if (!plan.ok) {
           return { success: false, error: SPAWN_DENIALS[plan.reason], reason: plan.reason };
@@ -499,8 +559,6 @@ export function createSessionTools(deps: SessionToolsDeps): {
           };
         }
 
-        const callerConversationId = context?.conversationId;
-        if (!callerConversationId) return NEEDS_CONVERSATION;
         const sessionId = deps.newId();
         const created = await deps.createWorkerSession({
           sessionId,

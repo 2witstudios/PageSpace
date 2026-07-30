@@ -30,7 +30,8 @@ import {
   checkSessionAccess,
   createConversationInSession,
 } from '@/lib/agent-sessions/agent-sessions-runtime';
-import { ConversationUnavailableError } from '@/lib/agent-sessions/create-conversation-in-session';
+import { ConversationUnavailableError, SessionFullError } from '@/lib/agent-sessions/create-conversation-in-session';
+import { sessionConversationLimitExceeded } from '@/lib/agent-sessions/quota-response';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -112,6 +113,9 @@ export async function POST(request: Request, context: RouteContext) {
       sessionId,
     });
   } catch (error) {
+    if (error instanceof SessionFullError) {
+      return sessionConversationLimitExceeded(request, auth.userId, sessionId, 'agent-sessions/[sessionId]/conversations');
+    }
     if (error instanceof ConversationUnavailableError) {
       // The id names a conversation that cannot be claimed WITH this binding
       // (someone else's, a legacy conflict, or a different session's) — a

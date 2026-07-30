@@ -6,6 +6,7 @@ import {
   planSpawnWorkerSession,
   isValidShellName,
   MAX_AGENT_DEPTH,
+  MAX_SESSION_CONVERSATIONS,
   SHELL_LABEL_PREFIX,
   type PlanSpawnWorkerSessionInput,
 } from '../plan-spawn-session';
@@ -135,6 +136,7 @@ describe('planSpawnWorkerSession', () => {
       callerDepth: 0,
       activeSessionCount: 0,
       concurrencyLimit: 10,
+      sessionConversationCount: 0,
       ...overrides,
     };
   }
@@ -242,5 +244,39 @@ describe('planSpawnWorkerSession', () => {
       ok: false,
       reason: 'depth_exceeded',
     });
+  });
+
+  it('given a session already at the conversation ceiling, should reject — spawning MINTS a conversation', () => {
+    // The sandbox-concurrency inputs above count something a worker spawn never
+    // creates, so on their own they leave worker minting unbounded (issue
+    // #2262 finding 2). What a spawn actually mints is a conversation, and
+    // THIS is the input that counts it.
+    expect(planSpawnWorkerSession(input({ sessionConversationCount: MAX_SESSION_CONVERSATIONS }))).toEqual({
+      ok: false,
+      reason: 'session_full',
+    });
+    expect(
+      planSpawnWorkerSession(input({ sessionConversationCount: MAX_SESSION_CONVERSATIONS + 1 })),
+    ).toEqual({ ok: false, reason: 'session_full' });
+  });
+
+  it('given one conversation slot left, should allow', () => {
+    expect(planSpawnWorkerSession(input({ sessionConversationCount: MAX_SESSION_CONVERSATIONS - 1 })).ok).toBe(
+      true,
+    );
+  });
+
+  it('should report the account-level quota problem before the session-level one', () => {
+    expect(
+      planSpawnWorkerSession(
+        input({ activeSessionCount: 10, concurrencyLimit: 10, sessionConversationCount: MAX_SESSION_CONVERSATIONS }),
+      ),
+    ).toEqual({ ok: false, reason: 'concurrency_exceeded' });
+  });
+
+  it('should carry a conversation ceiling that matches the per-session listing cap', () => {
+    // 100 is also listSessionConversationsBulk's per-session cap: a session may
+    // never hold more conversations than its sidebar listing can show.
+    expect(MAX_SESSION_CONVERSATIONS).toBe(100);
   });
 });

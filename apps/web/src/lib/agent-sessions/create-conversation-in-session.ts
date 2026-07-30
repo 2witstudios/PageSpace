@@ -23,10 +23,28 @@
  * `agent-sessions-runtime.ts` only wires the production deps.
  */
 
+import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-sessions/plan-spawn-session';
+
 export class ConversationUnavailableError extends Error {
   constructor() {
     super('conversation_unavailable');
     this.name = 'ConversationUnavailableError';
+  }
+}
+
+/**
+ * The session already holds `MAX_SESSION_CONVERSATIONS` active conversations.
+ * Thrown BEFORE either creator runs (issue #2262 finding 2): this is the ONE
+ * write path both HTTP routes and the session-tools spawn dep funnel through,
+ * so the cap enforced here bounds every conversation-minting entry point —
+ * including the ones with no pure-planner preflight of their own. The tool
+ * layer's own `planSpawnWorkerSession` check against the same constant is a
+ * courtesy (a truthful denial before minting an id); this is the backstop.
+ */
+export class SessionFullError extends Error {
+  constructor() {
+    super('session_full');
+    this.name = 'SessionFullError';
   }
 }
 
@@ -80,6 +98,8 @@ export interface CreateConversationInSessionDeps {
   findAgentDriveId: (agentPageId: string) => Promise<string | null>;
   /** The session's drive (null = a global-assistant session), or null when the session is missing. */
   findSessionDriveId: (sessionId: string) => Promise<{ driveId: string | null } | null>;
+  /** ACTIVE conversations already bound to this session — the cap's input. */
+  countActiveConversations: (sessionId: string) => Promise<number>;
 }
 
 export async function createConversationInSessionWith(
@@ -100,6 +120,19 @@ export async function createConversationInSessionWith(
     title?: string | null;
   },
 ): Promise<void> {
+  const activeCount = await deps.countActiveConversations(sessionId);
+  if (activeCount >= MAX_SESSION_CONVERSATIONS) {
+    // Only a genuinely NEW conversation adds to that count — a retry of one
+    // already bound HERE does not — so before refusing, check whether this
+    // exact id already belongs to this session. A false positive here (some
+    // other mismatch that isn't really a valid retry) is caught downstream by
+    // the real idempotency check below; this is only what decides whether the
+    // cap gets a say at all.
+    const existing = await deps.findConversation(conversationId);
+    const isRetryInThisSession = existing !== null && existing.sessionId === sessionId;
+    if (!isRetryInThisSession) throw new SessionFullError();
+  }
+
   if (agentPageId === null) {
     try {
       await deps.createGlobalConversation({ conversationId, userId, sessionId, title });
