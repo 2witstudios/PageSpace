@@ -30,7 +30,7 @@ import { canManageDrive } from '@/hooks/usePermissions';
 import { usePageAgents, type DriveWithAgents } from '@/hooks/page-agents/usePageAgents';
 import { useAgentSurfaceStore, SHEET_BREAKPOINT_QUERY } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
-import { fetchWithAuth, post, del } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, post, del, ApiRequestError } from '@/lib/auth/auth-fetch';
 import { buildSessionGroups, ASSISTANT_GROUP_KEY } from './session-groups';
 import { RowMenu, type RowMenuItem } from './session-row-menu';
 
@@ -462,6 +462,31 @@ function SessionRow({ session, onChanged }: { session: SessionListEntry; onChang
     }
   }, [forgetWorkspace, onChanged, selectSession, selectedSessionId, session.sessionId]);
 
+  const closeConversation = useCallback(
+    async (conversationId: string) => {
+      try {
+        await del(
+          `/api/agent-sessions/${encodeURIComponent(session.sessionId)}/conversations/${encodeURIComponent(conversationId)}`,
+        );
+        onChanged();
+      } catch (error) {
+        if (error instanceof ApiRequestError && error.status === 409) {
+          // The session's LAST open listing — the server is the authority on
+          // the never-empty invariant; fall back to the same confirmed
+          // end-session flow the row's own "End session" already uses
+          // (mirrors the pane grid's identical 409 fallback in AgentPanes).
+          setConfirmingEnd(true);
+          return;
+        }
+        console.error('Failed to close this conversation:', error);
+        toast.error('Could not close this conversation', {
+          description: error instanceof Error ? error.message : 'Please try again.',
+        });
+      }
+    },
+    [onChanged, session.sessionId],
+  );
+
   const menuItems: RowMenuItem[] = useMemo(
     () => [
       { label: 'New conversation', icon: MessageSquarePlus, onSelect: () => void newConversation() },
@@ -533,21 +558,31 @@ function SessionRow({ session, onChanged }: { session: SessionListEntry; onChang
 
       {expanded && (
         <div className="ml-4 space-y-0.5 border-l border-border pl-1.5">
-          {/* Conversation rows have no row menu yet — their only item, "Close",
-              is the conversation-close route from #2277 (still open); it lands
-              here once that PR merges. */}
           {session.conversations.map((conversation) => (
-            <button
+            <RowMenu
               key={conversation.conversationId}
-              type="button"
+              items={[
+                {
+                  label: 'Close',
+                  icon: X,
+                  onSelect: () => void closeConversation(conversation.conversationId),
+                  destructive: true,
+                },
+              ]}
+              menuLabel="Conversation actions"
               className={cn(
-                'flex w-full items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left text-xs text-muted-foreground hover:bg-accent hover:text-foreground',
+                'gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground',
                 selectedConversationId === conversation.conversationId && 'bg-accent text-foreground',
               )}
-              onClick={() => openConversation(conversation)}
             >
-              <span className="truncate">{conversation.title || 'New conversation'}</span>
-            </button>
+              <button
+                type="button"
+                className="flex min-w-0 flex-1 items-center text-left"
+                onClick={() => openConversation(conversation)}
+              >
+                <span className="truncate">{conversation.title || 'New conversation'}</span>
+              </button>
+            </RowMenu>
           ))}
           {session.shells.length > 0 && (
             <div className="flex items-center gap-1.5 px-1.5 py-0.5 text-[11px] text-muted-foreground">
