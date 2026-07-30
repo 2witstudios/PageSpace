@@ -52,7 +52,11 @@ export async function DELETE(request: Request, context: RouteContext) {
       error instanceof Error ? error : undefined,
       { sessionId, conversationId },
     );
-    return NextResponse.json({ error: 'Could not close this conversation' }, { status: 502 });
+    // 500, not 502: `closeConversationInSession` is a pure DB transaction —
+    // no sandbox/machine layer involved, unlike the sibling POST (mints a
+    // conversation into a sandbox) or the shell/file routes, where 502
+    // correctly signals an upstream failure (caught in review).
+    return NextResponse.json({ error: 'Could not close this conversation' }, { status: 500 });
   }
 
   if (outcome === 'not_in_session') {

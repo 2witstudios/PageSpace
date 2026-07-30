@@ -114,10 +114,10 @@ describe('DELETE /api/agent-sessions/[sessionId]/conversations/[conversationId]'
     );
   });
 
-  it('502s a thrown failure with a human error', async () => {
+  it('500s a thrown failure with a human error — a pure DB transaction, no sandbox layer to blame', async () => {
     mockCloseConversationInSession.mockRejectedValue(new Error('db exploded'));
     const response = await del();
-    expect(response.status).toBe(502);
+    expect(response.status).toBe(500);
   });
 
   it('given an auth failure, should return the auth error untouched', async () => {
