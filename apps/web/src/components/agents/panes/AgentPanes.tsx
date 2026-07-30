@@ -41,15 +41,21 @@ import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR from 'swr';
 import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
+import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { fetchWithAuth, post, del } from '@/lib/auth/auth-fetch';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { panesOf, isLastPane, type PaneState } from '@/stores/agent-workspace/pane-reducer';
 import { usePageAgents } from '@/hooks/page-agents/usePageAgents';
+import { useAuth } from '@/hooks/useAuth';
+import { useConversationActiveStream } from '@/hooks/useActiveStream';
+import { AISelector } from '@/components/ai/shared';
 import EndSessionDialog from '../EndSessionDialog';
+import { useResolvedAgent } from '../useResolvedAgent';
 import SessionPanes from './SessionPanes';
 import PaneBar, { PaneSessionIdentity, PaneSplitCloseActions } from './PaneBar';
 import PanePicker, { type PickableAgent, type ReattachableShell } from './PanePicker';
-import { resolvePaneSurface } from './pane-surface';
+import { resolvePaneSurface, type PaneSurface } from './pane-surface';
+import { selectPaneAgent, type SessionConversationSummary } from './select-pane-agent';
 import PaneChat from './PaneChat';
 import Shell from '../shell/Shell';
 
@@ -77,6 +83,24 @@ export interface AgentPanesProps {
 async function shellsFetcher(url: string): Promise<{ shells: ReattachableShell[] }> {
   const response = await fetchWithAuth(url);
   if (!response.ok) throw new Error(`Failed to list shells (${response.status})`);
+  return response.json();
+}
+
+interface SessionListEntry {
+  sessionId: string;
+  conversations: SessionConversationSummary[];
+}
+
+/**
+ * The same bulk listing the sidebar polls (`AgentsSidebar`) — SWR dedupes an
+ * identical key, so mounting both costs one request, not two. No dedicated
+ * endpoint for "one session's conversations" exists, and none is needed: the
+ * pane bar selector's decision (`selectPaneAgent`) only needs to know, for
+ * THIS session, which agents already have a thread.
+ */
+async function sessionsFetcher(url: string): Promise<{ sessions: SessionListEntry[] }> {
+  const response = await fetchWithAuth(url);
+  if (!response.ok) throw new Error(`Failed to list sessions (${response.status})`);
   return response.json();
 }
 
@@ -127,6 +151,19 @@ export default function AgentPanes({
     }
     return (shellsData?.shells ?? []).filter((shell) => !bound.has(shell.shellId));
   }, [shellsData, workspace]);
+
+  // The pane bar selector's switch decision needs to know which of the
+  // session's conversations already exist, per agent — the same list the
+  // sidebar's expansion already shows.
+  const { data: sessionsData } = useSWR(
+    driveId !== null ? `/api/agent-sessions?driveId=${encodeURIComponent(driveId)}` : '/api/agent-sessions',
+    sessionsFetcher,
+    { revalidateOnFocus: false, refreshInterval: 20_000 },
+  );
+  const sessionConversations: SessionConversationSummary[] = useMemo(
+    () => (sessionsData?.sessions ?? []).find((session) => session.sessionId === sessionId)?.conversations ?? [],
+    [sessionsData, sessionId],
+  );
 
   // Selection IS an instruction to show the conversation (review M1): on
   // mount this seeds the first pane; on a later selection within the same
@@ -273,6 +310,33 @@ export default function AgentPanes({
     [assignPane, resetPane, sessionId, paneStillExists, cleanupOrphanedConversation],
   );
 
+  // The pane bar selector's switch — focus-or-mint, decided by the pure
+  // module above. Focusing reuses the store's dedup-aware `openConversation`
+  // (the same conversation never shows in two panes at once — review M1);
+  // minting reuses `handlePickAgent`'s own path, which binds THIS pane
+  // directly, exactly as picking from the split picker already does.
+  const handleSwitchAgent = useCallback(
+    (paneId: string, currentAgentPageId: string | null, nextAgentPageId: string | null) => {
+      const decision = selectPaneAgent({
+        conversations: sessionConversations,
+        selectedAgentPageId: nextAgentPageId,
+        currentAgentPageId,
+      });
+      if (decision.action === 'noop') return;
+      if (decision.action === 'focus') {
+        openConversation(sessionId, {
+          kind: 'chat',
+          name: 'Conversation',
+          targetId: decision.conversationId,
+          agentPageId: nextAgentPageId,
+        });
+        return;
+      }
+      void handlePickAgent(paneId, nextAgentPageId);
+    },
+    [sessionConversations, sessionId, openConversation, handlePickAgent],
+  );
+
   const handlePickShell = useCallback(
     async (paneId: string) => {
       assignPane(sessionId, paneId, { kind: 'terminal', name: 'shell', targetId: null, agentPageId: null });
@@ -334,7 +398,18 @@ export default function AgentPanes({
         <PaneBar
           isActive={isActive}
           identity={
-            pane.scope ? (
+            pane.scope?.kind === 'chat' ? (
+              <ChatPaneIdentity
+                scope={pane.scope}
+                surface={surface}
+                pickableAgents={pickableAgents}
+                agentsLoading={driveId !== null && agentsLoading}
+                driveId={driveId}
+                onSelectAgent={(nextAgentPageId) =>
+                  handleSwitchAgent(pane.id, pane.scope!.agentPageId, nextAgentPageId)
+                }
+              />
+            ) : pane.scope ? (
               <PaneSessionIdentity name={pane.scope.name || 'pane'} />
             ) : (
               <span className="text-muted-foreground">New pane</span>
@@ -398,5 +473,59 @@ export default function AgentPanes({
         onConfirm={() => void confirmEndSession()}
       />
     </>
+  );
+}
+
+/**
+ * A chat pane's bar identity: the `/development` AISelector, restored as a
+ * first-class pane bar control (issue #2274 audit follow-up). Own component
+ * (rather than inline in `renderPane`) so its hooks — resolving the pane's
+ * agent, reading whether it's streaming — obey the rules of hooks across a
+ * pane count that changes on every split/close.
+ *
+ * `pickableAgents` is what scopes the dropdown to the session's own drive
+ * (or to nothing, for a global-assistant session — see `AISelector`'s
+ * `agents` override): the same list the split picker already offers, so a
+ * pane's selector and "Split → pick an agent" never disagree about what's
+ * choosable here.
+ */
+function ChatPaneIdentity({
+  scope,
+  surface,
+  pickableAgents,
+  agentsLoading,
+  driveId,
+  onSelectAgent,
+}: {
+  /** Always `kind: 'chat'` at the call site — `PaneScope` isn't a discriminated union, so this stays the full type. */
+  scope: PaneScope;
+  surface: PaneSurface;
+  pickableAgents: PickableAgent[];
+  agentsLoading: boolean;
+  driveId: string | null;
+  onSelectAgent: (agentPageId: string | null) => void;
+}) {
+  const { user } = useAuth();
+  const { agent } = useResolvedAgent(scope.agentPageId);
+  const conversationId = surface.surface === 'chat' ? surface.conversationId : null;
+  // The channel a stream for this conversation would be tagged with — an
+  // agent's own page id, or the user's global channel for the Assistant
+  // (`useAssistantSessionChat`'s own scoping, mirrored here).
+  const streamPageId = scope.agentPageId ?? (user?.id ? globalChannelId(user.id) : null);
+  const activeStream = useConversationActiveStream(streamPageId, conversationId);
+  // Mid-mint (the row isn't there yet) or mid-stream: switching now has
+  // nothing stable to point at, or would abandon a running send.
+  const disabled = surface.surface === 'loading' || activeStream !== undefined;
+
+  return (
+    <AISelector
+      selectedAgent={scope.agentPageId === null ? null : agent}
+      onSelectAgent={(next) => onSelectAgent(next?.id ?? null)}
+      driveId={driveId ?? undefined}
+      agents={pickableAgents}
+      agentsLoading={agentsLoading}
+      disabled={disabled}
+      className="h-6 min-w-0 flex-1 justify-start gap-1 px-1.5 py-0 text-xs font-medium"
+    />
   );
 }
