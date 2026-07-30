@@ -69,9 +69,14 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       source: 'terminal',
       // No pageId: a session is a drive-level workspace, not page-anchored, so
       // there is no page to group its storage under. `trackUsage` treats a
-      // missing pageId as unattributed-to-a-page, not an error; the drive and
-      // session ride in metadata for forensics.
+      // missing pageId as unattributed-to-a-page, not an error.
       pageId: undefined,
+      // First-class drive/session attribution (Terminal Epic 3 usage-breakdown
+      // fix) — top-level columns the breakdown can group/filter on directly,
+      // not just freeform metadata forensics. `driveId` undefined for a
+      // global-assistant session (mirrors `pageId`'s "unattributed" reading).
+      driveId,
+      sessionId,
       providerCostDollars: costDollars,
       // Not a wall-clock duration (this is a background storage charge, not a
       // single timed run) — 0 mirrors the shape of every other non-timed
@@ -84,7 +89,7 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       // Same 1.5x substrate floor as active-runtime billing (machine-billing.ts),
       // independent of the shared AI MARKUP_BPS default.
       markupBpsOverride: MACHINE_MARKUP_BPS,
-      metadata: { type: 'terminal_storage', driveId, sessionId, gbMonths },
+      metadata: { type: 'terminal_storage', gbMonths },
     });
   },
 

@@ -815,6 +815,13 @@ export interface AIUsageData {
   messageId?: string;
   pageId?: string;
   driveId?: string;
+  /**
+   * The `agent_sessions.id` this usage attributes to (Terminal Epic 3 first-class
+   * attribution) — set by the sandbox runtime/storage charge streams so the
+   * usage breakdown can group terminal spend by session without JSON forensics.
+   * Absent for every non-terminal source.
+   */
+  sessionId?: string;
   success?: boolean;
   error?: string;
   metadata?: Record<string, unknown>;
@@ -960,6 +967,7 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
         messageId: data.messageId,
         pageId: data.pageId,
         driveId: data.driveId,
+        sessionId: data.sessionId,
         success,
         error: data.error,
         source: normalizeUsageSource(data.source),

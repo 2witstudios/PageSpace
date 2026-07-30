@@ -90,16 +90,28 @@ export interface SandboxQuotaDeps {
  */
 export interface SandboxBillingDeps {
   /**
-   * Resolves who pays for THIS run (Terminal Epic 3 owner-pays) — the
-   * referenced agent page's actual owner when resolvable, else the acting
-   * tenantId. The one seam payer resolution goes through; see
-   * `sandbox-payer.ts`'s `resolveSandboxPayerId`.
+   * Resolves who pays for THIS run (Terminal Epic 3 owner-pays) — from the
+   * ACQUIRED SESSION's own `driveId`/`ownerId` (drive owner when it has one,
+   * else the session's own owner), never the caller's surface drive or agent
+   * page. The one seam payer resolution goes through; see `sandbox-payer.ts`'s
+   * `resolveSessionPayerId` — the same rule `storageBillingTarget` applies for
+   * storage attribution.
    */
-  resolvePayerId: (input: { tenantId: string; agentPageId?: string }) => Promise<string>;
+  resolvePayerId: (input: { driveId: string | null; ownerId: string }) => Promise<string>;
   /** Places a flat-estimate hold for this payer before the machine run begins. */
   gate: (input: { payerId: string }) => Promise<{ allowed: boolean; holdId?: string; reason?: string }>;
   /** Settles the hold to the real active-window cost. Only called on a successful run. */
-  trackUsage: (input: { payerId: string; holdId?: string; activeSeconds: number; pageId?: string }) => Promise<void>;
+  trackUsage: (input: {
+    payerId: string;
+    holdId?: string;
+    activeSeconds: number;
+    /** The referenced agent page, for the per-agent usage-breakdown grouping — purely descriptive, never the payer source. */
+    pageId?: string;
+    /** The session's own drive — first-class attribution so the usage breakdown can group terminal spend by drive without JSON forensics. Undefined for a global-assistant session. */
+    driveId?: string;
+    /** The `agent_sessions.id` this run belongs to — first-class attribution, mirroring `driveId`. */
+    sessionId?: string;
+  }) => Promise<void>;
   /** Releases a hold without billing. Called on every exit that never reaches `trackUsage`. */
   releaseHold: (holdId: string) => Promise<void>;
 }
@@ -111,7 +123,9 @@ export interface SandboxBillingDeps {
  */
 export interface ShellActivityNotification {
   /**
-   * The session whose sandbox the agent acted on — ≡ its conversation id.
+   * The session whose sandbox the agent acted on — `agent_sessions.id`, NOT
+   * the conversation id (post-unconflation the two are different namespaces:
+   * one session hosts many conversations).
    *
    * This replaces the old `(tenantId, driveId, pageId)` machine tuple, which
    * had no successor and, worse, could not address a global-assistant session
@@ -161,9 +175,12 @@ export interface AcquireSandboxRequest {
   requestOrigin?: 'user' | 'agent';
   agentPageId?: string;
   /**
-   * The conversation this run belongs to — which IS the agent-session id
-   * (contract.ts invariant 1). The session-anchored `acquireSandbox`
-   * implementation folds the Sprite key off it.
+   * The conversation this run belongs to — NOT the agent-session id
+   * (contract.ts invariant 1: a session hosts MANY conversations, and the two
+   * are different id namespaces post-unconflation). The session-anchored
+   * `acquireSandbox` implementation resolves this conversation's session row
+   * (`conversations.sessionId`) and folds the Sprite key off THAT row's own
+   * id, never off this one.
    */
   conversationId?: string;
 }
@@ -221,6 +238,24 @@ export interface SandboxRunDeps {
    */
   billing?: SandboxBillingDeps;
   /**
+   * Cheap resolve of the CALLER's session identity for billing attribution — a
+   * read of the session row only (`agent_sessions.driveId`/`ownerId`/`id`), no
+   * sandbox provisioning. Called BEFORE the gate whenever `billing` is set, so
+   * a credit-exhausted payer is denied without ever waking a hibernating
+   * sandbox — the same fail-fast property the old (surface-derived, ctx-only)
+   * payer resolution had, now backed by a real (if cheap) session read instead
+   * of trusting client-influenceable context. `null` = the conversation has no
+   * session yet (a legacy pre-session thread): `withMachineBilling` skips
+   * gating entirely and calls straight through to `run()`, which surfaces the
+   * ordinary `no_session` denial via `openSession`. Required whenever
+   * `billing` is set; never called otherwise.
+   */
+  resolveBillingSession?: (ctx: SandboxActorContext) => Promise<{
+    sessionId: string;
+    driveId: string | null;
+    ownerId: string;
+  } | null>;
+  /**
    * Optional opportunistic storage-measurement seam (Sprites Platform Alignment
    * 6-1): while this sprite is ALREADY awake for this real op, capture its used
    * storage bytes (throttled, best-effort) so the storage reconcile can bill
@@ -270,6 +305,10 @@ export function safeLogWarn(
 const AUTHZ_DENY_REASONS = new Set([
   'no_drive_access', 'insufficient_role', 'no_agent_access', 'app_admin_required', 'kill_switch_off', 'no_machine',
   'machine_runtime_exceeded', 'session_limit_reached',
+  // A legacy conversation that predates sessions has no working context to run
+  // in — an expected refusal (not an infra fault), so it belongs here rather
+  // than paging on-call for every pre-session thread an agent tool touches.
+  'no_session',
 ]);
 
 
@@ -455,8 +494,24 @@ async function withMachineBilling<S>(
   const billing = deps.billing;
   if (!billing) return run();
 
-  const agentPageId = ctx.agentPageId;
-  const payerId = await billing.resolvePayerId({ tenantId: ctx.tenantId, agentPageId });
+  // Resolve the CALLER's session for billing attribution — a cheap session-row
+  // read (no sandbox provisioning), so a credit-exhausted payer is denied
+  // before any sandbox work happens: the same fail-fast property the old
+  // surface-derived resolution had, now backed by the SESSION's own
+  // driveId/ownerId instead of the caller's (client-influenceable) surface
+  // drive/agent page — a session hosts MANY conversations, and its drive can
+  // differ from the one the caller happens to be chatting from.
+  //
+  // `null` = no session yet for this conversation (a legacy pre-session
+  // thread): nothing to gate against, so fall through unmetered and let
+  // `run()` surface the ordinary `no_session` denial via `openSession`.
+  const billingSession = deps.resolveBillingSession ? await deps.resolveBillingSession(ctx) : null;
+  if (!billingSession) return run();
+
+  const payerId = await billing.resolvePayerId({
+    driveId: billingSession.driveId,
+    ownerId: billingSession.ownerId,
+  });
   const gate = await billing.gate({ payerId });
   if (!gate.allowed) return fail('credit_exhausted');
 
@@ -468,7 +523,16 @@ async function withMachineBilling<S>(
     if (result.success) {
       handedOff = true;
       const activeSeconds = Math.max(0, (deps.now().getTime() - startedAt) / 1000);
-      await billing.trackUsage({ payerId, holdId, activeSeconds, pageId: agentPageId });
+      await billing.trackUsage({
+        payerId,
+        holdId,
+        activeSeconds,
+        // Purely descriptive (which agent page this run was for) — never the
+        // payer source, which is resolved from the session above.
+        pageId: ctx.agentPageId,
+        driveId: billingSession.driveId ?? undefined,
+        sessionId: billingSession.sessionId,
+      });
     }
     return result;
   } finally {
