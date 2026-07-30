@@ -22,15 +22,12 @@ interface FormTarget {
   status: 'active' | 'paused' | 'archived';
   submissionCount: number;
   lastSubmittedAt: string | null;
+  notificationEmail: string | null;
 }
 
 interface CanvasFormsSettingsTabProps {
   pageId: string;
-  /** The Canvas page's current raw HTML content, so this tab can detect
-   *  <form> tags directly rather than owning its own field-authoring UI. */
   content: string;
-  /** Persists (and debounce-saves) an updated content string — used when
-   *  wiring a tag up or deleting one on archive. */
   onContentChange: (value: string) => void;
 }
 
@@ -74,9 +71,10 @@ function UnwiredFormCard({
   tag: DetectedFormTag;
   driveId: string | null;
   isBusy: boolean;
-  onWire: (sheetPageId: string) => void;
+  onWire: (sheetPageId: string, notificationEmail: string) => void;
 }) {
   const [sheetPageId, setSheetPageId] = useState<string | null>(null);
+  const [notificationEmail, setNotificationEmail] = useState('');
 
   return (
     <Card>
@@ -115,9 +113,10 @@ function UnwiredFormCard({
             disabled={isBusy}
           />
         </div>
+        <Button
           type="button"
           disabled={isBusy || !sheetPageId || tag.fields.length === 0}
-          onClick={() => sheetPageId && onWire(sheetPageId)}
+          onClick={() => sheetPageId && onWire(sheetPageId, notificationEmail)}
         >
           {isBusy ? 'Wiring…' : 'Wire this form'}
         </Button>
@@ -130,13 +129,17 @@ function WiredFormCard({
   formTarget,
   isBusy,
   onSetStatus,
+  onSetNotificationEmail,
   onDelete,
 }: {
   formTarget: FormTarget;
   isBusy: boolean;
   onSetStatus: (status: 'active' | 'paused') => void;
+  onSetNotificationEmail: (email: string | null) => void;
   onDelete: () => void;
 }) {
+  const [emailDraft, setEmailDraft] = useState(formTarget.notificationEmail ?? '');
+
   return (
     <Card>
       <CardHeader>
@@ -245,21 +248,23 @@ export default function CanvasFormsSettingsTab({ pageId, content, onContentChang
     () => new Set(detected.map((tag) => tag.wiredFormTargetId).filter((id): id is string => !!id)),
     [detected]
   );
-  // form_targets rows linked to this Canvas page whose <form> tag can no
-  // longer be found in content — e.g. hand-edited/deleted outside the tab.
   const orphaned = useMemo(
     () => formTargets.filter((ft) => ft.status !== 'archived' && !detectedIds.has(ft.id)),
     [formTargets, detectedIds]
   );
 
   const handleWire = useCallback(
-    async (tag: DetectedFormTag, sheetPageId: string) => {
+    async (tag: DetectedFormTag, sheetPageId: string, notificationEmail: string) => {
       setBusyKey(tag.outerHtml);
       try {
         const res = await fetchWithAuth(`/api/pages/${pageId}/form-target`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sheetPageId, fields: tag.fields }),
+          body: JSON.stringify({
+            sheetPageId,
+            fields: tag.fields,
+            ...(notificationEmail ? { notificationEmail } : {}),
+          }),
         });
         if (!res.ok) {
           toast.error(await readError(res));
@@ -271,10 +276,6 @@ export default function CanvasFormsSettingsTab({ pageId, content, onContentChang
         const newContent = embedWiredBlock({ content, originalFormHtml: tag.outerHtml, formTargetId, wiredFormHtml });
 
         if (newContent === null) {
-          // The tag we just provisioned against no longer matches content
-          // verbatim (edited concurrently, or the browser's HTML parser
-          // reformatted it on the way in) — don't leave a dangling, never-
-          // embedded active token behind.
           await fetchWithAuth(`/api/pages/${pageId}/form-target?formTargetId=${formTargetId}`, { method: 'DELETE' });
           toast.error("Couldn't find this form tag to wire it up — the page may have changed. Try again.");
           return;
@@ -315,6 +316,29 @@ export default function CanvasFormsSettingsTab({ pageId, content, onContentChang
     [pageId, loadFormTargets]
   );
 
+  const handleSetNotificationEmail = useCallback(
+    async (formTargetId: string, email: string | null) => {
+      setBusyKey(formTargetId);
+      try {
+        const res = await fetchWithAuth(`/api/pages/${pageId}/form-target`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ formTargetId, notificationEmail: email }),
+        });
+        if (!res.ok) {
+          toast.error(await readError(res));
+          return;
+        }
+        await loadFormTargets();
+      } catch {
+        toast.error('Request failed');
+      } finally {
+        setBusyKey(null);
+      }
+    },
+    [pageId, loadFormTargets]
+  );
+
   const handleDelete = useCallback(
     async (formTargetId: string) => {
       setBusyKey(formTargetId);
@@ -326,9 +350,6 @@ export default function CanvasFormsSettingsTab({ pageId, content, onContentChang
           toast.error(await readError(res));
           return;
         }
-        // A no-op for an "orphaned" target (its tag already isn't in
-        // content) — skip the save rather than re-persisting identical
-        // content and needlessly marking the document dirty.
         const nextContent = deleteFormBlock({ content, formTargetId });
         if (nextContent !== content) {
           onContentChange(nextContent);
@@ -390,7 +411,7 @@ export default function CanvasFormsSettingsTab({ pageId, content, onContentChang
             tag={tag}
             driveId={driveId}
             isBusy={busyKey === tag.outerHtml}
-            onWire={(sheetPageId) => handleWire(tag, sheetPageId)}
+            onWire={(sheetPageId, notificationEmail) => handleWire(tag, sheetPageId, notificationEmail)}
           />
         );
       })}
@@ -406,6 +427,7 @@ export default function CanvasFormsSettingsTab({ pageId, content, onContentChang
               formTarget={ft}
               isBusy={busyKey === ft.id}
               onSetStatus={(status) => handleSetStatus(ft.id, status)}
+              onSetNotificationEmail={(email) => handleSetNotificationEmail(ft.id, email)}
               onDelete={() => handleDelete(ft.id)}
             />
           ))}

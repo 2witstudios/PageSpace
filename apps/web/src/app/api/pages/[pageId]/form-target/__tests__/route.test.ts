@@ -183,6 +183,11 @@ describe('/api/pages/[pageId]/form-target', () => {
       expect(response.status).toBe(403);
     });
 
+    it('returns 400 when formTargetId is missing', async () => {
+      const response = await PATCH(createRequest('PATCH', {}), params());
+      expect(response.status).toBe(400);
+    });
+
     it('returns 400 when neither status nor notificationEmail is provided', async () => {
       const response = await PATCH(createRequest('PATCH', { formTargetId: 'ft-1' }), params());
       expect(response.status).toBe(400);
