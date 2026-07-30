@@ -25,7 +25,7 @@
  * is lazy and automatic (first tool call / shell open), and shells live in
  * panes, opened from the pane picker like everywhere else.
  */
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   AlertCircle,
@@ -91,6 +91,25 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   const isReadOnly = usePermissionsCheck(page.id, user?.id);
 
   const { agent, isLoading: agentLoading, error: agentError, retry: retryAgent } = useResolvedAgent(page.id);
+
+  // The Settings tab's data: PageAgentSettingsTab renders its loading state
+  // until `config` arrives, so this fetch is what makes Settings (and Save)
+  // work at all — the AiChatView effect this page's rewrite dropped, restored.
+  useEffect(() => {
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const response = await fetchWithAuth(`/api/pages/${page.id}/agent-config`, {
+          signal: controller.signal,
+        });
+        if (response.ok) setAgentConfig(await response.json());
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        console.error('Failed to load agent config:', error);
+      }
+    })();
+    return () => controller.abort();
+  }, [page.id]);
 
   const {
     selectedProvider,

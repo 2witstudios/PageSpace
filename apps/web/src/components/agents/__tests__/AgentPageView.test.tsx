@@ -88,7 +88,9 @@ vi.mock('@/lib/ai/shared/hooks/useConversations', () => ({
 }));
 
 vi.mock('@/components/ai/page-agents', () => ({
-  PageAgentSettingsTab: () => <div data-testid="page-agent-settings-tab" />,
+  PageAgentSettingsTab: ({ config }: { config: unknown }) => (
+    <div data-testid="page-agent-settings-tab" data-has-config={String(config !== null)} />
+  ),
   PageAgentHistoryTab: ({
     onSelectConversation,
   }: {
@@ -142,6 +144,8 @@ beforeEach(() => {
   };
   mockFetchWithAuth.mockImplementation(async (url: string) => {
     if (url.endsWith('/permissions/check')) return jsonResponse({ canEdit: true });
+    if (url.endsWith('/agent-config'))
+      return jsonResponse({ systemPrompt: '', enabledTools: [], availableTools: [] });
     return jsonResponse({});
   });
 });
@@ -225,6 +229,25 @@ describe('AgentPageView', () => {
     expect(await screen.findByText('Save Settings')).toBeInTheDocument();
     expect(screen.getByTestId('page-agent-settings-tab')).toBeInTheDocument();
     expect(screen.getByTestId('agent-integrations-panel')).toBeInTheDocument();
+  });
+
+  it('loads the agent config so the Settings tab has data, not an eternal spinner', async () => {
+    // The rewrite once dropped this fetch entirely — PageAgentSettingsTab
+    // shows its loading state until config arrives, so a page that never
+    // fetches it has a Settings tab that never works (codex review, P1).
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() =>
+      expect(mockFetchWithAuth).toHaveBeenCalledWith(
+        '/api/pages/agent-1/agent-config',
+        expect.objectContaining({ signal: expect.anything() }),
+      ),
+    );
+    await userEvent.click(screen.getByRole('tab', { name: /settings/i }));
+    await waitFor(() =>
+      expect(screen.getByTestId('page-agent-settings-tab')).toHaveAttribute('data-has-config', 'true'),
+    );
   });
 
   it('opens the webhooks dialog from the icon-only header button', async () => {
