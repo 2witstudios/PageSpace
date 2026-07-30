@@ -32,7 +32,7 @@ import { useAgentSurfaceStore, SHEET_BREAKPOINT_QUERY } from '@/stores/agents/us
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { fetchWithAuth, post, del, ApiRequestError } from '@/lib/auth/auth-fetch';
 import { buildSessionGroups, ASSISTANT_GROUP_KEY } from './session-groups';
-import { RowMenu, type RowMenuItem } from './session-row-menu';
+import { RowMenu, type RowMenuItem } from './RowMenu';
 
 /**
  * The Agents console's left sidebar: **Drive → Session → conversations.**
@@ -640,7 +640,7 @@ function SpawnSessionPalette({
           {agents.map((agent) => (
             <CommandItem
               key={agent.id}
-              value={agent.title ?? 'Agent'}
+              value={`${agent.id}-${agent.title ?? 'Agent'}`}
               disabled={spawning}
               onSelect={() => onSelectAgent(agent.id)}
             >

@@ -12,7 +12,7 @@ import { Bot, Trash2 } from 'lucide-react';
 const mockUseTouchDevice = vi.fn(() => false);
 vi.mock('@/hooks/useTouchDevice', () => ({ useTouchDevice: () => mockUseTouchDevice() }));
 
-import { RowMenu, type RowMenuItem } from '../session-row-menu';
+import { RowMenu, type RowMenuItem } from '../RowMenu';
 
 beforeEach(() => {
   vi.clearAllMocks();

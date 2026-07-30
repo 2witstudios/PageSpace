@@ -50,7 +50,7 @@ function renderRowMenuItems(
       {item.separatorBefore && <SeparatorComponent />}
       <ItemComponent
         onSelect={item.onSelect}
-        className={cn(item.destructive && 'text-red-500 focus:text-red-500')}
+        className={cn(item.destructive && 'text-destructive focus:text-destructive')}
       >
         <item.icon className="mr-2 size-3.5" aria-hidden="true" />
         {item.label}
