@@ -27,6 +27,11 @@ interface PublishControlsProps {
    *  (a save just completed) and the page is published, the control marks itself
    *  stale so the user sees the Update button without a page reload. */
   contentDirty?: boolean;
+  /** 'header' (default): rendered among other populated header buttons, so
+   *  staying silent when unavailable is fine. 'panel': rendered as the sole
+   *  content of a dedicated tab/panel, where silence would leave a blank tab —
+   *  render an explanatory message instead. */
+  variant?: 'header' | 'panel';
 }
 
 /** Author-supplied SEO overrides for a published page. */
@@ -83,7 +88,7 @@ const readError = async (res: Response): Promise<string> => {
   }
 };
 
-const PublishControls = ({ pageId, contentDirty }: PublishControlsProps) => {
+const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishControlsProps) => {
   const params = useParams<{ driveId?: string }>();
   const driveId = params?.driveId;
   const [state, setState] = useState<PublishState>({ published: false, url: null, available: false, isStale: false, settings: EMPTY_SETTINGS });
@@ -208,9 +213,18 @@ const PublishControls = ({ pageId, contentDirty }: PublishControlsProps) => {
     return <span className="px-4 py-2 text-sm text-muted-foreground">Loading…</span>;
   }
 
-  // Publishing isn't configured on this deployment (e.g. no PUBLISH_BUCKET) —
-  // hide the control entirely rather than show a button that only returns 503.
+  // Publishing isn't configured on this deployment (e.g. no PUBLISH_BUCKET), or
+  // this viewer lacks permission to publish. In the header (among other
+  // populated buttons) staying silent is fine; in a standalone panel (the
+  // canvas Settings tab) silence would leave the tab blank, so explain instead.
   if (!state.available) {
+    if (variant === 'panel') {
+      return (
+        <p className="text-sm text-muted-foreground">
+          Publishing isn&apos;t available for this page.
+        </p>
+      );
+    }
     return null;
   }
 
