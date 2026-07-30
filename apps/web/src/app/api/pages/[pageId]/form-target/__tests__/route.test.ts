@@ -19,6 +19,7 @@ const mockGetFormTargetsByCanvasPageId = vi.hoisted(() => vi.fn());
 const mockGetFormTargetById = vi.hoisted(() => vi.fn());
 const mockCreateFormTarget = vi.hoisted(() => vi.fn());
 const mockUpdateFormTargetStatus = vi.hoisted(() => vi.fn());
+const mockUpdateFormTargetNotification = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: mockAuthenticate,
@@ -47,6 +48,7 @@ vi.mock('@/services/api/form-target-service', async () => {
     getFormTargetById: mockGetFormTargetById,
     createFormTarget: mockCreateFormTarget,
     updateFormTargetStatus: mockUpdateFormTargetStatus,
+    updateFormTargetNotification: mockUpdateFormTargetNotification,
   };
 });
 
@@ -181,8 +183,8 @@ describe('/api/pages/[pageId]/form-target', () => {
       expect(response.status).toBe(403);
     });
 
-    it('returns 400 for a malformed body', async () => {
-      const response = await PATCH(createRequest('PATCH', { formTargetId: 'ft-1' }), params());
+    it('returns 400 for a malformed body (missing formTargetId)', async () => {
+      const response = await PATCH(createRequest('PATCH', {}), params());
       expect(response.status).toBe(400);
     });
 
@@ -242,6 +244,40 @@ describe('/api/pages/[pageId]/form-target', () => {
         params()
       );
       expect(response.status).toBe(400);
+    });
+
+    it('updates notificationEmail on a target scoped to this Canvas page', async () => {
+      mockGetFormTargetById.mockResolvedValue(storedFormTarget);
+      mockUpdateFormTargetNotification.mockResolvedValue({ ...storedFormTarget, notificationEmail: 'owner@example.com' });
+
+      const response = await PATCH(
+        createRequest('PATCH', { formTargetId: 'ft-1', notificationEmail: 'owner@example.com' }),
+        params()
+      );
+
+      expect(mockUpdateFormTargetNotification).toHaveBeenCalledWith({
+        formTargetId: 'ft-1',
+        notificationEmail: 'owner@example.com',
+      });
+      const body = await response.json();
+      expect(body.formTarget.notificationEmail).toBe('owner@example.com');
+    });
+
+    it('clears notificationEmail when set to null', async () => {
+      mockGetFormTargetById.mockResolvedValue(storedFormTarget);
+      mockUpdateFormTargetNotification.mockResolvedValue({ ...storedFormTarget, notificationEmail: null });
+
+      const response = await PATCH(
+        createRequest('PATCH', { formTargetId: 'ft-1', notificationEmail: null }),
+        params()
+      );
+
+      expect(mockUpdateFormTargetNotification).toHaveBeenCalledWith({
+        formTargetId: 'ft-1',
+        notificationEmail: null,
+      });
+      const body = await response.json();
+      expect(body.formTarget.notificationEmail).toBeNull();
     });
   });
 

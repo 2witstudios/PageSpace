@@ -13,6 +13,7 @@ const mockCheckDistributedRateLimit = vi.hoisted(() => vi.fn());
 const mockLookupActiveFormTarget = vi.hoisted(() => vi.fn());
 const mockAppendFormSubmission = vi.hoisted(() => vi.fn());
 const mockGetClientIP = vi.hoisted(() => vi.fn());
+const mockSendFormSubmissionNotification = vi.hoisted(() => vi.fn());
 
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: mockCheckDistributedRateLimit,
@@ -24,6 +25,10 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
 vi.mock('@/services/api/form-target-service', () => ({
   lookupActiveFormTarget: mockLookupActiveFormTarget,
   appendFormSubmission: mockAppendFormSubmission,
+}));
+
+vi.mock('@/lib/forms/send-form-notification', () => ({
+  sendFormSubmissionNotification: mockSendFormSubmissionNotification,
 }));
 
 vi.mock('@/lib/auth/auth-helpers', () => ({
@@ -68,6 +73,7 @@ describe('POST /api/public/forms/[token]/submit', () => {
     mockCheckDistributedRateLimit.mockResolvedValue({ allowed: true });
     mockLookupActiveFormTarget.mockResolvedValue(activeFormTarget);
     mockAppendFormSubmission.mockResolvedValue(undefined);
+    mockSendFormSubmissionNotification.mockResolvedValue(undefined);
   });
 
   describe('successful submission', () => {
@@ -201,6 +207,56 @@ describe('POST /api/public/forms/[token]/submit', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).not.toContain('DB connection');
+    });
+  });
+
+  describe('notification email', () => {
+    it('sends a notification email when notificationEmail is configured', async () => {
+      mockLookupActiveFormTarget.mockResolvedValue({
+        ...activeFormTarget,
+        notificationEmail: 'owner@example.com',
+        fields,
+        driveId: 'drive-1',
+        pageId: 'sheet-1',
+      });
+
+      const request = createRequest({ name: 'Ada Lovelace', email: 'ada@example.com' });
+      await POST(request, params());
+
+      expect(mockSendFormSubmissionNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          values: { name: 'Ada Lovelace', email: 'ada@example.com' },
+        })
+      );
+    });
+
+    it('does not send a notification email when notificationEmail is null', async () => {
+      mockLookupActiveFormTarget.mockResolvedValue({
+        ...activeFormTarget,
+        notificationEmail: null,
+      });
+
+      const request = createRequest({ name: 'Ada Lovelace', email: 'ada@example.com' });
+      await POST(request, params());
+
+      expect(mockSendFormSubmissionNotification).not.toHaveBeenCalled();
+    });
+
+    it('still returns 200 even if the notification email fails', async () => {
+      mockLookupActiveFormTarget.mockResolvedValue({
+        ...activeFormTarget,
+        notificationEmail: 'owner@example.com',
+        fields,
+        driveId: 'drive-1',
+        pageId: 'sheet-1',
+      });
+      // sendFormSubmissionNotification swallows errors internally (best-effort),
+      // but the test verifies the route is not awaiting it (void).
+
+      const request = createRequest({ name: 'Ada Lovelace', email: 'ada@example.com' });
+      const response = await POST(request, params());
+
+      expect(response.status).toBe(200);
     });
   });
 

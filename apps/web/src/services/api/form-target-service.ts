@@ -38,6 +38,8 @@ export interface CreateFormTargetInput {
    *  through the Forms settings UI. Omitted for AI-tool-provisioned targets
    *  that don't (yet) know which Canvas page will embed the form. */
   canvasPageId?: string;
+  /** Optional email address to notify on each submission. Null/undefined = no notification. */
+  notificationEmail?: string | null;
 }
 
 export interface CreateFormTargetResult {
@@ -67,6 +69,7 @@ export async function createFormTarget({
   createdBy,
   mutationContext,
   canvasPageId,
+  notificationEmail,
 }: CreateFormTargetInput): Promise<CreateFormTargetResult> {
   const page = await pageRepository.findById(sheetPageId);
   if (!page) {
@@ -108,6 +111,7 @@ export async function createFormTarget({
           nextRow: HEADER_ROW + 1,
           status: 'active',
           createdBy,
+          notificationEmail: notificationEmail ?? null,
         })
         .returning();
     });
@@ -215,6 +219,33 @@ export async function updateFormTargetStatus({
   throw new FormTargetArchivedError(
     `Form target "${formTargetId}" is archived — archiving is permanent and cannot be reversed`
   );
+}
+
+export interface UpdateFormTargetNotificationInput {
+  formTargetId: string;
+  notificationEmail: string | null;
+}
+
+/**
+ * Updates a form target's notification email. Null clears it (disables
+ * notifications). Takes effect immediately — the next submission reads the
+ * updated value.
+ */
+export async function updateFormTargetNotification({
+  formTargetId,
+  notificationEmail,
+}: UpdateFormTargetNotificationInput): Promise<FormTarget> {
+  const [updated] = await db
+    .update(formTargets)
+    .set({ notificationEmail })
+    .where(eq(formTargets.id, formTargetId))
+    .returning();
+
+  if (!updated) {
+    throw new Error(`Form target "${formTargetId}" not found`);
+  }
+
+  return updated;
 }
 
 export interface AppendFormSubmissionInput {

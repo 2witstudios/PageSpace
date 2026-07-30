@@ -28,6 +28,7 @@ import {
   getFormTargetsByCanvasPageId,
   getFormTargetById,
   updateFormTargetStatus,
+  updateFormTargetNotification,
   FormTargetPageNotSheetError,
   FormTargetAlreadyActiveError,
   FormTargetArchivedError,
@@ -52,6 +53,7 @@ function sanitizeFormTarget(formTarget: FormTarget) {
 const createBodySchema = z.object({
   sheetPageId: z.string().min(1),
   fields: formFieldsSchema,
+  notificationEmail: z.string().email().optional().nullable(),
 });
 
 // Archiving goes through DELETE, not PATCH — it's a distinct, terminal
@@ -59,8 +61,9 @@ const createBodySchema = z.object({
 // audit event type, not a routine status toggle.
 const patchBodySchema = z.object({
   formTargetId: z.string().min(1),
-  status: z.enum(['active', 'paused']),
+  status: z.enum(['active', 'paused']).optional(),
   reason: z.string().optional(),
+  notificationEmail: z.string().email().nullable().optional(),
 });
 
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
@@ -120,6 +123,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       createdBy: userId,
       mutationContext: { userId },
       canvasPageId: pageId,
+      notificationEmail: body.notificationEmail,
     });
 
     const submitUrl = `${webAppBaseUrl}/api/public/forms/${token}/submit`;
@@ -175,18 +179,34 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
       return NextResponse.json({ error: 'No form target with that id is set up on this page' }, { status: 404 });
     }
 
-    const updated = await updateFormTargetStatus({
-      formTargetId: body.formTargetId,
-      status: body.status,
-      statusReason: body.reason,
-    });
+    let updated = existing;
+
+    if (body.status !== undefined) {
+      updated = await updateFormTargetStatus({
+        formTargetId: body.formTargetId,
+        status: body.status,
+        statusReason: body.reason,
+      });
+    }
+
+    if (body.notificationEmail !== undefined) {
+      updated = await updateFormTargetNotification({
+        formTargetId: body.formTargetId,
+        notificationEmail: body.notificationEmail,
+      });
+    }
 
     auditRequest(req, {
       eventType: 'data.write',
       userId: auth.userId,
       resourceType: 'page',
       resourceId: pageId,
-      details: { operation: 'form-target-update', formTargetId: body.formTargetId, status: body.status },
+      details: {
+        operation: 'form-target-update',
+        formTargetId: body.formTargetId,
+        ...(body.status !== undefined ? { status: body.status } : {}),
+        ...(body.notificationEmail !== undefined ? { notificationEmail: body.notificationEmail } : {}),
+      },
     });
 
     return NextResponse.json({ formTarget: sanitizeFormTarget(updated) });

@@ -20,6 +20,7 @@ import { buildSubmissionSchema } from '@pagespace/lib/forms/submission-schema';
 import { isHoneypotTriggered, HONEYPOT_FIELD_NAME } from '@pagespace/lib/forms/honeypot';
 import { getClientIP } from '@/lib/auth/auth-helpers';
 import { lookupActiveFormTarget, appendFormSubmission } from '@/services/api/form-target-service';
+import { sendFormSubmissionNotification } from '@/lib/forms/send-form-notification';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const MAX_PAYLOAD_BYTES = 8 * 1024;
@@ -158,6 +159,17 @@ export async function POST(request: Request, context: { params: Promise<{ token:
       values: validation.data,
       submitterIpHash: hashToken(ip),
     });
+
+    // 8. Notification email — best-effort, fire-and-forget. The submission
+    // already succeeded (row appended). A Resend failure is logged, never
+    // surfaced to the visitor.
+    if (formTarget.notificationEmail) {
+      void sendFormSubmissionNotification({
+        formTarget,
+        values: validation.data,
+        submittedAt: new Date(),
+      });
+    }
 
     return corsJson({ success: true }, { status: 200 });
   } catch (error) {

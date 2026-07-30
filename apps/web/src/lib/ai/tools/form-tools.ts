@@ -43,8 +43,13 @@ export const formTools = {
         .string()
         .optional()
         .describe('The Canvas page formHtml will be embedded into, if known — lets the Forms settings UI find and manage this target later'),
+      notificationEmail: z
+        .string()
+        .email()
+        .optional()
+        .describe('Optional email address to notify on each form submission. Omit to disable notifications.'),
     }),
-    execute: async ({ sheetPageId, fields, canvasPageId }, { experimental_context: context }) => {
+    execute: async ({ sheetPageId, fields, canvasPageId, notificationEmail }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -62,6 +67,7 @@ export const formTools = {
           createdBy: userId,
           mutationContext: { userId, isAiGenerated: true },
           canvasPageId,
+          notificationEmail,
         });
 
         const submitUrl = `${getWebAppUrl()}/api/public/forms/${token}/submit`;
