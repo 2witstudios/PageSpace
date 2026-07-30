@@ -486,8 +486,12 @@ export default function AgentPanes({
   const confirmEndSession = useCallback(async () => {
     if (!pendingEndClose) return;
     setEndingSession(true);
+    let hadOtherOpenConversations = false;
     try {
-      await del(`/api/agent-sessions/${encodeURIComponent(sessionId)}`);
+      const ended = await del<{ hadOtherOpenConversations?: boolean }>(
+        `/api/agent-sessions/${encodeURIComponent(sessionId)}`,
+      );
+      hadOtherOpenConversations = ended?.hadOtherOpenConversations ?? false;
     } catch (error) {
       // Nothing was mutated locally, so there is nothing to restore — the
       // grid the user is looking at is still exactly the live session.
@@ -510,6 +514,15 @@ export default function AgentPanes({
     // Same instant-freshness nudge as closeConversationListing — otherwise
     // the now-dead session's row lingers in the sidebar until the next poll.
     void mutate(isAgentSessionsKey);
+    if (hadOtherOpenConversations) {
+      // Ending is unconditional by design — this can't be prevented client
+      // side — but the confirm the user just clicked may have been shown
+      // because THIS pane's own close 409'd on a stale "last listing" belief
+      // (a conversation minted elsewhere committed between that 409 and this
+      // confirm). Silently destroying more than expected deserves a signal,
+      // even though nothing here can undo it (caught in review).
+      toast.warning('This session had other open conversations, which were also ended.');
+    }
     onSessionEnded?.();
   }, [pendingEndClose, sessionId, forgetWorkspace, closeTerminalShell, onSessionEnded]);
 

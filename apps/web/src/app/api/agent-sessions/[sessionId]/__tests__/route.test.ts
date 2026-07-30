@@ -6,6 +6,7 @@ const {
   mockAuditRequest,
   mockCheckSessionAccess,
   mockCheckSessionEndAccess,
+  mockCountOpenConversationsForSession,
   mockEndSession,
   mockFindSessionRecord,
   mockProvisionSessionSandbox,
@@ -14,6 +15,7 @@ const {
   mockAuditRequest: vi.fn(),
   mockCheckSessionAccess: vi.fn(),
   mockCheckSessionEndAccess: vi.fn(),
+  mockCountOpenConversationsForSession: vi.fn(),
   mockEndSession: vi.fn(),
   mockFindSessionRecord: vi.fn(),
   mockProvisionSessionSandbox: vi.fn(),
@@ -32,6 +34,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
   checkSessionAccess: (...args: unknown[]) => mockCheckSessionAccess(...args),
   checkSessionEndAccess: (...args: unknown[]) => mockCheckSessionEndAccess(...args),
+  countOpenConversationsForSession: (...args: unknown[]) => mockCountOpenConversationsForSession(...args),
   endSession: (...args: unknown[]) => mockEndSession(...args),
   findSessionRecord: (...args: unknown[]) => mockFindSessionRecord(...args),
   provisionSessionSandbox: (...args: unknown[]) => mockProvisionSessionSandbox(...args),
@@ -56,6 +59,7 @@ beforeEach(() => {
   mockCheckSessionEndAccess.mockResolvedValue({ allowed: true });
   mockFindSessionRecord.mockResolvedValue(ROW);
   mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sb-1', resumed: false });
+  mockCountOpenConversationsForSession.mockResolvedValue(1);
   mockEndSession.mockResolvedValue({ ok: true, spriteTornDown: true });
 });
 
@@ -147,7 +151,29 @@ describe('DELETE /api/agent-sessions/[sessionId]', () => {
   it('should end the session (row retained) and report the teardown', async () => {
     const response = await del();
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ok: true, spriteTornDown: true });
+    expect(await response.json()).toEqual({ ok: true, spriteTornDown: true, hadOtherOpenConversations: false });
+    expect(mockEndSession).toHaveBeenCalledWith(SESSION_ID);
+  });
+
+  it('reports hadOtherOpenConversations: true — informational only, still ends the session', async () => {
+    // Ending is unconditional by design (the sidebar's own "End session" is
+    // reachable regardless of open-conversation count) — this field never
+    // blocks teardown, it only lets a caller whose confirm was based on a
+    // stale "this looks empty" premise warn the user after the fact (caught
+    // in review: a conversation minted elsewhere can commit between an
+    // earlier `last_conversation` 409 and this confirm).
+    mockCountOpenConversationsForSession.mockResolvedValue(3);
+    const response = await del();
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true, spriteTornDown: true, hadOtherOpenConversations: true });
+    expect(mockEndSession).toHaveBeenCalledWith(SESSION_ID);
+  });
+
+  it('still ends the session even if the informational count read itself fails', async () => {
+    mockCountOpenConversationsForSession.mockRejectedValue(new Error('db blip'));
+    const response = await del();
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true, spriteTornDown: true, hadOtherOpenConversations: false });
     expect(mockEndSession).toHaveBeenCalledWith(SESSION_ID);
   });
 

@@ -334,6 +334,26 @@ export async function closeConversationInSession(input: {
   });
 }
 
+/**
+ * A plain, lock-free, INFORMATIONAL read — not a guard. Ending a session is a
+ * genuinely unconditional act (the sidebar's own "End session" is reachable
+ * with any number of open conversations, by design), so this never blocks
+ * `endSession`; it exists only so the caller can warn the user when their
+ * confirm turned out to destroy more than the empty/near-empty session they
+ * thought they were looking at — e.g. a conversation minted in another pane
+ * or tab committed between an earlier `last_conversation` 409 and this
+ * confirm (caught in review: the advisory lock in `closeConversationInSession`
+ * only serializes against OTHER closes, and no lock held for milliseconds
+ * around either transaction can prevent a human confirming minutes later).
+ */
+export async function countOpenConversationsForSession(sessionId: string): Promise<number> {
+  const [row] = await db
+    .select({ n: count() })
+    .from(conversations)
+    .where(and(eq(conversations.sessionId, sessionId), eq(conversations.isActive, true), isNull(conversations.closedInSessionAt)));
+  return row?.n ?? 0;
+}
+
 export async function spawnSession(input: {
   userId: string;
   driveId: string | null;

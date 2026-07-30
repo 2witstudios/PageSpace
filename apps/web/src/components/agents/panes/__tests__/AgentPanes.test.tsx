@@ -18,6 +18,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SWRConfig } from 'swr';
+import { toast } from 'sonner';
 
 const mockPost = vi.fn();
 const mockDel = vi.fn();
@@ -238,6 +239,32 @@ describe('AgentPanes', () => {
       await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1'));
       await waitFor(() => expect(onSessionEnded).toHaveBeenCalledTimes(1));
       expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeUndefined();
+    });
+
+    it('warns (but still ends the session) when the server reports other open conversations existed', async () => {
+      // Ending is unconditional by design and can't be prevented client
+      // side — but THIS dialog's confirm was shown because the pane's own
+      // close 409'd on a "this looks like the last listing" belief that can
+      // go stale (a conversation minted elsewhere committed in the window
+      // between that 409 and this confirm). Silently destroying more than
+      // expected deserves a signal, even though nothing here can undo it
+      // (caught in review).
+      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+      mockDel.mockImplementation(async (url: string) => {
+        if (url === '/api/agent-sessions/ses-1/conversations/conv-1') throw new ApiRequestError('conflict', 409);
+        return { ok: true, spriteTornDown: true, hadOtherOpenConversations: true };
+      });
+      const warnSpy = vi.spyOn(toast, 'warning').mockImplementation(() => '');
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      const user = userEvent.setup();
+      await user.click(screen.getByLabelText('Close pane'));
+      const dialog = await screen.findByRole('alertdialog');
+
+      await user.click(within(dialog).getByRole('button', { name: 'End session' }));
+
+      await waitFor(() => expect(warnSpy).toHaveBeenCalled());
+      warnSpy.mockRestore();
     });
 
     it('a failed DELETE leaves the grid exactly as it was — no rollback needed because nothing moved', async () => {
