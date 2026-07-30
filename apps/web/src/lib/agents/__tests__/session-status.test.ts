@@ -15,7 +15,7 @@ import { deriveSandboxStatus, describeSandboxStatus, isSandboxLive, SANDBOX_STAT
 const session = (overrides: Partial<AgentSessionDTO> = {}): AgentSessionDTO => ({
   sessionId: 'conv-1',
   ownerId: 'user-1',
-  agentPageId: 'agent-1',
+  driveId: 'drive-1',
   name: 'Untitled',
   sandboxStatus: 'running',
   createdAt: '2026-07-28T00:00:00.000Z',

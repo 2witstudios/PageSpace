@@ -76,9 +76,9 @@ describe('GET /api/agent-sessions', () => {
     expect(mockListSessions).toHaveBeenCalledWith({ driveId: 'drive-1', ownerId: 'user-1' });
   });
 
-  it('given ?agentId=, should filter by agent page, still owner-scoped', async () => {
+  it('given ?agentId=, should IGNORE it — a session hosts many agents, so no such filter exists', async () => {
     await GET(new Request('http://localhost/api/agent-sessions?agentId=page-1'));
-    expect(mockListSessions).toHaveBeenCalledWith({ agentPageId: 'page-1', ownerId: 'user-1' });
+    expect(mockListSessions).toHaveBeenCalledWith({ ownerId: 'user-1' });
   });
 
   it('given a non-admin, should 403 WITHOUT enumerating anything, and audit the denial', async () => {

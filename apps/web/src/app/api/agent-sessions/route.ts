@@ -29,26 +29,25 @@ export async function GET(request: Request) {
 
   const url = new URL(request.url);
   const driveId = url.searchParams.get('driveId');
-  const agentId = url.searchParams.get('agentId');
 
   if (auth.role !== 'admin') {
     auditRequest(request, {
       eventType: 'authz.access.denied',
       userId: auth.userId,
       resourceType: driveId ? 'drive' : 'agent_sessions',
-      resourceId: driveId ?? agentId ?? undefined,
+      resourceId: driveId ?? undefined,
       details: { reason: 'app_admin_required', method: 'GET', route: 'agent-sessions' },
       riskScore: 0.5,
     });
     return NextResponse.json({ error: 'Agent sessions require administrator privileges' }, { status: 403 });
   }
 
+  // No agent filter exists any more: a session hosts conversations with MANY
+  // agents, so "an agent's sessions" is not a real relation to query.
   const filter: AgentSessionListFilter =
     driveId !== null && driveId.length > 0
       ? { driveId, ownerId: auth.userId }
-      : agentId !== null && agentId.length > 0
-        ? { agentPageId: agentId, ownerId: auth.userId }
-        : { ownerId: auth.userId };
+      : { ownerId: auth.userId };
 
   try {
     const sessions = await listSessions(filter);
@@ -63,7 +62,7 @@ export async function GET(request: Request) {
     loggers.api.error(
       'Agent sessions list failed',
       error instanceof Error ? error : undefined,
-      { driveId, agentId },
+      { driveId },
     );
     return NextResponse.json({ error: 'Failed to list agent sessions' }, { status: 500 });
   }

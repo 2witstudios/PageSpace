@@ -190,7 +190,10 @@ export interface SessionToolsDeps {
   canUseAgent: (userId: string, agentPageId: string) => Promise<boolean>;
   /** Create the labeled worker session row (conversation + session, squat-guarded). */
   createWorkerSession: (input: {
+    /** The WORKER's new conversation id (minted by the caller of this dep). */
     sessionId: string;
+    /** The conversation whose SESSION the worker joins — a worker works in its spawner's workspace. */
+    callerConversationId: string;
     ownerId: string;
     agentPageId: string | null;
     name: string;
@@ -407,7 +410,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
 
     spawn_session: tool({
       description:
-        'Spawn a WORKER: a new labeled conversation-session that starts working on your prompt immediately, visible live in the sidebar like any conversation. Returns its sessionId — the address for send_session/read_session/kill_session (the name is only a label). ' +
+        'Spawn a WORKER: a new labeled conversation IN YOUR OWN SESSION (same sandbox, same filesystem) that starts working on your prompt immediately, visible live in the sidebar like any conversation. Returns its sessionId — the address for send_session/read_session/kill_session (the name is only a label). ' +
         'Pass agent to run it under another agent (an agentId from list_agents); omit it to use this conversation\'s own agent. ' +
         'Default is fire-and-forget: the reply lands in the worker\'s own transcript (read_session), NOT here. Pass wait: true to block for the first reply and get it back directly.',
       inputSchema: spawnSessionInputSchema,
@@ -443,9 +446,12 @@ export function createSessionTools(deps: SessionToolsDeps): {
           };
         }
 
+        const callerConversationId = context?.conversationId;
+        if (!callerConversationId) return NEEDS_CONVERSATION;
         const sessionId = deps.newId();
         const created = await deps.createWorkerSession({
           sessionId,
+          callerConversationId,
           ownerId: actor.userId,
           agentPageId,
           name: plan.name,
@@ -557,7 +563,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
 
     kill_session: tool({
       description:
-        'End one of your worker sessions (by sessionId): any in-flight run is stopped and its sandbox is torn down. The conversation and its transcript survive — this releases compute, it does not delete history. Not reversible for whatever was running.',
+        'Stop one of your workers (by sessionId): any in-flight run is aborted. The conversation and its transcript survive. Workers share YOUR session\'s sandbox, so stopping one never tears the sandbox down — closing your session is what releases compute.',
       inputSchema: killSessionInputSchema,
       execute: async ({ sessionId }, options) => {
         const opened = await openOwnSession(readContext(options), sessionId);

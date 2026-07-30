@@ -30,15 +30,11 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { sessionAnchorForConversation } from '@/lib/agent-sessions/session-anchor';
 import { sessionQuotaExceeded } from '@/lib/agent-sessions/quota-response';
 import {
-  checkAccessForSubject,
   checkSessionAccess,
   checkSessionEndAccess,
   endSession,
-  ensureSession,
-  findSessionConversation,
   findSessionRecord,
   provisionSessionSandbox,
   toAgentSessionDTO,
@@ -92,40 +88,21 @@ export async function POST(request: Request, context: RouteContext) {
   if (isAuthError(auth)) return auth.error;
   const { sessionId } = await context.params;
 
-  const conversation = await findSessionConversation(sessionId);
-  if (!conversation) {
-    return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
-  }
-  const anchor = sessionAnchorForConversation(conversation);
-  if (!anchor.ok) {
-    return NextResponse.json(
-      { error: 'This conversation cannot host an agent session', reason: anchor.reason },
-      { status: 409 },
-    );
-  }
-
-  // The subject is the row-to-be: owner = the CONVERSATION's owner, so a
-  // shared requester ensuring first can never claim someone else's session.
-  const access = await checkAccessForSubject(auth.userId, {
-    sessionId,
-    ownerId: conversation.userId,
-    agentPageId: anchor.agentPageId,
-  });
-  if (!access.allowed) return denied(request, auth.userId, sessionId, access.reason);
-
-  const ensured = await ensureSession({
-    conversationId: sessionId,
-    userId: conversation.userId,
-    agentPageId: anchor.agentPageId,
-  });
-  if (!ensured.ok) {
-    return NextResponse.json(
-      { error: 'This conversation cannot host an agent session', reason: ensured.reason },
-      { status: 409 },
-    );
+  // The session must already exist — spawning one is the collection route's
+  // POST. This POST (re-)provisions an EXISTING workspace's sandbox: cold
+  // start, or resume after an end.
+  const access = await checkSessionAccess(auth.userId, sessionId);
+  if (!access.allowed) {
+    if (access.reason === 'session_not_found') {
+      return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+    }
+    return denied(request, auth.userId, sessionId, access.reason);
   }
 
-  const provisioned = await provisionSessionSandbox(ensured.session, auth.userId);
+  const existing = await findSessionRecord(sessionId);
+  if (!existing) return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+
+  const provisioned = await provisionSessionSandbox(existing, auth.userId);
   if (!provisioned.ok) {
     if (provisioned.reason === 'denied') {
       // A plan-limit refusal is not an access denial — separate response and
@@ -151,7 +128,7 @@ export async function POST(request: Request, context: RouteContext) {
     userId: auth.userId,
     resourceType: 'agent_session',
     resourceId: sessionId,
-    details: { op: 'ensure_session', resumed: provisioned.resumed },
+    details: { op: 'provision_session', resumed: provisioned.resumed },
   });
 
   const row = await findSessionRecord(sessionId);

@@ -18,7 +18,7 @@ const shellRow: ShellDTO = {
   createdAt: '2026-01-01T00:00:00.000Z',
 };
 
-const sessionSubject = { sessionId: 'conv-1', ownerId: 'owner-1', agentPageId: 'page-1' };
+const sessionSubject = { sessionId: 'ses-1', ownerId: 'owner-1', driveId: 'drive-1' };
 
 type DepCalls = {
   checkSessionAccess: number;
@@ -163,7 +163,7 @@ describe('buildShellCheckAuth — access half', () => {
     });
   });
 
-  it('returns the access verdict (session key + payer + billing page) on the happy path', async () => {
+  it('returns the access verdict (session key + payer + billing drive) on the happy path', async () => {
     const { deps } = buildDeps();
     const checkAuth = buildShellCheckAuth(deps);
 
@@ -171,25 +171,25 @@ describe('buildShellCheckAuth — access half', () => {
 
     assert({
       given: 'a fully-authorized connect',
-      should: 'return ok with the session key, payer and billing page, plus a sandbox resolver to call lazily',
+      should: 'return ok with the session key, payer and billing drive, plus a sandbox resolver to call lazily',
       actual: result.ok
         ? {
             ok: result.ok,
             sessionKey: result.sessionKey,
             payerId: result.payerId,
-            agentPageId: result.agentPageId,
+            driveId: result.driveId,
             resolver: typeof result.resolveSandbox,
           }
         : result,
-      expected: { ok: true, sessionKey: 'shell:shl-1', payerId: 'payer-1', agentPageId: 'page-1', resolver: 'function' },
+      expected: { ok: true, sessionKey: 'shell:shl-1', payerId: 'payer-1', driveId: 'drive-1', resolver: 'function' },
     });
   });
 
-  it('surfaces a null agentPageId (a global-assistant session) so billing attributes to the owner', async () => {
+  it('surfaces a null driveId (a global-assistant session) so billing attributes to the owner', async () => {
     const { deps } = buildDeps({
       checkSessionAccess: async () => ({
         allowed: true,
-        session: { sessionId: 'conv-1', ownerId: 'owner-1', agentPageId: null },
+        session: { sessionId: 'ses-1', ownerId: 'owner-1', driveId: null },
       }),
       resolvePayer: async () => ({ payerId: 'owner-1', driveId: null }),
     });
@@ -199,9 +199,9 @@ describe('buildShellCheckAuth — access half', () => {
 
     assert({
       given: 'a global-assistant session (no agent page)',
-      should: 'authorize with a null billing page and the owner as payer',
-      actual: result.ok ? { agentPageId: result.agentPageId, payerId: result.payerId } : result,
-      expected: { agentPageId: null, payerId: 'owner-1' },
+      should: 'authorize with a null billing drive and the owner as payer',
+      actual: result.ok ? { driveId: result.driveId, payerId: result.payerId } : result,
+      expected: { driveId: null, payerId: 'owner-1' },
     });
   });
 

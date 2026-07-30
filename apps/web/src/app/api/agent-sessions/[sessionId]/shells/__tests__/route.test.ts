@@ -5,9 +5,7 @@ const {
   mockAuthenticateRequest,
   mockAuditRequest,
   mockCheckSessionAccess,
-  mockCheckAccessForSubject,
-  mockEnsureSession,
-  mockFindSessionConversation,
+  mockFindSessionRecord,
   mockProvisionSessionSandbox,
   mockListShells,
   mockSpawnShell,
@@ -15,9 +13,7 @@ const {
   mockAuthenticateRequest: vi.fn(),
   mockAuditRequest: vi.fn(),
   mockCheckSessionAccess: vi.fn(),
-  mockCheckAccessForSubject: vi.fn(),
-  mockEnsureSession: vi.fn(),
-  mockFindSessionConversation: vi.fn(),
+  mockFindSessionRecord: vi.fn(),
   mockProvisionSessionSandbox: vi.fn(),
   mockListShells: vi.fn(),
   mockSpawnShell: vi.fn(),
@@ -35,9 +31,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
   checkSessionAccess: (...args: unknown[]) => mockCheckSessionAccess(...args),
-  checkAccessForSubject: (...args: unknown[]) => mockCheckAccessForSubject(...args),
-  ensureSession: (...args: unknown[]) => mockEnsureSession(...args),
-  findSessionConversation: (...args: unknown[]) => mockFindSessionConversation(...args),
+  findSessionRecord: (...args: unknown[]) => mockFindSessionRecord(...args),
   provisionSessionSandbox: (...args: unknown[]) => mockProvisionSessionSandbox(...args),
 }));
 vi.mock('@/lib/agent-sessions/session-shells-runtime', () => ({
@@ -48,9 +42,8 @@ vi.mock('@/lib/agent-sessions/session-shells-runtime', () => ({
 import { GET, POST } from '../route';
 
 const AUTH_USER = { userId: 'user-1', role: 'admin' };
-const SESSION_ID = 'conv-1';
-const ROW = { conversationId: SESSION_ID, ownerId: 'user-1', agentPageId: 'page-1' };
-const CONVERSATION = { userId: 'user-1', type: 'page', contextId: 'page-1', isShared: false };
+const SESSION_ID = 'ses-1';
+const ROW = { id: SESSION_ID, ownerId: 'user-1', driveId: 'drive-1' };
 const SHELL = {
   shellId: 'shell-row-1',
   sessionId: SESSION_ID,
@@ -78,9 +71,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockAuthenticateRequest.mockResolvedValue(AUTH_USER);
   mockCheckSessionAccess.mockResolvedValue({ allowed: true });
-  mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
-  mockFindSessionConversation.mockResolvedValue(CONVERSATION);
-  mockEnsureSession.mockResolvedValue({ ok: true, session: ROW });
+  mockFindSessionRecord.mockResolvedValue(ROW);
   mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sb-1', resumed: true });
   mockListShells.mockResolvedValue([SHELL]);
   mockSpawnShell.mockResolvedValue({ ok: true, shell: SHELL });
@@ -114,7 +105,7 @@ describe('GET /api/agent-sessions/[sessionId]/shells', () => {
 });
 
 describe('POST /api/agent-sessions/[sessionId]/shells', () => {
-  it('given a cold session, should ensure + provision the sandbox BEFORE spawning', async () => {
+  it('given a cold session, should provision the sandbox BEFORE spawning — never mint a session', async () => {
     const order: string[] = [];
     mockProvisionSessionSandbox.mockImplementation(async () => {
       order.push('provision');
@@ -150,18 +141,17 @@ describe('POST /api/agent-sessions/[sessionId]/shells', () => {
     expect(mockSpawnShell).not.toHaveBeenCalled();
   });
 
-  it('given a missing conversation, should 404 and never provision', async () => {
-    mockFindSessionConversation.mockResolvedValue(null);
+  it('given no such session, should 404 and never provision — a shell opens INSIDE a workspace', async () => {
+    mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'session_not_found' });
     const response = await post({});
     expect(response.status).toBe(404);
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
   });
 
   it('given an access denial, should 403 and never provision or spawn', async () => {
-    mockCheckAccessForSubject.mockResolvedValue({ allowed: false, reason: 'not_shared' });
+    mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'drive_access_denied' });
     const response = await post({});
     expect(response.status).toBe(403);
-    expect(mockEnsureSession).not.toHaveBeenCalled();
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
     expect(mockSpawnShell).not.toHaveBeenCalled();
   });

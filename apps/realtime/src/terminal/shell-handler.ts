@@ -102,8 +102,8 @@ export type ShellCheckAuthResult =
       sessionKey: string;
       /** The session's resolved payer — metering attribution, present regardless of whether `billing` is wired. */
       payerId: string;
-      /** Billing pageId attribution: the session's agent page, or null (owner-attributed) for a global-assistant session. */
-      agentPageId: string | null;
+      /** Billing attribution scope: the session's drive, or null (owner-attributed) for a global-assistant session. */
+      driveId: string | null;
       /**
        * Reserve the concurrency slot and resolve the Sprite for a FRESH PTY —
        * called ONLY on the create path. Owns the slot's release on its OWN
@@ -835,7 +835,7 @@ export interface ShellTarget {
 }
 
 export interface EnsureShellSessionRequest {
-  /** The ALREADY-GRANTED access verdict for this target — `sessionKey`, `payerId`, `agentPageId`, and the uncalled `resolveSandbox` thunk. */
+  /** The ALREADY-GRANTED access verdict for this target — `sessionKey`, `payerId`, `driveId`, and the uncalled `resolveSandbox` thunk. */
   access: ShellAccessGranted;
   target: ShellTarget;
   /** Who this session is being started FOR — the re-auth tick's identity while nobody is attached. */
@@ -1074,9 +1074,10 @@ export async function ensureShellSession(
       payerId: access.payerId,
       holdId,
       connectedAt,
-      // Billing attribution: the session's agent page — or undefined for a
-      // global-assistant session, whose usage attributes to the owner alone.
-      pageId: access.agentPageId ?? undefined,
+      // No pageId: a session is a drive-level workspace, not page-anchored —
+      // usage attributes to the payer (drive owner, or the session's own owner
+      // for a global-assistant session) with no page grouping.
+      pageId: undefined,
       shellId: sandbox.shellId,
       // The creator is viewer #1, registered in the literal — BEFORE
       // `openShell` — so output arriving between the shell opening and

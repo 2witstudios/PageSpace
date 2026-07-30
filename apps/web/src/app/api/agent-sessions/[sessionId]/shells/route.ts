@@ -19,12 +19,9 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { sessionAnchorForConversation } from '@/lib/agent-sessions/session-anchor';
 import {
-  checkAccessForSubject,
   checkSessionAccess,
-  ensureSession,
-  findSessionConversation,
+  findSessionRecord,
   provisionSessionSandbox,
 } from '@/lib/agent-sessions/agent-sessions-runtime';
 import { listShells, spawnShell } from '@/lib/agent-sessions/session-shells-runtime';
@@ -94,40 +91,23 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json({ error: 'name must be a string' }, { status: 400 });
   }
 
-  const conversation = await findSessionConversation(sessionId);
-  if (!conversation) {
-    return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
-  }
-  const anchor = sessionAnchorForConversation(conversation);
-  if (!anchor.ok) {
-    return NextResponse.json(
-      { error: 'This conversation cannot host an agent session', reason: anchor.reason },
-      { status: 409 },
-    );
+  // The session must already EXIST — a shell opens inside a workspace, it
+  // never mints one (spawning a session is an explicit act on the collection
+  // route, and a session is born with its first conversation, not a shell).
+  const access = await checkSessionAccess(auth.userId, sessionId);
+  if (!access.allowed) {
+    if (access.reason === 'session_not_found') {
+      return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+    }
+    return denied(request, auth.userId, sessionId, access.reason);
   }
 
-  const access = await checkAccessForSubject(auth.userId, {
-    sessionId,
-    ownerId: conversation.userId,
-    agentPageId: anchor.agentPageId,
-  });
-  if (!access.allowed) return denied(request, auth.userId, sessionId, access.reason);
+  const row = await findSessionRecord(sessionId);
+  if (!row) return NextResponse.json({ error: 'Session not found' }, { status: 404 });
 
   // A shell needs a sandbox to run in: cold sessions lazily acquire theirs
   // HERE, through the same one provisioning path every surface shares.
-  const ensured = await ensureSession({
-    conversationId: sessionId,
-    userId: conversation.userId,
-    agentPageId: anchor.agentPageId,
-  });
-  if (!ensured.ok) {
-    return NextResponse.json(
-      { error: 'This conversation cannot host an agent session', reason: ensured.reason },
-      { status: 409 },
-    );
-  }
-
-  const provisioned = await provisionSessionSandbox(ensured.session, auth.userId);
+  const provisioned = await provisionSessionSandbox(row, auth.userId);
   if (!provisioned.ok) {
     if (provisioned.reason === 'denied') {
       // A plan-limit refusal is not an access denial — separate response and
