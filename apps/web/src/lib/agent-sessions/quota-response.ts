@@ -30,6 +30,35 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 export const SESSION_QUOTA_MESSAGE =
   "Your plan's limit for running sandboxes is already in use — stop one before starting another.";
 
+/**
+ * Human-facing copy for the PER-SESSION conversation ceiling (issue #2262
+ * finding 2) — a different quota from {@link SESSION_QUOTA_MESSAGE}'s
+ * account-wide sandbox count: this one is about how many conversations ONE
+ * session holds, and its remedy is a different session or an existing
+ * conversation, never "stop a sandbox".
+ */
+export const SESSION_CONVERSATION_LIMIT_MESSAGE =
+  'This session already holds the maximum number of conversations — continue in an existing one, or start a new session, before adding another.';
+
+/** The 429 for `SessionFullError` (`create-conversation-in-session.ts`) — kept beside its message so the two cannot drift. */
+export function sessionConversationLimitExceeded(
+  request: Request,
+  userId: string,
+  sessionId: string,
+  /** Which route refused, for the audit trail only — never shown to the caller. */
+  route: string,
+): NextResponse {
+  auditRequest(request, {
+    eventType: 'security.rate.limited',
+    userId,
+    resourceType: 'agent_session',
+    resourceId: sessionId,
+    details: { reason: 'session_conversation_limit_reached', route },
+    riskScore: 0,
+  });
+  return NextResponse.json({ error: SESSION_CONVERSATION_LIMIT_MESSAGE }, { status: 429 });
+}
+
 export function sessionQuotaExceeded(
   request: Request,
   userId: string,

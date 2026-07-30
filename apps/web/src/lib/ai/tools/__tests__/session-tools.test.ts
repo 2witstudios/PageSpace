@@ -37,9 +37,11 @@ function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
       agentPageId: CALLER_AGENT,
       name: 'worker',
       endedAt: null,
+      workspaceSessionId: WORKSPACE_ID,
     })),
     countActiveSessions: vi.fn(async () => 0),
     concurrencyLimit: vi.fn(async () => 5),
+    countSessionConversations: vi.fn(async () => 0),
     canUseAgent: vi.fn(async () => true),
     createWorkerSession: vi.fn(async () => ({ ok: true as const })),
     dispatch: vi.fn(async () => ({ ok: true as const, waited: false as const })),
@@ -282,6 +284,7 @@ describe('send_session', () => {
         agentPageId: null,
         name: '',
         endedAt: null,
+        workspaceSessionId: WORKSPACE_ID,
       })),
     });
     const tools = createSessionTools(deps);
@@ -304,6 +307,86 @@ describe('send_session', () => {
     const tools = createSessionTools(deps);
     const result = await run(tools.send_session, { sessionId: 's1', input: 'x', wait: true }, contextOptions());
     expect(result).toEqual(expect.objectContaining({ success: true, reply: 'the answer' }));
+  });
+});
+
+describe('worker verbs target only the CALLER\'s own workspace (issue #2262 H2 parity with shells)', () => {
+  // The blast-radius case the shells fix (H2) never reached workers: a
+  // prompt-injected agent could aim send/read/kill_session at ANY conversation
+  // its user owns — another session's worker, another drive's thread, a plain
+  // session-less chat — and exfiltrate a private transcript or dispatch turns
+  // into a foreign sandbox. One address namespace per verb family means a
+  // worker verb resolves ONLY siblings in the caller's own session.
+  const CROSS_SESSION_ROW = {
+    sessionId: 'conv-other',
+    ownerId: USER_ID, // the caller's OWN conversation — ownership alone must not admit it
+    agentPageId: CALLER_AGENT,
+    name: 'private thread',
+    endedAt: null,
+    workspaceSessionId: 'someone-elses-workspace',
+  };
+
+  it('a conversation in ANOTHER session — even the caller\'s own — reads as nonexistent', async () => {
+    const deps = makeDeps({ findSession: vi.fn(async () => CROSS_SESSION_ROW) });
+    const tools = createSessionTools(deps);
+
+    const sent = await run(tools.send_session, { sessionId: 'conv-other', input: 'x' }, contextOptions());
+    expect(sent.success).toBe(false);
+    expect(deps.dispatch).not.toHaveBeenCalled();
+
+    const readResult = await run(tools.read_session, { sessionId: 'conv-other' }, contextOptions());
+    expect(readResult.success).toBe(false);
+    expect(deps.readTranscript).not.toHaveBeenCalled();
+
+    const killed = await run(tools.kill_session, { sessionId: 'conv-other' }, contextOptions());
+    expect(killed.success).toBe(false);
+    expect(deps.endSession).not.toHaveBeenCalled();
+  });
+
+  it('a SESSION-LESS conversation reads as nonexistent — it is not a worker anywhere', async () => {
+    const deps = makeDeps({
+      findSession: vi.fn(async () => ({ ...CROSS_SESSION_ROW, workspaceSessionId: null })),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(tools.read_session, { sessionId: 'conv-other' }, contextOptions());
+    expect(result.success).toBe(false);
+    expect(deps.readTranscript).not.toHaveBeenCalled();
+  });
+
+  it('a caller whose conversation has NO workspace cannot address any worker', async () => {
+    const deps = makeDeps({ findOwnWorkspace: vi.fn(async () => null) });
+    const tools = createSessionTools(deps);
+    const result = await run(tools.send_session, { sessionId: 's1', input: 'x' }, contextOptions());
+    expect(result.success).toBe(false);
+    expect(deps.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('a caller with no conversation at all cannot address any worker', async () => {
+    const deps = makeDeps();
+    const tools = createSessionTools(deps);
+    const result = await run(
+      tools.read_session,
+      { sessionId: 's1' },
+      contextOptions({ conversationId: undefined }),
+    );
+    expect(result.success).toBe(false);
+    expect(deps.readTranscript).not.toHaveBeenCalled();
+  });
+
+  it('the refusal reads exactly like a nonexistent session — nothing to learn from the difference', async () => {
+    const deps = makeDeps({ findSession: vi.fn(async () => CROSS_SESSION_ROW) });
+    const noRowDeps = makeDeps({ findSession: vi.fn(async () => null) });
+    const crossSession = await run(
+      createSessionTools(deps).send_session,
+      { sessionId: 'conv-other', input: 'x' },
+      contextOptions(),
+    );
+    const noRow = await run(
+      createSessionTools(noRowDeps).send_session,
+      { sessionId: 'conv-other', input: 'x' },
+      contextOptions(),
+    );
+    expect(crossSession).toEqual(noRow);
   });
 });
 

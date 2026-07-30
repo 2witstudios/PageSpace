@@ -18,7 +18,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, desc, eq, inArray, isNotNull } from '@pagespace/db/operators';
+import { and, count, eq, inArray, isNotNull, sql } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { driveMembers } from '@pagespace/db/schema/members';
@@ -65,6 +65,7 @@ import {
 } from '@pagespace/lib/services/agent-sessions/agent-session-access';
 import type { AgentSessionDTO } from '@pagespace/lib/agent-sessions/contract';
 import { decideAgentSessionAccess } from '@pagespace/lib/agent-sessions/decide-session-access';
+import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-sessions/plan-spawn-session';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { resolveOrCreateConversation } from '@/app/api/ai/global/[id]/messages/resolve-or-create-conversation';
 import { createConversationInSessionWith } from '@/lib/agent-sessions/create-conversation-in-session';
@@ -287,6 +288,13 @@ export async function createConversationInSession(input: {
         const row = await findSessionRecord(sessionId);
         return row ? { driveId: row.driveId } : null;
       },
+      countActiveConversations: async (sessionId) => {
+        const [row] = await db
+          .select({ n: count() })
+          .from(conversations)
+          .where(and(eq(conversations.sessionId, sessionId), eq(conversations.isActive, true)));
+        return row?.n ?? 0;
+      },
     },
     input,
   );
@@ -322,16 +330,36 @@ export interface SessionConversationEntry {
 /**
  * The conversations of MANY sessions in one query, grouped by session —
  * the collection GET's shape, which previously ran one query per session
- * (review M4: 1+2N per sidebar poll). Newest activity first per
- * session; the per-session cap (100) is enforced during grouping so one hot
- * session cannot starve the others.
+ * (review M4: 1+2N per sidebar poll). Newest activity first per session,
+ * capped at {@link MAX_SESSION_CONVERSATIONS} — the same ceiling
+ * `planSpawnWorkerSession`/`createConversationInSessionWith` enforce, so a
+ * session's own listing cap and its create-time cap agree by construction.
+ *
+ * The cap is enforced IN SQL via a `ROW_NUMBER() OVER (PARTITION BY
+ * sessionId ...)` filter (issue #2262 finding 4), not the JS `bucket.length`
+ * check the previous shape used: without a query-layer bound, a single
+ * session holding far more rows than its cap pulled its ENTIRE row set into
+ * app memory before the JS loop ever discarded the excess. The window
+ * function is what keeps the per-session fairness a flat `LIMIT` would lose
+ * — one hot session's rows cannot crowd another session's out of a shared cap
+ * ordered across all of them together.
+ *
+ * DELIBERATE metadata exposure (issue #2262 finding 6): every caller with
+ * access to a session (its owner, or any member whose own conversation lives
+ * there) sees every OTHER conversation's title and agent in that session,
+ * this way — including threads it did not create. Shared-workspace semantics,
+ * not a leak: a session is one shared sandbox by design. TRANSCRIPT content
+ * is a separate, still owner-gated read (`checkSessionAccess` /
+ * `openOwnSession` in the tool layer) — this listing carries no message
+ * bodies.
  */
 export async function listSessionConversationsBulk(
   sessionIds: string[],
 ): Promise<Map<string, SessionConversationEntry[]>> {
   const grouped = new Map<string, SessionConversationEntry[]>();
   if (sessionIds.length === 0) return grouped;
-  const rows = await db
+
+  const rankedConversations = db
     .select({
       sessionId: conversations.sessionId,
       conversationId: conversations.id,
@@ -339,14 +367,29 @@ export async function listSessionConversationsBulk(
       type: conversations.type,
       contextId: conversations.contextId,
       lastMessageAt: conversations.lastMessageAt,
+      rowNumber: sql<number>`ROW_NUMBER() OVER (PARTITION BY ${conversations.sessionId} ORDER BY ${conversations.lastMessageAt} DESC)`.as(
+        'row_number',
+      ),
     })
     .from(conversations)
     .where(and(inArray(conversations.sessionId, sessionIds), eq(conversations.isActive, true)))
-    .orderBy(desc(conversations.lastMessageAt));
+    .as('ranked_conversations');
+
+  const rows = await db
+    .select({
+      sessionId: rankedConversations.sessionId,
+      conversationId: rankedConversations.conversationId,
+      title: rankedConversations.title,
+      type: rankedConversations.type,
+      contextId: rankedConversations.contextId,
+      lastMessageAt: rankedConversations.lastMessageAt,
+    })
+    .from(rankedConversations)
+    .where(sql`${rankedConversations.rowNumber} <= ${MAX_SESSION_CONVERSATIONS}`);
+
   for (const row of rows) {
     if (row.sessionId === null) continue;
     const bucket = grouped.get(row.sessionId) ?? [];
-    if (bucket.length >= 100) continue;
     bucket.push({
       conversationId: row.conversationId,
       title: row.title,

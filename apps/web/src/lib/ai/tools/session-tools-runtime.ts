@@ -19,7 +19,7 @@
 
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { and, eq, ne, desc } from '@pagespace/db/operators';
+import { and, count, eq, ne, desc } from '@pagespace/db/operators';
 import { chatMessages, pages } from '@pagespace/db/schema/core';
 import { conversations, messages as globalMessages } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
@@ -34,6 +34,12 @@ import {
   provisionSessionSandbox,
   getAgentSessionStore,
 } from '@/lib/agent-sessions/agent-sessions-runtime';
+import {
+  ConversationUnavailableError,
+  AgentNotInSessionDriveError,
+  SessionFullError,
+} from '@/lib/agent-sessions/create-conversation-in-session';
+import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-sessions/plan-spawn-session';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import {
   getSessionShellStore,
@@ -206,7 +212,13 @@ async function dispatchThroughChatPipeline(input: {
   try {
     response = await fetch(url, { method: 'POST', headers: requestHeaders, body });
   } catch (error) {
-    return { ok: false, reason: 'failed', detail: error instanceof Error ? error.message : String(error) };
+    // A FIXED message, never the raw fetch/network error (issue #2262 finding
+    // 3) — the real cause (DNS, connection refused, TLS) is an internal detail
+    // logged server-side, not something to hand a model dispatching a turn.
+    loggers.ai.error('session dispatch: could not reach the chat pipeline', error instanceof Error ? error : undefined, {
+      sessionId: input.sessionId,
+    });
+    return { ok: false, reason: 'failed', detail: 'could not reach the chat pipeline to dispatch this turn' };
   }
 
   if (!response.ok) {
@@ -249,7 +261,21 @@ async function dispatchThroughChatPipeline(input: {
  * kill_session take), shells are the workspace's PTYs, and the sandbox status
  * is the one Sprite they all share (review H2b — the old listing enumerated
  * workspace-row ids no verb could address, and never delivered the promised
- * agent labels).
+ * agent labels). Newest first, capped at {@link MAX_SESSION_CONVERSATIONS} —
+ * the same ceiling a session's conversations are created under, so the
+ * listing can never be truncated by anything the cap didn't already permit
+ * to exist (issue #2262 finding 4 — no unbounded `db.select()` feeding model
+ * context).
+ *
+ * DELIBERATE metadata exposure (issue #2262 finding 6): this lists EVERY
+ * active conversation in the session — including siblings the CALLER did not
+ * spawn and does not own — by title and agent, to whichever member's agent
+ * asks. That is shared-workspace semantics, not a leak: a session is one
+ * shared sandbox and filesystem by design, so knowing what else is running
+ * there is the same visibility a human teammate has glancing at the sidebar.
+ * What stays owner-gated is TRANSCRIPT content — `read_session` still requires
+ * `openOwnSession`'s ownership check, so seeing a sibling listed here grants
+ * no access to what it said.
  */
 async function listSessionWorkers({
   workspaceSessionId,
@@ -272,7 +298,8 @@ async function listSessionWorkers({
       .from(conversations)
       .leftJoin(pages, eq(pages.id, conversations.contextId))
       .where(and(eq(conversations.sessionId, workspaceSessionId), eq(conversations.isActive, true)))
-      .orderBy(desc(conversations.createdAt)),
+      .orderBy(desc(conversations.createdAt))
+      .limit(MAX_SESSION_CONVERSATIONS),
     listShells(workspaceSessionId),
   ]);
 
@@ -367,7 +394,22 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
         // A worker conversation never "ends" — its session might, which the
         // dispatch surfaces as a failed run rather than a dead address.
         endedAt: null,
+        // The WORKSPACE this conversation is bound to (conversations.sessionId
+        // — the agent_sessions.id FK), or null for a session-less thread.
+        // Compared against the CALLER's own workspace in openOwnSession
+        // (issue #2262 finding 1): ownership of the row alone is not enough,
+        // because a user's own conversation in a DIFFERENT session must still
+        // refuse — exactly what shells already enforce via findOwnWorkspace.
+        workspaceSessionId: conversation.sessionId,
       };
+    },
+
+    countSessionConversations: async (workspaceSessionId) => {
+      const [row] = await db
+        .select({ n: count() })
+        .from(conversations)
+        .where(and(eq(conversations.sessionId, workspaceSessionId), eq(conversations.isActive, true)));
+      return row?.n ?? 0;
     },
 
     countActiveSessions: async (ownerId) => {
@@ -424,7 +466,20 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
           title: name,
         });
       } catch (error) {
-        return { ok: false, reason: 'conversation_unavailable', detail: error instanceof Error ? error.message : String(error) };
+        // A FIXED message per known cause, never the raw driver/error string
+        // (issue #2262 finding 3): a database error's text is an internal
+        // implementation detail, not something a model should read or repeat.
+        // The real error is logged server-side for whoever debugs the denial.
+        if (error instanceof SessionFullError) {
+          return { ok: false, reason: 'session_full', detail: 'This session already has its maximum number of conversations.' };
+        }
+        if (error instanceof AgentNotInSessionDriveError) {
+          return { ok: false, reason: 'conversation_unavailable', detail: 'That agent belongs to a different drive than this session.' };
+        }
+        if (!(error instanceof ConversationUnavailableError)) {
+          loggers.ai.error('createWorkerSession: could not create the worker conversation', error instanceof Error ? error : undefined, { sessionId, callerConversationId, ownerId });
+        }
+        return { ok: false, reason: 'conversation_unavailable', detail: 'That conversation id is not available.' };
       }
       return { ok: true };
     },
