@@ -530,7 +530,13 @@ export default function AgentPanes({
         toast.error('Could not start a conversation', {
           description: error instanceof Error ? error.message : 'Please try again.',
         });
-        resetPane(sessionId, paneId);
+        // Same rebind-survives rule as the success path above: a rejected
+        // mint must not reset a pane a grid-last close already rebound to
+        // something else while this request was in flight (caught in
+        // review — the earlier fix only guarded the success path).
+        if (paneStillLoading(paneId, { kind: 'chat', agentPageId })) {
+          resetPane(sessionId, paneId);
+        }
       }
     },
     [assignPane, resetPane, sessionId, paneStillLoading, cleanupOrphanedConversation, recordMintedConversation],
@@ -585,7 +591,14 @@ export default function AgentPanes({
         toast.error('Could not open a shell', {
           description: error instanceof Error ? error.message : 'Please try again.',
         });
-        resetPane(sessionId, paneId);
+        // Same rebind-survives rule as the success path above and as
+        // handlePickAgent's catch block: a rejected shell-open must not reset
+        // a pane a grid-last close already rebound to something else while
+        // this request was in flight (caught in review — the earlier fix
+        // only guarded the success path).
+        if (paneStillLoading(paneId, { kind: 'terminal', agentPageId: null })) {
+          resetPane(sessionId, paneId);
+        }
       }
     },
     [assignPane, resetPane, sessionId, paneStillLoading, closeShell],

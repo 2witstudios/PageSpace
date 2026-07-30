@@ -576,6 +576,50 @@ describe('AgentPanes', () => {
         .find((p) => p.id === mintingPaneId)!;
       expect(pane.scope).toMatchObject({ targetId: 'rebound-conv', agentPageId: 'agent-3' });
     });
+
+    it('a pane REBOUND to another listing mid-mint survives a REJECTED mint too, not just a resolved one', async () => {
+      // Same rebind-survives rule as the success-path test above, but for the
+      // catch branch: a mint that fails outright must not reset a pane a
+      // grid-last close already rebound to something else while the request
+      // was in flight (round-4b review — the earlier fix only guarded the
+      // success path's assignPane call, not the catch block's resetPane).
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      let rejectPost!: (error: unknown) => void;
+      mockPost.mockReturnValue(new Promise((_resolve, reject) => (rejectPost = reject)));
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByTestId('pick-agent-agent-2'));
+      const mintingPaneId = useAgentWorkspaceStore
+        .getState()
+        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+        .find((p) => p.id !== firstPaneId)!.id;
+
+      act(() => {
+        useAgentWorkspaceStore.getState().assignPane('ses-1', mintingPaneId, {
+          kind: 'chat',
+          name: 'Conversation',
+          targetId: 'rebound-conv',
+          agentPageId: 'agent-3',
+        });
+      });
+
+      act(() => {
+        rejectPost(new Error('quota exceeded'));
+      });
+
+      await waitFor(() => expect(consoleErrorSpy).toHaveBeenCalled());
+      // The rebind survives the rejection too — not reset to a dead sentinel.
+      const pane = useAgentWorkspaceStore
+        .getState()
+        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+        .find((p) => p.id === mintingPaneId)!;
+      expect(pane.scope).toMatchObject({ targetId: 'rebound-conv', agentPageId: 'agent-3' });
+      consoleErrorSpy.mockRestore();
+    });
   });
 
   describe('picking a shell', () => {
