@@ -173,6 +173,51 @@ export function selectPane(state: WorkspaceState, id: string): WorkspaceState {
   return { ...state, activePaneId: id };
 }
 
+/**
+ * Whether closing this pane would empty the grid. The container needs this
+ * BEFORE it decides anything — show a confirm dialog, gate the close on a
+ * server round-trip — and `closePane` itself only answers it by no-oping
+ * (it cannot delete its own container), which is too late for a caller that
+ * has to decide what to do *before* committing to the close.
+ */
+export function isLastPane(state: WorkspaceState, id: string): boolean {
+  if (!findPaneLocation(state, id)) return false;
+  return panesOf(state).length <= 1;
+}
+
+/**
+ * Unbind a pane back to the picker — the first-class shape for "this mint
+ * failed, start over here." Distinct from ever writing a scope whose fields
+ * lie about what it is: an earlier version overloaded `name === ''` on a
+ * still-bound chat scope as an unbound sentinel, on a field the contract
+ * documents as "never an address" (any future empty-named chat scope would
+ * have silently become a picker). Focuses the pane's picker on the next
+ * render, the same courtesy a fresh split gets.
+ */
+export function resetPane(state: WorkspaceState, id: string): WorkspaceState {
+  if (!findPaneLocation(state, id)) return state;
+  return {
+    ...state,
+    columns: state.columns.map((column) => ({
+      ...column,
+      panes: column.panes.map((pane) => (pane.id === id ? { ...pane, scope: null } : pane)),
+    })),
+    pendingPickerPaneId: id,
+  };
+}
+
+/**
+ * Assign whichever pane is showing `oldTargetId` to a new scope — used when
+ * the row it addressed was deleted and replaced, so the pane the user was
+ * looking at follows the replacement instead of dangling on a dead id. A
+ * target shown nowhere is a no-op: there is nothing stale to prune.
+ */
+export function assignPaneShowing(state: WorkspaceState, oldTargetId: string, newScope: PaneScope): WorkspaceState {
+  const pane = paneShowing(state, oldTargetId);
+  if (!pane) return state;
+  return assignPane(state, pane.id, newScope);
+}
+
 /** Every pane, flattened in visual order (left-to-right, top-to-bottom). */
 export function panesOf(state: WorkspaceState): PaneState[] {
   return state.columns.flatMap((column) => column.panes);

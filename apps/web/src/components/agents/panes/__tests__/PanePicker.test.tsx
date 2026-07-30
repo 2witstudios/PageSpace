@@ -83,4 +83,44 @@ describe('PanePicker', () => {
     expect(screen.getByTestId('pick-shell')).toBeInTheDocument();
     expect(screen.getByTestId('pick-global-assistant')).toBeInTheDocument();
   });
+
+  describe('reattaching an existing shell (issue #2263, finding 3)', () => {
+    const shells = [
+      { shellId: 'shell-1', name: 'build' },
+      { shellId: 'shell-2', name: 'server' },
+    ];
+
+    it('offers each existing shell as a reattach choice', () => {
+      render(<PanePicker agents={agents} existingShells={shells} onPickAgent={vi.fn()} onPickShell={vi.fn()} />);
+      expect(screen.getByTestId('reattach-shell-shell-1')).toBeInTheDocument();
+      expect(screen.getByText('build')).toBeInTheDocument();
+      expect(screen.getByTestId('reattach-shell-shell-2')).toBeInTheDocument();
+      expect(screen.getByText('server')).toBeInTheDocument();
+    });
+
+    it('reports the reattached shell by id and name', async () => {
+      const onReattachShell = vi.fn();
+      render(
+        <PanePicker
+          agents={agents}
+          existingShells={shells}
+          onPickAgent={vi.fn()}
+          onPickShell={vi.fn()}
+          onReattachShell={onReattachShell}
+        />,
+      );
+      await userEvent.click(screen.getByTestId('reattach-shell-shell-2'));
+      expect(onReattachShell).toHaveBeenCalledWith('shell-2', 'server');
+    });
+
+    it('renders no reattach section when there is nothing to reattach', () => {
+      render(<PanePicker agents={agents} existingShells={[]} onPickAgent={vi.fn()} onPickShell={vi.fn()} />);
+      expect(screen.queryByText(/reattach/i)).not.toBeInTheDocument();
+    });
+
+    it('omits the section entirely when the prop is not passed — sidebar callers unaffected', () => {
+      render(<PanePicker agents={agents} onPickAgent={vi.fn()} onPickShell={vi.fn()} />);
+      expect(screen.queryByText(/reattach/i)).not.toBeInTheDocument();
+    });
+  });
 });

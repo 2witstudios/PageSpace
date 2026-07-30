@@ -84,9 +84,16 @@ const conversationsState = vi.hoisted(() => ({
     deleteConversation: vi.fn(async () => {}),
     refreshConversations: vi.fn(),
   },
+  // Captured so tests can trigger `onConversationDelete` directly — the real
+  // hook fires it when the deleted id is the current conversation; this mock
+  // stands in for the hook's own logic, not the callback wiring under test.
+  lastOnConversationDelete: null as (() => void) | null,
 }));
 vi.mock('@/lib/ai/shared/hooks/useConversations', () => ({
-  useConversations: () => conversationsState.current,
+  useConversations: (opts: { onConversationDelete?: () => void }) => {
+    conversationsState.lastOnConversationDelete = opts.onConversationDelete ?? null;
+    return conversationsState.current;
+  },
 }));
 
 vi.mock('@/components/ai/page-agents', () => ({
@@ -95,12 +102,17 @@ vi.mock('@/components/ai/page-agents', () => ({
   ),
   PageAgentHistoryTab: ({
     onSelectConversation,
+    onCreateNew,
   }: {
     onSelectConversation: (id: string) => void;
+    onCreateNew: () => void;
   }) => (
     <div data-testid="history-tab">
       <button data-testid="history-select-conv-2" onClick={() => onSelectConversation('conv-2')}>
         conv-2
+      </button>
+      <button data-testid="history-create-new" onClick={onCreateNew}>
+        New
       </button>
     </div>
   ),
@@ -115,6 +127,7 @@ vi.mock('@/components/shared/PageWebhooksDialog', () => ({
 }));
 
 import AgentPageView from '../AgentPageView';
+import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 
 function pageFixture(): TreePage {
   return {
@@ -144,6 +157,8 @@ beforeEach(() => {
     deleteConversation: vi.fn(async () => {}),
     refreshConversations: vi.fn(),
   };
+  conversationsState.lastOnConversationDelete = null;
+  useAgentWorkspaceStore.setState({ workspaces: {} });
   mockFetchWithAuth.mockImplementation(async (url: string) => {
     if (url.endsWith('/permissions/check')) return jsonResponse({ canEdit: true });
     if (url.endsWith('/agent-config'))
@@ -309,5 +324,84 @@ describe('AgentPageView', () => {
     expect(screen.queryByTestId('sandbox-status-chip')).not.toBeInTheDocument();
     expect(screen.queryByText(/add shell/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Conversation history')).not.toBeInTheDocument();
+  });
+
+  describe('deleting the current conversation (issue #2263, finding 4)', () => {
+    it('when session-bound, mints the replacement INTO that session — never a new one', async () => {
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: 'ses-1' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      conversationsState.lastOnConversationDelete?.();
+
+      await waitFor(() =>
+        expect(mockCreatePageConversation).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: 'agent-1', sessionId: 'ses-1' }),
+        ),
+      );
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-2'));
+    });
+
+    it('prunes the pane that was showing the deleted conversation, wherever it lived in the grid', async () => {
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: 'ses-1' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      // A split grid where the deleted conversation is NOT the active pane —
+      // pruning must target the pane actually showing it, not "the active one".
+      useAgentWorkspaceStore.getState().ensureWorkspace('ses-1', {
+        kind: 'chat',
+        name: 'Conversation',
+        targetId: 'conv-1',
+        agentPageId: 'agent-1',
+      });
+      const originalPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].activePaneId;
+      useAgentWorkspaceStore.getState().splitRight('ses-1', originalPaneId);
+      useAgentWorkspaceStore.getState().selectPane('ses-1', originalPaneId);
+
+      conversationsState.lastOnConversationDelete?.();
+
+      await waitFor(() => {
+        const pane = useAgentWorkspaceStore
+          .getState()
+          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+          .find((p) => p.id === originalPaneId);
+        expect(pane?.scope?.targetId).toBe('conv-2');
+      });
+    });
+
+    it('when NOT session-bound, falls back to the plain new-conversation path unaffected', async () => {
+      resolveTo({ conversationId: 'conv-1', sessionId: null });
+      mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: null });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
+
+      conversationsState.lastOnConversationDelete?.();
+
+      await waitFor(() =>
+        expect(mockCreatePageConversation).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: 'agent-1', sessionId: null }),
+        ),
+      );
+      await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-2'));
+    });
+
+    it('the History tab "New" button is unaffected — it always spawns a fresh session, never reuses', async () => {
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-3', sessionId: 'ses-new' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole('tab', { name: /history/i }));
+      await userEvent.click(await screen.findByTestId('history-create-new'));
+
+      await waitFor(() =>
+        expect(mockCreatePageConversation).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: 'agent-1', sessionId: null }),
+        ),
+      );
+    });
   });
 });

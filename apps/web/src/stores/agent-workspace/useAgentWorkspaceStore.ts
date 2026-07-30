@@ -6,13 +6,18 @@ import {
   paneShowing,
   panesOf,
   assignPane as assignPaneIn,
+  assignPaneShowing as assignPaneShowingIn,
   dismissPicker as dismissPickerIn,
   splitRight as splitRightIn,
   splitDown as splitDownIn,
   closePane as closePaneIn,
+  isLastPane,
+  resetPane as resetPaneIn,
   selectPane as selectPaneIn,
+  type PaneState,
   type WorkspaceState,
 } from './pane-reducer';
+import { validatePersistedWorkspaces } from './persisted-workspace';
 
 /**
  * Where each session's pane layout lives.
@@ -64,7 +69,16 @@ interface AgentWorkspaceState {
   closePane(sessionId: string, paneId: string): 'closed' | 'session-ended' | 'noop';
   selectPane(sessionId: string, paneId: string): void;
   assignPane(sessionId: string, paneId: string, scope: PaneScope): void;
+  /** Unbind a pane back to the picker — a failed mint, first-class rather than a sentinel scope. */
+  resetPane(sessionId: string, paneId: string): void;
   dismissPicker(sessionId: string, paneId: string): void;
+  /**
+   * Point whichever pane is showing `oldConversationId` at its replacement.
+   * Used when the current conversation is deleted and re-minted into the
+   * SAME session (`AgentPageView`'s delete flow) — a no-op if the deleted
+   * conversation was not showing in any pane.
+   */
+  replaceConversation(sessionId: string, oldConversationId: string, newScope: PaneScope): void;
   /** Drop a session's grid entirely (the session was ended elsewhere). */
   forgetWorkspace(sessionId: string): void;
 }
@@ -138,10 +152,14 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
         }
         const panes = panesOf(workspace);
         const active = panes.find((pane) => pane.id === workspace.activePaneId);
-        const replaceable =
-          active && active.scope?.kind !== 'terminal'
-            ? active
-            : panes.find((pane) => pane.scope?.kind !== 'terminal');
+        // Replaceable = unbound (picker), or bound to a resolved, non-terminal
+        // row. A pane whose mint is still in flight (`targetId === null`) is
+        // EXCLUDED even though its kind isn't terminal: landing a different
+        // selection there now means the mint's own success callback later
+        // overwrites it with the stale pick (review low-batch #1).
+        const isReplaceable = (pane: PaneState) =>
+          pane.scope === null || (pane.scope.kind !== 'terminal' && pane.scope.targetId !== null);
+        const replaceable = active && isReplaceable(active) ? active : panes.find(isReplaceable);
         if (replaceable) {
           state.assignPane(sessionId, replaceable.id, scope);
           return;
@@ -175,9 +193,8 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
       closePane: (sessionId, paneId) => {
         const current = useAgentWorkspaceStore.getState().workspaces[sessionId];
         if (!current) return 'noop';
-        const paneExists = panesOf(current).some((pane) => pane.id === paneId);
-        if (!paneExists) return 'noop';
-        if (panesOf(current).length <= 1) {
+        if (!panesOf(current).some((pane) => pane.id === paneId)) return 'noop';
+        if (isLastPane(current, paneId)) {
           // The LAST pane: emptying a session ends it. The reducer no-ops on
           // this by design (it cannot delete its own container); the store is
           // the container, so the interception lives here — the old
@@ -198,8 +215,17 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
       assignPane: (sessionId, paneId, scope) =>
         set((state) => updateWorkspace(state, sessionId, (w) => assignPaneIn(w, paneId, scope)) ?? {}),
 
+      resetPane: (sessionId, paneId) =>
+        set((state) => updateWorkspace(state, sessionId, (w) => resetPaneIn(w, paneId)) ?? {}),
+
       dismissPicker: (sessionId, paneId) =>
         set((state) => updateWorkspace(state, sessionId, (w) => dismissPickerIn(w, paneId)) ?? {}),
+
+      replaceConversation: (sessionId, oldConversationId, newScope) =>
+        set(
+          (state) =>
+            updateWorkspace(state, sessionId, (w) => assignPaneShowingIn(w, oldConversationId, newScope)) ?? {},
+        ),
 
       forgetWorkspace: (sessionId) =>
         set((state) => {
@@ -208,6 +234,17 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
           return { workspaces: rest };
         }),
     }),
-    { name: 'agent-workspace-storage' },
+    {
+      name: 'agent-workspace-storage',
+      // Bumped when the persisted grid shape changes; paired with `merge`
+      // below so a stale or corrupted grid is dropped on rehydrate rather
+      // than trusted — see `validatePersistedWorkspaces`.
+      version: 1,
+      partialize: (state) => ({ workspaces: state.workspaces }),
+      merge: (persisted, current) => ({
+        ...current,
+        workspaces: validatePersistedWorkspaces(persisted),
+      }),
+    },
   ),
 );

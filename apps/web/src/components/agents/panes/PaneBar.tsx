@@ -111,8 +111,9 @@ export function PaneSplitCloseActions({
             onClick={guarded(onSplitRight)}
             className="size-6 text-muted-foreground hover:text-foreground"
             title="Split right"
+            aria-label="Split right"
           >
-            <SquareSplitHorizontal className="size-3.5" />
+            <SquareSplitHorizontal className="size-3.5" aria-hidden="true" />
           </Button>
           <Button
             variant="ghost"
@@ -120,8 +121,9 @@ export function PaneSplitCloseActions({
             onClick={guarded(onSplitDown)}
             className="size-6 text-muted-foreground hover:text-foreground"
             title="Split down"
+            aria-label="Split down"
           >
-            <SquareSplitVertical className="size-3.5" />
+            <SquareSplitVertical className="size-3.5" aria-hidden="true" />
           </Button>
         </>
       )}
@@ -132,8 +134,9 @@ export function PaneSplitCloseActions({
           onClick={guarded(onClose)}
           className="size-6 text-muted-foreground hover:text-destructive"
           title="Close pane"
+          aria-label="Close pane"
         >
-          <X className="size-3.5" />
+          <X className="size-3.5" aria-hidden="true" />
         </Button>
       )}
     </>

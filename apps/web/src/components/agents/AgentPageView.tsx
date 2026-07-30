@@ -60,6 +60,7 @@ import {
 import { useResolvedAgent } from './useResolvedAgent';
 import SessionChat from './chat/SessionChat';
 import AgentPanes from './panes/AgentPanes';
+import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import type { TreePage } from '@/hooks/usePageTree';
 import type { AgentConfig } from '@/lib/ai/shared/chat-types';
 
@@ -119,16 +120,20 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
     isProviderConfigured,
   } = useProviderSettings({ pageId: page.id });
 
-  const newConversation = useCallback(async () => {
-    const created = await createPageConversation({
-      agentId: page.id,
-      driveId: page.driveId,
-      canUseSessions,
-    });
-    setOverride(created);
-    setActiveTab('chat');
-    return created;
-  }, [page.id, page.driveId, canUseSessions]);
+  const newConversation = useCallback(
+    async (reuseSessionId?: string | null) => {
+      const created = await createPageConversation({
+        agentId: page.id,
+        driveId: page.driveId,
+        canUseSessions,
+        sessionId: reuseSessionId ?? null,
+      });
+      setOverride(created);
+      setActiveTab('chat');
+      return created;
+    },
+    [page.id, page.driveId, canUseSessions],
+  );
 
   const {
     conversations,
@@ -142,7 +147,26 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
     // can be looked up for its session.
     enabled: activeTab === 'history' || activeTab === 'chat',
     onConversationDelete: () => {
-      void newConversation();
+      // `onConversationDelete` only fires for the CURRENT conversation, so
+      // `current` here is exactly the deleted thread. If it was session-bound,
+      // mint the replacement INTO that session — never spawn a new one, which
+      // would abandon a live session (issue #2263, finding 4) — and prune the
+      // pane that was showing the now-deleted id, wherever it lives in the
+      // grid (not necessarily the active pane: the grid's own selection and
+      // this page's `current` are independent state).
+      const deletedConversationId = current?.conversationId ?? null;
+      const sessionId = current?.sessionId ?? null;
+      void (async () => {
+        const created = await newConversation(sessionId);
+        if (sessionId && deletedConversationId) {
+          useAgentWorkspaceStore.getState().replaceConversation(sessionId, deletedConversationId, {
+            kind: 'chat',
+            name: 'New conversation',
+            targetId: created.conversationId,
+            agentPageId: page.id,
+          });
+        }
+      })();
     },
   });
 

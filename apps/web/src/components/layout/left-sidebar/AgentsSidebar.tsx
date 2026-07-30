@@ -6,16 +6,7 @@ import { Bot, ChevronDown, ChevronRight, CircleStop, MessageSquarePlus, Plus, Sq
 import { toast } from 'sonner';
 import useSWR from 'swr';
 
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
+import EndSessionDialog from '@/components/agents/EndSessionDialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn, isElectron } from '@/lib/utils';
 import type { SidebarProps } from './index';
@@ -404,23 +395,13 @@ function SessionRow({ session, onChanged }: { session: SessionListEntry; onChang
         </button>
       </div>
 
-      <AlertDialog open={confirmingEnd} onOpenChange={setConfirmingEnd}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>End {session.name ? `“${session.name}”` : 'this session'}?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Its sandbox is stopped and its shells close. Conversations stay in each
-              agent&apos;s history.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={ending}>Cancel</AlertDialogCancel>
-            <AlertDialogAction disabled={ending} onClick={() => void endSession()}>
-              End session
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <EndSessionDialog
+        open={confirmingEnd}
+        onOpenChange={setConfirmingEnd}
+        sessionName={session.name}
+        isEnding={ending}
+        onConfirm={() => void endSession()}
+      />
 
       {expanded && (
         <div className="ml-5 space-y-0.5 border-l border-border pl-2">

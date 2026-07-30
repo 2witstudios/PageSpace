@@ -138,4 +138,42 @@ describe('createPageConversation', () => {
     });
     expect(created).toEqual({ conversationId: 'conv-x', sessionId: 'ses-x' });
   });
+
+  describe('given a sessionId to reuse (issue #2263, finding 4)', () => {
+    // Deleting the CURRENT conversation must mint its replacement INTO the
+    // same session — never spawn a new one, which would abandon a live
+    // session (contradicting "a session is never empty") and leave the old
+    // session's quota burned for nothing.
+    it('mints the replacement into that session via the session-scoped route, never /api/agent-sessions', async () => {
+      mockPost.mockResolvedValue(undefined);
+      const created = await createPageConversation({
+        agentId: 'agent-1',
+        driveId: 'drive-1',
+        canUseSessions: true,
+        sessionId: 'ses-existing',
+      });
+
+      expect(mockPost).toHaveBeenCalledTimes(1);
+      const [url, body] = mockPost.mock.calls[0];
+      expect(url).toBe('/api/ai/page-agents/agent-1/conversations');
+      expect(body).toMatchObject({ sessionId: 'ses-existing' });
+      expect(created.sessionId).toBe('ses-existing');
+      expect(created.conversationId).toBe(body.conversationId);
+    });
+
+    it('takes priority over canUseSessions — reuse is never downgraded to a fresh spawn', async () => {
+      mockPost.mockResolvedValue(undefined);
+      await createPageConversation({
+        agentId: 'agent-1',
+        driveId: 'drive-1',
+        canUseSessions: false,
+        sessionId: 'ses-existing',
+      });
+
+      expect(mockPost).toHaveBeenCalledWith(
+        '/api/ai/page-agents/agent-1/conversations',
+        expect.objectContaining({ sessionId: 'ses-existing' }),
+      );
+    });
+  });
 });
