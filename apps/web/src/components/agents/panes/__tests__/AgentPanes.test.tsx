@@ -378,7 +378,7 @@ describe('AgentPanes', () => {
       });
     }
 
-    /** Every interactive test needs the switch-decision data loaded first — see the disabled-while-loading test below for why. */
+    /** Every interactive test needs THIS session's entry present in the switch-decision data first — see the readiness tests below for why. */
     async function findEnabledSelector(name: RegExp) {
       const button = await screen.findByRole('button', { name });
       await waitFor(() => expect(button).not.toBeDisabled());
@@ -391,12 +391,12 @@ describe('AgentPanes', () => {
       expect(await screen.findByRole('button', { name: /Researcher/ })).toBeInTheDocument();
     });
 
-    it('is disabled until the session conversation list — the switch decision\'s own data — has loaded at least once', async () => {
+    it("is disabled until THIS session's entry appears in the switch decision's own data", async () => {
       let resolveSessions!: () => void;
       mockFetchWithAuth.mockImplementation(async (url: string) => {
         if (url.includes('/api/agent-sessions')) {
           return new Promise((resolve) => {
-            resolveSessions = () => resolve(jsonOk({ sessions: [] }));
+            resolveSessions = () => resolve(jsonOk({ sessions: [{ sessionId: 'ses-1', conversations: [] }] }));
           });
         }
         return jsonOk(defaultFetchRoute(url));
@@ -409,6 +409,41 @@ describe('AgentPanes', () => {
 
       resolveSessions();
       await waitFor(() => expect(button).not.toBeDisabled());
+    });
+
+    it('stays disabled when the initial sessions fetch fails outright (SWR isLoading goes false with no data)', async () => {
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url.includes('/api/agent-sessions')) return { ok: false, status: 500, json: async () => ({}) };
+        return jsonOk(defaultFetchRoute(url));
+      });
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+
+      const button = await screen.findByRole('button', { name: /Researcher/ });
+      // Give SWR's failed fetch time to settle (isLoading -> false) — the
+      // gate must not key off that; it must still see no data for THIS
+      // session and stay disabled.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(button).toBeDisabled();
+    });
+
+    it('stays disabled when the shared drive-level cache is already warm but does not yet list THIS session (a session spawned after the last successful fetch)', async () => {
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url.includes('/api/agent-sessions')) {
+          // Warm cache, real data, but for a DIFFERENT session — exactly
+          // what a shared per-drive SWR key can already hold when a brand
+          // new session opens.
+          return jsonOk({ sessions: [{ sessionId: 'some-other-session', conversations: [] }] });
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      await waitFor(() =>
+        expect(mockFetchWithAuth).toHaveBeenCalledWith(expect.stringContaining('/api/agent-sessions?driveId=drive-1')),
+      );
+
+      expect(await screen.findByRole('button', { name: /Researcher/ })).toBeDisabled();
     });
 
     it('selecting the pane\'s current agent again is a no-op', async () => {
