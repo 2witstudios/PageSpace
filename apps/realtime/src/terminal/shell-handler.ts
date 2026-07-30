@@ -1424,6 +1424,19 @@ export function connectFailureMessage(failure: Extract<EnsureShellSessionResult,
   }
 }
 
+/**
+ * The key a session is filed under on its VIEWER side: a socket's own
+ * server-assigned id, namespaced by the client-minted `connectionId` it
+ * multiplexes (several panes share one socket). Exported so `index.ts`'s
+ * `shell:connect` handler can look up the just-registered session by the
+ * SAME key `onConnect` files it under, without re-spelling the format
+ * inline — see `buildShellHandlers`'s internal `socketKey` (below) for why
+ * the namespacing exists.
+ */
+export function composeSocketKey(socketId: string, connectionId: string): string {
+  return `${socketId}\u0000${connectionId}`;
+}
+
 export function buildShellHandlers({
   sessionMap,
   openShell,
@@ -1499,25 +1512,11 @@ export function buildShellHandlers({
   }
 
   /**
-   * The key a session is filed under on its VIEWER side.
-   *
-   * `connectionId` is a UUID the CLIENT mints, and the session map is one
-   * shared, server-wide instance — so filing by the bare id lets one client's
-   * chosen string address ANOTHER client's session. Two sockets picking the
-   * same id (a buggy client, or a hostile one: it is validated only as a
-   * non-empty string) then collide inside the map, where `setNew` silently
-   * overwrites the socket entry of a session that is still running. That
-   * session is then unreachable: no viewer, no armed reap, so its PTY, its
-   * concurrency slot and its billing heartbeat run for the life of the process
-   * — billed to the SESSION's payer, not the caller's. Worse, the first
-   * socket's later disconnect resolves to the SECOND socket's session and
-   * reaps it, killing a shell someone else is watching.
-   *
-   * Namespacing by the server-assigned socket id makes that collision
-   * unrepresentable rather than merely detected: a client can only ever name
-   * its own connections.
+   * The key a session is filed under on its VIEWER side — see
+   * `composeSocketKey`'s doc for why this is namespaced by the socket id
+   * rather than the bare, client-minted `connectionId`.
    */
-  const socketKey = (connectionId: string) => `${socket.id}\u0000${connectionId}`;
+  const socketKey = (connectionId: string) => composeSocketKey(socket.id, connectionId);
 
   function disconnectConnection(connectionId: string) {
     const session = sessionMap.getBySocket(socketKey(connectionId));

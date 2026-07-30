@@ -41,8 +41,8 @@ import type { ExecSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-
 import {
   acquireCodeExecutionSlot,
   releaseCodeExecutionSlot,
-  checkMachineRuntimeGuardrail,
-  recordMachineActivity,
+  checkSessionRuntimeGuardrail,
+  recordSessionActivity,
 } from '@pagespace/lib/services/sandbox/quota';
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import { gateSandboxToolCall } from '@pagespace/lib/services/sandbox/tool-gate';
@@ -133,7 +133,7 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
       // The per-sandbox continuous-runtime backstop, keyed by the SESSION id —
       // one budget per workspace, however many threads work in it.
       const nowMs = Date.now();
-      const guardrail = checkMachineRuntimeGuardrail({ machineKey: row.id, now: nowMs });
+      const guardrail = checkSessionRuntimeGuardrail({ sessionId: row.id, now: nowMs });
       if (!guardrail.allowed) return { ok: false, reason: guardrail.reason };
 
       const provisioned = await provisionSessionSandbox(row, input.userId);
@@ -148,7 +148,7 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
         return { ok: false, reason: 'provision_failed', cause: provisioned.detail ?? provisioned.reason };
       }
 
-      recordMachineActivity({ machineKey: row.id, now: nowMs });
+      recordSessionActivity({ sessionId: row.id, now: nowMs });
 
       return {
         ok: true,

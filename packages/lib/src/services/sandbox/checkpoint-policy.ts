@@ -113,7 +113,7 @@ const stateBySandboxId = new Map<string, CheckpointState>();
 /**
  * How long a sandbox's checkpoint bookkeeping may sit unused before an
  * opportunistic sweep reclaims it — mirrors `quota.ts`'s
- * `evictStaleMachineActivity`/`MACHINE_ACTIVITY_GRACE_MS` pattern (this map
+ * `evictStaleSessionActivity`/`SESSION_ACTIVITY_GRACE_MS` pattern (this map
  * has no symmetric acquire/release either, so eviction has to be
  * opportunistic). Sandboxes are long-lived and reused across many turns, so
  * this is deliberately generous — the only failure mode of evicting too

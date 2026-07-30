@@ -385,10 +385,11 @@ export default function XtermTerminal({ socket, shellId, initialInput, onInitial
           useEditingStore.getState().endEditing(shellId);
         };
 
-        // The tracking row for this shell must already exist — adding a shell
-        // (`useSessionShells.addShell()`) reserves it before this component is
-        // ever bound to it, so connecting here only ever attaches to (or
-        // resumes) an already-known session.
+        // The tracking row for this shell must already exist — the pane picker's
+        // `POST /api/agent-sessions/{sessionId}/shells` (`AgentPanes.tsx`'s
+        // `handlePickShell`) reserves it before this component is ever bound to
+        // it, so connecting here only ever attaches to (or resumes) an
+        // already-known session.
         //
         // Bind now if the socket is up; otherwise the `connect` handler does the
         // first bind when it comes up. (Emitting while down would only sit in

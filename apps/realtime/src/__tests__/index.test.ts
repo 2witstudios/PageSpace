@@ -272,6 +272,10 @@ vi.mock('../terminal/shell-handler', () => ({
     onResize: vi.fn(),
     onDisconnect: vi.fn(),
   }),
+  // Real implementation (pure, no deps) — the `shell:connect` success-path
+  // tests below assert index.ts looks the just-registered session up under
+  // this SAME composed key.
+  composeSocketKey: (socketId: string, connectionId: string) => `${socketId}\u0000${connectionId}`,
 }));
 
 // Captures the deps object index.ts builds for the shell-IO bridge, so the

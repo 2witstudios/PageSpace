@@ -18,10 +18,8 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, count, eq, inArray, isNotNull, sql } from '@pagespace/db/operators';
-import { drives } from '@pagespace/db/schema/core';
+import { and, count, eq, inArray, sql } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
-import { driveMembers } from '@pagespace/db/schema/members';
 import { users } from '@pagespace/db/schema/auth';
 import { checkAgentSessionConcurrency } from '@pagespace/lib/services/sandbox/quota';
 import {
@@ -63,6 +61,11 @@ import {
   type AgentSessionAccessCheck,
   type AgentSessionAccessDeps,
 } from '@pagespace/lib/services/agent-sessions/agent-session-access';
+import {
+  resolveSessionTenantId,
+  resolveDriveMembership,
+  canRunCodeForSession,
+} from '@pagespace/lib/services/agent-sessions/agent-session-tenant';
 import type { AgentSessionDTO } from '@pagespace/lib/agent-sessions/contract';
 import { decideAgentSessionAccess } from '@pagespace/lib/agent-sessions/decide-session-access';
 import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-sessions/plan-spawn-session';
@@ -119,24 +122,6 @@ export function getSandboxHost(): Promise<SandboxHost> {
 // Row-fact lookups (null-plumbing only)
 // ---------------------------------------------------------------------------
 
-/**
- * The tenant a session's Sprite key folds under: the agent page's drive OWNER
- * for a page-anchored session, the session owner themself for a global one
- * (the user is their own isolation boundary — same rule as
- * `resolveSandboxActorContext`).
- */
-export async function resolveSessionTenantId(session: {
-  driveId: string | null;
-  ownerId: string;
-}): Promise<string> {
-  if (session.driveId === null) return session.ownerId;
-  const drive = await db.query.drives.findFirst({
-    where: eq(drives.id, session.driveId),
-    columns: { ownerId: true },
-  });
-  return drive?.ownerId ?? session.ownerId;
-}
-
 /** The owner's not-ended session count — the spawn ceiling's input (store.countActive). */
 export async function countActiveSessionsForOwner(ownerId: string): Promise<number> {
   return (await getAgentSessionStore()).countActive(ownerId);
@@ -150,30 +135,6 @@ export async function findSessionRecord(sessionId: string): Promise<AgentSession
 // Access
 // ---------------------------------------------------------------------------
 
-/**
- * The requester's relationship to a drive: its owner, an accepted member, or
- * neither. The ONE membership read both access checks share.
- */
-export async function resolveDriveMembership({
-  userId,
-  driveId,
-}: {
-  userId: string;
-  driveId: string;
-}): Promise<'owner' | 'member' | 'none'> {
-  const drive = await db.query.drives.findFirst({
-    where: eq(drives.id, driveId),
-    columns: { ownerId: true },
-  });
-  if (!drive) return 'none';
-  if (drive.ownerId === userId) return 'owner';
-  const membership = await db.query.driveMembers.findFirst({
-    where: and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt)),
-    columns: { id: true },
-  });
-  return membership ? 'member' : 'none';
-}
-
 function buildAccessDeps(): AgentSessionAccessDeps {
   return {
     findSession: async (sessionId) => {
@@ -182,14 +143,7 @@ function buildAccessDeps(): AgentSessionAccessDeps {
       return { sessionId: row.id, ownerId: row.ownerId, driveId: row.driveId };
     },
     resolveDriveMembership,
-    canRunCode: async ({ userId, driveId }) => {
-      const result = await canRunCode({
-        userId,
-        driveId: driveId ?? undefined,
-        requestOrigin: 'user',
-      });
-      return result.ok;
-    },
+    canRunCode: canRunCodeForSession,
   };
 }
 
@@ -410,21 +364,28 @@ export async function provisionSessionSandbox(
   row: AgentSessionRecord,
   requesterId: string,
 ): Promise<EnsureAgentSessionSandboxResult> {
-  const [store, host, tenantId] = await Promise.all([
+  const [store, host, tenant] = await Promise.all([
     getAgentSessionStore(),
     getSandboxHost(),
     resolveSessionTenantId(row),
   ]);
+  // Fail CLOSED on a vanished drive — never fall back to the session owner.
+  // That fallback would fold the Sprite key under a DIFFERENT tenant than the
+  // one this session's key already folded under on a prior provision,
+  // splitting one session across two Sprite identities (audit #2265 finding 1).
+  if (!tenant.ok) {
+    return { ok: false, reason: 'provision_failed', detail: tenant.reason };
+  }
 
   return ensureAgentSessionSandbox({
     row: { ...row, sessionId: row.id },
     intent: 'ensure',
-    actor: { userId: requesterId, tenantId },
+    actor: { userId: requesterId, tenantId: tenant.tenantId },
     deps: {
       store,
       host,
       substrate: { kind: 'sprite' },
-      options: resolveSandboxNetworkOptions({ surface: 'machine', egressIpTag: getConfiguredEgressIpTag() }),
+      options: resolveSandboxNetworkOptions({ surface: 'session', egressIpTag: getConfiguredEgressIpTag() }),
       secret: getSandboxSessionSecret(),
       authorize: canRunCode,
       checkFullEgressEnablement: async () =>

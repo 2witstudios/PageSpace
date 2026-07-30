@@ -160,112 +160,112 @@ export async function checkAgentSessionConcurrency({
 }
 
 /**
- * Per-machine active-runtime guardrail (Terminal Epic 1 T1.5).
+ * Per-session active-runtime guardrail (Terminal Epic 1 T1.5).
  *
  * A pulled-forward, minimal cost backstop ahead of Epic 3's full usage
- * metering: an agent that keeps a persistent machine continuously busy
- * (back-to-back tool calls, no idle gaps) is capped at a configurable
+ * metering: an agent that keeps a persistent session's sandbox continuously
+ * busy (back-to-back tool calls, no idle gaps) is capped at a configurable
  * wall-clock duration instead of running unbounded. This tracks CONTINUOUS
- * activity per machine, not lifetime usage — a gap longer than the grace
- * window resets the clock, so a machine that goes idle (naturally, or via
+ * activity per session, not lifetime usage — a gap longer than the grace
+ * window resets the clock, so a session that goes idle (naturally, or via
  * Sprite hibernation) recovers full budget rather than being capped forever.
  *
  * Deliberately separate from the per-user concurrency semaphore above: that
  * bounds how many runs a USER has in flight; this bounds how long a single
- * MACHINE has been kept continuously active, regardless of which user/agent
- * is driving it.
+ * SESSION's sandbox has been kept continuously active, regardless of which
+ * user/agent is driving it.
  */
 
-const MACHINE_MAX_ACTIVE_SECONDS_ENV = 'TERMINAL_MACHINE_MAX_ACTIVE_SECONDS';
-const DEFAULT_MACHINE_MAX_ACTIVE_SECONDS = 4 * 60 * 60; // 4 hours
+const SESSION_MAX_ACTIVE_SECONDS_ENV = 'TERMINAL_SESSION_MAX_ACTIVE_SECONDS';
+const DEFAULT_SESSION_MAX_ACTIVE_SECONDS = 4 * 60 * 60; // 4 hours
 /** A gap longer than this between calls resets the continuous-activity clock. */
-export const MACHINE_ACTIVITY_GRACE_MS = 5 * 60 * 1000;
+export const SESSION_ACTIVITY_GRACE_MS = 5 * 60 * 1000;
 
-export function getMachineMaxActiveSeconds(): number {
-  const raw = process.env[MACHINE_MAX_ACTIVE_SECONDS_ENV];
+export function getSessionMaxActiveSeconds(): number {
+  const raw = process.env[SESSION_MAX_ACTIVE_SECONDS_ENV];
   const parsed = raw ? Number.parseInt(raw, 10) : NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MACHINE_MAX_ACTIVE_SECONDS;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SESSION_MAX_ACTIVE_SECONDS;
 }
 
-interface MachineActivityState {
+interface SessionActivityState {
   firstActiveAt: number;
   lastActiveAt: number;
 }
 
-const machineActivityByKey = new Map<string, MachineActivityState>();
+const sessionActivityByKey = new Map<string, SessionActivityState>();
 
-export type MachineRuntimeGuardrailReason = 'machine_runtime_exceeded';
+export type SessionRuntimeGuardrailReason = 'session_runtime_exceeded';
 
-export type MachineRuntimeGuardrailDecision =
+export type SessionRuntimeGuardrailDecision =
   | { allowed: true }
-  | { allowed: false; reason: MachineRuntimeGuardrailReason };
+  | { allowed: false; reason: SessionRuntimeGuardrailReason };
 
 /**
  * Drop entries whose gap has already exceeded the grace window: once that's
- * true, `checkMachineRuntimeGuardrail` treats the key as if it had no state
+ * true, `checkSessionRuntimeGuardrail` treats the key as if it had no state
  * anyway, so the entry is pure dead weight. Without this, every distinct
- * machine ever acquired would occupy an entry for the life of the process —
+ * session ever acquired would occupy an entry for the life of the process —
  * unlike the per-user semaphore above, this map has no symmetric
  * acquire/release to hook a delete into, so eviction has to be opportunistic.
  */
-function evictStaleMachineActivity(now: number): void {
-  for (const [key, state] of machineActivityByKey) {
-    if (now - state.lastActiveAt > MACHINE_ACTIVITY_GRACE_MS) {
-      machineActivityByKey.delete(key);
+function evictStaleSessionActivity(now: number): void {
+  for (const [key, state] of sessionActivityByKey) {
+    if (now - state.lastActiveAt > SESSION_ACTIVITY_GRACE_MS) {
+      sessionActivityByKey.delete(key);
     }
   }
 }
 
 /**
- * Advisory check: has this machine been continuously active (no gap longer
- * than `MACHINE_ACTIVITY_GRACE_MS`) for at least `maxActiveSeconds`? Pure
- * read — does not itself record activity; callers must also call
- * `recordMachineActivity` on every acquisition (allowed or not) so a stalled
+ * Advisory check: has this session's sandbox been continuously active (no gap
+ * longer than `SESSION_ACTIVITY_GRACE_MS`) for at least `maxActiveSeconds`?
+ * Pure read — does not itself record activity; callers must also call
+ * `recordSessionActivity` on every acquisition (allowed or not) so a stalled
  * caller who never records still reflects real elapsed time.
  */
-export function checkMachineRuntimeGuardrail({
-  machineKey,
+export function checkSessionRuntimeGuardrail({
+  sessionId,
   now,
-  maxActiveSeconds = getMachineMaxActiveSeconds(),
+  maxActiveSeconds = getSessionMaxActiveSeconds(),
 }: {
-  machineKey: string;
+  sessionId: string;
   now: number;
   maxActiveSeconds?: number;
-}): MachineRuntimeGuardrailDecision {
-  const state = machineActivityByKey.get(machineKey);
-  if (state && now - state.lastActiveAt <= MACHINE_ACTIVITY_GRACE_MS) {
+}): SessionRuntimeGuardrailDecision {
+  const state = sessionActivityByKey.get(sessionId);
+  if (state && now - state.lastActiveAt <= SESSION_ACTIVITY_GRACE_MS) {
     const activeMs = now - state.firstActiveAt;
     if (activeMs >= maxActiveSeconds * 1000) {
-      return { allowed: false, reason: 'machine_runtime_exceeded' };
+      return { allowed: false, reason: 'session_runtime_exceeded' };
     }
   }
   return { allowed: true };
 }
 
 /**
- * Record that this machine was just active. Starts (or continues) the
- * continuous-activity window; a gap longer than the grace period starts a
- * fresh window instead of extending the old one.
+ * Record that this session's sandbox was just active. Starts (or continues)
+ * the continuous-activity window; a gap longer than the grace period starts
+ * a fresh window instead of extending the old one.
  */
-export function recordMachineActivity({ machineKey, now }: { machineKey: string; now: number }): void {
+export function recordSessionActivity({ sessionId, now }: { sessionId: string; now: number }): void {
   // Opportunistic sweep: every acquisition is a natural checkpoint to reclaim
-  // any OTHER machine's entry that has gone idle, keeping the map bounded by
-  // currently (or recently) active machines rather than every machine ever seen.
-  evictStaleMachineActivity(now);
-  const state = machineActivityByKey.get(machineKey);
-  if (!state || now - state.lastActiveAt > MACHINE_ACTIVITY_GRACE_MS) {
-    machineActivityByKey.set(machineKey, { firstActiveAt: now, lastActiveAt: now });
+  // any OTHER session's entry that has gone idle, keeping the map bounded by
+  // currently (or recently) active sessions rather than every session ever seen.
+  evictStaleSessionActivity(now);
+  const state = sessionActivityByKey.get(sessionId);
+  if (!state || now - state.lastActiveAt > SESSION_ACTIVITY_GRACE_MS) {
+    sessionActivityByKey.set(sessionId, { firstActiveAt: now, lastActiveAt: now });
   } else {
     state.lastActiveAt = now;
   }
 }
 
-/** Clear all machine-runtime guardrail state. Test-only seam. */
-export function resetMachineRuntimeGuardrail(): void {
-  machineActivityByKey.clear();
+/** Clear all session-runtime guardrail state. Test-only seam. */
+export function resetSessionRuntimeGuardrail(): void {
+  sessionActivityByKey.clear();
 }
 
 /** Current guardrail map size — test-only seam for verifying eviction bounds memory. */
-export function machineActivityMapSize(): number {
-  return machineActivityByKey.size;
+export function sessionActivityMapSize(): number {
+  return sessionActivityByKey.size;
 }

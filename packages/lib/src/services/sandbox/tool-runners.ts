@@ -100,7 +100,13 @@ export interface SandboxBillingDeps {
   resolvePayerId: (input: { driveId: string | null; ownerId: string }) => Promise<string>;
   /** Places a flat-estimate hold for this payer before the machine run begins. */
   gate: (input: { payerId: string }) => Promise<{ allowed: boolean; holdId?: string; reason?: string }>;
-  /** Settles the hold to the real active-window cost. Only called on a successful run. */
+  /**
+   * Settles the hold to the real active-window cost. Only called on a
+   * successful run. `pageId` is the AI-tool-runner path's calling-surface
+   * agent page; `driveId` is the realtime shell bridge's session-level
+   * attribution (a session is drive-scoped, not page-anchored) — a caller
+   * sets whichever one its own model has, never both.
+   */
   trackUsage: (input: {
     payerId: string;
     holdId?: string;
@@ -151,7 +157,7 @@ export interface ShellActivityNotification {
  * `getState`/`recordCheckpoint` are the bookkeeping the pure `shouldCheckpoint`
  * policy (`checkpoint-policy.ts`) needs to enforce "at most once per turn" +
  * the rapid-batch throttle; production wires them to an in-process Map keyed
- * by sandboxId (mirrors `quota.ts`'s `machineActivityByKey` — no persistence,
+ * by sandboxId (mirrors `quota.ts`'s `sessionActivityByKey` — no persistence,
  * no reaper). `createCheckpoint` is the actual SDK call against a live,
  * already-awake sandbox handle.
  */
@@ -304,7 +310,7 @@ export function safeLogWarn(
 // noise that trains the on-call to ignore this logger.
 const AUTHZ_DENY_REASONS = new Set([
   'no_drive_access', 'insufficient_role', 'no_agent_access', 'app_admin_required', 'kill_switch_off', 'no_machine',
-  'machine_runtime_exceeded', 'session_limit_reached',
+  'session_runtime_exceeded', 'session_limit_reached',
   // A legacy conversation that predates sessions has no working context to run
   // in — an expected refusal (not an infra fault), so it belongs here rather
   // than paging on-call for every pre-session thread an agent tool touches.
@@ -319,7 +325,7 @@ export type SandboxToolDenialReason =
   | 'insufficient_role'
   | 'no_agent_access'
   | 'no_machine'
-  | 'machine_runtime_exceeded'
+  | 'session_runtime_exceeded'
   | 'credit_exhausted'
   | 'concurrency_limit'
   | 'session_limit_reached'
@@ -360,8 +366,8 @@ export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   insufficient_role: 'Running code requires drive owner or admin access.',
   no_agent_access: 'This agent is not permitted to run code in this drive.',
   no_machine: 'No machine is configured for this run.',
-  machine_runtime_exceeded:
-    'This machine has been running continuously for too long. Wait for it to go idle, or switch to a different machine.',
+  session_runtime_exceeded:
+    "This session's sandbox has been running continuously for too long. Wait for it to go idle, or switch to a different session.",
   credit_exhausted: 'Insufficient credits to run this machine.',
   concurrency_limit: 'Too many concurrent runs. Wait for a run to finish and retry.',
   // A different limit from `concurrency_limit`, and the distinction is the
