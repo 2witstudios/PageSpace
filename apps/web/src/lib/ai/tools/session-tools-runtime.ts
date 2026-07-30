@@ -21,7 +21,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { and, eq, ne, desc } from '@pagespace/db/operators';
 import { chatMessages, pages } from '@pagespace/db/schema/core';
-import { messages as globalMessages } from '@pagespace/db/schema/conversations';
+import { conversations, messages as globalMessages } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { getCodeExecutionConcurrencyLimit } from '@pagespace/lib/services/sandbox/quota';
@@ -45,7 +45,7 @@ import { abortConversationStreams } from '@/lib/ai/core/abort-conversation-strea
 import {
   createSessionTools,
   type DispatchOutcome,
-  type SessionListingEntry,
+  type SessionWorkspaceListing,
   type SessionToolsDeps,
   type TranscriptEntry,
 } from './session-tools';
@@ -243,25 +243,56 @@ async function dispatchThroughChatPipeline(input: {
 // Listings / transcripts
 // ---------------------------------------------------------------------------
 
-async function listSessionsForOwner(ownerId: string): Promise<SessionListingEntry[]> {
+/**
+ * The caller's whole workspace, in the tool family's OWN address namespace:
+ * workers are the session's conversations (their ids are what send/read/
+ * kill_session take), shells are the workspace's PTYs, and the sandbox status
+ * is the one Sprite they all share (review H2b — the old listing enumerated
+ * workspace-row ids no verb could address, and never delivered the promised
+ * agent labels).
+ */
+async function listSessionWorkers({
+  workspaceSessionId,
+  callerConversationId,
+}: {
+  workspaceSessionId: string;
+  callerConversationId: string;
+}): Promise<SessionWorkspaceListing> {
   const store = await getAgentSessionStore();
-  const rows = await store.list({ ownerId });
+  const [row, workerRows, shells] = await Promise.all([
+    store.findById(workspaceSessionId),
+    db
+      .select({
+        conversationId: conversations.id,
+        title: conversations.title,
+        agentPageId: conversations.contextId,
+        type: conversations.type,
+        agentTitle: pages.title,
+      })
+      .from(conversations)
+      .leftJoin(pages, eq(pages.id, conversations.contextId))
+      .where(and(eq(conversations.sessionId, workspaceSessionId), eq(conversations.isActive, true)))
+      .orderBy(desc(conversations.createdAt)),
+    listShells(workspaceSessionId),
+  ]);
 
-  return Promise.all(
-    rows.map(async (row) => ({
-      sessionId: row.id,
-      name: row.name ?? '',
-      status: deriveSandboxStatus(row),
-      // A session hosts conversations with MANY agents, so there is no single
-      // agent to name here — the per-conversation agent lives on each thread.
-      agent: null,
-      shells: (await listShells(row.id)).map((shell) => ({
-        shellId: shell.shellId,
-        name: shell.name,
-        createdAt: shell.createdAt,
-      })),
+  return {
+    sandbox: row ? deriveSandboxStatus(row) : 'none',
+    workers: workerRows.map((worker) => ({
+      sessionId: worker.conversationId,
+      name: worker.title ?? '',
+      agent:
+        worker.type === 'page' && worker.agentPageId !== null
+          ? { agentId: worker.agentPageId, title: worker.agentTitle ?? '' }
+          : null,
+      isCaller: worker.conversationId === callerConversationId,
     })),
-  );
+    shells: shells.map((shell) => ({
+      shellId: shell.shellId,
+      name: shell.name,
+      createdAt: shell.createdAt,
+    })),
+  };
 }
 
 async function readSessionTranscript(input: {
@@ -317,7 +348,11 @@ async function readSessionTranscript(input: {
 
 export function buildSessionToolsDeps(): SessionToolsDeps {
   return {
-    listSessions: listSessionsForOwner,
+    findOwnWorkspace: async (conversationId) => {
+      const row = await findSessionForConversation(conversationId);
+      return row ? { sessionId: row.id } : null;
+    },
+    listSessionWorkers,
 
     findSession: async (sessionId) => {
       // The tool family's "sessionId" is the WORKER's conversation id (what

@@ -21,7 +21,6 @@ import { db } from '@pagespace/db/db';
 import { and, desc, eq, isNotNull } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
-import { conversations } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
 import { checkAgentSessionConcurrency } from '@pagespace/lib/services/sandbox/quota';
 import {
@@ -66,10 +65,8 @@ import {
 import type { AgentSessionDTO } from '@pagespace/lib/agent-sessions/contract';
 import { decideAgentSessionAccess } from '@pagespace/lib/agent-sessions/decide-session-access';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import {
-  resolveOrCreateConversation,
-  ConversationOwnershipError,
-} from '@/app/api/ai/global/[id]/messages/resolve-or-create-conversation';
+import { resolveOrCreateConversation } from '@/app/api/ai/global/[id]/messages/resolve-or-create-conversation';
+import { createConversationInSessionWith } from '@/lib/agent-sessions/create-conversation-in-session';
 
 export { isCodeExecutionEnabled };
 
@@ -226,11 +223,10 @@ export async function checkSessionEndAccess(
   requesterId: string,
   sessionId: string,
 ): Promise<AgentSessionAccessCheck> {
-  const { findSession, resolveDriveMembership: resolveMembership } = buildAccessDeps();
   return checkAgentSessionEndAccess({
     requesterId,
     sessionId,
-    deps: { findSession, resolveDriveMembership: resolveMembership },
+    deps: buildAccessDeps(),
   });
 }
 
@@ -239,43 +235,39 @@ export async function checkSessionEndAccess(
 // ---------------------------------------------------------------------------
 
 /**
- * The squat-guarded conversation creators, one per anchor kind. Injected into
- * `ensureAgentSession` so the guard in the app repository stays the ONLY way a
- * conversation id is ever claimed (see `EnsureConversationFn`'s doc).
- * `resolveOrCreateConversation` throws `ConversationOwnershipError` for a
- * conversation someone else owns — rethrown as-is for the service to fold into
- * its `conversation_unavailable` result.
+ * Create a conversation BORN INTO a session. Decision logic lives in the pure
+ * module (`create-conversation-in-session.ts`) — this is only its production
+ * wiring: the squat-guarded repository creator for page threads, the
+ * ownership-guarded resolver for global ones, both carrying the binding
+ * INSIDE their INSERT (no `conversations.sessionId` UPDATE exists anywhere —
+ * rebinding is unrepresentable, per invariant 1).
+ *
+ * Throws `ConversationUnavailableError` (message `conversation_unavailable`)
+ * when the id cannot be claimed WITH this binding — foreign owner, legacy
+ * message-owner conflict, or an existing row whose binding disagrees.
  */
-export async function createConversationInSession({
-  conversationId,
-  userId,
-  agentPageId,
-  sessionId,
-}: {
+export async function createConversationInSession(input: {
   conversationId: string;
   userId: string;
   /** null = a global-assistant conversation. */
   agentPageId: string | null;
   sessionId: string;
 }): Promise<void> {
-  if (agentPageId === null) {
-    try {
-      await resolveOrCreateConversation(userId, conversationId);
-    } catch (error) {
-      if (error instanceof ConversationOwnershipError) {
-        throw new Error('conversation_unavailable');
-      }
-      throw error;
-    }
-  } else {
-    await conversationRepository.createConversation(conversationId, userId, agentPageId);
-  }
-  // The binding, set once at creation and permanent (contract invariant 1) —
-  // moving a thread to another session is a fork, never a rebind.
-  await db
-    .update(conversations)
-    .set({ sessionId })
-    .where(eq(conversations.id, conversationId));
+  return createConversationInSessionWith(
+    {
+      createPageConversation: ({ conversationId, userId, agentPageId, sessionId }) =>
+        conversationRepository.createConversation(conversationId, userId, agentPageId, { sessionId }),
+      createGlobalConversation: async ({ conversationId, userId, sessionId }) => {
+        await resolveOrCreateConversation(userId, conversationId, undefined, { sessionId });
+      },
+      findConversation: async (conversationId) => {
+        const row = await conversationRepository.getConversation(conversationId);
+        if (!row) return null;
+        return { userId: row.userId, type: row.type, contextId: row.contextId, sessionId: row.sessionId };
+      },
+    },
+    input,
+  );
 }
 
 export async function spawnSession(input: {
