@@ -444,6 +444,9 @@ export default function AgentPanes({
     closeTerminalShell(pendingEndClose.scope);
     setEndingSession(false);
     setPendingEndClose(null);
+    // Same instant-freshness nudge as closeConversationListing — otherwise
+    // the now-dead session's row lingers in the sidebar until the next poll.
+    void mutate(isAgentSessionsKey);
     onSessionEnded?.();
   }, [pendingEndClose, sessionId, forgetWorkspace, closeTerminalShell, onSessionEnded]);
 

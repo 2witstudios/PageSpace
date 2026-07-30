@@ -470,6 +470,49 @@ describe('AgentPageView', () => {
       await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-2'));
     });
 
+    it('follows the grid rebind instead of minting when it already points at another OPEN conversation of THIS agent', async () => {
+      // The grid closed conv-1's listing but it was grid-last with another
+      // open conversation (conv-2) of the SAME agent still available — it
+      // rebound the pane to that rather than ending the session. This tab
+      // should follow the same rebind rather than minting a third,
+      // redundant conversation and leaving conv-2 an orphaned empty thread.
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      agentPanesState.lastOnConversationClosed?.({
+        conversationId: 'conv-1',
+        next: 'conv-2',
+        nextAgentPageId: 'agent-1',
+      });
+
+      expect(mockCreatePageConversation).not.toHaveBeenCalled();
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-2'));
+    });
+
+    it("still mints when the grid's rebind target belongs to a DIFFERENT agent", async () => {
+      // `next` exists, but for another agent's conversation — not something
+      // this page can show as its own `current`, so it must mint its own
+      // replacement exactly as when there was no rebind at all.
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-3', sessionId: 'ses-1' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      agentPanesState.lastOnConversationClosed?.({
+        conversationId: 'conv-1',
+        next: 'conv-2',
+        nextAgentPageId: 'other-agent',
+      });
+
+      await waitFor(() =>
+        expect(mockCreatePageConversation).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: 'agent-1', sessionId: 'ses-1' }),
+        ),
+      );
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-3'));
+    });
+
     it('ignores a close for a conversation that is not the currently tracked one', async () => {
       resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
       render(<AgentPageView page={pageFixture()} />);

@@ -219,13 +219,22 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   // Closing a listing never mints a replacement on its own (it isn't a
   // history delete), but THIS tab needs `current` to keep naming a usable
   // conversation for its agent, so it recovers the same way History-delete
-  // does: mint a fresh one for this agent into the same session.
+  // does: mint a fresh one for this agent into the same session — UNLESS the
+  // grid already rebound to another OPEN listing that belongs to this same
+  // agent, in which case following it is free and avoids leaving a redundant
+  // empty conversation behind (caught in review: this host was the one place
+  // that always minted instead of following `next` like AgentsSurface does).
   const handleConversationClosed = useCallback(
     (event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => {
       if (event.conversationId !== currentRef.current?.conversationId) return;
+      if (event.next !== null && event.nextAgentPageId === page.id) {
+        setOverride({ conversationId: event.next, sessionId: currentRef.current?.sessionId ?? null });
+        setActiveTab('chat');
+        return;
+      }
       mintReplacementForCurrent();
     },
-    [mintReplacementForCurrent, currentRef],
+    [mintReplacementForCurrent, currentRef, page.id],
   );
 
   const handleSelectConversation = useCallback(
