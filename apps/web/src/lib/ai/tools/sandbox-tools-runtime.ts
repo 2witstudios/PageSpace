@@ -48,7 +48,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { createSandboxTools, type ResolveSandboxContext, type SandboxGate } from './sandbox-tools';
 import {
-  ensureSession,
+  findSessionForConversation,
   provisionSessionSandbox,
   measureWarmSessionStorage,
 } from '@/lib/agent-sessions/agent-sessions-runtime';
@@ -105,33 +105,35 @@ function getSandboxClient(): Promise<ExecSandboxClient> {
 export function buildRealSandboxRunDeps(): SandboxRunDeps {
   return {
     isEnabled: isCodeExecutionEnabled,
-    // The session-anchored acquisition: ensure the conversation's session row,
+    // The session-anchored acquisition: resolve the conversation's SESSION row,
     // then ensure its Sprite — both through the shared agent-sessions runtime,
     // never a local copy (the CAS only serializes provisioners that all run it).
     acquireSandbox: async (input) => {
-      const sessionId = input.conversationId;
-      if (!sessionId) {
-        // No conversation, no session address — nothing to fold a Sprite key
-        // off. resolveSandboxActorContext already refuses this upstream.
+      const conversationId = input.conversationId;
+      if (!conversationId) {
+        // No conversation, nothing to resolve a session through.
+        // resolveSandboxActorContext already refuses this upstream.
         return { ok: false, reason: 'provision_failed', cause: 'missing_conversation_id' };
       }
 
-      // The per-sandbox continuous-runtime backstop, keyed by the session id —
-      // the exact discipline the machine path keyed by page id.
-      const nowMs = Date.now();
-      const guardrail = checkMachineRuntimeGuardrail({ machineKey: sessionId, now: nowMs });
-      if (!guardrail.allowed) return { ok: false, reason: guardrail.reason };
-
-      const ensured = await ensureSession({
-        conversationId: sessionId,
-        userId: input.userId,
-        agentPageId: input.agentPageId ?? null,
-      });
-      if (!ensured.ok) {
-        return { ok: false, reason: 'provision_failed', cause: ensured.reason };
+      // The conversation's WORKING CONTEXT, through conversations.sessionId.
+      // A thread with no session gets a denial, never a lazily-minted
+      // environment — per-conversation minting is exactly the conflation the
+      // session model removed, and it is what made panes unable to share a
+      // sandbox. Every conversation in one session resolves this same row,
+      // whose own id folds the ONE Sprite key.
+      const row = await findSessionForConversation(conversationId);
+      if (!row) {
+        return { ok: false, reason: 'no_session' };
       }
 
-      const provisioned = await provisionSessionSandbox(ensured.session, input.userId);
+      // The per-sandbox continuous-runtime backstop, keyed by the SESSION id —
+      // one budget per workspace, however many threads work in it.
+      const nowMs = Date.now();
+      const guardrail = checkMachineRuntimeGuardrail({ machineKey: row.id, now: nowMs });
+      if (!guardrail.allowed) return { ok: false, reason: guardrail.reason };
+
+      const provisioned = await provisionSessionSandbox(row, input.userId);
       if (!provisioned.ok) {
         if (provisioned.reason === 'denied') {
           // `not_authorized` is the capability denial the runners already speak
@@ -143,12 +145,15 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
         return { ok: false, reason: 'provision_failed', cause: provisioned.detail ?? provisioned.reason };
       }
 
-      recordMachineActivity({ machineKey: sessionId, now: nowMs });
+      recordMachineActivity({ machineKey: row.id, now: nowMs });
 
       return {
         ok: true,
         sandboxId: provisioned.sandboxId,
         resumed: provisioned.resumed,
+        // The session the sandbox belongs to — what every post-run hook
+        // (storage measurement, activity feed) is keyed by.
+        sessionId: row.id,
         // The billing/attribution key: the session's agent page when it has
         // one. A global-assistant session has none; the payer resolution's
         // tenant fallback covers it.

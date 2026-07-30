@@ -71,9 +71,10 @@ export interface SidebarMessagesContentProps {
   assistantName: string;
   /** Human-readable label for the current location, shown in the empty state. */
   contextLabel: string | null;
-  handleEdit: (messageId: string, newContent: string) => Promise<void>;
-  handleDelete: (messageId: string) => Promise<void>;
-  handleRetry: () => Promise<void>;
+  /** Optional, matching CompactMessageRenderer: absent = the affordance is hidden (read-only viewers). */
+  handleEdit?: (messageId: string, newContent: string) => Promise<void>;
+  handleDelete?: (messageId: string) => Promise<void>;
+  handleRetry?: () => Promise<void>;
   handleUndoFromHere: (messageId: string) => void;
   lastAssistantMessageId: string | undefined;
   lastUserMessageId: string | undefined;

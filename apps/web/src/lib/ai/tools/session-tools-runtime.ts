@@ -19,9 +19,9 @@
 
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { and, eq, ne, desc, inArray } from '@pagespace/db/operators';
+import { and, eq, ne, desc } from '@pagespace/db/operators';
 import { chatMessages, pages } from '@pagespace/db/schema/core';
-import { messages as globalMessages } from '@pagespace/db/schema/conversations';
+import { conversations, messages as globalMessages } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { getCodeExecutionConcurrencyLimit } from '@pagespace/lib/services/sandbox/quota';
@@ -29,12 +29,12 @@ import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { deriveSandboxStatus } from '@pagespace/lib/services/agent-sessions/session-status';
 import {
-  ensureSession,
+  createConversationInSession,
+  findSessionForConversation,
   provisionSessionSandbox,
-  endSession as endSessionRuntime,
   getAgentSessionStore,
-  findSessionRecord,
 } from '@/lib/agent-sessions/agent-sessions-runtime';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import {
   getSessionShellStore,
   killShellById,
@@ -45,7 +45,7 @@ import { abortConversationStreams } from '@/lib/ai/core/abort-conversation-strea
 import {
   createSessionTools,
   type DispatchOutcome,
-  type SessionListingEntry,
+  type SessionWorkspaceListing,
   type SessionToolsDeps,
   type TranscriptEntry,
 } from './session-tools';
@@ -243,37 +243,56 @@ async function dispatchThroughChatPipeline(input: {
 // Listings / transcripts
 // ---------------------------------------------------------------------------
 
-async function listSessionsForOwner(ownerId: string): Promise<SessionListingEntry[]> {
+/**
+ * The caller's whole workspace, in the tool family's OWN address namespace:
+ * workers are the session's conversations (their ids are what send/read/
+ * kill_session take), shells are the workspace's PTYs, and the sandbox status
+ * is the one Sprite they all share (review H2b — the old listing enumerated
+ * workspace-row ids no verb could address, and never delivered the promised
+ * agent labels).
+ */
+async function listSessionWorkers({
+  workspaceSessionId,
+  callerConversationId,
+}: {
+  workspaceSessionId: string;
+  callerConversationId: string;
+}): Promise<SessionWorkspaceListing> {
   const store = await getAgentSessionStore();
-  const rows = await store.list({ ownerId });
-  const agentIds = [...new Set(rows.flatMap((row) => (row.agentPageId ? [row.agentPageId] : [])))];
-  const agentTitles = new Map<string, string>(
-    agentIds.length === 0
-      ? []
-      : (
-          await db
-            .select({ id: pages.id, title: pages.title })
-            .from(pages)
-            .where(inArray(pages.id, agentIds))
-        ).map((page) => [page.id, page.title]),
-  );
+  const [row, workerRows, shells] = await Promise.all([
+    store.findById(workspaceSessionId),
+    db
+      .select({
+        conversationId: conversations.id,
+        title: conversations.title,
+        agentPageId: conversations.contextId,
+        type: conversations.type,
+        agentTitle: pages.title,
+      })
+      .from(conversations)
+      .leftJoin(pages, eq(pages.id, conversations.contextId))
+      .where(and(eq(conversations.sessionId, workspaceSessionId), eq(conversations.isActive, true)))
+      .orderBy(desc(conversations.createdAt)),
+    listShells(workspaceSessionId),
+  ]);
 
-  return Promise.all(
-    rows.map(async (row) => ({
-      sessionId: row.conversationId,
-      name: row.name ?? '',
-      status: deriveSandboxStatus(row),
+  return {
+    sandbox: row ? deriveSandboxStatus(row) : 'none',
+    workers: workerRows.map((worker) => ({
+      sessionId: worker.conversationId,
+      name: worker.title ?? '',
       agent:
-        row.agentPageId === null
-          ? null
-          : { agentId: row.agentPageId, title: agentTitles.get(row.agentPageId) ?? 'Agent' },
-      shells: (await listShells(row.conversationId)).map((shell) => ({
-        shellId: shell.shellId,
-        name: shell.name,
-        createdAt: shell.createdAt,
-      })),
+        worker.type === 'page' && worker.agentPageId !== null
+          ? { agentId: worker.agentPageId, title: worker.agentTitle ?? '' }
+          : null,
+      isCaller: worker.conversationId === callerConversationId,
     })),
-  );
+    shells: shells.map((shell) => ({
+      shellId: shell.shellId,
+      name: shell.name,
+      createdAt: shell.createdAt,
+    })),
+  };
 }
 
 async function readSessionTranscript(input: {
@@ -329,17 +348,25 @@ async function readSessionTranscript(input: {
 
 export function buildSessionToolsDeps(): SessionToolsDeps {
   return {
-    listSessions: listSessionsForOwner,
+    findOwnWorkspace: async (conversationId) => {
+      const row = await findSessionForConversation(conversationId);
+      return row ? { sessionId: row.id } : null;
+    },
+    listSessionWorkers,
 
     findSession: async (sessionId) => {
-      const row = await findSessionRecord(sessionId);
-      if (!row) return null;
+      // The tool family's "sessionId" is the WORKER's conversation id (what
+      // spawn returned) — resolve the conversation, not a workspace row.
+      const conversation = await conversationRepository.getConversation(sessionId);
+      if (!conversation) return null;
       return {
-        sessionId: row.conversationId,
-        ownerId: row.ownerId,
-        agentPageId: row.agentPageId,
-        name: row.name ?? '',
-        endedAt: row.endedAt?.toISOString() ?? null,
+        sessionId,
+        ownerId: conversation.userId,
+        agentPageId: conversation.type === 'page' ? conversation.contextId : null,
+        name: conversation.title ?? '',
+        // A worker conversation never "ends" — its session might, which the
+        // dispatch surfaces as a failed run rather than a dead address.
+        endedAt: null,
       };
     },
 
@@ -375,9 +402,30 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       return canUserViewPage(userId, agentPageId);
     },
 
-    createWorkerSession: async ({ sessionId, ownerId, agentPageId, name }) => {
-      const ensured = await ensureSession({ conversationId: sessionId, userId: ownerId, agentPageId, name });
-      if (!ensured.ok) return { ok: false, reason: ensured.reason, detail: ensured.detail };
+    createWorkerSession: async ({ sessionId, callerConversationId, ownerId, agentPageId, name }) => {
+      // A worker works in its SPAWNER's workspace: same session, same sandbox,
+      // same filesystem — that shared context is the point of spawning one.
+      // No caller session ⇒ refusal, never a lazily-minted per-thread
+      // environment (the conflation the session model removed).
+      const callerSession = await findSessionForConversation(callerConversationId);
+      if (!callerSession) {
+        return { ok: false, reason: 'no_session', detail: 'This conversation has no session for a worker to join.' };
+      }
+      try {
+        await createConversationInSession({
+          conversationId: sessionId,
+          userId: ownerId,
+          agentPageId,
+          sessionId: callerSession.id,
+          // The worker's label, written AT BIRTH onto the conversation row —
+          // it is what the sidebar and list_sessions display (codex review,
+          // P2: the old path reported the name in the tool response and then
+          // discarded it).
+          title: name,
+        });
+      } catch (error) {
+        return { ok: false, reason: 'conversation_unavailable', detail: error instanceof Error ? error.message : String(error) };
+      }
       return { ok: true };
     },
 
@@ -386,20 +434,21 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
     readTranscript: readSessionTranscript,
 
     endSession: async ({ sessionId, userId }) => {
-      // Stop any in-flight run FIRST (the caller's own streams only —
-      // abortConversationStreams' authorization), then release the compute.
+      // Stop the worker's in-flight run (the caller's own streams only —
+      // abortConversationStreams' authorization). Deliberately NO sandbox
+      // teardown: a worker works in its SPAWNER's session, so tearing "its"
+      // sandbox down would destroy the caller's own working context.
       await abortConversationStreams({ conversationId: sessionId, userId }).catch(() => {});
-      const ended = await endSessionRuntime(sessionId);
-      if (!ended.ok) return { ok: false, reason: ended.reason };
-      return { ok: true, spriteTornDown: ended.spriteTornDown };
+      return { ok: true, spriteTornDown: false };
     },
 
     ensureOwnSessionSandbox: async ({ conversationId, userId, agentPageId }) => {
-      const ensured = await ensureSession({ conversationId, userId, agentPageId });
-      if (!ensured.ok) {
-        return { ok: false, error: `Could not open this conversation's session (${ensured.reason}).` };
+      void agentPageId;
+      const row = await findSessionForConversation(conversationId);
+      if (!row) {
+        return { ok: false, error: "This conversation has no session — open it inside a session to use shells." };
       }
-      const provisioned = await provisionSessionSandbox(ensured.session, userId);
+      const provisioned = await provisionSessionSandbox(row, userId);
       if (!provisioned.ok) {
         return {
           ok: false,
@@ -413,7 +462,11 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
     },
 
     spawnShell: async ({ sessionId, ownerId, name }) => {
-      const spawned = await spawnShell({ sessionId, ownerId, name });
+      // The pure layer hands the CALLER's conversation id; shells hang off the
+      // SESSION, so resolve the working context first.
+      const session = await findSessionForConversation(sessionId);
+      if (!session) return { ok: false, reason: 'no_session' };
+      const spawned = await spawnShell({ sessionId: session.id, ownerId, name });
       if (!spawned.ok) return { ok: false, reason: spawned.reason };
       return { ok: true, shell: spawned.shell };
     },

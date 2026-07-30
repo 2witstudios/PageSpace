@@ -1,0 +1,203 @@
+/**
+ * The store's own job: identity, idempotence, and not blowing up on a
+ * transition aimed at a grid that is gone. The layout rules themselves are the
+ * reducer's, and are tested there.
+ */
+import { describe, it, expect, beforeEach } from 'vitest';
+import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
+import { useAgentWorkspaceStore } from '../useAgentWorkspaceStore';
+import { panesOf } from '../pane-reducer';
+
+const scope = (name = 'Planning'): PaneScope => ({
+  kind: 'chat',
+  name,
+  targetId: 'conv-1',
+  agentPageId: 'agent-1',
+});
+
+const store = () => useAgentWorkspaceStore.getState();
+const grid = (id = 'ses-1') => store().workspaces[id];
+
+beforeEach(() => {
+  useAgentWorkspaceStore.setState({ workspaces: {} });
+});
+
+describe('ensureWorkspace', () => {
+  it('should open a session on one pane bound to its first conversation', () => {
+    store().ensureWorkspace('ses-1', scope());
+    expect(panesOf(grid())).toHaveLength(1);
+    expect(panesOf(grid())[0].scope).toEqual(scope());
+  });
+
+  it('should be idempotent — re-opening a session must not discard its layout', () => {
+    store().ensureWorkspace('ses-1', scope());
+    store().splitRight('ses-1', grid().activePaneId);
+    expect(panesOf(grid())).toHaveLength(2);
+
+    store().ensureWorkspace('ses-1', scope());
+
+    expect(panesOf(grid())).toHaveLength(2);
+  });
+
+  it('should keep sessions independent', () => {
+    store().ensureWorkspace('ses-1', scope());
+    store().ensureWorkspace('ses-2', { ...scope('Other'), targetId: 'conv-2' });
+    store().splitRight('ses-1', grid('ses-1').activePaneId);
+
+    expect(panesOf(grid('ses-1'))).toHaveLength(2);
+    expect(panesOf(grid('ses-2'))).toHaveLength(1);
+  });
+});
+
+describe('pane ids', () => {
+  it('should mint distinct ids for every pane', () => {
+    store().ensureWorkspace('ses-1', scope());
+    store().splitRight('ses-1', grid().activePaneId);
+    store().splitDown('ses-1', grid().activePaneId);
+
+    const ids = panesOf(grid()).map((p) => p.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('should mint distinct column ids across split-rights', () => {
+    store().ensureWorkspace('ses-1', scope());
+    store().splitRight('ses-1', grid().activePaneId);
+    store().splitRight('ses-1', grid().activePaneId);
+
+    const columnIds = grid().columns.map((c) => c.id);
+    expect(new Set(columnIds).size).toBe(columnIds.length);
+  });
+});
+
+describe('transitions', () => {
+  beforeEach(() => {
+    store().ensureWorkspace('ses-1', scope());
+  });
+
+  it('should bind a pane through assignPane', () => {
+    store().splitRight('ses-1', grid().activePaneId);
+    const target = grid().activePaneId;
+    const shell: PaneScope = { kind: 'terminal', name: 'shell-1', targetId: 'shell-9', agentPageId: null };
+
+    store().assignPane('ses-1', target, shell);
+
+    expect(panesOf(grid()).find((p) => p.id === target)?.scope).toEqual(shell);
+  });
+
+  it('should close a pane and keep the grid non-empty', () => {
+    store().splitRight('ses-1', grid().activePaneId);
+    store().closePane('ses-1', grid().activePaneId);
+    expect(panesOf(grid())).toHaveLength(1);
+  });
+
+  it('closing the LAST pane ends the session — the grid is removed and the caller told to end it', () => {
+    // The container-level interception the old closePaneIn owned: the pure
+    // reducer no-ops (it cannot delete its own container), the store CAN, and
+    // the return value is how the caller knows to tear the sandbox down.
+    const verdict = store().closePane('ses-1', grid().activePaneId);
+    expect(verdict).toBe('session-ended');
+    expect(store().workspaces['ses-1']).toBeUndefined();
+  });
+
+  it('closing a NON-last pane reports closed and keeps the grid', () => {
+    store().splitRight('ses-1', grid().activePaneId);
+    const verdict = store().closePane('ses-1', grid().activePaneId);
+    expect(verdict).toBe('closed');
+    expect(panesOf(grid())).toHaveLength(1);
+  });
+
+  it('closing an unknown pane reports noop', () => {
+    expect(store().closePane('ses-1', 'ghost')).toBe('noop');
+    expect(store().closePane('never-existed', 'ghost')).toBe('noop');
+  });
+});
+
+describe('a transition aimed at a grid that is gone', () => {
+  it('should no-op rather than throw or fabricate one', () => {
+    // A close can land after the conversation was deleted and its grid
+    // forgotten. There is nothing meaningful to build from a split of something
+    // absent, so the store declines rather than inventing a workspace.
+    expect(() => store().splitRight('never-existed', 'pane-x')).not.toThrow();
+    expect(store().workspaces['never-existed']).toBeUndefined();
+
+    store().ensureWorkspace('ses-1', scope());
+    store().forgetWorkspace('ses-1');
+    expect(() => store().closePane('ses-1', 'pane-1')).not.toThrow();
+    expect(store().workspaces['ses-1']).toBeUndefined();
+  });
+
+  it('forgetWorkspace should be safe to call twice', () => {
+    store().ensureWorkspace('ses-1', scope());
+    store().forgetWorkspace('ses-1');
+    expect(() => store().forgetWorkspace('conv-1')).not.toThrow();
+  });
+});
+
+describe('openConversation — selection means SHOW it (review M1)', () => {
+  const conv = (targetId: string, name = 'Thread'): PaneScope => ({
+    kind: 'chat',
+    name,
+    targetId,
+    agentPageId: 'agent-1',
+  });
+  const shellScope = (targetId: string): PaneScope => ({
+    kind: 'terminal',
+    name: 'shell-1',
+    targetId,
+    agentPageId: null,
+  });
+
+  it('with no workspace, seeds the opening grid (ensure semantics)', () => {
+    store().openConversation('ses-1', conv('conv-1'));
+    expect(panesOf(grid())).toHaveLength(1);
+    expect(panesOf(grid())[0].scope?.targetId).toBe('conv-1');
+  });
+
+  it('focuses the pane already showing the conversation instead of duplicating it', () => {
+    store().openConversation('ses-1', conv('conv-1'));
+    const first = panesOf(grid())[0];
+    store().splitRight('ses-1', first.id);
+    const second = panesOf(grid()).find((p) => p.id !== first.id)!;
+    store().assignPane('ses-1', second.id, conv('conv-2'));
+    expect(grid().activePaneId).toBe(second.id);
+
+    store().openConversation('ses-1', conv('conv-1'));
+    expect(grid().activePaneId).toBe(first.id);
+    expect(panesOf(grid())).toHaveLength(2);
+  });
+
+  it('opens an unseen conversation in the ACTIVE pane when it is a chat', () => {
+    store().openConversation('ses-1', conv('conv-1'));
+    const paneId = panesOf(grid())[0].id;
+    store().openConversation('ses-1', conv('conv-2'));
+    expect(panesOf(grid())).toHaveLength(1);
+    expect(panesOf(grid())[0].id).toBe(paneId);
+    expect(panesOf(grid())[0].scope?.targetId).toBe('conv-2');
+  });
+
+  it('never opens OVER a terminal — a running PTY keeps its only surface', () => {
+    store().openConversation('ses-1', conv('conv-1'));
+    const chatPane = panesOf(grid())[0];
+    store().splitRight('ses-1', chatPane.id);
+    const termPane = panesOf(grid()).find((p) => p.id !== chatPane.id)!;
+    store().assignPane('ses-1', termPane.id, shellScope('shell-row-1'));
+    // Terminal is the ACTIVE pane now; the open must land on the chat pane.
+    store().openConversation('ses-1', conv('conv-2'));
+    const term = panesOf(grid()).find((p) => p.id === termPane.id)!;
+    expect(term.scope?.kind).toBe('terminal');
+    const chat = panesOf(grid()).find((p) => p.id === chatPane.id)!;
+    expect(chat.scope?.targetId).toBe('conv-2');
+  });
+
+  it('with EVERY pane a terminal, splits right rather than evicting one', () => {
+    store().openConversation('ses-1', conv('conv-1'));
+    const only = panesOf(grid())[0];
+    store().assignPane('ses-1', only.id, shellScope('shell-row-1'));
+
+    store().openConversation('ses-1', conv('conv-2'));
+    const panes = panesOf(grid());
+    expect(panes).toHaveLength(2);
+    expect(panes.filter((p) => p.scope?.kind === 'terminal')).toHaveLength(1);
+    expect(panes.find((p) => p.scope?.targetId === 'conv-2')).toBeDefined();
+  });
+});

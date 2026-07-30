@@ -9,10 +9,9 @@ import { useLayoutStore } from '@/stores/useLayoutStore';
  * Deliberately NOT an extension of `usePageAgentDashboardStore`. That store owns
  * the right-sidebar assistant's conversation IDENTITY state machine (resolving /
  * ready / failed, message-cache seeding, most-recent-conversation resolution);
- * this one owns two ids and a URL. Folding them together would give the surface
+ * this one owns three ids and a URL. Folding them together would give the surface
  * a state machine it doesn't need and give the assistant a drive scope it
- * doesn't have. They do share the `?agent=`/`?c=` grammar — one grammar, one
- * module (`lib/agents/agent-selection.ts`), two readers.
+ * doesn't have. One grammar, one module (`lib/agents/agent-selection.ts`).
  *
  * ## Selection is not navigation
  *
@@ -52,25 +51,31 @@ interface HydrateInput {
 interface AgentSurfaceState {
   /** Which surface we're on, so transitions stay inside it. Null = `/dashboard/agents`. */
   driveId: string | null;
-  selectedAgentId: string | null;
-  /** ≡ the sessionId of whatever the user has open (see the agent-sessions contract). */
+  /** The selected SESSION (workspace) — what the centre view's pane grid renders. */
+  selectedSessionId: string | null;
+  /** The conversation inside that session the grid opened on. */
   selectedConversationId: string | null;
+  /** The selected conversation's agent page — the pane grid's seed. */
+  selectedAgentId: string | null;
 
   /**
-   * Select an agent (or `null` to clear). Switching to a DIFFERENT agent clears
-   * the conversation — it belonged to the old agent — while re-selecting the
-   * agent already open keeps it, so clicking the row you're on is a no-op rather
-   * than a way to lose your place.
+   * Select a session (or `null` to clear). Switching to a DIFFERENT session
+   * clears the conversation — it belonged to the old workspace — while
+   * re-selecting the session already open keeps it, so clicking the row you're
+   * on is a no-op rather than a way to lose your place.
    */
-  selectAgent: (agentId: string | null) => void;
+  selectSession: (sessionId: string | null) => void;
 
   /**
-   * Select a conversation, optionally naming the agent it belongs to. Passing
-   * the owning agent is how a click on a conversation nested under a different
-   * agent lands as ONE transition (and one history entry) with both params
-   * agreeing, instead of two writes with a moment of disagreement between them.
+   * Select a conversation inside a session, naming the session and the
+   * conversation's agent so a click lands as ONE transition (one history
+   * entry) with all params agreeing.
    */
-  selectConversation: (conversationId: string | null, agentId?: string | null) => void;
+  selectConversation: (input: {
+    sessionId: string;
+    conversationId: string;
+    agentId: string | null;
+  }) => void;
 
   /** Read the URL into state. Reading, not selecting: writes no history entry. */
   hydrateFromSearch: (input?: HydrateInput) => void;
@@ -104,14 +109,19 @@ export const useAgentSurfaceStore = create<AgentSurfaceState>()((set, get) => {
    * so re-selecting what's already open doesn't stack duplicate Back entries a
    * user would have to press through to get anywhere.
    */
-  const commit = (next: { agentId: string | null; conversationId: string | null }) => {
-    set({ selectedAgentId: next.agentId, selectedConversationId: next.conversationId });
+  const commit = (next: { sessionId: string | null; conversationId: string | null; agentId: string | null }) => {
+    set({
+      selectedSessionId: next.sessionId,
+      selectedConversationId: next.conversationId,
+      selectedAgentId: next.agentId,
+    });
 
     if (typeof window === 'undefined') return;
     const url = buildAgentSelectionUrl({
       driveId: get().driveId,
-      agentId: next.agentId,
+      sessionId: next.sessionId,
       conversationId: next.conversationId,
+      agentId: next.agentId,
     });
     if (url === currentUrl()) return;
     window.history.pushState({}, '', url);
@@ -119,19 +129,23 @@ export const useAgentSurfaceStore = create<AgentSurfaceState>()((set, get) => {
 
   return {
     driveId: null,
-    selectedAgentId: null,
+    selectedSessionId: null,
     selectedConversationId: null,
+    selectedAgentId: null,
 
-    selectAgent: (agentId) => {
-      const { selectedAgentId, selectedConversationId } = get();
-      const isSameAgent = agentId === selectedAgentId;
-      commit({ agentId, conversationId: isSameAgent ? selectedConversationId : null });
+    selectSession: (sessionId) => {
+      const { selectedSessionId, selectedConversationId, selectedAgentId } = get();
+      const isSameSession = sessionId === selectedSessionId;
+      commit({
+        sessionId,
+        conversationId: isSameSession ? selectedConversationId : null,
+        agentId: isSameSession ? selectedAgentId : null,
+      });
       closeSheetIfMobile();
     },
 
-    selectConversation: (conversationId, agentId) => {
-      const nextAgentId = agentId === undefined ? get().selectedAgentId : agentId;
-      commit({ agentId: nextAgentId, conversationId });
+    selectConversation: ({ sessionId, conversationId, agentId }) => {
+      commit({ sessionId, conversationId, agentId });
       closeSheetIfMobile();
     },
 
@@ -142,8 +156,9 @@ export const useAgentSurfaceStore = create<AgentSurfaceState>()((set, get) => {
         // Only when the caller actually said — a hydrate that omits the key
         // (e.g. a bare popstate re-read) must not silently drop the drive scope.
         ...(input && 'driveId' in input ? { driveId: input.driveId ?? null } : {}),
-        selectedAgentId: selection.agentId,
+        selectedSessionId: selection.sessionId,
         selectedConversationId: selection.conversationId,
+        selectedAgentId: selection.agentId,
       });
     },
   };

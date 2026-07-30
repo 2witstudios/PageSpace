@@ -56,7 +56,7 @@ export const defaultReconcileAgentSessionOrphanSpritesDeps: ReconcileOrphanSprit
         .limit(LOOKAHEAD),
       db
         .select({
-          sessionId: agentSessions.conversationId,
+          sessionId: agentSessions.id,
           sandboxId: agentSessions.sandboxId,
           spriteInstanceId: agentSessions.spriteInstanceId,
           teardownRequestedAt: agentSessions.teardownRequestedAt,

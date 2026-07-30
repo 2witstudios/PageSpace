@@ -5,52 +5,53 @@
  * handler — call this function. That is the concrete mitigation for the risk
  * that the two surfaces drift apart: they cannot, because there is only one
  * decision, and its input shape is constructible from either side (a requester
- * id, the session row's own two identity columns, and three facts the caller
- * looks up: is the conversation shared, what page permission does the requester
- * hold, may they run code at all).
+ * id, the session row's own identity columns, and two facts the caller looks
+ * up: the requester's drive membership, and whether they may run code at all).
  *
- * Three gates, all of which must pass, evaluated in a fixed order so a denial
- * always names the FIRST thing wrong:
+ * A session is a DRIVE-LEVEL workspace (contract invariant 1), so access is
+ * drive access. The old model gated on conversation ownership and agent-page
+ * permission; both dissolved with the conflation — a session hosts many
+ * conversations with many agents, so neither a single thread's sharing state
+ * nor a single page's ACL can speak for it. The drive can, and does.
  *
- *  1. **Identity** — the requester owns the conversation, or it is shared with
- *     them. This is the "is this yours" question and it is asked first.
- *  2. **Page** — for a session anchored to an agent page, view access to that
- *     page. For a global-assistant session (`agentPageId` null) there is no page
- *     to share through, so it is owner-only by construction.
+ * Three gates, evaluated in a fixed order so a denial always names the FIRST
+ * thing wrong:
+ *
+ *  1. **Requester** — a non-empty id. Fails closed on the degenerate input.
+ *  2. **Scope** — for a drive session, the requester must be the drive's owner
+ *     or a member (any drive collaborator may work in the drive's sessions —
+ *     that is what makes them shared working contexts). For a global-assistant
+ *     session (`driveId` null) there is no drive to share through, so it is
+ *     owner-only by construction. The gate applies to the session's OWNER too:
+ *     an owner removed from the drive loses USE of its working context (see
+ *     the END variant for why release-of-compute is different).
  *  3. **Capability** — `canRunCode` (app-admin + the CODE_EXECUTION flag,
  *     computed by the centralized checker). A distinct reason, because it is a
- *     distinct condition: the requester may legitimately see this conversation
+ *     distinct condition: the requester may legitimately reach this session
  *     and still not be allowed a sandbox.
  *
- * Everything fails closed: an unresolved page permission denies, a caller that
- * mis-derives ownership denies, and an empty requester denies.
+ * Everything fails closed: an unresolved membership (`null`) denies, and an
+ * empty requester denies.
  */
 
 /** The session columns the decision needs — no more, so both surfaces can build it from a single row read. */
 export interface AgentSessionAccessSubject {
-  /** ≡ the conversation id. */
+  /** The session's own id. */
   sessionId: string;
   ownerId: string;
-  /** null = a global-assistant session: no agent page, so no page to derive access from. */
-  agentPageId: string | null;
+  /** null = a global-assistant session: no drive, so no drive to derive access from. */
+  driveId: string | null;
 }
 
 /**
- * What the caller determined about the requester's relationship to the
- * CONVERSATION. `'owner'` is cross-checked against `session.ownerId` rather than
- * trusted — a caller that computes it wrongly is a bug we want to fail closed on,
- * not honor.
+ * What the caller determined about the requester's relationship to the DRIVE.
+ * `null` = not resolved (denied — unknown is never a grant).
  */
-export type ConversationOwnership = 'owner' | 'shared' | 'none';
-
-/** The requester's permission on `agentPageId`. `null` = no page, or not resolved (denied). */
-export type AgentSessionPagePermission = 'view' | 'edit' | 'none';
+export type DriveMembership = 'owner' | 'member' | 'none';
 
 export type AgentSessionDenialReason =
   | 'invalid_requester'
-  | 'not_shared'
-  | 'ownership_mismatch'
-  | 'page_access_denied'
+  | 'drive_access_denied'
   | 'global_assistant_not_owner'
   | 'code_execution_denied';
 
@@ -61,45 +62,31 @@ export type AgentSessionAccessDecision =
 export interface DecideAgentSessionAccessInput {
   requesterId: string;
   session: AgentSessionAccessSubject;
-  conversationOwnership: ConversationOwnership;
-  pagePermission: AgentSessionPagePermission | null;
+  /** The requester's membership in `session.driveId`. Ignored (may be null) for a global-assistant session. */
+  driveMembership: DriveMembership | null;
   canRunCode: boolean;
 }
 
 export function decideAgentSessionAccess({
   requesterId,
   session,
-  conversationOwnership,
-  pagePermission,
+  driveMembership,
   canRunCode,
 }: DecideAgentSessionAccessInput): AgentSessionAccessDecision {
   if (requesterId.length === 0) {
     return { allowed: false, reason: 'invalid_requester' };
   }
 
-  // Ownership is derived from ids, not taken on the caller's word: the id
-  // comparison is the fact, `conversationOwnership` only adds what ids cannot say
-  // (whether a non-owner was shared in).
   const isOwner = requesterId === session.ownerId;
 
-  if (!isOwner) {
-    if (conversationOwnership === 'owner') {
-      // The caller says "owner" about someone who is not the owner — a mis-derived
-      // input, never a grant.
-      return { allowed: false, reason: 'ownership_mismatch' };
-    }
-    if (conversationOwnership !== 'shared') {
-      return { allowed: false, reason: 'not_shared' };
-    }
-  }
-
-  if (session.agentPageId === null) {
-    // A global-assistant session has no page to share through — sharing the
-    // conversation cannot widen it, so it stays private to its owner.
+  if (session.driveId === null) {
+    // A global-assistant session has no drive to share through — it stays
+    // private to its owner.
     if (!isOwner) return { allowed: false, reason: 'global_assistant_not_owner' };
-  } else if (pagePermission !== 'view' && pagePermission !== 'edit') {
-    // Includes an unresolved permission (`null`): unknown is denied.
-    return { allowed: false, reason: 'page_access_denied' };
+  } else if (driveMembership !== 'owner' && driveMembership !== 'member') {
+    // Includes an unresolved membership (`null`): unknown is denied. Applies
+    // to the session owner too — losing the drive loses its working contexts.
+    return { allowed: false, reason: 'drive_access_denied' };
   }
 
   if (!canRunCode) {
@@ -109,25 +96,30 @@ export function decideAgentSessionAccess({
   return { allowed: true };
 }
 
-export type DecideAgentSessionEndAccessInput = Omit<DecideAgentSessionAccessInput, 'canRunCode'>;
+export type DecideAgentSessionEndAccessInput = DecideAgentSessionAccessInput;
 
 /**
- * The END-SESSION variant of the decision: identity and page gates only, with
- * the capability gate DELIBERATELY absent.
+ * The END-SESSION variant: ONE deliberate widening, for the owner only.
  *
- * Ending a session is release-of-compute, and the lifecycle planner already
- * decided that teardown runs unconditional on `canRun` — an actor who has just
- * LOST the right to a sandbox (the CODE_EXECUTION flag flipped off, an admin
- * role revoked) must still be able to end their own session, or the Sprite
- * bills until an operator notices. The identity and page gates stay: releasing
- * someone ELSE's compute is still touching someone else's session.
+ * The session's OWNER may always end it — no drive membership, no capability.
+ * Ending is release-of-compute: an owner who just lost `canRunCode` (flag
+ * flipped, admin role revoked) or was removed from the drive must still be
+ * able to stop paying for their Sprite, or it bills until an operator
+ * notices.
  *
- * Implemented by delegating to {@link decideAgentSessionAccess} with the
- * capability pinned true, so the two deciders cannot drift on the gates they
- * share — this function IS the other one minus its last gate, by construction.
+ * NON-owners get the full decision, real capability included. The previous
+ * shape pinned `canRunCode: true` on the fallthrough, which handed every
+ * accepted drive member — including ones with no code-execution rights at
+ * all — the power to destroy other members' sessions and kill their live
+ * shells (review finding H3). Release-of-compute is the OWNER's emergency
+ * exit; a collaborator ending shared compute is ordinary session management
+ * and is gated exactly like every other session action.
  */
 export function decideAgentSessionEndAccess(
   input: DecideAgentSessionEndAccessInput,
 ): AgentSessionAccessDecision {
-  return decideAgentSessionAccess({ ...input, canRunCode: true });
+  if (input.requesterId.length > 0 && input.requesterId === input.session.ownerId) {
+    return { allowed: true };
+  }
+  return decideAgentSessionAccess(input);
 }

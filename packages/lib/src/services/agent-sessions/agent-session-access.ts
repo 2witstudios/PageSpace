@@ -1,14 +1,13 @@
 /**
  * The IO wrapper around the ONE agent-session access decision.
  *
- * Its whole job is to GATHER — the session row, whether the requester owns or
- * was shared the conversation, what page permission they hold, whether they may
- * run code — and hand all four to `decideAgentSessionAccess`. It contains no
- * decision of its own, and that is enforceable by reading it: the only `if`s
- * below turn a null into another null (there is no page, so there is no page
- * permission to fetch; there is no session, so there is nothing to decide
- * about). Anything that WEIGHS these facts belongs in the pure decider, where
- * both enforcement points share it.
+ * Its whole job is to GATHER — the session row, the requester's drive
+ * membership, whether they may run code — and hand all three to
+ * `decideAgentSessionAccess`. It contains no decision of its own, and that is
+ * enforceable by reading it: the only `if`s below turn a null into another
+ * null (there is no drive, so there is no membership to fetch; there is no
+ * session, so there is nothing to decide about). Anything that WEIGHS these
+ * facts belongs in the pure decider, where both enforcement points share it.
  *
  * Both enforcement points being one function is the concrete mitigation for the
  * "web and realtime must not diverge" risk: the API routes and the realtime
@@ -21,34 +20,22 @@ import {
   decideAgentSessionEndAccess,
   type AgentSessionAccessDecision,
   type AgentSessionAccessSubject,
-  type AgentSessionPagePermission,
-  type ConversationOwnership,
+  type DriveMembership,
 } from '../../agent-sessions/decide-session-access';
 
 export interface AgentSessionAccessDeps {
   /** The session row, reduced to the three identity columns the decision needs. `null` = no such session. */
   findSession: (sessionId: string) => Promise<AgentSessionAccessSubject | null>;
   /**
-   * The requester's relationship to the CONVERSATION: they own it, it was shared
-   * with them, or neither. Injected because "shared" is a conversations-table
-   * fact the app repository owns; the decider cross-checks the `owner` answer
-   * against the row's `ownerId` rather than trusting it.
+   * The requester's relationship to the DRIVE. Called ONLY for a drive-scoped
+   * session; a `null` answer (unresolved) denies — unknown is never a grant.
    */
-  resolveConversationOwnership: (input: {
-    conversationId: string;
-    requesterId: string;
-  }) => Promise<ConversationOwnership>;
-  /**
-   * The requester's permission on the agent page. Called ONLY for a
-   * page-anchored session; a `null` answer (unresolved, or no access) denies —
-   * unknown is never a grant.
-   */
-  resolvePagePermission: (input: {
+  resolveDriveMembership: (input: {
     userId: string;
-    agentPageId: string;
-  }) => Promise<AgentSessionPagePermission | null>;
+    driveId: string;
+  }) => Promise<DriveMembership | null>;
   /** The centralized `canRunCode` capability check, already reduced to a boolean by the caller's wiring. Must never throw (it is fail-closed by construction). */
-  canRunCode: (input: { userId: string; agentPageId: string | null }) => Promise<boolean>;
+  canRunCode: (input: { userId: string; driveId: string | null }) => Promise<boolean>;
 }
 
 /**
@@ -74,25 +61,25 @@ export async function checkAgentSessionAccess({
   const session = await deps.findSession(sessionId);
   if (!session) return { allowed: false, reason: 'session_not_found' };
 
-  const [conversationOwnership, pagePermission, canRunCode] = await Promise.all([
-    deps.resolveConversationOwnership({ conversationId: session.sessionId, requesterId }),
-    // No page means no page permission to hold — a global-assistant session is
+  const [driveMembership, canRunCode] = await Promise.all([
+    // No drive means no membership to hold — a global-assistant session is
     // owner-only by construction, which the decider states and enforces.
-    session.agentPageId === null
+    session.driveId === null
       ? Promise.resolve(null)
-      : deps.resolvePagePermission({ userId: requesterId, agentPageId: session.agentPageId }),
-    deps.canRunCode({ userId: requesterId, agentPageId: session.agentPageId }),
+      : deps.resolveDriveMembership({ userId: requesterId, driveId: session.driveId }),
+    deps.canRunCode({ userId: requesterId, driveId: session.driveId }),
   ]);
 
-  return decideAgentSessionAccess({ requesterId, session, conversationOwnership, pagePermission, canRunCode });
+  return decideAgentSessionAccess({ requesterId, session, driveMembership, canRunCode });
 }
 
 /**
- * The END-SESSION gather, wrapping {@link decideAgentSessionEndAccess}: same
- * facts minus the capability check, because ending a session is release of
- * compute and must survive a lost `canRunCode` (see the pure decider's doc).
- * The `canRunCode` dep is deliberately not in this function's `Pick` — an end
- * check that could consult it would be one refactor away from gating on it.
+ * The END-SESSION gather, wrapping {@link decideAgentSessionEndAccess}. Same
+ * three facts as the main check — the decider's owner short-circuit is what
+ * keeps release-of-compute alive for an owner who lost the capability or the
+ * drive; for everyone else the REAL `canRunCode` is gathered and weighed
+ * (review finding H3: pinning it true handed destructive power to drive
+ * members with no code-execution rights).
  */
 export async function checkAgentSessionEndAccess({
   requesterId,
@@ -101,17 +88,17 @@ export async function checkAgentSessionEndAccess({
 }: {
   requesterId: string;
   sessionId: string;
-  deps: Omit<AgentSessionAccessDeps, 'canRunCode'>;
+  deps: AgentSessionAccessDeps;
 }): Promise<AgentSessionAccessCheck> {
   const session = await deps.findSession(sessionId);
   if (!session) return { allowed: false, reason: 'session_not_found' };
 
-  const [conversationOwnership, pagePermission] = await Promise.all([
-    deps.resolveConversationOwnership({ conversationId: session.sessionId, requesterId }),
-    session.agentPageId === null
+  const [driveMembership, canRunCode] = await Promise.all([
+    session.driveId === null
       ? Promise.resolve(null)
-      : deps.resolvePagePermission({ userId: requesterId, agentPageId: session.agentPageId }),
+      : deps.resolveDriveMembership({ userId: requesterId, driveId: session.driveId }),
+    deps.canRunCode({ userId: requesterId, driveId: session.driveId }),
   ]);
 
-  return decideAgentSessionEndAccess({ requesterId, session, conversationOwnership, pagePermission });
+  return decideAgentSessionEndAccess({ requesterId, session, driveMembership, canRunCode });
 }

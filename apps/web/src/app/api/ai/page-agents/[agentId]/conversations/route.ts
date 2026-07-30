@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createId, isCuid } from '@paralleldrive/cuid2';
+import { checkSessionAccess, createConversationInSession } from '@/lib/agent-sessions/agent-sessions-runtime';
+import { ConversationUnavailableError } from '@/lib/agent-sessions/create-conversation-in-session';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -98,6 +100,9 @@ export async function GET(
         messageCount: Number(conv.messageCount),
         isShared,
         isOwner,
+        // The workspace the thread was born into (null = plain page chat) —
+        // what lets the page's Chat tab render the pane grid for it.
+        sessionId: conv.sessionId ?? null,
         lastMessage: {
           role: conv.lastMessageRole,
           timestamp: conv.lastMessageTime,
@@ -191,9 +196,39 @@ export async function POST(
         ? body.conversationId
         : createId();
 
+    // Optional session binding — the thread is BORN into its working context
+    // (contract invariant 1: set once at creation, permanent; a session hosts
+    // many conversations and owns the one sandbox they share). Gated on the
+    // session access check so a caller cannot bind a thread into a workspace
+    // they cannot reach.
+    const sessionId: string | null =
+      typeof body.sessionId === 'string' && body.sessionId.length > 0 ? body.sessionId : null;
+    if (sessionId !== null) {
+      const sessionAccess = await checkSessionAccess(auth.userId, sessionId);
+      if (!sessionAccess.allowed) {
+        auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'agent_session', resourceId: sessionId, details: { reason: sessionAccess.reason, method: 'POST', route: 'page-agents/conversations' }, riskScore: 0.5 });
+        return NextResponse.json({ error: 'You do not have access to this session' }, { status: sessionAccess.reason === 'session_not_found' ? 404 : 403 });
+      }
+    }
+
     // Eagerly persist ownership so privacy filtering works immediately.
     // isShared defaults to false — conversation is private to this user.
-    await conversationRepository.createConversation(conversationId, auth.userId, agentId);
+    if (sessionId !== null) {
+      try {
+        await createConversationInSession({ conversationId, userId: auth.userId, agentPageId: agentId, sessionId });
+      } catch (error) {
+        if (error instanceof ConversationUnavailableError) {
+          // The id cannot be claimed WITH this binding (someone else's row, a
+          // legacy conflict, or a different session's thread) — a state
+          // conflict, not a service failure, and one answer for every cause.
+          auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: conversationId, details: { reason: 'conversation_unavailable', method: 'POST', agentId, sessionId }, riskScore: 0.5 });
+          return NextResponse.json({ error: 'That conversation id is not available' }, { status: 409 });
+        }
+        throw error;
+      }
+    } else {
+      await conversationRepository.createConversation(conversationId, auth.userId, agentId);
+    }
 
     const response = {
       conversationId,

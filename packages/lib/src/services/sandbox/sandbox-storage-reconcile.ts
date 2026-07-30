@@ -56,15 +56,14 @@
  * `agent_sessions` Sprite — one per tier of the deleted Machine page type's
  * tree, ADDED alongside the `agent_sessions` source in Phase 7 while the
  * machine-tree tables still existed. Only `agent_sessions` survives (the
- * other four's tables are dropped): its attribution target may be a page
- * (`agentPageId` set) OR the session's own `ownerId` directly (a
- * global-assistant session, `agentPageId` null — there is no page to group
- * its usage under). `storageBillingTarget` (`sandbox-storage-attribution.ts`)
- * is the one place that branches on this for ATTRIBUTION; `resolveAgentSessionPayerId` in the
- * deps seam resolves the payer for the `ownerId` case with no page lookup at
- * all — mirroring `billing/sandbox-payer.ts`'s function of the same name,
- * which the real IO composition (`sandbox-storage-billing.ts`) delegates to
- * directly so the nullable-payer fallback is written exactly once.
+ * other four's tables are dropped): a session is a drive-level workspace, so
+ * its attribution target is its DRIVE's owner (`driveId` set) OR the
+ * session's own `ownerId` directly (a user-scoped global-assistant session,
+ * `driveId` null). `storageBillingTarget` (`sandbox-storage-attribution.ts`)
+ * is the one place that branches on this for ATTRIBUTION; the `ownerId` case
+ * needs no lookup at all — mirroring `billing/sandbox-payer.ts`, whose
+ * fallback the real IO composition (`sandbox-storage-billing.ts`) delegates
+ * to so the nullable-payer rule is written exactly once.
  */
 
 import { calculateMachineStorageCostDollars } from '../../monitoring/machine-pricing';
@@ -131,11 +130,11 @@ export function pickBillableGB(input: {
  * source, not billed at 0 here.
  */
 export interface AgentSessionStorageRow {
-  /** The `agent_sessions` row's PK — ≡ sessionId ≡ conversationId. Where THIS Sprite's measurement/watermark are persisted. */
+  /** The `agent_sessions` row's own id. Where THIS Sprite's measurement/watermark are persisted. */
   sessionId: string;
-  /** The session's backing agent page; null for a global-assistant session (see `storageBillingTarget`). */
-  agentPageId: string | null;
-  /** The session's own owner — the payer of last resort, and the ONLY payer when `agentPageId` is null. */
+  /** The session's drive; null for a user-scoped global-assistant session (see `storageBillingTarget`). */
+  driveId: string | null;
+  /** The session's own owner — the payer of last resort, and the ONLY payer when `driveId` is null. */
   ownerId: string;
   storageLastBilledAt: Date;
   /** Last opportunistically-measured used bytes on the SESSION Sprite; null when never measured. */
@@ -153,15 +152,15 @@ export interface ReconcileSandboxStorageDeps {
    */
   listAgentSessionSprites: () => Promise<AgentSessionStorageRow[]>;
   /**
-   * Resolves a page's owning drive's ownerId; null when it can't be resolved
-   * (e.g. an orphaned row). Used only for an `agent-session` subject whose
-   * `agentPageId` is set — the `agentPageId === null` case bypasses this
-   * entirely (see `storageBillingTarget`, whose `{ ownerId }` branch is
-   * already resolved, pure data with no IO needed).
+   * Resolves a drive's ownerId; null when it can't be resolved (e.g. a stale
+   * read of a drive mid-delete). Used only for a subject whose `driveId` is
+   * set — the `driveId === null` case bypasses this entirely (see
+   * `storageBillingTarget`, whose `{ ownerId }` branch is already resolved,
+   * pure data with no IO needed).
    */
-  lookupPageOwnerId: (pageId: string) => Promise<string | null>;
-  /** Charges the payer for this session's accrued storage cost. Not hold-gated — a background reconcile charge, mirroring reconcile-ai-cost. `pageId` is omitted for a global-assistant agent-session (no page to attribute usage-breakdown to). */
-  chargeStorage: (input: { payerId: string; pageId?: string; costDollars: number; gbMonths: number }) => Promise<void>;
+  lookupDriveOwnerId: (driveId: string) => Promise<string | null>;
+  /** Charges the payer for this session's accrued storage cost. Not hold-gated — a background reconcile charge, mirroring reconcile-ai-cost. `driveId` is omitted for a global-assistant agent-session (no drive to attribute usage-breakdown to). */
+  chargeStorage: (input: { payerId: string; driveId?: string; sessionId: string; costDollars: number; gbMonths: number }) => Promise<void>;
   /** Persists the new watermark for an `agent_sessions` Sprite, on the ROW ITSELF — the per-row watermark the design calls for, no separate tracking table needed. */
   advanceAgentSessionWatermark: (input: { sessionId: string; billedThrough: Date }) => Promise<void>;
   now: () => Date;
@@ -199,13 +198,13 @@ export async function reconcileSandboxStorage(
   let totalCostDollars = 0;
 
   for (const session of sessions) {
-    const subject: StorageSubject = { sessionId: session.sessionId, agentPageId: session.agentPageId, ownerId: session.ownerId };
-    // The billing target this filesystem attributes to — `agentPageId` when
-    // set, OR, for a global-assistant session, the session's own `ownerId`
-    // directly (see `storageBillingTarget`'s doc — the one place this fork
-    // exists).
+    const subject: StorageSubject = { sessionId: session.sessionId, driveId: session.driveId, ownerId: session.ownerId };
+    // The billing target this filesystem attributes to — the DRIVE's owner
+    // when the session has one, OR, for a global-assistant session, the
+    // session's own `ownerId` directly (see `storageBillingTarget`'s doc —
+    // the one place this fork exists).
     const target = storageBillingTarget(subject);
-    const attributionPageId = 'pageId' in target ? target.pageId : undefined;
+    const attributionDriveId = 'driveId' in target ? target.driveId : undefined;
     try {
       const elapsedMs = now.getTime() - session.storageLastBilledAt.getTime();
       const lastMeasuredGB = session.measuredBytes === null ? null : bytesToGB(session.measuredBytes);
@@ -239,19 +238,19 @@ export async function reconcileSandboxStorage(
         continue;
       }
 
-      // `ownerId` in the target means an agent-session with no page at all, so
-      // only the page-lookup branch can leave this unresolved.
+      // `ownerId` in the target means a session with no drive at all, so only
+      // the drive-lookup branch can leave this unresolved.
       //
-      // Deliberately NOT `resolveAgentSessionPayerId` (billing/sandbox-payer.ts),
-      // even though the two agree on every other input: that function falls back
-      // to the session owner when the page lookup fails, which is right at CHARGE
-      // time (someone must pay for compute already consumed) and wrong here. A
-      // failed lookup during a storage sweep usually means a stale read of a page
-      // mid-delete; billing it to an owner who may not be the drive owner would
-      // be a misattributed money movement we cannot take back, whereas skipping
-      // costs one cycle of accrual and self-corrects on the next tick.
+      // Deliberately NOT the charge-time fallback (billing/sandbox-payer.ts
+      // falls back to the session owner when the lookup fails, which is right
+      // at CHARGE time — someone must pay for compute already consumed — and
+      // wrong here). A failed lookup during a storage sweep usually means a
+      // stale read of a drive mid-delete; billing it to an owner who may not
+      // be the drive owner would be a misattributed money movement we cannot
+      // take back, whereas skipping costs one cycle of accrual and
+      // self-corrects on the next tick.
       const ownerId =
-        'ownerId' in target ? target.ownerId : await deps.lookupPageOwnerId(target.pageId);
+        'ownerId' in target ? target.ownerId : await deps.lookupDriveOwnerId(target.driveId);
       if (!ownerId) {
         // Can't resolve who to bill (e.g. the page/drive vanished). Leave the
         // watermark untouched so this window keeps accruing until it either
@@ -260,7 +259,7 @@ export async function reconcileSandboxStorage(
         continue;
       }
 
-      await deps.chargeStorage({ payerId: ownerId, pageId: attributionPageId, costDollars, gbMonths });
+      await deps.chargeStorage({ payerId: ownerId, driveId: attributionDriveId, sessionId: session.sessionId, costDollars, gbMonths });
       await deps.advanceAgentSessionWatermark({ sessionId: session.sessionId, billedThrough: now });
       totalCostDollars += costDollars;
       charged += 1;
@@ -273,7 +272,7 @@ export async function reconcileSandboxStorage(
       loggers.ai.error(
         'Sandbox storage reconcile failed for session',
         error instanceof Error ? error : new Error(String(error)),
-        { pageId: attributionPageId, sessionId: session.sessionId },
+        { driveId: attributionDriveId, sessionId: session.sessionId },
       );
     }
   }

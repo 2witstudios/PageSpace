@@ -8,10 +8,10 @@ import { sessionService } from '@pagespace/lib/auth/session-service';
 import { verifyBroadcastSignature } from '@pagespace/lib/auth/broadcast-auth';
 import * as dotenv from 'dotenv';
 import { db } from '@pagespace/db/db';
-import { eq, and, or } from '@pagespace/db/operators';
+import { and, eq, isNotNull, or } from '@pagespace/db/operators';
 import { dmConversations } from '@pagespace/db/schema/social';
 import { users } from '@pagespace/db/schema/auth';
-import { userProfiles } from '@pagespace/db/schema/members';
+import { driveMembers, userProfiles } from '@pagespace/db/schema/members';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { canRunCode, isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { checkAgentSessionConcurrency } from '@pagespace/lib/services/sandbox/quota';
@@ -176,20 +176,23 @@ async function ensureShellSessionSandbox({ sessionId, userId }: { sessionId: str
   const row = await store.findById(sessionId);
   if (!row) return { ok: false, reason: 'session_not_found' };
 
+  // tenantId (the Sprite-key fold's tenant and the billing account) is the
+  // session's DRIVE owner, falling back to the session's own owner for a
+  // user-scoped global-assistant session — the drive is a fact of the row now.
   let tenantId: string;
-  if (row.agentPageId === null) {
+  if (row.driveId === null) {
     tenantId = row.ownerId;
   } else {
-    const context = await resolveDriveOwnerContext(row.agentPageId);
-    if (!context.ok) return { ok: false, reason: context.reason };
-    tenantId = context.tenantId;
+    const [drive] = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, row.driveId)).limit(1);
+    if (!drive) return { ok: false, reason: 'drive_not_found' };
+    tenantId = drive.ownerId;
   }
 
   const sdk = createSpriteHandleCache(await getRealtimeSpritesSdk());
   const host = createSpriteSandboxHost({ sdk, client: createSpritesSandboxClient({ sdk }) });
 
   const result = await ensureAgentSessionSandbox({
-    row: { ...row, sessionId: row.conversationId },
+    row: { ...row, sessionId: row.id },
     intent: 'ensure',
     actor: { userId, tenantId },
     deps: {
@@ -202,10 +205,6 @@ async function ensureShellSessionSandbox({ sessionId, userId }: { sessionId: str
       // shared provisioner before any Sprite is provisioned OR handed back —
       // the same fail-closed checker the access half already consulted.
       authorize: canRunCode,
-      resolveDriveId: async (agentPageId) => {
-        const context = await resolveDriveOwnerContext(agentPageId);
-        return context.ok ? context.driveId : null;
-      },
       checkFullEgressEnablement: async () =>
         decideFullEgressEnablement({
           adminGateEnabled: isCodeExecutionEnabled(),
@@ -254,7 +253,7 @@ async function ensureShellSessionSandbox({ sessionId, userId }: { sessionId: str
   // measurement path — is both awake and worth measuring. Throttled per session,
   // and deliberately not awaited: a billing observation must never delay opening
   // a shell.
-  void measureWarmSessionStorageOnResume(row.conversationId, result.sandboxId);
+  void measureWarmSessionStorageOnResume(row.id, result.sandboxId);
 
   return { ok: true, sandboxId: result.sandboxId };
 }
@@ -309,7 +308,7 @@ const shellCheckAuth = buildShellCheckAuth({
     const store = await dbAgentSessionStorePromise;
     const row = await store.findById(sessionId);
     if (!row) return { allowed: false, reason: 'session_not_found' };
-    const subject = { sessionId: row.conversationId, ownerId: row.ownerId, agentPageId: row.agentPageId };
+    const subject = { sessionId: row.id, ownerId: row.ownerId, driveId: row.driveId };
     const decision = await checkAgentSessionAccess({
       requesterId,
       sessionId,
@@ -317,29 +316,21 @@ const shellCheckAuth = buildShellCheckAuth({
         // The row was just read; hand the wrapper the same subject rather than
         // paying a second lookup for the identical answer.
         findSession: async () => subject,
-        resolveConversationOwnership: async ({ conversationId, requesterId: rid }) => {
-          const [conversation] = await db
-            .select({ userId: conversations.userId, isShared: conversations.isShared })
-            .from(conversations)
-            .where(eq(conversations.id, conversationId))
+        resolveDriveMembership: async ({ userId, driveId }) => {
+          const [drive] = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, driveId)).limit(1);
+          if (!drive) return 'none';
+          if (drive.ownerId === userId) return 'owner';
+          const [membership] = await db
+            .select({ id: driveMembers.id })
+            .from(driveMembers)
+            .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt)))
             .limit(1);
-          if (!conversation) return 'none';
-          if (conversation.userId === rid) return 'owner';
-          return conversation.isShared ? 'shared' : 'none';
+          return membership ? 'member' : 'none';
         },
-        resolvePagePermission: async ({ userId, agentPageId }) => {
-          const level = await getUserAccessLevel(userId, agentPageId);
-          if (!level) return null;
-          return level.canEdit ? 'edit' : 'view';
-        },
-        canRunCode: async ({ userId, agentPageId }) => {
-          // Drive-scoped for a page session; global (no driveId) otherwise. An
-          // unresolvable drive fails closed.
-          const context = agentPageId === null ? null : await resolveDriveOwnerContext(agentPageId);
-          if (agentPageId !== null && !context?.ok) return false;
+        canRunCode: async ({ userId, driveId }) => {
           const verdict = await canRunCode({
             userId,
-            driveId: context?.ok ? context.driveId : undefined,
+            driveId: driveId ?? undefined,
             requestOrigin: 'user',
           });
           return verdict.ok;
@@ -349,12 +340,12 @@ const shellCheckAuth = buildShellCheckAuth({
     return decision.allowed ? { allowed: true, session: subject } : decision;
   },
   resolvePayer: async (session) => {
-    // Payer = the agent page's drive owner; a global-assistant session (or an
-    // orphaned page) attributes to the session owner instead.
-    if (session.agentPageId === null) return { payerId: session.ownerId, driveId: null };
-    const context = await resolveDriveOwnerContext(session.agentPageId);
-    if (!context.ok) return { payerId: session.ownerId, driveId: null };
-    return { payerId: context.tenantId, driveId: context.driveId };
+    // Payer = the session's DRIVE owner; a global-assistant session (or a
+    // vanished drive) attributes to the session owner instead.
+    if (session.driveId === null) return { payerId: session.ownerId, driveId: null };
+    const [drive] = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, session.driveId)).limit(1);
+    if (!drive) return { payerId: session.ownerId, driveId: null };
+    return { payerId: drive.ownerId, driveId: session.driveId };
   },
   getUser: async (userId) => {
     const [userRow] = await db

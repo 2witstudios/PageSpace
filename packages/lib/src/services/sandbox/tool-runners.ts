@@ -169,7 +169,21 @@ export interface AcquireSandboxRequest {
 }
 
 export type SandboxAcquireResult =
-  | { ok: true; sandboxId: string; resumed: boolean; pageId?: string }
+  | {
+      ok: true;
+      sandboxId: string;
+      resumed: boolean;
+      /**
+       * The SESSION the sandbox belongs to (`agent_sessions.id`) — required,
+       * because every post-run hook (storage measurement, shell-activity
+       * notification) is keyed by it. The conversation id is NOT a substitute:
+       * post-unconflation they are different namespaces, and keying the hooks
+       * on the conversation silently no-oped measurement (underbilling) and
+       * mis-addressed activity (codex review, P1).
+       */
+      sessionId: string;
+      pageId?: string;
+    }
   | {
       ok: false;
       reason: SandboxToolDenialReason;
@@ -278,6 +292,7 @@ export type SandboxToolDenialReason =
   | 'content_too_large'
   | 'edit_no_match'
   | 'edit_not_unique'
+  | 'no_session'
   | 'provision_failed'
   | 'execution_failed'
   | 'not_found'
@@ -325,6 +340,8 @@ export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   content_too_large: 'The file content is too large.',
   edit_no_match: 'The oldString was not found in the file. Read the file and copy the exact text to replace.',
   edit_not_unique: 'The oldString is not unique in the file. Include more surrounding context, or set replaceAll to replace every occurrence.',
+  no_session:
+    'This conversation has no session (workspace), so there is no sandbox to run in — it predates sessions. Start a new conversation to get one.',
   provision_failed: 'Could not provision a sandbox for this run.',
   execution_failed: 'Command execution failed or timed out.',
   not_found: 'File not found.',
@@ -470,7 +487,7 @@ async function openSession(
   ctx: SandboxActorContext,
   deps: SandboxRunDeps,
 ): Promise<
-  | { ok: true; sandbox: ExecutableSandbox; release: () => void; pageId?: string }
+  | { ok: true; sandbox: ExecutableSandbox; sessionId: string; release: () => void; pageId?: string }
   | { ok: false; reason: SandboxToolDenialReason }
 > {
   if (!deps.quota.acquireSlot({ userId: ctx.userId, tier: ctx.tier })) {
@@ -504,6 +521,7 @@ async function openSession(
     return {
       ok: true,
       sandbox,
+      sessionId: acquired.sessionId,
       release: () => {
         deps.quota.releaseSlot({ userId: ctx.userId });
         // Opportunistic, throttled, best-effort storage measurement. Fired from
@@ -512,13 +530,12 @@ async function openSession(
         // the op, would persist the pre-write footprint and let the throttle
         // suppress the post-write one) and runs sequentially after the op rather
         // than contending with it. Never blocks or fails the op.
-        // Gated on the SESSION, not the agent page. The sandbox whose bytes
-        // these are belongs to the session, and a global-assistant session has
-        // no page at all — keying on `pageId` silently excluded that whole class
-        // from measurement, the same page-shaped assumption that had excluded it
-        // from the activity feed.
-        if (ctx.conversationId && deps.measureStorage) {
-          const sessionId = ctx.conversationId;
+        // Keyed by the SESSION id the acquire resolved — the sandbox whose
+        // bytes these are belongs to the session (not the agent page, and not
+        // the conversation: both are different namespaces, and each has
+        // silently excluded a class of sessions from measurement before).
+        if (deps.measureStorage) {
+          const sessionId = acquired.sessionId;
           void deps.measureStorage({ sandbox, sessionId }).catch((error) => {
             safeLogWarn(deps.logger, 'Opportunistic storage measurement failed', {
               sessionId,
@@ -738,9 +755,11 @@ export async function runBashInSandbox({
       durationMs,
       anomaly: anomalyForExit(run.exitCode),
     });
-    // Gated on the SESSION id, not the agent page: the sandbox this ran in
-    // belongs to the session, and a global-assistant session has no page at all.
-    if (ctx.conversationId) {
+    // Keyed by the SESSION id the acquire resolved: the sandbox this ran in
+    // belongs to the session — not the agent page, and not the conversation
+    // (a different id namespace; addressing the feed by it pointed every
+    // notification at a session that does not exist).
+    {
       // Fire-and-forget: this is a visibility nicety over a network hop to
       // another service, not a safety gate. Awaiting it would tie every
       // successful bash call's latency to the activity feed's availability (up
@@ -748,7 +767,7 @@ export async function runBashInSandbox({
       // not depend on it. safeNotifyShellActivity already swallows its own
       // errors, so this can never surface as an unhandled rejection.
       void safeNotifyShellActivity(deps, {
-        sessionId: ctx.conversationId,
+        sessionId: session.sessionId,
         command,
         output: [stdout.text, stderr.text].filter((text) => text.length > 0).join('\n'),
         exitCode: run.exitCode,

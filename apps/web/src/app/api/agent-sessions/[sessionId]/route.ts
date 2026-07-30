@@ -2,24 +2,21 @@
  * One agent session — status / ensure+provision / end.
  *
  * GET    → 200 { session: AgentSessionDTO | null }
- *   A NEVER-PROVISIONED session is `{ session: null }` (the client derives
- *   status 'none'), NOT a 404: "this conversation has no sandbox" is the
- *   common, expected answer, and it is the same answer whether the
- *   conversation exists, is someone else's, or was never minted — so a probe
- *   learns nothing from it.
+ *   `{ session: null }` for an unknown id, NOT a 404: it is the same answer
+ *   whether the session never existed or is someone else's, so a probe
+ *   learns nothing from it. (Post-unconflation every spawned session has a
+ *   row from birth; null here means the id resolves to nothing you may see.)
  *
- * POST   → 200 { session } — ensure the row + provision its sandbox,
- *   idempotent by the PK (a re-POST resumes). No body: the session's whole
- *   identity is READ off the conversation row (sessionId ≡ conversationId;
- *   anchor via the pure `sessionAnchorForConversation`), never claimed by a
- *   client. The row's owner is the CONVERSATION's owner even when a shared
- *   requester ensures first — otherwise the owner would flunk their own
- *   session's ownership cross-check forever.
+ * POST   → 200 { session } — provision the EXISTING session's sandbox,
+ *   idempotent by the session id (a re-POST resumes). No body: sessions are
+ *   born through the collection route's spawn; this route never mints one, so
+ *   an unknown id is a 404, not an ensure.
  *
  * DELETE → 200 { ok, spriteTornDown } — end the session: instance-guarded
  *   Sprite kill, row RETAINED (re-provisionable under the same key). Gated by
- *   the END access check, which deliberately omits the capability gate: an
- *   actor who just lost `canRunCode` must still be able to release compute.
+ *   the END access check: the OWNER may always end (release-of-compute — no
+ *   membership or capability needed to stop paying); everyone else faces the
+ *   full decision, real capability included.
  *
  * Access decisions live in `decideAgentSessionAccess` (packages/lib) — these
  * handlers only map its verdicts onto statuses: not_found → 404 (or the
@@ -30,15 +27,11 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { sessionAnchorForConversation } from '@/lib/agent-sessions/session-anchor';
 import { sessionQuotaExceeded } from '@/lib/agent-sessions/quota-response';
 import {
-  checkAccessForSubject,
   checkSessionAccess,
   checkSessionEndAccess,
   endSession,
-  ensureSession,
-  findSessionConversation,
   findSessionRecord,
   provisionSessionSandbox,
   toAgentSessionDTO,
@@ -92,40 +85,21 @@ export async function POST(request: Request, context: RouteContext) {
   if (isAuthError(auth)) return auth.error;
   const { sessionId } = await context.params;
 
-  const conversation = await findSessionConversation(sessionId);
-  if (!conversation) {
-    return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
-  }
-  const anchor = sessionAnchorForConversation(conversation);
-  if (!anchor.ok) {
-    return NextResponse.json(
-      { error: 'This conversation cannot host an agent session', reason: anchor.reason },
-      { status: 409 },
-    );
-  }
-
-  // The subject is the row-to-be: owner = the CONVERSATION's owner, so a
-  // shared requester ensuring first can never claim someone else's session.
-  const access = await checkAccessForSubject(auth.userId, {
-    sessionId,
-    ownerId: conversation.userId,
-    agentPageId: anchor.agentPageId,
-  });
-  if (!access.allowed) return denied(request, auth.userId, sessionId, access.reason);
-
-  const ensured = await ensureSession({
-    conversationId: sessionId,
-    userId: conversation.userId,
-    agentPageId: anchor.agentPageId,
-  });
-  if (!ensured.ok) {
-    return NextResponse.json(
-      { error: 'This conversation cannot host an agent session', reason: ensured.reason },
-      { status: 409 },
-    );
+  // The session must already exist — spawning one is the collection route's
+  // POST. This POST (re-)provisions an EXISTING workspace's sandbox: cold
+  // start, or resume after an end.
+  const access = await checkSessionAccess(auth.userId, sessionId);
+  if (!access.allowed) {
+    if (access.reason === 'session_not_found') {
+      return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+    }
+    return denied(request, auth.userId, sessionId, access.reason);
   }
 
-  const provisioned = await provisionSessionSandbox(ensured.session, auth.userId);
+  const existing = await findSessionRecord(sessionId);
+  if (!existing) return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+
+  const provisioned = await provisionSessionSandbox(existing, auth.userId);
   if (!provisioned.ok) {
     if (provisioned.reason === 'denied') {
       // A plan-limit refusal is not an access denial — separate response and
@@ -151,7 +125,7 @@ export async function POST(request: Request, context: RouteContext) {
     userId: auth.userId,
     resourceType: 'agent_session',
     resourceId: sessionId,
-    details: { op: 'ensure_session', resumed: provisioned.resumed },
+    details: { op: 'provision_session', resumed: provisioned.resumed },
   });
 
   const row = await findSessionRecord(sessionId);

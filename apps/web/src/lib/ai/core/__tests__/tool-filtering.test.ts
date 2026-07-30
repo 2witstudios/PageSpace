@@ -12,8 +12,12 @@ import {
   hasSandboxGitTools,
   suppressGithubIntegrationTools,
   filterToolsForAgentAllowlist,
+  filterToolsForSandboxEnablement,
+  SANDBOX_TOOL_NAMES,
   SESSION_FAMILY_TOOL_NAMES,
 } from '../tool-filtering';
+import { SANDBOX_CORE_TOOL_NAMES, createSandboxTools } from '../../tools/sandbox-tools';
+import { SANDBOX_GIT_TOOL_NAMES } from '../../tools/sandbox-git-tools';
 
 const baseline = {
   // read tools
@@ -498,5 +502,51 @@ describe('read-only mode vs the session/shell family', () => {
     expect(Object.keys(filterToolsForReadOnly(sessionFamily, false)).sort()).toEqual(
       Object.keys(sessionFamily).sort(),
     );
+  });
+});
+
+describe('filterToolsForSandboxEnablement', () => {
+  const sandboxishSample = {
+    bash: {},
+    editFile: {},
+    git_status: {},
+    spawn_session: {},
+    read_shell: {},
+    // non-sandbox neighbours that must survive either way
+    read_page: {},
+    create_page: {},
+  };
+
+  it('given sandboxEnabled: false (the default), strips EVERY sandbox-family tool', () => {
+    const filtered = filterToolsForSandboxEnablement(sandboxishSample, false);
+    expect(Object.keys(filtered).sort()).toEqual(['create_page', 'read_page']);
+  });
+
+  it('given sandboxEnabled: true, returns the set untouched', () => {
+    expect(filterToolsForSandboxEnablement(sandboxishSample, true)).toEqual(sandboxishSample);
+  });
+
+  it('the OFF state strips reads too — the switch is agent configuration, not the read-only gate', () => {
+    // read_shell/list_sessions survive READ-ONLY mode; they must NOT survive a
+    // disabled sandbox, whose whole tool surface is off.
+    const filtered = filterToolsForSandboxEnablement({ read_shell: {}, list_sessions: {} }, false);
+    expect(Object.keys(filtered)).toEqual([]);
+  });
+});
+
+describe('SANDBOX_TOOL_NAMES', () => {
+  it('is exactly core ∪ git ∪ session families', () => {
+    expect([...SANDBOX_TOOL_NAMES].sort()).toEqual(
+      [...new Set([...SANDBOX_CORE_TOOL_NAMES, ...SANDBOX_GIT_TOOL_NAMES, ...SESSION_FAMILY_TOOL_NAMES])].sort(),
+    );
+  });
+
+  it('SANDBOX_CORE_TOOL_NAMES never drifts from what createSandboxTools actually builds', () => {
+    const built = createSandboxTools({
+      runDeps: {} as never,
+      resolveContext: (() => {}) as never,
+      gate: (() => {}) as never,
+    });
+    expect(Object.keys(built).sort()).toEqual([...SANDBOX_CORE_TOOL_NAMES].sort());
   });
 });

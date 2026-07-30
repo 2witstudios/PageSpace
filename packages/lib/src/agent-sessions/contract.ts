@@ -7,21 +7,25 @@
  * Two semantic invariants govern everything downstream, and this module is where
  * they are written down once:
  *
- * 1. **sessionId ≡ conversationId.** A session and a conversation are ONE
- *    object with two audiences: "session" is the tool/backend word (it owns a
- *    sandbox, it is the Sprite-key fold, `agent_sessions.conversationId` is the
- *    primary key), "conversation" is the UI word (what a user opens, `?c=` in
- *    the URL, what `chat_messages` key on). There is therefore NO
- *    session-binding field anywhere in this contract, and none may be added:
- *    the chat body's `conversationId` IS the session address. A DTO that
- *    carried both would immediately raise the "which id?" question this design
- *    exists to delete. User-facing copy says only "conversation" — "session"
- *    never appears in it.
+ * 1. **A session is NOT a conversation — it OWNS conversations.** A session is
+ *    a drive-level workspace with its own id (`agent_sessions.id`): it owns the
+ *    one sandbox, its id is the Sprite-key fold, and it hosts MANY
+ *    conversations (with any of the drive's agents, or the global assistant)
+ *    plus any number of shells. `conversations.sessionId` is the binding — set
+ *    at creation, permanent, and nullable (a plain chat has no session). A
+ *    conversation-derived id must never become a session address again: the
+ *    first cut had `sessionId ≡ conversationId`, which forced one environment
+ *    per chat thread and made it structurally impossible for two conversations
+ *    to share a working context. The old "which id?" worry inverts cleanly:
+ *    a DTO carries `sessionId` when it means the workspace and
+ *    `conversationId` when it means the thread, and the two are different
+ *    kinds of thing, not two names for one. Sessions are USER-VISIBLE — the
+ *    sidebar lists them — and the user-facing word is simply "session".
  *
  * 2. **Ids address, names label.** `sessionId` and `shellId` are the addresses:
  *    every wire payload, every tool argument after the spawn, and every Sprite
  *    key folds one of them. `name` is a display label with no addressing role —
- *    worker-session names carry no uniqueness constraint at all, and the
+ *    session names carry no uniqueness constraint at all, and the
  *    shell-name uniqueness that does exist (`(sessionId, name)`) is there for
  *    unambiguous tab titles, never for lookups. Renaming can therefore never
  *    break a connection, and two identically-named things are never ambiguous.
@@ -44,15 +48,60 @@ export const sandboxStatusSchema = z.enum(SANDBOX_STATUSES);
 export type SandboxStatus = z.infer<typeof sandboxStatusSchema>;
 
 /**
- * The agent types a shell can run. PTY-only by construction: a shell is always a
- * real PTY process, and the session's chat surface is the conversation itself —
- * so the legacy `'pagespace'` chat-surface type has no successor here. New PTY
- * agent CLIs are added as entries; nothing branches on which one it got.
+ * The agent types a SHELL can run. PTY-only, because this names what a row in
+ * `agent_session_shells` is — a real PTY process — and nothing else.
+ *
+ * Read narrowly. The legacy `AGENT_LAUNCH_SPECS` carried two entries
+ * (`pagespace` → surface `'chat'`, `shell` → surface `'pty'`) because ONE table
+ * held both kinds and needed a discriminator. This model splits them:
+ * `agent_sessions` holds conversations, `agent_session_shells` holds PTYs. So
+ * the chat type has no successor *here* — but that is a fact about this table,
+ * NOT about what a pane can display.
+ *
+ * An earlier draft of this comment claimed PTY-only "by construction" as though
+ * it settled the whole surface, and that reading is what removed the ability to
+ * open an agent conversation in a pane. A pane's binding carries its own
+ * `kind` (`'chat' | 'terminal'`) and the id it addresses — a conversationId or
+ * a shellId — written at bind time by the path that knew what it spawned.
  */
 export const SHELL_AGENT_TYPES = ['shell'] as const;
 
 export const shellAgentTypeSchema = z.enum(SHELL_AGENT_TYPES);
 export type ShellAgentType = z.infer<typeof shellAgentTypeSchema>;
+
+/**
+ * What a pane displays. The discriminator lives on the PANE BINDING rather than
+ * on either row type, because the two surfaces are now two different tables and
+ * a pane is the one place that has to talk about both.
+ *
+ * `'chat'` addresses a conversation (one thread among the session's many —
+ * invariant 1); `'terminal'` addresses a `shellId`.
+ */
+export const PANE_KINDS = ['chat', 'terminal'] as const;
+
+export const paneKindSchema = z.enum(PANE_KINDS);
+export type PaneKind = z.infer<typeof paneKindSchema>;
+
+/**
+ * A pane's binding: what it shows, and the id it shows it for. `null` id is a
+ * bound-but-not-yet-resolved pane (the picker just chose a kind); an unbound
+ * pane stores no scope at all and renders the picker.
+ */
+export const paneScopeSchema = z.object({
+  kind: paneKindSchema,
+  /** Display label — the conversation title or the shell name. Never an address. */
+  name: z.string(),
+  /** The conversationId (chat) or shellId (terminal) this pane is bound to. */
+  targetId: z.string().min(1).nullable(),
+  /**
+   * Which agent the conversation belongs to, for a `'chat'` pane. Null for a
+   * global-assistant conversation, and irrelevant for a terminal — so a single
+   * grid can hold conversations with several different agents side by side.
+   */
+  agentPageId: z.string().min(1).nullable(),
+});
+
+export type PaneScope = z.infer<typeof paneScopeSchema>;
 
 /** Wire timestamps are ISO-8601 strings; `Date` never crosses the boundary. */
 const isoTimestamp = z.string().datetime();
@@ -60,22 +109,25 @@ const isoTimestamp = z.string().datetime();
 /**
  * One agent session as served to any client.
  *
- * `sessionId` IS the conversation id (invariant 1). `agentPageId` is nullable:
- * null means a global-assistant session, which has no agent page to derive
- * access or billing from — those paths fall back to `ownerId`.
+ * `sessionId` is the session's OWN id (invariant 1) — the workspace address,
+ * never a conversation id. `driveId` is nullable: null means a
+ * global-assistant session, which lives outside any drive — access and
+ * billing fall back to `ownerId`. There is deliberately no agent field: a
+ * session hosts conversations with MANY agents, so the agent association
+ * lives on each conversation.
  */
 export const agentSessionDtoSchema = z.object({
-  /** ≡ the conversation id. The tool address, the `?c=` URL value, and the Sprite-key fold. */
+  /** `agent_sessions.id` — the tool address, the `?session=` URL value, and the Sprite-key fold. */
   sessionId: z.string().min(1),
+  /** The drive this workspace belongs to, or null for a global-assistant session. */
+  driveId: z.string().min(1).nullable(),
   ownerId: z.string().min(1),
-  /** The AI_CHAT page this session belongs to, or null for a global-assistant session. */
-  agentPageId: z.string().min(1).nullable(),
   /** Display label only — no uniqueness, never an address. */
   name: z.string(),
   sandboxStatus: sandboxStatusSchema,
   createdAt: isoTimestamp,
   lastActiveAt: isoTimestamp.nullable(),
-  /** Stamped when the session was explicitly ended; the row survives for re-provisioning. */
+  /** Stamped when the session ended; the row survives so its conversations stay readable history. */
   endedAt: isoTimestamp.nullable(),
 });
 
@@ -92,7 +144,7 @@ export type AgentSessionDTO = z.infer<typeof agentSessionDtoSchema>;
 export const shellDtoSchema = z.object({
   /** The wire address. Everything after the spawn addresses a shell by this and nothing else. */
   shellId: z.string().min(1),
-  /** ≡ the conversation id of the owning session. */
+  /** The owning session's id (`agent_sessions.id`). */
   sessionId: z.string().min(1),
   ownerId: z.string().min(1),
   /** Tab label. Unique within a session for tab clarity — still not an address. */

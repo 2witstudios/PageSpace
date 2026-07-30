@@ -2,12 +2,12 @@
  * The chat POST body for an agent session — the one place it is shaped.
  *
  * Pure successor to the machine pane's `buildPaneChatRequestBody` (agent-mode
- * branch): an `AgentView` always has a fixed agent (no dual-mode selector), so
- * there is only ever one shape to build. `chatId` is the agent's page id —
- * the server derives everything else (permissions, tool set) from it — and
- * `conversationId` is the session address (sessionId ≡ conversationId, see
- * `@pagespace/lib/agent-sessions/contract`). No session-binding field is ever
- * added here: the conversationId IS the address.
+ * branch): a session chat surface always has a fixed agent (no dual-mode
+ * selector), so there is only ever one shape to build. `chatId` is the
+ * agent's page id — the server derives everything else (permissions, tool
+ * set) from it — and `conversationId` names the thread; the server resolves
+ * the thread's SESSION (and therefore its sandbox) from the row's own
+ * binding, so no session field ever rides the request.
  */
 import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
 

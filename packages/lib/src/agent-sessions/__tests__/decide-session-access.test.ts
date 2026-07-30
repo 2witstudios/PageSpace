@@ -1,202 +1,128 @@
+/**
+ * The ONE access decision, exhaustively — a session is a drive-level
+ * workspace, so access is drive access. Denials must name the FIRST failing
+ * gate, and unknown facts must always deny.
+ */
 import { describe, it, expect } from 'vitest';
 import {
   decideAgentSessionAccess,
   decideAgentSessionEndAccess,
-  type DecideAgentSessionAccessInput,
   type AgentSessionAccessSubject,
 } from '../decide-session-access';
 
-const OWNER = 'user-owner';
-const OTHER = 'user-other';
+const driveSession: AgentSessionAccessSubject = { sessionId: 'ses-1', ownerId: 'owner-1', driveId: 'drive-1' };
+const globalSession: AgentSessionAccessSubject = { sessionId: 'ses-2', ownerId: 'owner-1', driveId: null };
 
-const session: AgentSessionAccessSubject = { sessionId: 'conv-1', ownerId: OWNER, agentPageId: 'page-1' };
-const globalSession: AgentSessionAccessSubject = { sessionId: 'conv-2', ownerId: OWNER, agentPageId: null };
-
-function input(overrides: Partial<DecideAgentSessionAccessInput> = {}): DecideAgentSessionAccessInput {
-  return {
-    requesterId: OWNER,
-    session,
-    conversationOwnership: 'owner',
-    pagePermission: 'view',
-    canRunCode: true,
-    ...overrides,
-  };
-}
-
-describe('decideAgentSessionAccess — allow', () => {
-  it('given the owner with page access and canRunCode, should allow', () => {
-    expect(decideAgentSessionAccess(input())).toEqual({ allowed: true });
-  });
-
-  it('given edit-level page permission, should allow (edit implies view)', () => {
-    expect(decideAgentSessionAccess(input({ pagePermission: 'edit' })).allowed).toBe(true);
-  });
-
-  it('given a non-owner on a SHARED conversation with page access, should allow', () => {
-    const decision = decideAgentSessionAccess(
-      input({ requesterId: OTHER, conversationOwnership: 'shared' }),
-    );
-    expect(decision.allowed).toBe(true);
-  });
-
-  it('given the owner of a global-assistant session (agentPageId null), should allow', () => {
-    const decision = decideAgentSessionAccess(
-      input({ session: globalSession, pagePermission: null }),
-    );
-    expect(decision.allowed).toBe(true);
-  });
-
-  it('given a global-assistant session, should ignore any page permission passed in', () => {
-    const decision = decideAgentSessionAccess(
-      input({ session: globalSession, pagePermission: 'none' }),
-    );
-    expect(decision.allowed).toBe(true);
-  });
-});
-
-describe('decideAgentSessionAccess — ownership', () => {
-  it('given a requester who is neither owner nor shared, should deny', () => {
-    const decision = decideAgentSessionAccess(
-      input({ requesterId: OTHER, conversationOwnership: 'none' }),
-    );
-    expect(decision).toEqual({ allowed: false, reason: 'not_shared' });
-  });
-
-  it('given a caller that claims ownership for a non-owner, should deny (fail closed on a mis-derived input)', () => {
-    const decision = decideAgentSessionAccess(
-      input({ requesterId: OTHER, conversationOwnership: 'owner' }),
-    );
-    expect(decision).toEqual({ allowed: false, reason: 'ownership_mismatch' });
-  });
-
-  it('given an empty requesterId, should deny (an unauthenticated caller is nobody)', () => {
-    const decision = decideAgentSessionAccess(input({ requesterId: '' }));
-    expect(decision).toEqual({ allowed: false, reason: 'invalid_requester' });
-  });
-
-  it('given the owner, should allow even when the ownership input says none (identity beats the hint)', () => {
-    expect(decideAgentSessionAccess(input({ conversationOwnership: 'none' })).allowed).toBe(true);
-  });
-});
-
-describe('decideAgentSessionAccess — page permission', () => {
-  it('given no view permission on a non-null agentPageId, should deny', () => {
-    const decision = decideAgentSessionAccess(input({ pagePermission: 'none' }));
-    expect(decision).toEqual({ allowed: false, reason: 'page_access_denied' });
-  });
-
-  it('given an unresolved page permission on a non-null agentPageId, should deny (fail closed)', () => {
-    const decision = decideAgentSessionAccess(input({ pagePermission: null }));
-    expect(decision).toEqual({ allowed: false, reason: 'page_access_denied' });
-  });
-
-  it('given a shared conversation but no page access, should deny — both gates apply', () => {
-    const decision = decideAgentSessionAccess(
-      input({ requesterId: OTHER, conversationOwnership: 'shared', pagePermission: 'none' }),
-    );
-    expect(decision).toEqual({ allowed: false, reason: 'page_access_denied' });
-  });
-
-  it('given a NON-owner on a shared GLOBAL-assistant session, should deny (no page to share through)', () => {
-    const decision = decideAgentSessionAccess(
-      input({ requesterId: OTHER, session: globalSession, conversationOwnership: 'shared', pagePermission: null }),
-    );
-    expect(decision).toEqual({ allowed: false, reason: 'global_assistant_not_owner' });
-  });
-});
-
-describe('decideAgentSessionAccess — code execution', () => {
-  it('given canRunCode false, should deny with a DISTINCT reason', () => {
-    const decision = decideAgentSessionAccess(input({ canRunCode: false }));
-    expect(decision).toEqual({ allowed: false, reason: 'code_execution_denied' });
-  });
-
-  it('given canRunCode false, should not be confused with a permission denial', () => {
-    const codeDenial = decideAgentSessionAccess(input({ canRunCode: false }));
-    const pageDenial = decideAgentSessionAccess(input({ pagePermission: 'none' }));
-    if (codeDenial.allowed || pageDenial.allowed) throw new Error('expected two denials');
-    expect(codeDenial.reason).not.toBe(pageDenial.reason);
-  });
-
-  it('given canRunCode false on a global-assistant session, should still deny for code execution', () => {
-    const decision = decideAgentSessionAccess(
-      input({ session: globalSession, pagePermission: null, canRunCode: false }),
-    );
-    expect(decision).toEqual({ allowed: false, reason: 'code_execution_denied' });
-  });
-
-  it('should report the identity denial before the capability denial when both fail', () => {
-    const decision = decideAgentSessionAccess(
-      input({ requesterId: OTHER, conversationOwnership: 'none', canRunCode: false }),
-    );
-    expect(decision).toEqual({ allowed: false, reason: 'not_shared' });
-  });
-});
-
-describe('decideAgentSessionAccess — one decision for web and realtime', () => {
-  it('should be a pure function of its input (same input, same verdict)', () => {
-    expect(decideAgentSessionAccess(input())).toEqual(decideAgentSessionAccess(input()));
-  });
-
-  it('should never return a reason alongside an allow', () => {
-    const decision = decideAgentSessionAccess(input()) as { allowed: boolean; reason?: string };
-    expect(decision.reason).toBeUndefined();
-  });
-});
-
-describe('decideAgentSessionEndAccess — capability gate deliberately absent', () => {
-  it('given the owner WITHOUT canRunCode, should still allow ending the session', () => {
+describe('decideAgentSessionAccess — drive sessions', () => {
+  it('allows a drive member with the capability', () => {
     expect(
-      decideAgentSessionEndAccess({
-        requesterId: OWNER,
-        session,
-        conversationOwnership: 'owner',
-        pagePermission: 'view',
-      }),
+      decideAgentSessionAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'member', canRunCode: true }),
     ).toEqual({ allowed: true });
   });
 
-  it('given the owner of a global-assistant session, should allow ending it', () => {
+  it('allows the drive owner', () => {
     expect(
-      decideAgentSessionEndAccess({
-        requesterId: OWNER,
-        session: globalSession,
-        conversationOwnership: 'owner',
-        pagePermission: null,
-      }),
+      decideAgentSessionAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'owner', canRunCode: true }),
     ).toEqual({ allowed: true });
   });
 
-  it('given a requester who is neither owner nor shared, should still deny', () => {
+  it('denies a non-member — a drive session is shared through the drive, nothing else', () => {
     expect(
-      decideAgentSessionEndAccess({
-        requesterId: OTHER,
-        session,
-        conversationOwnership: 'none',
-        pagePermission: 'view',
-      }),
-    ).toEqual({ allowed: false, reason: 'not_shared' });
+      decideAgentSessionAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'none', canRunCode: true }),
+    ).toEqual({ allowed: false, reason: 'drive_access_denied' });
   });
 
-  it('given a shared requester without page access, should still deny', () => {
+  it('denies an UNRESOLVED membership — unknown is never a grant', () => {
     expect(
-      decideAgentSessionEndAccess({
-        requesterId: OTHER,
-        session,
-        conversationOwnership: 'shared',
-        pagePermission: 'none',
-      }),
-    ).toEqual({ allowed: false, reason: 'page_access_denied' });
+      decideAgentSessionAccess({ requesterId: 'user-2', session: driveSession, driveMembership: null, canRunCode: true }),
+    ).toEqual({ allowed: false, reason: 'drive_access_denied' });
   });
 
-  it('given a non-owner on a global-assistant session, should still deny (owner-only)', () => {
+  it('denies even the session OWNER once they lose the drive — a removed member keeps no working context', () => {
     expect(
-      decideAgentSessionEndAccess({
-        requesterId: OTHER,
-        session: globalSession,
-        conversationOwnership: 'shared',
-        pagePermission: null,
-      }),
+      decideAgentSessionAccess({ requesterId: 'owner-1', session: driveSession, driveMembership: 'none', canRunCode: true }),
+    ).toEqual({ allowed: false, reason: 'drive_access_denied' });
+  });
+
+  it('denies a member without the capability, naming the capability', () => {
+    // A distinct reason: the requester may legitimately reach this session and
+    // still not be allowed a sandbox.
+    expect(
+      decideAgentSessionAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'member', canRunCode: false }),
+    ).toEqual({ allowed: false, reason: 'code_execution_denied' });
+  });
+
+  it('names the FIRST failing gate — scope before capability', () => {
+    expect(
+      decideAgentSessionAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'none', canRunCode: false }),
+    ).toEqual({ allowed: false, reason: 'drive_access_denied' });
+  });
+});
+
+describe('decideAgentSessionAccess — global-assistant sessions', () => {
+  it('allows only the owner — no drive to share through', () => {
+    expect(
+      decideAgentSessionAccess({ requesterId: 'owner-1', session: globalSession, driveMembership: null, canRunCode: true }),
+    ).toEqual({ allowed: true });
+    expect(
+      decideAgentSessionAccess({ requesterId: 'user-2', session: globalSession, driveMembership: null, canRunCode: true }),
     ).toEqual({ allowed: false, reason: 'global_assistant_not_owner' });
+  });
+
+  it('still gates the owner on the capability', () => {
+    expect(
+      decideAgentSessionAccess({ requesterId: 'owner-1', session: globalSession, driveMembership: null, canRunCode: false }),
+    ).toEqual({ allowed: false, reason: 'code_execution_denied' });
+  });
+});
+
+describe('decideAgentSessionAccess — degenerate input', () => {
+  it('denies an empty requester before anything else', () => {
+    expect(
+      decideAgentSessionAccess({ requesterId: '', session: driveSession, driveMembership: 'owner', canRunCode: true }),
+    ).toEqual({ allowed: false, reason: 'invalid_requester' });
+  });
+});
+
+describe('decideAgentSessionEndAccess', () => {
+  it('lets the OWNER end without the capability — release of compute is the owner\'s emergency exit', () => {
+    // An owner who just LOST canRunCode must still be able to stop paying.
+    expect(
+      decideAgentSessionEndAccess({ requesterId: 'owner-1', session: driveSession, driveMembership: 'member', canRunCode: false }),
+    ).toEqual({ allowed: true });
+  });
+
+  it('lets the OWNER end even after losing the drive — same principle, scope gate', () => {
+    // Use is gone (the main decision denies), but the power to stop paying is not.
+    expect(
+      decideAgentSessionEndAccess({ requesterId: 'owner-1', session: driveSession, driveMembership: 'none', canRunCode: false }),
+    ).toEqual({ allowed: true });
+  });
+
+  it('lets a member WITH the capability end — collaborators manage shared compute like any other session action', () => {
+    expect(
+      decideAgentSessionEndAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'member', canRunCode: true }),
+    ).toEqual({ allowed: true });
+  });
+
+  it('refuses a member WITHOUT the capability — review H3: destroying compute is not release, for a non-owner', () => {
+    // The old shape pinned canRunCode true here, handing every drive member —
+    // including ones with no code-execution rights — the power to kill other
+    // members' sessions and shells.
+    expect(
+      decideAgentSessionEndAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'member', canRunCode: false }),
+    ).toEqual({ allowed: false, reason: 'code_execution_denied' });
+  });
+
+  it("still refuses a non-member non-owner — releasing someone else's compute is touching their session", () => {
+    expect(
+      decideAgentSessionEndAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'none', canRunCode: true }),
+    ).toEqual({ allowed: false, reason: 'drive_access_denied' });
+  });
+
+  it('refuses an empty requester — the owner short-circuit must not bypass the degenerate gate', () => {
+    expect(
+      decideAgentSessionEndAccess({ requesterId: '', session: { ...driveSession, ownerId: '' }, driveMembership: 'owner', canRunCode: true }),
+    ).toEqual({ allowed: false, reason: 'invalid_requester' });
   });
 });

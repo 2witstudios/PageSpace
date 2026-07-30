@@ -129,14 +129,14 @@ describe('pickBillableGB', () => {
 
 function makeDeps(over: Partial<ReconcileSandboxStorageDeps> = {}): {
   deps: ReconcileSandboxStorageDeps;
-  chargeCalls: Array<{ payerId: string; pageId?: string; costDollars: number; gbMonths: number }>;
+  chargeCalls: Array<{ payerId: string; driveId?: string; sessionId: string; costDollars: number; gbMonths: number }>;
   agentSessionAdvanceCalls: Array<{ sessionId: string; billedThrough: Date }>;
 } {
-  const chargeCalls: Array<{ payerId: string; pageId?: string; costDollars: number; gbMonths: number }> = [];
+  const chargeCalls: Array<{ payerId: string; driveId?: string; sessionId: string; costDollars: number; gbMonths: number }> = [];
   const agentSessionAdvanceCalls: Array<{ sessionId: string; billedThrough: Date }> = [];
   const deps: ReconcileSandboxStorageDeps = {
     listAgentSessionSprites: async () => [],
-    lookupPageOwnerId: async () => 'owner-1',
+    lookupDriveOwnerId: async () => 'owner-1',
     chargeStorage: async (input) => {
       chargeCalls.push(input);
     },
@@ -149,11 +149,11 @@ function makeDeps(over: Partial<ReconcileSandboxStorageDeps> = {}): {
   return { deps, chargeCalls, agentSessionAdvanceCalls };
 }
 
-/** A measured agent-session Sprite: 1GB written, measured just before `now`, backed by `agent-page-1`. */
+/** A measured agent-session Sprite: 1GB written, measured just before `now`, in `drive-1`. */
 function agentSession(over: Partial<AgentSessionStorageRow> = {}): AgentSessionStorageRow {
   return {
     sessionId: 'session-1',
-    agentPageId: 'agent-page-1',
+    driveId: 'drive-1',
     ownerId: 'session-owner-1',
     storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
     measuredBytes: 1_000_000_000, // 1 GB
@@ -164,9 +164,9 @@ function agentSession(over: Partial<AgentSessionStorageRow> = {}): AgentSessionS
 }
 
 describe('reconcileSandboxStorage', () => {
-  it('bills an agent-session Sprite to its backing agent page for its MEASURED storage window and advances its watermark', async () => {
+  it('bills an agent-session Sprite to its drive for its MEASURED storage window and advances its watermark', async () => {
     const { deps, chargeCalls, agentSessionAdvanceCalls } = makeDeps({
-      listAgentSessionSprites: async () => [agentSession({ sessionId: 'session-1', agentPageId: 'agent-page-1' })],
+      listAgentSessionSprites: async () => [agentSession({ sessionId: 'session-1', driveId: 'drive-1' })],
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -174,32 +174,32 @@ describe('reconcileSandboxStorage', () => {
     assert({
       given: 'an agent-session Sprite with a backing agent page and a measured 1GB footprint',
       should: 'charge its agent page — the key the usage breakdown groups on',
-      actual: { charged: result.charged, pageId: chargeCalls[0]?.pageId },
-      expected: { charged: 1, pageId: 'agent-page-1' },
+      actual: { charged: result.charged, driveId: chargeCalls[0]?.driveId },
+      expected: { charged: 1, driveId: 'drive-1' },
     });
     expect(chargeCalls[0].gbMonths).toBeCloseTo(1, 5);
     expect(chargeCalls[0].costDollars).toBeGreaterThan(0);
     expect(agentSessionAdvanceCalls).toEqual([{ sessionId: 'session-1', billedThrough: new Date('2026-07-01T00:00:00.000Z') }]);
   });
 
-  it('resolves the payer via lookupPageOwnerId when agentPageId is set', async () => {
-    const lookup = vi.fn(async (pageId: string) => `owner-of-${pageId}`);
+  it('resolves the payer via lookupDriveOwnerId when driveId is set', async () => {
+    const lookup = vi.fn(async (driveId: string) => `owner-of-${driveId}`);
     const { deps, chargeCalls } = makeDeps({
-      listAgentSessionSprites: async () => [agentSession({ agentPageId: 'agent-page-9', ownerId: 'session-owner-9' })],
-      lookupPageOwnerId: lookup,
+      listAgentSessionSprites: async () => [agentSession({ driveId: 'drive-9', ownerId: 'session-owner-9' })],
+      lookupDriveOwnerId: lookup,
     });
 
     await reconcileSandboxStorage(deps);
 
-    expect(lookup).toHaveBeenCalledWith('agent-page-9');
-    expect(chargeCalls[0]).toMatchObject({ payerId: 'owner-of-agent-page-9', pageId: 'agent-page-9' });
+    expect(lookup).toHaveBeenCalledWith('drive-9');
+    expect(chargeCalls[0]).toMatchObject({ payerId: 'owner-of-drive-9', driveId: 'drive-9' });
   });
 
   it('bills a global-assistant session (null agentPageId) straight to its ownerId, with no page lookup and no pageId on the charge', async () => {
     const lookup = vi.fn(async () => 'should-not-be-called');
     const { deps, chargeCalls } = makeDeps({
-      listAgentSessionSprites: async () => [agentSession({ agentPageId: null, ownerId: 'global-owner-1' })],
-      lookupPageOwnerId: lookup,
+      listAgentSessionSprites: async () => [agentSession({ driveId: null, ownerId: 'global-owner-1' })],
+      lookupDriveOwnerId: lookup,
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -208,8 +208,8 @@ describe('reconcileSandboxStorage', () => {
     assert({
       given: 'a global-assistant agent-session Sprite (no backing page)',
       should: 'charge the session ownerId directly, with pageId omitted from the charge',
-      actual: { charged: result.charged, payerId: chargeCalls[0]?.payerId, pageId: chargeCalls[0]?.pageId },
-      expected: { charged: 1, payerId: 'global-owner-1', pageId: undefined },
+      actual: { charged: result.charged, payerId: chargeCalls[0]?.payerId, driveId: chargeCalls[0]?.driveId },
+      expected: { charged: 1, payerId: 'global-owner-1', driveId: undefined },
     });
   });
 
@@ -230,8 +230,8 @@ describe('reconcileSandboxStorage', () => {
 
   it('skips (and does not advance the watermark for) a page-backed session whose page owner cannot be resolved', async () => {
     const { deps, chargeCalls, agentSessionAdvanceCalls } = makeDeps({
-      listAgentSessionSprites: async () => [agentSession({ agentPageId: 'orphaned-page' })],
-      lookupPageOwnerId: async () => null,
+      listAgentSessionSprites: async () => [agentSession({ driveId: 'orphaned-page' })],
+      lookupDriveOwnerId: async () => null,
     });
 
     const result = await reconcileSandboxStorage(deps);

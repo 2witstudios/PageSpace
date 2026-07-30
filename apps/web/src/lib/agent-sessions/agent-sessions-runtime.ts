@@ -18,8 +18,10 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
-import { pages, drives } from '@pagespace/db/schema/core';
+import { and, desc, eq, inArray, isNotNull } from '@pagespace/db/operators';
+import { drives } from '@pagespace/db/schema/core';
+import { conversations } from '@pagespace/db/schema/conversations';
+import { driveMembers } from '@pagespace/db/schema/members';
 import { users } from '@pagespace/db/schema/auth';
 import { checkAgentSessionConcurrency } from '@pagespace/lib/services/sandbox/quota';
 import {
@@ -37,13 +39,12 @@ import {
 import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { resolveSandboxNetworkOptions } from '@pagespace/lib/services/sandbox/network-options';
 import { getConfiguredEgressIpTag } from '@pagespace/lib/services/sandbox/egress-ip';
-import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import {
-  ensureAgentSession,
+  spawnAgentSession,
   endAgentSession,
   listAgentSessions,
   toAgentSessionDTO,
-  type EnsureAgentSessionResult,
+  type SpawnAgentSessionResult,
   type EndAgentSessionResult,
 } from '@pagespace/lib/services/agent-sessions/agent-sessions';
 import {
@@ -65,10 +66,8 @@ import {
 import type { AgentSessionDTO } from '@pagespace/lib/agent-sessions/contract';
 import { decideAgentSessionAccess } from '@pagespace/lib/agent-sessions/decide-session-access';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import {
-  resolveOrCreateConversation,
-  ConversationOwnershipError,
-} from '@/app/api/ai/global/[id]/messages/resolve-or-create-conversation';
+import { resolveOrCreateConversation } from '@/app/api/ai/global/[id]/messages/resolve-or-create-conversation';
+import { createConversationInSessionWith } from '@/lib/agent-sessions/create-conversation-in-session';
 
 export { isCodeExecutionEnabled };
 
@@ -119,15 +118,6 @@ export function getSandboxHost(): Promise<SandboxHost> {
 // Row-fact lookups (null-plumbing only)
 // ---------------------------------------------------------------------------
 
-/** The agent page's drive, or null when the page (or its drive) cannot be resolved. */
-export async function resolveAgentPageDriveId(agentPageId: string): Promise<string | null> {
-  const page = await db.query.pages.findFirst({
-    where: eq(pages.id, agentPageId),
-    columns: { driveId: true },
-  });
-  return page?.driveId ?? null;
-}
-
 /**
  * The tenant a session's Sprite key folds under: the agent page's drive OWNER
  * for a page-anchored session, the session owner themself for a global one
@@ -135,33 +125,20 @@ export async function resolveAgentPageDriveId(agentPageId: string): Promise<stri
  * `resolveSandboxActorContext`).
  */
 export async function resolveSessionTenantId(session: {
-  agentPageId: string | null;
+  driveId: string | null;
   ownerId: string;
 }): Promise<string> {
-  if (session.agentPageId === null) return session.ownerId;
-  const driveId = await resolveAgentPageDriveId(session.agentPageId);
-  if (driveId === null) return session.ownerId;
+  if (session.driveId === null) return session.ownerId;
   const drive = await db.query.drives.findFirst({
-    where: eq(drives.id, driveId),
+    where: eq(drives.id, session.driveId),
     columns: { ownerId: true },
   });
   return drive?.ownerId ?? session.ownerId;
 }
 
-export interface SessionConversationFacts {
-  userId: string;
-  type: string;
-  contextId: string | null;
-  isShared: boolean;
-}
-
-/** The conversation row's identity facts, or null when it does not exist. */
-export async function findSessionConversation(
-  conversationId: string,
-): Promise<SessionConversationFacts | null> {
-  const row = await conversationRepository.getConversation(conversationId);
-  if (!row) return null;
-  return { userId: row.userId, type: row.type, contextId: row.contextId, isShared: row.isShared };
+/** The owner's not-ended session count — the spawn ceiling's input (store.countActive). */
+export async function countActiveSessionsForOwner(ownerId: string): Promise<number> {
+  return (await getAgentSessionStore()).countActive(ownerId);
 }
 
 export async function findSessionRecord(sessionId: string): Promise<AgentSessionRecord | null> {
@@ -172,26 +149,39 @@ export async function findSessionRecord(sessionId: string): Promise<AgentSession
 // Access
 // ---------------------------------------------------------------------------
 
+/**
+ * The requester's relationship to a drive: its owner, an accepted member, or
+ * neither. The ONE membership read both access checks share.
+ */
+export async function resolveDriveMembership({
+  userId,
+  driveId,
+}: {
+  userId: string;
+  driveId: string;
+}): Promise<'owner' | 'member' | 'none'> {
+  const drive = await db.query.drives.findFirst({
+    where: eq(drives.id, driveId),
+    columns: { ownerId: true },
+  });
+  if (!drive) return 'none';
+  if (drive.ownerId === userId) return 'owner';
+  const membership = await db.query.driveMembers.findFirst({
+    where: and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt)),
+    columns: { id: true },
+  });
+  return membership ? 'member' : 'none';
+}
+
 function buildAccessDeps(): AgentSessionAccessDeps {
   return {
     findSession: async (sessionId) => {
       const row = await findSessionRecord(sessionId);
       if (!row) return null;
-      return { sessionId: row.conversationId, ownerId: row.ownerId, agentPageId: row.agentPageId };
+      return { sessionId: row.id, ownerId: row.ownerId, driveId: row.driveId };
     },
-    resolveConversationOwnership: async ({ conversationId, requesterId }) => {
-      const conversation = await findSessionConversation(conversationId);
-      if (!conversation) return 'none';
-      if (conversation.userId === requesterId) return 'owner';
-      return conversation.isShared ? 'shared' : 'none';
-    },
-    resolvePagePermission: async ({ userId, agentPageId }) => {
-      if (await canUserEditPage(userId, agentPageId)) return 'edit';
-      if (await canUserViewPage(userId, agentPageId)) return 'view';
-      return 'none';
-    },
-    canRunCode: async ({ userId, agentPageId }) => {
-      const driveId = agentPageId === null ? null : await resolveAgentPageDriveId(agentPageId);
+    resolveDriveMembership,
+    canRunCode: async ({ userId, driveId }) => {
       const result = await canRunCode({
         userId,
         driveId: driveId ?? undefined,
@@ -210,30 +200,27 @@ export async function checkSessionAccess(
 }
 
 /**
- * The same ONE pure decision, applied to a session that may not have a row yet
- * — the ensure path's subject is synthesized from the conversation row it is
- * about to anchor to (`sessionId` ≡ conversationId, `ownerId` = the
- * conversation's owner). This gathers the identical facts `buildAccessDeps`
- * gathers and hands them to `decideAgentSessionAccess`; no fifth fact and no
+ * The same ONE pure decision, applied BEFORE a row exists — the spawn path's
+ * subject is the session about to be minted (`ownerId` = the requester,
+ * `driveId` = where it will live). This gathers the identical facts
+ * `buildAccessDeps` gathers and hands them to `decideAgentSessionAccess`; no
  * extra rule exists here.
  */
 export async function checkAccessForSubject(
   requesterId: string,
-  subject: { sessionId: string; ownerId: string; agentPageId: string | null },
+  subject: { sessionId: string; ownerId: string; driveId: string | null },
 ): Promise<AgentSessionAccessCheck> {
   const deps = buildAccessDeps();
-  const [conversationOwnership, pagePermission, allowedToRunCode] = await Promise.all([
-    deps.resolveConversationOwnership({ conversationId: subject.sessionId, requesterId }),
-    subject.agentPageId === null
+  const [driveMembership, allowedToRunCode] = await Promise.all([
+    subject.driveId === null
       ? Promise.resolve(null)
-      : deps.resolvePagePermission({ userId: requesterId, agentPageId: subject.agentPageId }),
-    deps.canRunCode({ userId: requesterId, agentPageId: subject.agentPageId }),
+      : deps.resolveDriveMembership({ userId: requesterId, driveId: subject.driveId }),
+    deps.canRunCode({ userId: requesterId, driveId: subject.driveId }),
   ]);
   return decideAgentSessionAccess({
     requesterId,
     session: subject,
-    conversationOwnership,
-    pagePermission,
+    driveMembership,
     canRunCode: allowedToRunCode,
   });
 }
@@ -242,11 +229,10 @@ export async function checkSessionEndAccess(
   requesterId: string,
   sessionId: string,
 ): Promise<AgentSessionAccessCheck> {
-  const { findSession, resolveConversationOwnership, resolvePagePermission } = buildAccessDeps();
   return checkAgentSessionEndAccess({
     requesterId,
     sessionId,
-    deps: { findSession, resolveConversationOwnership, resolvePagePermission },
+    deps: buildAccessDeps(),
   });
 }
 
@@ -255,54 +241,121 @@ export async function checkSessionEndAccess(
 // ---------------------------------------------------------------------------
 
 /**
- * The squat-guarded conversation creators, one per anchor kind. Injected into
- * `ensureAgentSession` so the guard in the app repository stays the ONLY way a
- * conversation id is ever claimed (see `EnsureConversationFn`'s doc).
- * `resolveOrCreateConversation` throws `ConversationOwnershipError` for a
- * conversation someone else owns — rethrown as-is for the service to fold into
- * its `conversation_unavailable` result.
+ * Create a conversation BORN INTO a session. Decision logic lives in the pure
+ * module (`create-conversation-in-session.ts`) — this is only its production
+ * wiring: the squat-guarded repository creator for page threads, the
+ * ownership-guarded resolver for global ones, both carrying the binding
+ * INSIDE their INSERT (no `conversations.sessionId` UPDATE exists anywhere —
+ * rebinding is unrepresentable, per invariant 1).
+ *
+ * Throws `ConversationUnavailableError` (message `conversation_unavailable`)
+ * when the id cannot be claimed WITH this binding — foreign owner, legacy
+ * message-owner conflict, or an existing row whose binding disagrees.
  */
-async function ensureConversationRow({
-  conversationId,
-  userId,
-  agentPageId,
-}: {
+export async function createConversationInSession(input: {
   conversationId: string;
   userId: string;
+  /** null = a global-assistant conversation. */
   agentPageId: string | null;
+  sessionId: string;
+  /** Display label written at birth (a spawned worker's name). */
+  title?: string | null;
 }): Promise<void> {
-  if (agentPageId === null) {
-    try {
-      await resolveOrCreateConversation(userId, conversationId);
-    } catch (error) {
-      if (error instanceof ConversationOwnershipError) {
-        throw new Error('conversation_unavailable');
-      }
-      throw error;
-    }
-    return;
-  }
-  await conversationRepository.createConversation(conversationId, userId, agentPageId);
+  return createConversationInSessionWith(
+    {
+      createPageConversation: ({ conversationId, userId, agentPageId, sessionId, title }) =>
+        conversationRepository.createConversation(conversationId, userId, agentPageId, {
+          sessionId,
+          title: title ?? undefined,
+        }),
+      createGlobalConversation: async ({ conversationId, userId, sessionId, title }) => {
+        await resolveOrCreateConversation(userId, conversationId, undefined, {
+          sessionId,
+          title: title ?? undefined,
+        });
+      },
+      findConversation: async (conversationId) => {
+        const row = await conversationRepository.getConversation(conversationId);
+        if (!row) return null;
+        return { userId: row.userId, type: row.type, contextId: row.contextId, sessionId: row.sessionId };
+      },
+      findAgentDriveId: async (agentPageId) => {
+        const agent = await conversationRepository.getAiAgent(agentPageId);
+        return agent?.driveId ?? null;
+      },
+      findSessionDriveId: async (sessionId) => {
+        const row = await findSessionRecord(sessionId);
+        return row ? { driveId: row.driveId } : null;
+      },
+    },
+    input,
+  );
 }
 
-export async function ensureSession(input: {
-  conversationId: string;
+export async function spawnSession(input: {
   userId: string;
-  agentPageId: string | null;
+  driveId: string | null;
   name?: string | null;
-}): Promise<EnsureAgentSessionResult> {
+}): Promise<SpawnAgentSessionResult> {
   const store = await getAgentSessionStore();
-  return ensureAgentSession({
-    userId: input.userId,
-    agentPageId: input.agentPageId,
-    conversationId: input.conversationId,
+  return spawnAgentSession({
+    ownerId: input.userId,
+    driveId: input.driveId,
     name: input.name,
-    deps: {
-      store,
-      ensureConversation: ensureConversationRow,
-      now: () => new Date(),
-    },
+    deps: { store, now: () => new Date() },
   });
+}
+
+/** Resolve a conversation's session — how a chat turn finds its working context. Null = a plain chat. */
+export async function findSessionForConversation(conversationId: string): Promise<AgentSessionRecord | null> {
+  return (await getAgentSessionStore()).findByConversation(conversationId);
+}
+
+export interface SessionConversationEntry {
+  conversationId: string;
+  title: string | null;
+  /** The thread's agent page (`contextId` for a page chat), or null for a global-assistant thread. */
+  agentPageId: string | null;
+  lastMessageAt: Date | null;
+}
+
+/**
+ * The conversations of MANY sessions in one query, grouped by session —
+ * the collection GET's shape, which previously ran one query per session
+ * (review M4: 1+2N per sidebar poll). Newest activity first per
+ * session; the per-session cap (100) is enforced during grouping so one hot
+ * session cannot starve the others.
+ */
+export async function listSessionConversationsBulk(
+  sessionIds: string[],
+): Promise<Map<string, SessionConversationEntry[]>> {
+  const grouped = new Map<string, SessionConversationEntry[]>();
+  if (sessionIds.length === 0) return grouped;
+  const rows = await db
+    .select({
+      sessionId: conversations.sessionId,
+      conversationId: conversations.id,
+      title: conversations.title,
+      type: conversations.type,
+      contextId: conversations.contextId,
+      lastMessageAt: conversations.lastMessageAt,
+    })
+    .from(conversations)
+    .where(and(inArray(conversations.sessionId, sessionIds), eq(conversations.isActive, true)))
+    .orderBy(desc(conversations.lastMessageAt));
+  for (const row of rows) {
+    if (row.sessionId === null) continue;
+    const bucket = grouped.get(row.sessionId) ?? [];
+    if (bucket.length >= 100) continue;
+    bucket.push({
+      conversationId: row.conversationId,
+      title: row.title,
+      agentPageId: row.type === 'page' ? row.contextId : null,
+      lastMessageAt: row.lastMessageAt,
+    });
+    grouped.set(row.sessionId, bucket);
+  }
+  return grouped;
 }
 
 /**
@@ -321,7 +374,7 @@ export async function provisionSessionSandbox(
   ]);
 
   return ensureAgentSessionSandbox({
-    row: { ...row, sessionId: row.conversationId },
+    row: { ...row, sessionId: row.id },
     intent: 'ensure',
     actor: { userId: requesterId, tenantId },
     deps: {
@@ -331,7 +384,6 @@ export async function provisionSessionSandbox(
       options: resolveSandboxNetworkOptions({ surface: 'machine', egressIpTag: getConfiguredEgressIpTag() }),
       secret: getSandboxSessionSecret(),
       authorize: canRunCode,
-      resolveDriveId: resolveAgentPageDriveId,
       checkFullEgressEnablement: async () =>
         decideFullEgressEnablement({
           adminGateEnabled: isCodeExecutionEnabled(),

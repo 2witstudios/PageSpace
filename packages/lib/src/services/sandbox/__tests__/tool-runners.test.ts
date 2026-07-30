@@ -45,7 +45,7 @@ function makeDeps(over: Partial<SandboxRunDeps> = {}) {
   const sandbox = over.reconnect ? undefined : makeSandbox();
   const deps: SandboxRunDeps = {
     isEnabled: () => true,
-    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' }),
     reconnect: async () => sandbox ?? null,
     quota: {
       acquireSlot: () => {
@@ -80,7 +80,7 @@ describe('runBashInSandbox', () => {
     const { deps, audits } = makeDeps({
       acquireSandbox: async () => {
         acquireCalls += 1;
-        return { ok: true, sandboxId: 'sbx-1', resumed: false };
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' };
       },
     });
     const result = await runBashInSandbox({
@@ -99,7 +99,7 @@ describe('runBashInSandbox', () => {
     const { deps, audits } = makeDeps({
       acquireSandbox: async () => {
         acquireCalls += 1;
-        return { ok: true, sandboxId: 'sbx-1', resumed: false };
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' };
       },
     });
     const result = await runBashInSandbox({ command: 'gh pr list', ctx: makeCtx(), deps });
@@ -133,7 +133,7 @@ describe('runBashInSandbox', () => {
     const { deps } = makeDeps({
       acquireSandbox: async (input) => {
         seen.push(input);
-        return { ok: true, sandboxId: 'sbx-1', resumed: false };
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' };
       },
     });
     await runBashInSandbox({
@@ -230,7 +230,7 @@ describe('runBashInSandbox', () => {
   it('given a successful run, should notify the session\'s shell activity feed', async () => {
     const notified: unknown[] = [];
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1', pageId: 'terminal-page-1' }),
       notifyShellActivity: async (input) => {
         notified.push(input);
       },
@@ -243,7 +243,7 @@ describe('runBashInSandbox', () => {
     expect(result).toMatchObject({ success: true });
     expect(notified).toEqual([
       {
-        sessionId: 'c1',
+        sessionId: 'ws-1',
         command: 'echo hi',
         output: 'ok',
         exitCode: 0,
@@ -255,7 +255,7 @@ describe('runBashInSandbox', () => {
   it('given a successful run, should measure the SESSION\'s storage with the live sandbox', async () => {
     const measured: Array<{ sandbox: unknown; sessionId: string }> = [];
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1', pageId: 'terminal-page-1' }),
       measureStorage: async (input) => {
         measured.push(input);
       },
@@ -265,7 +265,7 @@ describe('runBashInSandbox', () => {
     // Fire-and-forget: give the microtask a tick to run.
     await Promise.resolve();
     expect(measured).toHaveLength(1);
-    expect(measured[0].sessionId).toBe('c1');
+    expect(measured[0].sessionId).toBe('ws-1');
   });
 
   it('should measure AFTER the command runs, not before — the whole point of the seam', async () => {
@@ -276,7 +276,7 @@ describe('runBashInSandbox', () => {
     // from `release` (a `finally`, after the op) rather than from acquisition.
     const order: string[] = [];
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'p1' }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1', pageId: 'p1' }),
       reconnect: async () =>
         makeSandbox({
           runCommand: async () => {
@@ -300,7 +300,7 @@ describe('runBashInSandbox', () => {
     // activity feed: the old gate was `acquired.pageId`, which they never have.
     const measured: Array<{ sessionId: string }> = [];
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' }),
       measureStorage: async (input) => {
         measured.push(input);
       },
@@ -308,13 +308,17 @@ describe('runBashInSandbox', () => {
     const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ agentPageId: undefined }), deps });
     expect(result).toMatchObject({ success: true });
     await Promise.resolve();
-    expect(measured[0]?.sessionId).toBe('c1');
+    expect(measured[0]?.sessionId).toBe('ws-1');
   });
 
-  it('given no conversation id, should never measure — there is no session to attribute bytes to', async () => {
-    const measured: unknown[] = [];
+  it('measures even with NO conversation id — the key is the acquired SESSION, not the conversation', async () => {
+    // The old gate keyed on the conversation and silently skipped measurement
+    // whenever the two ids diverged (codex review, P1: underbilling). The
+    // session id comes from the acquire itself, so it is always present on a
+    // successful run.
+    const measured: Array<{ sessionId: string }> = [];
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' }),
       measureStorage: async (input) => {
         measured.push(input);
       },
@@ -322,12 +326,12 @@ describe('runBashInSandbox', () => {
     const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ conversationId: undefined }), deps });
     expect(result).toMatchObject({ success: true });
     await Promise.resolve();
-    expect(measured).toEqual([]);
+    expect(measured).toMatchObject([{ sessionId: 'ws-1' }]);
   });
 
   it('given a throwing storage measurement, should still return the successful result (best-effort)', async () => {
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1', pageId: 'terminal-page-1' }),
       measureStorage: async () => {
         throw new Error('measure failed');
       },
@@ -343,32 +347,35 @@ describe('runBashInSandbox', () => {
     // feed. The session id is the address now, and every session has one.
     const notified: Array<{ sessionId: string }> = [];
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' }),
       notifyShellActivity: async (input) => {
         notified.push(input);
       },
     });
     const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ agentPageId: undefined }), deps });
     expect(result).toMatchObject({ success: true });
-    expect(notified[0]?.sessionId).toBe('c1');
+    expect(notified[0]?.sessionId).toBe('ws-1');
   });
 
-  it('given no conversation id, should never call the activity feed — there is nothing to address', async () => {
-    const notified: unknown[] = [];
+  it('notifies even with NO conversation id — the feed is addressed by the acquired SESSION', async () => {
+    // Same inversion as the measurement case: the conversation id was never
+    // the feed's address, and gating on it dropped notifications whenever the
+    // namespaces diverged.
+    const notified: Array<{ sessionId: string }> = [];
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' }),
       notifyShellActivity: async (input) => {
         notified.push(input);
       },
     });
     const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ conversationId: undefined }), deps });
     expect(result).toMatchObject({ success: true });
-    expect(notified).toEqual([]);
+    expect(notified).toMatchObject([{ sessionId: 'ws-1' }]);
   });
 
   it('given a throwing activity feed, should still return the successful result', async () => {
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1', pageId: 'terminal-page-1' }),
       notifyShellActivity: async () => {
         throw new Error('feed down');
       },
@@ -383,7 +390,7 @@ describe('runBashInSandbox', () => {
       releaseFeed = resolve;
     });
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1', pageId: 'terminal-page-1' }),
       notifyShellActivity: async () => {
         await feedGate; // Never resolves during this test unless we release it.
       },
@@ -398,7 +405,7 @@ describe('runBashInSandbox', () => {
   it('given both stdout and stderr, should combine them for the activity feed instead of dropping stderr', async () => {
     const notified: Array<{ output: string }> = [];
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1', pageId: 'terminal-page-1' }),
       reconnect: async () =>
         makeSandbox({ runCommand: async () => ({ exitCode: 0, stdout: 'out-line', stderr: 'err-line' }) }),
       notifyShellActivity: async (input) => {
@@ -412,7 +419,7 @@ describe('runBashInSandbox', () => {
   it('given no actorDisplayName, should fall back to a generic label instead of the actor\'s raw email (PII)', async () => {
     const notified: Array<{ agentLabel: string }> = [];
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1', pageId: 'terminal-page-1' }),
       notifyShellActivity: async (input) => {
         notified.push(input);
       },
@@ -518,7 +525,7 @@ describe('runBashInSandbox', () => {
     const { deps, audits } = makeDeps({
       acquireSandbox: async () => {
         acquired = true;
-        return { ok: true, sandboxId: 'sbx-1', resumed: false };
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' };
       },
     });
     const result = await runBashInSandbox({ command: 'ls', cwd: '../../etc', ctx: makeCtx(), deps });
@@ -924,7 +931,7 @@ describe('editSandboxFile', () => {
     const { deps, audits } = makeDeps({
       acquireSandbox: async () => {
         acquired = true;
-        return { ok: true, sandboxId: 'sbx-1', resumed: false };
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' };
       },
     });
     const result = await editSandboxFile({
@@ -1023,7 +1030,7 @@ describe('readSandboxFile', () => {
     const { deps } = makeDeps({
       acquireSandbox: async () => {
         acquired = true;
-        return { ok: true, sandboxId: 'sbx-1', resumed: false };
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' };
       },
     });
     const result = await readSandboxFile({ path: '/etc/passwd', ctx: makeCtx(), deps });
@@ -1150,7 +1157,7 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
       billing,
       acquireSandbox: async () => {
         acquireCalls += 1;
-        return { ok: true, sandboxId: 'sbx-1', resumed: false };
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' };
       },
     });
     const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });

@@ -87,3 +87,23 @@ export async function lookupPageOwnerId(pageId: string): Promise<string | null> 
 
   return row?.ownerId ?? null;
 }
+
+/**
+ * Real DB-backed drive→owner lookup — the ONE place this read is written for
+ * billing. A session is a drive-level workspace, so its storage bills the
+ * drive's owner; null when the drive cannot be found (a stale read mid-delete
+ * — the storage reconcile skips rather than misattributing).
+ */
+export async function lookupDriveOwnerId(driveId: string): Promise<string | null> {
+  const { db } = await import('@pagespace/db/db');
+  const { eq } = await import('@pagespace/db/operators');
+  const { drives } = await import('@pagespace/db/schema/core');
+
+  const [row] = await db
+    .select({ ownerId: drives.ownerId })
+    .from(drives)
+    .where(eq(drives.id, driveId))
+    .limit(1);
+
+  return row?.ownerId ?? null;
+}

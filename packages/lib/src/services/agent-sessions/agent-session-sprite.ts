@@ -79,8 +79,6 @@ export interface AgentSessionSpriteDeps {
    * each call site has to remember.
    */
   authorize: (input: CanRunCodeInput) => Promise<CanRunCodeResult>;
-  /** The agent page's owning drive, for the drive-role arm of `authorize`. `null` when it cannot be resolved (authorization then fails closed). */
-  resolveDriveId: (agentPageId: string) => Promise<string | null>;
   /** REQUIRED full-egress enablement gate — a session Sprite runs open egress. */
   checkFullEgressEnablement: () => Promise<FullEgressEnablement>;
   /**
@@ -109,7 +107,6 @@ export interface AgentSessionSpriteDeps {
    */
   measureSessionStorage?: (input: {
     sessionId: string;
-    agentPageId: string | null;
     handle: SandboxHandle;
   }) => Promise<void>;
   now: () => Date;
@@ -293,7 +290,7 @@ export type AgentSessionSpriteRow = AgentSessionLifecycleRow &
   // live sessions, and the owner is a fact of the row, never of the actor
   // (a drive member provisioning inside someone else's agent still consumes the
   // session owner's allocation, not their own).
-  Pick<AgentSessionRecord, 'agentPageId' | 'egressPolicyToken' | 'ownerId'>;
+  Pick<AgentSessionRecord, 'driveId' | 'egressPolicyToken' | 'ownerId'>;
 
 /**
  * Ensure this session's sandbox exists (or resume/adopt the one it has), and
@@ -318,11 +315,13 @@ export async function ensureAgentSessionSandbox({
 }): Promise<EnsureAgentSessionSandboxResult> {
   // Authorization is computed for THIS request and handed to the planner, which
   // applies it before any warm session is returned. Resolved with
-  // `requestOrigin: 'user'` to match the realtime attach path's check.
-  const driveId = row.agentPageId === null ? null : await deps.resolveDriveId(row.agentPageId);
+  // `requestOrigin: 'user'` to match the realtime attach path's check. The
+  // drive is a fact of the ROW now (a session is drive-scoped; null = a
+  // user-scoped global-assistant session), so there is nothing to resolve
+  // through an agent page any more.
   const authorized = await deps.authorize({
     userId: actor.userId,
-    driveId: driveId ?? undefined,
+    driveId: row.driveId ?? undefined,
     requestOrigin: 'user',
   });
 
@@ -492,7 +491,7 @@ export async function ensureAgentSessionSandbox({
       // must never be awaited by, or fail, a provision.
       if (deps.measureSessionStorage) {
         void deps
-          .measureSessionStorage({ sessionId: row.sessionId, agentPageId: row.agentPageId, handle })
+          .measureSessionStorage({ sessionId: row.sessionId, handle })
           .catch(() => {
             /* Best-effort: the seam already logs; provisioning must never fail on it. */
           });

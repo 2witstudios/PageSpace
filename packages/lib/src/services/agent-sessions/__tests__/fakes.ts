@@ -24,18 +24,18 @@ import { stampColumns } from '../agent-sessions-store';
 import type { SessionShellRecord, SessionShellStore } from '../session-shells-store';
 
 export const NOW = new Date('2026-07-28T12:00:00.000Z');
-export const SESSION_ID = 'conv-1';
+export const SESSION_ID = 'ses-1';
 export const OWNER_ID = 'user-1';
-export const AGENT_PAGE_ID = 'page-agent-1';
+export const DRIVE_ID = 'drive-1';
 export const TENANT_ID = 'tenant-1';
 /** >= 32 chars — `deriveAgentSessionSpriteKey` refuses anything shorter. */
 export const SECRET = 'x'.repeat(40);
 
 export function makeSessionRecord(over: Partial<AgentSessionRecord> = {}): AgentSessionRecord {
   return {
-    conversationId: SESSION_ID,
+    id: SESSION_ID,
     ownerId: OWNER_ID,
-    agentPageId: AGENT_PAGE_ID,
+    driveId: DRIVE_ID,
     name: null,
     sessionKey: null,
     sandboxId: null,
@@ -59,45 +59,66 @@ export interface FakeAgentSessionStore {
   rows: Map<string, AgentSessionRecord>;
   /** Models `machine_sprite_reclaims`: sandboxId → spriteInstanceId. */
   reclaims: Map<string, string | null>;
-  calls: { insertIfAbsent: number; updateSpriteIdentity: number };
+  calls: { create: number; updateSpriteIdentity: number };
+  /** conversationId → sessionId, modelling `conversations.sessionId`. */
+  conversationBindings: Map<string, string>;
 }
 
 export function makeAgentSessionStore(seed: AgentSessionRecord[] = []): FakeAgentSessionStore {
   const rows = new Map<string, AgentSessionRecord>();
-  for (const row of seed) rows.set(row.conversationId, row);
+  for (const row of seed) rows.set(row.id, row);
   const reclaims = new Map<string, string | null>();
-  const calls = { insertIfAbsent: 0, updateSpriteIdentity: 0 };
+  const calls = { create: 0, updateSpriteIdentity: 0 };
+  const conversationBindings = new Map<string, string>();
+  let minted = 0;
 
   const store: AgentSessionStore = {
     async findById(sessionId) {
       return rows.get(sessionId) ?? null;
     },
 
-    async insertIfAbsent(input) {
-      calls.insertIfAbsent += 1;
-      // The PK is the conversation id, so a second insert is a no-op rather than
-      // a second row — the whole concurrency contract of `ensureAgentSession`.
-      if (rows.has(input.conversationId)) return;
-      rows.set(
-        input.conversationId,
-        makeSessionRecord({
-          conversationId: input.conversationId,
-          ownerId: input.ownerId,
-          agentPageId: input.agentPageId,
-          name: input.name,
-          storageLastBilledAt: input.now,
-          createdAt: input.now,
-          updatedAt: input.now,
-        }),
-      );
+    async findByConversation(conversationId) {
+      // Models conversations.sessionId: a thread with no binding (or whose
+      // session is gone) resolves to null, never to a fallback.
+      const sessionId = conversationBindings.get(conversationId);
+      if (sessionId === undefined) return null;
+      return rows.get(sessionId) ?? null;
+    },
+
+    async create(input) {
+      calls.create += 1;
+      minted += 1;
+      const row = makeSessionRecord({
+        id: `ses-minted-${minted}`,
+        ownerId: input.ownerId,
+        driveId: input.driveId,
+        name: input.name,
+        storageLastBilledAt: input.now,
+        createdAt: input.now,
+        updatedAt: input.now,
+      });
+      rows.set(row.id, row);
+      return row;
     },
 
     async list(filter) {
-      return [...rows.values()].filter((row) => {
-        if ('agentPageId' in filter && row.agentPageId !== filter.agentPageId) return false;
-        if (filter.ownerId !== undefined && row.ownerId !== filter.ownerId) return false;
-        return true;
-      });
+      // Mirrors the real store: active rows only, newest activity first.
+      return [...rows.values()]
+        .filter((row) => {
+          if ('driveId' in filter && row.driveId !== filter.driveId) return false;
+          if (filter.ownerId !== undefined && row.ownerId !== filter.ownerId) return false;
+          return row.endedAt === null;
+        })
+        .sort((a, b) => {
+          const aAt = a.lastActiveAt?.getTime() ?? -1;
+          const bAt = b.lastActiveAt?.getTime() ?? -1;
+          if (aAt !== bAt) return bAt - aAt;
+          return b.createdAt.getTime() - a.createdAt.getTime();
+        });
+    },
+
+    async countActive(ownerId) {
+      return [...rows.values()].filter((row) => row.ownerId === ownerId && row.endedAt === null).length;
     },
 
     async countLive(ownerId) {
@@ -173,7 +194,7 @@ export function makeAgentSessionStore(seed: AgentSessionRecord[] = []): FakeAgen
     },
   };
 
-  return { store, rows, reclaims, calls };
+  return { store, rows, reclaims, calls, conversationBindings };
 }
 
 export interface FakeSpriteHost {
