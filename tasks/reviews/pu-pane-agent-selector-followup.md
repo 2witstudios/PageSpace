@@ -85,11 +85,9 @@ something happen," it asks the one question the switch decision actually depends
   mints from different panes in the same session in quick succession both land, neither overwrites the
   other. No test added (would require reaching into SWR's internal mutate queue to observe ordering);
   reasoned through the SWR contract instead.
-- [ ] **minor, not actioned** · test coverage gap · No test exercises `recordMintedConversation` for a
-  `null` (Global Assistant) `agentPageId` specifically — the function is parameterized identically for
-  both cases and the existing agent-2 test exercises the same code path, so this is symmetric-logic
-  coverage rather than a distinct branch. Flagging so it isn't silently forgotten if
-  `recordMintedConversation` ever grows agent-specific branching.
+- [x] **minor, fixed** · test coverage gap · No test exercised `recordMintedConversation` for a `null`
+  (Global Assistant) `agentPageId`. Cheap and directly in-scope, so added rather than left noted:
+  "records a freshly minted GLOBAL ASSISTANT conversation locally too."
 - [ ] **not a defect** · perpetual-disable-on-a-permanently-denied-fetch · If `/api/agent-sessions`
   ever answers with a durable, non-recovering failure for this session specifically (not the transient
   case the new test covers — that one still resolves via SWR's retry/poll), the selector stays
@@ -99,8 +97,8 @@ something happen," it asks the one question the switch decision actually depends
   (same shape). No action.
 
 **Verdict: 2 blockers-in-practice found and fixed across two review rounds / 0 majors remaining /
-0 minors actioned / 1 minor noted-not-actioned / 2 nits verified.** Both original Codex findings from
-#2276 are now fixed with a gate that doesn't share their own failure mode, each covered by a
-regression test that fails on revert (traced by hand). No security-relevant surface touched
+1 minor fixed / 2 nits verified.** Both original Codex findings from #2276 are now fixed with a gate
+that doesn't share their own failure mode, each covered by a regression test that fails on revert
+(traced by hand). No security-relevant surface touched
 (client-side SWR cache + a disabled boolean; no new network requests, no auth/permission code, no user
 input handling). Merge-ready.

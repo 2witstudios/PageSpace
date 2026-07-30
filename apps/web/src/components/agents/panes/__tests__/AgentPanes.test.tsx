@@ -534,6 +534,43 @@ describe('AgentPanes', () => {
       expect(mockPost).toHaveBeenCalledTimes(1);
     });
 
+    it('records a freshly minted GLOBAL ASSISTANT conversation locally too (agentPageId: null), so switching back focuses rather than re-mints', async () => {
+      mockPost.mockResolvedValue({});
+      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+      renderPanes();
+      const user = userEvent.setup();
+      await user.click(await findEnabledSelector(/Researcher/));
+      await user.click(await screen.findByRole('menuitem', { name: 'Global Assistant' }));
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations', {
+          conversationId: 'new-id-1',
+        }),
+      );
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('new-id-1'));
+
+      // Same race as the named-agent case, for the null-agentPageId branch:
+      // switch away then back inside the poll window, sessions fixture
+      // never updated.
+      await user.click(await findEnabledSelector(/Global Assistant/));
+      await user.click(await screen.findByRole('menuitem', { name: /Researcher/ }));
+      await waitFor(() =>
+        expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].scope).toMatchObject({
+          targetId: 'conv-1',
+        }),
+      );
+
+      await user.click(await findEnabledSelector(/Researcher/));
+      await user.click(await screen.findByRole('menuitem', { name: /Global Assistant/ }));
+
+      await waitFor(() =>
+        expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].scope).toMatchObject({
+          targetId: 'new-id-1',
+          agentPageId: null,
+        }),
+      );
+      expect(mockPost).toHaveBeenCalledTimes(1);
+    });
+
     it("disables the selector while the pane's chat is streaming", async () => {
       mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
       usePendingStreamsStore.getState().addStream({
