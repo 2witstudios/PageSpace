@@ -462,6 +462,23 @@ describe('AgentPageView', () => {
       expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2');
     });
 
+    it('reports an error rather than crashing when the replacement mint itself fails', async () => {
+      // The listing close already succeeded server-side by the time this
+      // runs — only the replacement POST fails (network, lost permission, a
+      // concurrent cap fill). Without a catch this was an unhandled
+      // rejection (caught in review).
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      mockCreatePageConversation.mockRejectedValue(new Error('quota exceeded'));
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      conversationsState.lastOnConversationDelete?.('conv-1');
+
+      await waitFor(() => expect(consoleErrorSpy).toHaveBeenCalled());
+      consoleErrorSpy.mockRestore();
+    });
+
     it('the History tab "New" button is unaffected — it always spawns a fresh session, never reuses', async () => {
       resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
       mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-3', sessionId: 'ses-new' });

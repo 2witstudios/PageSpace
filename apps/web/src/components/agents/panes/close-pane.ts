@@ -123,6 +123,16 @@ export function decideClosePane(params: {
   // state; fall back to the same rule as a non-chat pane.
   const isOpenListed = activeConversations?.some((c) => c.conversationId === conversationId) ?? false;
   if (!isOpenListed) {
+    // Genuinely UNKNOWN (never resolved, or the fetch failed) is not the same
+    // fact as "resolved and confirmed not open" — the latter really has
+    // nothing left to DELETE (someone else already closed it), but the
+    // former does not. Falling through to `notThisPanesConversation` here
+    // would, for a non-grid-last pane, silently treat this as a pure layout
+    // close — the conversation's actual listing stays open server-side,
+    // lingering in the sidebar and holding a cap slot forever with no pane
+    // left to retry the close from (caught in review). `noop` regardless of
+    // pane count, same discipline `gridLastFallback` already applies.
+    if (activeConversations === null) return { action: 'noop' };
     return notThisPanesConversation(isGridLast, activeConversations);
   }
 

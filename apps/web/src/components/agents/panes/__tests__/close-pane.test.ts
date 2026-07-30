@@ -136,13 +136,18 @@ describe('decideClosePane', () => {
 
   describe('the listing has not loaded, or no longer lists this conversation', () => {
     it('given a null (unloaded) listing, should never act on the unverified state — not grid-last', () => {
+      // Genuinely unknown (never resolved, or the fetch failed) is NOT the
+      // same fact as "resolved and confirmed not open" (the next test) — a
+      // layout-only close here would leave the conversation's actual listing
+      // open server-side with no pane left to retry the close from (caught
+      // in review). `noop`, same discipline as the grid-last case below.
       expect(
         decideClosePane({
           panes: [chatPane('p1', 'conv-1'), terminalPane('p2')],
           paneId: 'p1',
           activeConversations: null,
         }),
-      ).toEqual({ action: 'close-pane' });
+      ).toEqual({ action: 'noop' });
     });
 
     it('given a null listing AND the pane is grid-last, should no-op rather than guess at ending the session', () => {
