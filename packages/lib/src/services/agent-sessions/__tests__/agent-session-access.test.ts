@@ -78,28 +78,36 @@ describe('checkAgentSessionEndAccess', () => {
     const result = await checkAgentSessionEndAccess({
       requesterId: OWNER_ID,
       sessionId: 'missing',
-      deps: { findSession: async () => null, resolveDriveMembership: async () => 'member' },
+      deps: makeDeps({ findSession: async () => null }),
     });
     expect(result).toEqual({ allowed: false, reason: 'session_not_found' });
   });
 
-  it('cannot consult canRunCode — the dep is not even in its type', async () => {
-    // Enforced structurally (Omit<'canRunCode'>): an end check that could
-    // consult the capability would be one refactor away from gating on it,
-    // and ending is release-of-compute.
+  it('gathers the REAL capability for a non-owner — a member without it cannot end (review H3)', async () => {
     const result = await checkAgentSessionEndAccess({
       requesterId: 'user-2',
       sessionId: SESSION_ID,
-      deps: { findSession: async () => subject, resolveDriveMembership: async () => 'member' },
+      deps: makeDeps({ canRunCode: async () => false }),
+    });
+    expect(result).toEqual({ allowed: false, reason: 'code_execution_denied' });
+  });
+
+  it('a member WITH the capability may end — shared compute, ordinary session management', async () => {
+    const result = await checkAgentSessionEndAccess({
+      requesterId: 'user-2',
+      sessionId: SESSION_ID,
+      deps: makeDeps({ canRunCode: async () => true }),
     });
     expect(result).toEqual({ allowed: true });
   });
 
-  it('given the session OWNER without drive membership, should still allow the end', async () => {
+  it('given the session OWNER without drive membership OR capability, should still allow the end', async () => {
+    // Release-of-compute is the owner's emergency exit — the short-circuit in
+    // the pure decider, exercised through the gather.
     const result = await checkAgentSessionEndAccess({
       requesterId: OWNER_ID,
       sessionId: SESSION_ID,
-      deps: { findSession: async () => subject, resolveDriveMembership: async () => 'none' },
+      deps: makeDeps({ resolveDriveMembership: async () => 'none', canRunCode: async () => false }),
     });
     expect(result).toEqual({ allowed: true });
   });

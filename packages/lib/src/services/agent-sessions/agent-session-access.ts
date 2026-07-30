@@ -74,12 +74,12 @@ export async function checkAgentSessionAccess({
 }
 
 /**
- * The END-SESSION gather, wrapping {@link decideAgentSessionEndAccess}: the
- * scope facts only, because ending a session is release of compute and must
- * survive a lost `canRunCode` (see the pure decider's doc — the owner may also
- * end a session in a drive they were removed from). The `canRunCode` dep is
- * deliberately not in this function's `Pick` — an end check that could consult
- * it would be one refactor away from gating on it.
+ * The END-SESSION gather, wrapping {@link decideAgentSessionEndAccess}. Same
+ * three facts as the main check — the decider's owner short-circuit is what
+ * keeps release-of-compute alive for an owner who lost the capability or the
+ * drive; for everyone else the REAL `canRunCode` is gathered and weighed
+ * (review finding H3: pinning it true handed destructive power to drive
+ * members with no code-execution rights).
  */
 export async function checkAgentSessionEndAccess({
   requesterId,
@@ -88,15 +88,17 @@ export async function checkAgentSessionEndAccess({
 }: {
   requesterId: string;
   sessionId: string;
-  deps: Omit<AgentSessionAccessDeps, 'canRunCode'>;
+  deps: AgentSessionAccessDeps;
 }): Promise<AgentSessionAccessCheck> {
   const session = await deps.findSession(sessionId);
   if (!session) return { allowed: false, reason: 'session_not_found' };
 
-  const driveMembership =
+  const [driveMembership, canRunCode] = await Promise.all([
     session.driveId === null
-      ? null
-      : await deps.resolveDriveMembership({ userId: requesterId, driveId: session.driveId });
+      ? Promise.resolve(null)
+      : deps.resolveDriveMembership({ userId: requesterId, driveId: session.driveId }),
+    deps.canRunCode({ userId: requesterId, driveId: session.driveId }),
+  ]);
 
-  return decideAgentSessionEndAccess({ requesterId, session, driveMembership });
+  return decideAgentSessionEndAccess({ requesterId, session, driveMembership, canRunCode });
 }

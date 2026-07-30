@@ -223,11 +223,10 @@ export async function checkSessionEndAccess(
   requesterId: string,
   sessionId: string,
 ): Promise<AgentSessionAccessCheck> {
-  const { findSession, resolveDriveMembership: resolveMembership } = buildAccessDeps();
   return checkAgentSessionEndAccess({
     requesterId,
     sessionId,
-    deps: { findSession, resolveDriveMembership: resolveMembership },
+    deps: buildAccessDeps(),
   });
 }
 

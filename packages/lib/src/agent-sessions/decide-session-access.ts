@@ -96,24 +96,24 @@ export function decideAgentSessionAccess({
   return { allowed: true };
 }
 
-export type DecideAgentSessionEndAccessInput = Omit<DecideAgentSessionAccessInput, 'canRunCode'>;
+export type DecideAgentSessionEndAccessInput = DecideAgentSessionAccessInput;
 
 /**
- * The END-SESSION variant: the scope gate with TWO deliberate widenings.
+ * The END-SESSION variant: ONE deliberate widening, for the owner only.
  *
- *  - No capability gate. Ending a session is release-of-compute, and the
- *    lifecycle planner already decided teardown runs unconditional on
- *    `canRun` — an actor who just LOST the right to a sandbox (the flag
- *    flipped off, an admin role revoked) must still be able to end their own
- *    session, or the Sprite bills until an operator notices.
- *  - The session's OWNER may always end it, drive membership or not. An owner
- *    removed from a drive loses USE of the session (the main decision above)
- *    but must keep the power to stop paying for it — the same
- *    release-of-compute principle, applied to the scope gate.
+ * The session's OWNER may always end it — no drive membership, no capability.
+ * Ending is release-of-compute: an owner who just lost `canRunCode` (flag
+ * flipped, admin role revoked) or was removed from the drive must still be
+ * able to stop paying for their Sprite, or it bills until an operator
+ * notices.
  *
- * Delegates to {@link decideAgentSessionAccess} with the capability pinned
- * true and the owner short-circuited, so the deciders cannot drift on the
- * gate they share.
+ * NON-owners get the full decision, real capability included. The previous
+ * shape pinned `canRunCode: true` on the fallthrough, which handed every
+ * accepted drive member — including ones with no code-execution rights at
+ * all — the power to destroy other members' sessions and kill their live
+ * shells (review finding H3). Release-of-compute is the OWNER's emergency
+ * exit; a collaborator ending shared compute is ordinary session management
+ * and is gated exactly like every other session action.
  */
 export function decideAgentSessionEndAccess(
   input: DecideAgentSessionEndAccessInput,
@@ -121,5 +121,5 @@ export function decideAgentSessionEndAccess(
   if (input.requesterId.length > 0 && input.requesterId === input.session.ownerId) {
     return { allowed: true };
   }
-  return decideAgentSessionAccess({ ...input, canRunCode: true });
+  return decideAgentSessionAccess(input);
 }

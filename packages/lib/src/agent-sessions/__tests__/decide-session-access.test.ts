@@ -85,29 +85,44 @@ describe('decideAgentSessionAccess — degenerate input', () => {
 });
 
 describe('decideAgentSessionEndAccess', () => {
-  it('lets a member end without the capability — ending is release of compute', () => {
-    // An actor who just LOST canRunCode must still be able to stop paying.
+  it('lets the OWNER end without the capability — release of compute is the owner\'s emergency exit', () => {
+    // An owner who just LOST canRunCode must still be able to stop paying.
     expect(
-      decideAgentSessionEndAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'member' }),
+      decideAgentSessionEndAccess({ requesterId: 'owner-1', session: driveSession, driveMembership: 'member', canRunCode: false }),
     ).toEqual({ allowed: true });
   });
 
   it('lets the OWNER end even after losing the drive — same principle, scope gate', () => {
     // Use is gone (the main decision denies), but the power to stop paying is not.
     expect(
-      decideAgentSessionEndAccess({ requesterId: 'owner-1', session: driveSession, driveMembership: 'none' }),
+      decideAgentSessionEndAccess({ requesterId: 'owner-1', session: driveSession, driveMembership: 'none', canRunCode: false }),
     ).toEqual({ allowed: true });
+  });
+
+  it('lets a member WITH the capability end — collaborators manage shared compute like any other session action', () => {
+    expect(
+      decideAgentSessionEndAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'member', canRunCode: true }),
+    ).toEqual({ allowed: true });
+  });
+
+  it('refuses a member WITHOUT the capability — review H3: destroying compute is not release, for a non-owner', () => {
+    // The old shape pinned canRunCode true here, handing every drive member —
+    // including ones with no code-execution rights — the power to kill other
+    // members' sessions and shells.
+    expect(
+      decideAgentSessionEndAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'member', canRunCode: false }),
+    ).toEqual({ allowed: false, reason: 'code_execution_denied' });
   });
 
   it("still refuses a non-member non-owner — releasing someone else's compute is touching their session", () => {
     expect(
-      decideAgentSessionEndAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'none' }),
+      decideAgentSessionEndAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'none', canRunCode: true }),
     ).toEqual({ allowed: false, reason: 'drive_access_denied' });
   });
 
   it('refuses an empty requester — the owner short-circuit must not bypass the degenerate gate', () => {
     expect(
-      decideAgentSessionEndAccess({ requesterId: '', session: { ...driveSession, ownerId: '' }, driveMembership: 'owner' }),
+      decideAgentSessionEndAccess({ requesterId: '', session: { ...driveSession, ownerId: '' }, driveMembership: 'owner', canRunCode: true }),
     ).toEqual({ allowed: false, reason: 'invalid_requester' });
   });
 });
