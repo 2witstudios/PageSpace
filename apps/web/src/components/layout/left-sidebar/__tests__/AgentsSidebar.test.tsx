@@ -19,7 +19,7 @@
  * - The admin gate is a DISABLED FETCH (null SWR key), not a hidden list.
  */
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SWRConfig } from 'swr';
 
@@ -37,6 +37,9 @@ vi.mock('next/navigation', () => ({
 
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => mockUseAuth() }));
 vi.mock('@/hooks/useBreakpoint', () => ({ useBreakpoint: () => mockUseBreakpoint() }));
+
+const mockUseTouchDevice = vi.fn(() => false);
+vi.mock('@/hooks/useTouchDevice', () => ({ useTouchDevice: () => mockUseTouchDevice() }));
 
 interface PageAgentsResult {
   agentsByDrive: {
@@ -77,11 +80,18 @@ vi.mock('@/hooks/page-agents/usePageAgents', () => ({
 const mockFetchWithAuth = vi.fn();
 const mockPost = vi.fn();
 const mockDel = vi.fn();
-vi.mock('@/lib/auth/auth-fetch', () => ({
-  fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args),
-  post: (...args: unknown[]) => mockPost(...args),
-  del: (...args: unknown[]) => mockDel(...args),
-}));
+vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => {
+  // `ApiRequestError` is re-exported from the REAL module (not hand-rolled)
+  // so the component's `instanceof` check on a mocked-`del` rejection stays
+  // true to the actual class the real `del()` throws.
+  const actual = await importOriginal<typeof import('@/lib/auth/auth-fetch')>();
+  return {
+    ...actual,
+    fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args),
+    post: (...args: unknown[]) => mockPost(...args),
+    del: (...args: unknown[]) => mockDel(...args),
+  };
+});
 
 // Sidebar chrome that isn't under test.
 vi.mock('@/components/layout/navbar/DriveSwitcher', () => ({ default: () => <div /> }));
@@ -90,6 +100,7 @@ vi.mock('../DriveFooter', () => ({ default: () => <div /> }));
 vi.mock('../DashboardFooter', () => ({ default: () => <div /> }));
 
 import { within } from '@testing-library/react';
+import { ApiRequestError } from '@/lib/auth/auth-fetch';
 import AgentsSidebar from '../AgentsSidebar';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
@@ -166,6 +177,7 @@ beforeEach(() => {
   mockUseParams.mockReturnValue({ driveId: 'drive-1' });
   mockUsePathname.mockReturnValue('/dashboard/drive-1/agents');
   mockUseBreakpoint.mockReturnValue(false);
+  mockUseTouchDevice.mockReturnValue(false);
   respondWithSessions([SESSION]);
 });
 
@@ -214,7 +226,7 @@ describe('AgentsSidebar', () => {
     renderSidebar();
 
     expect(await screen.findByText(/no sessions in this drive/i)).toBeDefined();
-    expect(screen.getByText('New session')).toBeDefined();
+    expect(screen.getByLabelText('New session')).toBeDefined();
   });
 
   test('never lists panes — the second level is conversations', async () => {
@@ -334,16 +346,13 @@ describe('AgentsSidebar', () => {
   });
 
   describe('new session', () => {
-    test('one act: pick an agent, get the session AND its first conversation, land inside it', async () => {
+    test('the inline "+" opens a searchable agent palette; picking an agent is one act: session AND its first conversation, land inside it', async () => {
       mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-new' });
       const user = userEvent.setup();
       renderSidebar();
 
-      // Let the session list land first: the loading state renders its own
-      // "New session" row, and clicking THAT one loses the open chooser when
-      // the loaded list replaces it.
       await screen.findByText('api refactor');
-      await user.click(screen.getByText('New session'));
+      await user.click(screen.getByLabelText('New session'));
       await user.click(await screen.findByText('Researcher'));
 
       await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
@@ -370,7 +379,7 @@ describe('AgentsSidebar', () => {
       renderSidebar();
 
       await screen.findByText('api refactor');
-      await user.click(screen.getByText('New session'));
+      await user.click(screen.getByLabelText('New session'));
 
       expect(await screen.findByText(/no agents in this drive/i)).toBeDefined();
     });
@@ -418,6 +427,125 @@ describe('AgentsSidebar', () => {
     });
   });
 
+  describe('session row menu', () => {
+    test('the 3-dots button is auto-revealed on a touch device', async () => {
+      mockUseTouchDevice.mockReturnValue(true);
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      expect(screen.getByLabelText('Session actions').className).toContain('opacity-100');
+    });
+
+    test('the 3-dots button is hover-revealed (opacity-0 at rest) on a non-touch device', async () => {
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      expect(screen.getByLabelText('Session actions').className).toContain('opacity-0');
+    });
+
+    test('right-click opens a context menu; "New conversation" drives the same handler as the inline icon', async () => {
+      mockPost.mockResolvedValue({ conversationId: 'conv-new' });
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      fireEvent.contextMenu(screen.getByText('api refactor'));
+      await user.click(await screen.findByText('New conversation'));
+
+      await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
+      expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-1/conversations', {
+        sessionId: 'ses-1',
+      });
+    });
+
+    test('"End session" from the context menu opens the same confirm dialog as the inline X', async () => {
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      fireEvent.contextMenu(screen.getByText('api refactor'));
+      await user.click(await screen.findByText('End session'));
+
+      expect(await screen.findByRole('alertdialog')).toBeDefined();
+    });
+
+    test('the 3-dots dropdown opens the same two items, driving the same handlers', async () => {
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      await user.click(screen.getByLabelText('Session actions'));
+
+      expect(await screen.findByText('New conversation')).toBeDefined();
+      await user.click(screen.getByText('End session'));
+
+      expect(await screen.findByRole('alertdialog')).toBeDefined();
+    });
+  });
+
+  describe('conversation close', () => {
+    test('right-click "Close" DELETEs the session-scoped route and refetches on success', async () => {
+      mockDel.mockResolvedValue(undefined);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      const fetchesBefore = mockFetchWithAuth.mock.calls.length;
+      fireEvent.contextMenu(await screen.findByText('First chat'));
+      await user.click(await screen.findByText('Close'));
+
+      await waitFor(() =>
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'),
+      );
+      // Instant sidebar freshness, same as the session row's other mutating actions.
+      await waitFor(() => expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(fetchesBefore));
+    });
+
+    test('the 3-dots dropdown "Close" drives the same DELETE', async () => {
+      mockDel.mockResolvedValue(undefined);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      // Two conversations render — each gets its own "Conversation actions"
+      // trigger, so scope to "First chat"'s own row.
+      const firstChatRow = (await screen.findByText('First chat')).closest(
+        '[data-slot="context-menu-trigger"]',
+      ) as HTMLElement;
+      await user.click(within(firstChatRow).getByLabelText('Conversation actions'));
+      await user.click(await screen.findByText('Close'));
+
+      await waitFor(() =>
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'),
+      );
+    });
+
+    test('a 409 (the session\'s last open listing) falls back to the end-session confirm dialog, mirroring the pane grid', async () => {
+      mockDel.mockRejectedValue(new ApiRequestError('last open listing', 409));
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      fireEvent.contextMenu(await screen.findByText('First chat'));
+      await user.click(await screen.findByText('Close'));
+
+      expect(await screen.findByRole('alertdialog')).toBeDefined();
+    });
+
+    test('a non-409 failure shows an error toast, not the end-session dialog', async () => {
+      mockDel.mockRejectedValue(new ApiRequestError('boom', 500));
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      fireEvent.contextMenu(await screen.findByText('First chat'));
+      await user.click(await screen.findByText('Close'));
+
+      await waitFor(() => expect(mockDel).toHaveBeenCalled());
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+    });
+  });
+
   describe('global mode', () => {
     beforeEach(() => {
       mockUseParams.mockReturnValue({});
@@ -430,8 +558,14 @@ describe('AgentsSidebar', () => {
       useDriveStore.setState({ drives: [driveFixture('drive-1', 'Alpha')] });
     });
 
-    /** The group div wrapping a header, its sessions, and its "+ New session" row. */
-    const groupContainer = (headerText: string) => screen.getByText(headerText).parentElement as HTMLElement;
+    /**
+     * The group div wrapping a header row (name + inline "+") and its
+     * sessions. The name lives in a `<span>` inside the header row now (not
+     * the header row's own text), so it's two parents up: span → header row
+     * → group.
+     */
+    const groupContainer = (headerText: string) =>
+      screen.getByText(headerText).parentElement?.parentElement as HTMLElement;
 
     test('fetches every accessible session and groups them under a drive header', async () => {
       renderSidebar();
@@ -449,9 +583,9 @@ describe('AgentsSidebar', () => {
 
       expect(await screen.findByText('Alpha')).toBeDefined();
       expect(screen.getByText('Beta')).toBeDefined();
-      // Every roster drive gets its own spawn affordance, whether or not it has
-      // a session — plus the Assistant group's own.
-      expect(screen.getAllByText('New session')).toHaveLength(3);
+      // Every roster drive gets its own inline spawn affordance, whether or
+      // not it has a session — plus the Assistant group's own.
+      expect(screen.getAllByRole('button', { name: /^New session/i })).toHaveLength(3);
     });
 
     test('excludes trashed drives from the roster, matching DriveSwitcher and the multi-drive agents API', async () => {
@@ -482,18 +616,18 @@ describe('AgentsSidebar', () => {
       await screen.findByText('lingering session');
       // The orphan header falls back to the raw id — the trash-filtered
       // roster has no name to offer for it.
-      expect(within(groupContainer('drive-2')).queryByText('New session')).toBeNull();
+      expect(within(groupContainer('drive-2')).queryByRole('button', { name: /^New session/i })).toBeNull();
       // An active roster drive is unaffected.
-      expect(within(groupContainer('Alpha')).getByText('New session')).toBeDefined();
+      expect(within(groupContainer('Alpha')).getByRole('button', { name: /^New session/i })).toBeDefined();
     });
 
     test('shows no roster groups for a non-admin — refusal-only, not a dead spawn chooser', () => {
       // The admin gate must cover the roster too: previously only the
       // Assistant group's visibility was tied to admin status, so a
       // non-admin with drives in the persisted store would see every
-      // roster drive's header and "+ New session" row alongside the
-      // refusal notice, each expanding into an empty chooser since
-      // usePageAgents is disabled for them.
+      // roster drive's header and its inline "+" alongside the refusal
+      // notice, opening onto an empty palette since usePageAgents is
+      // disabled for them.
       mockUseAuth.mockReturnValue({ user: { role: 'user' }, isLoading: false });
       useDriveStore.setState({ drives: [driveFixture('drive-1', 'Alpha')] });
 
@@ -502,7 +636,7 @@ describe('AgentsSidebar', () => {
       expect(screen.getByText(/administrator privileges/i)).toBeDefined();
       expect(screen.queryByText('Alpha')).toBeNull();
       expect(screen.queryByText('Assistant')).toBeNull();
-      expect(screen.queryByText('New session')).toBeNull();
+      expect(screen.queryByRole('button', { name: /^New session/i })).toBeNull();
       expect(mockFetchWithAuth).not.toHaveBeenCalled();
     });
 
@@ -513,7 +647,7 @@ describe('AgentsSidebar', () => {
       renderSidebar();
 
       await screen.findByText('Alpha');
-      await user.click(within(groupContainer('Alpha')).getByText('New session'));
+      await user.click(within(groupContainer('Alpha')).getByRole('button', { name: /^New session/i }));
       await user.click(await screen.findByText('Researcher'));
 
       await waitFor(() =>
@@ -533,9 +667,9 @@ describe('AgentsSidebar', () => {
       renderSidebar();
 
       expect(await screen.findByText('Assistant')).toBeDefined();
-      // Scoped: the roster's own drive group also renders its own "New
-      // session" row now, so an unscoped query would be ambiguous.
-      await user.click(within(groupContainer('Assistant')).getByText('New session'));
+      // Scoped: the roster's own drive group also renders its own inline "+"
+      // now, so an unscoped query would be ambiguous.
+      await user.click(within(groupContainer('Assistant')).getByRole('button', { name: /^New session/i }));
 
       await waitFor(() => expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {}));
       await waitFor(() => expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-a'));
