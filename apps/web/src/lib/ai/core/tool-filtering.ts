@@ -5,6 +5,7 @@
  * toggles that filter out specific tools based on user settings.
  */
 
+import { SANDBOX_CORE_TOOL_NAMES } from '../tools/sandbox-tools';
 import { SANDBOX_GIT_TOOL_NAMES } from '../tools/sandbox-git-tools';
 import { parseIntegrationToolName } from '@pagespace/lib/integrations/converter/ai-sdk';
 
@@ -133,8 +134,9 @@ const WEB_SEARCH_TOOLS = new Set(['web_search', 'web_fetch']);
  * The SESSION + SHELL families — the agent-session orchestration surface
  * (spawn/send/read/kill workers; spawn/send/read/kill PTY shells in the
  * caller's own session's sandbox). Registered alongside bash/git behind the
- * CODE_EXECUTION kill-switch in `buildPageSpaceTools`; a conversation IS a
- * session, so there is no binding to gate registration on.
+ * CODE_EXECUTION kill-switch in `buildPageSpaceTools`; the tools resolve the
+ * caller's SESSION from its conversation at call time, so there is no
+ * binding to gate registration on.
  *
  * Exported for the read-only DRIFT GUARD in this module's tests: every mutating
  * member must appear in `WRITE_TOOLS` (or a read-only agent could spawn a shell
@@ -154,6 +156,39 @@ export const SESSION_FAMILY_TOOL_NAMES: readonly string[] = [
   'read_shell',
   'kill_shell',
 ];
+
+/**
+ * The WHOLE sandbox tool surface — the three families a `sandboxEnabled: false`
+ * agent must not see: core execution (bash/files), the git+gh CLI toolkit, and
+ * session/shell orchestration (whose entire point is the sandbox a session
+ * lazily owns). The per-agent settings switch (`pages.sandboxEnabled`,
+ * successor to the old machineAccess toggle + MACHINE_TOOL_NAMES filter) gates
+ * these BOTH at listing time (the settings tab's Default Tools) and at request
+ * time (`filterToolsForSandboxEnablement` below) — hiding a tool from a picker
+ * is not a gate. The env kill-switch and per-call `canRunCode` remain the
+ * security boundaries underneath; this is agent configuration, not authz.
+ */
+export const SANDBOX_TOOL_NAMES: ReadonlySet<string> = new Set([
+  ...SANDBOX_CORE_TOOL_NAMES,
+  ...SANDBOX_GIT_TOOL_NAMES,
+  ...SESSION_FAMILY_TOOL_NAMES,
+]);
+
+/**
+ * Apply the per-agent sandbox switch: `sandboxEnabled: false` (the default —
+ * code execution is opt-in per agent, as machineAccess was) strips every
+ * sandbox-family tool from the set. Provisioning stays lazy and automatic for
+ * an ENABLED agent — this filter is the only thing the switch controls.
+ */
+export function filterToolsForSandboxEnablement<T>(
+  tools: Record<string, T>,
+  sandboxEnabled: boolean
+): Record<string, T> {
+  if (sandboxEnabled) return tools;
+  return Object.fromEntries(
+    Object.entries(tools).filter(([name]) => !SANDBOX_TOOL_NAMES.has(name))
+  );
+}
 
 // Image-generation tools (a runtime composer toggle, like web search — filtered
 // independently of the saved per-agent allow-list).

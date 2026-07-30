@@ -48,15 +48,60 @@ export const sandboxStatusSchema = z.enum(SANDBOX_STATUSES);
 export type SandboxStatus = z.infer<typeof sandboxStatusSchema>;
 
 /**
- * The agent types a shell can run. PTY-only by construction: a shell is always a
- * real PTY process, and the session's chat surface is the conversation itself —
- * so the legacy `'pagespace'` chat-surface type has no successor here. New PTY
- * agent CLIs are added as entries; nothing branches on which one it got.
+ * The agent types a SHELL can run. PTY-only, because this names what a row in
+ * `agent_session_shells` is — a real PTY process — and nothing else.
+ *
+ * Read narrowly. The legacy `AGENT_LAUNCH_SPECS` carried two entries
+ * (`pagespace` → surface `'chat'`, `shell` → surface `'pty'`) because ONE table
+ * held both kinds and needed a discriminator. This model splits them:
+ * `agent_sessions` holds conversations, `agent_session_shells` holds PTYs. So
+ * the chat type has no successor *here* — but that is a fact about this table,
+ * NOT about what a pane can display.
+ *
+ * An earlier draft of this comment claimed PTY-only "by construction" as though
+ * it settled the whole surface, and that reading is what removed the ability to
+ * open an agent conversation in a pane. A pane's binding carries its own
+ * `kind` (`'chat' | 'terminal'`) and the id it addresses — a conversationId or
+ * a shellId — written at bind time by the path that knew what it spawned.
  */
 export const SHELL_AGENT_TYPES = ['shell'] as const;
 
 export const shellAgentTypeSchema = z.enum(SHELL_AGENT_TYPES);
 export type ShellAgentType = z.infer<typeof shellAgentTypeSchema>;
+
+/**
+ * What a pane displays. The discriminator lives on the PANE BINDING rather than
+ * on either row type, because the two surfaces are now two different tables and
+ * a pane is the one place that has to talk about both.
+ *
+ * `'chat'` addresses a conversation (one thread among the session's many —
+ * invariant 1); `'terminal'` addresses a `shellId`.
+ */
+export const PANE_KINDS = ['chat', 'terminal'] as const;
+
+export const paneKindSchema = z.enum(PANE_KINDS);
+export type PaneKind = z.infer<typeof paneKindSchema>;
+
+/**
+ * A pane's binding: what it shows, and the id it shows it for. `null` id is a
+ * bound-but-not-yet-resolved pane (the picker just chose a kind); an unbound
+ * pane stores no scope at all and renders the picker.
+ */
+export const paneScopeSchema = z.object({
+  kind: paneKindSchema,
+  /** Display label — the conversation title or the shell name. Never an address. */
+  name: z.string(),
+  /** The conversationId (chat) or shellId (terminal) this pane is bound to. */
+  targetId: z.string().min(1).nullable(),
+  /**
+   * Which agent the conversation belongs to, for a `'chat'` pane. Null for a
+   * global-assistant conversation, and irrelevant for a terminal — so a single
+   * grid can hold conversations with several different agents side by side.
+   */
+  agentPageId: z.string().min(1).nullable(),
+});
+
+export type PaneScope = z.infer<typeof paneScopeSchema>;
 
 /** Wire timestamps are ISO-8601 strings; `Date` never crosses the boundary. */
 const isoTimestamp = z.string().datetime();

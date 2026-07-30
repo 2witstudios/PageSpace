@@ -12,6 +12,8 @@ import {
   MAX_COLS,
   MAX_ROWS,
   SHELL_AGENT_TYPES,
+  PANE_KINDS,
+  paneScopeSchema,
 } from '../contract';
 
 const session = {
@@ -185,5 +187,54 @@ describe('shellConnectPayloadSchema', () => {
     expect(parsed.projectName).toBeUndefined();
     expect(parsed.branchName).toBeUndefined();
     expect(parsed.sessionId).toBeUndefined();
+  });
+});
+
+describe('paneScopeSchema', () => {
+  it('should offer BOTH surfaces — a pane that can only be a terminal makes panes pointless', () => {
+    // The regression this guards: `SHELL_AGENT_TYPES` being PTY-only was read as
+    // "the whole pane surface is PTY-only", which removed the ability to open an
+    // agent conversation in a pane and left splitting with nothing to split into.
+    expect([...PANE_KINDS].sort()).toEqual(['chat', 'terminal']);
+  });
+
+  it('should bind a chat pane to a conversation and its agent', () => {
+    const parsed = paneScopeSchema.parse({
+      kind: 'chat',
+      name: 'Planning',
+      targetId: 'conv-1',
+      agentPageId: 'page-1',
+    });
+    expect(parsed).toEqual({ kind: 'chat', name: 'Planning', targetId: 'conv-1', agentPageId: 'page-1' });
+  });
+
+  it('should allow a null agentPageId — a global-assistant conversation has no agent page', () => {
+    expect(
+      paneScopeSchema.safeParse({ kind: 'chat', name: 'Assistant', targetId: 'conv-2', agentPageId: null }).success,
+    ).toBe(true);
+  });
+
+  it('should let two panes name different agents, so one grid holds several side by side', () => {
+    const left = paneScopeSchema.parse({ kind: 'chat', name: 'A', targetId: 'conv-a', agentPageId: 'agent-a' });
+    const right = paneScopeSchema.parse({ kind: 'chat', name: 'B', targetId: 'conv-b', agentPageId: 'agent-b' });
+    expect(left.agentPageId).not.toBe(right.agentPageId);
+  });
+
+  it('should accept a null targetId — the picker chose a kind before the row exists', () => {
+    expect(
+      paneScopeSchema.safeParse({ kind: 'terminal', name: 'shell-1', targetId: null, agentPageId: null }).success,
+    ).toBe(true);
+  });
+
+  it('should reject an empty targetId — absent is a state, blank is a bug', () => {
+    expect(
+      paneScopeSchema.safeParse({ kind: 'terminal', name: 'shell-1', targetId: '', agentPageId: null }).success,
+    ).toBe(false);
+  });
+
+  it('should reject an unknown kind', () => {
+    expect(
+      paneScopeSchema.safeParse({ kind: 'pagespace', name: 'x', targetId: 'c1', agentPageId: null }).success,
+    ).toBe(false);
   });
 });

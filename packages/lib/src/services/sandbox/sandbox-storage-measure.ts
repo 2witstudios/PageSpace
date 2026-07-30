@@ -93,7 +93,7 @@ export function shouldRefreshMeasurement(input: {
 }
 
 export type PersistSessionStorageMeasurement = (input: {
-  /** The `agent_sessions` PK (≡ conversationId) whose row receives the measurement. */
+  /** The `agent_sessions` PK (the workspace row id) whose row receives the measurement. */
   sessionId: string;
   measuredBytes: number;
   measuredAt: Date;

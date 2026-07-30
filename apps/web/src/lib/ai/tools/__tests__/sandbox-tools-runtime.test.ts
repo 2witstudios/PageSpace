@@ -335,7 +335,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     mockFindSessionForConversation.mockResolvedValue(null);
     const deps = buildRealSandboxRunDeps();
     const result = await deps.acquireSandbox(baseInput());
-    expect(result).toEqual({ ok: false, reason: 'provision_failed', cause: 'no_session' });
+    expect(result).toEqual({ ok: false, reason: 'no_session' });
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
     expect(mockRecordMachineActivity).not.toHaveBeenCalled();
   });

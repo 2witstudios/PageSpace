@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Loader2, Bot, FolderTree, Shield, Copy, Check, Code2, Wrench } from 'lucide-react';
+import { Loader2, Bot, FolderTree, Shield, Copy, Check, Code2, Wrench, TerminalSquare } from 'lucide-react';
 import { toast } from 'sonner';
 import { useForm, useFormState, Controller } from 'react-hook-form';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -15,6 +15,7 @@ import Link from 'next/link';
 import { AI_PROVIDERS, getVisibleProviders } from '@/lib/ai/core/ai-providers-config';
 import { getRoleColorClasses } from '@/lib/utils';
 import { AgentDrivesCard } from './AgentDrivesCard';
+import { SANDBOX_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
 import { useEditingStore } from '@/stores/useEditingStore';
 
 interface AgentConfig {
@@ -30,6 +31,7 @@ interface AgentConfig {
   includePageTree?: boolean;
   pageTreeScope?: 'children' | 'drive';
   toolExposureMode?: 'upfront' | 'search';
+  sandboxEnabled?: boolean;
 }
 
 interface AgentMembership {
@@ -108,6 +110,7 @@ interface FormData {
   includePageTree: boolean;
   pageTreeScope: 'children' | 'drive';
   toolExposureMode: 'upfront' | 'search';
+  sandboxEnabled: boolean;
 }
 
 const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettingsTabProps>(({
@@ -202,6 +205,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       includePageTree: config?.includePageTree ?? false,
       pageTreeScope: config?.pageTreeScope ?? 'children',
       toolExposureMode: config?.toolExposureMode ?? 'upfront',
+      sandboxEnabled: config?.sandboxEnabled ?? false,
     }
   });
 
@@ -219,6 +223,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
         includePageTree: config.includePageTree ?? false,
         pageTreeScope: config.pageTreeScope ?? 'children',
         toolExposureMode: config.toolExposureMode ?? 'upfront',
+        sandboxEnabled: config.sandboxEnabled ?? false,
       });
     }
   }, [config, reset, selectedProvider, selectedModel]);
@@ -354,9 +359,18 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   // Watch enabledTools for the count display
   const enabledTools = watch('enabledTools', []);
 
+  // The sandbox switch gates the sandbox tool families out of the Default
+  // Tools list (the old machineAccess/MACHINE_TOOL_NAMES behaviour). The
+  // request-time filter in tool-filtering.ts is the real gate; this keeps the
+  // picker from offering tools the agent will never receive.
+  const sandboxEnabled = watch('sandboxEnabled', false);
+
   const visibleTools = useMemo(
-    () => config?.availableTools || [],
-    [config]
+    () =>
+      (config?.availableTools || []).filter(
+        (tool) => sandboxEnabled || !SANDBOX_TOOL_NAMES.has(tool.name)
+      ),
+    [config, sandboxEnabled]
   );
 
   const handleSelectAllTools = () => {
@@ -691,6 +705,39 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
 
         {/* Drives this agent can access */}
         <AgentDrivesCard agentPageId={pageId} />
+
+        {/* Sandbox — successor to the old Machine Access card, minus the
+            machine topology: there is nothing to pick, because the sandbox
+            belongs to the conversation's SESSION and is provisioned
+            automatically the first time the agent needs it. */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <TerminalSquare className="h-5 w-5" />
+                <div>
+                  <CardTitle className="text-lg">Sandbox</CardTitle>
+                  <CardDescription>
+                    Let this agent run commands, edit files and use git in an isolated
+                    sandbox. It&apos;s provisioned automatically the first time the agent
+                    needs it — there is nothing to start or manage.
+                  </CardDescription>
+                </div>
+              </div>
+              <Controller
+                name="sandboxEnabled"
+                control={control}
+                render={({ field }) => (
+                  <Switch
+                    aria-label="Sandbox access"
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                  />
+                )}
+              />
+            </div>
+          </CardHeader>
+        </Card>
 
         {/* Tool Permissions */}
         <Card>

@@ -64,6 +64,8 @@ export interface ConversationData {
   messageCount: number;
   isShared: boolean;
   isOwner: boolean;
+  /** The session (workspace) the thread was born into — null for a plain chat. */
+  sessionId: string | null;
   lastMessage: {
     role: string;
     timestamp: Date;
@@ -82,6 +84,7 @@ export interface RawConversationData {
   messageCount: number;
   isShared?: boolean;
   isOwner?: boolean;
+  sessionId?: string | null;
   lastMessage: {
     role: string;
     timestamp: string;
@@ -126,6 +129,7 @@ export function parseConversationData(raw: RawConversationData): ConversationDat
     ...raw,
     isShared: raw.isShared ?? false,
     isOwner: raw.isOwner ?? false,
+    sessionId: raw.sessionId ?? null,
     createdAt: new Date(raw.createdAt),
     updatedAt: new Date(raw.updatedAt),
     lastMessage: {

@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * Resolves the full `AgentInfo` an `AgentView` needs from just an `agentId` —
+ * Resolves the full `AgentInfo` a chat surface needs from just an `agentId` —
  * the "ids address" invariant means every caller (the page view, the console)
  * holds only the id, so the component that needs the rest fetches it itself
  * rather than every caller re-deriving the same shape.

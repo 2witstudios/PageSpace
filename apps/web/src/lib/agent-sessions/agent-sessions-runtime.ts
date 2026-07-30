@@ -18,8 +18,9 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq, isNotNull } from '@pagespace/db/operators';
+import { and, desc, eq, inArray, isNotNull } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
+import { conversations } from '@pagespace/db/schema/conversations';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { users } from '@pagespace/db/schema/auth';
 import { checkAgentSessionConcurrency } from '@pagespace/lib/services/sandbox/quota';
@@ -133,6 +134,11 @@ export async function resolveSessionTenantId(session: {
     columns: { ownerId: true },
   });
   return drive?.ownerId ?? session.ownerId;
+}
+
+/** The owner's not-ended session count — the spawn ceiling's input (store.countActive). */
+export async function countActiveSessionsForOwner(ownerId: string): Promise<number> {
+  return (await getAgentSessionStore()).countActive(ownerId);
 }
 
 export async function findSessionRecord(sessionId: string): Promise<AgentSessionRecord | null> {
@@ -303,6 +309,53 @@ export async function spawnSession(input: {
 /** Resolve a conversation's session — how a chat turn finds its working context. Null = a plain chat. */
 export async function findSessionForConversation(conversationId: string): Promise<AgentSessionRecord | null> {
   return (await getAgentSessionStore()).findByConversation(conversationId);
+}
+
+export interface SessionConversationEntry {
+  conversationId: string;
+  title: string | null;
+  /** The thread's agent page (`contextId` for a page chat), or null for a global-assistant thread. */
+  agentPageId: string | null;
+  lastMessageAt: Date | null;
+}
+
+/**
+ * The conversations of MANY sessions in one query, grouped by session —
+ * the collection GET's shape, which previously ran one query per session
+ * (review M4: 1+2N per sidebar poll). Newest activity first per
+ * session; the per-session cap (100) is enforced during grouping so one hot
+ * session cannot starve the others.
+ */
+export async function listSessionConversationsBulk(
+  sessionIds: string[],
+): Promise<Map<string, SessionConversationEntry[]>> {
+  const grouped = new Map<string, SessionConversationEntry[]>();
+  if (sessionIds.length === 0) return grouped;
+  const rows = await db
+    .select({
+      sessionId: conversations.sessionId,
+      conversationId: conversations.id,
+      title: conversations.title,
+      type: conversations.type,
+      contextId: conversations.contextId,
+      lastMessageAt: conversations.lastMessageAt,
+    })
+    .from(conversations)
+    .where(and(inArray(conversations.sessionId, sessionIds), eq(conversations.isActive, true)))
+    .orderBy(desc(conversations.lastMessageAt));
+  for (const row of rows) {
+    if (row.sessionId === null) continue;
+    const bucket = grouped.get(row.sessionId) ?? [];
+    if (bucket.length >= 100) continue;
+    bucket.push({
+      conversationId: row.conversationId,
+      title: row.title,
+      agentPageId: row.type === 'page' ? row.contextId : null,
+      lastMessageAt: row.lastMessageAt,
+    });
+    grouped.set(row.sessionId, bucket);
+  }
+  return grouped;
 }
 
 /**

@@ -105,7 +105,7 @@ function getSandboxClient(): Promise<ExecSandboxClient> {
 export function buildRealSandboxRunDeps(): SandboxRunDeps {
   return {
     isEnabled: isCodeExecutionEnabled,
-    // The session-anchored acquisition: ensure the conversation's session row,
+    // The session-anchored acquisition: resolve the conversation's SESSION row,
     // then ensure its Sprite — both through the shared agent-sessions runtime,
     // never a local copy (the CAS only serializes provisioners that all run it).
     acquireSandbox: async (input) => {
@@ -124,7 +124,7 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
       // whose own id folds the ONE Sprite key.
       const row = await findSessionForConversation(conversationId);
       if (!row) {
-        return { ok: false, reason: 'provision_failed', cause: 'no_session' };
+        return { ok: false, reason: 'no_session' };
       }
 
       // The per-sandbox continuous-runtime backstop, keyed by the SESSION id —
