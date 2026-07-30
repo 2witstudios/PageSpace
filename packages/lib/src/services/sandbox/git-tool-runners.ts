@@ -151,7 +151,7 @@ export async function runGitInSandbox({
       userId: ctx.userId,
       requestOrigin: ctx.requestOrigin,
       agentPageId: ctx.agentPageId,
-      // The session address (≡ conversationId) — what the session-anchored
+      // The session address (the caller's session, resolved from its conversation) — what the session-anchored
       // acquire implementation folds the Sprite key off.
       conversationId: ctx.conversationId,
     });

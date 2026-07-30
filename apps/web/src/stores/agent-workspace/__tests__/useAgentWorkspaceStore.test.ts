@@ -110,23 +110,6 @@ describe('transitions', () => {
     expect(store().closePane('ses-1', 'ghost')).toBe('noop');
     expect(store().closePane('never-existed', 'ghost')).toBe('noop');
   });
-
-  it('should clear a delivered prompt so a remount cannot re-send it', () => {
-    const paneId = grid().activePaneId;
-    useAgentWorkspaceStore.setState((s) => ({
-      workspaces: {
-        ...s.workspaces,
-        'ses-1': {
-          ...s.workspaces['ses-1'],
-          columns: [{ ...s.workspaces['ses-1'].columns[0], panes: [{ id: paneId, scope: scope(), pendingPrompt: 'go' }] }],
-        },
-      },
-    }));
-
-    store().clearPanePrompt('ses-1', paneId);
-
-    expect(panesOf(grid())[0].pendingPrompt).toBeUndefined();
-  });
 });
 
 describe('a transition aimed at a grid that is gone', () => {

@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * Shell — the `AgentView` tab leaf for one PTY.
+ * Shell — the terminal pane's leaf for one PTY.
  *
  * Thin wrapper: resolves the one shared socket (`useSocket`) and hands it to
  * `XtermTerminal` keyed by `shellId` — the whole address a shell needs. Renders
@@ -9,9 +9,7 @@
  * paint, or a post-auth-refresh reconnect) rather than mounting `XtermTerminal`
  * with no socket to bind to.
  *
- * `AgentView`'s tab container force-mounts every shell tab and CSS-hides the
- * inactive ones (never unmounts — a closed tab is a DELETE, not a hide), so a
- * shell's PTY and scrollback survive switching tabs. No extra "fit on reveal"
+ * the pane grid keeps shell panes mounted (hidden, not unmounted) across layout changes. No extra "fit on reveal"
  * wiring is needed here: `XtermTerminal`'s own `ResizeObserver` already fires
  * when a hidden (0×0) container regains real size, which is exactly the
  * transition a tab switch produces.

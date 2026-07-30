@@ -292,6 +292,7 @@ export type SandboxToolDenialReason =
   | 'content_too_large'
   | 'edit_no_match'
   | 'edit_not_unique'
+  | 'no_session'
   | 'provision_failed'
   | 'execution_failed'
   | 'not_found'
@@ -339,6 +340,8 @@ export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   content_too_large: 'The file content is too large.',
   edit_no_match: 'The oldString was not found in the file. Read the file and copy the exact text to replace.',
   edit_not_unique: 'The oldString is not unique in the file. Include more surrounding context, or set replaceAll to replace every occurrence.',
+  no_session:
+    'This conversation has no session (workspace), so there is no sandbox to run in — it predates sessions. Start a new conversation to get one.',
   provision_failed: 'Could not provision a sandbox for this run.',
   execution_failed: 'Command execution failed or timed out.',
   not_found: 'File not found.',

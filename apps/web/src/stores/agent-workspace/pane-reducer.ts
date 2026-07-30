@@ -13,7 +13,7 @@
  * Machine and let one machine own several named workspaces, each pinned to a
  * project/branch checkout (`MachineNodeScope`, `OpenTerminalScope`,
  * `projectName`/`branchName`). Git is no longer the information architecture
- * and a sandbox now belongs to a conversation-session, so:
+ * and a sandbox belongs to the SESSION every pane here shares, so:
  *
  *  - the workspace unit is the SESSION — one grid per session, keyed by its
  *    id, matching the schema (`agent_sessions.id` owns the sandbox every pane
@@ -33,11 +33,6 @@ export interface PaneState {
   id: string;
   /** `null` = unbound: the pane renders the picker. */
   scope: PaneScope | null;
-  /**
-   * Typed into the pane's agent once it is ready, then cleared — a pane that
-   * re-mounts (reattach, viewport change) must not re-send its starting prompt.
-   */
-  pendingPrompt?: string;
 }
 
 export interface ColumnState {
@@ -102,33 +97,6 @@ export function assignPane(state: WorkspaceState, paneId: string, scope: PaneSco
     })),
     activePaneId: paneId,
     pendingPickerPaneId: state.pendingPickerPaneId === paneId ? null : state.pendingPickerPaneId,
-  };
-}
-
-export function setPanePendingPrompt(state: WorkspaceState, paneId: string, pendingPrompt: string): WorkspaceState {
-  if (!findPaneLocation(state, paneId)) return state;
-  return {
-    ...state,
-    columns: state.columns.map((column) => ({
-      ...column,
-      panes: column.panes.map((pane) => (pane.id === paneId ? { ...pane, pendingPrompt } : pane)),
-    })),
-  };
-}
-
-/** Clear a delivered prompt so a remount cannot re-send it. */
-export function clearPanePrompt(state: WorkspaceState, paneId: string): WorkspaceState {
-  if (!findPaneLocation(state, paneId)) return state;
-  return {
-    ...state,
-    columns: state.columns.map((column) => ({
-      ...column,
-      panes: column.panes.map((pane) => {
-        if (pane.id !== paneId) return pane;
-        const { pendingPrompt: _dropped, ...rest } = pane;
-        return rest;
-      }),
-    })),
   };
 }
 

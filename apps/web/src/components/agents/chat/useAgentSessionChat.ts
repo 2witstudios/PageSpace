@@ -4,12 +4,12 @@
  * useAgentSessionChat — the ONE chat's state for an agent session.
  *
  * Derived from the machine pane's `useMachinePaneChat` with the dual-mode
- * selector, `AISelector` and `pendingPrompt` machinery stripped: an
- * `AgentView` is never dual-mode — the agent is fixed by props, and the
- * conversation being chatted in (sessionId ≡ conversationId, see
- * `@pagespace/lib/agent-sessions/contract`) is fixed by props too. History
- * (the conversation list) is a separate concern owned by whoever renders the
- * conversation picker (`AgentView`'s header) — this hook is purely
+ * selector, `AISelector` and `pendingPrompt` machinery stripped: a session
+ * chat surface is never dual-mode — the agent is fixed by props, and the
+ * conversation being chatted in is fixed by props too (its SESSION, and
+ * therefore its sandbox, resolves server-side from the row's binding).
+ * History is a separate concern owned by whoever renders the conversation
+ * picker — this hook is purely
  * send/stream/edit/delete/retry/error for the one conversation it was mounted
  * for.
  *

@@ -11,9 +11,9 @@
  *   → 201 { session, conversationId } — spawn (see below)
  *
  * Every listing is scoped to the REQUESTER's own sessions (`ownerId` rides
- * every filter): `driveId` narrows *where*, never *whose*. Admin gate
- * first, 403 without enumerating anything — the agents surface is admin-only +
- * CODE_EXECUTION, same population `/api/machines` served.
+ * every filter): `driveId` narrows *where*, never *whose*. Admin gate first,
+ * 403 without enumerating anything — the agents surface is admin-only +
+ * CODE_EXECUTION (the population the retired machines surface served).
  */
 
 import { NextResponse } from 'next/server';

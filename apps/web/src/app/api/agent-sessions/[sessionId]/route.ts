@@ -2,11 +2,10 @@
  * One agent session — status / ensure+provision / end.
  *
  * GET    → 200 { session: AgentSessionDTO | null }
- *   A NEVER-PROVISIONED session is `{ session: null }` (the client derives
- *   status 'none'), NOT a 404: "this conversation has no sandbox" is the
- *   common, expected answer, and it is the same answer whether the
- *   conversation exists, is someone else's, or was never minted — so a probe
- *   learns nothing from it.
+ *   `{ session: null }` for an unknown id, NOT a 404: it is the same answer
+ *   whether the session never existed or is someone else's, so a probe
+ *   learns nothing from it. (Post-unconflation every spawned session has a
+ *   row from birth; null here means the id resolves to nothing you may see.)
  *
  * POST   → 200 { session } — provision the EXISTING session's sandbox,
  *   idempotent by the session id (a re-POST resumes). No body: sessions are
@@ -15,8 +14,9 @@
  *
  * DELETE → 200 { ok, spriteTornDown } — end the session: instance-guarded
  *   Sprite kill, row RETAINED (re-provisionable under the same key). Gated by
- *   the END access check, which deliberately omits the capability gate: an
- *   actor who just lost `canRunCode` must still be able to release compute.
+ *   the END access check: the OWNER may always end (release-of-compute — no
+ *   membership or capability needed to stop paying); everyone else faces the
+ *   full decision, real capability included.
  *
  * Access decisions live in `decideAgentSessionAccess` (packages/lib) — these
  * handlers only map its verdicts onto statuses: not_found → 404 (or the

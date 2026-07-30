@@ -4,6 +4,8 @@ export interface OptimisticConversationEntry {
   id: string;
   title: string;
   createdAt: string;
+  /** The session the thread was born into, when the broadcast knew it — null/absent renders as a plain chat until the server list confirms. */
+  sessionId?: string | null;
 }
 
 interface OptimisticConversationsState {

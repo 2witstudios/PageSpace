@@ -11,8 +11,8 @@
  * the sidebar's `SidebarMessagesContent`, chrome-free and narrow-width safe).
  *
  * Self-contained by design (`@container`, `h-full min-w-0 min-h-0`, identity
- * via props, no layout props) so a future pane grid can embed this unchanged —
- * see the design doc's "v1 = tabs, not split panes" note.
+ * via props, no layout props) — which is exactly what lets the pane grid
+ * embed it unchanged.
  *
  * The presentation itself is `SessionChatView`, split out so the GLOBAL
  * ASSISTANT (`AssistantSessionChat`, whose state comes from the other chat
@@ -35,7 +35,7 @@ import { useAgentSessionChat, type UseAgentSessionChatReturn } from './useAgentS
 export interface SessionChatProps {
   /** The fixed agent this conversation belongs to. */
   agent: AgentInfo;
-  /** ≡ the sessionId. */
+  /** The thread — its session (and sandbox) resolves server-side from the row's binding. */
   conversationId: string;
   /** Which renderer/chrome to use — the only thing that differs between surfaces. */
   context: 'page' | 'console';

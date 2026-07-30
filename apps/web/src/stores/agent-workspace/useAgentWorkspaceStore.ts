@@ -6,7 +6,6 @@ import {
   paneShowing,
   panesOf,
   assignPane as assignPaneIn,
-  clearPanePrompt as clearPanePromptIn,
   dismissPicker as dismissPickerIn,
   splitRight as splitRightIn,
   splitDown as splitDownIn,
@@ -66,7 +65,6 @@ interface AgentWorkspaceState {
   selectPane(sessionId: string, paneId: string): void;
   assignPane(sessionId: string, paneId: string, scope: PaneScope): void;
   dismissPicker(sessionId: string, paneId: string): void;
-  clearPanePrompt(sessionId: string, paneId: string): void;
   /** Drop a session's grid entirely (the session was ended elsewhere). */
   forgetWorkspace(sessionId: string): void;
 }
@@ -86,10 +84,10 @@ function mintId(prefix: string): string {
 }
 
 /**
- * Applies a reducer transition to one workspace. A conversation with no grid
- * yet is a no-op rather than an error: a transition can land after the grid was
- * forgotten (a close racing a conversation delete), and there is nothing
- * meaningful to create from a split of something absent.
+ * Applies a reducer transition to one workspace. A SESSION with no grid yet
+ * is a no-op rather than an error: a transition can land after the grid was
+ * forgotten (a close racing a session end), and there is nothing meaningful
+ * to create from a split of something absent.
  */
 function updateWorkspace(
   state: AgentWorkspaceState,
@@ -202,9 +200,6 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
 
       dismissPicker: (sessionId, paneId) =>
         set((state) => updateWorkspace(state, sessionId, (w) => dismissPickerIn(w, paneId)) ?? {}),
-
-      clearPanePrompt: (sessionId, paneId) =>
-        set((state) => updateWorkspace(state, sessionId, (w) => clearPanePromptIn(w, paneId)) ?? {}),
 
       forgetWorkspace: (sessionId) =>
         set((state) => {

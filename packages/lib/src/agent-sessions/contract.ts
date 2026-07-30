@@ -74,8 +74,8 @@ export type ShellAgentType = z.infer<typeof shellAgentTypeSchema>;
  * on either row type, because the two surfaces are now two different tables and
  * a pane is the one place that has to talk about both.
  *
- * `'chat'` addresses a conversation (`sessionId` ≡ `conversationId`);
- * `'terminal'` addresses a `shellId`.
+ * `'chat'` addresses a conversation (one thread among the session's many —
+ * invariant 1); `'terminal'` addresses a `shellId`.
  */
 export const PANE_KINDS = ['chat', 'terminal'] as const;
 

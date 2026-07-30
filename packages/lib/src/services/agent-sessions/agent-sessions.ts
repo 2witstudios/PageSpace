@@ -191,7 +191,7 @@ export interface ListAgentSessionsDeps {
 }
 
 /**
- * List sessions by agent page, drive, or owner.
+ * List sessions by drive or owner.
  *
  * The filter type requires at least one narrowing key, so there is no
  * "everything" query to accidentally issue. Access is NOT checked here — the

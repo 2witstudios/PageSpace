@@ -8,8 +8,6 @@ import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
 import {
   newWorkspace,
   assignPane,
-  setPanePendingPrompt,
-  clearPanePrompt,
   dismissPicker,
   splitRight,
   splitDown,
@@ -186,22 +184,6 @@ describe('selectPane', () => {
   it('given an unresolvable pane, should no-op', () => {
     const state = base();
     expect(selectPane(state, 'ghost')).toBe(state);
-  });
-});
-
-describe('pending prompts', () => {
-  it('should set and then clear, so a remount cannot re-send', () => {
-    let state = setPanePendingPrompt(base(), 'pane-1', 'run the tests');
-    expect(panesOf(state)[0].pendingPrompt).toBe('run the tests');
-    state = clearPanePrompt(state, 'pane-1');
-    expect(panesOf(state)[0].pendingPrompt).toBeUndefined();
-    expect('pendingPrompt' in panesOf(state)[0]).toBe(false);
-  });
-
-  it('given an unresolvable pane, should no-op', () => {
-    const state = base();
-    expect(setPanePendingPrompt(state, 'ghost', 'x')).toBe(state);
-    expect(clearPanePrompt(state, 'ghost')).toBe(state);
   });
 });
 

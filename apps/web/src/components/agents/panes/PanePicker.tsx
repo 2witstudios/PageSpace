@@ -34,14 +34,11 @@ export interface PanePickerProps {
    */
   autoFocus?: boolean;
   /**
-   * Whether the global assistant is offerable yet.
-   *
-   * Defaults to FALSE, and that default is the point: a global-assistant
-   * conversation has no agent page, and the chat surface currently resolves its
-   * identity from one — so until that path exists, offering the choice would be
-   * a menu item that resolves to nothing. Offering a pick with no supplier is
-   * the exact shape of bug this rebuild is being corrected for; the option is
-   * built and tested, and the flag turns it on when the surface can render it.
+   * Whether the global assistant is offerable. The identity path exists
+   * (`AssistantSessionChat` rides the global chat pipeline), so the one
+   * production caller passes true; the flag remains so a host without that
+   * renderer can withhold the choice rather than offer a pick with no
+   * supplier.
    */
   canPickAssistant?: boolean;
   /** `null` starts a global-assistant conversation, which has no agent page. */
