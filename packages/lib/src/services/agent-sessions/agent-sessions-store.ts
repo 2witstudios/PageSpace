@@ -133,17 +133,37 @@ export interface AgentSessionStore {
   countLive(ownerId: string): Promise<number>;
   /**
    * Persist an opportunistic storage measurement (see
-   * `services/sandbox/sandbox-storage-measure.ts`). Separate from
-   * `updateSpriteIdentity` because it is a pure billing observation, not a
-   * lifecycle transition: it carries no CAS and must never disturb identity or
-   * teardown stamps.
+   * `services/sandbox/sandbox-storage-measure.ts`). Not a lifecycle transition —
+   * a pure billing observation that must never disturb identity or teardown
+   * stamps — but it IS generation-scoped, so it carries a CAS of its own.
    *
-   * Guarded on the row still being live (`spriteTornDownAt IS NULL`): a
-   * measurement that lands after teardown describes a filesystem that no longer
-   * exists, and writing it would bill the next generation against a dead disk.
+   * The CAS is on `spriteInstanceId`, the id of the VM actually measured, and it
+   * has to be: `sandboxId` is the HMAC-derived NAME, identical across every
+   * generation of one session, so it cannot tell A from B. `SandboxHandle` says
+   * this outright — "anything that must act on THIS VM (a kill, a CAS against a
+   * tracking row) keys on this".
+   *
+   * A liveness guard alone (`spriteTornDownAt IS NULL`) does NOT cover it. The
+   * measurement is fire-and-forget, so a `du` against generation A can still be
+   * in flight when A is torn down and B provisioned — and B's own stamps clear
+   * `spriteTornDownAt` AND null the measurement columns
+   * (`plan-session-lifecycle.ts`), so the late write finds a live row, lands A's
+   * bytes on B, and stamps a fresh `storageMeasuredAt` that suppresses B's real
+   * measurement for the whole throttle window. The reconcile then bills B's
+   * interval against A's disk. The teardown-only guard is the one case where the
+   * row is never revived.
+   *
+   * A stale write is DROPPED, not retried: the next wake re-measures, and a
+   * billing observation is worth less than a wrong one.
    */
   recordStorageMeasurement(input: {
     sessionId: string;
+    /**
+     * The instance actually measured. Null when the driver reports none — then
+     * the row's own null matches and the CAS degrades to the liveness guard,
+     * which is the most any caller can know without a generation id.
+     */
+    spriteInstanceId: string | null;
     measuredBytes: number;
     measuredAt: Date;
   }): Promise<void>;
@@ -426,7 +446,7 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
       return row?.n ?? 0;
     },
 
-    async recordStorageMeasurement({ sessionId, measuredBytes, measuredAt }) {
+    async recordStorageMeasurement({ sessionId, spriteInstanceId, measuredBytes, measuredAt }) {
       await db
         .update(agentSessions)
         .set({ storageMeasuredBytes: measuredBytes, storageMeasuredAt: measuredAt })
@@ -434,6 +454,10 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
           and(
             eq(agentSessions.id, sessionId),
             isNull(agentSessions.spriteTornDownAt),
+            // CAS on the generation measured. `eqOrIsNull` so a driver that
+            // reports no instance id still matches its own null row rather than
+            // never persisting — plain `eq` never matches null in SQL.
+            eqOrIsNull(agentSessions.spriteInstanceId, spriteInstanceId),
           ),
         );
     },

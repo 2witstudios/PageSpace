@@ -153,11 +153,16 @@ export function makeAgentSessionStore(
       ).length;
     },
 
-    async recordStorageMeasurement({ sessionId, measuredBytes, measuredAt }) {
+    async recordStorageMeasurement({ sessionId, spriteInstanceId, measuredBytes, measuredAt }) {
       const row = rows.get(sessionId);
       // Mirrors the real store's live-row guard: a measurement landing after
       // teardown describes a filesystem that no longer exists.
       if (!row || row.spriteTornDownAt !== null) return;
+      // ...and its generation CAS. A fake that accepts writes the real store
+      // rejects makes every test using it agree with a bug: the liveness guard
+      // alone passes a stale measurement onto the NEXT generation, because
+      // re-provisioning clears `spriteTornDownAt`.
+      if ((row.spriteInstanceId ?? null) !== (spriteInstanceId ?? null)) return;
       row.storageMeasuredBytes = measuredBytes;
       row.storageMeasuredAt = measuredAt;
     },

@@ -205,12 +205,14 @@ async function ensureShellSessionSandbox({ sessionId, userId }: { sessionId: str
         await refreshSessionStorageMeasurement({
           handle,
           sessionId,
+          // The generation just minted, for the writer's CAS (see the web tier).
+          spriteInstanceId: handle.spriteInstanceId ?? null,
           // Null for the same reason as the web tier: this fires on the create
           // arm, whose own stamps reset the measurement columns.
           lastMeasuredAt: null,
           now: new Date(),
-          persist: async ({ measuredBytes, measuredAt }) => {
-            await store.recordStorageMeasurement({ sessionId, measuredBytes, measuredAt });
+          persist: async ({ spriteInstanceId, measuredBytes, measuredAt }) => {
+            await store.recordStorageMeasurement({ sessionId, spriteInstanceId, measuredBytes, measuredAt });
           },
         });
       },
@@ -263,10 +265,15 @@ async function measureWarmSessionStorageOnResume(sessionId: string, sandboxId: s
     await refreshSessionStorageMeasurement({
       handle: { exec: (args) => sandbox.runCommand(args) },
       sessionId,
+      // The FETCHED sandbox's own generation, not the row's: the CAS has to
+      // describe the disk that was walked (see the web tier). Here the two
+      // usually agree — the sandbox is fetched right after the row — but
+      // "usually" is exactly what a CAS is for.
+      spriteInstanceId: sandbox.spriteInstanceId ?? null,
       lastMeasuredAt: row.storageMeasuredAt ?? null,
       now: new Date(),
-      persist: async ({ measuredBytes, measuredAt }) => {
-        await store.recordStorageMeasurement({ sessionId, measuredBytes, measuredAt });
+      persist: async ({ spriteInstanceId, measuredBytes, measuredAt }) => {
+        await store.recordStorageMeasurement({ sessionId, spriteInstanceId, measuredBytes, measuredAt });
       },
     });
   } catch {

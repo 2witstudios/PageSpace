@@ -425,6 +425,9 @@ export async function provisionSessionSandbox(
         await refreshSessionStorageMeasurement({
           handle,
           sessionId,
+          // The generation just minted — the CAS target for the write. Taken
+          // from the handle, not the row: this is the VM the `du` runs on.
+          spriteInstanceId: handle.spriteInstanceId ?? null,
           // NULL, not the row's value: this callback only fires on the `create`
           // arm, where the same operation resets the measurement columns (a new
           // Sprite generation is an empty filesystem). Passing the pre-provision
@@ -457,7 +460,15 @@ export async function provisionSessionSandbox(
  */
 export async function measureWarmSessionStorage(input: {
   sessionId: string;
-  attach: () => Promise<{ exec: SandboxHandle['exec'] } | null>;
+  /**
+   * Returns the sandbox to measure AND its own generation id. Both, because the
+   * two can disagree: this path is fed by a sandbox the tool run ALREADY
+   * acquired, so by the time the row is read below the session may have been
+   * torn down and re-provisioned — the row would say B while the handle in hand
+   * is still A. CASing on the row's value would then let A's bytes land on B
+   * under a CAS that "succeeded", which is the bug the CAS exists to stop.
+   */
+  attach: () => Promise<{ exec: SandboxHandle['exec']; spriteInstanceId: string | null } | null>;
 }): Promise<void> {
   try {
     const store = await getAgentSessionStore();
@@ -476,6 +487,11 @@ export async function measureWarmSessionStorage(input: {
     await refreshSessionStorageMeasurement({
       handle,
       sessionId: input.sessionId,
+      // The MEASURED handle's own generation, never the row's. The row is read
+      // for the throttle; the CAS has to describe the disk the `du` actually
+      // walked, or a handle captured before a re-provision would persist the
+      // old generation's bytes under the new generation's id.
+      spriteInstanceId: handle.spriteInstanceId,
       lastMeasuredAt: row.storageMeasuredAt ?? null,
       now: new Date(),
       persist: (measurement) => store.recordStorageMeasurement(measurement),
