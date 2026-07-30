@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware';
 import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
 import {
   newWorkspace,
+  panesOf,
   assignPane as assignPaneIn,
   clearPanePrompt as clearPanePromptIn,
   dismissPicker as dismissPickerIn,
@@ -14,7 +15,7 @@ import {
 } from './pane-reducer';
 
 /**
- * Where each conversation's pane layout lives.
+ * Where each session's pane layout lives.
  *
  * Every transition delegates to the pure reducer — this store is the IO shell
  * (identity minting, persistence, subscription) and holds no layout logic of
@@ -24,25 +25,38 @@ import {
  * (`useMachineWorkspaceSync`); that is deliberately not restored. A layout is a
  * local view preference, and syncing it made every split a write.
  *
- * Keyed by conversationId: the conversation IS the workspace unit, so opening a
- * conversation restores the grid you left it in, and the PTYs behind those panes
- * are still running server-side to reattach to.
+ * Keyed by SESSION id: the session is the workspace unit (it owns the sandbox
+ * every pane shares), so opening a session restores the grid you left it in,
+ * and the PTYs behind those panes are still running server-side to reattach to.
+ *
+ * **A session is never empty, in both directions.** It is born with its first
+ * conversation in its first pane, and closing the LAST pane is intercepted
+ * HERE — the store forgets the grid and reports it, so the caller can end the
+ * session (tear down its sandbox) as the same act. The pure reducer's
+ * `closePane` deliberately no-ops on the last pane because a `WorkspaceState`
+ * transition cannot delete its own container; this interception is the
+ * container level the old `closePaneIn` owned.
  */
 
 interface AgentWorkspaceState {
-  /** conversationId → its grid. */
+  /** sessionId → its grid. */
   workspaces: Record<string, WorkspaceState>;
-  /** Give a conversation its opening grid, once. Idempotent. */
-  ensureWorkspace(conversationId: string, scope: PaneScope): void;
-  splitRight(conversationId: string, fromPaneId: string): void;
-  splitDown(conversationId: string, fromPaneId: string): void;
-  closePane(conversationId: string, paneId: string): void;
-  selectPane(conversationId: string, paneId: string): void;
-  assignPane(conversationId: string, paneId: string, scope: PaneScope): void;
-  dismissPicker(conversationId: string, paneId: string): void;
-  clearPanePrompt(conversationId: string, paneId: string): void;
-  /** Drop a conversation's grid entirely (the conversation itself was deleted). */
-  forgetWorkspace(conversationId: string): void;
+  /** Give a session its opening grid, once. Idempotent. */
+  ensureWorkspace(sessionId: string, scope: PaneScope): void;
+  splitRight(sessionId: string, fromPaneId: string): void;
+  splitDown(sessionId: string, fromPaneId: string): void;
+  /**
+   * Close a pane. Closing the LAST pane removes the whole grid and returns
+   * `'session-ended'` — the caller owns the IO that ends the session; the
+   * store owns only the layout fact.
+   */
+  closePane(sessionId: string, paneId: string): 'closed' | 'session-ended' | 'noop';
+  selectPane(sessionId: string, paneId: string): void;
+  assignPane(sessionId: string, paneId: string, scope: PaneScope): void;
+  dismissPicker(sessionId: string, paneId: string): void;
+  clearPanePrompt(sessionId: string, paneId: string): void;
+  /** Drop a session's grid entirely (the session was ended elsewhere). */
+  forgetWorkspace(sessionId: string): void;
 }
 
 /**
@@ -67,14 +81,14 @@ function mintId(prefix: string): string {
  */
 function updateWorkspace(
   state: AgentWorkspaceState,
-  conversationId: string,
+  sessionId: string,
   transition: (workspace: WorkspaceState) => WorkspaceState,
 ): Partial<AgentWorkspaceState> | null {
-  const current = state.workspaces[conversationId];
+  const current = state.workspaces[sessionId];
   if (!current) return null;
   const next = transition(current);
   if (next === current) return null;
-  return { workspaces: { ...state.workspaces, [conversationId]: next } };
+  return { workspaces: { ...state.workspaces, [sessionId]: next } };
 }
 
 export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
@@ -82,14 +96,14 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
     (set) => ({
       workspaces: {},
 
-      ensureWorkspace: (conversationId, scope) =>
+      ensureWorkspace: (sessionId, scope) =>
         set((state) => {
-          if (state.workspaces[conversationId]) return {};
+          if (state.workspaces[sessionId]) return {};
           return {
             workspaces: {
               ...state.workspaces,
-              [conversationId]: newWorkspace({
-                conversationId,
+              [sessionId]: newWorkspace({
+                sessionId,
                 paneId: mintId('pane'),
                 columnId: mintId('col'),
                 scope,
@@ -98,41 +112,58 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
           };
         }),
 
-      splitRight: (conversationId, fromPaneId) =>
+      splitRight: (sessionId, fromPaneId) =>
         set(
           (state) =>
-            updateWorkspace(state, conversationId, (workspace) =>
+            updateWorkspace(state, sessionId, (workspace) =>
               splitRightIn(workspace, fromPaneId, mintId('col'), mintId('pane')),
             ) ?? {},
         ),
 
-      splitDown: (conversationId, fromPaneId) =>
+      splitDown: (sessionId, fromPaneId) =>
         set(
           (state) =>
-            updateWorkspace(state, conversationId, (workspace) =>
+            updateWorkspace(state, sessionId, (workspace) =>
               splitDownIn(workspace, fromPaneId, mintId('pane')),
             ) ?? {},
         ),
 
-      closePane: (conversationId, paneId) =>
-        set((state) => updateWorkspace(state, conversationId, (w) => closePaneIn(w, paneId)) ?? {}),
+      closePane: (sessionId, paneId) => {
+        const current = useAgentWorkspaceStore.getState().workspaces[sessionId];
+        if (!current) return 'noop';
+        const paneExists = panesOf(current).some((pane) => pane.id === paneId);
+        if (!paneExists) return 'noop';
+        if (panesOf(current).length <= 1) {
+          // The LAST pane: emptying a session ends it. The reducer no-ops on
+          // this by design (it cannot delete its own container); the store is
+          // the container, so the interception lives here — the old
+          // `closePaneIn`'s job, restored at the level that owns the grid map.
+          set((state) => {
+            const { [sessionId]: _dropped, ...rest } = state.workspaces;
+            return { workspaces: rest };
+          });
+          return 'session-ended';
+        }
+        set((state) => updateWorkspace(state, sessionId, (w) => closePaneIn(w, paneId)) ?? {});
+        return 'closed';
+      },
 
-      selectPane: (conversationId, paneId) =>
-        set((state) => updateWorkspace(state, conversationId, (w) => selectPaneIn(w, paneId)) ?? {}),
+      selectPane: (sessionId, paneId) =>
+        set((state) => updateWorkspace(state, sessionId, (w) => selectPaneIn(w, paneId)) ?? {}),
 
-      assignPane: (conversationId, paneId, scope) =>
-        set((state) => updateWorkspace(state, conversationId, (w) => assignPaneIn(w, paneId, scope)) ?? {}),
+      assignPane: (sessionId, paneId, scope) =>
+        set((state) => updateWorkspace(state, sessionId, (w) => assignPaneIn(w, paneId, scope)) ?? {}),
 
-      dismissPicker: (conversationId, paneId) =>
-        set((state) => updateWorkspace(state, conversationId, (w) => dismissPickerIn(w, paneId)) ?? {}),
+      dismissPicker: (sessionId, paneId) =>
+        set((state) => updateWorkspace(state, sessionId, (w) => dismissPickerIn(w, paneId)) ?? {}),
 
-      clearPanePrompt: (conversationId, paneId) =>
-        set((state) => updateWorkspace(state, conversationId, (w) => clearPanePromptIn(w, paneId)) ?? {}),
+      clearPanePrompt: (sessionId, paneId) =>
+        set((state) => updateWorkspace(state, sessionId, (w) => clearPanePromptIn(w, paneId)) ?? {}),
 
-      forgetWorkspace: (conversationId) =>
+      forgetWorkspace: (sessionId) =>
         set((state) => {
-          if (!state.workspaces[conversationId]) return {};
-          const { [conversationId]: _dropped, ...rest } = state.workspaces;
+          if (!state.workspaces[sessionId]) return {};
+          const { [sessionId]: _dropped, ...rest } = state.workspaces;
           return { workspaces: rest };
         }),
     }),

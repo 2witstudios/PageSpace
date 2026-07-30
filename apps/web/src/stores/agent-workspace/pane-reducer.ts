@@ -15,9 +15,9 @@
  * `projectName`/`branchName`). Git is no longer the information architecture
  * and a sandbox now belongs to a conversation-session, so:
  *
- *  - the workspace unit is the CONVERSATION — one grid per conversation, keyed
- *    by its id. The sidebar's leaves are conversations, which is exactly what
- *    the old sidebar's workspace leaves were;
+ *  - the workspace unit is the SESSION — one grid per session, keyed by its
+ *    id, matching the schema (`agent_sessions.id` owns the sandbox every pane
+ *    shares by construction);
  *  - every scope tuple is gone. A pane stores a {@link PaneScope} — what it
  *    shows and the id it shows it for — and nothing about where a checkout is;
  *  - server-synced layouts (`useMachineWorkspaceSync`, the `Server*DTO` types,
@@ -45,9 +45,9 @@ export interface ColumnState {
   panes: PaneState[];
 }
 
-/** One conversation's pane grid. */
+/** One session's pane grid. */
 export interface WorkspaceState {
-  /** ≡ the conversationId whose grid this is. */
+  /** The SESSION id whose grid this is (`agent_sessions.id`). */
   id: string;
   columns: ColumnState[];
   activePaneId: string;
@@ -73,18 +73,18 @@ function findPaneLocation(state: WorkspaceState, paneId: string): PaneLocation |
 }
 
 /**
- * A conversation's opening grid: one pane, already bound to the conversation
- * itself. The grid is never empty and never starts on a picker — opening a
- * conversation shows that conversation.
+ * A session's opening grid: one pane, already bound to the session's FIRST
+ * conversation (a session is born with one — spawning a session spawns an
+ * agent). The grid is never empty and never starts on a picker.
  */
 export function newWorkspace(params: {
-  conversationId: string;
+  sessionId: string;
   paneId: string;
   columnId: string;
   scope: PaneScope;
 }): WorkspaceState {
   return {
-    id: params.conversationId,
+    id: params.sessionId,
     columns: [{ id: params.columnId, panes: [{ id: params.paneId, scope: params.scope }] }],
     activePaneId: params.paneId,
     pendingPickerPaneId: null,

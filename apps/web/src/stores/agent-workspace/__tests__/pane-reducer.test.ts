@@ -30,7 +30,7 @@ function terminalScope(targetId: string | null): PaneScope {
 
 function base(): WorkspaceState {
   return newWorkspace({
-    conversationId: 'conv-1',
+    sessionId: 'ses-1',
     paneId: 'pane-1',
     columnId: 'col-1',
     scope: chatScope('conv-1'),
@@ -46,8 +46,8 @@ describe('newWorkspace', () => {
     expect(state.pendingPickerPaneId).toBeNull();
   });
 
-  it('should key the grid by its conversation', () => {
-    expect(base().id).toBe('conv-1');
+  it('should key the grid by its session', () => {
+    expect(base().id).toBe('ses-1');
   });
 });
 

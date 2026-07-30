@@ -16,53 +16,53 @@ const scope = (name = 'Planning'): PaneScope => ({
 });
 
 const store = () => useAgentWorkspaceStore.getState();
-const grid = (id = 'conv-1') => store().workspaces[id];
+const grid = (id = 'ses-1') => store().workspaces[id];
 
 beforeEach(() => {
   useAgentWorkspaceStore.setState({ workspaces: {} });
 });
 
 describe('ensureWorkspace', () => {
-  it('should open a conversation on one pane bound to itself', () => {
-    store().ensureWorkspace('conv-1', scope());
+  it('should open a session on one pane bound to its first conversation', () => {
+    store().ensureWorkspace('ses-1', scope());
     expect(panesOf(grid())).toHaveLength(1);
     expect(panesOf(grid())[0].scope).toEqual(scope());
   });
 
-  it('should be idempotent — re-opening a conversation must not discard its layout', () => {
-    store().ensureWorkspace('conv-1', scope());
-    store().splitRight('conv-1', grid().activePaneId);
+  it('should be idempotent — re-opening a session must not discard its layout', () => {
+    store().ensureWorkspace('ses-1', scope());
+    store().splitRight('ses-1', grid().activePaneId);
     expect(panesOf(grid())).toHaveLength(2);
 
-    store().ensureWorkspace('conv-1', scope());
+    store().ensureWorkspace('ses-1', scope());
 
     expect(panesOf(grid())).toHaveLength(2);
   });
 
-  it('should keep conversations independent', () => {
-    store().ensureWorkspace('conv-1', scope());
-    store().ensureWorkspace('conv-2', { ...scope('Other'), targetId: 'conv-2' });
-    store().splitRight('conv-1', grid('conv-1').activePaneId);
+  it('should keep sessions independent', () => {
+    store().ensureWorkspace('ses-1', scope());
+    store().ensureWorkspace('ses-2', { ...scope('Other'), targetId: 'conv-2' });
+    store().splitRight('ses-1', grid('ses-1').activePaneId);
 
-    expect(panesOf(grid('conv-1'))).toHaveLength(2);
-    expect(panesOf(grid('conv-2'))).toHaveLength(1);
+    expect(panesOf(grid('ses-1'))).toHaveLength(2);
+    expect(panesOf(grid('ses-2'))).toHaveLength(1);
   });
 });
 
 describe('pane ids', () => {
   it('should mint distinct ids for every pane', () => {
-    store().ensureWorkspace('conv-1', scope());
-    store().splitRight('conv-1', grid().activePaneId);
-    store().splitDown('conv-1', grid().activePaneId);
+    store().ensureWorkspace('ses-1', scope());
+    store().splitRight('ses-1', grid().activePaneId);
+    store().splitDown('ses-1', grid().activePaneId);
 
     const ids = panesOf(grid()).map((p) => p.id);
     expect(new Set(ids).size).toBe(ids.length);
   });
 
   it('should mint distinct column ids across split-rights', () => {
-    store().ensureWorkspace('conv-1', scope());
-    store().splitRight('conv-1', grid().activePaneId);
-    store().splitRight('conv-1', grid().activePaneId);
+    store().ensureWorkspace('ses-1', scope());
+    store().splitRight('ses-1', grid().activePaneId);
+    store().splitRight('ses-1', grid().activePaneId);
 
     const columnIds = grid().columns.map((c) => c.id);
     expect(new Set(columnIds).size).toBe(columnIds.length);
@@ -71,28 +71,44 @@ describe('pane ids', () => {
 
 describe('transitions', () => {
   beforeEach(() => {
-    store().ensureWorkspace('conv-1', scope());
+    store().ensureWorkspace('ses-1', scope());
   });
 
   it('should bind a pane through assignPane', () => {
-    store().splitRight('conv-1', grid().activePaneId);
+    store().splitRight('ses-1', grid().activePaneId);
     const target = grid().activePaneId;
     const shell: PaneScope = { kind: 'terminal', name: 'shell-1', targetId: 'shell-9', agentPageId: null };
 
-    store().assignPane('conv-1', target, shell);
+    store().assignPane('ses-1', target, shell);
 
     expect(panesOf(grid()).find((p) => p.id === target)?.scope).toEqual(shell);
   });
 
   it('should close a pane and keep the grid non-empty', () => {
-    store().splitRight('conv-1', grid().activePaneId);
-    store().closePane('conv-1', grid().activePaneId);
+    store().splitRight('ses-1', grid().activePaneId);
+    store().closePane('ses-1', grid().activePaneId);
     expect(panesOf(grid())).toHaveLength(1);
   });
 
-  it('should refuse to close the last pane — a grid is never empty', () => {
-    store().closePane('conv-1', grid().activePaneId);
+  it('closing the LAST pane ends the session — the grid is removed and the caller told to end it', () => {
+    // The container-level interception the old closePaneIn owned: the pure
+    // reducer no-ops (it cannot delete its own container), the store CAN, and
+    // the return value is how the caller knows to tear the sandbox down.
+    const verdict = store().closePane('ses-1', grid().activePaneId);
+    expect(verdict).toBe('session-ended');
+    expect(store().workspaces['ses-1']).toBeUndefined();
+  });
+
+  it('closing a NON-last pane reports closed and keeps the grid', () => {
+    store().splitRight('ses-1', grid().activePaneId);
+    const verdict = store().closePane('ses-1', grid().activePaneId);
+    expect(verdict).toBe('closed');
     expect(panesOf(grid())).toHaveLength(1);
+  });
+
+  it('closing an unknown pane reports noop', () => {
+    expect(store().closePane('ses-1', 'ghost')).toBe('noop');
+    expect(store().closePane('never-existed', 'ghost')).toBe('noop');
   });
 
   it('should clear a delivered prompt so a remount cannot re-send it', () => {
@@ -100,14 +116,14 @@ describe('transitions', () => {
     useAgentWorkspaceStore.setState((s) => ({
       workspaces: {
         ...s.workspaces,
-        'conv-1': {
-          ...s.workspaces['conv-1'],
-          columns: [{ ...s.workspaces['conv-1'].columns[0], panes: [{ id: paneId, scope: scope(), pendingPrompt: 'go' }] }],
+        'ses-1': {
+          ...s.workspaces['ses-1'],
+          columns: [{ ...s.workspaces['ses-1'].columns[0], panes: [{ id: paneId, scope: scope(), pendingPrompt: 'go' }] }],
         },
       },
     }));
 
-    store().clearPanePrompt('conv-1', paneId);
+    store().clearPanePrompt('ses-1', paneId);
 
     expect(panesOf(grid())[0].pendingPrompt).toBeUndefined();
   });
@@ -121,15 +137,15 @@ describe('a transition aimed at a grid that is gone', () => {
     expect(() => store().splitRight('never-existed', 'pane-x')).not.toThrow();
     expect(store().workspaces['never-existed']).toBeUndefined();
 
-    store().ensureWorkspace('conv-1', scope());
-    store().forgetWorkspace('conv-1');
-    expect(() => store().closePane('conv-1', 'pane-1')).not.toThrow();
-    expect(store().workspaces['conv-1']).toBeUndefined();
+    store().ensureWorkspace('ses-1', scope());
+    store().forgetWorkspace('ses-1');
+    expect(() => store().closePane('ses-1', 'pane-1')).not.toThrow();
+    expect(store().workspaces['ses-1']).toBeUndefined();
   });
 
   it('forgetWorkspace should be safe to call twice', () => {
-    store().ensureWorkspace('conv-1', scope());
-    store().forgetWorkspace('conv-1');
+    store().ensureWorkspace('ses-1', scope());
+    store().forgetWorkspace('ses-1');
     expect(() => store().forgetWorkspace('conv-1')).not.toThrow();
   });
 });

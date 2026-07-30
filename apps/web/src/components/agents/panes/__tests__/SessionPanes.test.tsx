@@ -17,7 +17,7 @@ import SessionPanes from '../SessionPanes';
 const scope = (name: string): PaneScope => ({ kind: 'chat', name, targetId: 'conv-1', agentPageId: 'agent-1' });
 
 function base(): WorkspaceState {
-  return newWorkspace({ conversationId: 'conv-1', paneId: 'pane-1', columnId: 'col-1', scope: scope('Planning') });
+  return newWorkspace({ sessionId: 'ses-1', paneId: 'pane-1', columnId: 'col-1', scope: scope('Planning') });
 }
 
 function renderGrid(workspace: WorkspaceState, onSelectPane = vi.fn()) {
