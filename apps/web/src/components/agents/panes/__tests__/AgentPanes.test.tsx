@@ -530,6 +530,52 @@ describe('AgentPanes', () => {
         useAgentWorkspaceStore.getState().workspaces['ses-1'].columns.flatMap((c) => c.panes),
       ).toHaveLength(1);
     });
+
+    it('a pane REBOUND to another listing mid-mint does not get clobbered once the abandoned mint resolves', async () => {
+      // A grid-last close can rebind this exact pane to a different open
+      // conversation while a mint it started is still in flight — the
+      // mint's own completion must see that and clean up rather than
+      // overwrite the rebind with its own now-abandoned result.
+      let resolvePost!: (value: unknown) => void;
+      mockPost.mockReturnValue(new Promise((resolve) => (resolvePost = resolve)));
+      mockDel.mockResolvedValue(undefined);
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByTestId('pick-agent-agent-2'));
+      const mintingPaneId = useAgentWorkspaceStore
+        .getState()
+        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+        .find((p) => p.id !== firstPaneId)!.id;
+
+      // Simulate a grid-last close rebinding THIS pane to another already-open
+      // conversation, exactly as `handleClosePane`'s `rebind-pane` branch does
+      // — while the mint above is still awaiting its POST.
+      act(() => {
+        useAgentWorkspaceStore.getState().assignPane('ses-1', mintingPaneId, {
+          kind: 'chat',
+          name: 'Conversation',
+          targetId: 'rebound-conv',
+          agentPageId: 'agent-3',
+        });
+      });
+
+      resolvePost({});
+
+      await waitFor(() =>
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/new-id-1'),
+      );
+      // The rebind survives — still pointed at the OTHER conversation, not
+      // silently overwritten by the abandoned mint's own conversationId.
+      const pane = useAgentWorkspaceStore
+        .getState()
+        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+        .find((p) => p.id === mintingPaneId)!;
+      expect(pane.scope).toMatchObject({ targetId: 'rebound-conv', agentPageId: 'agent-3' });
+    });
   });
 
   describe('picking a shell', () => {

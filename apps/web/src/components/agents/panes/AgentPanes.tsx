@@ -282,17 +282,31 @@ export default function AgentPanes({
     [closeShell],
   );
 
-  const paneStillExists = useCallback(
-    (paneId: string) => {
+  /**
+   * Is `paneId` STILL in the SAME loading state this mint (or shell open)
+   * left it in — not just present, but not yet reassigned to anything else.
+   * A grid-last close can rebind this exact pane to another open listing
+   * WHILE its own mint/shell-open request is still in flight; the request's
+   * completion handler must not then clobber that rebind with its own
+   * (now-abandoned) result just because the pane id still exists (caught
+   * in review).
+   */
+  const paneStillLoading = useCallback(
+    (paneId: string, scope: { kind: 'chat' | 'terminal'; agentPageId: string | null }) => {
       const current = useAgentWorkspaceStore.getState().workspaces[sessionId];
-      return current ? panesOf(current).some((pane) => pane.id === paneId) : false;
+      const pane = current ? panesOf(current).find((p) => p.id === paneId) : undefined;
+      return (
+        pane?.scope?.kind === scope.kind &&
+        pane.scope.targetId === null &&
+        pane.scope.agentPageId === scope.agentPageId
+      );
     },
     [sessionId],
   );
 
   /**
-   * Is `paneId` STILL the pane bound to `conversationId`, right now? Stronger
-   * than `paneStillExists`: a slow DELETE can resolve after the user has
+   * Is `paneId` STILL the pane bound to `conversationId`, right now? Checking
+   * mere existence isn't enough: a slow DELETE can resolve after the user has
    * already repurposed this exact pane slot (switched its agent, minted a
    * new conversation into it) — the pane id still exists, but applying a
    * close/rebind meant for the OLD binding would destroy the user's newer
@@ -488,16 +502,29 @@ export default function AgentPanes({
             sessionId,
           });
         }
-        if (!paneStillExists(paneId)) {
-          // The pane closed mid-mint. The row was already created
-          // server-side (the request was already in the air) — clean it up
-          // rather than leaving an orphaned, unbound thread in the session's
-          // history.
+        if (!paneStillLoading(paneId, { kind: 'chat', agentPageId })) {
+          // The pane closed mid-mint, OR a grid-last close already rebound it
+          // to another open listing while this request was in flight. Either
+          // way, the row was already created server-side — clean it up
+          // rather than leaving an orphaned, unbound thread (or clobbering
+          // the rebind with this now-abandoned mint's result).
           void cleanupOrphanedConversation(conversationId);
           return;
         }
         assignPane(sessionId, paneId, { kind: 'chat', name: 'New conversation', targetId: conversationId, agentPageId });
+        // Local optimistic update for THIS component's own switch/close
+        // decisions (instant, no network)...
         recordMintedConversation(conversationId, agentPageId);
+        // ...and a broader revalidate for every OTHER `/api/agent-sessions**`
+        // consumer (the sidebar, other panes) sharing a differently-scoped
+        // cache key that the local update above doesn't touch. Without this,
+        // `decideClosePane`'s `activeConversations` (a 20s poll) can still
+        // lack this brand-new row elsewhere — closing this exact pane before
+        // the next poll then reads it as "not in the open listing" and takes
+        // the pure layout-close path instead of the DELETE one, leaving an
+        // orphaned conversation that holds a cap slot forever (caught in
+        // review).
+        void mutate(isAgentSessionsKey);
       } catch (error) {
         console.error('Failed to start a conversation in this pane:', error);
         toast.error('Could not start a conversation', {
@@ -506,7 +533,7 @@ export default function AgentPanes({
         resetPane(sessionId, paneId);
       }
     },
-    [assignPane, resetPane, sessionId, paneStillExists, cleanupOrphanedConversation, recordMintedConversation],
+    [assignPane, resetPane, sessionId, paneStillLoading, cleanupOrphanedConversation, recordMintedConversation],
   );
 
   // The pane bar selector's switch — focus-or-mint, decided by the pure
@@ -544,10 +571,11 @@ export default function AgentPanes({
           `/api/agent-sessions/${encodeURIComponent(sessionId)}/shells`,
           {},
         );
-        if (!paneStillExists(paneId)) {
-          // Same staleness rule as a conversation mint: the row exists
-          // server-side already, so close it rather than leave it running
-          // unattached.
+        if (!paneStillLoading(paneId, { kind: 'terminal', agentPageId: null })) {
+          // Same staleness rule as a conversation mint (including the
+          // grid-last-rebind case): the shell exists server-side already, so
+          // close it rather than leave it running unattached or clobber
+          // whatever this pane was rebound to meanwhile.
           closeShell(shell.shellId);
           return;
         }
@@ -560,7 +588,7 @@ export default function AgentPanes({
         resetPane(sessionId, paneId);
       }
     },
-    [assignPane, resetPane, sessionId, paneStillExists, closeShell],
+    [assignPane, resetPane, sessionId, paneStillLoading, closeShell],
   );
 
   const handleReattachShell = useCallback(
