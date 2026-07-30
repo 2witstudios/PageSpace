@@ -102,9 +102,14 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
   //   is now just as stale, still naming a conversation with no listing left.
   //   Retarget to another OPEN chat pane still in the grid so a refresh or a
   //   deep link back to this URL doesn't reopen the closed conversation and
-  //   silently replace whatever pane is actually live (caught in review). If
-  //   no other chat pane remains (e.g. only a terminal), leave the selection
-  //   as-is — same residual gap as before this fix, not a regression.
+  //   silently replace whatever pane is actually live. If no other chat pane
+  //   remains (e.g. only a terminal, or the session's other open listing has
+  //   no pane here at all — a background worker minted one), CLEAR the
+  //   selection instead of leaving it stale: showing "pick a conversation" is
+  //   honest and recoverable, where keeping the closed id risks silently
+  //   reopening it (or hiding a still-open listing) on the next refresh or
+  //   deep link (caught in review — the first pass here left this case
+  //   untouched).
   const handleConversationClosed = useCallback(
     (event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => {
       const { selectedConversationId: currentConversationId, selectedSessionId: currentSessionId } =
@@ -121,13 +126,11 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
               pane.scope?.kind === 'chat' && pane.scope.targetId !== null && pane.scope.targetId !== event.conversationId,
           )
         : undefined;
-      if (replacement?.scope?.targetId) {
-        selectConversation({
-          sessionId: currentSessionId,
-          conversationId: replacement.scope.targetId,
-          agentId: replacement.scope.agentPageId,
-        });
-      }
+      selectConversation({
+        sessionId: currentSessionId,
+        conversationId: replacement?.scope?.targetId ?? null,
+        agentId: replacement?.scope?.agentPageId ?? null,
+      });
     },
     [selectConversation, selectionRef],
   );

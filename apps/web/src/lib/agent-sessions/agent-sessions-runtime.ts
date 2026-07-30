@@ -297,7 +297,11 @@ export async function closeConversationInSession(input: {
       {
         findConversation: async (conversationId) => {
           const [row] = await tx
-            .select({ sessionId: conversations.sessionId, closedInSessionAt: conversations.closedInSessionAt })
+            .select({
+              sessionId: conversations.sessionId,
+              closedInSessionAt: conversations.closedInSessionAt,
+              isActive: conversations.isActive,
+            })
             .from(conversations)
             .where(eq(conversations.id, conversationId))
             .limit(1);

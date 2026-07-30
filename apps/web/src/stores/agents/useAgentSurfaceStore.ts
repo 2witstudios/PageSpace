@@ -69,11 +69,13 @@ interface AgentSurfaceState {
   /**
    * Select a conversation inside a session, naming the session and the
    * conversation's agent so a click lands as ONE transition (one history
-   * entry) with all params agreeing.
+   * entry) with all params agreeing. `conversationId: null` clears just the
+   * conversation (e.g. its listing closed with no live chat pane to fall
+   * back to) while keeping the session selected.
    */
   selectConversation: (input: {
     sessionId: string;
-    conversationId: string;
+    conversationId: string | null;
     agentId: string | null;
   }) => void;
 

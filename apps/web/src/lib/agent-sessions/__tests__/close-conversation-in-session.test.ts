@@ -21,7 +21,7 @@ const run = () => closeConversationInSessionWith(deps as CloseConversationInSess
 
 beforeEach(() => {
   deps = {
-    findConversation: vi.fn(async () => ({ sessionId: 'ses-1', closedInSessionAt: null })),
+    findConversation: vi.fn(async () => ({ sessionId: 'ses-1', closedInSessionAt: null, isActive: true })),
     countOpenConversations: vi.fn(async () => 2),
     closeConversation: vi.fn(async () => 'closed' as const),
   };
@@ -41,14 +41,27 @@ describe('closeConversationInSessionWith', () => {
   });
 
   it("given the row belongs to a DIFFERENT session, should answer not_in_session — same shape as no such row", async () => {
-    deps.findConversation.mockResolvedValue({ sessionId: 'ses-other', closedInSessionAt: null });
+    deps.findConversation.mockResolvedValue({ sessionId: 'ses-other', closedInSessionAt: null, isActive: true });
     await expect(run()).resolves.toBe('not_in_session');
     expect(deps.closeConversation).not.toHaveBeenCalled();
   });
 
   it('given a row bound to no session at all (sessionId null), should answer not_in_session', async () => {
-    deps.findConversation.mockResolvedValue({ sessionId: null, closedInSessionAt: null });
+    deps.findConversation.mockResolvedValue({ sessionId: null, closedInSessionAt: null, isActive: true });
     await expect(run()).resolves.toBe('not_in_session');
+  });
+
+  it('given a history-deleted target (isActive false), should answer already_closed WITHOUT weighing the never-empty guard', async () => {
+    // A history-deleted row was never counted in `countOpenConversations`
+    // (excluded there by `isActive`), so it isn't occupying a slot the
+    // never-empty guard needs to protect. A stale tab still showing it
+    // must not get a spurious `last_conversation` (409) just because ONE
+    // unrelated listing happens to remain (caught in review).
+    deps.findConversation.mockResolvedValue({ sessionId: 'ses-1', closedInSessionAt: null, isActive: false });
+    deps.countOpenConversations.mockResolvedValue(1);
+    await expect(run()).resolves.toBe('already_closed');
+    expect(deps.countOpenConversations).not.toHaveBeenCalled();
+    expect(deps.closeConversation).not.toHaveBeenCalled();
   });
 
   describe('the never-empty guard', () => {
@@ -71,7 +84,11 @@ describe('closeConversationInSessionWith', () => {
 
   describe('idempotency', () => {
     it('closing an already-closed conversation is a no-op success, not an error', async () => {
-      deps.findConversation.mockResolvedValue({ sessionId: 'ses-1', closedInSessionAt: new Date('2026-01-01') });
+      deps.findConversation.mockResolvedValue({
+        sessionId: 'ses-1',
+        closedInSessionAt: new Date('2026-01-01'),
+        isActive: true,
+      });
       await expect(run()).resolves.toBe('already_closed');
       // Already closed — no need to weigh the never-empty guard or write anything.
       expect(deps.countOpenConversations).not.toHaveBeenCalled();

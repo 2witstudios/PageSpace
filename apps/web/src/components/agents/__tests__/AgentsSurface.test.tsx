@@ -247,13 +247,18 @@ describe('onConversationClosed — following the grid\'s own close/rebind', () =
     expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
   });
 
-  it('leaves the selection untouched when there was nothing to rebind to and no other chat pane remains', async () => {
+  it('clears the selection when there was nothing to rebind to and no other chat pane remains', async () => {
+    // Keeping the closed id would risk silently reopening it (or hiding a
+    // still-open listing elsewhere with no pane here) on the next refresh
+    // or deep link — showing "pick a conversation" is honest instead
+    // (caught in review; the first pass here left this case untouched).
     const { getByTestId } = render(<AgentsSurface />);
     await waitFor(() => expect(getByTestId('agent-panes')).toBeInTheDocument());
 
     act(() => getByTestId('fire-conversation-closed-no-rebind').click());
 
-    expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-1');
+    expect(useAgentSurfaceStore.getState().selectedConversationId).toBeNull();
+    expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
   });
 
   it('retargets to another OPEN chat pane when an ordinary (non-grid-last) close drops the SELECTED conversation', async () => {

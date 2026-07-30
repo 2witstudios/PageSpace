@@ -37,6 +37,14 @@ export interface CloseConversationInSessionDeps {
   findConversation: (conversationId: string) => Promise<{
     sessionId: string | null;
     closedInSessionAt: Date | null;
+    /**
+     * History soft-delete (separate from `closedInSessionAt` — see the
+     * column's own doc). A history-deleted row is excluded from
+     * `countOpenConversations`, so it never occupies a countable "open
+     * listing" slot — closing its (already-gone) listing can never empty
+     * the session, and must not trip the never-empty guard below.
+     */
+    isActive: boolean;
   } | null>;
   /**
    * OPEN (not yet closed) conversations already counted against this session
@@ -60,6 +68,14 @@ export async function closeConversationInSessionWith(
   const row = await deps.findConversation(conversationId);
   if (row === null || row.sessionId !== sessionId) return 'not_in_session';
   if (row.closedInSessionAt !== null) return 'already_closed';
+  // A history-deleted target was never counted in `countOpenConversations`
+  // (it's excluded there by `isActive`), so it isn't occupying a slot the
+  // never-empty guard needs to protect — treat it as already gone from this
+  // operation's perspective rather than letting the guard below wrongly
+  // read "one unrelated listing remains" as "closing THIS one would empty
+  // the session" (caught in review — a stale tab could otherwise get a 409
+  // and offer to end a session that still has a genuinely live listing).
+  if (!row.isActive) return 'already_closed';
 
   // Only a genuinely open conversation counts toward "is this the last one" —
   // checked AFTER the idempotency return above, so a retry of an already-closed
