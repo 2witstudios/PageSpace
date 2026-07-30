@@ -17,13 +17,13 @@ import PrimaryNavigation from './PrimaryNavigation';
 import { SidebarLoading, SidebarNotice } from './sidebar-states';
 import { useAuth } from '@/hooks/useAuth';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
-import { useDriveStore } from '@/hooks/useDrive';
+import { useDriveStore, type Drive } from '@/hooks/useDrive';
 import { canManageDrive } from '@/hooks/usePermissions';
 import { usePageAgents, type DriveWithAgents } from '@/hooks/page-agents/usePageAgents';
 import { useAgentSurfaceStore, SHEET_BREAKPOINT_QUERY } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { fetchWithAuth, post, del } from '@/lib/auth/auth-fetch';
-import { groupSessionsByDrive, ASSISTANT_GROUP_KEY } from './session-groups';
+import { buildSessionGroups, ASSISTANT_GROUP_KEY } from './session-groups';
 
 /**
  * The Agents console's left sidebar: **Drive → Session → conversations.**
@@ -107,6 +107,7 @@ export default function AgentsSidebar({ className }: SidebarProps) {
               authLoading={authLoading}
               isAdmin={isAdmin}
               driveId={driveId}
+              drives={drives}
               sessions={data?.sessions ?? []}
               isLoading={sessionsLoading && !data}
               hasError={!!sessionsError}
@@ -190,6 +191,7 @@ function SessionList({
   authLoading,
   isAdmin,
   driveId,
+  drives,
   sessions,
   isLoading,
   hasError,
@@ -200,6 +202,7 @@ function SessionList({
   authLoading: boolean;
   isAdmin: boolean;
   driveId: string | undefined;
+  drives: Drive[];
   sessions: SessionListEntry[];
   isLoading: boolean;
   hasError: boolean;
@@ -218,42 +221,54 @@ function SessionList({
   });
 
   const canSpawn = isAdmin && !authLoading;
-  // The Assistant group exists in global mode even with zero sessions — the
-  // affordance to start one IS the group. Not while loading or on a dead
-  // fetch, though: an offer to spawn under a spinner would remount mid-click.
-  const showEmptyAssistantGroup = !driveId && canSpawn && !isLoading && !(hasError && sessions.length === 0);
 
-  // Group by drive in global mode (Assistant first — it is the user's own,
-  // sorted there deterministically rather than by fetch order); a single
-  // implicit group in drive mode.
-  const groups = useMemo(() => {
-    if (driveId) return sessions.length > 0 || notice === null ? [{ driveId, sessions }] : [];
-    return groupSessionsByDrive(sessions, { seedEmptyAssistantGroup: showEmptyAssistantGroup });
-  }, [driveId, sessions, notice, showEmptyAssistantGroup]);
-
-  const driveTitle = useCallback(
-    (id: string) => {
-      if (id === ASSISTANT_GROUP_KEY) return 'Assistant';
-      return agentsByDrive.find((entry) => entry.driveId === id)?.driveName ?? id;
-    },
-    [agentsByDrive],
+  // The roster — every drive the user can work in, whether or not it has a
+  // live session — is the canonical drive-group source in global mode. Not
+  // `agentsByDrive`: that fetch's drive enumeration is an implementation
+  // detail of the multi-drive agents feature, and coupling the sidebar's
+  // drive list to it would regress silently if that feature's shape changes.
+  // Empty for a non-admin (or while auth is still resolving): this is a
+  // refusal-only surface for them, and `useDriveStore` can otherwise hold
+  // trashed drives too — `useGlobalDriveSocket` refetches with
+  // `includeTrash: true` on drive events — so those are filtered out to match
+  // DriveSwitcher and the multi-drive agents API, both active-drives-only.
+  const roster = useMemo(
+    () => (canSpawn ? drives.filter((d) => !d.isTrashed).map((d) => ({ driveId: d.id, driveName: d.name })) : []),
+    [canSpawn, drives],
   );
+
+  // A trashed drive with a lingering session becomes an orphan group (it's
+  // excluded from the roster above) — it must still surface its existing
+  // session, but must not offer to spawn a NEW one into a trashed drive.
+  const trashedDriveIds = useMemo(() => new Set(drives.filter((d) => d.isTrashed).map((d) => d.id)), [drives]);
+
+  // Group by drive in global mode (roster ∪ session-implied drives, Assistant
+  // first — see session-groups.ts for the ordering rule); a single implicit
+  // group in drive mode.
+  const groups = useMemo(() => {
+    if (driveId) return sessions.length > 0 || notice === null ? [{ driveId, driveName: null, sessions }] : [];
+    return buildSessionGroups(sessions, { assistant: canSpawn, drives: roster });
+  }, [driveId, sessions, notice, canSpawn, roster]);
 
   return (
     <div className="space-y-2">
       {groups.map((group) => (
         <div key={group.driveId}>
           {!driveId && (
-            <div className="px-2 pb-1 pt-2 text-xs font-medium text-muted-foreground">{driveTitle(group.driveId)}</div>
+            <div className="px-2 pb-1 pt-2 text-xs font-medium text-muted-foreground">
+              {group.driveName ?? group.driveId}
+            </div>
           )}
           {group.sessions.map((session) => (
             <SessionRow key={session.sessionId} session={session} onChanged={onChanged} />
           ))}
-          <NewSessionRow
-            driveId={group.driveId === ASSISTANT_GROUP_KEY ? null : group.driveId}
-            agentsByDrive={agentsByDrive}
-            onSpawned={onChanged}
-          />
+          {!trashedDriveIds.has(group.driveId) && (
+            <NewSessionRow
+              driveId={group.driveId === ASSISTANT_GROUP_KEY ? null : group.driveId}
+              agentsByDrive={agentsByDrive}
+              onSpawned={onChanged}
+            />
+          )}
         </div>
       ))}
       {notice}

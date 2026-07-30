@@ -94,6 +94,20 @@ import AgentsSidebar from '../AgentsSidebar';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { useLayoutStore } from '@/stores/useLayoutStore';
+import { useDriveStore, type Drive } from '@/hooks/useDrive';
+
+const driveFixture = (id: string, name: string, overrides: Partial<Drive> = {}): Drive => ({
+  id,
+  name,
+  slug: name.toLowerCase(),
+  ownerId: 'user-1',
+  isTrashed: false,
+  trashedAt: null,
+  createdAt: '2026-01-01T00:00:00.000Z',
+  updatedAt: '2026-01-01T00:00:00.000Z',
+  isOwned: true,
+  ...overrides,
+});
 
 interface SessionFixture {
   sessionId: string;
@@ -144,6 +158,10 @@ beforeEach(() => {
     selectedAgentId: null,
   });
   useLayoutStore.setState({ leftSheetOpen: false });
+  // The roster is the canonical drive-group source in global mode — reset per
+  // test so one test's fixture never leaks into the next via the persisted
+  // store.
+  useDriveStore.setState({ drives: [] });
   mockUseAuth.mockReturnValue({ user: { role: 'admin' }, isLoading: false });
   mockUseParams.mockReturnValue({ driveId: 'drive-1' });
   mockUsePathname.mockReturnValue('/dashboard/drive-1/agents');
@@ -406,15 +424,103 @@ describe('AgentsSidebar', () => {
       mockUsePathname.mockReturnValue('/dashboard/agents');
       window.history.replaceState({}, '', '/dashboard/agents');
       useAgentSurfaceStore.setState({ driveId: null });
+      // The roster — every drive the user can work in — is what makes a
+      // drive's group appear at all, independent of whether it has a live
+      // session. `useDriveStore` (not `agentsByDrive`) is the canonical source.
+      useDriveStore.setState({ drives: [driveFixture('drive-1', 'Alpha')] });
     });
+
+    /** The group div wrapping a header, its sessions, and its "+ New session" row. */
+    const groupContainer = (headerText: string) => screen.getByText(headerText).parentElement as HTMLElement;
 
     test('fetches every accessible session and groups them under a drive header', async () => {
       renderSidebar();
 
       expect(await screen.findByText('api refactor')).toBeDefined();
       expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-sessions');
-      // The drive name resolves through the agents-by-drive fetch.
+      // The drive name resolves through the roster, not the agents-by-drive fetch.
       expect(screen.getByText('Alpha')).toBeDefined();
+    });
+
+    test('lists every roster drive, not just ones with a live session', async () => {
+      useDriveStore.setState({ drives: [driveFixture('drive-1', 'Alpha'), driveFixture('drive-2', 'Beta')] });
+      respondWithSessions([]);
+      renderSidebar();
+
+      expect(await screen.findByText('Alpha')).toBeDefined();
+      expect(screen.getByText('Beta')).toBeDefined();
+      // Every roster drive gets its own spawn affordance, whether or not it has
+      // a session — plus the Assistant group's own.
+      expect(screen.getAllByText('New session')).toHaveLength(3);
+    });
+
+    test('excludes trashed drives from the roster, matching DriveSwitcher and the multi-drive agents API', async () => {
+      // useDriveStore can legitimately hold trashed drives — useGlobalDriveSocket
+      // refetches with includeTrash: true on drive events — so the roster must
+      // filter them out itself rather than trusting the store's contents.
+      useDriveStore.setState({
+        drives: [driveFixture('drive-1', 'Alpha'), driveFixture('drive-2', 'Gamma', { isTrashed: true })],
+      });
+      respondWithSessions([]);
+      renderSidebar();
+
+      expect(await screen.findByText('Alpha')).toBeDefined();
+      expect(screen.queryByText('Gamma')).toBeNull();
+    });
+
+    test('a trashed drive with a lingering session keeps it visible but offers no new-session spawn', async () => {
+      // The trashed drive is excluded from the roster, so its lingering
+      // session surfaces as an orphan group (session-groups.ts never drops a
+      // session) — but that orphan group must not let an admin spawn a NEW
+      // session into a drive that was explicitly excluded for being trashed.
+      useDriveStore.setState({
+        drives: [driveFixture('drive-1', 'Alpha'), driveFixture('drive-2', 'Gamma', { isTrashed: true })],
+      });
+      respondWithSessions([{ ...SESSION, sessionId: 'ses-trashed', driveId: 'drive-2', name: 'lingering session' }]);
+      renderSidebar();
+
+      await screen.findByText('lingering session');
+      // The orphan header falls back to the raw id — the trash-filtered
+      // roster has no name to offer for it.
+      expect(within(groupContainer('drive-2')).queryByText('New session')).toBeNull();
+      // An active roster drive is unaffected.
+      expect(within(groupContainer('Alpha')).getByText('New session')).toBeDefined();
+    });
+
+    test('shows no roster groups for a non-admin — refusal-only, not a dead spawn chooser', () => {
+      // The admin gate must cover the roster too: previously only the
+      // Assistant group's visibility was tied to admin status, so a
+      // non-admin with drives in the persisted store would see every
+      // roster drive's header and "+ New session" row alongside the
+      // refusal notice, each expanding into an empty chooser since
+      // usePageAgents is disabled for them.
+      mockUseAuth.mockReturnValue({ user: { role: 'user' }, isLoading: false });
+      useDriveStore.setState({ drives: [driveFixture('drive-1', 'Alpha')] });
+
+      renderSidebar();
+
+      expect(screen.getByText(/administrator privileges/i)).toBeDefined();
+      expect(screen.queryByText('Alpha')).toBeNull();
+      expect(screen.queryByText('Assistant')).toBeNull();
+      expect(screen.queryByText('New session')).toBeNull();
+      expect(mockFetchWithAuth).not.toHaveBeenCalled();
+    });
+
+    test('spawning from a roster drive with zero sessions posts its driveId + the chosen agent', async () => {
+      mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-new' });
+      respondWithSessions([]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('Alpha');
+      await user.click(within(groupContainer('Alpha')).getByText('New session'));
+      await user.click(await screen.findByText('Researcher'));
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', { driveId: 'drive-1', agentPageId: 'agent-1' }),
+      );
+      await waitFor(() => expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-new'));
+      expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-new');
     });
 
     test('the Assistant group exists with zero sessions, and spawning it is ONE click', async () => {
@@ -427,7 +533,9 @@ describe('AgentsSidebar', () => {
       renderSidebar();
 
       expect(await screen.findByText('Assistant')).toBeDefined();
-      await user.click(screen.getByText('New session'));
+      // Scoped: the roster's own drive group also renders its own "New
+      // session" row now, so an unscoped query would be ambiguous.
+      await user.click(within(groupContainer('Assistant')).getByText('New session'));
 
       await waitFor(() => expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {}));
       await waitFor(() => expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-a'));
