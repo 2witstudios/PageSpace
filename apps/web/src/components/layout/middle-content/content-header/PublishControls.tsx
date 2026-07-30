@@ -51,9 +51,26 @@ interface PublishState {
   available: boolean;
   isStale: boolean;
   settings: PublishSettings;
+  // True only for a transient failure to load status (network error, 5xx) —
+  // distinct from `!available`, which means the status request succeeded (or
+  // definitively 403'd for a read-only viewer) and reported publishing as
+  // genuinely unavailable. Keeping these separate stops a blip from rendering
+  // the same "isn't available" message as a real, durable unavailability
+  // signal. Lives alongside `available` (rather than as its own useState) so
+  // every status-fetch outcome sets both fields in one atomic update.
+  hasLoadError: boolean;
 }
 
 const EMPTY_SETTINGS: PublishSettings = { title: '', description: '', ogImageUrl: '', noindex: false };
+
+const EMPTY_STATE: PublishState = {
+  published: false,
+  url: null,
+  available: false,
+  isStale: false,
+  settings: EMPTY_SETTINGS,
+  hasLoadError: false,
+};
 
 /** PublishSettings plus a transient "picked an uploaded file" alternative to
  *  pasting a URL — resolved server-side, never persisted as its own field. */
@@ -91,15 +108,8 @@ const readError = async (res: Response): Promise<string> => {
 const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishControlsProps) => {
   const params = useParams<{ driveId?: string }>();
   const driveId = params?.driveId;
-  const [state, setState] = useState<PublishState>({ published: false, url: null, available: false, isStale: false, settings: EMPTY_SETTINGS });
+  const [state, setState] = useState<PublishState>(EMPTY_STATE);
   const [isLoading, setIsLoading] = useState(true);
-  // True only for a transient failure to load status (network error, 5xx) —
-  // distinct from `!state.available`, which means the status request
-  // succeeded (or definitively 403'd for a read-only viewer) and reported
-  // publishing as genuinely unavailable. Keeping these separate stops a blip
-  // from rendering the same "isn't available" message as a real, durable
-  // unavailability signal.
-  const [hasLoadError, setHasLoadError] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const prevDirtyRef = useRef<boolean | undefined>(undefined);
@@ -107,7 +117,6 @@ const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishCo
   useEffect(() => {
     let cancelled = false;
     setIsLoading(true);
-    setHasLoadError(false);
     (async () => {
       try {
         const res = await fetchWithAuth(`/api/pages/${pageId}/publish`);
@@ -116,8 +125,7 @@ const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishCo
           // 403 means the viewer definitively lacks permission to publish —
           // a genuine unavailability signal, not a failed request. Anything
           // else (5xx, etc.) is a real load failure.
-          if (res.status !== 403) setHasLoadError(true);
-          setState({ published: false, url: null, available: false, isStale: false, settings: EMPTY_SETTINGS });
+          setState({ ...EMPTY_STATE, hasLoadError: res.status !== 403 });
           return;
         }
         const data = (await res.json()) as PublishStatusResponse;
@@ -128,12 +136,12 @@ const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishCo
             available: data.available ?? false,
             isStale: data.isStale ?? false,
             settings: settingsFromResponse(data),
+            hasLoadError: false,
           });
         }
       } catch {
         if (!cancelled) {
-          setHasLoadError(true);
-          setState({ published: false, url: null, available: false, isStale: false, settings: EMPTY_SETTINGS });
+          setState({ ...EMPTY_STATE, hasLoadError: true });
         }
       } finally {
         if (!cancelled) setIsLoading(false);
@@ -231,15 +239,15 @@ const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishCo
 
   // Publishing isn't configured on this deployment (e.g. no PUBLISH_BUCKET), or
   // this viewer lacks permission to publish (a definitive 403 — see
-  // `hasLoadError` above for the transient-failure case, handled separately).
-  // In the header (among other populated buttons) staying silent is fine; in
-  // a standalone panel (the canvas Settings tab) silence would leave the tab
-  // blank, so explain instead.
+  // `hasLoadError` on PublishState for the transient-failure case, handled
+  // separately). In the header (among other populated buttons) staying silent
+  // is fine; in a standalone panel (the canvas Settings tab) silence would
+  // leave the tab blank, so explain instead.
   if (!state.available) {
     if (variant === 'panel') {
       return (
         <p className="text-sm text-muted-foreground">
-          {hasLoadError
+          {state.hasLoadError
             ? "Couldn't load publishing status. Try again shortly."
             : "Publishing isn't available for this page."}
         </p>

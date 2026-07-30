@@ -35,30 +35,14 @@ import PublishControls from '../PublishControls';
 
 const mockFetchWithAuth = vi.mocked(fetchWithAuth);
 
-const make403Response = () =>
-  ({
-    ok: false,
-    status: 403,
-    json: async () => ({ error: 'You do not have permission to view this page' }),
-  }) as Response;
-
-const make500Response = () =>
-  ({
-    ok: false,
-    status: 500,
-    json: async () => ({ error: 'Failed to read publish status' }),
-  }) as Response;
-
-const makeUnavailableResponse = () =>
-  ({
-    ok: true,
-    status: 200,
-    json: async () => ({ published: false, available: false }),
-  }) as Response;
+const makeStatusResponse = ({ status = 200, body = {} }: { status?: number; body?: unknown } = {}) =>
+  ({ ok: status < 400, status, json: async () => body }) as Response;
 
 describe('PublishControls — unavailable-state branching', () => {
   it('given a read-only viewer (403), panel variant should show the durable unavailable message', async () => {
-    mockFetchWithAuth.mockResolvedValue(make403Response());
+    mockFetchWithAuth.mockResolvedValue(
+      makeStatusResponse({ status: 403, body: { error: 'You do not have permission to view this page' } })
+    );
 
     render(<PublishControls pageId="page_1" variant="panel" />);
 
@@ -72,7 +56,7 @@ describe('PublishControls — unavailable-state branching', () => {
   });
 
   it('given publishing unconfigured (200, available: false), panel variant should show the durable unavailable message', async () => {
-    mockFetchWithAuth.mockResolvedValue(makeUnavailableResponse());
+    mockFetchWithAuth.mockResolvedValue(makeStatusResponse({ body: { published: false, available: false } }));
 
     render(<PublishControls pageId="page_1" variant="panel" />);
 
@@ -86,7 +70,9 @@ describe('PublishControls — unavailable-state branching', () => {
   });
 
   it('given a server error (500), panel variant should show a distinct load-failure message', async () => {
-    mockFetchWithAuth.mockResolvedValue(make500Response());
+    mockFetchWithAuth.mockResolvedValue(
+      makeStatusResponse({ status: 500, body: { error: 'Failed to read publish status' } })
+    );
 
     render(<PublishControls pageId="page_1" variant="panel" />);
 
@@ -114,7 +100,9 @@ describe('PublishControls — unavailable-state branching', () => {
   });
 
   it('given a read-only viewer (403), header variant (default) should render nothing', async () => {
-    mockFetchWithAuth.mockResolvedValue(make403Response());
+    mockFetchWithAuth.mockResolvedValue(
+      makeStatusResponse({ status: 403, body: { error: 'You do not have permission to view this page' } })
+    );
 
     const { container } = render(<PublishControls pageId="page_1" />);
     await waitFor(() => assert({
@@ -126,7 +114,9 @@ describe('PublishControls — unavailable-state branching', () => {
   });
 
   it('given a server error (500), header variant (default) should render nothing', async () => {
-    mockFetchWithAuth.mockResolvedValue(make500Response());
+    mockFetchWithAuth.mockResolvedValue(
+      makeStatusResponse({ status: 500, body: { error: 'Failed to read publish status' } })
+    );
 
     const { container } = render(<PublishControls pageId="page_1" />);
     await waitFor(() => assert({
