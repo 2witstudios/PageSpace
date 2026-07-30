@@ -86,10 +86,10 @@ describe('DELETE /api/agent-sessions/[sessionId]/shells/[shellId]', () => {
     expect(mockCheckSessionEndAccess).toHaveBeenCalledWith('user-1', SESSION_ID);
   });
 
-  it('given a denial, should 403, audit it, and kill nothing', async () => {
+  it('given a denial, should 404 (SAME as not-found, review #2261/5), audit it, and kill nothing', async () => {
     mockCheckSessionEndAccess.mockResolvedValue({ allowed: false, reason: 'not_shared' });
     const response = await del();
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(404);
     expect(mockKillShellById).not.toHaveBeenCalled();
     expect(mockAuditRequest).toHaveBeenCalledWith(
       expect.anything(),

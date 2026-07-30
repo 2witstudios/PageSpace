@@ -94,6 +94,19 @@ export interface AgentSessionStore {
    */
   create(input: NewAgentSessionInput): Promise<AgentSessionRecord>;
   /**
+   * Mint a session row IFF this owner is under `maxActive` NOT-ENDED sessions
+   * — the spawn ceiling made STRUCTURAL rather than a pre-check (review
+   * #2261/2). A count-then-insert pre-check at the call site is TOCTOU-racy:
+   * N concurrent spawns can all read under the ceiling and all insert. This
+   * serializes the count-and-insert under a per-owner Postgres advisory lock
+   * (the same primitive `credit-gate.ts`'s billing-off ceiling uses), so two
+   * concurrent callers for the SAME owner cannot both win, while spawns for
+   * DIFFERENT owners never contend.
+   */
+  createIfUnderLimit(
+    input: NewAgentSessionInput & { maxActive: number },
+  ): Promise<{ ok: true; session: AgentSessionRecord } | { ok: false; reason: 'limit_reached' }>;
+  /**
    * ACTIVE sessions only (`endedAt IS NULL`), newest activity first
    * (`lastActiveAt DESC NULLS LAST, createdAt DESC`), capped at
    * {@link SESSION_LIST_LIMIT}. Ended rows are retained for lifecycle/billing
@@ -155,8 +168,33 @@ export interface AgentSessionStore {
     stamps: AgentSessionRowStamps;
     now: Date;
   }): Promise<boolean>;
-  /** Write a verdict's stamps with no CAS — for verdicts that change no identity (a resume's activity touch, ending a session that never provisioned). */
-  applyStamps(input: { sessionId: string; stamps: AgentSessionRowStamps }): Promise<void>;
+  /**
+   * Write a verdict's stamps — CAS-guarded whenever the verdict was planned
+   * from a read that a concurrent identity or lifecycle write could have
+   * since invalidated (review #2261/1). Two shapes of guard, matching the two
+   * ways a stale plan can corrupt the row:
+   *
+   *  - `cas.sandboxId` — for a plan computed from a `sandboxId` that could
+   *    have been claimed by a concurrent provision in between (the `end`
+   *    intent's never-provisioned noop): refuses if the row's CURRENT
+   *    `sandboxId` no longer matches, rather than stamping `endedAt` onto a
+   *    session a concurrent `ensure` just revived.
+   *  - `cas.endedAt` — for an "activity refresh" computed under the
+   *    assumption the row was NOT ended (the `resume`/`attach` arm's
+   *    `endedAt: null, teardownRequestedAt: null` stamps): refuses if the
+   *    row's CURRENT `endedAt` no longer matches, rather than silently
+   *    erasing a concurrent `end`'s teardown intent.
+   *
+   * Absent entirely for verdicts with nothing to race (an already-ended
+   * noop's empty stamps). Returns whether the write landed — `true` when no
+   * `cas` was given (nothing to have raced) or the CAS matched, `false` when
+   * a `cas` was given and refused.
+   */
+  applyStamps(input: {
+    sessionId: string;
+    stamps: AgentSessionRowStamps;
+    cas?: { sandboxId?: string | null; endedAt?: Date | null };
+  }): Promise<boolean>;
   /**
    * Record the durable teardown INTENT, BEFORE the kill. The one stamp written
    * ahead of its IO: its entire job is to survive a crash between "we decided to
@@ -320,6 +358,27 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
       return row as AgentSessionRecord;
     },
 
+    async createIfUnderLimit({ ownerId, driveId, name, now, maxActive }) {
+      return db.transaction(async (tx) => {
+        // Per-owner advisory lock, held for this transaction only — same
+        // primitive `credit-gate.ts`'s billing-off daily ceiling uses.
+        // Serializes concurrent spawns for THIS owner (so the count read
+        // below cannot go stale before the insert) without contending with
+        // any other owner's spawn at all.
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${'agent-session-spawn:' + ownerId}))`);
+        const [{ n }] = await tx
+          .select({ n: count() })
+          .from(agentSessions)
+          .where(and(eq(agentSessions.ownerId, ownerId), isNull(agentSessions.endedAt)));
+        if (n >= maxActive) return { ok: false as const, reason: 'limit_reached' as const };
+        const [row] = await tx
+          .insert(agentSessions)
+          .values({ ownerId, driveId, name, createdAt: now, updatedAt: now })
+          .returning();
+        return { ok: true as const, session: row as AgentSessionRecord };
+      });
+    },
+
     async list(filter) {
       const conditions = [];
       if (filter.ownerId !== undefined) conditions.push(eq(agentSessions.ownerId, filter.ownerId));
@@ -405,16 +464,26 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
       return updated.length > 0;
     },
 
-    async applyStamps({ sessionId, stamps }) {
+    async applyStamps({ sessionId, stamps, cas }) {
       const columns = stampColumns(stamps);
       // Nothing to write is a legitimate verdict (a noop that stamps nothing);
       // an empty `set` is a SQL error, so it is skipped rather than special-cased
       // by every caller.
-      if (Object.keys(columns).length === 0) return;
-      await db
+      if (Object.keys(columns).length === 0) return true;
+      const conditions = [eq(agentSessions.id, sessionId)];
+      if (cas?.sandboxId !== undefined) conditions.push(eqOrIsNull(agentSessions.sandboxId, cas.sandboxId));
+      if (cas?.endedAt !== undefined) conditions.push(eqOrIsNull(agentSessions.endedAt, cas.endedAt));
+      const updated = await db
         .update(agentSessions)
         .set({ ...columns, updatedAt: now() })
-        .where(eq(agentSessions.id, sessionId));
+        .where(and(...conditions))
+        .returning({ id: agentSessions.id });
+      // No guard requested: the caller accepted whatever the row currently is
+      // (there was nothing this write could have raced), so a miss (e.g. the
+      // row was deleted) is not a refusal — matches the prior unconditional
+      // behavior.
+      if (!cas) return true;
+      return updated.length > 0;
     },
 
     async requestTeardown({ sessionId, sandboxId, spriteInstanceId, at }) {

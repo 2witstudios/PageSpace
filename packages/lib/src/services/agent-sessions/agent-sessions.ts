@@ -20,20 +20,31 @@
 
 import type { SandboxHost } from '../sandbox/sandbox-host';
 import { SandboxSpriteReplacedError } from '../sandbox/sandbox-host';
-import { planAgentSessionLifecycle } from '../../agent-sessions/plan-session-lifecycle';
+import { planAgentSessionLifecycle, type AgentSessionLifecyclePlan } from '../../agent-sessions/plan-session-lifecycle';
 import type { AgentSessionDTO } from '../../agent-sessions/contract';
 import { deriveSandboxStatus } from './session-status';
 import type { AgentSessionListFilter, AgentSessionRecord, AgentSessionStore } from './agent-sessions-store';
 
 export interface SpawnAgentSessionDeps {
-  store: Pick<AgentSessionStore, 'create'>;
+  store: Pick<AgentSessionStore, 'createIfUnderLimit'>;
   now: () => Date;
+  /**
+   * The most NOT-ENDED sessions this owner may hold. REQUIRED, mirroring
+   * `checkConcurrency` in `agent-session-sprite.ts`: the ceiling used to be a
+   * pre-check at ONE call site (the web route), which a future caller could
+   * simply forget to run. Folding it into this function's dependencies makes
+   * it a property of spawning a session at all, not a habit each call site
+   * has to remember (review #2261/2).
+   */
+  maxActiveSessions: number;
 }
 
 export type SpawnAgentSessionResult =
   | { ok: true; session: AgentSessionRecord }
   /** The drive does not exist (FK refused) or the insert failed outright. */
-  | { ok: false; reason: 'spawn_failed'; detail?: string };
+  | { ok: false; reason: 'spawn_failed'; detail?: string }
+  /** The owner is already at `maxActiveSessions` not-ended sessions. */
+  | { ok: false; reason: 'session_limit_reached' };
 
 /**
  * Spawn a session: mint the workspace row.
@@ -63,8 +74,15 @@ export async function spawnAgentSession({
   deps: SpawnAgentSessionDeps;
 }): Promise<SpawnAgentSessionResult> {
   try {
-    const session = await deps.store.create({ ownerId, driveId, name: name ?? null, now: deps.now() });
-    return { ok: true, session };
+    const result = await deps.store.createIfUnderLimit({
+      ownerId,
+      driveId,
+      name: name ?? null,
+      now: deps.now(),
+      maxActive: deps.maxActiveSessions,
+    });
+    if (!result.ok) return { ok: false, reason: 'session_limit_reached' };
+    return { ok: true, session: result.session };
   } catch (error) {
     return {
       ok: false,
@@ -85,6 +103,15 @@ export type EndAgentSessionResult =
   | { ok: false; reason: 'not_found' | 'teardown_failed'; detail?: string };
 
 /**
+ * Bounded retries for the never-provisioned-noop's CAS (see below). A stale
+ * plan re-reads and re-plans against the fresh row rather than clobbering it,
+ * so contention resolves in a handful of attempts under any realistic race;
+ * this is a backstop against pathological, sustained contention, not the
+ * normal path.
+ */
+const MAX_END_ATTEMPTS = 5;
+
+/**
  * End a session: kill its Sprite (instance-guarded) and stamp the row.
  *
  * THE ROW IS KEPT. That is the point of the whole design — a later `ensure`
@@ -103,30 +130,66 @@ export async function endAgentSession({
   sessionId: string;
   deps: EndAgentSessionDeps;
 }): Promise<EndAgentSessionResult> {
-  const row = await deps.store.findById(sessionId);
-  const now = deps.now();
-  const plan = planAgentSessionLifecycle({
-    row: row === null ? null : { ...row, sessionId: row.id },
-    intent: 'end',
-    // Ignored for `end` — the planner handles cleanup BEFORE the authorization
-    // gate. Passing `true` documents that this path deliberately does not gate.
-    canRun: true,
-    now,
-  });
+  // Bounded retry: the never-provisioned noop's plan is only valid while
+  // `sandboxId` stays null between the read and the write below. A concurrent
+  // `ensure` can provision in that window; re-reading and re-planning turns
+  // that race into a REAL teardown of the newly-live session instead of a
+  // stale `endedAt` stamp landing on it (review #2261/1).
+  for (let attempt = 0; attempt < MAX_END_ATTEMPTS; attempt += 1) {
+    const row = await deps.store.findById(sessionId);
+    const now = deps.now();
+    const plan = planAgentSessionLifecycle({
+      row: row === null ? null : { ...row, sessionId: row.id },
+      intent: 'end',
+      // Ignored for `end` — the planner handles cleanup BEFORE the authorization
+      // gate. Passing `true` documents that this path deliberately does not gate.
+      canRun: true,
+      now,
+    });
 
-  if (plan.action === 'noop') {
-    if (plan.reason === 'no_session') return { ok: false, reason: 'not_found' };
-    // Either already ended (nothing stamped) or a session that never acquired a
-    // sandbox, which still ends.
-    await deps.store.applyStamps({ sessionId, stamps: plan.stamps });
-    return { ok: true, spriteTornDown: false };
+    if (plan.action === 'noop') {
+      if (plan.reason === 'no_session') return { ok: false, reason: 'not_found' };
+      if (plan.reason === 'already_ended') {
+        // Nothing to write (plan.stamps is {}) — no race to guard against.
+        await deps.store.applyStamps({ sessionId, stamps: plan.stamps });
+        return { ok: true, spriteTornDown: false };
+      }
+      // `no_sandbox`: this plan is only valid while the row's `sandboxId`
+      // stays null. CAS-guard the `endedAt` stamp on that pointer — if a
+      // concurrent `ensure` provisioned in between, the stamp must not land on
+      // a now-live session; re-read and re-plan against what it actually is.
+      const applied = await deps.store.applyStamps({
+        sessionId,
+        stamps: plan.stamps,
+        cas: { sandboxId: null },
+      });
+      if (!applied) continue;
+      return { ok: true, spriteTornDown: false };
+    }
+
+    if (plan.action !== 'teardown') {
+      // Unreachable: `end` yields only `teardown` or `noop`.
+      return { ok: false, reason: 'teardown_failed', detail: `unexpected_lifecycle_verdict:${plan.action}` };
+    }
+
+    return endProvisionedSession({ sessionId, plan, now, deps });
   }
+  // Sustained contention exhausted every retry — a transient condition the
+  // caller can simply retry, not a genuine failure of this session.
+  return { ok: false, reason: 'teardown_failed', detail: 'concurrent_modification' };
+}
 
-  if (plan.action !== 'teardown') {
-    // Unreachable: `end` yields only `teardown` or `noop`.
-    return { ok: false, reason: 'teardown_failed', detail: `unexpected_lifecycle_verdict:${plan.action}` };
-  }
-
+async function endProvisionedSession({
+  sessionId,
+  plan,
+  now,
+  deps,
+}: {
+  sessionId: string;
+  plan: Extract<AgentSessionLifecyclePlan, { action: 'teardown' }>;
+  now: Date;
+  deps: EndAgentSessionDeps;
+}): Promise<EndAgentSessionResult> {
   // Record the teardown INTENT before the kill, so a crash in between still
   // leaves the Sprite reclaimable by the orphan reconciler. CAS-guarded on the
   // pointer we are about to kill: if a concurrent ensure has already revived
@@ -157,13 +220,17 @@ export async function endAgentSession({
   // ensure re-provisioned this session onto a live replacement between our kill
   // and now: those stamps are not ours to write, and marking that VM as torn down
   // would hide a billing Sprite from the reconciler forever.
-  await deps.store.stampSpriteTornDown({
+  const stamped = await deps.store.stampSpriteTornDown({
     sessionId,
     sandboxId: plan.sandboxId,
     spriteInstanceId: plan.expectedInstanceId,
     stamps: plan.stamps,
   });
-  return { ok: true, spriteTornDown: true };
+  // Report the CAS outcome honestly (review #2261/3): when a concurrent
+  // ensure revived this session onto a new instance, the CAS correctly
+  // refused, and the caller must not be told the session ended — it is live
+  // again, on a Sprite this call never touched.
+  return { ok: true, spriteTornDown: stamped };
 }
 
 /**

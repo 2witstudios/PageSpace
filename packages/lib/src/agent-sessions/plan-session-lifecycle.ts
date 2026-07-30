@@ -231,6 +231,19 @@ export function planAgentSessionLifecycle({
   // be able to end it, and so must every automated path.
   if (intent === 'end') {
     if (!row) return { action: 'noop', reason: 'no_session', stamps: {} };
+    // A CONFIRMED kill is checked BEFORE `sandboxId`, and specifically on
+    // `spriteTornDownAt` rather than the broader `isEnded` — teardown never
+    // clears `sandboxId` (the row outlives its Sprite, on purpose; see
+    // `agent-sessions-store.ts`'s schema doc), so a NORMALLY-ended session —
+    // the common shape, `sandboxId` still recorded — used to fall through to
+    // `teardown` on every re-end, re-requesting teardown and re-killing an
+    // already-confirmed-dead Sprite (review #2261/4). `isEnded` would be the
+    // WRONG guard here: it also trips on `endedAt` alone, which is exactly
+    // the crash-recovery shape below (`teardownRequestedAt`/`endedAt` stamped
+    // together on a CONFIRMED kill, so `endedAt` set with `spriteTornDownAt`
+    // still null means the kill was never confirmed) — that row must still
+    // retry teardown, not read as already-ended.
+    if (row.spriteTornDownAt !== null) return { action: 'noop', reason: 'already_ended', stamps: {} };
     if (row.sandboxId !== null) {
       return {
         action: 'teardown',
@@ -239,9 +252,9 @@ export function planAgentSessionLifecycle({
         stamps: { teardownRequestedAt: now, spriteTornDownAt: now, endedAt: now },
       };
     }
-    // No pointer left. Either it was already torn down (nothing to do) or the
-    // session never acquired a sandbox — which still ends the session.
-    if (isEnded(row)) return { action: 'noop', reason: 'already_ended', stamps: {} };
+    // No sandbox recorded: either explicitly ended already (nothing further
+    // to stamp) or never acquired one, which still ends the session.
+    if (row.endedAt !== null) return { action: 'noop', reason: 'already_ended', stamps: {} };
     return { action: 'noop', reason: 'no_sandbox', stamps: { endedAt: now } };
   }
 

@@ -44,7 +44,7 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
 }));
 
 import { POST } from '../route';
-import { ConversationUnavailableError } from '@/lib/agent-sessions/create-conversation-in-session';
+import { AgentNotInSessionDriveError, ConversationUnavailableError } from '@/lib/agent-sessions/create-conversation-in-session';
 
 const AUTH_USER = { userId: 'user-1', role: 'admin' };
 const SESSION_ID = 'ses-1';
@@ -114,10 +114,10 @@ describe('POST /api/agent-sessions/[sessionId]/conversations', () => {
     expect(mockCreateConversationInSession).not.toHaveBeenCalled();
   });
 
-  it('403s a session the requester cannot reach, and audits it', async () => {
+  it('404s a session the requester cannot reach (SAME as not-found, review #2261/5), but still audits it', async () => {
     mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'drive_access_denied' });
     const response = await post({ agentPageId: 'agent-1' });
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(404);
     expect(mockCreateConversationInSession).not.toHaveBeenCalled();
     expect(mockAuditRequest).toHaveBeenCalledWith(
       expect.anything(),
@@ -161,6 +161,12 @@ describe('POST /api/agent-sessions/[sessionId]/conversations', () => {
     const response = await post({});
     expect(response.status).toBe(502);
     expect(await response.json()).toEqual({ error: 'Could not start a conversation' });
+  });
+
+  it('400s an agent from a DIFFERENT drive than the session — a caller mistake, not a service failure (review #2261/6)', async () => {
+    mockCreateConversationInSession.mockRejectedValue(new AgentNotInSessionDriveError());
+    const response = await post({ agentPageId: 'agent-1' });
+    expect(response.status).toBe(400);
   });
 
   it('given an auth failure, should return the auth error untouched', async () => {

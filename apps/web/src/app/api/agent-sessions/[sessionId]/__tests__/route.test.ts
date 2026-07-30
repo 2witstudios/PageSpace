@@ -73,10 +73,11 @@ describe('GET /api/agent-sessions/[sessionId]', () => {
     expect(await response.json()).toEqual({ session: null });
   });
 
-  it('given a denial, should 403 and audit it', async () => {
+  it('given a denial, should answer { session: null } — SAME as not-found, but still audit it (review #2261/5)', async () => {
     mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'page_access_denied' });
     const response = await get();
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ session: null });
     expect(mockAuditRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ eventType: 'authz.access.denied' }),
@@ -99,10 +100,10 @@ describe('POST /api/agent-sessions/[sessionId]', () => {
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
   });
 
-  it('given an access denial, should 403 BEFORE provisioning anything', async () => {
+  it('given an access denial, should 404 (SAME as not-found, review #2261/5) BEFORE provisioning anything', async () => {
     mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'drive_access_denied' });
     const response = await post();
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(404);
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
   });
 
@@ -163,10 +164,10 @@ describe('DELETE /api/agent-sessions/[sessionId]', () => {
     expect(mockEndSession).not.toHaveBeenCalled();
   });
 
-  it('given a denial, should 403 and never touch the session', async () => {
+  it('given a denial, should 404 (SAME as not-found, review #2261/5) and never touch the session', async () => {
     mockCheckSessionEndAccess.mockResolvedValue({ allowed: false, reason: 'not_shared' });
     const response = await del();
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(404);
     expect(mockEndSession).not.toHaveBeenCalled();
   });
 

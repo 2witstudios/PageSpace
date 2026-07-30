@@ -30,6 +30,7 @@ function makeSpawnDeps(
   return {
     store: store.store,
     now: () => NOW,
+    maxActiveSessions: 100,
     ...over,
   };
 }
@@ -84,11 +85,29 @@ describe('spawnAgentSession', () => {
 
   it('given the store insert throwing (e.g. a dead driveId FK), should report spawn_failed', async () => {
     const store = makeAgentSessionStore();
-    store.store.create = async () => {
+    store.store.createIfUnderLimit = async () => {
       throw new Error('violates foreign key constraint');
     };
     const result = await spawnAgentSession({ ownerId: OWNER_ID, driveId: 'no-such-drive', deps: makeSpawnDeps(store) });
     expect(result).toMatchObject({ ok: false, reason: 'spawn_failed' });
+  });
+
+  it('given the owner is AT the ceiling, should report session_limit_reached — the check a future caller cannot omit (review #2261/2)', async () => {
+    const store = makeAgentSessionStore();
+    const result = await spawnAgentSession({
+      ownerId: OWNER_ID,
+      driveId: DRIVE_ID,
+      deps: makeSpawnDeps(store, { maxActiveSessions: 1 }),
+    });
+    expect(result.ok).toBe(true);
+
+    const second = await spawnAgentSession({
+      ownerId: OWNER_ID,
+      driveId: DRIVE_ID,
+      deps: makeSpawnDeps(store, { maxActiveSessions: 1 }),
+    });
+    expect(second).toEqual({ ok: false, reason: 'session_limit_reached' });
+    expect(store.rows.size).toBe(1);
   });
 });
 
@@ -240,11 +259,83 @@ describe('endAgentSession', () => {
     };
     const result = await endAgentSession({ sessionId: SESSION_ID, deps });
 
-    expect(result.ok).toBe(true);
+    // Honest reporting (review #2261/3): the CAS refused, so the caller must
+    // not be told the session ended — it is live again, on a Sprite this call
+    // never touched.
+    expect(result).toEqual({ ok: true, spriteTornDown: false });
     const row = store.rows.get(SESSION_ID)!;
     expect(row.spriteInstanceId).toBe('inst-revived');
     expect(row.spriteTornDownAt).toBeNull();
     expect(row.teardownRequestedAt).toBeNull();
+  });
+
+  it('given a concurrent ensure that PROVISIONS between the read and the stamp, should never strand endedAt on the newly-live row', async () => {
+    // The acceptance test (review #2261): concurrent end + ensure must never
+    // produce a row with endedAt set AND a live sandboxId AND no
+    // teardownRequestedAt. Our plan reads sandboxId: null and computes a
+    // never-provisioned noop; a concurrent ensure provisions in between. The
+    // CAS on that stamp must refuse, and the retry must re-plan against what
+    // the row actually is now — a real teardown, not a stale stamp.
+    const neverProvisioned = makeSessionRecord();
+    const store = makeAgentSessionStore([neverProvisioned]);
+    const host = makeSpriteHost({ seed: { [SESSION_KEY]: { instanceId: 'inst-concurrent' } } });
+    let reads = 0;
+    const deps = {
+      store: {
+        ...store.store,
+        async findById(sessionId: string) {
+          reads += 1;
+          const row = await store.store.findById(sessionId);
+          if (reads === 1) {
+            // The concurrent ensure wins the race right after our read.
+            store.rows.set(
+              SESSION_ID,
+              makeSessionRecord({
+                sessionKey: SESSION_KEY,
+                sandboxId: SESSION_KEY,
+                spriteInstanceId: 'inst-concurrent',
+              }),
+            );
+          }
+          return row;
+        },
+      },
+      host: host.host,
+      now: () => NOW,
+    };
+
+    const result = await endAgentSession({ sessionId: SESSION_ID, deps });
+
+    expect(reads).toBe(2);
+    expect(result).toEqual({ ok: true, spriteTornDown: true });
+    const row = store.rows.get(SESSION_ID)!;
+    const isTheBadState = row.endedAt !== null && row.sandboxId !== null && row.teardownRequestedAt === null;
+    expect(isTheBadState).toBe(false);
+    // It retried and genuinely tore down the newly-provisioned session.
+    expect(row.spriteTornDownAt).toEqual(NOW);
+    expect(row.endedAt).toEqual(NOW);
+    expect(host.calls.kill).toEqual([{ sandboxId: SESSION_KEY, expectedInstanceId: 'inst-concurrent' }]);
+  });
+
+  it('given a NORMALLY-ended session (provisioned, then ended — the common shape), should be idempotent without re-tearing-down', async () => {
+    // review #2261/4: `row.sandboxId !== null` used to be checked BEFORE
+    // `isEnded(row)`, and teardown never clears `sandboxId` — so this common
+    // shape (not the never-provisioned one the old test covered) fell through
+    // to the teardown branch on every re-end.
+    const endedProvisioned = makeSessionRecord({
+      sessionKey: SESSION_KEY,
+      sandboxId: SESSION_KEY,
+      spriteInstanceId: 'inst-live',
+      teardownRequestedAt: NOW,
+      spriteTornDownAt: NOW,
+      endedAt: NOW,
+    });
+    const store = makeAgentSessionStore([endedProvisioned]);
+    const host = makeSpriteHost();
+    const result = await endAgentSession({ sessionId: SESSION_ID, deps: makeEndDeps(store, host) });
+
+    expect(result).toEqual({ ok: true, spriteTornDown: false });
+    expect(host.calls.kill).toHaveLength(0);
   });
 });
 

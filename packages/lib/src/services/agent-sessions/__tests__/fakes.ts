@@ -105,6 +105,24 @@ export function makeAgentSessionStore(
       return row;
     },
 
+    async createIfUnderLimit({ ownerId, driveId, name, now, maxActive }) {
+      const activeCount = [...rows.values()].filter((row) => row.ownerId === ownerId && row.endedAt === null).length;
+      if (activeCount >= maxActive) return { ok: false, reason: 'limit_reached' };
+      calls.create += 1;
+      minted += 1;
+      const row = makeSessionRecord({
+        id: `ses-minted-${minted}`,
+        ownerId,
+        driveId,
+        name,
+        storageLastBilledAt: now,
+        createdAt: now,
+        updatedAt: now,
+      });
+      rows.set(row.id, row);
+      return { ok: true, session: row };
+    },
+
     async list(filter) {
       // Mirrors the real store: active rows only, newest activity first,
       // capped at SESSION_LIST_LIMIT (the sidebar polls this every few
@@ -164,15 +182,18 @@ export function makeAgentSessionStore(
       return true;
     },
 
-    async applyStamps({ sessionId, stamps }) {
+    async applyStamps({ sessionId, stamps, cas }) {
       const row = rows.get(sessionId);
-      if (!row) return;
+      if (!row) return true;
       // Mirrors the real store: a stamp write with nothing to write is a
       // legitimate no-op verdict, and must not bump updatedAt on a row it
       // otherwise leaves untouched.
       const columns = stampColumns(stamps);
-      if (Object.keys(columns).length === 0) return;
+      if (Object.keys(columns).length === 0) return true;
+      if (cas?.sandboxId !== undefined && (row.sandboxId ?? null) !== (cas.sandboxId ?? null)) return false;
+      if (cas?.endedAt !== undefined && (row.endedAt?.getTime() ?? null) !== (cas.endedAt?.getTime() ?? null)) return false;
       rows.set(sessionId, { ...row, ...columns, updatedAt: now() });
+      return true;
     },
 
     async requestTeardown({ sessionId, sandboxId, spriteInstanceId, at }) {

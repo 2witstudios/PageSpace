@@ -547,6 +547,35 @@ describe('ensureAgentSessionSandbox — resumed Sprite identity (ABA)', () => {
   });
 });
 
+describe('ensureAgentSessionSandbox — resume vs a concurrent end (review #2261/1 mirror)', () => {
+  it('given a concurrent end that ended the row between the read and the activity stamp, should NOT erase its teardown intent', async () => {
+    // The caller read this row (not ended) before calling ensure. Concurrently,
+    // endAgentSession ran to completion — teardown never clears `sandboxId`, so
+    // an identity CAS alone cannot catch this; only a state CAS on `endedAt`
+    // can. Without it, the resume arm's unconditional
+    // `{ endedAt: null, teardownRequestedAt: null }` stamp would silently erase
+    // the concurrent end's teardown intent.
+    const live = makeSessionRecord({ sessionKey: SESSION_KEY, sandboxId: SESSION_KEY, spriteInstanceId: 'inst-live' });
+    const store = makeAgentSessionStore([live]);
+    const host = makeSpriteHost({ seed: { [SESSION_KEY]: { instanceId: 'inst-live' } } });
+
+    store.rows.set(SESSION_ID, { ...live, teardownRequestedAt: NOW, spriteTornDownAt: NOW, endedAt: NOW });
+
+    const result = await ensureAgentSessionSandbox({
+      row: toSpriteRow(live),
+      intent: 'ensure',
+      actor,
+      deps: makeDeps({ store, host }),
+    });
+
+    expect(result).toEqual({ ok: true, sandboxId: SESSION_KEY, resumed: true });
+    const row = store.rows.get(SESSION_ID)!;
+    expect(row.endedAt).toEqual(NOW);
+    expect(row.teardownRequestedAt).toEqual(NOW);
+    expect(row.spriteTornDownAt).toEqual(NOW);
+  });
+});
+
 describe('ensureAgentSessionSandbox — attach', () => {
   const provisioned = makeSessionRecord({
     sessionKey: SESSION_KEY,

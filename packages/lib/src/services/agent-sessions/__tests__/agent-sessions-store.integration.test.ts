@@ -488,3 +488,44 @@ describe('list bounds and ordering (review M3/M4)', () => {
     expect(after).toBe(before + 1);
   });
 });
+
+describe('createIfUnderLimit — the spawn ceiling made atomic (review #2261/2)', () => {
+  it('given the owner is under the ceiling, should mint a session', async () => {
+    const result = await store.createIfUnderLimit({
+      ownerId,
+      driveId,
+      name: 'ceiling test',
+      now: new Date(),
+      maxActive: 1_000_000,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    sessionIds.push(result.session.id);
+    expect(result.session.ownerId).toBe(ownerId);
+  });
+
+  it('given the owner is AT the ceiling, should refuse without inserting', async () => {
+    const before = await store.countActive(ownerId);
+    const result = await store.createIfUnderLimit({ ownerId, driveId, name: null, now: new Date(), maxActive: before });
+    expect(result).toEqual({ ok: false, reason: 'limit_reached' });
+    expect(await store.countActive(ownerId)).toBe(before);
+  });
+
+  it('given N concurrent spawns racing the SAME ceiling, should mint EXACTLY the remaining allowance — not N (the TOCTOU a count-then-insert pre-check left open)', async () => {
+    const before = await store.countActive(ownerId);
+    const allowance = 3;
+    const maxActive = before + allowance;
+    const attempts = 10;
+
+    const results = await Promise.all(
+      Array.from({ length: attempts }, () =>
+        store.createIfUnderLimit({ ownerId, driveId, name: null, now: new Date(), maxActive }),
+      ),
+    );
+    const minted = results.filter((r): r is Extract<typeof r, { ok: true }> => r.ok);
+    for (const r of minted) sessionIds.push(r.session.id);
+
+    expect(minted).toHaveLength(allowance);
+    expect(await store.countActive(ownerId)).toBe(maxActive);
+  });
+});

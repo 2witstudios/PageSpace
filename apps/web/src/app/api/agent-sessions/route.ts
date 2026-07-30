@@ -29,6 +29,7 @@ import {
   endSession,
   listSessions,
   listSessionConversationsBulk,
+  MAX_ACTIVE_SESSIONS_PER_OWNER,
   spawnSession,
   toAgentSessionDTO,
   type AgentSessionListFilter,
@@ -38,15 +39,6 @@ import { sessionQuotaExceeded } from '@/lib/agent-sessions/quota-response';
 
 /** Bound on the stored display label — rendered everywhere the session appears. */
 const MAX_SESSION_NAME_LENGTH = 120;
-
-/**
- * The most NOT-ENDED sessions one owner may hold. Spawn is deliberately
- * instant and free (no sandbox), which meant the live-sandbox concurrency
- * quota never applied to it — an authorized caller could mint unbounded rows
- * (review M6/F4). Matches SESSION_LIST_LIMIT: the sidebar shows at most this
- * many anyway.
- */
-const MAX_ACTIVE_SESSIONS_PER_OWNER = 100;
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -189,6 +181,13 @@ export async function POST(request: Request) {
     }
   }
 
+  // Advisory fast-path only (review #2261/2): count-then-branch here is
+  // TOCTOU-racy on its own — N concurrent POSTs could all read under the
+  // ceiling — so it exists to skip the agent lookups below for the OBVIOUS
+  // over-limit case. `spawnSession` enforces the ceiling ATOMICALLY (a
+  // per-owner advisory lock around the count-and-insert in the store), and is
+  // the authoritative check the `spawned.reason === 'session_limit_reached'`
+  // branch below maps.
   const activeCount = await countActiveSessionsForOwner(auth.userId);
   if (activeCount >= MAX_ACTIVE_SESSIONS_PER_OWNER) {
     return sessionQuotaExceeded(request, auth.userId, 'about-to-be-minted', 'agent-sessions', {
@@ -218,6 +217,13 @@ export async function POST(request: Request) {
 
   const spawned = await spawnSession({ userId: auth.userId, driveId, name });
   if (!spawned.ok) {
+    if (spawned.reason === 'session_limit_reached') {
+      // The atomic backstop caught what the pre-check above missed — a
+      // concurrent spawn landed between the pre-check and here.
+      return sessionQuotaExceeded(request, auth.userId, 'about-to-be-minted', 'agent-sessions', {
+        message: 'You have reached your active session limit — end some before starting more.',
+      });
+    }
     loggers.api.error('Agent session spawn failed', undefined, { driveId, detail: spawned.detail });
     return NextResponse.json({ error: 'Could not start a session', reason: spawned.reason }, { status: 502 });
   }

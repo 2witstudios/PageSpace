@@ -355,8 +355,14 @@ export async function ensureAgentSessionSandbox({
         return { ok: false, reason: 'provision_failed', detail: 'sandbox_vanished' };
       }
       // Nothing to provision and no identity to move — only the activity stamps
-      // the verdict asked for.
-      await deps.store.applyStamps({ sessionId: row.sessionId, stamps: plan.stamps });
+      // the verdict asked for. CAS-guarded on `endedAt` still being null: these
+      // stamps (`endedAt: null, teardownRequestedAt: null`) were computed under
+      // the assumption the row was NOT ended, and a concurrent `end` that
+      // stamped it in between must not be silently erased — an unguarded write
+      // here is the mirror-image of the end path's race (review #2261/1). A
+      // refusal is not a failure: the identity being resumed is unchanged
+      // either way, only the freshness touch is skipped.
+      await deps.store.applyStamps({ sessionId: row.sessionId, stamps: plan.stamps, cas: { endedAt: null } });
       return { ok: true, sandboxId: plan.sandboxId, resumed: true };
 
     case 'adopt': {

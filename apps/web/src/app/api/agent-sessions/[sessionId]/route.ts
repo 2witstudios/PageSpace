@@ -2,15 +2,14 @@
  * One agent session — status / ensure+provision / end.
  *
  * GET    → 200 { session: AgentSessionDTO | null }
- *   `{ session: null }` for an unknown id, NOT a 404: it is the same answer
- *   whether the session never existed or is someone else's, so a probe
+ *   `{ session: null }` whether the session never existed OR is someone
+ *   else's — never a 404 or a 403: the same answer either way, so a probe
  *   learns nothing from it. (Post-unconflation every spawned session has a
  *   row from birth; null here means the id resolves to nothing you may see.)
  *
  * POST   → 200 { session } — provision the EXISTING session's sandbox,
  *   idempotent by the session id (a re-POST resumes). No body: sessions are
- *   born through the collection route's spawn; this route never mints one, so
- *   an unknown id is a 404, not an ensure.
+ *   born through the collection route's spawn; this route never mints one.
  *
  * DELETE → 200 { ok, spriteTornDown } — end the session: instance-guarded
  *   Sprite kill, row RETAINED (re-provisionable under the same key). Gated by
@@ -19,8 +18,11 @@
  *   full decision, real capability included.
  *
  * Access decisions live in `decideAgentSessionAccess` (packages/lib) — these
- * handlers only map its verdicts onto statuses: not_found → 404 (or the
- * null-session 200 on GET), denial → 403, service failure → 502.
+ * handlers map its verdicts onto ONE not-found/denied policy for the whole
+ * `[sessionId]` family (`session-unavailable-response.ts`, review #2261/5):
+ * an unknown id and a denied one answer IDENTICALLY (the null-session 200 on
+ * GET, a uniform 404 on POST/DELETE) — service failure is the only distinct
+ * outcome, at 502.
  */
 
 import { NextResponse } from 'next/server';
@@ -28,6 +30,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { sessionQuotaExceeded } from '@/lib/agent-sessions/quota-response';
+import { auditSessionAccessDenial, sessionNotFoundOrDenied } from '@/lib/agent-sessions/session-unavailable-response';
 import {
   checkSessionAccess,
   checkSessionEndAccess,
@@ -40,16 +43,24 @@ import {
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
+const ROUTE = 'agent-sessions/[sessionId]';
+
 type RouteContext = { params: Promise<{ sessionId: string }> };
 
-
-function denied(request: Request, userId: string, sessionId: string, reason: string): NextResponse {
+/**
+ * A denial AFTER the not-found/denied family gate has already passed — the
+ * caller already knows this session exists (the session-access check above
+ * succeeded and its row was found). This is a DIFFERENT question
+ * (`ensureAgentSessionSandbox`'s own authorization, re-checked at provision
+ * time) that leaks nothing new by staying a genuine 403.
+ */
+function provisioningDenied(request: Request, userId: string, sessionId: string, reason: string): NextResponse {
   auditRequest(request, {
     eventType: 'authz.access.denied',
     userId,
     resourceType: 'agent_session',
     resourceId: sessionId,
-    details: { reason, route: 'agent-sessions/[sessionId]' },
+    details: { reason, route: ROUTE },
     riskScore: 0.5,
   });
   return NextResponse.json({ error: 'You do not have access to this session' }, { status: 403 });
@@ -62,10 +73,10 @@ export async function GET(request: Request, context: RouteContext) {
 
   const access = await checkSessionAccess(auth.userId, sessionId);
   if (!access.allowed) {
-    // No row = no sandbox = status 'none' — the expected cold answer, not an
-    // error and not a fact worth distinguishing from "not yours to ask about".
-    if (access.reason === 'session_not_found') return NextResponse.json({ session: null });
-    return denied(request, auth.userId, sessionId, access.reason);
+    // Not found and denied answer THE SAME — null, never a 404 or a 403 —
+    // so a probe learns nothing from the difference (family policy above).
+    auditSessionAccessDenial(request, auth.userId, sessionId, access.reason, ROUTE);
+    return NextResponse.json({ session: null });
   }
 
   const row = await findSessionRecord(sessionId);
@@ -90,10 +101,7 @@ export async function POST(request: Request, context: RouteContext) {
   // start, or resume after an end.
   const access = await checkSessionAccess(auth.userId, sessionId);
   if (!access.allowed) {
-    if (access.reason === 'session_not_found') {
-      return NextResponse.json({ error: 'Session not found' }, { status: 404 });
-    }
-    return denied(request, auth.userId, sessionId, access.reason);
+    return sessionNotFoundOrDenied(request, auth.userId, sessionId, access.reason, ROUTE);
   }
 
   const existing = await findSessionRecord(sessionId);
@@ -105,11 +113,11 @@ export async function POST(request: Request, context: RouteContext) {
       // A plan-limit refusal is not an access denial — separate response and
       // separate audit event (see quotaExceeded).
       if (provisioned.denial === 'session_limit_reached') {
-        return sessionQuotaExceeded(request, auth.userId, sessionId, 'agent-sessions/[sessionId]', {
+        return sessionQuotaExceeded(request, auth.userId, sessionId, ROUTE, {
           reasonCode: provisioned.detail,
         });
       }
-      return denied(request, auth.userId, sessionId, provisioned.denial ?? 'denied');
+      return provisioningDenied(request, auth.userId, sessionId, provisioned.denial ?? 'denied');
     }
     loggers.api.error('Agent session provision failed', undefined, {
       sessionId,
@@ -146,10 +154,7 @@ export async function DELETE(request: Request, context: RouteContext) {
 
   const access = await checkSessionEndAccess(auth.userId, sessionId);
   if (!access.allowed) {
-    if (access.reason === 'session_not_found') {
-      return NextResponse.json({ error: 'Session not found' }, { status: 404 });
-    }
-    return denied(request, auth.userId, sessionId, access.reason);
+    return sessionNotFoundOrDenied(request, auth.userId, sessionId, access.reason, ROUTE);
   }
 
   const ended = await endSession(sessionId);
