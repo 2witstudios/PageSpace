@@ -22,6 +22,15 @@ export const conversations = pgTable('conversations', {
    * session keeps its threads as plain history.
    */
   sessionId: text('sessionId').references(() => agentSessions.id, { onDelete: 'set null' }),
+  /**
+   * Stamped when this thread is closed OUT OF its session's listing — a fact
+   * separate from `isActive` (history soft-delete) on purpose: closing from
+   * the session must never touch history. NULL = open in the session's
+   * working set; set = closed from the listing (and, symmetrically, no
+   * longer counted against the session's conversation cap). Reopening is
+   * just clearing the stamp.
+   */
+  closedInSessionAt: timestamp('closedInSessionAt', { mode: 'date' }),
   lastMessageAt: timestamp('lastMessageAt', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),

@@ -38,6 +38,7 @@ function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
       name: 'worker',
       endedAt: null,
       workspaceSessionId: WORKSPACE_ID,
+      isClosed: false,
     })),
     countActiveSessions: vi.fn(async () => 0),
     concurrencyLimit: vi.fn(async () => 5),
@@ -285,6 +286,7 @@ describe('send_session', () => {
         name: '',
         endedAt: null,
         workspaceSessionId: WORKSPACE_ID,
+        isClosed: false,
       })),
     });
     const tools = createSessionTools(deps);
@@ -324,10 +326,30 @@ describe('worker verbs target only the CALLER\'s own workspace (issue #2262 H2 p
     name: 'private thread',
     endedAt: null,
     workspaceSessionId: 'someone-elses-workspace',
+    isClosed: false,
   };
 
   it('a conversation in ANOTHER session — even the caller\'s own — reads as nonexistent', async () => {
     const deps = makeDeps({ findSession: vi.fn(async () => CROSS_SESSION_ROW) });
+    const tools = createSessionTools(deps);
+
+    const sent = await run(tools.send_session, { sessionId: 'conv-other', input: 'x' }, contextOptions());
+    expect(sent.success).toBe(false);
+    expect(deps.dispatch).not.toHaveBeenCalled();
+
+    const readResult = await run(tools.read_session, { sessionId: 'conv-other' }, contextOptions());
+    expect(readResult.success).toBe(false);
+    expect(deps.readTranscript).not.toHaveBeenCalled();
+
+    const killed = await run(tools.kill_session, { sessionId: 'conv-other' }, contextOptions());
+    expect(killed.success).toBe(false);
+    expect(deps.endSession).not.toHaveBeenCalled();
+  });
+
+  it('a sibling the human already CLOSED reads as nonexistent — never dispatch/read/kill into a closed listing', async () => {
+    const deps = makeDeps({
+      findSession: vi.fn(async () => ({ ...CROSS_SESSION_ROW, workspaceSessionId: WORKSPACE_ID, isClosed: true })),
+    });
     const tools = createSessionTools(deps);
 
     const sent = await run(tools.send_session, { sessionId: 'conv-other', input: 'x' }, contextOptions());

@@ -10,23 +10,64 @@
  * - The centre is the SESSION's pane grid, keyed by the session id — switching
  *   sessions swaps the grid; nothing else about the shell changes.
  */
+import { useRef } from 'react';
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, waitFor } from '@testing-library/react';
 
 vi.mock('../panes/AgentPanes', () => ({
-  default: ({
+  default: function MockAgentPanes({
     sessionId,
     driveId,
     initialConversation,
+    onConversationClosed,
   }: {
     sessionId: string;
     driveId: string | null;
     initialConversation: { conversationId: string; agentPageId: string | null };
-  }) => (
-    <div data-testid="agent-panes" data-drive-id={driveId ?? 'none'}>
-      {sessionId}/{initialConversation.conversationId}/{initialConversation.agentPageId ?? 'no-agent'}
-    </div>
-  ),
+    onConversationClosed?: (event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => void;
+  }) {
+    // Captured ONCE, on this component's first render — models the closure a
+    // real in-flight `closeConversationListing` call would hold, unaffected
+    // by whatever `onConversationClosed` the surface passes down on a LATER
+    // render (e.g. after the user picks a different conversation while the
+    // close DELETE is still pending).
+    const staleOnConversationClosed = useRef(onConversationClosed).current;
+    return (
+      <div data-testid="agent-panes" data-drive-id={driveId ?? 'none'}>
+        {sessionId}/{initialConversation.conversationId}/{initialConversation.agentPageId ?? 'no-agent'}
+        <button
+          type="button"
+          data-testid="fire-conversation-closed-rebind"
+          onClick={() =>
+            onConversationClosed?.({
+              conversationId: initialConversation.conversationId,
+              next: 'conv-next',
+              nextAgentPageId: 'agent-next',
+            })
+          }
+        />
+        <button
+          type="button"
+          data-testid="fire-conversation-closed-no-rebind"
+          onClick={() =>
+            onConversationClosed?.({ conversationId: initialConversation.conversationId, next: null, nextAgentPageId: null })
+          }
+        />
+        <button
+          type="button"
+          data-testid="fire-conversation-closed-unrelated"
+          onClick={() => onConversationClosed?.({ conversationId: 'conv-other', next: 'conv-next', nextAgentPageId: 'agent-next' })}
+        />
+        <button
+          type="button"
+          data-testid="fire-conversation-closed-stale"
+          onClick={() =>
+            staleOnConversationClosed?.({ conversationId: 'conv-1', next: 'conv-next', nextAgentPageId: 'agent-next' })
+          }
+        />
+      </div>
+    );
+  },
 }));
 
 const mockFetchWithAuth = vi.hoisted(() => vi.fn());
@@ -186,5 +227,106 @@ describe('the grid gets the SESSION\'s drive, not the surface\'s (review M5)', (
       expect(screen.getByTestId('agent-panes')).toHaveAttribute('data-drive-id', 'drive-7'),
     );
     expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-sessions/ses-m5');
+  });
+});
+
+describe('onConversationClosed — following the grid\'s own close/rebind', () => {
+  beforeEach(() => {
+    window.history.replaceState({}, '', '/dashboard/agents?session=ses-1&c=conv-1&agent=agent-1');
+    useAgentSurfaceStore.getState().hydrateFromSearch();
+  });
+
+  it('follows a rebind of the CURRENTLY selected conversation', async () => {
+    const { getByTestId } = render(<AgentsSurface />);
+    await waitFor(() => expect(getByTestId('agent-panes')).toBeInTheDocument());
+
+    act(() => getByTestId('fire-conversation-closed-rebind').click());
+
+    expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-next');
+    expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-next');
+    expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
+  });
+
+  it('clears the selection when there was nothing to rebind to and no other chat pane remains', async () => {
+    // Keeping the closed id would risk silently reopening it (or hiding a
+    // still-open listing elsewhere with no pane here) on the next refresh
+    // or deep link — showing "pick a conversation" is honest instead
+    // (caught in review; the first pass here left this case untouched).
+    const { getByTestId } = render(<AgentsSurface />);
+    await waitFor(() => expect(getByTestId('agent-panes')).toBeInTheDocument());
+
+    act(() => getByTestId('fire-conversation-closed-no-rebind').click());
+
+    expect(useAgentSurfaceStore.getState().selectedConversationId).toBeNull();
+    expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
+  });
+
+  it('retargets to another OPEN chat pane when an ordinary (non-grid-last) close drops the SELECTED conversation', async () => {
+    // `next: null` isn't only for "nothing to rebind to" — it's also what an
+    // ORDINARY close reports when the grid still has other panes (rebinding
+    // only matters for an emptied grid). Left alone, the surface's own
+    // selection (and the URL it mirrors to) would keep naming a conversation
+    // with no listing left — a refresh or deep link back to this URL would
+    // reopen it, silently replacing whatever pane is actually live (caught
+    // in review).
+    useAgentWorkspaceStore.getState().ensureWorkspace('ses-1', {
+      kind: 'chat',
+      name: 'Conversation',
+      targetId: 'conv-1',
+      agentPageId: 'agent-1',
+    });
+    const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+    useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId);
+    const secondPaneId = useAgentWorkspaceStore
+      .getState()
+      .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+      .find((p) => p.id !== firstPaneId)!.id;
+    useAgentWorkspaceStore.getState().assignPane('ses-1', secondPaneId, {
+      kind: 'chat',
+      name: 'Conversation',
+      targetId: 'conv-2',
+      agentPageId: 'agent-2',
+    });
+
+    const { getByTestId } = render(<AgentsSurface />);
+    await waitFor(() => expect(getByTestId('agent-panes')).toBeInTheDocument());
+
+    act(() => getByTestId('fire-conversation-closed-no-rebind').click());
+
+    expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-2');
+    expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-2');
+  });
+
+  it('ignores a close for a conversation this surface was not showing', async () => {
+    const { getByTestId } = render(<AgentsSurface />);
+    await waitFor(() => expect(getByTestId('agent-panes')).toBeInTheDocument());
+
+    act(() => getByTestId('fire-conversation-closed-unrelated').click());
+
+    expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-1');
+  });
+
+  it('a stale close (captured before the user picked something else) does not clobber the newer selection', async () => {
+    const { getByTestId } = render(<AgentsSurface />);
+    await waitFor(() => expect(getByTestId('agent-panes')).toBeInTheDocument());
+
+    // The user switches conversations WHILE a close DELETE for conv-1 is
+    // still in flight (this test's "stale" button fires the callback exactly
+    // as it was captured on first render, before this switch).
+    act(() =>
+      useAgentSurfaceStore.getState().selectConversation({
+        sessionId: 'ses-1',
+        conversationId: 'conv-switched',
+        agentId: 'agent-switched',
+      }),
+    );
+
+    act(() => getByTestId('fire-conversation-closed-stale').click());
+
+    // The stale callback's `conversationId: 'conv-1'` no longer matches the
+    // CURRENT selection ('conv-switched'), so it must be ignored — not
+    // overwrite the user's newer pick with the stale rebind target.
+    expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-switched');
+    expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-switched');
   });
 });

@@ -37,6 +37,8 @@ import {
   Settings,
   Webhook,
 } from 'lucide-react';
+import { toast } from 'sonner';
+import { mutate } from 'swr';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
@@ -51,6 +53,7 @@ import { useConversations } from '@/lib/ai/shared/hooks/useConversations';
 import { buildAgentSelectionUrl } from '@/lib/agents/agent-selection';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useAuth } from '@/hooks/useAuth';
+import { useLatestRef } from '@/hooks/useLatestRef';
 import { usePermissionsCheck } from './usePermissionsCheck';
 import {
   useResolvedConversation,
@@ -60,6 +63,7 @@ import {
 import { useResolvedAgent } from './useResolvedAgent';
 import SessionChat from './chat/SessionChat';
 import AgentPanes from './panes/AgentPanes';
+import { agentSessionsKey, isAgentSessionsKey, type SessionListEntry } from './panes/session-conversations';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import type { TreePage } from '@/hooks/usePageTree';
 import type { AgentConfig } from '@/lib/ai/shared/chat-types';
@@ -125,18 +129,137 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   } = useProviderSettings({ pageId: page.id });
 
   const newConversation = useCallback(
-    async (reuseSessionId?: string | null) => {
+    async (reuseSessionId?: string | null, options?: { applyOverride?: boolean }) => {
       const created = await createPageConversation({
         agentId: page.id,
         driveId: page.driveId,
         canUseSessions,
         sessionId: reuseSessionId ?? null,
       });
-      setOverride(created);
-      setActiveTab('chat');
+      // Every OTHER caller (History's "New" button, the session-ended
+      // fallback) wants this mint to become the visible conversation
+      // unconditionally, which is why this defaults to true — only
+      // `mintReplacementForCurrent` below opts out, because by the time its
+      // own await resolves the user may have already moved on to something
+      // else and an unconditional override would clobber that pick.
+      if (options?.applyOverride ?? true) {
+        setOverride(created);
+        setActiveTab('chat');
+      }
       return created;
     },
     [page.id, page.driveId, canUseSessions],
+  );
+
+  // The LATEST `current`, read at completion time rather than trusted from a
+  // closure captured before an await — `mintReplacementForCurrent` runs after
+  // an async gap (a conversation-close DELETE, or `deleteConversation`), and
+  // the user can select a different thread while that request is in flight.
+  // Without this, a slow request's callback still holds the OLD `current` it
+  // closed over, wrongly matches the just-closed id, and overwrites the
+  // user's newer selection with an unwanted replacement (caught in review).
+  const currentRef = useLatestRef(current);
+
+  // Shared by the History-tab delete AND a session-grid listing close: both
+  // leave `current` pointing at a conversation that is no longer usable here,
+  // and both recover the SAME way — mint this agent's replacement INTO the
+  // same session (never spawn a new one, which would abandon a live session —
+  // issue #2263, finding 4) and prune the pane that was showing the old id,
+  // wherever it lives in the grid (not necessarily the active pane: the
+  // grid's own selection and this page's `current` are independent state).
+  const mintReplacementForCurrent = useCallback(
+    (deletedConversationId: string) => {
+      // `deletedConversationId` is the ACTUAL id the caller confirmed is gone
+      // (from `useConversations`, matched against `currentConversationId` at
+      // CLICK time) — not necessarily what `current` still is NOW. If the
+      // user already switched to a different thread while this delete was
+      // in flight, `current` no longer names the deleted conversation, and
+      // minting a replacement (into whatever session `current` now belongs
+      // to) would wrongly repoint that OTHER conversation's pane instead
+      // (caught in review). Bail rather than guess.
+      if (currentRef.current?.conversationId !== deletedConversationId) return;
+      const staleConversationId = deletedConversationId;
+      const sessionId = currentRef.current?.sessionId ?? null;
+      void (async () => {
+        try {
+          // `applyOverride: false` — this mint has its OWN async gap (the POST
+          // below), and the user can select a different thread while it's in
+          // flight. Applying `newConversation`'s default unconditional override
+          // after that gap would silently replace whatever they picked in the
+          // meantime (caught in review) — checked explicitly below instead.
+          const created = await newConversation(sessionId, { applyOverride: false });
+          // A background revalidate alone leaves a real window: if the user
+          // closes the replacement pane before that GET resolves (or it
+          // fails), `AgentPanes`' own cache still lacks this brand-new row,
+          // reads it as absent, and can even offer to end the session on a
+          // grid whose only cached listing is now stale (caught in review —
+          // the earlier revalidate-only fix here missed the same optimistic
+          // LOCAL insert `handlePickAgent` already does via
+          // `recordMintedConversation` before it ever revalidates).
+          if (created.sessionId) {
+            const insertedSessionId = created.sessionId;
+            void mutate(
+              agentSessionsKey(page.driveId),
+              (current: { sessions: SessionListEntry[] } | undefined) => {
+                if (!current) return current;
+                return {
+                  sessions: current.sessions.map((session) =>
+                    session.sessionId === insertedSessionId
+                      ? {
+                          ...session,
+                          conversations: [
+                            { conversationId: created.conversationId, agentPageId: page.id, lastMessageAt: null },
+                            ...session.conversations,
+                          ],
+                        }
+                      : session,
+                  ),
+                };
+              },
+              { revalidate: false },
+            );
+          }
+          // ...and a broader revalidate for every OTHER `/api/agent-sessions**`
+          // consumer (the sidebar, other panes) whose differently-scoped
+          // cache key the local insert above doesn't touch.
+          void mutate(isAgentSessionsKey);
+          if (sessionId && staleConversationId) {
+            // The grid's pane binding is repointed regardless: a pane still
+            // showing the now-gone `staleConversationId` is a dangling reference
+            // no matter what this page's OWN `current` has moved on to.
+            useAgentWorkspaceStore.getState().replaceConversation(sessionId, staleConversationId, {
+              kind: 'chat',
+              name: 'New conversation',
+              targetId: created.conversationId,
+              agentPageId: page.id,
+            });
+          }
+          // Only follow the replacement as THIS page's own view if the user
+          // hasn't already navigated elsewhere while the mint was in flight.
+          // Uses `created.sessionId`, not the outer `sessionId` — a session-less
+          // stale conversation (sessionId null) can still mint INTO a fresh
+          // session when `canUseSessions` is true, and this must reflect that
+          // real result, not the pre-mint guess (caught in adversarial review).
+          if (currentRef.current?.conversationId === staleConversationId) {
+            setOverride({ conversationId: created.conversationId, sessionId: created.sessionId });
+            setActiveTab('chat');
+          }
+        } catch (error) {
+          // The listing close already succeeded server-side by the time this
+          // runs — only the REPLACEMENT mint failed (network, lost
+          // permission, a concurrent cap fill). Without a catch here this was
+          // an unhandled rejection, and `current` was left silently pointing
+          // at a conversation that no longer exists with no replacement pane
+          // (caught in review). Report it; no further recovery is attempted
+          // here, same as every other failed-IO catch in this file's siblings.
+          console.error('Failed to create a replacement conversation:', error);
+          toast.error('Could not start a replacement conversation', {
+            description: error instanceof Error ? error.message : 'Please try again.',
+          });
+        }
+      })();
+    },
+    [newConversation, page.id, currentRef],
   );
 
   const {
@@ -150,29 +273,33 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
     // History needs the list; chat needs it too so a history-selected thread
     // can be looked up for its session.
     enabled: activeTab === 'history' || activeTab === 'chat',
-    onConversationDelete: () => {
-      // `onConversationDelete` only fires for the CURRENT conversation, so
-      // `current` here is exactly the deleted thread. If it was session-bound,
-      // mint the replacement INTO that session — never spawn a new one, which
-      // would abandon a live session (issue #2263, finding 4) — and prune the
-      // pane that was showing the now-deleted id, wherever it lives in the
-      // grid (not necessarily the active pane: the grid's own selection and
-      // this page's `current` are independent state).
-      const deletedConversationId = current?.conversationId ?? null;
-      const sessionId = current?.sessionId ?? null;
-      void (async () => {
-        const created = await newConversation(sessionId);
-        if (sessionId && deletedConversationId) {
-          useAgentWorkspaceStore.getState().replaceConversation(sessionId, deletedConversationId, {
-            kind: 'chat',
-            name: 'New conversation',
-            targetId: created.conversationId,
-            agentPageId: page.id,
-          });
-        }
-      })();
-    },
+    // `onConversationDelete` only fires for the CURRENT conversation, so
+    // `current` here is exactly the deleted thread.
+    onConversationDelete: mintReplacementForCurrent,
   });
+
+  // The session grid closed `current`'s listing (its last pane, in a pane
+  // this page-view tab wasn't itself driving — e.g. a split the user made).
+  // Closing a listing never mints a replacement on its own (it isn't a
+  // history delete), but THIS tab needs `current` to keep naming a usable
+  // conversation for its agent, so it recovers the same way History-delete
+  // does: mint a fresh one for this agent into the same session — UNLESS the
+  // grid already rebound to another OPEN listing that belongs to this same
+  // agent, in which case following it is free and avoids leaving a redundant
+  // empty conversation behind (caught in review: this host was the one place
+  // that always minted instead of following `next` like AgentsSurface does).
+  const handleConversationClosed = useCallback(
+    (event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => {
+      if (event.conversationId !== currentRef.current?.conversationId) return;
+      if (event.next !== null && event.nextAgentPageId === page.id) {
+        setOverride({ conversationId: event.next, sessionId: currentRef.current?.sessionId ?? null });
+        setActiveTab('chat');
+        return;
+      }
+      mintReplacementForCurrent(event.conversationId);
+    },
+    [mintReplacementForCurrent, currentRef, page.id],
+  );
 
   const handleSelectConversation = useCallback(
     (id: string) => {
@@ -312,6 +439,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
               chatContext="page"
               isReadOnly={isReadOnly}
               onSessionEnded={() => void handleCreateNew()}
+              onConversationClosed={handleConversationClosed}
             />
           ) : agentLoading ? (
             <div className="flex h-full items-center justify-center">

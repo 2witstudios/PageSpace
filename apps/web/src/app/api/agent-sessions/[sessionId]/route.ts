@@ -11,11 +11,18 @@
  *   idempotent by the session id (a re-POST resumes). No body: sessions are
  *   born through the collection route's spawn; this route never mints one.
  *
- * DELETE → 200 { ok, spriteTornDown } — end the session: instance-guarded
- *   Sprite kill, row RETAINED (re-provisionable under the same key). Gated by
- *   the END access check: the OWNER may always end (release-of-compute — no
- *   membership or capability needed to stop paying); everyone else faces the
- *   full decision, real capability included.
+ * DELETE → 200 { ok, spriteTornDown, hadOtherOpenConversations } — end the
+ *   session: instance-guarded Sprite kill, row RETAINED (re-provisionable
+ *   under the same key). Gated by the END access check: the OWNER may always
+ *   end (release-of-compute — no membership or capability needed to stop
+ *   paying); everyone else faces the full decision, real capability included.
+ *   Ending is unconditional by design (the sidebar's own "End session" is
+ *   reachable with any number of open conversations) — `hadOtherOpenConversations`
+ *   is informational only, a plain lock-free read taken right before
+ *   teardown, so a caller whose confirm was based on a stale "this looks
+ *   empty" premise (a conversation minted elsewhere between an earlier
+ *   `last_conversation` 409 and this confirm) can warn the user after the
+ *   fact instead of destroying it in total silence.
  *
  * Access decisions live in `decideAgentSessionAccess` (packages/lib) — these
  * handlers map its verdicts onto ONE not-found/denied policy for the whole
@@ -34,6 +41,7 @@ import { auditSessionAccessDenial, sessionNotFoundOrDenied } from '@/lib/agent-s
 import {
   checkSessionAccess,
   checkSessionEndAccess,
+  countOpenConversationsForSession,
   endSession,
   findSessionRecord,
   provisionSessionSandbox,
@@ -157,6 +165,19 @@ export async function DELETE(request: Request, context: RouteContext) {
     return sessionNotFoundOrDenied(request, auth.userId, sessionId, access.reason, ROUTE);
   }
 
+  // Purely informational — never blocks teardown (ending is unconditional by
+  // design; see the DELETE docstring above). Best-effort: a failure here must
+  // never fail the actual end-session request.
+  let hadOtherOpenConversations = false;
+  try {
+    hadOtherOpenConversations = (await countOpenConversationsForSession(sessionId)) > 1;
+  } catch (error) {
+    loggers.api.error('Could not read open-conversation count before ending session', undefined, {
+      sessionId,
+      detail: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   const ended = await endSession(sessionId);
   if (!ended.ok) {
     if (ended.reason === 'not_found') {
@@ -174,8 +195,8 @@ export async function DELETE(request: Request, context: RouteContext) {
     userId: auth.userId,
     resourceType: 'agent_session',
     resourceId: sessionId,
-    details: { op: 'end_session', spriteTornDown: ended.spriteTornDown },
+    details: { op: 'end_session', spriteTornDown: ended.spriteTornDown, hadOtherOpenConversations },
   });
 
-  return NextResponse.json({ ok: true, spriteTornDown: ended.spriteTornDown });
+  return NextResponse.json({ ok: true, spriteTornDown: ended.spriteTornDown, hadOtherOpenConversations });
 }

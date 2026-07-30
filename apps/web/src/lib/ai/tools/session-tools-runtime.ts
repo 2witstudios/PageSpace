@@ -19,7 +19,7 @@
 
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { and, count, eq, ne, desc } from '@pagespace/db/operators';
+import { and, count, eq, isNull, ne, desc } from '@pagespace/db/operators';
 import { chatMessages, pages } from '@pagespace/db/schema/core';
 import { conversations, messages as globalMessages } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
@@ -297,7 +297,16 @@ async function listSessionWorkers({
       })
       .from(conversations)
       .leftJoin(pages, eq(pages.id, conversations.contextId))
-      .where(and(eq(conversations.sessionId, workspaceSessionId), eq(conversations.isActive, true)))
+      .where(
+        and(
+          eq(conversations.sessionId, workspaceSessionId),
+          eq(conversations.isActive, true),
+          // A closed listing is gone from the human's sidebar — `list_sessions`
+          // must agree, or an agent keeps seeing (and dispatching to) a
+          // sibling the user believes they already closed.
+          isNull(conversations.closedInSessionAt),
+        ),
+      )
       .orderBy(desc(conversations.createdAt))
       .limit(MAX_SESSION_CONVERSATIONS),
     listShells(workspaceSessionId),
@@ -401,6 +410,11 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
         // because a user's own conversation in a DIFFERENT session must still
         // refuse — exactly what shells already enforce via findOwnWorkspace.
         workspaceSessionId: conversation.sessionId,
+        // The human closed this conversation's LISTING (it no longer shows in
+        // their sidebar) — `openOwnSession` refuses on this the same way it
+        // refuses a foreign workspace, so a worker verb can never dispatch new
+        // work into, read, or kill a sibling the user has already closed.
+        isClosed: conversation.closedInSessionAt !== null,
       };
     },
 
@@ -408,7 +422,17 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       const [row] = await db
         .select({ n: count() })
         .from(conversations)
-        .where(and(eq(conversations.sessionId, workspaceSessionId), eq(conversations.isActive, true)));
+        .where(
+          and(
+            eq(conversations.sessionId, workspaceSessionId),
+            eq(conversations.isActive, true),
+            // Mirrors the HTTP creation path's cap count (create-conversation-
+            // in-session.ts): a closed listing frees its cap slot here too, or
+            // the tool-side spawn planner keeps refusing a replacement worker
+            // for a slot the human already closed.
+            isNull(conversations.closedInSessionAt),
+          ),
+        );
       return row?.n ?? 0;
     },
 

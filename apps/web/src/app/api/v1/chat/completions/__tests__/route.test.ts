@@ -836,6 +836,7 @@ describe('POST /api/v1/chat/completions', () => {
       updatedAt: new Date(),
       isShared: false,
   sessionId: null,
+  closedInSessionAt: null,
       type: 'client',
       lastMessageAt: null,
     });
@@ -873,6 +874,7 @@ describe('POST /api/v1/chat/completions', () => {
         updatedAt: new Date(),
         isShared: false,
   sessionId: null,
+  closedInSessionAt: null,
         type: 'page',
         lastMessageAt: null,
       });
@@ -920,6 +922,7 @@ describe('POST /api/v1/chat/completions', () => {
       updatedAt: new Date(),
       isShared: false,
   sessionId: null,
+  closedInSessionAt: null,
       type: 'page',
       lastMessageAt: null,
     });
@@ -959,6 +962,7 @@ describe('POST /api/v1/chat/completions', () => {
       updatedAt: new Date(),
       isShared: false,
   sessionId: null,
+  closedInSessionAt: null,
       type: 'page',
       lastMessageAt: null,
     });
@@ -986,6 +990,7 @@ describe('POST /api/v1/chat/completions', () => {
       updatedAt: new Date(),
       isShared: false,
   sessionId: null,
+  closedInSessionAt: null,
       type: 'page',
       lastMessageAt: null,
     });
@@ -1017,6 +1022,7 @@ describe('POST /api/v1/chat/completions', () => {
         updatedAt: new Date(),
         isShared: false,
   sessionId: null,
+  closedInSessionAt: null,
         type: 'page',
         lastMessageAt: null,
       });
@@ -1345,6 +1351,7 @@ describe('POST /api/v1/chat/completions', () => {
       updatedAt: new Date(),
       isShared: false,
   sessionId: null,
+  closedInSessionAt: null,
       type: 'page',
       lastMessageAt: null,
     });
@@ -1372,6 +1379,7 @@ describe('POST /api/v1/chat/completions', () => {
       updatedAt: new Date(),
       isShared: true,
   sessionId: null,
+  closedInSessionAt: null,
       type: 'page',
       lastMessageAt: null,
     });

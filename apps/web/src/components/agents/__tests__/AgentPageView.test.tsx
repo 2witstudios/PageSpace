@@ -23,6 +23,9 @@ vi.mock('../useResolvedConversation', () => ({
   createPageConversation: (...args: unknown[]) => mockCreatePageConversation(...args),
 }));
 
+const mockMutate = vi.hoisted(() => vi.fn());
+vi.mock('swr', () => ({ mutate: (...args: unknown[]) => mockMutate(...args) }));
+
 vi.mock('../useResolvedAgent', () => ({
   useResolvedAgent: () => ({
     agent: { id: 'agent-1', title: 'My Agent', driveId: 'drive-1', driveName: 'Drive' },
@@ -40,22 +43,44 @@ vi.mock('../chat/SessionChat', () => ({
   ),
 }));
 
+const agentPanesState = vi.hoisted(() => ({
+  lastOnConversationClosed: null as
+    | ((event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => void)
+    | null,
+  // Captured ONCE, on the first render that supplies a callback — models the
+  // closure a real in-flight `closeConversationListing` call would hold,
+  // unaffected by whatever `onConversationClosed` a LATER render passes
+  // (e.g. after the user picks a different conversation while a close DELETE
+  // is still pending).
+  firstOnConversationClosed: null as
+    | ((event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => void)
+    | null,
+}));
+
 vi.mock('../panes/AgentPanes', () => ({
   default: ({
     sessionId,
     initialConversation,
     chatContext,
     isReadOnly,
+    onConversationClosed,
   }: {
     sessionId: string;
     initialConversation: { conversationId: string };
     chatContext?: string;
     isReadOnly?: boolean;
-  }) => (
-    <div data-testid="agent-panes" data-chat-context={chatContext} data-readonly={String(!!isReadOnly)}>
-      {sessionId}/{initialConversation.conversationId}
-    </div>
-  ),
+    onConversationClosed?: (event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => void;
+  }) => {
+    agentPanesState.lastOnConversationClosed = onConversationClosed ?? null;
+    if (agentPanesState.firstOnConversationClosed === null) {
+      agentPanesState.firstOnConversationClosed = onConversationClosed ?? null;
+    }
+    return (
+      <div data-testid="agent-panes" data-chat-context={chatContext} data-readonly={String(!!isReadOnly)}>
+        {sessionId}/{initialConversation.conversationId}
+      </div>
+    );
+  },
 }));
 
 const { mockFetchWithAuth } = vi.hoisted(() => ({ mockFetchWithAuth: vi.fn() }));
@@ -87,10 +112,10 @@ const conversationsState = vi.hoisted(() => ({
   // Captured so tests can trigger `onConversationDelete` directly — the real
   // hook fires it when the deleted id is the current conversation; this mock
   // stands in for the hook's own logic, not the callback wiring under test.
-  lastOnConversationDelete: null as (() => void) | null,
+  lastOnConversationDelete: null as ((conversationId: string) => void) | null,
 }));
 vi.mock('@/lib/ai/shared/hooks/useConversations', () => ({
-  useConversations: (opts: { onConversationDelete?: () => void }) => {
+  useConversations: (opts: { onConversationDelete?: (conversationId: string) => void }) => {
     conversationsState.lastOnConversationDelete = opts.onConversationDelete ?? null;
     return conversationsState.current;
   },
@@ -158,6 +183,8 @@ beforeEach(() => {
     refreshConversations: vi.fn(),
   };
   conversationsState.lastOnConversationDelete = null;
+  agentPanesState.lastOnConversationClosed = null;
+  agentPanesState.firstOnConversationClosed = null;
   useAgentWorkspaceStore.setState({ workspaces: {} });
   mockFetchWithAuth.mockImplementation(async (url: string) => {
     if (url.endsWith('/permissions/check')) return jsonResponse({ canEdit: true });
@@ -333,7 +360,7 @@ describe('AgentPageView', () => {
       render(<AgentPageView page={pageFixture()} />);
       await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
 
-      conversationsState.lastOnConversationDelete?.();
+      conversationsState.lastOnConversationDelete?.('conv-1');
 
       await waitFor(() =>
         expect(mockCreatePageConversation).toHaveBeenCalledWith(
@@ -341,6 +368,48 @@ describe('AgentPageView', () => {
         ),
       );
       await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-2'));
+    });
+
+    it('inserts the replacement into the sessions-listing cache LOCALLY, not just a background revalidate', async () => {
+      // A background revalidate alone leaves a real window: closing the
+      // replacement pane before that GET resolves (or it failing outright)
+      // would still read the brand-new row as absent from `AgentPanes`' own
+      // cache and take the pure layout-close path instead of DELETE — or
+      // even offer to end the session on a grid whose only cached listing is
+      // stale (the same class of bug `handlePickAgent` already guards
+      // against via its own local `recordMintedConversation`, not merely a
+      // revalidate — caught in review).
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: 'ses-1' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      conversationsState.lastOnConversationDelete?.('conv-1');
+
+      await waitFor(() => expect(mockMutate).toHaveBeenCalledWith('/api/agent-sessions?driveId=drive-1', expect.any(Function), { revalidate: false }));
+      const [, updater] = mockMutate.mock.calls.find(([key]) => key === '/api/agent-sessions?driveId=drive-1')!;
+      const updated = (updater as (current: unknown) => unknown)({
+        sessions: [{ sessionId: 'ses-1', conversations: [] }],
+      });
+      expect(updated).toEqual({
+        sessions: [{ sessionId: 'ses-1', conversations: [{ conversationId: 'conv-2', agentPageId: 'agent-1', lastMessageAt: null }] }],
+      });
+    });
+
+    it('also revalidates the sessions-listing cache after minting the replacement, so a fast re-close sees the new row', async () => {
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: 'ses-1' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      conversationsState.lastOnConversationDelete?.('conv-1');
+
+      await waitFor(() => expect(mockMutate.mock.calls.some(([key]) => typeof key === 'function')).toBe(true));
+      const predicate = mockMutate.mock.calls.find(([key]) => typeof key === 'function')![0] as (
+        key: unknown,
+      ) => boolean;
+      expect(predicate('/api/agent-sessions?driveId=drive-1')).toBe(true);
+      expect(predicate('/api/pages/agent-1')).toBe(false);
     });
 
     it('prunes the pane that was showing the deleted conversation, wherever it lived in the grid', async () => {
@@ -361,7 +430,7 @@ describe('AgentPageView', () => {
       useAgentWorkspaceStore.getState().splitRight('ses-1', originalPaneId);
       useAgentWorkspaceStore.getState().selectPane('ses-1', originalPaneId);
 
-      conversationsState.lastOnConversationDelete?.();
+      conversationsState.lastOnConversationDelete?.('conv-1');
 
       await waitFor(() => {
         const pane = useAgentWorkspaceStore
@@ -378,7 +447,7 @@ describe('AgentPageView', () => {
       render(<AgentPageView page={pageFixture()} />);
       await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
 
-      conversationsState.lastOnConversationDelete?.();
+      conversationsState.lastOnConversationDelete?.('conv-1');
 
       await waitFor(() =>
         expect(mockCreatePageConversation).toHaveBeenCalledWith(
@@ -386,6 +455,73 @@ describe('AgentPageView', () => {
         ),
       );
       await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-2'));
+    });
+
+    it('a session-less mint that comes back session-bound switches to the pane grid with the REAL new session, not null', async () => {
+      // The stale conversation had no session (sessionId: null), so the mint
+      // call passes sessionId: null too — but createPageConversation is free
+      // to spawn a brand-new session on that path (canUseSessions), and the
+      // override must reflect what it actually returned, not the pre-mint
+      // guess (a stale-outer-variable regression caught in adversarial
+      // review after the round-2 async-gap fix).
+      resolveTo({ conversationId: 'conv-1', sessionId: null });
+      mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: 'ses-new' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
+
+      conversationsState.lastOnConversationDelete?.('conv-1');
+
+      await waitFor(() =>
+        expect(mockCreatePageConversation).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: 'agent-1', sessionId: null }),
+        ),
+      );
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-new'));
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2'));
+      expect(screen.queryByTestId('plain-chat')).not.toBeInTheDocument();
+    });
+
+    it('a stale History delete (captured before the user selected a different thread) does not mint an unwanted replacement', async () => {
+      // `useConversations` binds `onConversationDelete` to whichever id WAS
+      // current at click time (conv-1) and fires it whenever that DELETE
+      // resolves, however late — even after the user has already switched to
+      // a different thread. The callback must recover using conv-1, not
+      // whatever `current` has since become, or it mints a replacement into
+      // the WRONG (newly-current) conversation's session (caught in review).
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      conversationsState.current.conversations = [{ id: 'conv-2', sessionId: 'ses-1' }];
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      // The user selects a different history thread WHILE conv-1's own
+      // DELETE is still in flight.
+      await userEvent.click(screen.getByRole('tab', { name: /history/i }));
+      fireEvent.click(await screen.findByTestId('history-select-conv-2'));
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2'));
+
+      conversationsState.lastOnConversationDelete?.('conv-1');
+
+      // 'conv-1' no longer matches the CURRENT tracked conversation
+      // ('conv-2'), so the late-arriving delete must be a no-op.
+      expect(mockCreatePageConversation).not.toHaveBeenCalled();
+      expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2');
+    });
+
+    it('reports an error rather than crashing when the replacement mint itself fails', async () => {
+      // The listing close already succeeded server-side by the time this
+      // runs — only the replacement POST fails (network, lost permission, a
+      // concurrent cap fill). Without a catch this was an unhandled
+      // rejection (caught in review).
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      mockCreatePageConversation.mockRejectedValue(new Error('quota exceeded'));
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      conversationsState.lastOnConversationDelete?.('conv-1');
+
+      await waitFor(() => expect(consoleErrorSpy).toHaveBeenCalled());
+      consoleErrorSpy.mockRestore();
     });
 
     it('the History tab "New" button is unaffected — it always spawns a fresh session, never reuses', async () => {
@@ -402,6 +538,133 @@ describe('AgentPageView', () => {
           expect.objectContaining({ agentId: 'agent-1', sessionId: null }),
         ),
       );
+    });
+  });
+
+  describe('onConversationClosed — a session-grid listing close, not a history delete', () => {
+    it("mints a fresh replacement for THIS agent when the grid closed current's listing", async () => {
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: 'ses-1' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      agentPanesState.lastOnConversationClosed?.({ conversationId: 'conv-1', next: null, nextAgentPageId: null });
+
+      await waitFor(() =>
+        expect(mockCreatePageConversation).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: 'agent-1', sessionId: 'ses-1' }),
+        ),
+      );
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-2'));
+    });
+
+    it('follows the grid rebind instead of minting when it already points at another OPEN conversation of THIS agent', async () => {
+      // The grid closed conv-1's listing but it was grid-last with another
+      // open conversation (conv-2) of the SAME agent still available — it
+      // rebound the pane to that rather than ending the session. This tab
+      // should follow the same rebind rather than minting a third,
+      // redundant conversation and leaving conv-2 an orphaned empty thread.
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      agentPanesState.lastOnConversationClosed?.({
+        conversationId: 'conv-1',
+        next: 'conv-2',
+        nextAgentPageId: 'agent-1',
+      });
+
+      expect(mockCreatePageConversation).not.toHaveBeenCalled();
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-2'));
+    });
+
+    it("still mints when the grid's rebind target belongs to a DIFFERENT agent", async () => {
+      // `next` exists, but for another agent's conversation — not something
+      // this page can show as its own `current`, so it must mint its own
+      // replacement exactly as when there was no rebind at all.
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-3', sessionId: 'ses-1' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      agentPanesState.lastOnConversationClosed?.({
+        conversationId: 'conv-1',
+        next: 'conv-2',
+        nextAgentPageId: 'other-agent',
+      });
+
+      await waitFor(() =>
+        expect(mockCreatePageConversation).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: 'agent-1', sessionId: 'ses-1' }),
+        ),
+      );
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-3'));
+    });
+
+    it('ignores a close for a conversation that is not the currently tracked one', async () => {
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      agentPanesState.lastOnConversationClosed?.({ conversationId: 'conv-other', next: null, nextAgentPageId: null });
+
+      expect(mockCreatePageConversation).not.toHaveBeenCalled();
+      expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-1');
+    });
+
+    it('a stale close (captured before the user selected a different thread) does not mint an unwanted replacement', async () => {
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      conversationsState.current.conversations = [{ id: 'conv-2', sessionId: 'ses-1' }];
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+      const staleCallback = agentPanesState.firstOnConversationClosed;
+
+      // The user selects a different history thread WHILE a close DELETE for
+      // conv-1 is still in flight — `current` moves on before that request's
+      // own callback (captured on the earlier render) ever fires.
+      await userEvent.click(screen.getByRole('tab', { name: /history/i }));
+      fireEvent.click(await screen.findByTestId('history-select-conv-2'));
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2'));
+
+      staleCallback?.({ conversationId: 'conv-1', next: null, nextAgentPageId: null });
+
+      // 'conv-1' no longer matches the CURRENT tracked conversation
+      // ('conv-2'), so the stale callback must be a no-op — not mint an
+      // unnecessary replacement and not disturb the user's newer selection.
+      expect(mockCreatePageConversation).not.toHaveBeenCalled();
+      expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2');
+    });
+
+    it('a SECOND async gap — switching selection while the replacement mint itself is in flight — does not clobber the newer pick', async () => {
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      conversationsState.current.conversations = [{ id: 'conv-2', sessionId: 'ses-1' }];
+      let resolveCreate!: (value: { conversationId: string; sessionId: string | null }) => void;
+      mockCreatePageConversation.mockReturnValue(
+        new Promise((resolve) => {
+          resolveCreate = resolve;
+        }),
+      );
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      // The grid closes conv-1's listing (still the CURRENT conversation) —
+      // this starts the replacement mint, deliberately left pending.
+      agentPanesState.lastOnConversationClosed?.({ conversationId: 'conv-1', next: null, nextAgentPageId: null });
+      await waitFor(() => expect(mockCreatePageConversation).toHaveBeenCalledTimes(1));
+
+      // WHILE that mint's own network call is still in flight, the user
+      // selects a different history thread.
+      await userEvent.click(screen.getByRole('tab', { name: /history/i }));
+      fireEvent.click(await screen.findByTestId('history-select-conv-2'));
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2'));
+
+      // The mint finally resolves.
+      resolveCreate({ conversationId: 'conv-3', sessionId: 'ses-1' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // The user's newer pick (conv-2) survives — not clobbered by conv-3,
+      // the replacement for a conversation the user already moved on from.
+      expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2');
     });
   });
 });

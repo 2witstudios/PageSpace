@@ -174,6 +174,14 @@ export interface SessionToolRow {
    * exactly as shells already require via `findOwnWorkspace`.
    */
   workspaceSessionId: string | null;
+  /**
+   * The human closed this conversation's LISTING (`conversations.closedInSessionAt`
+   * set) — it no longer shows in their sidebar, even though its history is
+   * untouched. `openOwnSession` refuses on this the same way it refuses a
+   * foreign workspace: a worker verb must never dispatch new work into, read,
+   * or kill a sibling the user has already closed.
+   */
+  isClosed: boolean;
 }
 
 export type DispatchOutcome =
@@ -432,14 +440,16 @@ export function createSessionTools(deps: SessionToolsDeps): {
     const workspace = await deps.findOwnWorkspace(conversationId);
     if (!workspace) return { ok: false, error: notYourSession(sessionId) };
     const row = await deps.findSession(sessionId);
-    // Someone else's session, a nonexistent one, and a session outside the
-    // caller's own workspace all read identically — there is nothing to learn
-    // from the difference and nothing the caller could do with it.
+    // Someone else's session, a nonexistent one, a session outside the
+    // caller's own workspace, and one the human already closed all read
+    // identically — there is nothing to learn from the difference and
+    // nothing the caller could do with it.
     if (
       !row ||
       row.ownerId !== actor.userId ||
       row.workspaceSessionId === null ||
-      row.workspaceSessionId !== workspace.sessionId
+      row.workspaceSessionId !== workspace.sessionId ||
+      row.isClosed
     ) {
       return { ok: false, error: notYourSession(sessionId) };
     }
