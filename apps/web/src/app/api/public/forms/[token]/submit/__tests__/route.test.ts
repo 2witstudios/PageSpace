@@ -27,10 +27,6 @@ vi.mock('@/services/api/form-target-service', () => ({
   appendFormSubmission: mockAppendFormSubmission,
 }));
 
-vi.mock('next/server', () => ({
-  after: mockAfter,
-}));
-
 vi.mock('@/lib/forms/send-form-notification', () => ({
   sendFormSubmissionNotification: mockSendFormSubmissionNotification,
 }));
