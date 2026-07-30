@@ -18,10 +18,20 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { listSessions, type AgentSessionListFilter } from '@/lib/agent-sessions/agent-sessions-runtime';
+import { createId } from '@paralleldrive/cuid2';
+import {
+  checkAccessForSubject,
+  createConversationInSession,
+  endSession,
+  listSessions,
+  spawnSession,
+  toAgentSessionDTO,
+  type AgentSessionListFilter,
+} from '@/lib/agent-sessions/agent-sessions-runtime';
 import { listShells } from '@/lib/agent-sessions/session-shells-runtime';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 export async function GET(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
@@ -66,4 +76,103 @@ export async function GET(request: Request) {
     );
     return NextResponse.json({ error: 'Failed to list agent sessions' }, { status: 500 });
   }
+}
+
+/**
+ * POST → 201 { session, conversationId } — SPAWN a session.
+ *
+ * One act, per the lifecycle invariant: a session is born with its first
+ * conversation, so this creates the workspace row AND a conversation already
+ * bound to it. The conversation's agent is the caller's choice (`agentPageId`;
+ * omitted/null is reserved for the global assistant, which this route refuses
+ * until its identity path lands — the client's picker does not offer it).
+ *
+ * Spawn is instant and free: NO sandbox is provisioned here. The first tool
+ * call or shell open provisions lazily through the one shared path.
+ *
+ * Access: spawning into a drive requires drive membership + the code-execution
+ * capability — the same pure decision every session surface uses, applied to
+ * the row-to-be.
+ */
+export async function POST(request: Request) {
+  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
+  if (isAuthError(auth)) return auth.error;
+
+  let body: { driveId?: unknown; agentPageId?: unknown; name?: unknown } = {};
+  try {
+    body = await request.json();
+  } catch {
+    // Body is required — a spawn names its drive and agent.
+  }
+  const driveId = typeof body.driveId === 'string' && body.driveId.length > 0 ? body.driveId : null;
+  const agentPageId =
+    typeof body.agentPageId === 'string' && body.agentPageId.length > 0 ? body.agentPageId : null;
+  const name = typeof body.name === 'string' && body.name.trim().length > 0 ? body.name.trim() : null;
+
+  if (driveId === null || agentPageId === null) {
+    // Global-assistant sessions (null drive) are Phase R2's identity work;
+    // until then a spawn is always drive-scoped with a concrete agent.
+    return NextResponse.json(
+      { error: 'A session needs a drive and an agent to start with' },
+      { status: 400 },
+    );
+  }
+
+  const access = await checkAccessForSubject(auth.userId, {
+    sessionId: 'about-to-be-minted',
+    ownerId: auth.userId,
+    driveId,
+  });
+  if (!access.allowed) {
+    auditRequest(request, {
+      eventType: 'authz.access.denied',
+      userId: auth.userId,
+      resourceType: 'agent_session',
+      resourceId: driveId,
+      details: { reason: access.reason, method: 'POST', route: 'agent-sessions' },
+      riskScore: 0.5,
+    });
+    return NextResponse.json({ error: 'You cannot start a session in this drive' }, { status: 403 });
+  }
+
+  const spawned = await spawnSession({ userId: auth.userId, driveId, name });
+  if (!spawned.ok) {
+    loggers.api.error('Agent session spawn failed', undefined, { driveId, detail: spawned.detail });
+    return NextResponse.json({ error: 'Could not start a session', reason: spawned.reason }, { status: 502 });
+  }
+
+  // The first conversation — the session is never empty. Created through the
+  // squat-guarded path, already bound to the session.
+  const conversationId = createId();
+  try {
+    await createConversationInSession({
+      conversationId,
+      userId: auth.userId,
+      agentPageId,
+      sessionId: spawned.session.id,
+    });
+  } catch (error) {
+    // The session row exists but its first conversation failed: end it rather
+    // than leave an empty workspace the model says cannot exist.
+    await endSession(spawned.session.id).catch(() => {});
+    loggers.api.error(
+      'Agent session spawn: first conversation failed',
+      error instanceof Error ? error : undefined,
+      { sessionId: spawned.session.id },
+    );
+    return NextResponse.json({ error: 'Could not start a session' }, { status: 502 });
+  }
+
+  auditRequest(request, {
+    eventType: 'data.write',
+    userId: auth.userId,
+    resourceType: 'agent_session',
+    resourceId: spawned.session.id,
+    details: { op: 'spawn_session', driveId, agentPageId, conversationId },
+  });
+
+  return NextResponse.json(
+    { session: toAgentSessionDTO(spawned.session), conversationId },
+    { status: 201 },
+  );
 }
