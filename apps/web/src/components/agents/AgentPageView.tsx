@@ -63,7 +63,7 @@ import {
 import { useResolvedAgent } from './useResolvedAgent';
 import SessionChat from './chat/SessionChat';
 import AgentPanes from './panes/AgentPanes';
-import { isAgentSessionsKey } from './panes/session-conversations';
+import { agentSessionsKey, isAgentSessionsKey, type SessionListEntry } from './panes/session-conversations';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import type { TreePage } from '@/hooks/usePageTree';
 import type { AgentConfig } from '@/lib/ai/shared/chat-types';
@@ -188,13 +188,40 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
           // after that gap would silently replace whatever they picked in the
           // meantime (caught in review) — checked explicitly below instead.
           const created = await newConversation(sessionId, { applyOverride: false });
-          // Without this, `decideClosePane`'s `activeConversations` (a 20s
-          // poll) can still lack this brand-new row — closing the
-          // replacement pane before the next poll then reads it as "not in
-          // the open listing" and takes the pure layout-close path instead
-          // of the DELETE one, leaving it open server-side forever, holding
-          // a cap slot (the same class of bug `handlePickAgent` already
-          // guards against — caught in review).
+          // A background revalidate alone leaves a real window: if the user
+          // closes the replacement pane before that GET resolves (or it
+          // fails), `AgentPanes`' own cache still lacks this brand-new row,
+          // reads it as absent, and can even offer to end the session on a
+          // grid whose only cached listing is now stale (caught in review —
+          // the earlier revalidate-only fix here missed the same optimistic
+          // LOCAL insert `handlePickAgent` already does via
+          // `recordMintedConversation` before it ever revalidates).
+          if (created.sessionId) {
+            const insertedSessionId = created.sessionId;
+            void mutate(
+              agentSessionsKey(page.driveId),
+              (current: { sessions: SessionListEntry[] } | undefined) => {
+                if (!current) return current;
+                return {
+                  sessions: current.sessions.map((session) =>
+                    session.sessionId === insertedSessionId
+                      ? {
+                          ...session,
+                          conversations: [
+                            { conversationId: created.conversationId, agentPageId: page.id, lastMessageAt: null },
+                            ...session.conversations,
+                          ],
+                        }
+                      : session,
+                  ),
+                };
+              },
+              { revalidate: false },
+            );
+          }
+          // ...and a broader revalidate for every OTHER `/api/agent-sessions**`
+          // consumer (the sidebar, other panes) whose differently-scoped
+          // cache key the local insert above doesn't touch.
           void mutate(isAgentSessionsKey);
           if (sessionId && staleConversationId) {
             // The grid's pane binding is repointed regardless: a pane still

@@ -57,7 +57,12 @@ import PanePicker, { type PickableAgent, type ReattachableShell } from './PanePi
 import { resolvePaneSurface, type PaneSurface } from './pane-surface';
 import { selectPaneAgent } from './select-pane-agent';
 import { decideClosePane } from './close-pane';
-import { isAgentSessionsKey, type SessionConversationSummary } from './session-conversations';
+import {
+  agentSessionsKey,
+  isAgentSessionsKey,
+  type SessionConversationSummary,
+  type SessionListEntry,
+} from './session-conversations';
 import PaneChat from './PaneChat';
 import Shell from '../shell/Shell';
 
@@ -97,11 +102,6 @@ async function shellsFetcher(url: string): Promise<{ shells: ReattachableShell[]
   const response = await fetchWithAuth(url);
   if (!response.ok) throw new Error(`Failed to list shells (${response.status})`);
   return response.json();
-}
-
-interface SessionListEntry {
-  sessionId: string;
-  conversations: SessionConversationSummary[];
 }
 
 /**
@@ -174,7 +174,7 @@ export default function AgentPanes({
   // This session's open conversation listings — shared by the pane bar
   // selector's SWITCH decision and the pane grid's CLOSE decision.
   const { data: sessionsData, mutate: mutateSessionConversations } = useSWR(
-    driveId !== null ? `/api/agent-sessions?driveId=${encodeURIComponent(driveId)}` : '/api/agent-sessions',
+    agentSessionsKey(driveId),
     sessionConversationsFetcher,
     { revalidateOnFocus: false, refreshInterval: 20_000 },
   );

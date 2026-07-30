@@ -370,13 +370,15 @@ describe('AgentPageView', () => {
       await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-2'));
     });
 
-    it('revalidates the sessions-listing cache after minting the replacement, so a fast re-close sees the new row', async () => {
-      // Without this, `decideClosePane`'s `activeConversations` (a 20s poll)
-      // can still lack this brand-new row — closing the replacement pane
-      // before the next poll would then read it as absent and take the pure
-      // layout-close path instead of the DELETE one, leaving it open
-      // server-side forever (the same class of bug `handlePickAgent` already
-      // guards against — caught in review).
+    it('inserts the replacement into the sessions-listing cache LOCALLY, not just a background revalidate', async () => {
+      // A background revalidate alone leaves a real window: closing the
+      // replacement pane before that GET resolves (or it failing outright)
+      // would still read the brand-new row as absent from `AgentPanes`' own
+      // cache and take the pure layout-close path instead of DELETE — or
+      // even offer to end the session on a grid whose only cached listing is
+      // stale (the same class of bug `handlePickAgent` already guards
+      // against via its own local `recordMintedConversation`, not merely a
+      // revalidate — caught in review).
       resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
       mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: 'ses-1' });
       render(<AgentPageView page={pageFixture()} />);
@@ -384,8 +386,28 @@ describe('AgentPageView', () => {
 
       conversationsState.lastOnConversationDelete?.('conv-1');
 
-      await waitFor(() => expect(mockMutate).toHaveBeenCalled());
-      const predicate = mockMutate.mock.calls[0][0] as (key: unknown) => boolean;
+      await waitFor(() => expect(mockMutate).toHaveBeenCalledWith('/api/agent-sessions?driveId=drive-1', expect.any(Function), { revalidate: false }));
+      const [, updater] = mockMutate.mock.calls.find(([key]) => key === '/api/agent-sessions?driveId=drive-1')!;
+      const updated = (updater as (current: unknown) => unknown)({
+        sessions: [{ sessionId: 'ses-1', conversations: [] }],
+      });
+      expect(updated).toEqual({
+        sessions: [{ sessionId: 'ses-1', conversations: [{ conversationId: 'conv-2', agentPageId: 'agent-1', lastMessageAt: null }] }],
+      });
+    });
+
+    it('also revalidates the sessions-listing cache after minting the replacement, so a fast re-close sees the new row', async () => {
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: 'ses-1' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      conversationsState.lastOnConversationDelete?.('conv-1');
+
+      await waitFor(() => expect(mockMutate.mock.calls.some(([key]) => typeof key === 'function')).toBe(true));
+      const predicate = mockMutate.mock.calls.find(([key]) => typeof key === 'function')![0] as (
+        key: unknown,
+      ) => boolean;
       expect(predicate('/api/agent-sessions?driveId=drive-1')).toBe(true);
       expect(predicate('/api/pages/agent-1')).toBe(false);
     });

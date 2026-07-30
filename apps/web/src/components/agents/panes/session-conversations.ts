@@ -18,6 +18,22 @@ export interface SessionConversationSummary {
   lastMessageAt: string | null;
 }
 
+/** One session's row in the `/api/agent-sessions**` listing response. */
+export interface SessionListEntry {
+  sessionId: string;
+  conversations: SessionConversationSummary[];
+}
+
+/**
+ * The `/api/agent-sessions**` SWR key for a given drive scope — shared so
+ * every reader/writer of this cache (the grid's own hook, an optimistic
+ * local insert from elsewhere) targets the identical key. A hand-recomputed
+ * copy that drifts from this would silently target the wrong cache entry.
+ */
+export function agentSessionsKey(driveId: string | null): string {
+  return driveId !== null ? `/api/agent-sessions?driveId=${encodeURIComponent(driveId)}` : '/api/agent-sessions';
+}
+
 /**
  * The listing most recently active, treating never-messaged as older than
  * any messaged one. Shared by both deciders' "which one do I focus/rebind
