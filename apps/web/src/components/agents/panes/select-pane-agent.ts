@@ -16,7 +16,7 @@
  * mints a new row") or a fresh one (mint, via the picker's own path).
  */
 
-import type { SessionConversationSummary } from './session-conversations';
+import { mostRecentlyActive, type SessionConversationSummary } from './session-conversations';
 
 export type { SessionConversationSummary };
 
@@ -40,10 +40,5 @@ export function selectPaneAgent(params: {
   const matches = conversations.filter((c) => c.agentPageId === selectedAgentPageId);
   if (matches.length === 0) return { action: 'mint' };
 
-  const mostRecent = matches.reduce((latest, candidate) => {
-    const latestAt = latest.lastMessageAt ? Date.parse(latest.lastMessageAt) : -Infinity;
-    const candidateAt = candidate.lastMessageAt ? Date.parse(candidate.lastMessageAt) : -Infinity;
-    return candidateAt > latestAt ? candidate : latest;
-  });
-  return { action: 'focus', conversationId: mostRecent.conversationId };
+  return { action: 'focus', conversationId: mostRecentlyActive(matches).conversationId };
 }

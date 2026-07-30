@@ -11,8 +11,9 @@
  * Kept separate from `select-pane-agent.ts` (the pane bar's SWITCH decision,
  * `pu/pane-agent-selector`): that module decides which conversation a pane
  * should point at next; this one decides what removing a pane's binding
- * means. Both read the same `SessionConversationSummary` shape (hoisted to
- * `session-conversations.ts` once the two branches met).
+ * means. Both read the same `SessionConversationSummary` shape, and both
+ * share `mostRecentlyActive` (hoisted to `session-conversations.ts` once the
+ * two branches met — each had reimplemented the identical reduce).
  *
  * A pure decision over PLAIN DATA (the pane grid's panes, plus the session's
  * listing) — no store, no fetch, no IO — so the branch never lives inline in
@@ -20,7 +21,7 @@
  */
 
 import type { PaneState } from '@/stores/agent-workspace/pane-reducer';
-import type { SessionConversationSummary } from './session-conversations';
+import { mostRecentlyActive, type SessionConversationSummary } from './session-conversations';
 
 export type { SessionConversationSummary };
 
@@ -30,11 +31,11 @@ export type ClosePaneDecision =
   | { action: 'close-pane' }
   /**
    * Close conversation `conversationId`'s listing (DELETE the session-scoped
-   * route). `rebindTo` is set only when this pane is the grid's last pane —
-   * the grid never empties, so the pane repoints at that OTHER open
-   * conversation instead of vanishing.
+   * route). `rebindTo`/`rebindAgentPageId` are set only when this pane is the
+   * grid's last pane — the grid never empties, so the pane repoints at that
+   * OTHER open conversation instead of vanishing.
    */
-  | { action: 'close-conversation'; conversationId: string; rebindTo: string | null }
+  | { action: 'close-conversation'; conversationId: string; rebindTo: string | null; rebindAgentPageId: string | null }
   /**
    * The pane being closed was NOT itself a conversation (a picker, a
    * terminal, or a chat pane still mid-mint) and is the grid's last pane —
@@ -49,15 +50,6 @@ export type ClosePaneDecision =
   | { action: 'rebind-pane'; conversationId: string; agentPageId: string | null }
   /** Emptying the session's last listing (or its last pane, with nothing open to fall back to) — confirm, then end the session. */
   | { action: 'end-session' };
-
-/** The listing most recently active, treating never-messaged as older than any messaged one. */
-function mostRecentlyActive<T extends { lastMessageAt: string | null }>(listings: readonly T[]): T {
-  return listings.reduce((latest, candidate) => {
-    const latestAt = latest.lastMessageAt ? Date.parse(latest.lastMessageAt) : -Infinity;
-    const candidateAt = candidate.lastMessageAt ? Date.parse(candidate.lastMessageAt) : -Infinity;
-    return candidateAt > latestAt ? candidate : latest;
-  });
-}
 
 /**
  * The grid-last fallback shared by both branches below: with no conversation
@@ -82,6 +74,14 @@ function gridLastFallback(activeConversations: readonly SessionConversationSumma
   return { action: 'rebind-pane', conversationId: target.conversationId, agentPageId: target.agentPageId };
 }
 
+/** This pane addresses no conversation of its own (right now, or no longer) — the shared non-chat/stale-listing rule. */
+function notThisPanesConversation(
+  isGridLast: boolean,
+  activeConversations: readonly SessionConversationSummary[] | null,
+): ClosePaneDecision {
+  return isGridLast ? gridLastFallback(activeConversations) : { action: 'close-pane' };
+}
+
 export function decideClosePane(params: {
   /** Every pane in the grid, in visual order — `panesOf(workspace)`. */
   panes: readonly PaneState[];
@@ -103,12 +103,9 @@ export function decideClosePane(params: {
 
   // Picker, terminal, or a chat pane still mid-mint (targetId null) — none of
   // these address a conversation listing, so this pane itself has nothing to
-  // close. Not grid-last is still a pure layout act; grid-last falls back to
-  // "is there another open listing to rebind to" rather than assuming the
-  // session must end (a lone terminal pane is not proof the session's other
-  // conversations are gone — they may simply have no pane HERE).
+  // close.
   if (pane.scope === null || pane.scope.kind !== 'chat' || pane.scope.targetId === null) {
-    return isGridLast ? gridLastFallback(activeConversations) : { action: 'close-pane' };
+    return notThisPanesConversation(isGridLast, activeConversations);
   }
 
   const conversationId = pane.scope.targetId;
@@ -126,7 +123,7 @@ export function decideClosePane(params: {
   // state; fall back to the same rule as a non-chat pane.
   const isOpenListed = activeConversations?.some((c) => c.conversationId === conversationId) ?? false;
   if (!isOpenListed) {
-    return isGridLast ? gridLastFallback(activeConversations) : { action: 'close-pane' };
+    return notThisPanesConversation(isGridLast, activeConversations);
   }
 
   const otherOpenListings = (activeConversations ?? []).filter((c) => c.conversationId !== conversationId);
@@ -137,10 +134,15 @@ export function decideClosePane(params: {
   // conversation, not its pane count.
   if (otherOpenListings.length === 0) return { action: 'end-session' };
 
-  if (!isGridLast) return { action: 'close-conversation', conversationId, rebindTo: null };
+  if (!isGridLast) return { action: 'close-conversation', conversationId, rebindTo: null, rebindAgentPageId: null };
 
   // Grid-last: the grid never empties, so this pane rebinds to the most
   // recently active OTHER open listing instead of vanishing.
   const target = mostRecentlyActive(otherOpenListings);
-  return { action: 'close-conversation', conversationId, rebindTo: target.conversationId };
+  return {
+    action: 'close-conversation',
+    conversationId,
+    rebindTo: target.conversationId,
+    rebindAgentPageId: target.agentPageId,
+  };
 }

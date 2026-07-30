@@ -170,7 +170,7 @@ describe('decideClosePane', () => {
           paneId: 'p1',
           activeConversations: [listing('conv-1'), listing('conv-2')],
         }),
-      ).toEqual({ action: 'close-conversation', conversationId: 'conv-1', rebindTo: null });
+      ).toEqual({ action: 'close-conversation', conversationId: 'conv-1', rebindTo: null, rebindAgentPageId: null });
     });
 
     it('given the pane IS grid-last, should close the conversation and rebind to the most recently active other listing', () => {
@@ -184,7 +184,12 @@ describe('decideClosePane', () => {
             listing('conv-new', 'agent-3', '2026-01-15T00:00:00.000Z'),
           ],
         }),
-      ).toEqual({ action: 'close-conversation', conversationId: 'conv-1', rebindTo: 'conv-new' });
+      ).toEqual({
+        action: 'close-conversation',
+        conversationId: 'conv-1',
+        rebindTo: 'conv-new',
+        rebindAgentPageId: 'agent-3',
+      });
     });
 
     it('treats a never-messaged other listing as older than any messaged one when rebinding', () => {
@@ -194,7 +199,12 @@ describe('decideClosePane', () => {
           paneId: 'p1',
           activeConversations: [listing('conv-1'), listing('conv-never', 'agent-2', null), listing('conv-messaged', 'agent-3', '2026-01-01T00:00:00.000Z')],
         }),
-      ).toEqual({ action: 'close-conversation', conversationId: 'conv-1', rebindTo: 'conv-messaged' });
+      ).toEqual({
+        action: 'close-conversation',
+        conversationId: 'conv-1',
+        rebindTo: 'conv-messaged',
+        rebindAgentPageId: 'agent-3',
+      });
     });
   });
 

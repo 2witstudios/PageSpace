@@ -479,5 +479,37 @@ describe('AgentPageView', () => {
       expect(mockCreatePageConversation).not.toHaveBeenCalled();
       expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2');
     });
+
+    it('a SECOND async gap — switching selection while the replacement mint itself is in flight — does not clobber the newer pick', async () => {
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      conversationsState.current.conversations = [{ id: 'conv-2', sessionId: 'ses-1' }];
+      let resolveCreate!: (value: { conversationId: string; sessionId: string | null }) => void;
+      mockCreatePageConversation.mockReturnValue(
+        new Promise((resolve) => {
+          resolveCreate = resolve;
+        }),
+      );
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      // The grid closes conv-1's listing (still the CURRENT conversation) —
+      // this starts the replacement mint, deliberately left pending.
+      agentPanesState.lastOnConversationClosed?.({ conversationId: 'conv-1', next: null, nextAgentPageId: null });
+      await waitFor(() => expect(mockCreatePageConversation).toHaveBeenCalledTimes(1));
+
+      // WHILE that mint's own network call is still in flight, the user
+      // selects a different history thread.
+      await userEvent.click(screen.getByRole('tab', { name: /history/i }));
+      fireEvent.click(await screen.findByTestId('history-select-conv-2'));
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2'));
+
+      // The mint finally resolves.
+      resolveCreate({ conversationId: 'conv-3', sessionId: 'ses-1' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // The user's newer pick (conv-2) survives — not clobbered by conv-3,
+      // the replacement for a conversation the user already moved on from.
+      expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2');
+    });
   });
 });

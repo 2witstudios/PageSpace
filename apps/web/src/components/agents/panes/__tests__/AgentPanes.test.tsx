@@ -348,6 +348,46 @@ describe('AgentPanes', () => {
       );
     });
 
+    it('does not destroy a pane reassigned to a NEW conversation while its close DELETE was still in flight', async () => {
+      mockSessionConversations([
+        { conversationId: 'conv-1', agentPageId: 'agent-1' },
+        { conversationId: 'conv-2', agentPageId: 'agent-2' },
+      ]);
+      let resolveDel!: () => void;
+      mockDel.mockReturnValue(new Promise<void>((resolve) => (resolveDel = resolve)));
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
+      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+      // A second pane so closing the first is NOT grid-last (close-conversation, no rebind).
+      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', paneId));
+
+      const user = userEvent.setup();
+      const closeButtons = screen.getAllByLabelText('Close pane');
+      await user.click(closeButtons[0]);
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'));
+
+      // WHILE that DELETE is still pending, this exact pane gets reassigned —
+      // e.g. the pane bar's agent selector switched it, or a fresh mint
+      // landed here. The stale close must not clobber it once it resolves.
+      act(() =>
+        useAgentWorkspaceStore.getState().assignPane('ses-1', paneId, {
+          kind: 'chat',
+          name: 'Conversation',
+          targetId: 'conv-reassigned',
+          agentPageId: 'agent-3',
+        }),
+      );
+
+      resolveDel();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const paneAfter = useAgentWorkspaceStore
+        .getState()
+        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+        .find((p) => p.id === paneId);
+      expect(paneAfter?.scope).toMatchObject({ targetId: 'conv-reassigned', agentPageId: 'agent-3' });
+    });
+
     it("ends the session (via forgetWorkspace) when closing the session's LAST open listing, even with a terminal pane remaining", async () => {
       mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
       mockDel.mockResolvedValue(undefined);

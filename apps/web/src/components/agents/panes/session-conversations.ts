@@ -17,3 +17,17 @@ export interface SessionConversationSummary {
   /** ISO timestamp, or null for a conversation with no messages yet. */
   lastMessageAt: string | null;
 }
+
+/**
+ * The listing most recently active, treating never-messaged as older than
+ * any messaged one. Shared by both deciders' "which one do I focus/rebind
+ * to next" choice — each had reimplemented this reduce independently before
+ * they met.
+ */
+export function mostRecentlyActive<T extends { lastMessageAt: string | null }>(listings: readonly T[]): T {
+  return listings.reduce((latest, candidate) => {
+    const latestAt = latest.lastMessageAt ? Date.parse(latest.lastMessageAt) : -Infinity;
+    const candidateAt = candidate.lastMessageAt ? Date.parse(candidate.lastMessageAt) : -Infinity;
+    return candidateAt > latestAt ? candidate : latest;
+  });
+}

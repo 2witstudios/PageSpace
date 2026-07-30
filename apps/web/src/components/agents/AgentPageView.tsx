@@ -51,6 +51,7 @@ import { useConversations } from '@/lib/ai/shared/hooks/useConversations';
 import { buildAgentSelectionUrl } from '@/lib/agents/agent-selection';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useAuth } from '@/hooks/useAuth';
+import { useLatestRef } from '@/hooks/useLatestRef';
 import { usePermissionsCheck } from './usePermissionsCheck';
 import {
   useResolvedConversation,
@@ -125,15 +126,23 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   } = useProviderSettings({ pageId: page.id });
 
   const newConversation = useCallback(
-    async (reuseSessionId?: string | null) => {
+    async (reuseSessionId?: string | null, options?: { applyOverride?: boolean }) => {
       const created = await createPageConversation({
         agentId: page.id,
         driveId: page.driveId,
         canUseSessions,
         sessionId: reuseSessionId ?? null,
       });
-      setOverride(created);
-      setActiveTab('chat');
+      // Every OTHER caller (History's "New" button, the session-ended
+      // fallback) wants this mint to become the visible conversation
+      // unconditionally, which is why this defaults to true — only
+      // `mintReplacementForCurrent` below opts out, because by the time its
+      // own await resolves the user may have already moved on to something
+      // else and an unconditional override would clobber that pick.
+      if (options?.applyOverride ?? true) {
+        setOverride(created);
+        setActiveTab('chat');
+      }
       return created;
     },
     [page.id, page.driveId, canUseSessions],
@@ -146,10 +155,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   // Without this, a slow request's callback still holds the OLD `current` it
   // closed over, wrongly matches the just-closed id, and overwrites the
   // user's newer selection with an unwanted replacement (caught in review).
-  const currentRef = useRef(current);
-  useEffect(() => {
-    currentRef.current = current;
-  }, [current]);
+  const currentRef = useLatestRef(current);
 
   // Shared by the History-tab delete AND a session-grid listing close: both
   // leave `current` pointing at a conversation that is no longer usable here,
@@ -162,8 +168,16 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
     const staleConversationId = currentRef.current?.conversationId ?? null;
     const sessionId = currentRef.current?.sessionId ?? null;
     void (async () => {
-      const created = await newConversation(sessionId);
+      // `applyOverride: false` — this mint has its OWN async gap (the POST
+      // below), and the user can select a different thread while it's in
+      // flight. Applying `newConversation`'s default unconditional override
+      // after that gap would silently replace whatever they picked in the
+      // meantime (caught in review) — checked explicitly below instead.
+      const created = await newConversation(sessionId, { applyOverride: false });
       if (sessionId && staleConversationId) {
+        // The grid's pane binding is repointed regardless: a pane still
+        // showing the now-gone `staleConversationId` is a dangling reference
+        // no matter what this page's OWN `current` has moved on to.
         useAgentWorkspaceStore.getState().replaceConversation(sessionId, staleConversationId, {
           kind: 'chat',
           name: 'New conversation',
@@ -171,8 +185,14 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
           agentPageId: page.id,
         });
       }
+      // Only follow the replacement as THIS page's own view if the user
+      // hasn't already navigated elsewhere while the mint was in flight.
+      if (currentRef.current?.conversationId === staleConversationId) {
+        setOverride({ conversationId: created.conversationId, sessionId });
+        setActiveTab('chat');
+      }
     })();
-  }, [newConversation, page.id]);
+  }, [newConversation, page.id, currentRef]);
 
   const {
     conversations,
@@ -201,7 +221,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
       if (event.conversationId !== currentRef.current?.conversationId) return;
       mintReplacementForCurrent();
     },
-    [mintReplacementForCurrent],
+    [mintReplacementForCurrent, currentRef],
   );
 
   const handleSelectConversation = useCallback(

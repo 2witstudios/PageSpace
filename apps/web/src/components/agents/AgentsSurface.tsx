@@ -1,12 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect } from 'react';
 import { Bot } from 'lucide-react';
 import useSWR from 'swr';
 
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useLatestRef } from '@/hooks/useLatestRef';
 import AgentPanes from './panes/AgentPanes';
 
 /**
@@ -88,10 +89,7 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
   // over the selection at the moment the close started — a plain destructure
   // here would still match the now-stale `conversationId` and clobber the
   // user's newer pick with the computed rebind target (caught in review).
-  const selectionRef = useRef({ selectedConversationId, selectedSessionId });
-  useEffect(() => {
-    selectionRef.current = { selectedConversationId, selectedSessionId };
-  }, [selectedConversationId, selectedSessionId]);
+  const selectionRef = useLatestRef({ selectedConversationId, selectedSessionId });
 
   // The grid closed the conversation THIS surface has selected (its last
   // pane, closed) — follow its rebind so this surface's own selection (and
@@ -107,7 +105,7 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
       if (event.conversationId !== currentConversationId || event.next === null || !currentSessionId) return;
       selectConversation({ sessionId: currentSessionId, conversationId: event.next, agentId: event.nextAgentPageId });
     },
-    [selectConversation],
+    [selectConversation, selectionRef],
   );
 
   return (

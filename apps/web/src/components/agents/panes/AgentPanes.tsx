@@ -291,14 +291,41 @@ export default function AgentPanes({
   );
 
   /**
+   * Is `paneId` STILL the pane bound to `conversationId`, right now? Stronger
+   * than `paneStillExists`: a slow DELETE can resolve after the user has
+   * already repurposed this exact pane slot (switched its agent, minted a
+   * new conversation into it) — the pane id still exists, but applying a
+   * close/rebind meant for the OLD binding would destroy the user's newer
+   * one (caught in review).
+   */
+  const paneStillShows = useCallback(
+    (paneId: string, conversationId: string) => {
+      const current = useAgentWorkspaceStore.getState().workspaces[sessionId];
+      const pane = current ? panesOf(current).find((p) => p.id === paneId) : undefined;
+      return pane?.scope?.kind === 'chat' && pane.scope.targetId === conversationId;
+    },
+    [sessionId],
+  );
+
+  /** Peek the pane's LIVE scope and open the end-session confirm dialog — shared by the direct decision and the 409 fallback below. */
+  const beginEndSessionConfirm = useCallback(
+    (paneId: string) => {
+      const current = useAgentWorkspaceStore.getState().workspaces[sessionId];
+      const pane = current ? panesOf(current).find((p) => p.id === paneId) : undefined;
+      setPendingEndClose({ paneId, scope: pane?.scope ?? null });
+    },
+    [sessionId],
+  );
+
+  /**
    * Close conversation `conversationId`'s listing (the session-scoped DELETE)
    * — silent on success, since closing a listing never touches history (a
-   * pane-close-lifecycle audit follow-up). `rebindTo` set means this pane was
-   * the grid's last, so the grid never empties: it repoints at that other
-   * open conversation instead of vanishing.
+   * pane-close-lifecycle audit follow-up). `rebindTo`/`rebindAgentPageId` set
+   * means this pane was the grid's last, so the grid never empties: it
+   * repoints at that other open conversation instead of vanishing.
    */
   const closeConversationListing = useCallback(
-    async (paneId: string, conversationId: string, rebindTo: string | null) => {
+    async (paneId: string, conversationId: string, rebindTo: string | null, rebindAgentPageId: string | null) => {
       try {
         await del(
           `/api/agent-sessions/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversationId)}`,
@@ -308,10 +335,8 @@ export default function AgentPanes({
           // The session's LAST open listing — the server is the authority on
           // the never-empty invariant, so fall back to the same confirmed
           // end-session flow the grid's own last-pane close uses.
-          if (!paneStillExists(paneId)) return;
-          const current = useAgentWorkspaceStore.getState().workspaces[sessionId];
-          const pane = current ? panesOf(current).find((p) => p.id === paneId) : undefined;
-          setPendingEndClose({ paneId, scope: pane?.scope ?? null });
+          if (!paneStillShows(paneId, conversationId)) return;
+          beginEndSessionConfirm(paneId);
           return;
         }
         console.error('Failed to close this conversation:', error);
@@ -321,26 +346,24 @@ export default function AgentPanes({
         return;
       }
 
-      const nextAgentPageId =
-        rebindTo !== null ? sessionConversations.find((c) => c.conversationId === rebindTo)?.agentPageId ?? null : null;
-      if (paneStillExists(paneId)) {
+      if (paneStillShows(paneId, conversationId)) {
         if (rebindTo !== null) {
           replaceConversation(sessionId, conversationId, {
             kind: 'chat',
             name: 'Conversation',
             targetId: rebindTo,
-            agentPageId: nextAgentPageId,
+            agentPageId: rebindAgentPageId,
           });
         } else {
           closePane(sessionId, paneId);
         }
       }
-      onConversationClosed?.({ conversationId, next: rebindTo, nextAgentPageId });
+      onConversationClosed?.({ conversationId, next: rebindTo, nextAgentPageId: rebindAgentPageId });
       // Instant sidebar freshness — the closed listing's row leaves every
       // open `/api/agent-sessions**` poll without waiting on its interval.
       void mutate(isAgentSessionsKey);
     },
-    [sessionId, paneStillExists, replaceConversation, closePane, onConversationClosed, sessionConversations],
+    [sessionId, paneStillShows, beginEndSessionConfirm, replaceConversation, closePane, onConversationClosed],
   );
 
   const handleClosePane = useCallback(
@@ -358,7 +381,7 @@ export default function AgentPanes({
       if (decision.action === 'end-session') {
         // Emptying the session ends it — ask first, same as the sidebar's
         // identical act, and don't touch the grid until the user confirms.
-        setPendingEndClose({ paneId, scope: pane?.scope ?? null });
+        beginEndSessionConfirm(paneId);
         return;
       }
 
@@ -383,9 +406,18 @@ export default function AgentPanes({
         return;
       }
 
-      void closeConversationListing(paneId, decision.conversationId, decision.rebindTo);
+      void closeConversationListing(paneId, decision.conversationId, decision.rebindTo, decision.rebindAgentPageId);
     },
-    [workspace, closePane, sessionId, closeTerminalShell, closeDecisionListing, closeConversationListing, assignPane],
+    [
+      workspace,
+      closePane,
+      sessionId,
+      closeTerminalShell,
+      closeDecisionListing,
+      closeConversationListing,
+      assignPane,
+      beginEndSessionConfirm,
+    ],
   );
 
   const confirmEndSession = useCallback(async () => {
