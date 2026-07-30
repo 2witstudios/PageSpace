@@ -412,6 +412,30 @@ describe('AgentPageView', () => {
       await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-2'));
     });
 
+    it('a session-less mint that comes back session-bound switches to the pane grid with the REAL new session, not null', async () => {
+      // The stale conversation had no session (sessionId: null), so the mint
+      // call passes sessionId: null too — but createPageConversation is free
+      // to spawn a brand-new session on that path (canUseSessions), and the
+      // override must reflect what it actually returned, not the pre-mint
+      // guess (a stale-outer-variable regression caught in adversarial
+      // review after the round-2 async-gap fix).
+      resolveTo({ conversationId: 'conv-1', sessionId: null });
+      mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: 'ses-new' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
+
+      conversationsState.lastOnConversationDelete?.();
+
+      await waitFor(() =>
+        expect(mockCreatePageConversation).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: 'agent-1', sessionId: null }),
+        ),
+      );
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-new'));
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2'));
+      expect(screen.queryByTestId('plain-chat')).not.toBeInTheDocument();
+    });
+
     it('the History tab "New" button is unaffected — it always spawns a fresh session, never reuses', async () => {
       resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
       mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-3', sessionId: 'ses-new' });

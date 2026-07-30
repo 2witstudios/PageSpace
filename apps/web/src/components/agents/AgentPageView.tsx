@@ -187,8 +187,12 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
       }
       // Only follow the replacement as THIS page's own view if the user
       // hasn't already navigated elsewhere while the mint was in flight.
+      // Uses `created.sessionId`, not the outer `sessionId` — a session-less
+      // stale conversation (sessionId null) can still mint INTO a fresh
+      // session when `canUseSessions` is true, and this must reflect that
+      // real result, not the pre-mint guess (caught in adversarial review).
       if (currentRef.current?.conversationId === staleConversationId) {
-        setOverride({ conversationId: created.conversationId, sessionId });
+        setOverride({ conversationId: created.conversationId, sessionId: created.sessionId });
         setActiveTab('chat');
       }
     })();
