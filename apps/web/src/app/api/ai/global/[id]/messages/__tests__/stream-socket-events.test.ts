@@ -223,6 +223,7 @@ vi.mock('@/lib/ai/core/agent-awareness', () => ({
   buildAgentAwarenessPrompt: vi.fn().mockResolvedValue(''),
 }));
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
+  filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
   filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),
   filterToolsForWebSearch: vi.fn().mockReturnValue({}),
@@ -490,7 +491,6 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
         // Rides the stream_start broadcast so page members can tell a stream they may
         // watch from a co-member's PRIVATE conversation, without firing a doomed join.
         isShared: false,
-  sessionId: null,
       });
     });
 

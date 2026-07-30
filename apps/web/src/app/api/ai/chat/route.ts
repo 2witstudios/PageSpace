@@ -70,6 +70,7 @@ import {
   filterToolsForReadOnly,
   filterToolsForMcpScope,
   filterToolsForAgentAllowlist,
+  filterToolsForSandboxEnablement,
 } from '@/lib/ai/core/tool-filtering';
 import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
 import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/core/model-capabilities';
@@ -912,6 +913,16 @@ export async function POST(request: Request) {
     let filteredTools = filterToolsForAgentAllowlist(
       baseToolsWithoutOverrides,
       agentEnabledTools
+    ) as ToolSet;
+
+    // Step 3b: the per-agent sandbox switch. An agent with sandboxEnabled off
+    // never sees the sandbox families (bash/files, git+gh, sessions/shells) —
+    // independent of the allowlist, which cannot re-grant them. The env
+    // kill-switch and per-call canRunCode remain the security boundaries
+    // underneath; this is agent configuration.
+    filteredTools = filterToolsForSandboxEnablement(
+      filteredTools,
+      Boolean(page.sandboxEnabled)
     ) as ToolSet;
 
     // Step 4: webSearchEnabled is a runtime input toggle that overrides the allowlist.

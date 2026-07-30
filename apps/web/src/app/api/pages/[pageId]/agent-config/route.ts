@@ -90,6 +90,7 @@ export async function GET(
       includePageTree: page.includePageTree ?? false,
       pageTreeScope: page.pageTreeScope ?? 'children',
       toolExposureMode: page.toolExposureMode ?? 'upfront',
+      sandboxEnabled: page.sandboxEnabled ?? false,
     });
   } catch (error) {
     loggers.api.error('Error fetching page agent configuration:', error as Error);
@@ -125,6 +126,7 @@ export async function PATCH(
       includePageTree,
       pageTreeScope,
       toolExposureMode,
+      sandboxEnabled,
       expectedRevision,
     } = body;
 
@@ -226,6 +228,10 @@ export async function PATCH(
       if (toolExposureMode === 'upfront' || toolExposureMode === 'search') {
         updateData.toolExposureMode = toolExposureMode;
       }
+    }
+
+    if (sandboxEnabled !== undefined) {
+      updateData.sandboxEnabled = Boolean(sandboxEnabled);
     }
 
     // Only update if there are changes
