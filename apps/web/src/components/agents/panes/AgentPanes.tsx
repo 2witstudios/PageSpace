@@ -379,8 +379,17 @@ export default function AgentPanes({
         } else {
           closePane(sessionId, paneId);
         }
+        // Only tell the host to recover if THIS pane still shows the
+        // conversation that closed. If the user reassigned this exact pane
+        // (its own agent selector) while the DELETE was in flight,
+        // `paneStillShows` already caught that above — but the host
+        // (`AgentPageView`/`AgentsSurface`) tracks its own "current"
+        // independently of any specific pane, so an unconditional callback
+        // here would still tell it to recover from the now-irrelevant old
+        // conversation, potentially overwriting what the user just picked
+        // (caught in review).
+        onConversationClosed?.({ conversationId, next: rebindTo, nextAgentPageId: rebindAgentPageId });
       }
-      onConversationClosed?.({ conversationId, next: rebindTo, nextAgentPageId: rebindAgentPageId });
       // Instant sidebar freshness — the closed listing's row leaves every
       // open `/api/agent-sessions**` poll without waiting on its interval.
       void mutate(isAgentSessionsKey);

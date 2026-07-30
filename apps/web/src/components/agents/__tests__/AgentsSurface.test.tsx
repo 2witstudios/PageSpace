@@ -247,13 +247,49 @@ describe('onConversationClosed — following the grid\'s own close/rebind', () =
     expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
   });
 
-  it('leaves the selection untouched when there was nothing to rebind to (next: null)', async () => {
+  it('leaves the selection untouched when there was nothing to rebind to and no other chat pane remains', async () => {
     const { getByTestId } = render(<AgentsSurface />);
     await waitFor(() => expect(getByTestId('agent-panes')).toBeInTheDocument());
 
     act(() => getByTestId('fire-conversation-closed-no-rebind').click());
 
     expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-1');
+  });
+
+  it('retargets to another OPEN chat pane when an ordinary (non-grid-last) close drops the SELECTED conversation', async () => {
+    // `next: null` isn't only for "nothing to rebind to" — it's also what an
+    // ORDINARY close reports when the grid still has other panes (rebinding
+    // only matters for an emptied grid). Left alone, the surface's own
+    // selection (and the URL it mirrors to) would keep naming a conversation
+    // with no listing left — a refresh or deep link back to this URL would
+    // reopen it, silently replacing whatever pane is actually live (caught
+    // in review).
+    useAgentWorkspaceStore.getState().ensureWorkspace('ses-1', {
+      kind: 'chat',
+      name: 'Conversation',
+      targetId: 'conv-1',
+      agentPageId: 'agent-1',
+    });
+    const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+    useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId);
+    const secondPaneId = useAgentWorkspaceStore
+      .getState()
+      .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+      .find((p) => p.id !== firstPaneId)!.id;
+    useAgentWorkspaceStore.getState().assignPane('ses-1', secondPaneId, {
+      kind: 'chat',
+      name: 'Conversation',
+      targetId: 'conv-2',
+      agentPageId: 'agent-2',
+    });
+
+    const { getByTestId } = render(<AgentsSurface />);
+    await waitFor(() => expect(getByTestId('agent-panes')).toBeInTheDocument());
+
+    act(() => getByTestId('fire-conversation-closed-no-rebind').click());
+
+    expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-2');
+    expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-2');
   });
 
   it('ignores a close for a conversation this surface was not showing', async () => {

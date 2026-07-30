@@ -419,6 +419,46 @@ describe('AgentPanes', () => {
       expect(paneAfter?.scope).toMatchObject({ targetId: 'conv-reassigned', agentPageId: 'agent-3' });
     });
 
+    it('does not tell the host to recover a pane that was reassigned while its close DELETE was still in flight', async () => {
+      // Same race as above, but checking the HOST callback rather than the
+      // local pane mutation: even though `paneStillShows` already protects
+      // the pane's own scope, an unconditional `onConversationClosed` would
+      // still tell a host (AgentPageView/AgentsSurface) to recover from the
+      // now-irrelevant closed conversation — which tracks its own "current"
+      // independently of any specific pane — potentially overwriting
+      // whatever the user just picked for this exact pane (caught in review).
+      mockSessionConversations([
+        { conversationId: 'conv-1', agentPageId: 'agent-1' },
+        { conversationId: 'conv-2', agentPageId: 'agent-2' },
+      ]);
+      let resolveDel!: () => void;
+      mockDel.mockReturnValue(new Promise<void>((resolve) => (resolveDel = resolve)));
+      const onConversationClosed = vi.fn();
+      renderPanes({ onConversationClosed });
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
+      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', paneId));
+
+      const user = userEvent.setup();
+      const closeButtons = screen.getAllByLabelText('Close pane');
+      await user.click(closeButtons[0]);
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'));
+
+      act(() =>
+        useAgentWorkspaceStore.getState().assignPane('ses-1', paneId, {
+          kind: 'chat',
+          name: 'Conversation',
+          targetId: 'conv-reassigned',
+          agentPageId: 'agent-3',
+        }),
+      );
+
+      resolveDel();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(onConversationClosed).not.toHaveBeenCalled();
+    });
+
     it("ends the session (via forgetWorkspace) when closing the session's LAST open listing, even with a terminal pane remaining", async () => {
       mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
       mockDel.mockResolvedValue(undefined);

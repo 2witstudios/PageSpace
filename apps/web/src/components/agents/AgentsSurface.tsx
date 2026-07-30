@@ -6,6 +6,7 @@ import useSWR from 'swr';
 
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
+import { panesOf } from '@/stores/agent-workspace/pane-reducer';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useLatestRef } from '@/hooks/useLatestRef';
 import AgentPanes from './panes/AgentPanes';
@@ -91,19 +92,42 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
   // user's newer pick with the computed rebind target (caught in review).
   const selectionRef = useLatestRef({ selectedConversationId, selectedSessionId });
 
-  // The grid closed the conversation THIS surface has selected (its last
-  // pane, closed) — follow its rebind so this surface's own selection (and
-  // the URL it mirrors to) stays truthful. A closed conversation this surface
-  // was NOT showing (some other pane in the grid) is none of its business.
-  // `next: null` means there was nothing to rebind to — leave the selection
-  // alone rather than clearing it, which would unmount a still-live pane for
-  // no reason (the grid itself never emptied).
+  // The grid closed the conversation THIS surface has selected — follow so
+  // this surface's own selection (and the URL it mirrors to) stays truthful.
+  // A closed conversation this surface was NOT showing (some other pane in
+  // the grid) is none of its business. Two shapes:
+  // - grid-last close: `next` names the pane's rebind target — follow it.
+  // - ordinary close (the grid still has other panes): `next` is always
+  //   null, since rebinding is only for an EMPTIED grid — but the selection
+  //   is now just as stale, still naming a conversation with no listing left.
+  //   Retarget to another OPEN chat pane still in the grid so a refresh or a
+  //   deep link back to this URL doesn't reopen the closed conversation and
+  //   silently replace whatever pane is actually live (caught in review). If
+  //   no other chat pane remains (e.g. only a terminal), leave the selection
+  //   as-is — same residual gap as before this fix, not a regression.
   const handleConversationClosed = useCallback(
     (event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => {
       const { selectedConversationId: currentConversationId, selectedSessionId: currentSessionId } =
         selectionRef.current;
-      if (event.conversationId !== currentConversationId || event.next === null || !currentSessionId) return;
-      selectConversation({ sessionId: currentSessionId, conversationId: event.next, agentId: event.nextAgentPageId });
+      if (event.conversationId !== currentConversationId || !currentSessionId) return;
+      if (event.next !== null) {
+        selectConversation({ sessionId: currentSessionId, conversationId: event.next, agentId: event.nextAgentPageId });
+        return;
+      }
+      const workspace = useAgentWorkspaceStore.getState().workspaces[currentSessionId];
+      const replacement = workspace
+        ? panesOf(workspace).find(
+            (pane) =>
+              pane.scope?.kind === 'chat' && pane.scope.targetId !== null && pane.scope.targetId !== event.conversationId,
+          )
+        : undefined;
+      if (replacement?.scope?.targetId) {
+        selectConversation({
+          sessionId: currentSessionId,
+          conversationId: replacement.scope.targetId,
+          agentId: replacement.scope.agentPageId,
+        });
+      }
     },
     [selectConversation, selectionRef],
   );
