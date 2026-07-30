@@ -490,7 +490,6 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
         // Rides the stream_start broadcast so page members can tell a stream they may
         // watch from a co-member's PRIVATE conversation, without firing a doomed join.
         isShared: false,
-  sessionId: null,
       });
     });
 
