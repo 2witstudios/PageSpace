@@ -172,8 +172,8 @@ describe('reconcileSandboxStorage', () => {
     const result = await reconcileSandboxStorage(deps);
 
     assert({
-      given: 'an agent-session Sprite with a backing agent page and a measured 1GB footprint',
-      should: 'charge its agent page — the key the usage breakdown groups on',
+      given: 'an agent-session Sprite with a backing drive and a measured 1GB footprint',
+      should: 'charge its drive — the key the usage breakdown groups on',
       actual: { charged: result.charged, driveId: chargeCalls[0]?.driveId },
       expected: { charged: 1, driveId: 'drive-1' },
     });
@@ -195,7 +195,7 @@ describe('reconcileSandboxStorage', () => {
     expect(chargeCalls[0]).toMatchObject({ payerId: 'owner-of-drive-9', driveId: 'drive-9' });
   });
 
-  it('bills a global-assistant session (null agentPageId) straight to its ownerId, with no page lookup and no pageId on the charge', async () => {
+  it('bills a global-assistant session (null driveId) straight to its ownerId, with no drive lookup and no driveId on the charge', async () => {
     const lookup = vi.fn(async () => 'should-not-be-called');
     const { deps, chargeCalls } = makeDeps({
       listAgentSessionSprites: async () => [agentSession({ driveId: null, ownerId: 'global-owner-1' })],
@@ -206,8 +206,8 @@ describe('reconcileSandboxStorage', () => {
 
     expect(lookup).not.toHaveBeenCalled();
     assert({
-      given: 'a global-assistant agent-session Sprite (no backing page)',
-      should: 'charge the session ownerId directly, with pageId omitted from the charge',
+      given: 'a global-assistant agent-session Sprite (no backing drive)',
+      should: 'charge the session ownerId directly, with driveId omitted from the charge',
       actual: { charged: result.charged, payerId: chargeCalls[0]?.payerId, driveId: chargeCalls[0]?.driveId },
       expected: { charged: 1, payerId: 'global-owner-1', driveId: undefined },
     });
@@ -241,20 +241,44 @@ describe('reconcileSandboxStorage', () => {
     expect(agentSessionAdvanceCalls).toEqual([]);
   });
 
-  it('reports a session failure distinguishably rather than aborting the batch', async () => {
-    const { deps, chargeCalls } = makeDeps({
+  it('given chargeStorage succeeds but the FOLLOWING watermark advance throws, counts the money as charged (never under-reported) and flags the row distinguishably', async () => {
+    const { deps, chargeCalls, agentSessionAdvanceCalls } = makeDeps({
       listAgentSessionSprites: async () => [agentSession({ sessionId: 'boom' }), agentSession({ sessionId: 'fine' })],
-      advanceAgentSessionWatermark: async ({ sessionId }) => {
-        if (sessionId === 'boom') throw new Error('watermark write failed');
+      advanceAgentSessionWatermark: async (input) => {
+        if (input.sessionId === 'boom') throw new Error('watermark write failed');
+        agentSessionAdvanceCalls.push(input);
       },
     });
 
     const result = await reconcileSandboxStorage(deps);
 
-    // 'boom' is charged (chargeStorage succeeds) but its advance throws before
-    // `charged` increments — counted as failed, not charged.
-    expect(result).toMatchObject({ processed: 2, charged: 1, failed: 1 });
+    // Both rows' money actually moved (chargeStorage succeeded for both) — so
+    // BOTH count toward `charged`/`totalCostDollars`, regardless of the
+    // watermark outcome. 'boom's failed advance is its own distinct signal
+    // (`chargedButUnadvanced`), not folded into `failed` (which would imply
+    // nothing was billed).
+    expect(result).toMatchObject({ processed: 2, charged: 2, failed: 0, chargedButUnadvanced: 1 });
+    expect(result.totalCostDollars).toBeGreaterThan(0);
     expect(chargeCalls).toHaveLength(2);
+    // Only 'fine' successfully advanced — 'boom' will be billed again next run.
+    expect(agentSessionAdvanceCalls.map((c) => c.sessionId)).toEqual(['fine']);
+  });
+
+  it('given chargeStorage ITSELF throws, bills nothing for that row (no double-count) and never attempts its watermark advance', async () => {
+    const { deps, chargeCalls, agentSessionAdvanceCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ sessionId: 'boom' }), agentSession({ sessionId: 'fine' })],
+      chargeStorage: async (input) => {
+        if (input.sessionId === 'boom') throw new Error('credit ledger unreachable');
+        chargeCalls.push(input);
+      },
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    expect(result).toMatchObject({ processed: 2, charged: 1, failed: 1, chargedButUnadvanced: 0 });
+    expect(chargeCalls).toHaveLength(1);
+    expect(chargeCalls[0].sessionId).toBe('fine');
+    expect(agentSessionAdvanceCalls.map((c) => c.sessionId)).toEqual(['fine']);
   });
 
   it('given a stale measurement on an idle session, still bills the last measured value and flags it stale', async () => {

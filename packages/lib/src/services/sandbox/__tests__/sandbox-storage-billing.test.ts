@@ -19,7 +19,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 vi.mock('@pagespace/db/schema/agent-sessions', () => ({
   agentSessions: {
     id: 'agent_sessions.id',
-    driveId: 'agent_sessions.agentPageId',
+    driveId: 'agent_sessions.driveId',
     ownerId: 'agent_sessions.ownerId',
     sandboxId: 'agent_sessions.sandboxId',
     spriteTornDownAt: 'agent_sessions.spriteTornDownAt',
@@ -147,9 +147,12 @@ describe('defaultReconcileSandboxStorageDeps.chargeStorage', () => {
       providerCostDollars: 0.05,
       success: true,
       costSource: 'list_price',
+      // First-class attribution — top-level columns, not just metadata forensics.
+      driveId: 'drive-1',
+      sessionId: 'session-1',
     });
     expect(call.holdId).toBeUndefined();
-    expect(call.metadata).toMatchObject({ type: 'terminal_storage', driveId: 'drive-1', sessionId: 'session-1', gbMonths: 0.2 });
+    expect(call.metadata).toMatchObject({ type: 'terminal_storage', gbMonths: 0.2 });
   });
 
   it("passes MACHINE_MARKUP_BPS as markupBpsOverride", async () => {
@@ -177,9 +180,24 @@ describe('defaultReconcileSandboxStorageDeps.chargeStorage', () => {
       gbMonths: 0.2,
     });
 
-    // The drive and session ride in metadata for forensics instead.
+    // The drive and session ride as first-class top-level columns instead.
     expect(mockTrackUsage.mock.calls[0][0].pageId).toBeUndefined();
-    expect(mockTrackUsage.mock.calls[0][0].metadata).toMatchObject({ driveId: 'drive-1', sessionId: 'session-1' });
+    expect(mockTrackUsage.mock.calls[0][0]).toMatchObject({ driveId: 'drive-1', sessionId: 'session-1' });
+  });
+
+  it('given a global-assistant session (no drive), forwards driveId as undefined rather than null', async () => {
+    mockTrackUsage.mockResolvedValue(undefined);
+
+    await defaultReconcileSandboxStorageDeps.chargeStorage({
+      payerId: 'owner-1',
+      driveId: undefined,
+      sessionId: 'session-1',
+      costDollars: 0.05,
+      gbMonths: 0.2,
+    });
+
+    expect(mockTrackUsage.mock.calls[0][0].driveId).toBeUndefined();
+    expect(mockTrackUsage.mock.calls[0][0].sessionId).toBe('session-1');
   });
 });
 

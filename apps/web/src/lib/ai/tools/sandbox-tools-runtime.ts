@@ -9,12 +9,15 @@
  * (`@fly/sprites` is ESM/node24-only).
  *
  * THE HANDLE SOURCE: `acquireSandbox` lazily ensures the conversation's agent
- * session row and its Sprite from `conversationId` alone — the session id IS
- * the conversation id (contract.ts invariant 1), and this is one of the two
- * sanctioned first-touch provisioning sites (the other is a shell open). It
- * runs through the SAME `ensureSession`/`provisionSessionSandbox` path the API
- * routes and the realtime bridge use, so the CAS in `agent-session-sprite.ts`
- * actually serializes every concurrent provisioner.
+ * session row and its Sprite from `conversationId` alone — resolving
+ * `conversations.sessionId` to the session row it's bound to, NOT treating the
+ * conversation id as a session id (contract.ts invariant 1: a session hosts
+ * MANY conversations, and post-unconflation the two are different id
+ * namespaces). This is one of the two sanctioned first-touch provisioning
+ * sites (the other is a shell open). It runs through the SAME
+ * `ensureSession`/`provisionSessionSandbox` path the API routes and the
+ * realtime bridge use, so the CAS in `agent-session-sprite.ts` actually
+ * serializes every concurrent provisioner.
  */
 
 import type { Tool } from 'ai';
@@ -154,9 +157,13 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
         // The session the sandbox belongs to — what every post-run hook
         // (storage measurement, activity feed) is keyed by.
         sessionId: row.id,
-        // The billing/attribution key: the session's agent page when it has
-        // one. A global-assistant session has none; the payer resolution's
-        // tenant fallback covers it.
+        // The CALLER's surface agent page (the conversation this run came
+        // through) — purely descriptive per-agent attribution for the usage
+        // breakdown, never a billing/payer key. A session hosts MANY
+        // conversations (with any of the drive's agents, or the global
+        // assistant) and has no agent page of its own; the payer is resolved
+        // from the session's own driveId/ownerId (`resolveBillingSession`
+        // below), never from this field.
         pageId: input.agentPageId,
       };
     },
@@ -208,9 +215,21 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
       }),
     now: () => new Date(),
     logger: loggers.ai,
-    // Meter this run's active-runtime cost against the session's payer (the
-    // agent page's drive owner, or the acting tenant for a global session).
+    // Meter this run's active-runtime cost against the SESSION's payer (its
+    // own drive owner, or the session's own owner for a global-assistant
+    // session) — never the caller's surface drive/agent page.
     billing: defaultSandboxBillingDeps,
+    // Cheap billing-attribution resolve (`withMachineBilling` calls this
+    // BEFORE gating, so a credit-exhausted payer is denied without waking a
+    // hibernating sandbox): the same session row `acquireSandbox` above
+    // resolves via `conversations.sessionId`, read again here rather than
+    // threaded through the acquire result — this runs BEFORE the sandbox is
+    // provisioned, so there is nothing from `acquireSandbox` to thread yet.
+    resolveBillingSession: async (ctx) => {
+      if (!ctx.conversationId) return null;
+      const row = await findSessionForConversation(ctx.conversationId);
+      return row ? { sessionId: row.id, driveId: row.driveId, ownerId: row.ownerId } : null;
+    },
     // Sprites Platform Alignment 5-2: checkpoint the sandbox filesystem before
     // an agent bash batch runs (fail-open, at most once per turn — see
     // checkpoint-policy.ts). State is in-process, keyed by sandboxId; a

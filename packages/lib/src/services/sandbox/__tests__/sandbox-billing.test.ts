@@ -39,42 +39,40 @@ beforeEach(() => {
   mockTrackUsage.mockReset();
 });
 
-function mockPageOwnerRow(row: { ownerId: string } | undefined) {
+function mockDriveOwnerRow(row: { ownerId: string } | undefined) {
   mockDb.select.mockReturnValue({
     from: () => ({
-      leftJoin: () => ({
-        where: () => ({
-          limit: async () => (row ? [row] : []),
-        }),
+      where: () => ({
+        limit: async () => (row ? [row] : []),
       }),
     }),
   });
 }
 
 describe('defaultSandboxBillingDeps.resolvePayerId', () => {
-  it('falls back to tenantId when there is no agentPageId (no DB lookup performed)', async () => {
-    const result = await defaultSandboxBillingDeps.resolvePayerId({ tenantId: 'owner-1' });
+  it('bills the session ownerId directly for a global-assistant session (driveId null), with no DB lookup', async () => {
+    const result = await defaultSandboxBillingDeps.resolvePayerId({ driveId: null, ownerId: 'owner-1' });
     expect(result).toBe('owner-1');
     expect(mockDb.select).not.toHaveBeenCalled();
   });
 
-  it("resolves to the referenced agent page's ACTUAL drive owner via the pages -> drives join, not the acting tenantId", async () => {
-    mockPageOwnerRow({ ownerId: 'real-owner' });
+  it("resolves to the SESSION's ACTUAL drive owner via a direct drives read — never the session's own ownerId when a real owner resolves", async () => {
+    mockDriveOwnerRow({ ownerId: 'real-owner' });
 
     const result = await defaultSandboxBillingDeps.resolvePayerId({
-      tenantId: 'acting-user',
-      agentPageId: 'other-terminal-page',
+      driveId: 'session-drive-1',
+      ownerId: 'session-owner-1',
     });
 
     expect(result).toBe('real-owner');
   });
 
-  it('falls back to tenantId when the referenced page/drive cannot be resolved', async () => {
-    mockPageOwnerRow(undefined);
+  it('falls back to the session ownerId when the drive cannot be resolved (a stale read mid-delete)', async () => {
+    mockDriveOwnerRow(undefined);
 
     const result = await defaultSandboxBillingDeps.resolvePayerId({
-      tenantId: 'owner-1',
-      agentPageId: 'orphaned-page',
+      driveId: 'vanished-drive',
+      ownerId: 'owner-1',
     });
 
     expect(result).toBe('owner-1');
@@ -188,6 +186,20 @@ describe('defaultSandboxBillingDeps.trackUsage', () => {
     });
     const call = mockTrackUsage.mock.calls[0][0];
     expect(call.pageId).toBe('terminal-page-1');
+  });
+
+  it('forwards driveId/sessionId to AIMonitoring.trackUsage as first-class attribution (Terminal Epic 3 usage-breakdown fix)', async () => {
+    mockTrackUsage.mockResolvedValue(undefined);
+    await defaultSandboxBillingDeps.trackUsage({
+      payerId: 'owner-1',
+      holdId: 'hold-1',
+      activeSeconds: 60,
+      driveId: 'drive-1',
+      sessionId: 'session-1',
+    });
+    const call = mockTrackUsage.mock.calls[0][0];
+    expect(call.driveId).toBe('drive-1');
+    expect(call.sessionId).toBe('session-1');
   });
 
   it("passes MACHINE_MARKUP_BPS as markupBpsOverride so the settle path floors at terminal's own rate, not the shared AI MARKUP_BPS", async () => {

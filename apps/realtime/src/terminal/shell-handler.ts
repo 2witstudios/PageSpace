@@ -64,7 +64,7 @@ export type ShellSandboxResult =
   | {
       ok: true;
       shellId: string;
-      /** ≡ the conversation id of the owning session. */
+      /** The owning session's id (`agent_sessions.id`) — no conversation involved, a shell is a PTY, not a chat thread. */
       sessionId: string;
       sandboxId: string;
       /** The working directory for a FRESH session — always `SANDBOX_ROOT` (`/workspace`). */
@@ -358,7 +358,13 @@ function endShellSession(
   if (deps.billing && session.payerId && session.connectedAt !== undefined) {
     const activeSeconds = Math.max(0, (Date.now() - session.connectedAt) / 1000);
     void deps.billing
-      .trackUsage({ payerId: session.payerId, holdId: session.holdId, activeSeconds, pageId: session.pageId })
+      .trackUsage({
+        payerId: session.payerId,
+        holdId: session.holdId,
+        activeSeconds,
+        driveId: session.driveId,
+        sessionId: session.agentSessionId,
+      })
       .catch((error) => {
         loggers.realtime.error('Shell session billing settle failed', error instanceof Error ? error : new Error(String(error)), {
           sessionKey,
@@ -562,7 +568,13 @@ async function settleAccruedWindow(
   session.holdId = undefined;
   const activeSeconds = Math.max(0, (session.connectedAt - windowStart) / 1000);
   try {
-    await billing.trackUsage({ payerId, holdId, activeSeconds, pageId: session.pageId });
+    await billing.trackUsage({
+      payerId,
+      holdId,
+      activeSeconds,
+      driveId: session.driveId,
+      sessionId: session.agentSessionId,
+    });
   } catch (error) {
     loggers.realtime.error('Shell heartbeat settle failed', error instanceof Error ? error : new Error(String(error)), {
       sessionKey,
@@ -579,7 +591,13 @@ async function settleAccruedWindow(
       // the same fire-and-forget guarantee the end-settle itself has. If it
       // also fails, the hold expires via TTL and the window is lost.
       void billing
-        .trackUsage({ payerId, holdId, activeSeconds, pageId: session.pageId })
+        .trackUsage({
+          payerId,
+          holdId,
+          activeSeconds,
+          driveId: session.driveId,
+          sessionId: session.agentSessionId,
+        })
         .catch(() => {});
     }
     return true;
@@ -1074,10 +1092,12 @@ export async function ensureShellSession(
       payerId: access.payerId,
       holdId,
       connectedAt,
-      // No pageId: a session is a drive-level workspace, not page-anchored —
-      // usage attributes to the payer (drive owner, or the session's own owner
-      // for a global-assistant session) with no page grouping.
-      pageId: undefined,
+      // First-class attribution (Terminal Epic 3 usage-breakdown fix): the
+      // session's own drive (already resolved onto the access verdict) and its
+      // own agent_sessions.id (resolved onto the sandbox result) — no page
+      // grouping, since a session is drive-level, not page-anchored.
+      driveId: access.driveId ?? undefined,
+      agentSessionId: sandbox.sessionId,
       shellId: sandbox.shellId,
       // The creator is viewer #1, registered in the literal — BEFORE
       // `openShell` — so output arriving between the shell opening and

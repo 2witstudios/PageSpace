@@ -168,11 +168,20 @@ export interface ReconcileSandboxStorageDeps {
 
 export interface ReconcileSandboxStorageResult {
   processed: number;
+  /** Rows where `chargeStorage` SUCCEEDED — the money moved, regardless of whether the watermark then advanced. Always reflected in `totalCostDollars`. */
   charged: number;
   /** Rows with a positive accrual whose owner could not be resolved — left unbilled (watermark untouched) for a future run to retry. */
   skipped: number;
-  /** Rows where `chargeStorage`/`advanceWatermark` threw — isolated so one bad row doesn't abort the batch; see module doc on the residual double-bill risk this leaves for a future run to retry. */
+  /** Rows where `chargeStorage` ITSELF threw — nothing was billed, isolated so one bad row doesn't abort the batch. */
   failed: number;
+  /**
+   * Rows where `chargeStorage` succeeded but the FOLLOWING `advanceAgentSessionWatermark`
+   * threw — the money already moved (counted in `charged`/`totalCostDollars`), but the
+   * watermark did not advance, so this row's window WILL be billed again on the next run
+   * (see module doc on the double-bill risk this leaves). Distinct from `failed`, where
+   * nothing was charged at all.
+   */
+  chargedButUnadvanced: number;
   /**
    * Rows billed from a MEASURED footprint whose measurement is older than
    * {@link STALE_MEASUREMENT_MS} while the sandbox is not currently awake —
@@ -182,6 +191,7 @@ export interface ReconcileSandboxStorageResult {
    * (see `skipped` is unrelated; never-measured simply bill 0).
    */
   staleMeasurements: number;
+  /** Total money actually moved this run — accumulated the moment `chargeStorage` succeeds, never gated on the watermark advance that follows it. */
   totalCostDollars: number;
 }
 
@@ -194,6 +204,7 @@ export async function reconcileSandboxStorage(
   let charged = 0;
   let skipped = 0;
   let failed = 0;
+  let chargedButUnadvanced = 0;
   let staleMeasurements = 0;
   let totalCostDollars = 0;
 
@@ -205,6 +216,11 @@ export async function reconcileSandboxStorage(
     // the one place this fork exists).
     const target = storageBillingTarget(subject);
     const attributionDriveId = 'driveId' in target ? target.driveId : undefined;
+
+    // Everything up to (but NOT including) the charge itself: pure accrual
+    // computation plus the owner lookup. A throw anywhere in here means
+    // nothing was billed, so it counts as `failed` exactly like before.
+    let resolved: { ownerId: string; costDollars: number; gbMonths: number } | undefined;
     try {
       const elapsedMs = now.getTime() - session.storageLastBilledAt.getTime();
       const lastMeasuredGB = session.measuredBytes === null ? null : bytesToGB(session.measuredBytes);
@@ -259,23 +275,61 @@ export async function reconcileSandboxStorage(
         continue;
       }
 
-      await deps.chargeStorage({ payerId: ownerId, driveId: attributionDriveId, sessionId: session.sessionId, costDollars, gbMonths });
-      await deps.advanceAgentSessionWatermark({ sessionId: session.sessionId, billedThrough: now });
-      totalCostDollars += costDollars;
-      charged += 1;
+      resolved = { ownerId, costDollars, gbMonths };
     } catch (error) {
-      // Isolated per-row: one session's charge/advance failure must not drop
-      // every other session in this run from being billed. Left unresolved: if
-      // chargeStorage already committed before advanceWatermark threw, this
-      // row's window bills again next run (see module doc).
       failed += 1;
       loggers.ai.error(
         'Sandbox storage reconcile failed for session',
         error instanceof Error ? error : new Error(String(error)),
         { driveId: attributionDriveId, sessionId: session.sessionId },
       );
+      continue;
+    }
+    if (!resolved) continue;
+
+    // The charge itself — isolated from the watermark advance below so the
+    // two outcomes ("nothing was billed" vs "billed, but the watermark write
+    // failed") are never conflated. Real money moves the moment this
+    // resolves, so `charged`/`totalCostDollars` reflect it immediately,
+    // regardless of what happens next.
+    try {
+      await deps.chargeStorage({
+        payerId: resolved.ownerId,
+        driveId: attributionDriveId,
+        sessionId: session.sessionId,
+        costDollars: resolved.costDollars,
+        gbMonths: resolved.gbMonths,
+      });
+    } catch (error) {
+      // Isolated per-row: one session's charge failure must not drop every
+      // other session in this run from being billed. Nothing was moved, so
+      // this is a genuine failure — the accrual is retried next run.
+      failed += 1;
+      loggers.ai.error(
+        'Sandbox storage reconcile: chargeStorage failed for session',
+        error instanceof Error ? error : new Error(String(error)),
+        { driveId: attributionDriveId, sessionId: session.sessionId },
+      );
+      continue;
+    }
+    totalCostDollars += resolved.costDollars;
+    charged += 1;
+
+    try {
+      await deps.advanceAgentSessionWatermark({ sessionId: session.sessionId, billedThrough: now });
+    } catch (error) {
+      // The charge already committed (counted above) — only the watermark
+      // write failed, so this row's window WILL be billed again on the next
+      // run (see module doc on the double-bill risk). Distinguishable from a
+      // real charge failure: `chargedButUnadvanced`, not `failed`.
+      chargedButUnadvanced += 1;
+      loggers.ai.error(
+        'Sandbox storage reconcile: watermark advance failed after a successful charge — this window will be re-billed next run',
+        error instanceof Error ? error : new Error(String(error)),
+        { driveId: attributionDriveId, sessionId: session.sessionId },
+      );
     }
   }
 
-  return { processed: sessions.length, charged, skipped, failed, staleMeasurements, totalCostDollars };
+  return { processed: sessions.length, charged, skipped, failed, chargedButUnadvanced, staleMeasurements, totalCostDollars };
 }

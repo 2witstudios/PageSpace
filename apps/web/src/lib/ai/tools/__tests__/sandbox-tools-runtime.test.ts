@@ -408,6 +408,104 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
   });
 });
 
+// Billing attribution resolve (issue #2260): a CHEAP session-row read (no
+// provisioning) so `withMachineBilling` can resolve the payer from the
+// SESSION's own driveId/ownerId before gating — never from the caller's
+// surface drive/tenant.
+describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
+  function makeSessionRecord(overrides: Partial<AgentSessionRecord> = {}): AgentSessionRecord {
+    const now = new Date('2026-06-01T00:00:00Z');
+    return {
+      id: 'ses-1',
+      ownerId: 'u1',
+      driveId: 'd1',
+      name: null,
+      sessionKey: null,
+      sandboxId: null,
+      spriteInstanceId: null,
+      egressPolicyToken: null,
+      teardownRequestedAt: null,
+      spriteTornDownAt: null,
+      storageLastBilledAt: now,
+      storageMeasuredBytes: null,
+      storageMeasuredAt: null,
+      lastActiveAt: null,
+      endedAt: null,
+      createdAt: now,
+      updatedAt: now,
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("resolves the session's own driveId/ownerId — NOT ctx.tenantId/ctx.driveId, which may be a different drive entirely", async () => {
+    mockFindSessionForConversation.mockResolvedValue(
+      makeSessionRecord({ id: 'shared-session-1', driveId: 'session-own-drive', ownerId: 'session-own-owner' }),
+    );
+    const deps = buildRealSandboxRunDeps();
+
+    const result = await deps.resolveBillingSession?.({
+      userId: 'u1',
+      tenantId: 'surface-tenant-should-never-be-used',
+      driveId: 'surface-drive-should-never-be-used',
+      conversationId: 'conv-1',
+      actorEmail: 'u1@example.com',
+      tier: 'pro',
+    });
+
+    expect(result).toEqual({ sessionId: 'shared-session-1', driveId: 'session-own-drive', ownerId: 'session-own-owner' });
+    expect(mockFindSessionForConversation).toHaveBeenCalledWith('conv-1');
+  });
+
+  it('given a global-assistant session (null driveId), resolves driveId null and the session ownerId', async () => {
+    mockFindSessionForConversation.mockResolvedValue(makeSessionRecord({ driveId: null, ownerId: 'global-owner-1' }));
+    const deps = buildRealSandboxRunDeps();
+
+    const result = await deps.resolveBillingSession?.({
+      userId: 'u1',
+      tenantId: 'u1',
+      conversationId: 'conv-1',
+      actorEmail: 'u1@example.com',
+      tier: 'pro',
+    });
+
+    expect(result).toEqual({ sessionId: 'ses-1', driveId: null, ownerId: 'global-owner-1' });
+  });
+
+  it('given no conversationId, resolves null WITHOUT touching the session runtime', async () => {
+    const deps = buildRealSandboxRunDeps();
+
+    const result = await deps.resolveBillingSession?.({
+      userId: 'u1',
+      tenantId: 'u1',
+      conversationId: undefined as unknown as string,
+      actorEmail: 'u1@example.com',
+      tier: 'pro',
+    });
+
+    expect(result).toBeNull();
+    expect(mockFindSessionForConversation).not.toHaveBeenCalled();
+  });
+
+  it('given a conversation with no session yet, resolves null', async () => {
+    mockFindSessionForConversation.mockResolvedValue(null);
+    const deps = buildRealSandboxRunDeps();
+
+    const result = await deps.resolveBillingSession?.({
+      userId: 'u1',
+      tenantId: 'u1',
+      conversationId: 'conv-legacy',
+      actorEmail: 'u1@example.com',
+      tier: 'pro',
+    });
+
+    expect(result).toBeNull();
+  });
+});
+
 describe('buildSandboxTools', () => {
   it('should return exactly the four session tools', () => {
     expect(Object.keys(buildSandboxTools()).sort()).toEqual(['bash', 'editFile', 'readFile', 'writeFile']);

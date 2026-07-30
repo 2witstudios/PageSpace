@@ -4,112 +4,66 @@ const mockDb = vi.hoisted(() => ({ select: vi.fn() }));
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn((a, b) => ({ op: 'eq', a, b })) }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  pages: { id: 'pages.id', driveId: 'pages.driveId' },
   drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
 }));
 
-import { resolveSandboxPayerId, resolveAgentSessionPayerId, lookupPageOwnerId } from '../sandbox-payer';
+import { resolveSessionPayerId, lookupDriveOwnerId } from '../sandbox-payer';
 
-describe('resolveSandboxPayerId', () => {
-  it('falls back to tenantId when there is no backing agent page (e.g. a global-assistant run)', async () => {
+describe('resolveSessionPayerId', () => {
+  it('bills the session owner directly for a global-assistant session (driveId null), with no lookup', async () => {
     const lookup = vi.fn();
     await expect(
-      resolveSandboxPayerId({ tenantId: 'owner-1', lookupPageOwnerId: lookup }),
+      resolveSessionPayerId({ driveId: null, ownerId: 'owner-1', lookupDriveOwnerId: lookup }),
     ).resolves.toBe('owner-1');
     expect(lookup).not.toHaveBeenCalled();
   });
 
-  it("resolves to the referenced page's ACTUAL owner, not the acting tenantId", async () => {
-    const lookup = vi.fn(async () => 'real-owner');
+  it("resolves to the session's ACTUAL drive owner when driveId is set — never the caller's surface tenant", async () => {
+    const lookup = vi.fn(async () => 'real-drive-owner');
     await expect(
-      resolveSandboxPayerId({
-        tenantId: 'acting-user',
-        agentPageId: 'terminal-page-1',
-        lookupPageOwnerId: lookup,
-      }),
-    ).resolves.toBe('real-owner');
-    expect(lookup).toHaveBeenCalledWith('terminal-page-1');
+      resolveSessionPayerId({ driveId: 'session-drive-1', ownerId: 'session-owner-1', lookupDriveOwnerId: lookup }),
+    ).resolves.toBe('real-drive-owner');
+    expect(lookup).toHaveBeenCalledWith('session-drive-1');
   });
 
-  it('falls back to tenantId when the page/drive lookup finds no owner (orphaned page)', async () => {
+  it('falls back to the session ownerId when the drive lookup finds no owner (a stale read mid-delete)', async () => {
     const lookup = vi.fn(async () => null);
     await expect(
-      resolveSandboxPayerId({
-        tenantId: 'owner-1',
-        agentPageId: 'gone',
-        lookupPageOwnerId: lookup,
-      }),
+      resolveSessionPayerId({ driveId: 'vanished-drive', ownerId: 'owner-1', lookupDriveOwnerId: lookup }),
     ).resolves.toBe('owner-1');
   });
 
-  it('is not a passthrough — a resolved owner beats a different tenantId', async () => {
+  it('is not a passthrough — a resolved drive owner beats a different session ownerId', async () => {
     const lookup = vi.fn(async () => 'other-owner');
-    const a = await resolveSandboxPayerId({ tenantId: 'a', agentPageId: 'p', lookupPageOwnerId: lookup });
-    const b = await resolveSandboxPayerId({ tenantId: 'b', agentPageId: 'p', lookupPageOwnerId: lookup });
+    const a = await resolveSessionPayerId({ driveId: 'd', ownerId: 'a', lookupDriveOwnerId: lookup });
+    const b = await resolveSessionPayerId({ driveId: 'd', ownerId: 'b', lookupDriveOwnerId: lookup });
     expect(a).toBe('other-owner');
     expect(b).toBe('other-owner');
   });
 });
 
-describe('resolveAgentSessionPayerId', () => {
-  it('bills the session owner directly for a global-assistant session (null agentPageId)', async () => {
-    const lookup = vi.fn();
-    await expect(
-      resolveAgentSessionPayerId({ ownerId: 'owner-1', agentPageId: null, lookupPageOwnerId: lookup }),
-    ).resolves.toBe('owner-1');
-    expect(lookup).not.toHaveBeenCalled();
-  });
-
-  it("resolves to the agent page's ACTUAL page owner when agentPageId is set", async () => {
-    const lookup = vi.fn(async () => 'real-owner');
-    await expect(
-      resolveAgentSessionPayerId({ ownerId: 'owner-1', agentPageId: 'agent-page-1', lookupPageOwnerId: lookup }),
-    ).resolves.toBe('real-owner');
-    expect(lookup).toHaveBeenCalledWith('agent-page-1');
-  });
-
-  it('falls back to the session ownerId when the agent page/drive lookup finds no owner (orphaned page)', async () => {
-    const lookup = vi.fn(async () => null);
-    await expect(
-      resolveAgentSessionPayerId({ ownerId: 'owner-1', agentPageId: 'gone', lookupPageOwnerId: lookup }),
-    ).resolves.toBe('owner-1');
-  });
-
-  it('is not a passthrough — a resolved owner beats a different ownerId', async () => {
-    const lookup = vi.fn(async () => 'other-owner');
-    const a = await resolveAgentSessionPayerId({ ownerId: 'a', agentPageId: 'p', lookupPageOwnerId: lookup });
-    const b = await resolveAgentSessionPayerId({ ownerId: 'b', agentPageId: 'p', lookupPageOwnerId: lookup });
-    expect(a).toBe('other-owner');
-    expect(b).toBe('other-owner');
-  });
-});
-
-describe('lookupPageOwnerId (real pages -> drives join)', () => {
+describe('lookupDriveOwnerId (real drives read)', () => {
   beforeEach(() => mockDb.select.mockReset());
 
-  it('joins pages -> drives and returns the drive ownerId', async () => {
+  it("returns the drive's ownerId", async () => {
     mockDb.select.mockReturnValue({
       from: () => ({
-        leftJoin: () => ({
-          where: () => ({
-            limit: async () => [{ ownerId: 'owner-42' }],
-          }),
+        where: () => ({
+          limit: async () => [{ ownerId: 'owner-42' }],
         }),
       }),
     });
-    await expect(lookupPageOwnerId('page-1')).resolves.toBe('owner-42');
+    await expect(lookupDriveOwnerId('drive-1')).resolves.toBe('owner-42');
   });
 
-  it('returns null when the page has no row', async () => {
+  it('returns null when the drive has no row', async () => {
     mockDb.select.mockReturnValue({
       from: () => ({
-        leftJoin: () => ({
-          where: () => ({
-            limit: async () => [],
-          }),
+        where: () => ({
+          limit: async () => [],
         }),
       }),
     });
-    await expect(lookupPageOwnerId('missing')).resolves.toBeNull();
+    await expect(lookupDriveOwnerId('missing')).resolves.toBeNull();
   });
 });

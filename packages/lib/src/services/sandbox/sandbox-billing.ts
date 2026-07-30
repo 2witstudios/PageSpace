@@ -17,7 +17,7 @@ import {
   MACHINE_MAX_INFLIGHT,
   MACHINE_MARKUP_BPS,
 } from '../../billing/credit-pricing';
-import { resolveSandboxPayerId, lookupPageOwnerId } from '../../billing/sandbox-payer';
+import { resolveSessionPayerId, lookupDriveOwnerId } from '../../billing/sandbox-payer';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
 import { calculateMachineCostDollars } from '../../monitoring/machine-pricing';
 import { toSubscriptionTier, type SubscriptionTier } from '../../billing/subscription-tiers';
@@ -40,24 +40,14 @@ async function resolvePayerTier(payerId: string): Promise<SubscriptionTier> {
 }
 
 export const defaultSandboxBillingDeps: SandboxBillingDeps = {
-  // PHASE 8 NOTE: `agentPageId` here is `ctx.agentPageId` directly
-  // (`tool-runners.ts`'s `withMachineBilling` — `activeMachine`/
-  // `resolveMachinePageId` were deleted along with the Machine page type, so
-  // there is no second source `agentPageId` could ever diverge from).
-  // `resolveSandboxPayerId` therefore resolves correctly BY CONSTRUCTION, not
-  // coincidentally: an agent page set → its owning drive's owner; unset (a
-  // global-assistant session) → falls through to `tenantId`, which
-  // `sandbox-tools-runtime.ts`'s actor-context resolver sets to `userId` for a
-  // driveless global session — and `userId` and the session's `ownerId`
-  // coincide there, since a global-assistant conversation is single-user by
-  // construction. `resolveAgentSessionPayerId` (`billing/sandbox-payer.ts`) is
-  // the `agent_sessions`-row-aware twin of this fallback (used by the storage
-  // reconcile in `sandbox-storage-billing.ts`); re-pointing THIS runtime seam
-  // to it would need `SandboxBillingDeps`/`ToolExecutionContext` to carry the
-  // session's real `ownerId` end-to-end for no behavioral difference given the
-  // invariant above, so it stays as `resolveSandboxPayerId` here.
-  async resolvePayerId({ tenantId, agentPageId }) {
-    return resolveSandboxPayerId({ tenantId, agentPageId, lookupPageOwnerId });
+  // Resolves from the ACQUIRED SESSION's own driveId/ownerId (never the
+  // caller's surface drive or agent page) — `resolveSessionPayerId` is the
+  // same drive-owner-else-session-owner rule `storageBillingTarget` applies
+  // for the storage charge stream, so both streams bill one payer for one
+  // session regardless of which conversation/drive the caller happened to be
+  // in when the run started.
+  async resolvePayerId({ driveId, ownerId }) {
+    return resolveSessionPayerId({ driveId, ownerId, lookupDriveOwnerId });
   },
 
   async gate({ payerId }) {
@@ -78,15 +68,22 @@ export const defaultSandboxBillingDeps: SandboxBillingDeps = {
     return { allowed: result.allowed, holdId: result.holdId, reason: result.allowed ? undefined : result.reason };
   },
 
-  async trackUsage({ payerId, holdId, activeSeconds, pageId }) {
+  async trackUsage({ payerId, holdId, activeSeconds, pageId, driveId, sessionId }) {
     await AIMonitoring.trackUsage({
       userId: payerId,
       provider: 'sprites',
       model: 'terminal-machine',
       source: 'terminal',
-      // The machine's identifying page (resolveMachinePageId's output) — the ONE
-      // attribution field the usage-breakdown's per-machine view groups on.
+      // The referenced agent page — purely descriptive per-agent grouping,
+      // never the payer source (resolved from the session by `resolvePayerId`
+      // above).
       pageId,
+      // First-class drive/session attribution (Terminal Epic 3 usage-breakdown
+      // fix) — the SAME session driveId/ownerId the payer was resolved from,
+      // so the breakdown can group runtime spend by session/drive without
+      // JSON forensics, consistently with the storage charge stream.
+      driveId,
+      sessionId,
       providerCostDollars: calculateMachineCostDollars({ activeSeconds }),
       // Active-window duration (ms), matching the quantity that was billed —
       // not a request-latency figure, since there is no single "request" here.

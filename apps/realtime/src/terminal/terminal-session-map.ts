@@ -109,8 +109,15 @@ export type TerminalSession = {
   payerId?: string;
   holdId?: string;
   connectedAt?: number;
-  /** The Terminal page this session is for — the usage-breakdown's per-machine attribution key. */
-  pageId?: string;
+  /**
+   * First-class billing attribution (Terminal Epic 3 usage-breakdown fix) —
+   * the agent-session's own drive (undefined for a global-assistant session)
+   * and its own `agent_sessions.id`, so the usage breakdown can group shell
+   * runtime spend by drive/session without JSON forensics. A session is
+   * drive-level, not page-anchored, so there is no `pageId` to attribute to.
+   */
+  driveId?: string;
+  agentSessionId?: string;
   /**
    * The `machine_agent_terminals` row this PTY belongs to (issue #2205's
    * cold-tail persist). Known ONLY on the create path
