@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockKill = vi.fn();
 const mockStampSpriteTornDown = vi.fn();
+const mockEnqueueReclaim = vi.fn();
 const mockSelect = vi.fn();
 
 vi.mock('@pagespace/db/db', () => ({
@@ -26,6 +27,7 @@ vi.mock('./../agent-sessions-runtime', () => ({
   getSandboxHost: async () => ({ kill: (...args: unknown[]) => mockKill(...args) }),
   getAgentSessionStore: async () => ({
     stampSpriteTornDown: (...args: unknown[]) => mockStampSpriteTornDown(...args),
+    enqueueReclaim: (...args: unknown[]) => mockEnqueueReclaim(...args),
     findById: async () => null,
   }),
 }));
@@ -67,11 +69,16 @@ describe('killSprite', () => {
     expect(mockKill).toHaveBeenCalledWith({ sandboxId: 'sbx-1', expectedInstanceId: 'i-1' });
   });
 
-  it('given the name now holds a DIFFERENT VM, should treat it as success rather than retry forever', async () => {
-    // Our target is already gone — the outcome we wanted. The newcomer has its
-    // own tracking row, so releasing ours never orphans it.
+  it('given the name now holds a DIFFERENT VM, should report the replacement rather than collapsing to success', async () => {
+    // #2254: which VM the replacement means "gone" for is a per-row-kind
+    // decision the PURE module makes, not this binding — collapsing straight to
+    // `{ ok: true }` here is what let a `reclaim` row's replaced-instance
+    // refusal delete its outbox pointer and orphan the live VM.
     mockKill.mockRejectedValueOnce(new SandboxSpriteReplacedError('sbx-1', 'i-old', 'i-new'));
-    expect(await deps.killSprite({ sandboxId: 'sbx-1', spriteInstanceId: 'i-old' })).toEqual({ ok: true });
+    expect(await deps.killSprite({ sandboxId: 'sbx-1', spriteInstanceId: 'i-old' })).toEqual({
+      ok: 'replaced',
+      actualInstanceId: 'i-new',
+    });
   });
 
   it('given a genuine kill failure, should report it so the row stays queued for a later tick', async () => {
@@ -110,6 +117,18 @@ describe('markSessionTornDown', () => {
     expect(
       await deps.markSessionTornDown({ sessionId: 'conv-1', sandboxId: 'sbx-1', spriteInstanceId: 'i-1' }),
     ).toBe(false);
+  });
+});
+
+describe('chaseReclaimInstance', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('should re-point the outbox row at the live instance via the store upsert, not delete it', async () => {
+    mockEnqueueReclaim.mockResolvedValueOnce(undefined);
+
+    await deps.chaseReclaimInstance({ sandboxId: 'sbx-1', actualInstanceId: 'i-new' });
+
+    expect(mockEnqueueReclaim).toHaveBeenCalledWith({ sandboxId: 'sbx-1', spriteInstanceId: 'i-new' });
   });
 });
 

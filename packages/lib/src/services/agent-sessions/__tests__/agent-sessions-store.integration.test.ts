@@ -293,27 +293,97 @@ describe('countLive', () => {
 
 describe('recordStorageMeasurement', () => {
   it('given a live row, should persist the measurement', async () => {
-    const conversationId = await seedSession({ sandboxId: 'sbx-1', spriteInstanceId: 'i' });
+    const sessionId = await seedSession({ sandboxId: 'sbx-1', spriteInstanceId: 'i' });
     const measuredAt = new Date();
 
-    await store.recordStorageMeasurement({ sessionId: conversationId, measuredBytes: 4096, measuredAt });
+    await store.recordStorageMeasurement({ sessionId, spriteInstanceId: 'i', measuredBytes: 4096, measuredAt });
 
-    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.id, conversationId));
+    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.id, sessionId));
     expect(Number(row.storageMeasuredBytes)).toBe(4096);
     expect(row.storageMeasuredAt).not.toBeNull();
   });
 
   it('given a TORN-DOWN row, should not write — that filesystem no longer exists', async () => {
-    const conversationId = await seedSession({
+    const sessionId = await seedSession({
       sandboxId: 'sbx-1',
       spriteInstanceId: 'i',
       spriteTornDownAt: new Date(),
     });
 
-    await store.recordStorageMeasurement({ sessionId: conversationId, measuredBytes: 999, measuredAt: new Date() });
+    await store.recordStorageMeasurement({
+      sessionId,
+      spriteInstanceId: 'i',
+      measuredBytes: 999,
+      measuredAt: new Date(),
+    });
 
-    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.id, conversationId));
+    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.id, sessionId));
     expect(row.storageMeasuredBytes).toBeNull();
+  });
+
+  it('given the Sprite generation moved on mid-measurement, should DROP the stale write', async () => {
+    // The window the liveness guard cannot close, because a re-provision REVIVES
+    // the row: measure generation A (fire-and-forget) → A torn down → B minted,
+    // which clears `spriteTornDownAt` and nulls the measurement columns → A's
+    // `du` finally lands. Guarded only on liveness it finds a live row and
+    // writes A's bytes onto B, with a fresh `storageMeasuredAt` that suppresses
+    // B's own measurement for the whole throttle window while the reconcile
+    // bills B's interval against A's disk.
+    //
+    // The name cannot arbitrate this: `sandboxId` is HMAC-derived from the
+    // session, so A and B share it. Only the instance id differs.
+    const sessionId = await seedSession({ sandboxId: 'sbx-stable-name', spriteInstanceId: 'instance-A' });
+
+    await db
+      .update(agentSessions)
+      .set({ spriteInstanceId: 'instance-B', spriteTornDownAt: null, storageMeasuredBytes: null, storageMeasuredAt: null })
+      .where(eq(agentSessions.id, sessionId));
+
+    await store.recordStorageMeasurement({
+      sessionId,
+      spriteInstanceId: 'instance-A',
+      measuredBytes: 5_000_000,
+      measuredAt: new Date(),
+    });
+
+    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.id, sessionId));
+    expect(row.storageMeasuredBytes).toBeNull();
+    // The timestamp matters as much as the bytes: a stale one silences the next
+    // real measurement without ever having recorded a real number.
+    expect(row.storageMeasuredAt).toBeNull();
+  });
+
+  it('given the same generation still on the row, should persist despite an identical sandbox NAME', async () => {
+    // The other half: the CAS must not reject a legitimate measurement just
+    // because the name is reused. Same name, same instance → this is the disk
+    // that was measured.
+    const sessionId = await seedSession({ sandboxId: 'sbx-stable-name', spriteInstanceId: 'instance-B' });
+
+    await store.recordStorageMeasurement({
+      sessionId,
+      spriteInstanceId: 'instance-B',
+      measuredBytes: 777,
+      measuredAt: new Date(),
+    });
+
+    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.id, sessionId));
+    expect(Number(row.storageMeasuredBytes)).toBe(777);
+  });
+
+  it('given a driver that reports no instance id, should still persist against a null row', async () => {
+    // Degrades to the liveness guard rather than never persisting — the most a
+    // caller can know when the platform gives it no generation id.
+    const sessionId = await seedSession({ sandboxId: 'sbx-no-instance', spriteInstanceId: null });
+
+    await store.recordStorageMeasurement({
+      sessionId,
+      spriteInstanceId: null,
+      measuredBytes: 321,
+      measuredAt: new Date(),
+    });
+
+    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.id, sessionId));
+    expect(Number(row.storageMeasuredBytes)).toBe(321);
   });
 });
 

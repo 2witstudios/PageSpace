@@ -95,6 +95,13 @@ export function shouldRefreshMeasurement(input: {
 export type PersistSessionStorageMeasurement = (input: {
   /** The `agent_sessions` PK (the workspace row id) whose row receives the measurement. */
   sessionId: string;
+  /**
+   * The Sprite INSTANCE these bytes were read from, for the writer to CAS on.
+   * Carried because the measurement is fire-and-forget: it can land after its
+   * generation is gone and a new one has taken the row, and `sessionId` alone
+   * cannot tell the writer which disk the number describes.
+   */
+  spriteInstanceId: string | null;
   measuredBytes: number;
   measuredAt: Date;
 }) => Promise<void>;
@@ -103,6 +110,8 @@ export interface RefreshSessionStorageMeasurementInput {
   /** An ALREADY-AWAKE sandbox handle (real work just happened on it) — measurement never provisions or wakes. */
   handle: Pick<SandboxHandle, 'exec'>;
   sessionId: string;
+  /** The instance being measured, passed straight through to `persist` for its CAS. */
+  spriteInstanceId: string | null;
   /** Last persisted measurement time for this session (null = never measured). */
   lastMeasuredAt: Date | null;
   now: Date;
@@ -153,6 +162,11 @@ export async function refreshSessionStorageMeasurement(
   const bytes = parseDuBytes(run.stdout);
   if (bytes === null) return { measured: false };
 
-  await input.persist({ sessionId: input.sessionId, measuredBytes: bytes, measuredAt: input.now });
+  await input.persist({
+    sessionId: input.sessionId,
+    spriteInstanceId: input.spriteInstanceId,
+    measuredBytes: bytes,
+    measuredAt: input.now,
+  });
   return { measured: true, bytes };
 }

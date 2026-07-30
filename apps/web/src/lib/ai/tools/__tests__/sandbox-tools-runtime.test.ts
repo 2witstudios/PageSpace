@@ -306,6 +306,31 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     expect(typeof deps.notifyShellActivity).toBe('function');
   });
 
+  it('should measure against the ACQUIRED sandbox\'s generation, not whatever the row says later', async () => {
+    // The storage CAS is only as good as the id handed to it. This seam is fed
+    // the sandbox the tool run ALREADY acquired, and the measurement is
+    // fire-and-forget — so between acquiring it and persisting, the session can
+    // be torn down and re-provisioned. Reading the instance from the session row
+    // at persist time would then name generation B while `du` walked A's disk,
+    // and the CAS would "succeed" against B with A's bytes: the exact write the
+    // CAS exists to reject, waved through by its own guard.
+    const deps = buildRealSandboxRunDeps();
+    expect(typeof deps.measureStorage).toBe('function');
+
+    const sandbox = {
+      spriteInstanceId: 'instance-A',
+      runCommand: vi.fn(async () => ({ exitCode: 0, stdout: '1\t/workspace', stderr: '' })),
+    };
+    await deps.measureStorage!({ sandbox: sandbox as never, sessionId: 'conv-1' });
+
+    const [call] = mockMeasureWarmSessionStorage.mock.calls as unknown as [
+      [{ sessionId: string; attach: () => Promise<{ spriteInstanceId: string | null } | null> }],
+    ];
+    expect(call[0].sessionId).toBe('conv-1');
+    const attached = await call[0].attach();
+    expect(attached?.spriteInstanceId).toBe('instance-A');
+  });
+
   it('given no conversationId, should fail as provision_failed/missing_conversation_id without touching the session runtime', async () => {
     const deps = buildRealSandboxRunDeps();
     const result = await deps.acquireSandbox(baseInput({ conversationId: undefined }));
