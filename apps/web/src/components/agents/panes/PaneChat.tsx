@@ -21,16 +21,19 @@ import { useResolvedAgent } from '../useResolvedAgent';
 export default function PaneChat({
   conversationId,
   agentPageId,
+  context = 'console',
 }: {
   conversationId: string;
   agentPageId: string | null;
+  /** Which message renderer to use — the page grid hosts the full one. */
+  context?: 'page' | 'console';
 }) {
   // Hook order is safe across the branch: the hook itself branches on a null
   // id (null SWR keys), so it runs unconditionally either way.
   const { agent, isLoading } = useResolvedAgent(agentPageId);
 
   if (agentPageId === null) {
-    return <AssistantSessionChat conversationId={conversationId} context="console" />;
+    return <AssistantSessionChat conversationId={conversationId} context={context} />;
   }
 
   if (isLoading || !agent) {
@@ -41,5 +44,5 @@ export default function PaneChat({
     );
   }
 
-  return <SessionChat agent={agent} conversationId={conversationId} context="console" />;
+  return <SessionChat agent={agent} conversationId={conversationId} context={context} />;
 }

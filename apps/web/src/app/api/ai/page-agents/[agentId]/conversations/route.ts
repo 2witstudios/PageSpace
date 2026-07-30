@@ -99,6 +99,9 @@ export async function GET(
         messageCount: Number(conv.messageCount),
         isShared,
         isOwner,
+        // The workspace the thread was born into (null = plain page chat) —
+        // what lets the page's Chat tab render the pane grid for it.
+        sessionId: conv.sessionId ?? null,
         lastMessage: {
           role: conv.lastMessageRole,
           timestamp: conv.lastMessageTime,

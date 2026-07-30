@@ -54,9 +54,20 @@ export interface AgentPanesProps {
   initialConversation: { conversationId: string; agentPageId: string | null; name: string };
   /** Fired after the last pane closed and the session was ended — the host owns what renders next. */
   onSessionEnded?: () => void;
+  /**
+   * Which message renderer chat panes use — the agent PAGE hosts the grid with
+   * the full renderer, the console with the compact one. Layout is identical.
+   */
+  chatContext?: 'page' | 'console';
 }
 
-export default function AgentPanes({ sessionId, driveId, initialConversation, onSessionEnded }: AgentPanesProps) {
+export default function AgentPanes({
+  sessionId,
+  driveId,
+  initialConversation,
+  onSessionEnded,
+  chatContext = 'console',
+}: AgentPanesProps) {
   const workspaces = useAgentWorkspaceStore((state) => state.workspaces);
   const ensureWorkspace = useAgentWorkspaceStore((state) => state.ensureWorkspace);
   const splitRight = useAgentWorkspaceStore((state) => state.splitRight);
@@ -218,7 +229,7 @@ export default function AgentPanes({ sessionId, driveId, initialConversation, on
               <Loader2 className="size-4 animate-spin text-muted-foreground" />
             </div>
           ) : surface.surface === 'chat' ? (
-            <PaneChat conversationId={surface.conversationId} agentPageId={surface.agentPageId} />
+            <PaneChat conversationId={surface.conversationId} agentPageId={surface.agentPageId} context={chatContext} />
           ) : (
             <Shell shellId={surface.shellId} name={pane.scope?.name} />
           )}

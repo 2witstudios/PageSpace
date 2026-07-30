@@ -149,6 +149,7 @@ export function useConversations({
         preview: '',
         isShared: false,
         isOwner: true,
+        sessionId: null,
         createdAt: new Date(e.createdAt),
         updatedAt: new Date(e.createdAt),
         messageCount: 0,

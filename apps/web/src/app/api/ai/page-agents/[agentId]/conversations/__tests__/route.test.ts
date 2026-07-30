@@ -203,6 +203,7 @@ describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
           lastMessageContent: 'Hi there!',
           conversationUserId: 'other_user',
           isShared: false,
+          sessionId: null,
         },
       ];
       vi.mocked(conversationRepository.listConversations).mockResolvedValue(mockConversations);
@@ -224,6 +225,7 @@ describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
         updatedAt: '2025-01-02T00:00:00.000Z',
         messageCount: 5,
         isShared: false,
+        sessionId: null,
         isOwner: false,
         lastMessage: {
           role: 'assistant',
@@ -308,6 +310,7 @@ describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
           lastMessageContent: 'Hello',
           conversationUserId: mockUserId,
           isShared: false,
+          sessionId: null,
         },
         {
           conversationId: 'conv_shared',
@@ -319,6 +322,7 @@ describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
           lastMessageContent: 'Hi',
           conversationUserId: 'other_user',
           isShared: true,
+          sessionId: null,
         },
       ];
       vi.mocked(conversationRepository.listConversations).mockResolvedValue(mockConversations);

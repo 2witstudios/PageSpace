@@ -31,6 +31,8 @@ export interface ConversationStats {
   lastMessageContent: string | null;
   conversationUserId: string | null;
   isShared: boolean | null;
+  /** The session (workspace) this thread was born into — null for a plain page chat. */
+  sessionId: string | null;
   [key: string]: unknown; // Index signature for Drizzle execute compatibility
 }
 
@@ -266,7 +268,8 @@ export const conversationRepository = {
         lm.last_message_role as "lastMessageRole",
         lm.last_message_content as "lastMessageContent",
         conv."userId" as "conversationUserId",
-        conv."isShared" as "isShared"
+        conv."isShared" as "isShared",
+        conv."sessionId" as "sessionId"
       FROM conversation_stats cs
       LEFT JOIN first_user_messages fum ON cs."conversationId" = fum."conversationId"
       LEFT JOIN last_messages lm ON cs."conversationId" = lm."conversationId"

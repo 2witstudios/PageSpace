@@ -1,49 +1,69 @@
 /**
- * AgentPageView Component Tests — Phase 6.
+ * AgentPageView — the restored AiChatView shape.
  *
- * The page-level scaffolding AiChatView used to own (which conversation is on
- * screen, read-only gating, the history picker, settings/integrations/
- * webhooks) now lives here, thin, on top of `AgentView`. All IO hooks and the
- * re-hosted settings/integrations/webhooks/history components are mocked;
- * this suite covers AgentPageView's own wiring.
+ * The properties worth pinning: **Chat | History | Settings are real tabs**
+ * (History full-height, never a popover), **Save lives in the header row**
+ * (settings tab active), and the Chat tab's TWO renderings — the PANE GRID for
+ * a session-bound conversation, the plain chat for a pre-session one. All IO
+ * hooks and the re-hosted settings/integrations/webhooks/history components
+ * are mocked; this suite covers the page's own wiring.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import type { TreePage } from '@/hooks/usePageTree';
+import type { ResolvedConversation } from '../useResolvedConversation';
 
-const resolvedConversation = vi.hoisted(() => ({ current: { conversationId: null as string | null, isLoading: true } }));
+const resolvedConversation = vi.hoisted(() => ({
+  current: { resolved: null as ResolvedConversation | null, isLoading: true },
+}));
+const mockCreatePageConversation = vi.hoisted(() => vi.fn());
 vi.mock('../useResolvedConversation', () => ({
   useResolvedConversation: () => resolvedConversation.current,
+  createPageConversation: (...args: unknown[]) => mockCreatePageConversation(...args),
 }));
 
-vi.mock('../AgentView', () => ({
+vi.mock('../useResolvedAgent', () => ({
+  useResolvedAgent: () => ({
+    agent: { id: 'agent-1', title: 'My Agent', driveId: 'drive-1', driveName: 'Drive' },
+    isLoading: false,
+    error: undefined,
+    retry: vi.fn(),
+  }),
+}));
+
+vi.mock('../chat/SessionChat', () => ({
+  default: ({ conversationId, isReadOnly }: { conversationId: string; isReadOnly?: boolean }) => (
+    <div data-testid="plain-chat" data-readonly={String(!!isReadOnly)}>
+      {conversationId}
+    </div>
+  ),
+}));
+
+vi.mock('../panes/AgentPanes', () => ({
   default: ({
-    conversationId,
-    isReadOnly,
-    headerExtra,
-    settingsTab,
+    sessionId,
+    initialConversation,
+    chatContext,
   }: {
-    conversationId: string;
-    isReadOnly?: boolean;
-    headerExtra?: React.ReactNode;
-    settingsTab?: React.ReactNode;
+    sessionId: string;
+    initialConversation: { conversationId: string };
+    chatContext?: string;
   }) => (
-    <div data-testid="agent-view" data-readonly={String(!!isReadOnly)}>
-      <div data-testid="agent-view-conversation">{conversationId}</div>
-      <div data-testid="agent-view-header-extra">{headerExtra}</div>
-      <div data-testid="agent-view-settings-tab">{settingsTab}</div>
+    <div data-testid="agent-panes" data-chat-context={chatContext}>
+      {sessionId}/{initialConversation.conversationId}
     </div>
   ),
 }));
 
 const { mockFetchWithAuth } = vi.hoisted(() => ({ mockFetchWithAuth: vi.fn() }));
-vi.mock('@/lib/auth/auth-fetch', () => ({ fetchWithAuth: mockFetchWithAuth }));
-
-vi.mock('@/hooks/useAuth', () => ({ useAuth: () => ({ user: { id: 'user-1' } }) }));
-
-vi.mock('@/hooks/conversationMessagesActions', () => ({
-  conversationMessagesActions: { seedConversation: vi.fn() },
+vi.mock('@/lib/auth/auth-fetch', () => ({
+  fetchWithAuth: mockFetchWithAuth,
+  post: vi.fn(),
 }));
+
+const authState = vi.hoisted(() => ({ current: { user: { id: 'user-1', role: 'admin' } } }));
+vi.mock('@/hooks/useAuth', () => ({ useAuth: () => authState.current }));
 
 vi.mock('@/lib/ai/shared/hooks/useProviderSettings', () => ({
   useProviderSettings: () => ({
@@ -57,10 +77,10 @@ vi.mock('@/lib/ai/shared/hooks/useProviderSettings', () => ({
 
 const conversationsState = vi.hoisted(() => ({
   current: {
-    conversations: [] as Array<{ id: string }>,
+    conversations: [] as Array<{ id: string; sessionId: string | null }>,
     isLoading: false,
-    createConversation: vi.fn(async () => 'new-conv'),
     deleteConversation: vi.fn(async () => {}),
+    refreshConversations: vi.fn(),
   },
 }));
 vi.mock('@/lib/ai/shared/hooks/useConversations', () => ({
@@ -74,9 +94,11 @@ vi.mock('@/components/ai/page-agents', () => ({
   }: {
     onSelectConversation: (id: string) => void;
   }) => (
-    <button data-testid="history-select-conv-2" onClick={() => onSelectConversation('conv-2')}>
-      conv-2
-    </button>
+    <div data-testid="history-tab">
+      <button data-testid="history-select-conv-2" onClick={() => onSelectConversation('conv-2')}>
+        conv-2
+      </button>
+    </div>
   ),
 }));
 
@@ -104,18 +126,22 @@ function pageFixture(): TreePage {
 
 const jsonResponse = (body: unknown, ok = true) => ({ ok, json: async () => body });
 
+const resolveTo = (resolved: ResolvedConversation) => {
+  resolvedConversation.current = { resolved, isLoading: false };
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
-  resolvedConversation.current = { conversationId: null, isLoading: true };
+  resolvedConversation.current = { resolved: null, isLoading: true };
+  authState.current = { user: { id: 'user-1', role: 'admin' } };
   conversationsState.current = {
     conversations: [],
     isLoading: false,
-    createConversation: vi.fn(async () => 'new-conv'),
     deleteConversation: vi.fn(async () => {}),
+    refreshConversations: vi.fn(),
   };
   mockFetchWithAuth.mockImplementation(async (url: string) => {
     if (url.endsWith('/permissions/check')) return jsonResponse({ canEdit: true });
-    if (url.endsWith('/agent-config')) return jsonResponse({ systemPrompt: '', enabledTools: [], availableTools: [] });
     return jsonResponse({});
   });
 });
@@ -124,70 +150,116 @@ describe('AgentPageView', () => {
   it('shows a loading state until the conversation resolves', async () => {
     render(<AgentPageView page={pageFixture()} />);
     expect(screen.getByTestId('agent-page-view-loading')).toBeInTheDocument();
-    expect(screen.queryByTestId('agent-view')).not.toBeInTheDocument();
-    // Let the permission-check/agent-config fetch effects settle before the test ends.
     await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalled());
   });
 
-  it('renders AgentView once the conversation resolves, with the resolved id', async () => {
-    resolvedConversation.current = { conversationId: 'conv-1', isLoading: false };
+  it('renders Chat | History | Settings as real tabs', async () => {
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
     render(<AgentPageView page={pageFixture()} />);
-    await waitFor(() => expect(screen.getByTestId('agent-view-conversation')).toHaveTextContent('conv-1'));
+
+    expect(screen.getByRole('tab', { name: /chat/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /history/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /settings/i })).toBeInTheDocument();
+    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalled());
   });
 
-  it('marks AgentView read-only when the permission check says canEdit: false', async () => {
+  it('a session-bound conversation renders the PANE GRID with the page renderer', async () => {
+    resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-1'));
+    expect(screen.getByTestId('agent-panes')).toHaveAttribute('data-chat-context', 'page');
+    expect(screen.queryByTestId('plain-chat')).not.toBeInTheDocument();
+  });
+
+  it('a pre-session conversation renders the plain chat — no grid, no splits', async () => {
+    resolveTo({ conversationId: 'conv-old', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-old'));
+    expect(screen.queryByTestId('agent-panes')).not.toBeInTheDocument();
+  });
+
+  it('marks the chat read-only when the permission check says canEdit: false', async () => {
     mockFetchWithAuth.mockImplementation(async (url: string) => {
       if (url.endsWith('/permissions/check')) return jsonResponse({ canEdit: false });
       return jsonResponse({});
     });
-    resolvedConversation.current = { conversationId: 'conv-1', isLoading: false };
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
 
     render(<AgentPageView page={pageFixture()} />);
 
-    await waitFor(() => expect(screen.getByTestId('agent-view')).toHaveAttribute('data-readonly', 'true'));
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveAttribute('data-readonly', 'true'));
   });
 
-  it('passes the settings tab content (settings, integrations, webhooks trigger) through to AgentView', async () => {
-    resolvedConversation.current = { conversationId: 'conv-1', isLoading: false };
+  it('History is a full-height TAB, not a popover', async () => {
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
     render(<AgentPageView page={pageFixture()} />);
-    await waitFor(() => expect(screen.getByTestId('agent-view-conversation')).toHaveTextContent('conv-1'));
 
+    await userEvent.click(screen.getByRole('tab', { name: /history/i }));
+
+    expect(await screen.findByTestId('history-tab')).toBeInTheDocument();
+    // The one structural fact that made the popover broken: the tab content is
+    // a flexing region the h-full component can resolve against.
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('selecting a conversation from History opens it in Chat, carrying its session', async () => {
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    conversationsState.current.conversations = [{ id: 'conv-2', sessionId: 'ses-2' }];
+    render(<AgentPageView page={pageFixture()} />);
+
+    await userEvent.click(screen.getByRole('tab', { name: /history/i }));
+    fireEvent.click(await screen.findByTestId('history-select-conv-2'));
+
+    await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-2/conv-2'));
+  });
+
+  it('Save Settings is pinned in the header row while the settings tab is active', async () => {
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+
+    expect(screen.queryByText('Save Settings')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('tab', { name: /settings/i }));
+
+    expect(await screen.findByText('Save Settings')).toBeInTheDocument();
     expect(screen.getByTestId('page-agent-settings-tab')).toBeInTheDocument();
     expect(screen.getByTestId('agent-integrations-panel')).toBeInTheDocument();
-    expect(screen.getByText('Webhooks')).toBeInTheDocument();
   });
 
-  it('opens the webhooks dialog from the settings tab', async () => {
-    resolvedConversation.current = { conversationId: 'conv-1', isLoading: false };
+  it('opens the webhooks dialog from the icon-only header button', async () => {
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
     render(<AgentPageView page={pageFixture()} />);
-    await waitFor(() => expect(screen.getByTestId('agent-view-conversation')).toHaveTextContent('conv-1'));
 
-    fireEvent.click(screen.getByText('Webhooks'));
+    fireEvent.click(screen.getByLabelText('Incoming Webhooks'));
     expect(screen.getByTestId('webhooks-dialog')).toBeInTheDocument();
   });
 
-  it('cross-links to the Agents console for this exact agent + conversation', async () => {
-    resolvedConversation.current = { conversationId: 'conv-1', isLoading: false };
+  it('cross-links to the Agents console, carrying the session when bound', async () => {
+    resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
     render(<AgentPageView page={pageFixture()} />);
-    await waitFor(() => expect(screen.getByTestId('agent-view-conversation')).toHaveTextContent('conv-1'));
 
-    // No `session` param yet: a page conversation isn't bound into a session
-    // until the agent-page pane story (R3) lands, so the console degrades to
-    // its prompt rather than opening a grid for an unbound conversation.
     expect(screen.getByText('Open in Agents')).toHaveAttribute(
       'href',
-      '/dashboard/drive-1/agents?c=conv-1&agent=agent-1',
+      '/dashboard/drive-1/agents?session=ses-1&c=conv-1&agent=agent-1',
     );
   });
 
-  it('selecting a conversation from the history picker (headerExtra) switches AgentView to it', async () => {
-    resolvedConversation.current = { conversationId: 'conv-1', isLoading: false };
+  it('hides the console cross-link from non-session users — the console would refuse them', async () => {
+    authState.current = { user: { id: 'user-2', role: 'user' } };
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
     render(<AgentPageView page={pageFixture()} />);
-    await waitFor(() => expect(screen.getByTestId('agent-view-conversation')).toHaveTextContent('conv-1'));
 
-    fireEvent.click(screen.getByLabelText('Conversation history'));
-    fireEvent.click(await screen.findByTestId('history-select-conv-2'));
+    expect(screen.queryByText('Open in Agents')).not.toBeInTheDocument();
+  });
 
-    await waitFor(() => expect(screen.getByTestId('agent-view-conversation')).toHaveTextContent('conv-2'));
+  it('contains NONE of the removed chrome: no status chip, no Add shell, no history popover', async () => {
+    resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+    expect(screen.queryByTestId('sandbox-status-chip')).not.toBeInTheDocument();
+    expect(screen.queryByText(/add shell/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Conversation history')).not.toBeInTheDocument();
   });
 });
