@@ -93,6 +93,13 @@ const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishCo
   const driveId = params?.driveId;
   const [state, setState] = useState<PublishState>({ published: false, url: null, available: false, isStale: false, settings: EMPTY_SETTINGS });
   const [isLoading, setIsLoading] = useState(true);
+  // True only for a transient failure to load status (network error, 5xx) —
+  // distinct from `!state.available`, which means the status request
+  // succeeded (or definitively 403'd for a read-only viewer) and reported
+  // publishing as genuinely unavailable. Keeping these separate stops a blip
+  // from rendering the same "isn't available" message as a real, durable
+  // unavailability signal.
+  const [loadError, setLoadError] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const prevDirtyRef = useRef<boolean | undefined>(undefined);
@@ -100,11 +107,17 @@ const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishCo
   useEffect(() => {
     let cancelled = false;
     setIsLoading(true);
+    setLoadError(false);
     (async () => {
       try {
         const res = await fetchWithAuth(`/api/pages/${pageId}/publish`);
         if (!res.ok) {
-          if (!cancelled) setState({ published: false, url: null, available: false, isStale: false, settings: EMPTY_SETTINGS });
+          if (cancelled) return;
+          // 403 means the viewer definitively lacks permission to publish —
+          // a genuine unavailability signal, not a failed request. Anything
+          // else (5xx, etc.) is a real load failure.
+          if (res.status !== 403) setLoadError(true);
+          setState({ published: false, url: null, available: false, isStale: false, settings: EMPTY_SETTINGS });
           return;
         }
         const data = (await res.json()) as PublishStatusResponse;
@@ -118,7 +131,10 @@ const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishCo
           });
         }
       } catch {
-        if (!cancelled) setState({ published: false, url: null, available: false, isStale: false, settings: EMPTY_SETTINGS });
+        if (!cancelled) {
+          setLoadError(true);
+          setState({ published: false, url: null, available: false, isStale: false, settings: EMPTY_SETTINGS });
+        }
       } finally {
         if (!cancelled) setIsLoading(false);
       }
@@ -214,14 +230,18 @@ const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishCo
   }
 
   // Publishing isn't configured on this deployment (e.g. no PUBLISH_BUCKET), or
-  // this viewer lacks permission to publish. In the header (among other
-  // populated buttons) staying silent is fine; in a standalone panel (the
-  // canvas Settings tab) silence would leave the tab blank, so explain instead.
+  // this viewer lacks permission to publish (a definitive 403 — see
+  // `loadError` above for the transient-failure case, handled separately). In
+  // the header (among other populated buttons) staying silent is fine; in a
+  // standalone panel (the canvas Settings tab) silence would leave the tab
+  // blank, so explain instead.
   if (!state.available) {
     if (variant === 'panel') {
       return (
         <p className="text-sm text-muted-foreground">
-          Publishing isn&apos;t available for this page.
+          {loadError
+            ? "Couldn't load publishing status. Try again shortly."
+            : "Publishing isn't available for this page."}
         </p>
       );
     }
