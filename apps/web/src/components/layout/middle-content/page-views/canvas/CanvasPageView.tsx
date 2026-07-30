@@ -217,7 +217,7 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
       )}
       {activeTab === 'settings' && (
         <div className="flex-1 min-h-0 overflow-y-auto p-4">
-          <PublishControls pageId={pageId} contentDirty={documentState?.isDirty || false} />
+          <PublishControls pageId={pageId} contentDirty={documentState?.isDirty || false} variant="panel" />
         </div>
       )}
 
