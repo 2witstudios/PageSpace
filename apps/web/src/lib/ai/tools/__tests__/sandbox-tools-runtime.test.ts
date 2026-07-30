@@ -288,7 +288,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     vi.clearAllMocks();
     mockCheckMachineRuntimeGuardrail.mockReturnValue({ allowed: true });
     mockFindSessionForConversation.mockResolvedValue(sessionRecord);
-    mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: false });
+    mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' });
   });
 
   it('should WIRE the activity-feed seam — an unwired optional dep is a silently dead feature', async () => {
@@ -344,7 +344,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     // R0's payoff test at the tool layer: sandbox sharing is structural. Both
     // threads resolve one session row, and provisioning folds ITS id — so both
     // acquisitions name one sandboxId with no shared id threaded anywhere.
-    mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-shared', resumed: true });
+    mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-shared', resumed: true, sessionId: 'ws-1' });
     const deps = buildRealSandboxRunDeps();
 
     const a = await deps.acquireSandbox(baseInput({ conversationId: 'conv-a' }));
@@ -388,10 +388,10 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
   });
 
   it('given a successful provision, should return the sandbox with pageId = the agent page and record activity keyed by the session id', async () => {
-    mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: true });
+    mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: true, sessionId: 'ws-1' });
     const deps = buildRealSandboxRunDeps();
     const result = await deps.acquireSandbox(baseInput());
-    expect(result).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: true, pageId: 'agent-1' });
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: true, sessionId: 'ses-1', pageId: 'agent-1' });
     expect(mockFindSessionForConversation).toHaveBeenCalledWith('conv-1');
     expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(sessionRecord, 'u1');
     expect(mockRecordMachineActivity).toHaveBeenCalledWith({
@@ -403,7 +403,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
   it('given no agentPageId (a global-assistant conversation), should return no pageId', async () => {
     const deps = buildRealSandboxRunDeps();
     const result = await deps.acquireSandbox(baseInput({ agentPageId: undefined, driveId: undefined }));
-    expect(result).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: undefined });
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ses-1', pageId: undefined });
     expect(mockFindSessionForConversation).toHaveBeenCalledWith('conv-1');
   });
 });

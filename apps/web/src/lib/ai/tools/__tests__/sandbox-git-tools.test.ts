@@ -9,7 +9,7 @@ function makeDeps(token: string | null = 'ghp_test'): GitSandboxToolsDeps {
   return {
     gitRunDeps: {
       isEnabled: () => true,
-      acquireSandbox: vi.fn().mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+      acquireSandbox: vi.fn().mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' }),
       reconnect: vi.fn().mockResolvedValue({
         sandboxId: 'sbx-1',
         spriteInstanceId: null,

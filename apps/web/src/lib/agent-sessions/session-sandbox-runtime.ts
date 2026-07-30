@@ -93,8 +93,10 @@ export function buildSessionReadActorCtx(scopeKey: string, actor: SessionActorCo
 /**
  * `runGitInSandbox` deps bound directly to an already-resolved session
  * `SandboxHandle` — no acquire/reconnect lookup (the handle IS the sandbox).
+ * The session id rides the acquire result so the post-run hooks (storage
+ * measurement) stay keyed by the session, same as the tool path.
  */
-export function buildSessionGitDepsForHandle(handle: SandboxHandle): GitSandboxRunDeps {
+export function buildSessionGitDepsForHandle(handle: SandboxHandle, sessionId: string): GitSandboxRunDeps {
   const sandbox = adaptSandboxHandleToExecutableSandbox(handle);
   return {
     isEnabled: isCodeExecutionEnabled,
@@ -103,7 +105,7 @@ export function buildSessionGitDepsForHandle(handle: SandboxHandle): GitSandboxR
     buildEnv: defaultBuildEnv,
     audit: (input) => writeCodeExecutionAudit({ input }),
     now: () => new Date(),
-    acquireSandbox: async () => ({ ok: true, sandboxId: handle.sandboxId, resumed: false }),
+    acquireSandbox: async () => ({ ok: true, sandboxId: handle.sandboxId, resumed: false, sessionId }),
     reconnect: async () => sandbox,
   };
 }

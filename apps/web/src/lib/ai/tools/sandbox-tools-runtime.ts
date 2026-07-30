@@ -151,6 +151,9 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
         ok: true,
         sandboxId: provisioned.sandboxId,
         resumed: provisioned.resumed,
+        // The session the sandbox belongs to — what every post-run hook
+        // (storage measurement, activity feed) is keyed by.
+        sessionId: row.id,
         // The billing/attribution key: the session's agent page when it has
         // one. A global-assistant session has none; the payer resolution's
         // tenant fallback covers it.

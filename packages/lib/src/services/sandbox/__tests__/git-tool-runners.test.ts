@@ -49,7 +49,7 @@ function makeDeps(over: Partial<GitSandboxRunDeps> = {}, token: string | null = 
   const { sandbox, runCommandCalls } = makeSandbox(over.reconnect ? undefined : undefined);
   const deps: GitSandboxRunDeps = {
     isEnabled: () => true,
-    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' }),
     reconnect: async () => sandbox,
     quota: {
       acquireSlot: () => { slots.acquired += 1; return true; },
@@ -81,7 +81,7 @@ function makeDepsWithSpy(token: string | null = 'ghp_test_token') {
   const slots = { acquired: 0, released: 0 };
   const deps: GitSandboxRunDeps = {
     isEnabled: () => true,
-    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' }),
     reconnect: async () => sandbox,
     quota: {
       acquireSlot: () => { slots.acquired += 1; return true; },
@@ -109,7 +109,7 @@ describe('runGitInSandbox', () => {
     const { deps } = makeDeps({
       acquireSandbox: async (input) => {
         seen.push(input);
-        return { ok: true, sandboxId: 'sbx-1', resumed: false };
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' };
       },
     });
     await runGitInSandbox({
@@ -397,7 +397,7 @@ describe('opportunistic storage measurement', () => {
     await runGitInSandbox({ cmd: 'git', args: ['status'], ctx: makeCtx({ conversationId: 'c1' }), deps });
     await Promise.resolve();
 
-    expect(order).toEqual(['command', 'measure:c1']);
+    expect(order).toEqual(['command', 'measure:ws-1']);
   });
 
   it('given a THROWING measurement, should log it rather than swallow it silently', async () => {
@@ -430,20 +430,24 @@ describe('opportunistic storage measurement', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(warnings).toHaveLength(1);
-    expect(warnings[0].meta).toMatchObject({ sessionId: 'c1' });
+    expect(warnings[0].meta).toMatchObject({ sessionId: 'ws-1' });
   });
 
-  it('given no conversation id, should not measure — there is no session to attribute bytes to', async () => {
-    const measured: unknown[] = [];
+  it('measures even with NO conversation id — the key is the acquired SESSION, not the conversation', async () => {
+    // The old gate keyed on the conversation and silently skipped measurement
+    // whenever the two ids diverged (codex review, P1: underbilling). The
+    // session id comes from the acquire itself, so it is always present on a
+    // successful run.
+    const measured: Array<{ sessionId: string }> = [];
     const { deps } = makeDeps({
       measureStorage: async (input) => {
-        measured.push(input);
+        measured.push(input as { sessionId: string });
       },
     });
 
     await runGitInSandbox({ cmd: 'git', args: ['status'], ctx: makeCtx({ conversationId: undefined }), deps });
     await Promise.resolve();
 
-    expect(measured).toEqual([]);
+    expect(measured).toMatchObject([{ sessionId: 'ws-1' }]);
   });
 });
