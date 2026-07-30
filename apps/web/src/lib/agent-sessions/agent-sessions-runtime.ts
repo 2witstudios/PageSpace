@@ -273,6 +273,14 @@ export async function createConversationInSession(input: {
         if (!row) return null;
         return { userId: row.userId, type: row.type, contextId: row.contextId, sessionId: row.sessionId };
       },
+      findAgentDriveId: async (agentPageId) => {
+        const agent = await conversationRepository.getAiAgent(agentPageId);
+        return agent?.driveId ?? null;
+      },
+      findSessionDriveId: async (sessionId) => {
+        const row = await findSessionRecord(sessionId);
+        return row ? { driveId: row.driveId } : null;
+      },
     },
     input,
   );

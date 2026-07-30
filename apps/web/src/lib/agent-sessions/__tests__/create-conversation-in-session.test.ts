@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   createConversationInSessionWith,
   ConversationUnavailableError,
+  AgentNotInSessionDriveError,
   type CreateConversationInSessionDeps,
 } from '../create-conversation-in-session';
 
@@ -23,6 +24,8 @@ let deps: {
   createPageConversation: ReturnType<typeof vi.fn>;
   createGlobalConversation: ReturnType<typeof vi.fn>;
   findConversation: ReturnType<typeof vi.fn>;
+  findAgentDriveId: ReturnType<typeof vi.fn>;
+  findSessionDriveId: ReturnType<typeof vi.fn>;
 };
 
 const input = (overrides: Partial<{ agentPageId: string | null; sessionId: string }> = {}) => ({
@@ -40,6 +43,8 @@ beforeEach(() => {
     createPageConversation: vi.fn(async () => 'created' as const),
     createGlobalConversation: vi.fn(async () => {}),
     findConversation: vi.fn(async () => OWN_ROW),
+    findAgentDriveId: vi.fn(async () => 'drive-1'),
+    findSessionDriveId: vi.fn(async () => ({ driveId: 'drive-1' })),
   };
 });
 
@@ -143,5 +148,42 @@ describe('worker labels', () => {
     expect(deps.createPageConversation).toHaveBeenCalledWith(
       expect.objectContaining({ title: 'research worker' }),
     );
+  });
+});
+
+describe('the cross-drive gate (one binding path, review #43)', () => {
+  it("refuses an agent from a DIFFERENT drive — a session's tenant, payer and access all derive from ITS drive", async () => {
+    deps.findAgentDriveId.mockResolvedValue('drive-other');
+    await expect(run()).rejects.toThrow(AgentNotInSessionDriveError);
+    expect(deps.createPageConversation).not.toHaveBeenCalled();
+  });
+
+  it('a GLOBAL session (driveId null) hosts ONLY assistant threads — any agent page is a mismatch', async () => {
+    deps.findSessionDriveId.mockResolvedValue({ driveId: null });
+    await expect(run()).rejects.toThrow(AgentNotInSessionDriveError);
+    expect(deps.createPageConversation).not.toHaveBeenCalled();
+  });
+
+  it('the assistant is exempt — it has no drive to mismatch', async () => {
+    await createConversationInSessionWith(deps as CreateConversationInSessionDeps, input({ agentPageId: null }));
+    expect(deps.findAgentDriveId).not.toHaveBeenCalled();
+    expect(deps.createGlobalConversation).toHaveBeenCalled();
+  });
+
+  it('fails CLOSED when the agent cannot be resolved — a trashed or non-agent page never binds', async () => {
+    deps.findAgentDriveId.mockResolvedValue(null);
+    await expect(run()).rejects.toThrow(ConversationUnavailableError);
+    expect(deps.createPageConversation).not.toHaveBeenCalled();
+  });
+
+  it('fails CLOSED when the session cannot be resolved', async () => {
+    deps.findSessionDriveId.mockResolvedValue(null);
+    await expect(run()).rejects.toThrow(ConversationUnavailableError);
+    expect(deps.createPageConversation).not.toHaveBeenCalled();
+  });
+
+  it('a same-drive agent passes the gate and creates', async () => {
+    await expect(run()).resolves.toBeUndefined();
+    expect(deps.createPageConversation).toHaveBeenCalled();
   });
 });
