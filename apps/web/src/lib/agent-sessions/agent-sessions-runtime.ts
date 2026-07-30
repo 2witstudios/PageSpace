@@ -253,13 +253,21 @@ export async function createConversationInSession(input: {
   /** null = a global-assistant conversation. */
   agentPageId: string | null;
   sessionId: string;
+  /** Display label written at birth (a spawned worker's name). */
+  title?: string | null;
 }): Promise<void> {
   return createConversationInSessionWith(
     {
-      createPageConversation: ({ conversationId, userId, agentPageId, sessionId }) =>
-        conversationRepository.createConversation(conversationId, userId, agentPageId, { sessionId }),
-      createGlobalConversation: async ({ conversationId, userId, sessionId }) => {
-        await resolveOrCreateConversation(userId, conversationId, undefined, { sessionId });
+      createPageConversation: ({ conversationId, userId, agentPageId, sessionId, title }) =>
+        conversationRepository.createConversation(conversationId, userId, agentPageId, {
+          sessionId,
+          title: title ?? undefined,
+        }),
+      createGlobalConversation: async ({ conversationId, userId, sessionId, title }) => {
+        await resolveOrCreateConversation(userId, conversationId, undefined, {
+          sessionId,
+          title: title ?? undefined,
+        });
       },
       findConversation: async (conversationId) => {
         const row = await conversationRepository.getConversation(conversationId);

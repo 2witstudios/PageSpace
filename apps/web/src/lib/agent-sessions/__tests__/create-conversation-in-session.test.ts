@@ -51,6 +51,7 @@ describe('page arm', () => {
       userId: 'user-1',
       agentPageId: 'agent-1',
       sessionId: 'ses-1',
+      title: null,
     });
     expect(deps.findConversation).not.toHaveBeenCalled();
   });
@@ -118,6 +119,7 @@ describe('global arm', () => {
       conversationId: 'conv-1',
       userId: 'user-1',
       sessionId: 'ses-1',
+      title: null,
     });
     expect(deps.createPageConversation).not.toHaveBeenCalled();
   });
@@ -129,5 +131,17 @@ describe('global arm', () => {
     await expect(
       createConversationInSessionWith(deps as CreateConversationInSessionDeps, input({ agentPageId: null })),
     ).rejects.toThrow(ConversationUnavailableError);
+  });
+});
+
+describe('worker labels', () => {
+  it('a title travels to the creator AT BIRTH — the label the sidebar shows (codex P2)', async () => {
+    await createConversationInSessionWith(deps as CreateConversationInSessionDeps, {
+      ...input(),
+      title: 'research worker',
+    });
+    expect(deps.createPageConversation).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'research worker' }),
+    );
   });
 });

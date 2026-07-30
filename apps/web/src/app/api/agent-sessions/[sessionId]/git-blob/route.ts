@@ -98,7 +98,7 @@ export async function GET(request: Request, context: RouteContext) {
 
   const actor = await resolveSessionActorContext(auth.userId);
   const ctx = buildSessionReadActorCtx(`${sessionId}:${repoPath.value}:git-blob`, actor);
-  const deps = buildSessionGitDepsForHandle(resolved.handle);
+  const deps = buildSessionGitDepsForHandle(resolved.handle, sessionId);
 
   const result = await readMachineGitBlob({
     ref: ref.value,

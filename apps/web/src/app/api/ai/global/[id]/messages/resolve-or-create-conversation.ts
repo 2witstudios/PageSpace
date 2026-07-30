@@ -58,6 +58,8 @@ export async function resolveOrCreateConversation(
      * with {@link ConversationBindingConflictError} — never rebound.
      */
     sessionId?: string;
+    /** Display label for the new row (spawned workers are labeled at birth). Ignored for an existing row. */
+    title?: string;
   },
 ): Promise<ResolveOrCreateResult> {
   if (!CUID2_RE.test(conversationId)) {
@@ -91,6 +93,7 @@ export async function resolveOrCreateConversation(
       type: 'global',
       isActive: true,
       sessionId: opts?.sessionId ?? null,
+      title: opts?.title ?? null,
     })
     .onConflictDoNothing()
     .returning();

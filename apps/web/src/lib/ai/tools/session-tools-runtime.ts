@@ -417,12 +417,15 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
           userId: ownerId,
           agentPageId,
           sessionId: callerSession.id,
+          // The worker's label, written AT BIRTH onto the conversation row —
+          // it is what the sidebar and list_sessions display (codex review,
+          // P2: the old path reported the name in the tool response and then
+          // discarded it).
+          title: name,
         });
       } catch (error) {
         return { ok: false, reason: 'conversation_unavailable', detail: error instanceof Error ? error.message : String(error) };
       }
-      // `name` labels the worker CONVERSATION; the session keeps its own name.
-      void name;
       return { ok: true };
     },
 

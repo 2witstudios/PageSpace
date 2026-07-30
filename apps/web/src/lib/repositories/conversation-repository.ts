@@ -165,7 +165,7 @@ export const conversationRepository = {
     conversationId: string,
     userId: string,
     pageId: string,
-    opts?: { isShared?: boolean; sessionId?: string }
+    opts?: { isShared?: boolean; sessionId?: string; title?: string }
   ): Promise<'created' | 'exists' | 'message_owner_conflict'> {
     const [existing] = await db
       .select({ id: conversations.id })
@@ -186,6 +186,7 @@ export const conversationRepository = {
         contextId: pageId,
         isShared: opts?.isShared ?? false,
         sessionId: opts?.sessionId ?? null,
+        title: opts?.title ?? null,
         updatedAt: new Date(),
       })
       .onConflictDoNothing()

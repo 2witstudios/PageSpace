@@ -142,6 +142,7 @@ export async function runGitInSandbox({
   // Held across the try/finally so the post-op storage measurement can reach the
   // sandbox handle; null whenever the run never got one.
   let measurable: ExecutableSandbox | null = null;
+  let measurableSessionId: string | null = null;
   // Slot held — every exit path below must release it.
   try {
     const acquired = await deps.acquireSandbox({
@@ -169,6 +170,7 @@ export async function runGitInSandbox({
     // Held for the `finally`'s post-op measurement, which cannot see this
     // block's scope.
     measurable = sandbox;
+    measurableSessionId = acquired.sessionId;
 
     const startedAt = deps.now();
 
@@ -222,8 +224,8 @@ export async function runGitInSandbox({
     // Throttled per session inside the supplier, never awaited, and its own
     // failures are swallowed — a billing observation must not affect the tool
     // result that already succeeded.
-    if (measurable && ctx.conversationId && deps.measureStorage) {
-      const sessionId = ctx.conversationId;
+    if (measurable && measurableSessionId !== null && deps.measureStorage) {
+      const sessionId = measurableSessionId;
       void deps.measureStorage({ sandbox: measurable, sessionId }).catch((error) => {
         // Logged, not swallowed. Best-effort must not mean invisible: if the
         // measurement throws on EVERY git call — a bad exec adapter, a missing

@@ -44,7 +44,7 @@ function makeDeps(runCommand: (args: RunCommandArgs) => Promise<SandboxRunResult
   };
   const deps: GitSandboxRunDeps = {
     isEnabled: () => true,
-    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' }),
     reconnect: async () => sandbox,
     quota: { acquireSlot: () => true, releaseSlot: () => {} },
     buildEnv: () => ({}),
