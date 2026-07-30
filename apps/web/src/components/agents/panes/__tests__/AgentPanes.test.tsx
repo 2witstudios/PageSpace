@@ -50,8 +50,26 @@ vi.mock('../../shell/Shell', () => ({
 
 import AgentPanes from '../AgentPanes';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
+import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
 
 const jsonOk = (body: unknown) => ({ ok: true, json: async () => body });
+
+/**
+ * The default routing every test starts from: empty shells, an empty
+ * session-conversations list (`ChatPaneIdentity`'s switch-decision data), and
+ * `useResolvedAgent`'s two lookups per fixture agent (id/title come from
+ * `mockUsePageAgents` above). A test that cares about a specific route
+ * layers its own `mockImplementation` on top.
+ */
+function defaultFetchRoute(url: string): unknown {
+  if (url.includes('/shells')) return { shells: [] };
+  if (url.includes('/api/agent-sessions')) return { sessions: [] };
+  if (url === '/api/pages/agent-1') return { id: 'agent-1', title: 'Researcher', driveId: 'drive-1' };
+  if (url === '/api/pages/agent-1/agent-config') return {};
+  if (url === '/api/pages/agent-2') return { id: 'agent-2', title: 'Writer', driveId: 'drive-1' };
+  if (url === '/api/pages/agent-2/agent-config') return {};
+  return {};
+}
 
 function renderPanes(props: Partial<React.ComponentProps<typeof AgentPanes>> = {}) {
   return render(
@@ -70,6 +88,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   cuidCounter = 0;
   useAgentWorkspaceStore.setState({ workspaces: {} });
+  usePendingStreamsStore.setState({ streams: new Map() });
   mockUsePageAgents.mockReturnValue({
     allAgents: [
       { id: 'agent-1', title: 'Researcher', driveId: 'drive-1' },
@@ -77,7 +96,7 @@ beforeEach(() => {
     ],
     isLoading: false,
   });
-  mockFetchWithAuth.mockResolvedValue(jsonOk({ shells: [] }));
+  mockFetchWithAuth.mockImplementation(async (url: string) => jsonOk(defaultFetchRoute(url)));
 });
 
 describe('AgentPanes', () => {
@@ -342,6 +361,101 @@ describe('AgentPanes', () => {
       await waitFor(() =>
         expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].activePaneId).not.toBe(firstPaneId),
       );
+    });
+  });
+
+  describe('the pane bar agent selector (restored /development AISelector)', () => {
+    function mockSessionConversations(
+      conversations: Array<{ conversationId: string; agentPageId: string | null; lastMessageAt?: string | null }>,
+    ) {
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url.includes('/api/agent-sessions')) {
+          return jsonOk({
+            sessions: [{ sessionId: 'ses-1', conversations: conversations.map((c) => ({ lastMessageAt: null, ...c })) }],
+          });
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+    }
+
+    it("shows the pane's current agent as the bar identity", async () => {
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      expect(await screen.findByRole('button', { name: /Researcher/ })).toBeInTheDocument();
+    });
+
+    it('selecting the pane\'s current agent again is a no-op', async () => {
+      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+      renderPanes();
+      await waitFor(() =>
+        expect(mockFetchWithAuth).toHaveBeenCalledWith(expect.stringContaining('/api/agent-sessions?driveId=drive-1')),
+      );
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('button', { name: /Researcher/ }));
+      await user.click(await screen.findByRole('menuitem', { name: /Researcher/ }));
+
+      expect(mockPost).not.toHaveBeenCalled();
+      expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].scope).toMatchObject({
+        targetId: 'conv-1',
+        agentPageId: 'agent-1',
+      });
+    });
+
+    it('switching to an agent the session already has a conversation with focuses it, without minting', async () => {
+      mockSessionConversations([
+        { conversationId: 'conv-1', agentPageId: 'agent-1' },
+        { conversationId: 'conv-existing-2', agentPageId: 'agent-2' },
+      ]);
+      renderPanes();
+      await waitFor(() =>
+        expect(mockFetchWithAuth).toHaveBeenCalledWith(expect.stringContaining('/api/agent-sessions?driveId=drive-1')),
+      );
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('button', { name: /Researcher/ }));
+      await user.click(await screen.findByText('Writer'));
+
+      expect(mockPost).not.toHaveBeenCalled();
+      await waitFor(() =>
+        expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].scope).toMatchObject({
+          targetId: 'conv-existing-2',
+          agentPageId: 'agent-2',
+        }),
+      );
+      expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-existing-2');
+    });
+
+    it('switching to an agent with no conversation in this session mints one, same as the split picker', async () => {
+      mockPost.mockResolvedValue({});
+      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+      renderPanes();
+      await waitFor(() =>
+        expect(mockFetchWithAuth).toHaveBeenCalledWith(expect.stringContaining('/api/agent-sessions?driveId=drive-1')),
+      );
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('button', { name: /Researcher/ }));
+      await user.click(await screen.findByText('Writer'));
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-2/conversations', {
+          conversationId: 'new-id-1',
+          sessionId: 'ses-1',
+        }),
+      );
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('new-id-1'));
+    });
+
+    it("disables the selector while the pane's chat is streaming", async () => {
+      usePendingStreamsStore.getState().addStream({
+        messageId: 'msg-1',
+        pageId: 'agent-1',
+        conversationId: 'conv-1',
+        isOwn: true,
+        triggeredBy: { userId: 'user-1', displayName: 'You' },
+      });
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+
+      expect(await screen.findByRole('button', { name: /Researcher/ })).toBeDisabled();
     });
   });
 });
