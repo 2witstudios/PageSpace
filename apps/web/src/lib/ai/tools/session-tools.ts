@@ -1,19 +1,22 @@
 /**
- * The SESSION + SHELL tool families — an agent's whole orchestration surface,
- * re-founded on agent sessions (sessionId ≡ conversationId; ids address, names
- * label — contract.ts).
+ * The SESSION + SHELL tool families — an agent's whole orchestration surface
+ * inside its ONE workspace session (ids address, names label — contract.ts
+ * invariant 1: a session hosts many conversations and owns their shared
+ * sandbox).
  *
- * Two verb families, EXACTLY nine tools. You name a thing once, at spawn;
- * every verb after that takes the id the spawn returned:
+ * Two verb families, EXACTLY nine tools, ONE address namespace each. You name
+ * a thing once, at spawn; every verb after that takes the id the spawn
+ * returned — and `list_sessions` re-lists exactly those ids:
  *
- *  - **Worker sessions** — `spawn_session` (a labeled sibling
- *    conversation-session whose first turn is dispatched through the STANDARD
- *    chat pipeline, so the worker shows up live in the sidebar; NEVER a second
+ *  - **Workers** — labeled sibling CONVERSATIONS in the caller's own session
+ *    (same sandbox, same filesystem), addressed by their conversation id:
+ *    `spawn_session` (first turn dispatched through the STANDARD chat
+ *    pipeline, so the worker shows up live in the sidebar; NEVER a second
  *    engine) · `send_session` · `read_session` (transcript) · `kill_session`
- *    (end + sandbox teardown) · `list_sessions`.
- *  - **Shells** — PTYs in the CALLER's own session's ONE sandbox:
- *    `spawn_shell` → shellId · `send_shell` (keystrokes) · `read_shell`
- *    (scrollback) · `kill_shell`.
+ *    (abort its runs — the shared sandbox is untouched) · `list_sessions`.
+ *  - **Shells** — PTYs in the caller's session's ONE sandbox, addressed by
+ *    shellId: `spawn_shell` → shellId · `send_shell` (keystrokes) ·
+ *    `read_shell` (scrollback) · `kill_shell`.
  *
  * `wait: true` on spawn/send blocks for the worker's reply — this absorbs the
  * old `ask_agent` tool's synchronous consult (the inline invoke-an-agent
@@ -127,13 +130,26 @@ export const killShellInputSchema = z.object({ shellId: z.string().min(1) }).str
 // Injected IO
 // ---------------------------------------------------------------------------
 
-/** One session, as `list_sessions` reports it. */
-export interface SessionListingEntry {
+/**
+ * One WORKER, as `list_sessions` reports it. Its `sessionId` is the worker's
+ * conversation id — the exact address `send_session`/`read_session`/
+ * `kill_session` take (one namespace across the whole family; review H2b:
+ * the old listing returned workspace-row ids no verb could address).
+ */
+export interface WorkerListingEntry {
   sessionId: string;
   name: string;
-  status: SandboxStatus;
-  /** The agent the session runs under, or null for a global-assistant session. */
+  /** The agent the worker runs under, or null for a global-assistant worker. */
   agent: { agentId: string; title: string } | null;
+  /** True for the calling conversation itself, so the model can tell self from workers. */
+  isCaller: boolean;
+}
+
+/** The caller's whole workspace, as `list_sessions` reports it. */
+export interface SessionWorkspaceListing {
+  /** The ONE sandbox every worker and shell here shares. */
+  sandbox: SandboxStatus;
+  workers: WorkerListingEntry[];
   shells: Array<Pick<ShellDTO, 'shellId' | 'name' | 'createdAt'>>;
 }
 
@@ -175,8 +191,18 @@ export type ShellSendOutcome =
   | { ok: false; error: string };
 
 export interface SessionToolsDeps {
-  /** Every session the OWNER has, with shells and labels resolved. */
-  listSessions: (ownerId: string) => Promise<SessionListingEntry[]>;
+  /**
+   * The caller's WORKSPACE (agent_sessions row id) resolved from their
+   * conversation, or null for a plain conversation with no session. The two
+   * id namespaces meet exactly here: everything the shell verbs compare, and
+   * everything the listing enumerates, hangs off this one resolution.
+   */
+  findOwnWorkspace: (conversationId: string) => Promise<{ sessionId: string } | null>;
+  /** The workspace's workers + shells + sandbox status, labels resolved. */
+  listSessionWorkers: (input: {
+    workspaceSessionId: string;
+    callerConversationId: string;
+  }) => Promise<SessionWorkspaceListing>;
   /** One session row's identity slice, or null. */
   findSession: (sessionId: string) => Promise<SessionToolRow | null>;
   /** Live sessions counted against the owner's concurrency quota. */
@@ -385,26 +411,53 @@ export function createSessionTools(deps: SessionToolsDeps): {
   > => {
     const actor = readActor(context);
     if (!actor) return { ok: false, error: NEEDS_AUTH };
-    const sessionId = context?.conversationId;
-    if (!sessionId) return { ok: false, error: NEEDS_CONVERSATION };
+    const conversationId = context?.conversationId;
+    if (!conversationId) return { ok: false, error: NEEDS_CONVERSATION };
+    // Rows store the WORKSPACE id (`agent_sessions.id`), the context carries a
+    // conversation id — two namespaces, so resolve the caller's workspace and
+    // compare inside one of them (review H2: comparing across them refused
+    // every real shell, ever).
+    const workspace = await deps.findOwnWorkspace(conversationId);
+    if (!workspace) return { ok: false, error: notYourShell(shellId) };
     const shell = await deps.findShell(shellId);
     // Shells target ONLY the caller's own session's sandbox — a shell of any
-    // other session (even the caller's other conversations) is unaddressable
-    // from here, and reads the same as one that never existed.
-    if (!shell || shell.sessionId !== sessionId) return { ok: false, error: notYourShell(shellId) };
+    // other session is unaddressable from here, and reads the same as one
+    // that never existed.
+    if (!shell || shell.sessionId !== workspace.sessionId) {
+      return { ok: false, error: notYourShell(shellId) };
+    }
     return { ok: true, actor, shell };
   };
 
   return {
     list_sessions: tool({
       description:
-        'List your agent sessions: each one\'s sessionId (the address every other session/shell tool takes), display name, sandbox status, the agent it runs under, and its shells. Names are labels — always address by id.',
+        'List YOUR SESSION\'s workers and shells: each worker\'s sessionId (the exact address send_session/read_session/kill_session take), its display name and agent; each shell\'s shellId (the address send_shell/read_shell/kill_shell take); and the one shared sandbox\'s status. Names are labels — always address by id.',
       inputSchema: listSessionsInputSchema,
       execute: async (_input, options) => {
-        const actor = readActor(readContext(options));
+        const context = readContext(options);
+        const actor = readActor(context);
         if (!actor) return NEEDS_AUTH;
-        const sessions = await deps.listSessions(actor.userId);
-        return { success: true, sessions };
+        const conversationId = context?.conversationId;
+        if (!conversationId) return NEEDS_CONVERSATION;
+
+        const workspace = await deps.findOwnWorkspace(conversationId);
+        if (!workspace) {
+          // A plain conversation: nothing to list, and saying so beats an
+          // empty array the model would read as "my workers disappeared".
+          return {
+            success: true,
+            sandbox: 'none' as const,
+            workers: [],
+            shells: [],
+            note: 'This conversation has no session, so there are no workers or shells. spawn_session or spawn_shell will start its session.',
+          };
+        }
+        const listing = await deps.listSessionWorkers({
+          workspaceSessionId: workspace.sessionId,
+          callerConversationId: conversationId,
+        });
+        return { success: true, ...listing };
       },
     }),
 
@@ -681,13 +734,17 @@ export function createSessionTools(deps: SessionToolsDeps): {
         const context = readContext(options);
         const actor = readActor(context);
         if (!actor) return NEEDS_AUTH;
-        const sessionId = context?.conversationId;
-        if (!sessionId) return NEEDS_CONVERSATION;
+        const conversationId = context?.conversationId;
+        if (!conversationId) return NEEDS_CONVERSATION;
 
+        // Same one-namespace comparison as openOwnShell (review H2) — a shell
+        // outside the caller's workspace reads as already-gone, which is the
+        // fail-closed answer this verb already gives.
+        const workspace = await deps.findOwnWorkspace(conversationId);
         const shell = await deps.findShell(shellId);
         // Already gone is SUCCESS (planKillTarget's rule): teardown callers
         // retry, and a 404-shaped error would make every one special-case it.
-        if (!shell || shell.sessionId !== sessionId) {
+        if (!workspace || !shell || shell.sessionId !== workspace.sessionId) {
           return { success: true, shellId, killed: false, note: 'That shell was already gone.' };
         }
 
