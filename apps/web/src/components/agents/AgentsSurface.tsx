@@ -2,9 +2,23 @@
 
 import { useEffect } from 'react';
 import { Bot } from 'lucide-react';
+import useSWR from 'swr';
 
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import AgentPanes from './panes/AgentPanes';
+
+/**
+ * The selected session's own record — the authority on ITS drive. The surface
+ * store only knows the drive the CONSOLE is mounted under, which is null on
+ * `/dashboard/agents`; passing that to the grid left every drive session's
+ * pane picker with no agents to offer in global mode (review M5).
+ */
+async function sessionFetcher(url: string): Promise<{ session: { driveId: string | null } | null }> {
+  const response = await fetchWithAuth(url);
+  if (!response.ok) throw new Error(`Failed to load session (${response.status})`);
+  return response.json();
+}
 
 /**
  * The Agents console: mounted for the lifetime of the route, whatever is
@@ -33,6 +47,15 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
   const selectSession = useAgentSurfaceStore((state) => state.selectSession);
   const storeDriveId = useAgentSurfaceStore((state) => state.driveId);
 
+  const { data: sessionData } = useSWR(
+    selectedSessionId ? `/api/agent-sessions/${encodeURIComponent(selectedSessionId)}` : null,
+    sessionFetcher,
+    { revalidateOnFocus: false, dedupingInterval: 30_000 },
+  );
+  // The session's own drive wins; the surface's drive covers the in-flight
+  // window (they agree in drive mode, and global mode has nothing better).
+  const sessionDriveId = sessionData?.session?.driveId ?? storeDriveId;
+
   // Deep link, refresh, and Back are the same operation: read the URL. `popstate`
   // needs nothing beyond re-reading it, because the browser has already restored
   // the address by the time the event fires.
@@ -49,7 +72,7 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
         <AgentPanes
           key={selectedSessionId}
           sessionId={selectedSessionId}
-          driveId={storeDriveId}
+          driveId={sessionDriveId}
           initialConversation={{
             conversationId: selectedConversationId,
             agentPageId: selectedAgentId,

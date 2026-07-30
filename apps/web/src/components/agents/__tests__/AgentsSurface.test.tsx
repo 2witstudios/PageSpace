@@ -11,26 +11,34 @@
  *   sessions swaps the grid; nothing else about the shell changes.
  */
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, waitFor } from '@testing-library/react';
 
 vi.mock('../panes/AgentPanes', () => ({
   default: ({
     sessionId,
+    driveId,
     initialConversation,
   }: {
     sessionId: string;
+    driveId: string | null;
     initialConversation: { conversationId: string; agentPageId: string | null };
   }) => (
-    <div data-testid="agent-panes">
+    <div data-testid="agent-panes" data-drive-id={driveId ?? 'none'}>
       {sessionId}/{initialConversation.conversationId}/{initialConversation.agentPageId ?? 'no-agent'}
     </div>
   ),
+}));
+
+const mockFetchWithAuth = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/auth/auth-fetch', () => ({
+  fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args),
 }));
 
 import AgentsSurface from '../AgentsSurface';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 
 beforeEach(() => {
+  mockFetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({ session: null }) });
   window.history.replaceState({}, '', '/dashboard/agents');
   useAgentSurfaceStore.setState({
     driveId: null,
@@ -117,5 +125,23 @@ describe('AgentsSurface', () => {
     window.history.replaceState({}, '', '/dashboard/agents?session=ses-1&c=conv-1');
     render(<AgentsSurface />);
     expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-1/no-agent');
+  });
+});
+
+describe('the grid gets the SESSION\'s drive, not the surface\'s (review M5)', () => {
+  it('in global mode, a drive session\'s picker still knows its drive', async () => {
+    mockFetchWithAuth.mockResolvedValue({
+      ok: true,
+      json: async () => ({ session: { driveId: 'drive-7' } }),
+    });
+    // A session id no earlier test fetched — SWR's cache is module-global and
+    // this key's first answer would otherwise win for 30s.
+    window.history.replaceState({}, '', '/dashboard/agents?session=ses-m5&c=conv-1&agent=agent-1');
+    render(<AgentsSurface />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('agent-panes')).toHaveAttribute('data-drive-id', 'drive-7'),
+    );
+    expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-sessions/ses-m5');
   });
 });
