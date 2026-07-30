@@ -30,6 +30,22 @@ export class ConversationUnavailableError extends Error {
   }
 }
 
+/**
+ * The agent page belongs to a different drive than the session. A session is
+ * a DRIVE-level workspace: its sandbox tenant, payer and access decision all
+ * derive from ITS drive, so hosting another drive's agent would execute that
+ * agent's turns — and bill their runtime — inside a workspace its drive never
+ * admitted (three reviewers converged on this: codex p58/p59 + review M6).
+ * The global assistant is exempt (no drive); a GLOBAL session (driveId null)
+ * therefore hosts ONLY assistant threads.
+ */
+export class AgentNotInSessionDriveError extends Error {
+  constructor() {
+    super('That agent belongs to a different drive than this session.');
+    this.name = 'AgentNotInSessionDriveError';
+  }
+}
+
 export interface CreateConversationInSessionDeps {
   /**
    * The page-conversation creator (squat-guarded): inserts with the binding,
@@ -60,6 +76,10 @@ export interface CreateConversationInSessionDeps {
     contextId: string | null;
     sessionId: string | null;
   } | null>;
+  /** The agent page's drive, or null when the page is missing/trashed/not an agent. */
+  findAgentDriveId: (agentPageId: string) => Promise<string | null>;
+  /** The session's drive (null = a global-assistant session), or null when the session is missing. */
+  findSessionDriveId: (sessionId: string) => Promise<{ driveId: string | null } | null>;
 }
 
 export async function createConversationInSessionWith(
@@ -90,6 +110,16 @@ export async function createConversationInSessionWith(
       throw new ConversationUnavailableError();
     }
   }
+
+  // THE cross-drive gate, at the ONE binding path so no call site can forget
+  // it: the agent must belong to the session's drive. Checked before any row
+  // is written, and fail-closed on unresolved facts.
+  const [agentDriveId, sessionRow] = await Promise.all([
+    deps.findAgentDriveId(agentPageId),
+    deps.findSessionDriveId(sessionId),
+  ]);
+  if (agentDriveId === null || sessionRow === null) throw new ConversationUnavailableError();
+  if (sessionRow.driveId !== agentDriveId) throw new AgentNotInSessionDriveError();
 
   const outcome = await deps.createPageConversation({ conversationId, userId, agentPageId, sessionId, title });
   if (outcome === 'created') return;
