@@ -40,6 +40,7 @@ export interface CreateConversationInSessionDeps {
     userId: string;
     agentPageId: string;
     sessionId: string;
+    title: string | null;
   }) => Promise<'created' | 'exists' | 'message_owner_conflict'>;
   /**
    * The global-conversation creator: inserts with the binding, throws on a
@@ -50,6 +51,7 @@ export interface CreateConversationInSessionDeps {
     conversationId: string;
     userId: string;
     sessionId: string;
+    title: string | null;
   }) => Promise<void>;
   /** Row facts for the idempotent-retry check. `conversationRepository.getConversation`. */
   findConversation: (conversationId: string) => Promise<{
@@ -67,17 +69,20 @@ export async function createConversationInSessionWith(
     userId,
     agentPageId,
     sessionId,
+    title = null,
   }: {
     conversationId: string;
     userId: string;
     /** null = a global-assistant conversation. */
     agentPageId: string | null;
     sessionId: string;
+    /** Display label written at birth (a spawned worker's name). Labels only — never an address. */
+    title?: string | null;
   },
 ): Promise<void> {
   if (agentPageId === null) {
     try {
-      await deps.createGlobalConversation({ conversationId, userId, sessionId });
+      await deps.createGlobalConversation({ conversationId, userId, sessionId, title });
       return;
     } catch {
       // Foreign owner, wrong type, or binding mismatch — one answer, because
@@ -86,7 +91,7 @@ export async function createConversationInSessionWith(
     }
   }
 
-  const outcome = await deps.createPageConversation({ conversationId, userId, agentPageId, sessionId });
+  const outcome = await deps.createPageConversation({ conversationId, userId, agentPageId, sessionId, title });
   if (outcome === 'created') return;
 
   // Not inserted, so not bound. The ONE acceptable shape is our own earlier
