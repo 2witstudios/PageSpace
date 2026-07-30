@@ -19,6 +19,7 @@ vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: mockCheckDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS: {
     FORM_SUBMISSION: { maxAttempts: 10, windowMs: 60000 },
+    FORM_SUBMISSION_NOTIFICATION: { maxAttempts: 20, windowMs: 3600000 },
   },
 }));
 
@@ -260,6 +261,42 @@ describe('POST /api/public/forms/[token]/submit', () => {
       const response = await POST(request, params());
 
       expect(response.status).toBe(200);
+    });
+
+    it('skips the notification (but still appends the row) once the per-target notification limit is hit', async () => {
+      mockLookupActiveFormTarget.mockResolvedValue({
+        ...activeFormTarget,
+        notificationEmail: 'owner@example.com',
+        fields,
+        driveId: 'drive-1',
+        pageId: 'sheet-1',
+      });
+      mockCheckDistributedRateLimit.mockImplementation((key: string) =>
+        Promise.resolve({ allowed: !key.startsWith('form:notify:') })
+      );
+
+      const request = createRequest({ name: 'Ada Lovelace', email: 'ada@example.com' });
+      const response = await POST(request, params());
+
+      expect(response.status).toBe(200);
+      expect(mockAppendFormSubmission).toHaveBeenCalled();
+      expect(mockSendFormSubmissionNotification).not.toHaveBeenCalled();
+    });
+
+    it('keys the notification rate limit by form target id', async () => {
+      mockLookupActiveFormTarget.mockResolvedValue({
+        ...activeFormTarget,
+        notificationEmail: 'owner@example.com',
+        fields,
+        driveId: 'drive-1',
+        pageId: 'sheet-1',
+      });
+
+      const request = createRequest({ name: 'Ada Lovelace', email: 'ada@example.com' });
+      await POST(request, params());
+
+      const keys = mockCheckDistributedRateLimit.mock.calls.map((call) => call[0] as string);
+      expect(keys).toContain(`form:notify:${activeFormTarget.id}`);
     });
   });
 

@@ -923,6 +923,21 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 60 * 1000,
     progressiveDelay: false,
   },
+  // Notification email dispatched per form submission: keyed by formTargetId
+  // (not IP/token — see the route), so it bounds the total mail volume a
+  // recipient can be sent regardless of how many distinct submitters trigger
+  // it. FORM_SUBMISSION already caps how fast one submitter can hit a given
+  // token (10/min), but a script rotating IPs against the same public token
+  // could otherwise still ride that limit indefinitely and mail-bomb the
+  // owner's inbox once per accepted submission, since sendEmail's own
+  // recipient-wide 3/hr cap is intentionally skipped for this dispatch (see
+  // send-form-notification.ts).
+  FORM_SUBMISSION_NOTIFICATION: {
+    maxAttempts: 20,
+    windowMs: 60 * 60 * 1000,
+    blockDurationMs: 60 * 60 * 1000,
+    progressiveDelay: false,
+  },
   MARKETING_CONTACT_FORM: {
     maxAttempts: 5,
     windowMs: 60 * 60 * 1000,
