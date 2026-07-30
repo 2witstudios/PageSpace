@@ -276,7 +276,7 @@ describe('runBashInSandbox', () => {
     // from `release` (a `finally`, after the op) rather than from acquisition.
     const order: string[] = [];
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'p1' }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1', pageId: 'p1' }),
       reconnect: async () =>
         makeSandbox({
           runCommand: async () => {
