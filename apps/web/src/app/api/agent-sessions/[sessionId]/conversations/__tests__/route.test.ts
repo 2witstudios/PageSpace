@@ -44,6 +44,7 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
 }));
 
 import { POST } from '../route';
+import { ConversationUnavailableError } from '@/lib/agent-sessions/create-conversation-in-session';
 
 const AUTH_USER = { userId: 'user-1', role: 'admin' };
 const SESSION_ID = 'ses-1';
@@ -136,6 +137,23 @@ describe('POST /api/agent-sessions/[sessionId]/conversations', () => {
     const response = await post({ agentPageId: 'not-an-agent' });
     expect(response.status).toBe(404);
     expect(mockCreateConversationInSession).not.toHaveBeenCalled();
+  });
+
+  it('409s an id that cannot be claimed WITH this binding — one answer for every cause', async () => {
+    // Someone else's conversation, a legacy message-owner conflict, or a
+    // thread bound to a different session: all surface as the same conflict,
+    // audited as a denial, never as a 5xx.
+    mockCreateConversationInSession.mockRejectedValue(new ConversationUnavailableError());
+    const response = await post({ agentPageId: 'agent-1', conversationId: CLIENT_CONVERSATION_ID });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: 'That conversation id is not available' });
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        eventType: 'authz.access.denied',
+        details: expect.objectContaining({ reason: 'conversation_unavailable' }),
+      }),
+    );
   });
 
   it('502s a creation failure with a human error', async () => {

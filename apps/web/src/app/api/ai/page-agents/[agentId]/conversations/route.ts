@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createId, isCuid } from '@paralleldrive/cuid2';
 import { checkSessionAccess, createConversationInSession } from '@/lib/agent-sessions/agent-sessions-runtime';
+import { ConversationUnavailableError } from '@/lib/agent-sessions/create-conversation-in-session';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -213,7 +214,18 @@ export async function POST(
     // Eagerly persist ownership so privacy filtering works immediately.
     // isShared defaults to false — conversation is private to this user.
     if (sessionId !== null) {
-      await createConversationInSession({ conversationId, userId: auth.userId, agentPageId: agentId, sessionId });
+      try {
+        await createConversationInSession({ conversationId, userId: auth.userId, agentPageId: agentId, sessionId });
+      } catch (error) {
+        if (error instanceof ConversationUnavailableError) {
+          // The id cannot be claimed WITH this binding (someone else's row, a
+          // legacy conflict, or a different session's thread) — a state
+          // conflict, not a service failure, and one answer for every cause.
+          auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: conversationId, details: { reason: 'conversation_unavailable', method: 'POST', agentId, sessionId }, riskScore: 0.5 });
+          return NextResponse.json({ error: 'That conversation id is not available' }, { status: 409 });
+        }
+        throw error;
+      }
     } else {
       await conversationRepository.createConversation(conversationId, auth.userId, agentId);
     }

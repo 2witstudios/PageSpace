@@ -20,6 +20,11 @@ vi.mock('@/lib/websocket/broadcast-triggered-by', () => ({
 }));
 
 // Mock the repository seam (boundary)
+vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
+  checkSessionAccess: vi.fn(async () => ({ allowed: true })),
+  createConversationInSession: vi.fn(async () => undefined),
+}));
+
 vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: {
     getAiAgent: vi.fn(),
@@ -644,5 +649,39 @@ describe('generateTitle (pure function)', () => {
 
     const longPreview = 'a'.repeat(60);
     expect(generateTitle(longPreview)).toBe('a'.repeat(50) + '...');
+  });
+});
+
+describe('POST session binding (sessionId in body)', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkMCPPageScope).mockResolvedValue(null);
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    vi.mocked(conversationRepository.getAiAgent).mockResolvedValue(mockAgent());
+    const runtime = await import('@/lib/agent-sessions/agent-sessions-runtime');
+    vi.mocked(runtime.checkSessionAccess).mockResolvedValue({ allowed: true });
+    vi.mocked(runtime.createConversationInSession).mockResolvedValue(undefined);
+  });
+
+  it('binds through the session-gated creator and answers 200', async () => {
+    const runtime = await import('@/lib/agent-sessions/agent-sessions-runtime');
+    const request = createRequest(mockAgentId, 'POST', { sessionId: 'ses-1' });
+    const response = await POST(request, createContext(mockAgentId));
+    expect(response.status).toBe(200);
+    expect(runtime.createConversationInSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agentPageId: mockAgentId, sessionId: 'ses-1', userId: mockUserId }),
+    );
+  });
+
+  it('409s an id that cannot be claimed WITH this binding — never adopts or rebinds', async () => {
+    const runtime = await import('@/lib/agent-sessions/agent-sessions-runtime');
+    const { ConversationUnavailableError } = await import('@/lib/agent-sessions/create-conversation-in-session');
+    vi.mocked(runtime.createConversationInSession).mockRejectedValue(new ConversationUnavailableError());
+    const request = createRequest(mockAgentId, 'POST', { sessionId: 'ses-1', conversationId: 'tz4a98xxat96iws9zmbrgj3a' });
+    const response = await POST(request, createContext(mockAgentId));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: 'That conversation id is not available' });
   });
 });

@@ -30,6 +30,7 @@ import {
   checkSessionAccess,
   createConversationInSession,
 } from '@/lib/agent-sessions/agent-sessions-runtime';
+import { ConversationUnavailableError } from '@/lib/agent-sessions/create-conversation-in-session';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -111,6 +112,22 @@ export async function POST(request: Request, context: RouteContext) {
       sessionId,
     });
   } catch (error) {
+    if (error instanceof ConversationUnavailableError) {
+      // The id names a conversation that cannot be claimed WITH this binding
+      // (someone else's, a legacy conflict, or a different session's) — a
+      // conflict with existing state, not a service failure. One message for
+      // every cause: distinguishing them would tell an id-guessing caller
+      // which one it hit.
+      auditRequest(request, {
+        eventType: 'authz.access.denied',
+        userId: auth.userId,
+        resourceType: 'agent_session',
+        resourceId: sessionId,
+        details: { reason: 'conversation_unavailable', conversationId, route: 'agent-sessions/[sessionId]/conversations' },
+        riskScore: 0.5,
+      });
+      return NextResponse.json({ error: 'That conversation id is not available' }, { status: 409 });
+    }
     loggers.api.error(
       'Session conversation create failed',
       error instanceof Error ? error : undefined,

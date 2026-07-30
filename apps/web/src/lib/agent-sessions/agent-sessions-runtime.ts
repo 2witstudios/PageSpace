@@ -20,6 +20,7 @@
 import { db } from '@pagespace/db/db';
 import { and, desc, eq, isNotNull } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
+import { conversations } from '@pagespace/db/schema/conversations';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { users } from '@pagespace/db/schema/auth';
 import { checkAgentSessionConcurrency } from '@pagespace/lib/services/sandbox/quota';
