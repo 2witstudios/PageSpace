@@ -7,6 +7,8 @@ export interface AgentConversationSummary {
   title?: string | null;
   lastMessageAt?: string;
   createdAt?: string;
+  /** The session (workspace) the thread was born into — null/absent for a plain page chat. */
+  sessionId?: string | null;
 }
 
 interface AgentConversationsResponse {

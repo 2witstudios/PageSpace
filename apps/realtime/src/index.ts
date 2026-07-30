@@ -8,7 +8,7 @@ import { sessionService } from '@pagespace/lib/auth/session-service';
 import { verifyBroadcastSignature } from '@pagespace/lib/auth/broadcast-auth';
 import * as dotenv from 'dotenv';
 import { db } from '@pagespace/db/db';
-import { eq, and, or } from '@pagespace/db/operators';
+import { and, eq, or } from '@pagespace/db/operators';
 import { dmConversations } from '@pagespace/db/schema/social';
 import { users } from '@pagespace/db/schema/auth';
 import { userProfiles } from '@pagespace/db/schema/members';
@@ -27,7 +27,7 @@ import {
 } from '@pagespace/lib/services/sandbox/containment';
 import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/sandbox-billing';
-import { checkMachineRuntimeGuardrail, recordMachineActivity, acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
+import { acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
 import { createSpritesSandboxClient, createSpriteHandleCache, type SpritesSdk } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { createSpriteSandboxHost } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-sandbox-host';
 import {
@@ -42,6 +42,7 @@ import { openPtyShell } from './terminal/sprites-shell';
 import { getRealtimeSpritesSdk } from './terminal/realtime-sprites-client';
 import {
   buildShellHandlers,
+  composeSocketKey,
   connectFailureMessage,
   ensureShellSession,
   armIdleReap as armShellIdleReap,
@@ -53,13 +54,17 @@ import { deriveShellSessionKey } from './terminal/shell-session-key';
 import { handleShellReadRequest, handleShellSendRequest } from './terminal/shell-io';
 import { handleShellActivityRequest } from './terminal/shell-activity';
 import { checkAgentSessionAccess } from '@pagespace/lib/services/agent-sessions/agent-session-access';
+import {
+  resolveSessionTenantId,
+  resolveDriveMembership,
+  canRunCodeForSession,
+} from '@pagespace/lib/services/agent-sessions/agent-session-tenant';
 import { resolveSessionShellById } from '@pagespace/lib/services/agent-sessions/session-shells';
 import { createDbSessionShellStore } from '@pagespace/lib/services/agent-sessions/session-shells-store';
 import { createDbAgentSessionStore } from '@pagespace/lib/services/agent-sessions/agent-sessions-store';
 import { ensureAgentSessionSandbox } from '@pagespace/lib/services/agent-sessions/agent-session-sprite';
 import { resolveSandboxNetworkOptions } from '@pagespace/lib/services/sandbox/network-options';
 import { getConfiguredEgressIpTag } from '@pagespace/lib/services/sandbox/egress-ip';
-import { conversations } from '@pagespace/db/schema/conversations';
 import {
   validatePageId,
   validateDriveId,
@@ -121,24 +126,6 @@ export async function resolveActorEmail(rawEmail: string | null | undefined): Pr
   return rawEmail ? await decryptField(rawEmail) : '';
 }
 
-/**
- * A page's CURRENT driveId + that drive's owner (the `tenantId` convention the
- * Sprite session-key derivation uses) — shared by every call site below that
- * needs "which drive owns this agent page, and who pays" without risking a
- * stale cross-drive lookup.
- */
-type DriveOwnerContextResult =
-  | { ok: true; driveId: string; tenantId: string }
-  | { ok: false; reason: 'page_not_found' | 'drive_not_found' };
-
-async function resolveDriveOwnerContext(pageId: string): Promise<DriveOwnerContextResult> {
-  const [pageRow] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, pageId)).limit(1);
-  if (!pageRow) return { ok: false, reason: 'page_not_found' };
-  const [driveRow] = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, pageRow.driveId)).limit(1);
-  if (!driveRow) return { ok: false, reason: 'drive_not_found' };
-  return { ok: true, driveId: pageRow.driveId, tenantId: driveRow.ownerId };
-}
-
 // ---------------------------------------------------------------------------
 // shell:* family — the PTY bridge re-keyed onto agent sessions (Phase 3).
 //
@@ -165,9 +152,11 @@ async function resolveOwnerTier(ownerId: string) {
  * Ensure (create/resume/adopt) the session's ONE shared sandbox — the
  * `ensureSessionSandbox` seam of `buildShellCheckAuth`, backed by the shared
  * packages/lib provisioner and NEVER a realtime-local one. `tenantId` (the
- * Sprite-key fold's tenant and the billing account) is the agent page's drive
- * owner, falling back to the session's own owner for a global-assistant
- * session — the same `agentPageId ?? ownerId` attribution rule billing uses.
+ * Sprite-key fold's tenant and the billing account) is the session's own
+ * DRIVE owner, falling back to the session's own owner for a global-assistant
+ * session — resolved through `resolveSessionTenantId`, the SAME shared lib
+ * function the web tier's `provisionSessionSandbox` calls, so a vanished
+ * drive fails closed identically on both tiers.
  */
 async function ensureShellSessionSandbox({ sessionId, userId }: { sessionId: string; userId: string }): Promise<
   { ok: true; sandboxId: string } | { ok: false; reason: string }
@@ -176,36 +165,27 @@ async function ensureShellSessionSandbox({ sessionId, userId }: { sessionId: str
   const row = await store.findById(sessionId);
   if (!row) return { ok: false, reason: 'session_not_found' };
 
-  let tenantId: string;
-  if (row.agentPageId === null) {
-    tenantId = row.ownerId;
-  } else {
-    const context = await resolveDriveOwnerContext(row.agentPageId);
-    if (!context.ok) return { ok: false, reason: context.reason };
-    tenantId = context.tenantId;
-  }
+  const tenant = await resolveSessionTenantId(row);
+  if (!tenant.ok) return { ok: false, reason: tenant.reason };
+  const tenantId = tenant.tenantId;
 
   const sdk = createSpriteHandleCache(await getRealtimeSpritesSdk());
   const host = createSpriteSandboxHost({ sdk, client: createSpritesSandboxClient({ sdk }) });
 
   const result = await ensureAgentSessionSandbox({
-    row: { ...row, sessionId: row.conversationId },
+    row: { ...row, sessionId: row.id },
     intent: 'ensure',
     actor: { userId, tenantId },
     deps: {
       store,
       host,
       substrate: { kind: 'sprite' },
-      options: resolveSandboxNetworkOptions({ surface: 'machine', egressIpTag: getConfiguredEgressIpTag() }),
+      options: resolveSandboxNetworkOptions({ surface: 'session', egressIpTag: getConfiguredEgressIpTag() }),
       secret: getSandboxSessionSecret(),
       // SECURITY: the centralized code-execution gate, applied inside the
       // shared provisioner before any Sprite is provisioned OR handed back —
       // the same fail-closed checker the access half already consulted.
       authorize: canRunCode,
-      resolveDriveId: async (agentPageId) => {
-        const context = await resolveDriveOwnerContext(agentPageId);
-        return context.ok ? context.driveId : null;
-      },
       checkFullEgressEnablement: async () =>
         decideFullEgressEnablement({
           adminGateEnabled: isCodeExecutionEnabled(),
@@ -225,12 +205,14 @@ async function ensureShellSessionSandbox({ sessionId, userId }: { sessionId: str
         await refreshSessionStorageMeasurement({
           handle,
           sessionId,
+          // The generation just minted, for the writer's CAS (see the web tier).
+          spriteInstanceId: handle.spriteInstanceId ?? null,
           // Null for the same reason as the web tier: this fires on the create
           // arm, whose own stamps reset the measurement columns.
           lastMeasuredAt: null,
           now: new Date(),
-          persist: async ({ measuredBytes, measuredAt }) => {
-            await store.recordStorageMeasurement({ sessionId, measuredBytes, measuredAt });
+          persist: async ({ spriteInstanceId, measuredBytes, measuredAt }) => {
+            await store.recordStorageMeasurement({ sessionId, spriteInstanceId, measuredBytes, measuredAt });
           },
         });
       },
@@ -254,7 +236,7 @@ async function ensureShellSessionSandbox({ sessionId, userId }: { sessionId: str
   // measurement path — is both awake and worth measuring. Throttled per session,
   // and deliberately not awaited: a billing observation must never delay opening
   // a shell.
-  void measureWarmSessionStorageOnResume(row.conversationId, result.sandboxId);
+  void measureWarmSessionStorageOnResume(row.id, result.sandboxId);
 
   return { ok: true, sandboxId: result.sandboxId };
 }
@@ -283,10 +265,15 @@ async function measureWarmSessionStorageOnResume(sessionId: string, sandboxId: s
     await refreshSessionStorageMeasurement({
       handle: { exec: (args) => sandbox.runCommand(args) },
       sessionId,
+      // The FETCHED sandbox's own generation, not the row's: the CAS has to
+      // describe the disk that was walked (see the web tier). Here the two
+      // usually agree — the sandbox is fetched right after the row — but
+      // "usually" is exactly what a CAS is for.
+      spriteInstanceId: sandbox.spriteInstanceId ?? null,
       lastMeasuredAt: row.storageMeasuredAt ?? null,
       now: new Date(),
-      persist: async ({ measuredBytes, measuredAt }) => {
-        await store.recordStorageMeasurement({ sessionId, measuredBytes, measuredAt });
+      persist: async ({ spriteInstanceId, measuredBytes, measuredAt }) => {
+        await store.recordStorageMeasurement({ sessionId, spriteInstanceId, measuredBytes, measuredAt });
       },
     });
   } catch {
@@ -309,7 +296,7 @@ const shellCheckAuth = buildShellCheckAuth({
     const store = await dbAgentSessionStorePromise;
     const row = await store.findById(sessionId);
     if (!row) return { allowed: false, reason: 'session_not_found' };
-    const subject = { sessionId: row.conversationId, ownerId: row.ownerId, agentPageId: row.agentPageId };
+    const subject = { sessionId: row.id, ownerId: row.ownerId, driveId: row.driveId };
     const decision = await checkAgentSessionAccess({
       requesterId,
       sessionId,
@@ -317,44 +304,19 @@ const shellCheckAuth = buildShellCheckAuth({
         // The row was just read; hand the wrapper the same subject rather than
         // paying a second lookup for the identical answer.
         findSession: async () => subject,
-        resolveConversationOwnership: async ({ conversationId, requesterId: rid }) => {
-          const [conversation] = await db
-            .select({ userId: conversations.userId, isShared: conversations.isShared })
-            .from(conversations)
-            .where(eq(conversations.id, conversationId))
-            .limit(1);
-          if (!conversation) return 'none';
-          if (conversation.userId === rid) return 'owner';
-          return conversation.isShared ? 'shared' : 'none';
-        },
-        resolvePagePermission: async ({ userId, agentPageId }) => {
-          const level = await getUserAccessLevel(userId, agentPageId);
-          if (!level) return null;
-          return level.canEdit ? 'edit' : 'view';
-        },
-        canRunCode: async ({ userId, agentPageId }) => {
-          // Drive-scoped for a page session; global (no driveId) otherwise. An
-          // unresolvable drive fails closed.
-          const context = agentPageId === null ? null : await resolveDriveOwnerContext(agentPageId);
-          if (agentPageId !== null && !context?.ok) return false;
-          const verdict = await canRunCode({
-            userId,
-            driveId: context?.ok ? context.driveId : undefined,
-            requestOrigin: 'user',
-          });
-          return verdict.ok;
-        },
+        resolveDriveMembership,
+        canRunCode: canRunCodeForSession,
       },
     });
     return decision.allowed ? { allowed: true, session: subject } : decision;
   },
   resolvePayer: async (session) => {
-    // Payer = the agent page's drive owner; a global-assistant session (or an
-    // orphaned page) attributes to the session owner instead.
-    if (session.agentPageId === null) return { payerId: session.ownerId, driveId: null };
-    const context = await resolveDriveOwnerContext(session.agentPageId);
-    if (!context.ok) return { payerId: session.ownerId, driveId: null };
-    return { payerId: context.tenantId, driveId: context.driveId };
+    // Payer = the session's DRIVE owner; a global-assistant session (or a
+    // vanished drive) attributes to the session owner instead.
+    if (session.driveId === null) return { payerId: session.ownerId, driveId: null };
+    const [drive] = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, session.driveId)).limit(1);
+    if (!drive) return { payerId: session.ownerId, driveId: null };
+    return { payerId: drive.ownerId, driveId: session.driveId };
   },
   getUser: async (userId) => {
     const [userRow] = await db
@@ -1510,8 +1472,8 @@ io.on('connection', (socket: AuthSocket) => {
   // Shell PTY handlers (shell:* family): a named PTY inside its
   // agent session's ONE shared sandbox, addressed by `{shellId}` alone. Billing
   // meters every connection's active-runtime cost against the session's payer
-  // (agent page's drive owner, or the session owner for a global-assistant
-  // session).
+  // (the session's own DRIVE owner, or the session owner for a
+  // global-assistant session or a vanished drive).
   const shellHandlers = buildShellHandlers({
     ...shellSessionDeps,
     socket: socket as unknown as ShellSocketLike,
@@ -1527,7 +1489,7 @@ io.on('connection', (socket: AuthSocket) => {
       // Same `connectionId ?? socket.id` fallback `onConnect` itself uses —
       // several panes share this socket, each under its own connectionId, so a
       // bare `socket.id` lookup would only ever find whichever pane sent none.
-      const session = agentTerminalSessionMap.getBySocket(`${socket.id}\u0000${payloadConnectionId ?? socket.id}`);
+      const session = agentTerminalSessionMap.getBySocket(composeSocketKey(socket.id, payloadConnectionId ?? socket.id));
       if (session) {
         loggers.realtime.info('Shell session opened', { userId: user?.id, sessionKey: session.sessionKey, sandboxId: session.sandboxId });
       }

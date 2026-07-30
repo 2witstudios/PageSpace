@@ -19,11 +19,13 @@ function makeDeps(over: Partial<ReconcileOrphanSpritesDeps> = {}): {
   stampedSessions: string[];
   releasedReclaims: string[];
   notedFailures: string[];
+  chasedInstances: Array<{ sandboxId: string; actualInstanceId: string }>;
 } {
   const killed: string[] = [];
   const stampedSessions: string[] = [];
   const releasedReclaims: string[] = [];
   const notedFailures: string[] = [];
+  const chasedInstances: Array<{ sandboxId: string; actualInstanceId: string }> = [];
   const deps: ReconcileOrphanSpritesDeps = {
     listOrphanCandidates: async () => ({ rows: [], capped: false }),
     isTeardownStillRequested: async () => true,
@@ -41,9 +43,12 @@ function makeDeps(over: Partial<ReconcileOrphanSpritesDeps> = {}): {
     noteReclaimFailure: async ({ sandboxId }) => {
       notedFailures.push(sandboxId);
     },
+    chaseReclaimInstance: async ({ sandboxId, actualInstanceId }) => {
+      chasedInstances.push({ sandboxId, actualInstanceId });
+    },
     ...over,
   };
-  return { deps, killed, stampedSessions, releasedReclaims, notedFailures };
+  return { deps, killed, stampedSessions, releasedReclaims, notedFailures, chasedInstances };
 }
 
 const sessionRow: SpriteOrphanRow = {
@@ -105,6 +110,40 @@ describe('reconcileOrphanSprites — the reclaim outbox (a pointer whose row is 
     expect(result).toEqual({ processed: 1, capped: false, incomplete: false, torndown: 0, skipped: 0, failed: 1 });
     expect(releasedReclaims).toEqual([]); // and the pointer survives
   });
+
+  it('#2254: given the name now holds a DIFFERENT VM, should CHASE the pointer rather than releasing it', async () => {
+    // The outbox row is the LAST pointer to whatever VM exists under this name
+    // — unlike an `agent-session` row, there is no live row's own CAS left to
+    // protect a replacement. A stale outbox instance (e.g. from the 0234
+    // rescue's `ON CONFLICT DO NOTHING`) must never read as "confirmed killed":
+    // that would delete the only pointer to a Sprite that is still alive.
+    const { deps, killed, releasedReclaims, chasedInstances } = makeDeps({
+      listOrphanCandidates: async () => ({ rows: [reclaimRow], capped: false }),
+      killSprite: async () => ({ ok: 'replaced', actualInstanceId: 'inst-live-now' }),
+    });
+
+    const result = await reconcileOrphanSprites(deps);
+
+    expect(result).toEqual({ processed: 1, capped: false, incomplete: false, torndown: 0, skipped: 1, failed: 0 });
+    expect(killed).toEqual([]); // killSprite itself is stubbed, but the point is nothing was RELEASED
+    expect(releasedReclaims).toEqual([]);
+    expect(chasedInstances).toEqual([{ sandboxId: 'pgs-ses-orphaned', actualInstanceId: 'inst-live-now' }]);
+  });
+
+  it('#2254: given the chase write itself fails, should still leave the pointer in place', async () => {
+    const { deps, releasedReclaims } = makeDeps({
+      listOrphanCandidates: async () => ({ rows: [reclaimRow], capped: false }),
+      killSprite: async () => ({ ok: 'replaced', actualInstanceId: 'inst-live-now' }),
+      chaseReclaimInstance: async () => {
+        throw new Error('db write failed');
+      },
+    });
+
+    const result = await reconcileOrphanSprites(deps);
+
+    expect(result).toMatchObject({ torndown: 0, skipped: 1, failed: 0 });
+    expect(releasedReclaims).toEqual([]);
+  });
 });
 
 describe('reconcileOrphanSprites — agent-session rows whose teardown never confirmed', () => {
@@ -141,6 +180,23 @@ describe('reconcileOrphanSprites — agent-session rows whose teardown never con
     expect(killSprite).toHaveBeenCalledTimes(1);
     expect(killSprite).toHaveBeenCalledWith({ sandboxId: 'pgs-ses-1', spriteInstanceId: 'inst-1' });
     expect(stampedSessions).toEqual(['conv-1']);
+  });
+
+  it('#2254: given the name now holds a DIFFERENT VM, should still treat it as confirmed-gone — the row\'s own CAS protects a live replacement', async () => {
+    // Unlike a `reclaim` row, an `agent-session` row is not the last pointer:
+    // `markSessionTornDown`'s own instance CAS already refuses to mark a live
+    // replacement dead, so a replaced-instance kill can be handled exactly like
+    // a confirmed one here.
+    const { deps, stampedSessions, chasedInstances } = makeDeps({
+      listOrphanCandidates: async () => ({ rows: [sessionRow], capped: false }),
+      killSprite: async () => ({ ok: 'replaced', actualInstanceId: 'inst-new' }),
+    });
+
+    const result = await reconcileOrphanSprites(deps);
+
+    expect(result).toEqual({ processed: 1, capped: false, incomplete: false, torndown: 1, skipped: 0, failed: 0 });
+    expect(stampedSessions).toEqual(['conv-1']);
+    expect(chasedInstances).toEqual([]); // chasing is only meaningful for a reclaim row
   });
 
   it('counts a CAS lost to a concurrent re-provision as skipped, not torn down', async () => {

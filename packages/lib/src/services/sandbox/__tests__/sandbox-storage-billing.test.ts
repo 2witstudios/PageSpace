@@ -18,8 +18,8 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 vi.mock('@pagespace/db/schema/agent-sessions', () => ({
   agentSessions: {
-    conversationId: 'agent_sessions.conversationId',
-    agentPageId: 'agent_sessions.agentPageId',
+    id: 'agent_sessions.id',
+    driveId: 'agent_sessions.driveId',
     ownerId: 'agent_sessions.ownerId',
     sandboxId: 'agent_sessions.sandboxId',
     spriteTornDownAt: 'agent_sessions.spriteTornDownAt',
@@ -51,11 +51,11 @@ beforeEach(() => {
 });
 
 describe('defaultReconcileSandboxStorageDeps.listAgentSessionSprites', () => {
-  it("selects each session's own measurement/watermark, agentPageId and ownerId directly — no join, no de-fan needed", async () => {
+  it("selects each session's own measurement/watermark, driveId and ownerId directly — no join, no de-fan needed", async () => {
     const rows = [
       {
         sessionId: 'session-1',
-        agentPageId: 'agent-page-1',
+        driveId: 'agent-page-1',
         ownerId: 'owner-1',
         storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
         measuredBytes: 1_000_000_000,
@@ -80,7 +80,7 @@ describe('defaultReconcileSandboxStorageDeps.listAgentSessionSprites', () => {
     await expect(defaultReconcileSandboxStorageDeps.listAgentSessionSprites()).resolves.toEqual(rows);
 
     expect(Object.keys(selectedShape ?? {}).sort()).toEqual(
-      ['agentPageId', 'lastActiveAt', 'measuredAt', 'measuredBytes', 'ownerId', 'sessionId', 'storageLastBilledAt'].sort(),
+      ['driveId', 'lastActiveAt', 'measuredAt', 'measuredBytes', 'ownerId', 'sessionId', 'storageLastBilledAt'].sort(),
     );
     expect(whereArg).toEqual({
       op: 'and',
@@ -97,7 +97,7 @@ describe('defaultReconcileSandboxStorageDeps.listAgentSessionSprites', () => {
         where: async () => [
           {
             sessionId: 'session-1',
-            agentPageId: null,
+            driveId: null,
             ownerId: 'owner-1',
             storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
             measuredBytes: null,
@@ -110,22 +110,20 @@ describe('defaultReconcileSandboxStorageDeps.listAgentSessionSprites', () => {
 
     const rows = await defaultReconcileSandboxStorageDeps.listAgentSessionSprites();
 
-    expect(rows[0]).toMatchObject({ agentPageId: null, lastActiveAt: new Date(0) });
+    expect(rows[0]).toMatchObject({ driveId: null, lastActiveAt: new Date(0) });
   });
 });
 
-describe('defaultReconcileSandboxStorageDeps.lookupPageOwnerId', () => {
-  it('is the shared sandbox-payer.ts lookup (pages -> drives join)', async () => {
+describe('defaultReconcileSandboxStorageDeps.lookupDriveOwnerId', () => {
+  it('is the shared sandbox-payer.ts lookup (a direct drives read — no page join exists any more)', async () => {
     mockDb.select.mockReturnValue({
       from: () => ({
-        leftJoin: () => ({
-          where: () => ({
-            limit: async () => [{ ownerId: 'owner-1' }],
-          }),
+        where: () => ({
+          limit: async () => [{ ownerId: 'owner-1' }],
         }),
       }),
     });
-    await expect(defaultReconcileSandboxStorageDeps.lookupPageOwnerId('page-1')).resolves.toBe('owner-1');
+    await expect(defaultReconcileSandboxStorageDeps.lookupDriveOwnerId('drive-1')).resolves.toBe('owner-1');
   });
 });
 
@@ -135,7 +133,8 @@ describe('defaultReconcileSandboxStorageDeps.chargeStorage', () => {
 
     await defaultReconcileSandboxStorageDeps.chargeStorage({
       payerId: 'owner-1',
-      pageId: 'page-1',
+      driveId: 'drive-1',
+      sessionId: 'session-1',
       costDollars: 0.05,
       gbMonths: 0.2,
     });
@@ -148,9 +147,12 @@ describe('defaultReconcileSandboxStorageDeps.chargeStorage', () => {
       providerCostDollars: 0.05,
       success: true,
       costSource: 'list_price',
+      // First-class attribution — top-level columns, not just metadata forensics.
+      driveId: 'drive-1',
+      sessionId: 'session-1',
     });
     expect(call.holdId).toBeUndefined();
-    expect(call.metadata).toMatchObject({ type: 'terminal_storage', pageId: 'page-1', gbMonths: 0.2 });
+    expect(call.metadata).toMatchObject({ type: 'terminal_storage', gbMonths: 0.2 });
   });
 
   it("passes MACHINE_MARKUP_BPS as markupBpsOverride", async () => {
@@ -158,7 +160,8 @@ describe('defaultReconcileSandboxStorageDeps.chargeStorage', () => {
 
     await defaultReconcileSandboxStorageDeps.chargeStorage({
       payerId: 'owner-1',
-      pageId: 'page-1',
+      driveId: 'drive-1',
+      sessionId: 'session-1',
       costDollars: 0.05,
       gbMonths: 0.2,
     });
@@ -166,22 +169,40 @@ describe('defaultReconcileSandboxStorageDeps.chargeStorage', () => {
     expect(mockTrackUsage.mock.calls[0][0].markupBpsOverride).toBe(MACHINE_MARKUP_BPS);
   });
 
-  it('forwards pageId as a TOP-LEVEL field for per-session attribution', async () => {
+  it('sends NO top-level pageId — a session is drive-scoped, not page-anchored', async () => {
     mockTrackUsage.mockResolvedValue(undefined);
 
     await defaultReconcileSandboxStorageDeps.chargeStorage({
       payerId: 'owner-1',
-      pageId: 'page-1',
+      driveId: 'drive-1',
+      sessionId: 'session-1',
       costDollars: 0.05,
       gbMonths: 0.2,
     });
 
-    expect(mockTrackUsage.mock.calls[0][0].pageId).toBe('page-1');
+    // The drive and session ride as first-class top-level columns instead.
+    expect(mockTrackUsage.mock.calls[0][0].pageId).toBeUndefined();
+    expect(mockTrackUsage.mock.calls[0][0]).toMatchObject({ driveId: 'drive-1', sessionId: 'session-1' });
+  });
+
+  it('given a global-assistant session (no drive), forwards driveId as undefined rather than null', async () => {
+    mockTrackUsage.mockResolvedValue(undefined);
+
+    await defaultReconcileSandboxStorageDeps.chargeStorage({
+      payerId: 'owner-1',
+      driveId: undefined,
+      sessionId: 'session-1',
+      costDollars: 0.05,
+      gbMonths: 0.2,
+    });
+
+    expect(mockTrackUsage.mock.calls[0][0].driveId).toBeUndefined();
+    expect(mockTrackUsage.mock.calls[0][0].sessionId).toBe('session-1');
   });
 });
 
 describe('defaultReconcileSandboxStorageDeps.advanceAgentSessionWatermark', () => {
-  it("updates the SESSION row's own storageLastBilledAt, keyed by conversationId", async () => {
+  it("updates the SESSION row's own storageLastBilledAt, keyed by the session id", async () => {
     const setCalls: unknown[] = [];
     const whereCalls: unknown[] = [];
     mockDb.update.mockReturnValue({
@@ -197,7 +218,7 @@ describe('defaultReconcileSandboxStorageDeps.advanceAgentSessionWatermark', () =
     });
 
     expect(setCalls).toEqual([{ storageLastBilledAt: new Date('2026-07-01T00:00:00.000Z') }]);
-    expect(whereCalls).toEqual([{ op: 'eq', a: 'agent_sessions.conversationId', b: 'session-3' }]);
+    expect(whereCalls).toEqual([{ op: 'eq', a: 'agent_sessions.id', b: 'session-3' }]);
   });
 });
 
@@ -235,7 +256,7 @@ describe('reconcileSandboxStorageSerialized', () => {
   function makeDeps(overrides: Partial<ReconcileSandboxStorageDeps> = {}): ReconcileSandboxStorageDeps {
     return {
       listAgentSessionSprites: vi.fn(async () => []),
-      lookupPageOwnerId: vi.fn(async () => null),
+      lookupDriveOwnerId: vi.fn(async () => null),
       chargeStorage: vi.fn(async () => {}),
       advanceAgentSessionWatermark: vi.fn(async () => {}),
       now: () => new Date('2026-07-13T00:00:00.000Z'),

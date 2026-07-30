@@ -17,7 +17,6 @@
 
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { listMachineDiffFiles, readMachineDiffPair } from '@pagespace/lib/services/sandbox/machine-diff';
 import {
@@ -35,8 +34,11 @@ import {
   resolveSessionActorContext,
   resolveSessionSandboxHandle,
 } from '@/lib/agent-sessions/session-sandbox-runtime';
+import { auditSessionAccessDenial } from '@/lib/agent-sessions/session-unavailable-response';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
+
+const ROUTE = 'agent-sessions/[sessionId]/diff';
 
 type RouteContext = { params: Promise<{ sessionId: string }> };
 
@@ -64,21 +66,13 @@ export async function GET(request: Request, context: RouteContext) {
   const { sessionId } = await context.params;
 
   // Authorize BEFORE parsing scope/path params — a user without access gets a
-  // uniform answer and can never probe them.
+  // uniform answer and can never probe them. Not found and denied answer THE
+  // SAME (family policy, review #2261/5) — both `not_started`, never a 403
+  // that would confirm the session id is real.
   const access = await checkSessionAccess(auth.userId, sessionId);
   if (!access.allowed) {
-    if (access.reason === 'session_not_found') {
-      return NextResponse.json({ error: 'This session has no sandbox yet', reason: 'not_started' }, { status: 404 });
-    }
-    auditRequest(request, {
-      eventType: 'authz.access.denied',
-      userId: auth.userId,
-      resourceType: 'agent_session',
-      resourceId: sessionId,
-      details: { reason: access.reason, route: 'agent-sessions/[sessionId]/diff' },
-      riskScore: 0.5,
-    });
-    return NextResponse.json({ error: 'You do not have access to this session' }, { status: 403 });
+    auditSessionAccessDenial(request, auth.userId, sessionId, access.reason, ROUTE);
+    return NextResponse.json({ error: 'This session has no sandbox yet', reason: 'not_started' }, { status: 404 });
   }
 
   const { searchParams } = new URL(request.url);
@@ -133,7 +127,7 @@ export async function GET(request: Request, context: RouteContext) {
 
   const actor = await resolveSessionActorContext(auth.userId);
   const ctx = buildSessionReadActorCtx(`${sessionId}:${repoPath.value}:diff`, actor);
-  const deps = buildSessionGitDepsForHandle(resolved.handle);
+  const deps = buildSessionGitDepsForHandle(resolved.handle, sessionId);
 
   const logDiffFailure = (message: string, extra: Record<string, unknown>) =>
     loggers.api.error(message, undefined, {

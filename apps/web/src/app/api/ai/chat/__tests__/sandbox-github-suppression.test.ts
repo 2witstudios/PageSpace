@@ -72,6 +72,9 @@ vi.mock('@pagespace/db/db', () => {
     includeDrivePrompt: false,
     includePageTree: false,
     pageTreeScope: null,
+    // This suite is ABOUT the sandbox git toolkit reaching the integration
+    // resolver — the per-agent switch must be on for the tools to exist at all.
+    sandboxEnabled: true,
     revision: 0,
   };
   return {

@@ -64,7 +64,7 @@ export type ShellSandboxResult =
   | {
       ok: true;
       shellId: string;
-      /** ≡ the conversation id of the owning session. */
+      /** The owning session's id (`agent_sessions.id`) — no conversation involved, a shell is a PTY, not a chat thread. */
       sessionId: string;
       sandboxId: string;
       /** The working directory for a FRESH session — always `SANDBOX_ROOT` (`/workspace`). */
@@ -102,8 +102,8 @@ export type ShellCheckAuthResult =
       sessionKey: string;
       /** The session's resolved payer — metering attribution, present regardless of whether `billing` is wired. */
       payerId: string;
-      /** Billing pageId attribution: the session's agent page, or null (owner-attributed) for a global-assistant session. */
-      agentPageId: string | null;
+      /** Billing attribution scope: the session's drive, or null (owner-attributed) for a global-assistant session. */
+      driveId: string | null;
       /**
        * Reserve the concurrency slot and resolve the Sprite for a FRESH PTY —
        * called ONLY on the create path. Owns the slot's release on its OWN
@@ -358,7 +358,13 @@ function endShellSession(
   if (deps.billing && session.payerId && session.connectedAt !== undefined) {
     const activeSeconds = Math.max(0, (Date.now() - session.connectedAt) / 1000);
     void deps.billing
-      .trackUsage({ payerId: session.payerId, holdId: session.holdId, activeSeconds, pageId: session.pageId })
+      .trackUsage({
+        payerId: session.payerId,
+        holdId: session.holdId,
+        activeSeconds,
+        driveId: session.driveId,
+        sessionId: session.agentSessionId,
+      })
       .catch((error) => {
         loggers.realtime.error('Shell session billing settle failed', error instanceof Error ? error : new Error(String(error)), {
           sessionKey,
@@ -562,7 +568,13 @@ async function settleAccruedWindow(
   session.holdId = undefined;
   const activeSeconds = Math.max(0, (session.connectedAt - windowStart) / 1000);
   try {
-    await billing.trackUsage({ payerId, holdId, activeSeconds, pageId: session.pageId });
+    await billing.trackUsage({
+      payerId,
+      holdId,
+      activeSeconds,
+      driveId: session.driveId,
+      sessionId: session.agentSessionId,
+    });
   } catch (error) {
     loggers.realtime.error('Shell heartbeat settle failed', error instanceof Error ? error : new Error(String(error)), {
       sessionKey,
@@ -579,7 +591,13 @@ async function settleAccruedWindow(
       // the same fire-and-forget guarantee the end-settle itself has. If it
       // also fails, the hold expires via TTL and the window is lost.
       void billing
-        .trackUsage({ payerId, holdId, activeSeconds, pageId: session.pageId })
+        .trackUsage({
+          payerId,
+          holdId,
+          activeSeconds,
+          driveId: session.driveId,
+          sessionId: session.agentSessionId,
+        })
         .catch(() => {});
     }
     return true;
@@ -835,7 +853,7 @@ export interface ShellTarget {
 }
 
 export interface EnsureShellSessionRequest {
-  /** The ALREADY-GRANTED access verdict for this target — `sessionKey`, `payerId`, `agentPageId`, and the uncalled `resolveSandbox` thunk. */
+  /** The ALREADY-GRANTED access verdict for this target — `sessionKey`, `payerId`, `driveId`, and the uncalled `resolveSandbox` thunk. */
   access: ShellAccessGranted;
   target: ShellTarget;
   /** Who this session is being started FOR — the re-auth tick's identity while nobody is attached. */
@@ -1074,9 +1092,12 @@ export async function ensureShellSession(
       payerId: access.payerId,
       holdId,
       connectedAt,
-      // Billing attribution: the session's agent page — or undefined for a
-      // global-assistant session, whose usage attributes to the owner alone.
-      pageId: access.agentPageId ?? undefined,
+      // First-class attribution (Terminal Epic 3 usage-breakdown fix): the
+      // session's own drive (already resolved onto the access verdict) and its
+      // own agent_sessions.id (resolved onto the sandbox result) — no page
+      // grouping, since a session is drive-level, not page-anchored.
+      driveId: access.driveId ?? undefined,
+      agentSessionId: sandbox.sessionId,
       shellId: sandbox.shellId,
       // The creator is viewer #1, registered in the literal — BEFORE
       // `openShell` — so output arriving between the shell opening and
@@ -1403,6 +1424,19 @@ export function connectFailureMessage(failure: Extract<EnsureShellSessionResult,
   }
 }
 
+/**
+ * The key a session is filed under on its VIEWER side: a socket's own
+ * server-assigned id, namespaced by the client-minted `connectionId` it
+ * multiplexes (several panes share one socket). Exported so `index.ts`'s
+ * `shell:connect` handler can look up the just-registered session by the
+ * SAME key `onConnect` files it under, without re-spelling the format
+ * inline — see `buildShellHandlers`'s internal `socketKey` (below) for why
+ * the namespacing exists.
+ */
+export function composeSocketKey(socketId: string, connectionId: string): string {
+  return `${socketId}\u0000${connectionId}`;
+}
+
 export function buildShellHandlers({
   sessionMap,
   openShell,
@@ -1478,25 +1512,11 @@ export function buildShellHandlers({
   }
 
   /**
-   * The key a session is filed under on its VIEWER side.
-   *
-   * `connectionId` is a UUID the CLIENT mints, and the session map is one
-   * shared, server-wide instance — so filing by the bare id lets one client's
-   * chosen string address ANOTHER client's session. Two sockets picking the
-   * same id (a buggy client, or a hostile one: it is validated only as a
-   * non-empty string) then collide inside the map, where `setNew` silently
-   * overwrites the socket entry of a session that is still running. That
-   * session is then unreachable: no viewer, no armed reap, so its PTY, its
-   * concurrency slot and its billing heartbeat run for the life of the process
-   * — billed to the SESSION's payer, not the caller's. Worse, the first
-   * socket's later disconnect resolves to the SECOND socket's session and
-   * reaps it, killing a shell someone else is watching.
-   *
-   * Namespacing by the server-assigned socket id makes that collision
-   * unrepresentable rather than merely detected: a client can only ever name
-   * its own connections.
+   * The key a session is filed under on its VIEWER side — see
+   * `composeSocketKey`'s doc for why this is namespaced by the socket id
+   * rather than the bare, client-minted `connectionId`.
    */
-  const socketKey = (connectionId: string) => `${socket.id}\u0000${connectionId}`;
+  const socketKey = (connectionId: string) => composeSocketKey(socket.id, connectionId);
 
   function disconnectConnection(connectionId: string) {
     const session = sessionMap.getBySocket(socketKey(connectionId));

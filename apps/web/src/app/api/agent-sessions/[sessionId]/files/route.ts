@@ -30,6 +30,7 @@ import { StringDecoder } from 'string_decoder';
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { auditSessionAccessDenial } from '@/lib/agent-sessions/session-unavailable-response';
 import { sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 import {
   listMachineDirectory,
@@ -176,6 +177,12 @@ function resolveDenialResponse(reason: 'not_found' | 'not_started' | 'vanished')
   return NextResponse.json({ error, reason }, { status: RESOLVE_DENIAL_STATUS[reason] });
 }
 
+const ROUTE = 'agent-sessions/[sessionId]/files';
+
+/**
+ * Not found and denied answer THE SAME (family policy, review #2261/5) —
+ * both `not_started`, never a 403 that would confirm the session id is real.
+ */
 async function authorize(
   request: Request,
   userId: string,
@@ -183,18 +190,8 @@ async function authorize(
 ): Promise<NextResponse | null> {
   const access = await checkSessionAccess(userId, sessionId);
   if (access.allowed) return null;
-  if (access.reason === 'session_not_found') {
-    return NextResponse.json({ error: 'This session has no sandbox yet', reason: 'not_started' }, { status: 404 });
-  }
-  auditRequest(request, {
-    eventType: 'authz.access.denied',
-    userId,
-    resourceType: RESOURCE_TYPE,
-    resourceId: sessionId,
-    details: { reason: access.reason, route: 'agent-sessions/[sessionId]/files' },
-    riskScore: 0.5,
-  });
-  return NextResponse.json({ error: 'You do not have access to this session' }, { status: 403 });
+  auditSessionAccessDenial(request, userId, sessionId, access.reason, ROUTE);
+  return NextResponse.json({ error: 'This session has no sandbox yet', reason: 'not_started' }, { status: 404 });
 }
 
 function mutateFailureResponse(result: Extract<MutateMachinePathResult, { ok: false }>, notFoundMessage: string): NextResponse {

@@ -56,7 +56,7 @@ export const defaultReconcileAgentSessionOrphanSpritesDeps: ReconcileOrphanSprit
         .limit(LOOKAHEAD),
       db
         .select({
-          sessionId: agentSessions.conversationId,
+          sessionId: agentSessions.id,
           sandboxId: agentSessions.sandboxId,
           spriteInstanceId: agentSessions.spriteInstanceId,
           teardownRequestedAt: agentSessions.teardownRequestedAt,
@@ -126,10 +126,18 @@ export const defaultReconcileAgentSessionOrphanSpritesDeps: ReconcileOrphanSprit
       await host.kill({ sandboxId, expectedInstanceId: spriteInstanceId ?? undefined });
       return { ok: true };
     } catch (error) {
-      // A DIFFERENT VM holds this name now — our target is already gone,
-      // exactly the outcome we wanted. The newcomer has its OWN fresh
-      // tracking row, so releasing ours never orphans it.
-      if (error instanceof SandboxSpriteReplacedError) return { ok: true };
+      // A DIFFERENT VM holds this name now — our target is already gone, but
+      // what that MEANS depends on which row this is (#2254), and this binding
+      // doesn't know that — the pure module does (`row.kind`). Report the
+      // replacement rather than collapsing it to success here: for a session
+      // row that reads as "confirmed gone" (its own identity CAS protects a
+      // live replacement), but for a `reclaim` row — whose outbox entry is the
+      // LAST pointer to whatever VM exists under this name — treating it as
+      // success would delete the only pointer to a Sprite still alive under
+      // `actualInstanceId`.
+      if (error instanceof SandboxSpriteReplacedError) {
+        return { ok: 'replaced', actualInstanceId: error.actualInstanceId };
+      }
       return { ok: false, error };
     }
   },
@@ -159,5 +167,14 @@ export const defaultReconcileAgentSessionOrphanSpritesDeps: ReconcileOrphanSprit
         lastError: error instanceof Error ? error.message : String(error),
       })
       .where(eq(machineSpriteReclaims.sandboxId, sandboxId));
+  },
+
+  async chaseReclaimInstance({ sandboxId, actualInstanceId }) {
+    // Reuses the store's own upsert rather than a second write path — its
+    // `ON CONFLICT DO UPDATE ... COALESCE` is exactly the trigger-mirroring
+    // chase this needs, and the row already exists (we are reconciling it), so
+    // this always takes the UPDATE branch.
+    const store = await getAgentSessionStore();
+    await store.enqueueReclaim({ sandboxId, spriteInstanceId: actualInstanceId });
   },
 };

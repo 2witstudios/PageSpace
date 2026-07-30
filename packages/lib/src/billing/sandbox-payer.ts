@@ -1,88 +1,56 @@
 /**
- * resolveSandboxPayerId — the ONE seam that names who pays for a sandbox's
- * active runtime (and, via the idle-storage cron, its persistent storage).
+ * resolveSessionPayerId — the ONE seam that names who pays for a sandbox's
+ * active runtime, and (via the storage reconcile) its persistent storage.
  *
- * Every sandbox acquisition path (agent tool runs via
- * `createResolveSandboxActorContext`, interactive PTY sessions via
- * `makeTerminalCheckAuth`) resolves `tenantId` to the ACTING drive's
- * `ownerId` — correct when the sandbox is anchored to the agent's own page in
- * its own drive, but an agent page can be shared into a DIFFERENT drive than
- * the acting tenant's (page-permission-based, not per-drive). In that case
- * `tenantId` is the ACTOR's drive owner, not the referenced page's — so this
- * resolves the referenced page's own drive owner and bills THAT account,
- * falling back to `tenantId` only when there's no backing page (e.g. a
- * global-assistant run with no agent page) or the page's owner can't be
- * resolved (orphaned page).
+ * A session is a drive-level workspace (contract.ts invariant 1): its bill
+ * lands on the drive's owner when it has one, or on the session's own
+ * `ownerId` for a user-scoped global-assistant session (`driveId` null) — the
+ * SAME attribution rule `storageBillingTarget`
+ * (`services/sandbox/sandbox-storage-attribution.ts`) decides for storage.
+ * This is the charge-time twin of that rule: where the storage reconcile
+ * SKIPS a row whose drive owner can't be resolved (a stale read mid-delete,
+ * self-corrects next run), a live runtime charge has already happened and
+ * needs a payer NOW, so it falls back to the session's own `ownerId` instead.
  *
- * `lookupPageOwnerId` is injected (not a direct DB import) so this stays a
- * pure, independently-testable seam; `lookupPageOwnerId` below is the one real
- * implementation every caller wires in, so the pages→drives join is written
- * exactly once.
+ * Deliberately keyed on the session's OWN `driveId`/`ownerId`, never on the
+ * caller's surface drive or the conversation's agent page — a session hosts
+ * MANY conversations (possibly with agents from a different drive than the
+ * one the caller happens to be chatting from), and the payer must not depend
+ * on which conversation the request came through.
+ *
+ * `lookupDriveOwnerId` is injected (not a direct DB import) so this stays a
+ * pure, independently-testable seam.
  */
-export interface ResolveSandboxPayerInput {
-  /** Fallback payer — the ACTING drive's owner, as resolved by every current sandbox-acquisition path. */
-  tenantId: string;
-  /** The active sandbox's backing agent page id; undefined when there's no backing page. */
-  agentPageId?: string;
-  /** Resolves a page's owning drive's `ownerId`; null when the page/drive can't be found. */
-  lookupPageOwnerId: (pageId: string) => Promise<string | null>;
-}
-
-export async function resolveSandboxPayerId(input: ResolveSandboxPayerInput): Promise<string> {
-  if (!input.agentPageId) return input.tenantId;
-  const ownerId = await input.lookupPageOwnerId(input.agentPageId);
-  return ownerId ?? input.tenantId;
-}
-
-/**
- * resolveAgentSessionPayerId — the agent-sessions twin of `resolveSandboxPayerId`
- * above, and the ONLY place the nullable-`agentPageId` payer invariant is
- * handled (Phase 7, billing/storage re-point). Do not re-derive this fallback
- * elsewhere.
- *
- * An `agent_sessions` row's `agentPageId` is nullable — null means a
- * global-assistant session with no backing page at all, not an orphaned
- * reference. So the fallback here is the row's own `ownerId` (always present),
- * never a caller-supplied tenantId: unlike a sandbox acquisition (which can be
- * addressed from a different drive than the acting tenant), a session's owner
- * IS its payer of last resort by construction.
- *
- * When `agentPageId` IS set, resolution is identical to
- * `resolveSandboxPayerId`: look up the page's owning drive's owner, falling
- * back to `ownerId` if that lookup fails (e.g. an orphaned page) rather than
- * leaving the session unbillable.
- */
-export interface ResolveAgentSessionPayerInput {
-  /** The session's own owner — the fallback payer, and the ONLY payer for a null-`agentPageId` (global-assistant) session. */
+export interface ResolveSessionPayerInput {
+  /** The session's own drive; null for a user-scoped global-assistant session. */
+  driveId: string | null;
+  /** The session's own owner — the fallback payer, and the ONLY payer when `driveId` is null. */
   ownerId: string;
-  /** The session's backing agent page; null for a global-assistant session. */
-  agentPageId: string | null;
-  /** Resolves a page's owning drive's `ownerId`; null when the page/drive can't be found. */
-  lookupPageOwnerId: (pageId: string) => Promise<string | null>;
+  /** Resolves a drive's `ownerId`; null when it can't be resolved (e.g. a stale read of a drive mid-delete). */
+  lookupDriveOwnerId: (driveId: string) => Promise<string | null>;
 }
 
-export async function resolveAgentSessionPayerId(input: ResolveAgentSessionPayerInput): Promise<string> {
-  if (!input.agentPageId) return input.ownerId;
-  const ownerId = await input.lookupPageOwnerId(input.agentPageId);
+export async function resolveSessionPayerId(input: ResolveSessionPayerInput): Promise<string> {
+  if (!input.driveId) return input.ownerId;
+  const ownerId = await input.lookupDriveOwnerId(input.driveId);
   return ownerId ?? input.ownerId;
 }
 
 /**
- * Real DB-backed page→drive-owner lookup — the ONE place this join is
- * written. `leftJoin` (not `innerJoin`) so a page whose drive vanished (should
- * never happen given the cascade FK, but defends against a stale read) resolves
- * to `null` rather than silently dropping the row.
+ * Real DB-backed drive→owner lookup — the ONE place this read is written for
+ * billing. A session is a drive-level workspace, so its runtime/storage bills
+ * the drive's owner; null when the drive cannot be found (a stale read mid-delete
+ * — callers fall back to the session's own owner, or skip, per their own policy).
  */
-export async function lookupPageOwnerId(pageId: string): Promise<string | null> {
+export async function lookupDriveOwnerId(driveId: string): Promise<string | null> {
   const { db } = await import('@pagespace/db/db');
   const { eq } = await import('@pagespace/db/operators');
-  const { pages, drives } = await import('@pagespace/db/schema/core');
+  const { drives } = await import('@pagespace/db/schema/core');
 
   const [row] = await db
     .select({ ownerId: drives.ownerId })
-    .from(pages)
-    .leftJoin(drives, eq(pages.driveId, drives.id))
-    .where(eq(pages.id, pageId))
+    .from(drives)
+    .where(eq(drives.id, driveId))
     .limit(1);
 
   return row?.ownerId ?? null;

@@ -398,6 +398,7 @@
         "src/security/url-validator.ts",
         "src/services/agent-sessions/agent-session-access.ts",
         "src/services/agent-sessions/agent-session-sprite.ts",
+        "src/services/agent-sessions/agent-session-tenant.ts",
         "src/services/agent-sessions/agent-sessions-store.ts",
         "src/services/agent-sessions/agent-sessions.ts",
         "src/services/agent-sessions/session-scrollback.ts",

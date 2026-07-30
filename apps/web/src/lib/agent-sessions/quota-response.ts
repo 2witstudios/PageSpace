@@ -22,6 +22,16 @@
  *    agents, conversations and sandboxes. It matches what the socket surface
  *    prints into the terminal pane for the identical refusal — one event should
  *    not read three different ways depending on which layer said no.
+ *
+ * `reasonCode` vs `message` are deliberately two separate parameters, not one
+ * overloaded `detail` string (a live P1 the un-restored PR #2253 caught): the
+ * provisioner's denial carries a DIAGNOSTIC enum (`quota.reason`, e.g.
+ * `'concurrency_limit'`) that is always set whenever the denial fires — so a
+ * single `detail ?? SESSION_QUOTA_MESSAGE` never falls through to the human
+ * sentence and the caller sees the bare enum code rendered as their error
+ * message. `reasonCode` goes ONLY into the audit row; the response body is
+ * always the human sentence unless a caller hands `message` an already-human
+ * string it computed itself (the active-session-count refusal below does).
  */
 import { NextResponse } from 'next/server';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -30,22 +40,59 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 export const SESSION_QUOTA_MESSAGE =
   "Your plan's limit for running sandboxes is already in use — stop one before starting another.";
 
-export function sessionQuotaExceeded(
+/**
+ * Human-facing copy for the PER-SESSION conversation ceiling (issue #2262
+ * finding 2) — a different quota from {@link SESSION_QUOTA_MESSAGE}'s
+ * account-wide sandbox count: this one is about how many conversations ONE
+ * session holds, and its remedy is a different session or an existing
+ * conversation, never "stop a sandbox".
+ */
+export const SESSION_CONVERSATION_LIMIT_MESSAGE =
+  'This session already holds the maximum number of conversations — continue in an existing one, or start a new session, before adding another.';
+
+/** The 429 for `SessionFullError` (`create-conversation-in-session.ts`) — kept beside its message so the two cannot drift. */
+export function sessionConversationLimitExceeded(
   request: Request,
   userId: string,
   sessionId: string,
   /** Which route refused, for the audit trail only — never shown to the caller. */
   route: string,
-  /** A more specific message from the provisioner, when it had one. */
-  detail?: string,
 ): NextResponse {
   auditRequest(request, {
     eventType: 'security.rate.limited',
     userId,
     resourceType: 'agent_session',
     resourceId: sessionId,
-    details: { reason: 'session_limit_reached', route },
+    details: { reason: 'session_conversation_limit_reached', route },
     riskScore: 0,
   });
-  return NextResponse.json({ error: detail ?? SESSION_QUOTA_MESSAGE }, { status: 429 });
+  return NextResponse.json({ error: SESSION_CONVERSATION_LIMIT_MESSAGE }, { status: 429 });
+}
+
+export function sessionQuotaExceeded(
+  request: Request,
+  userId: string,
+  sessionId: string,
+  /** Which route refused, for the audit trail only — never shown to the caller. */
+  route: string,
+  options?: {
+    /** A diagnostic enum from the provisioner (e.g. `'concurrency_limit'`) — audit-only, NEVER the response body. */
+    reasonCode?: string;
+    /** An already-human-worded override (e.g. one that names a live count). Falls back to SESSION_QUOTA_MESSAGE. */
+    message?: string;
+  },
+): NextResponse {
+  auditRequest(request, {
+    eventType: 'security.rate.limited',
+    userId,
+    resourceType: 'agent_session',
+    resourceId: sessionId,
+    details: {
+      reason: 'session_limit_reached',
+      route,
+      ...(options?.reasonCode ? { reasonCode: options.reasonCode } : {}),
+    },
+    riskScore: 0,
+  });
+  return NextResponse.json({ error: options?.message ?? SESSION_QUOTA_MESSAGE }, { status: 429 });
 }

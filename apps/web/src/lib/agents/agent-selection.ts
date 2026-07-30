@@ -1,6 +1,7 @@
 /**
- * The Agents surface's URL grammar — the ONE place `?agent=<agentId>&c=<conversationId>`
- * is read or written.
+ * The Agents surface's URL grammar — the ONE place
+ * `?session=<sessionId>&c=<conversationId>&agent=<agentPageId>` is read or
+ * written.
  *
  * Successor to `lib/development/development-route.ts`'s single-call-site virtue,
  * with the shape changed: Development put its selection in the PATH
@@ -18,21 +19,25 @@
  * `parseAgentSelection`, every sidebar row and cross-link builds through
  * `buildAgentSelectionUrl`, and `popstate` re-hydrates through the parse again.
  *
- * Vocabulary note: `conversationId` is also the sessionId (see
- * `@pagespace/lib/agent-sessions/contract` — sessionId ≡ conversationId). This
- * module deliberately uses the UI word, because a URL is user-facing.
+ * Vocabulary note: a SESSION is a drive-level workspace hosting many
+ * conversations (contract invariant 1). `session` addresses the workspace,
+ * `c` the thread inside it, and `agent` names the thread's agent page — the
+ * seed the pane grid needs to render the conversation without a second fetch.
  */
 
 /** A selection is total: absent means `null`, never `undefined`, so it compares by value. */
 export interface AgentSelection {
-  /** The AI_CHAT page id, or null — either nothing is selected, or it's a global-assistant conversation. */
-  agentId: string | null;
-  /** ≡ the sessionId. Null when an agent is selected but none of its conversations is. */
+  /** The session (workspace) id, or null when nothing is selected. */
+  sessionId: string | null;
+  /** The conversation inside that session, or null when only the session is selected. */
   conversationId: string | null;
+  /** The conversation's agent page — the pane grid's seed. Null for none/global-assistant. */
+  agentId: string | null;
 }
 
-export const EMPTY_AGENT_SELECTION: AgentSelection = { agentId: null, conversationId: null };
+export const EMPTY_AGENT_SELECTION: AgentSelection = { sessionId: null, conversationId: null, agentId: null };
 
+const SESSION_PARAM = 'session';
 const AGENT_PARAM = 'agent';
 const CONVERSATION_PARAM = 'c';
 
@@ -56,8 +61,9 @@ function readParam(params: URLSearchParams, key: string): string | null {
 export function parseAgentSelection(search: string): AgentSelection {
   const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
   return {
-    agentId: readParam(params, AGENT_PARAM),
+    sessionId: readParam(params, SESSION_PARAM),
     conversationId: readParam(params, CONVERSATION_PARAM),
+    agentId: readParam(params, AGENT_PARAM),
   };
 }
 
@@ -75,22 +81,25 @@ export function agentsBasePath(driveId: string | null | undefined): string {
  *
  * Absent params are omitted rather than written empty, so the URL a user sees
  * (and copies) carries only what is actually selected — and so that the same
- * selection always stringifies the same way. Param order is fixed (`agent`
- * before `c`) for the same reason: `pushState` of a byte-identical URL is what
- * makes a re-selection a no-op instead of a duplicate history entry.
+ * selection always stringifies the same way. Param order is fixed (`session`,
+ * `c`, `agent`) for the same reason: `pushState` of a byte-identical URL is
+ * what makes a re-selection a no-op instead of a duplicate history entry.
  */
 export function buildAgentSelectionUrl({
   driveId,
+  sessionId,
   agentId,
   conversationId,
 }: {
   driveId?: string | null;
+  sessionId?: string | null;
   agentId?: string | null;
   conversationId?: string | null;
 }): string {
   const params = new URLSearchParams();
-  if (agentId) params.set(AGENT_PARAM, agentId);
+  if (sessionId) params.set(SESSION_PARAM, sessionId);
   if (conversationId) params.set(CONVERSATION_PARAM, conversationId);
+  if (agentId) params.set(AGENT_PARAM, agentId);
   const query = params.toString();
   const base = agentsBasePath(driveId);
   return query ? `${base}?${query}` : base;

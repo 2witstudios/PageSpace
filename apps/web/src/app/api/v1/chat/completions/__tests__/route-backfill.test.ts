@@ -104,6 +104,7 @@ vi.mock('@/lib/ai/core/ai-tools', () => ({
 }));
 
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
+  filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
   filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn((tools: unknown) => tools),
   filterToolsForMcpScope: vi.fn((tools: unknown) => tools),
@@ -246,6 +247,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
+  sessionId: null,
       type: 'page',
       lastMessageAt: null,
     });
@@ -314,6 +316,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
+  sessionId: null,
       type: 'page',
       lastMessageAt: null,
     });
@@ -358,6 +361,7 @@ describe('POST /api/v1/chat/completions — back-fill tool results', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
+  sessionId: null,
       type: 'page',
       lastMessageAt: null,
     });

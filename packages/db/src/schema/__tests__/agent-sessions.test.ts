@@ -1,14 +1,20 @@
 /**
- * Agent sessions phase 1 — schema-level proof of the invariants the rest of the
- * rebuild is allowed to assume. These run without a database: they assert the
- * Drizzle declarations the migrations were generated from, plus the reclaim
- * trigger's SQL.
+ * Agent sessions — schema-level proof of the invariants the rest of the system
+ * is allowed to assume. These run without a database: they assert the Drizzle
+ * declarations the migrations were generated from, plus the reclaim trigger's
+ * SQL.
  *
- * The four that must never silently regress:
+ * The five that must never silently regress:
  *
- *  - **sessionId ≡ conversationId** — `conversationId` is the PRIMARY KEY, not a
- *    unique column beside a synthetic id. That is what makes a second
- *    session-binding field impossible to add, and what gives the 1:1 for free.
+ *  - **A session is NOT a conversation** — `id` is the session's OWN primary
+ *    key, and no conversation-derived column exists on the table. The first cut
+ *    had `conversationId` as the PK (one environment per chat thread), which
+ *    made shared working contexts structurally impossible; a session is a
+ *    drive-level workspace hosting MANY conversations.
+ *  - **Threads bind permanently and survive their session** —
+ *    `conversations.sessionId` is a nullable FK with ON DELETE SET NULL: ending
+ *    a session keeps its threads as plain history, and a thread's filesystem is
+ *    never retroactively rewritten (moving a thread is a fork, not a rebind).
  *  - **Ids address, names label** — a session's `name` carries NO uniqueness of
  *    any kind (renaming can never break a connection); a shell's `(sessionId,
  *    name)` uniqueness exists for tab titles, while `id` alone is the address.
@@ -17,9 +23,9 @@
  *    session stops sharing one filesystem and the model is back to the
  *    per-terminal Sprite this design replaced.
  *  - **A Sprite pointer outlives its row** — every delete path into
- *    `agent_sessions` cascades, so an AFTER DELETE trigger must rescue
- *    `sandboxId`/`spriteInstanceId` into `machine_sprite_reclaims` or a live VM
- *    bills forever with nothing pointing at it.
+ *    `agent_sessions` cascades (drive, owner), so an AFTER DELETE trigger must
+ *    rescue `sandboxId`/`spriteInstanceId` into `machine_sprite_reclaims` or a
+ *    live VM bills forever with nothing pointing at it.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -32,6 +38,7 @@ import {
   agentSessionsRelations,
   agentSessionShellsRelations,
 } from '../agent-sessions';
+import { conversations } from '../conversations';
 
 const sessionsConfig = getTableConfig(agentSessions);
 const sessionsColumns = getTableColumns(agentSessions);
@@ -46,9 +53,11 @@ function fkOnColumn(config: ReturnType<typeof getTableConfig>, columnName: strin
   return fk!;
 }
 
+// 0238, not 0233: the un-conflation's DROP TABLE (0236) took 0233's trigger
+// with it, so the LIVE trigger is the one 0238 re-armed on the rebuilt table.
 const TRIGGER_MIGRATION = path.resolve(
   __dirname,
-  '../../../drizzle/0233_agent_session_sprite_reclaim_trigger.sql',
+  '../../../drizzle/0238_session_unconflate_recreate_reclaim_trigger.sql',
 );
 
 /** SQL with line comments stripped, so assertions never match prose. */
@@ -62,16 +71,25 @@ function stripComments(raw: string): string {
 const triggerSql = stripComments(readFileSync(TRIGGER_MIGRATION, 'utf8'));
 
 describe('agent_sessions schema — identity', () => {
-  it('given sessionId ≡ conversationId, the conversation id should BE the primary key', () => {
+  it('given a session is NOT a conversation, the session should own its OWN primary key', () => {
     expect(sessionsConfig.name).toBe('agent_sessions');
-    expect(sessionsColumns.conversationId.primary).toBe(true);
+    expect(sessionsColumns.id.primary).toBe(true);
     expect(sessionsConfig.primaryKeys).toHaveLength(0);
   });
 
-  it('cascade-deletes the session when its conversation is deleted', () => {
-    const fk = fkOnColumn(sessionsConfig, 'conversationId');
-    expect(getTableConfig(fk.reference().foreignTable).name).toBe('conversations');
+  it('should carry NO conversation-derived column — the conflation must not creep back', () => {
+    // `conversationId` as the PK is what forced one environment per chat
+    // thread and made panes unable to share a sandbox. The association runs
+    // the OTHER way now: conversations.sessionId FKs here.
+    expect('conversationId' in sessionsColumns).toBe(false);
+    expect('agentPageId' in sessionsColumns).toBe(false);
+  });
+
+  it('given a session is a drive-level workspace, driveId should be a nullable cascade FK (null = global-assistant, user-scoped)', () => {
+    const fk = fkOnColumn(sessionsConfig, 'driveId');
+    expect(getTableConfig(fk.reference().foreignTable).name).toBe('drives');
     expect(fk.onDelete).toBe('cascade');
+    expect(sessionsColumns.driveId.notNull).toBe(false);
   });
 
   it('cascade-deletes the session when its owner is deleted', () => {
@@ -79,13 +97,6 @@ describe('agent_sessions schema — identity', () => {
     expect(getTableConfig(fk.reference().foreignTable).name).toBe('users');
     expect(fk.onDelete).toBe('cascade');
     expect(sessionsColumns.ownerId.notNull).toBe(true);
-  });
-
-  it('given a global-assistant session has no agent page, agentPageId should be nullable and cascade off pages', () => {
-    const fk = fkOnColumn(sessionsConfig, 'agentPageId');
-    expect(getTableConfig(fk.reference().foreignTable).name).toBe('pages');
-    expect(fk.onDelete).toBe('cascade');
-    expect(sessionsColumns.agentPageId.notNull).toBe(false);
   });
 
   it('given names label and never address, the session name should carry no uniqueness at all', () => {
@@ -98,10 +109,34 @@ describe('agent_sessions schema — identity', () => {
     expect(sessionsConfig.uniqueConstraints).toHaveLength(0);
   });
 
-  it('indexes the two lookup keys — agentPageId and ownerId', () => {
+  it('indexes the two lookup keys — driveId and ownerId', () => {
     const indexNames = sessionsConfig.indexes.map((index) => index.config.name);
-    expect(indexNames).toContain('agent_sessions_agent_page_id_idx');
+    expect(indexNames).toContain('agent_sessions_drive_id_idx');
     expect(indexNames).toContain('agent_sessions_owner_id_idx');
+  });
+});
+
+describe('conversations.sessionId — the thread→session binding', () => {
+  const conversationsConfig = getTableConfig(conversations);
+  const conversationsColumns = getTableColumns(conversations);
+
+  it('should be a nullable FK onto agent_sessions.id — plain chats have no session', () => {
+    const fk = fkOnColumn(conversationsConfig, 'sessionId');
+    expect(getTableConfig(fk.reference().foreignTable).name).toBe('agent_sessions');
+    expect(fk.reference().foreignColumns.map((column) => column.name)).toEqual(['id']);
+    expect(conversationsColumns.sessionId.notNull).toBe(false);
+  });
+
+  it('given threads outlive their session as history, should SET NULL rather than cascade', () => {
+    // Cascade here would make ending a session DELETE its chat threads.
+    // A session's death releases compute; it must never erase history.
+    const fk = fkOnColumn(conversationsConfig, 'sessionId');
+    expect(fk.onDelete).toBe('set null');
+  });
+
+  it('indexes sessionId for the per-session conversation list', () => {
+    const indexNames = conversationsConfig.indexes.map((index) => index.config.name);
+    expect(indexNames).toContain('conversations_session_id_idx');
   });
 });
 
@@ -144,11 +179,11 @@ describe('agent_sessions schema — Sprite identity and storage', () => {
 });
 
 describe('agent_session_shells schema', () => {
-  it('cascade-deletes shells when their session row dies, addressing the session by its conversation id', () => {
+  it('cascade-deletes shells when their session row dies, addressing the session by its own id', () => {
     expect(shellsConfig.name).toBe('agent_session_shells');
     const fk = fkOnColumn(shellsConfig, 'sessionId');
     expect(getTableConfig(fk.reference().foreignTable).name).toBe('agent_sessions');
-    expect(fk.reference().foreignColumns.map((column) => column.name)).toEqual(['conversationId']);
+    expect(fk.reference().foreignColumns.map((column) => column.name)).toEqual(['id']);
     expect(fk.onDelete).toBe('cascade');
   });
 
@@ -221,7 +256,7 @@ describe('agent sessions relations', () => {
   });
 });
 
-describe('agent_sessions sprite reclaim trigger (0233)', () => {
+describe('agent_sessions sprite reclaim trigger (0238)', () => {
   it('fires AFTER DELETE, per row, on agent_sessions', () => {
     expect(triggerSql).toMatch(/CREATE TRIGGER agent_sessions_sprite_reclaim/);
     expect(triggerSql).toMatch(/AFTER DELETE ON agent_sessions/);

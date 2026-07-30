@@ -19,9 +19,9 @@
 
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { and, eq, ne, desc, inArray } from '@pagespace/db/operators';
+import { and, count, eq, ne, desc } from '@pagespace/db/operators';
 import { chatMessages, pages } from '@pagespace/db/schema/core';
-import { messages as globalMessages } from '@pagespace/db/schema/conversations';
+import { conversations, messages as globalMessages } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { getCodeExecutionConcurrencyLimit } from '@pagespace/lib/services/sandbox/quota';
@@ -29,12 +29,18 @@ import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { deriveSandboxStatus } from '@pagespace/lib/services/agent-sessions/session-status';
 import {
-  ensureSession,
+  createConversationInSession,
+  findSessionForConversation,
   provisionSessionSandbox,
-  endSession as endSessionRuntime,
   getAgentSessionStore,
-  findSessionRecord,
 } from '@/lib/agent-sessions/agent-sessions-runtime';
+import {
+  ConversationUnavailableError,
+  AgentNotInSessionDriveError,
+  SessionFullError,
+} from '@/lib/agent-sessions/create-conversation-in-session';
+import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-sessions/plan-spawn-session';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import {
   getSessionShellStore,
   killShellById,
@@ -45,7 +51,7 @@ import { abortConversationStreams } from '@/lib/ai/core/abort-conversation-strea
 import {
   createSessionTools,
   type DispatchOutcome,
-  type SessionListingEntry,
+  type SessionWorkspaceListing,
   type SessionToolsDeps,
   type TranscriptEntry,
 } from './session-tools';
@@ -206,7 +212,13 @@ async function dispatchThroughChatPipeline(input: {
   try {
     response = await fetch(url, { method: 'POST', headers: requestHeaders, body });
   } catch (error) {
-    return { ok: false, reason: 'failed', detail: error instanceof Error ? error.message : String(error) };
+    // A FIXED message, never the raw fetch/network error (issue #2262 finding
+    // 3) — the real cause (DNS, connection refused, TLS) is an internal detail
+    // logged server-side, not something to hand a model dispatching a turn.
+    loggers.ai.error('session dispatch: could not reach the chat pipeline', error instanceof Error ? error : undefined, {
+      sessionId: input.sessionId,
+    });
+    return { ok: false, reason: 'failed', detail: 'could not reach the chat pipeline to dispatch this turn' };
   }
 
   if (!response.ok) {
@@ -243,37 +255,71 @@ async function dispatchThroughChatPipeline(input: {
 // Listings / transcripts
 // ---------------------------------------------------------------------------
 
-async function listSessionsForOwner(ownerId: string): Promise<SessionListingEntry[]> {
+/**
+ * The caller's whole workspace, in the tool family's OWN address namespace:
+ * workers are the session's conversations (their ids are what send/read/
+ * kill_session take), shells are the workspace's PTYs, and the sandbox status
+ * is the one Sprite they all share (review H2b — the old listing enumerated
+ * workspace-row ids no verb could address, and never delivered the promised
+ * agent labels). Newest first, capped at {@link MAX_SESSION_CONVERSATIONS} —
+ * the same ceiling a session's conversations are created under, so the
+ * listing can never be truncated by anything the cap didn't already permit
+ * to exist (issue #2262 finding 4 — no unbounded `db.select()` feeding model
+ * context).
+ *
+ * DELIBERATE metadata exposure (issue #2262 finding 6): this lists EVERY
+ * active conversation in the session — including siblings the CALLER did not
+ * spawn and does not own — by title and agent, to whichever member's agent
+ * asks. That is shared-workspace semantics, not a leak: a session is one
+ * shared sandbox and filesystem by design, so knowing what else is running
+ * there is the same visibility a human teammate has glancing at the sidebar.
+ * What stays owner-gated is TRANSCRIPT content — `read_session` still requires
+ * `openOwnSession`'s ownership check, so seeing a sibling listed here grants
+ * no access to what it said.
+ */
+async function listSessionWorkers({
+  workspaceSessionId,
+  callerConversationId,
+}: {
+  workspaceSessionId: string;
+  callerConversationId: string;
+}): Promise<SessionWorkspaceListing> {
   const store = await getAgentSessionStore();
-  const rows = await store.list({ ownerId });
-  const agentIds = [...new Set(rows.flatMap((row) => (row.agentPageId ? [row.agentPageId] : [])))];
-  const agentTitles = new Map<string, string>(
-    agentIds.length === 0
-      ? []
-      : (
-          await db
-            .select({ id: pages.id, title: pages.title })
-            .from(pages)
-            .where(inArray(pages.id, agentIds))
-        ).map((page) => [page.id, page.title]),
-  );
+  const [row, workerRows, shells] = await Promise.all([
+    store.findById(workspaceSessionId),
+    db
+      .select({
+        conversationId: conversations.id,
+        title: conversations.title,
+        agentPageId: conversations.contextId,
+        type: conversations.type,
+        agentTitle: pages.title,
+      })
+      .from(conversations)
+      .leftJoin(pages, eq(pages.id, conversations.contextId))
+      .where(and(eq(conversations.sessionId, workspaceSessionId), eq(conversations.isActive, true)))
+      .orderBy(desc(conversations.createdAt))
+      .limit(MAX_SESSION_CONVERSATIONS),
+    listShells(workspaceSessionId),
+  ]);
 
-  return Promise.all(
-    rows.map(async (row) => ({
-      sessionId: row.conversationId,
-      name: row.name ?? '',
-      status: deriveSandboxStatus(row),
+  return {
+    sandbox: row ? deriveSandboxStatus(row) : 'none',
+    workers: workerRows.map((worker) => ({
+      sessionId: worker.conversationId,
+      name: worker.title ?? '',
       agent:
-        row.agentPageId === null
-          ? null
-          : { agentId: row.agentPageId, title: agentTitles.get(row.agentPageId) ?? 'Agent' },
-      shells: (await listShells(row.conversationId)).map((shell) => ({
-        shellId: shell.shellId,
-        name: shell.name,
-        createdAt: shell.createdAt,
-      })),
+        worker.type === 'page' && worker.agentPageId !== null
+          ? { agentId: worker.agentPageId, title: worker.agentTitle ?? '' }
+          : null,
+      isCaller: worker.conversationId === callerConversationId,
     })),
-  );
+    shells: shells.map((shell) => ({
+      shellId: shell.shellId,
+      name: shell.name,
+      createdAt: shell.createdAt,
+    })),
+  };
 }
 
 async function readSessionTranscript(input: {
@@ -329,18 +375,41 @@ async function readSessionTranscript(input: {
 
 export function buildSessionToolsDeps(): SessionToolsDeps {
   return {
-    listSessions: listSessionsForOwner,
+    findOwnWorkspace: async (conversationId) => {
+      const row = await findSessionForConversation(conversationId);
+      return row ? { sessionId: row.id } : null;
+    },
+    listSessionWorkers,
 
     findSession: async (sessionId) => {
-      const row = await findSessionRecord(sessionId);
-      if (!row) return null;
+      // The tool family's "sessionId" is the WORKER's conversation id (what
+      // spawn returned) — resolve the conversation, not a workspace row.
+      const conversation = await conversationRepository.getConversation(sessionId);
+      if (!conversation) return null;
       return {
-        sessionId: row.conversationId,
-        ownerId: row.ownerId,
-        agentPageId: row.agentPageId,
-        name: row.name ?? '',
-        endedAt: row.endedAt?.toISOString() ?? null,
+        sessionId,
+        ownerId: conversation.userId,
+        agentPageId: conversation.type === 'page' ? conversation.contextId : null,
+        name: conversation.title ?? '',
+        // A worker conversation never "ends" — its session might, which the
+        // dispatch surfaces as a failed run rather than a dead address.
+        endedAt: null,
+        // The WORKSPACE this conversation is bound to (conversations.sessionId
+        // — the agent_sessions.id FK), or null for a session-less thread.
+        // Compared against the CALLER's own workspace in openOwnSession
+        // (issue #2262 finding 1): ownership of the row alone is not enough,
+        // because a user's own conversation in a DIFFERENT session must still
+        // refuse — exactly what shells already enforce via findOwnWorkspace.
+        workspaceSessionId: conversation.sessionId,
       };
+    },
+
+    countSessionConversations: async (workspaceSessionId) => {
+      const [row] = await db
+        .select({ n: count() })
+        .from(conversations)
+        .where(and(eq(conversations.sessionId, workspaceSessionId), eq(conversations.isActive, true)));
+      return row?.n ?? 0;
     },
 
     countActiveSessions: async (ownerId) => {
@@ -375,9 +444,43 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       return canUserViewPage(userId, agentPageId);
     },
 
-    createWorkerSession: async ({ sessionId, ownerId, agentPageId, name }) => {
-      const ensured = await ensureSession({ conversationId: sessionId, userId: ownerId, agentPageId, name });
-      if (!ensured.ok) return { ok: false, reason: ensured.reason, detail: ensured.detail };
+    createWorkerSession: async ({ sessionId, callerConversationId, ownerId, agentPageId, name }) => {
+      // A worker works in its SPAWNER's workspace: same session, same sandbox,
+      // same filesystem — that shared context is the point of spawning one.
+      // No caller session ⇒ refusal, never a lazily-minted per-thread
+      // environment (the conflation the session model removed).
+      const callerSession = await findSessionForConversation(callerConversationId);
+      if (!callerSession) {
+        return { ok: false, reason: 'no_session', detail: 'This conversation has no session for a worker to join.' };
+      }
+      try {
+        await createConversationInSession({
+          conversationId: sessionId,
+          userId: ownerId,
+          agentPageId,
+          sessionId: callerSession.id,
+          // The worker's label, written AT BIRTH onto the conversation row —
+          // it is what the sidebar and list_sessions display (codex review,
+          // P2: the old path reported the name in the tool response and then
+          // discarded it).
+          title: name,
+        });
+      } catch (error) {
+        // A FIXED message per known cause, never the raw driver/error string
+        // (issue #2262 finding 3): a database error's text is an internal
+        // implementation detail, not something a model should read or repeat.
+        // The real error is logged server-side for whoever debugs the denial.
+        if (error instanceof SessionFullError) {
+          return { ok: false, reason: 'session_full', detail: 'This session already has its maximum number of conversations.' };
+        }
+        if (error instanceof AgentNotInSessionDriveError) {
+          return { ok: false, reason: 'conversation_unavailable', detail: 'That agent belongs to a different drive than this session.' };
+        }
+        if (!(error instanceof ConversationUnavailableError)) {
+          loggers.ai.error('createWorkerSession: could not create the worker conversation', error instanceof Error ? error : undefined, { sessionId, callerConversationId, ownerId });
+        }
+        return { ok: false, reason: 'conversation_unavailable', detail: 'That conversation id is not available.' };
+      }
       return { ok: true };
     },
 
@@ -386,20 +489,21 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
     readTranscript: readSessionTranscript,
 
     endSession: async ({ sessionId, userId }) => {
-      // Stop any in-flight run FIRST (the caller's own streams only —
-      // abortConversationStreams' authorization), then release the compute.
+      // Stop the worker's in-flight run (the caller's own streams only —
+      // abortConversationStreams' authorization). Deliberately NO sandbox
+      // teardown: a worker works in its SPAWNER's session, so tearing "its"
+      // sandbox down would destroy the caller's own working context.
       await abortConversationStreams({ conversationId: sessionId, userId }).catch(() => {});
-      const ended = await endSessionRuntime(sessionId);
-      if (!ended.ok) return { ok: false, reason: ended.reason };
-      return { ok: true, spriteTornDown: ended.spriteTornDown };
+      return { ok: true, spriteTornDown: false };
     },
 
     ensureOwnSessionSandbox: async ({ conversationId, userId, agentPageId }) => {
-      const ensured = await ensureSession({ conversationId, userId, agentPageId });
-      if (!ensured.ok) {
-        return { ok: false, error: `Could not open this conversation's session (${ensured.reason}).` };
+      void agentPageId;
+      const row = await findSessionForConversation(conversationId);
+      if (!row) {
+        return { ok: false, error: "This conversation has no session — open it inside a session to use shells." };
       }
-      const provisioned = await provisionSessionSandbox(ensured.session, userId);
+      const provisioned = await provisionSessionSandbox(row, userId);
       if (!provisioned.ok) {
         return {
           ok: false,
@@ -413,7 +517,11 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
     },
 
     spawnShell: async ({ sessionId, ownerId, name }) => {
-      const spawned = await spawnShell({ sessionId, ownerId, name });
+      // The pure layer hands the CALLER's conversation id; shells hang off the
+      // SESSION, so resolve the working context first.
+      const session = await findSessionForConversation(sessionId);
+      if (!session) return { ok: false, reason: 'no_session' };
+      const spawned = await spawnShell({ sessionId: session.id, ownerId, name });
       if (!spawned.ok) return { ok: false, reason: spawned.reason };
       return { ok: true, shell: spawned.shell };
     },

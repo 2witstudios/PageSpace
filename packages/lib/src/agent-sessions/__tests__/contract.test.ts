@@ -12,12 +12,19 @@ import {
   MAX_COLS,
   MAX_ROWS,
   SHELL_AGENT_TYPES,
+  PANE_KINDS,
+  paneScopeSchema,
+  shellReadPayloadSchema,
+  shellSendPayloadSchema,
+  MAX_SHELLS_PER_READ,
+  MAX_SHELL_INPUT_BYTES,
+  MAX_SCROLLBACK_TAIL_LINES,
 } from '../contract';
 
 const session = {
-  sessionId: 'conv-1',
+  sessionId: 'ses-1',
+  driveId: 'drive-1',
   ownerId: 'user-1',
-  agentPageId: 'page-1',
   name: 'Refactor the parser',
   sandboxStatus: 'running',
   createdAt: '2026-07-28T10:00:00.000Z',
@@ -27,7 +34,7 @@ const session = {
 
 const shell = {
   shellId: 'shell-row-1',
-  sessionId: 'conv-1',
+  sessionId: 'ses-1',
   ownerId: 'user-1',
   name: 'shell-1',
   agentType: 'shell',
@@ -54,8 +61,8 @@ describe('agentSessionDtoSchema', () => {
     expect(agentSessionDtoSchema.parse(session)).toEqual(session);
   });
 
-  it('given a null agentPageId (global-assistant session), should parse', () => {
-    expect(agentSessionDtoSchema.parse({ ...session, agentPageId: null }).agentPageId).toBeNull();
+  it('given a null driveId (global-assistant session, user-scoped), should parse', () => {
+    expect(agentSessionDtoSchema.parse({ ...session, driveId: null }).driveId).toBeNull();
   });
 
   it('given an empty sessionId, should fail (ids address — an empty one addresses nothing)', () => {
@@ -76,10 +83,19 @@ describe('agentSessionDtoSchema', () => {
     expect(parsed.endedAt).toBe('2026-07-28T11:00:00.000Z');
   });
 
-  it('should NOT accept a session-binding field — conversationId IS the session address', () => {
+  it('should strip a conversation id — a session is not addressed by any thread', () => {
+    // The inversion of the old rule: sessionId used to BE the conversation id.
+    // A session hosts many conversations, so a conversationId on the session
+    // DTO would be a claim about which thread "is" the session — a category
+    // error the schema strips rather than models.
     const parsed = agentSessionDtoSchema.parse({ ...session, conversationId: 'conv-1' }) as Record<string, unknown>;
     expect(parsed.conversationId).toBeUndefined();
-    expect(parsed.sessionId).toBe('conv-1');
+    expect(parsed.sessionId).toBe('ses-1');
+  });
+
+  it('should NOT accept an agent field — the agent belongs to each conversation, never the session', () => {
+    const parsed = agentSessionDtoSchema.parse({ ...session, agentPageId: 'page-1' }) as Record<string, unknown>;
+    expect(parsed.agentPageId).toBeUndefined();
   });
 });
 
@@ -170,11 +186,135 @@ describe('shellConnectPayloadSchema', () => {
       machineId: 'm1',
       projectName: 'p',
       branchName: 'b',
-      sessionId: 'conv-1',
+      sessionId: 'ses-1',
     }) as Record<string, unknown>;
     expect(parsed.machineId).toBeUndefined();
     expect(parsed.projectName).toBeUndefined();
     expect(parsed.branchName).toBeUndefined();
     expect(parsed.sessionId).toBeUndefined();
+  });
+});
+
+describe('shellReadPayloadSchema', () => {
+  it('given a single-shell read with a limit, should parse', () => {
+    expect(shellReadPayloadSchema.parse({ shellIds: ['sh-1'], limit: 100 })).toEqual({
+      shellIds: ['sh-1'],
+      limit: 100,
+    });
+  });
+
+  it('given the start half, should carry it — the semantics stay planSessionStart\'s decision', () => {
+    expect(shellReadPayloadSchema.parse({ shellIds: ['sh-1'], start: true, userId: 'user-1' })).toEqual({
+      shellIds: ['sh-1'],
+      start: true,
+      userId: 'user-1',
+    });
+  });
+
+  it('given no shellIds, an empty list, or a blank id, should fail — ids address', () => {
+    expect(shellReadPayloadSchema.safeParse({ limit: 0 }).success).toBe(false);
+    expect(shellReadPayloadSchema.safeParse({ shellIds: [] }).success).toBe(false);
+    expect(shellReadPayloadSchema.safeParse({ shellIds: [''] }).success).toBe(false);
+  });
+
+  it('given more shellIds than one listing can mean, should fail — a read is a session\'s listing, not a crawl', () => {
+    const shellIds = Array.from({ length: MAX_SHELLS_PER_READ + 1 }, (_, index) => `sh-${index}`);
+    expect(shellReadPayloadSchema.safeParse({ shellIds }).success).toBe(false);
+    expect(shellReadPayloadSchema.safeParse({ shellIds: shellIds.slice(0, MAX_SHELLS_PER_READ) }).success).toBe(true);
+  });
+
+  it('given a negative, fractional, or unbounded limit, should fail — no unbounded number crosses this hop', () => {
+    expect(shellReadPayloadSchema.safeParse({ shellIds: ['sh-1'], limit: -1 }).success).toBe(false);
+    expect(shellReadPayloadSchema.safeParse({ shellIds: ['sh-1'], limit: 1.5 }).success).toBe(false);
+    expect(shellReadPayloadSchema.safeParse({ shellIds: ['sh-1'], limit: MAX_SCROLLBACK_TAIL_LINES + 1 }).success).toBe(false);
+    expect(shellReadPayloadSchema.safeParse({ shellIds: ['sh-1'], limit: 0 }).success).toBe(true);
+  });
+
+  it('given a non-boolean start or blank userId, should fail rather than coerce', () => {
+    expect(shellReadPayloadSchema.safeParse({ shellIds: ['sh-1'], start: 'yes' }).success).toBe(false);
+    expect(shellReadPayloadSchema.safeParse({ shellIds: ['sh-1'], userId: '' }).success).toBe(false);
+  });
+});
+
+describe('shellSendPayloadSchema', () => {
+  it('given a well-formed send, should parse', () => {
+    expect(shellSendPayloadSchema.parse({ shellId: 'sh-1', input: 'ls\n' })).toEqual({
+      shellId: 'sh-1',
+      input: 'ls\n',
+    });
+  });
+
+  it('given a missing or blank shellId, should fail', () => {
+    expect(shellSendPayloadSchema.safeParse({ input: 'ls' }).success).toBe(false);
+    expect(shellSendPayloadSchema.safeParse({ shellId: '', input: 'ls' }).success).toBe(false);
+  });
+
+  it('given an empty input, should fail — there is nothing to type', () => {
+    expect(shellSendPayloadSchema.safeParse({ shellId: 'sh-1', input: '' }).success).toBe(false);
+  });
+
+  it('given input over the byte cap, should fail — refused, never truncated', () => {
+    expect(
+      shellSendPayloadSchema.safeParse({ shellId: 'sh-1', input: 'x'.repeat(MAX_SHELL_INPUT_BYTES + 1) }).success,
+    ).toBe(false);
+    expect(
+      shellSendPayloadSchema.safeParse({ shellId: 'sh-1', input: 'x'.repeat(MAX_SHELL_INPUT_BYTES) }).success,
+    ).toBe(true);
+  });
+
+  it('should count the cap in BYTES, not code units — what the PTY receives is bytes', () => {
+    // '€' is 3 UTF-8 bytes: 1366 of them fit in 4096 code units but not 4096 bytes.
+    expect(
+      shellSendPayloadSchema.safeParse({ shellId: 'sh-1', input: '€'.repeat(1366) }).success,
+    ).toBe(false);
+  });
+});
+
+describe('paneScopeSchema', () => {
+  it('should offer BOTH surfaces — a pane that can only be a terminal makes panes pointless', () => {
+    // The regression this guards: `SHELL_AGENT_TYPES` being PTY-only was read as
+    // "the whole pane surface is PTY-only", which removed the ability to open an
+    // agent conversation in a pane and left splitting with nothing to split into.
+    expect([...PANE_KINDS].sort()).toEqual(['chat', 'terminal']);
+  });
+
+  it('should bind a chat pane to a conversation and its agent', () => {
+    const parsed = paneScopeSchema.parse({
+      kind: 'chat',
+      name: 'Planning',
+      targetId: 'conv-1',
+      agentPageId: 'page-1',
+    });
+    expect(parsed).toEqual({ kind: 'chat', name: 'Planning', targetId: 'conv-1', agentPageId: 'page-1' });
+  });
+
+  it('should allow a null agentPageId — a global-assistant conversation has no agent page', () => {
+    expect(
+      paneScopeSchema.safeParse({ kind: 'chat', name: 'Assistant', targetId: 'conv-2', agentPageId: null }).success,
+    ).toBe(true);
+  });
+
+  it('should let two panes name different agents, so one grid holds several side by side', () => {
+    const left = paneScopeSchema.parse({ kind: 'chat', name: 'A', targetId: 'conv-a', agentPageId: 'agent-a' });
+    const right = paneScopeSchema.parse({ kind: 'chat', name: 'B', targetId: 'conv-b', agentPageId: 'agent-b' });
+    expect(left.agentPageId).not.toBe(right.agentPageId);
+  });
+
+  it('should accept a null targetId — the picker chose a kind before the row exists', () => {
+    expect(
+      paneScopeSchema.safeParse({ kind: 'terminal', name: 'shell-1', targetId: null, agentPageId: null }).success,
+    ).toBe(true);
+  });
+
+  it('should reject an empty targetId — absent is a state, blank is a bug', () => {
+    expect(
+      paneScopeSchema.safeParse({ kind: 'terminal', name: 'shell-1', targetId: '', agentPageId: null }).success,
+    ).toBe(false);
+  });
+
+  it('should reject an unknown kind', () => {
+    expect(
+      paneScopeSchema.safeParse({ kind: 'pagespace', name: 'x', targetId: 'c1', agentPageId: null }).success,
+    ).toBe(false);
   });
 });

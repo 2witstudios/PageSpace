@@ -55,7 +55,7 @@ export async function GET(request: Request) {
     }
 
     console.log(
-      `[Cron] Terminal storage reconcile: processed ${run.processed}, charged ${run.charged}, skipped ${run.skipped}, failed ${run.failed}, stale ${run.staleMeasurements}, total $${run.totalCostDollars.toFixed(6)}`,
+      `[Cron] Terminal storage reconcile: processed ${run.processed}, charged ${run.charged}, skipped ${run.skipped}, failed ${run.failed}, chargedButUnadvanced ${run.chargedButUnadvanced}, stale ${run.staleMeasurements}, total $${run.totalCostDollars.toFixed(6)}`,
     );
 
     audit({
@@ -67,6 +67,7 @@ export async function GET(request: Request) {
         charged: run.charged,
         skipped: run.skipped,
         failed: run.failed,
+        chargedButUnadvanced: run.chargedButUnadvanced,
         staleMeasurements: run.staleMeasurements,
         totalCostDollars: run.totalCostDollars,
       },
@@ -78,6 +79,7 @@ export async function GET(request: Request) {
       charged: run.charged,
       skipped: run.skipped,
       failed: run.failed,
+      chargedButUnadvanced: run.chargedButUnadvanced,
       staleMeasurements: run.staleMeasurements,
       totalCostDollars: run.totalCostDollars,
       timestamp: new Date().toISOString(),

@@ -1,8 +1,9 @@
 /**
  * Agent Sessions store (IO, dependency-injected).
  *
- * DB-backed CRUD for `agent_sessions` — one row per conversation that has
- * lazily acquired a sandbox. Kept separate from the lifecycle orchestration
+ * DB-backed CRUD for `agent_sessions` — one row per SESSION: a drive-level
+ * workspace that owns one sandbox and hosts many conversations plus shells
+ * (see `contract.ts` invariant 1). Kept separate from the lifecycle orchestration
  * (`agent-sessions.ts`, `agent-session-sprite.ts`) so that orchestration is
  * testable against an in-memory fake with NO database and NO live Sprite, the
  * same discipline `services/machines/agent-terminals-store.ts` established.
@@ -14,22 +15,23 @@
  *    arrive as an `AgentSessionRowStamps` object rather than being re-derived
  *    per call site. The store's only judgement is how to express "leave this
  *    column alone" versus "clear it" in SQL (see `stampColumns`).
- *  - **No conversation writes.** `agent_sessions.conversationId` is a FK, so the
- *    conversations row must already exist; creating it goes through the
- *    squat-guarded repository path, injected into `ensureAgentSession` as a dep
- *    (see its `ensureConversation`). A store that could insert conversations
- *    itself would be a second, unguarded way to claim a conversation id.
+ *  - **No conversation writes.** `conversations.sessionId` is the thread→session
+ *    binding, set once at conversation creation by the squat-guarded repository
+ *    path. This store READS that binding (`findByConversation` — how a chat
+ *    turn resolves its working context) but never writes it: a store that could
+ *    bind threads would be a second, unguarded way to move a thread's
+ *    filesystem, which the model forbids (moving a thread is a fork).
  */
 
 import type { AgentSessionRowStamps } from '../../agent-sessions/plan-session-lifecycle';
 
-/** One `agent_sessions` row. `conversationId` IS the sessionId (see `contract.ts`). */
+/** One `agent_sessions` row. `id` is the session's OWN identity (see `contract.ts`). */
 export interface AgentSessionRecord {
-  /** ≡ sessionId. The PK, the Sprite-key fold, the `?c=` URL value. */
-  conversationId: string;
+  /** The session's own id — the PK, the Sprite-key fold, the `?session=` URL value. */
+  id: string;
   ownerId: string;
-  /** null = a global-assistant session (no agent page to derive access or billing from). */
-  agentPageId: string | null;
+  /** null = a global-assistant session (user-scoped, outside any drive). */
+  driveId: string | null;
   /** Display label only — no uniqueness, never an address. */
   name: string | null;
 
@@ -51,10 +53,9 @@ export interface AgentSessionRecord {
 }
 
 export interface NewAgentSessionInput {
-  /** ≡ sessionId — supplied by the caller (client-minted cuid2), never generated here. */
-  conversationId: string;
   ownerId: string;
-  agentPageId: string | null;
+  /** null = a global-assistant session. */
+  driveId: string | null;
   name: string | null;
   now: Date;
 }
@@ -66,24 +67,62 @@ export interface NewAgentSessionInput {
  * cheaper than remembering to reject it.
  */
 export type AgentSessionListFilter =
-  | { agentPageId: string; ownerId?: string }
   | { driveId: string; ownerId?: string }
   | { ownerId: string };
+
+/** The most sessions one listing returns — the sidebar shows the newest slice, not an archive. */
+export const SESSION_LIST_LIMIT = 100;
 
 export interface AgentSessionStore {
   findById(sessionId: string): Promise<AgentSessionRecord | null>;
   /**
-   * Create the session row if it does not exist yet — `INSERT … ON CONFLICT
-   * (conversationId) DO NOTHING`, the PK being the conversation id.
-   *
-   * Idempotent by construction, which is the whole point: two concurrent first
-   * touches of one conversation (a sandbox tool call and a shell open, say) both
-   * run this and exactly one row results, with NEITHER caller erroring. It
-   * reports nothing about which one won because nothing downstream may depend on
-   * that — the caller re-selects.
+   * Resolve a conversation's session — how a chat turn finds its working
+   * context. Reads `conversations.sessionId` and returns the session row, or
+   * null when the thread has no session (a plain chat) or the FK was nulled by
+   * a session delete. THE lookup the tool layer folds its Sprite key from:
+   * every conversation in one session resolves the same row, which is what
+   * makes sandbox sharing structural rather than wired.
    */
-  insertIfAbsent(input: NewAgentSessionInput): Promise<void>;
+  findByConversation(conversationId: string): Promise<AgentSessionRecord | null>;
+  /**
+   * Create a session row. NOT idempotent and NOT keyed on anything external:
+   * a session's id is minted here (schema default), because spawning a session
+   * is an explicit act — the old ensure-by-conversation semantics died with
+   * the conflation (two first-touches of one conversation used to race to
+   * create "its" session; now a conversation is BORN into a session or has
+   * none).
+   */
+  create(input: NewAgentSessionInput): Promise<AgentSessionRecord>;
+  /**
+   * Mint a session row IFF this owner is under `maxActive` NOT-ENDED sessions
+   * — the spawn ceiling made STRUCTURAL rather than a pre-check (review
+   * #2261/2). A count-then-insert pre-check at the call site is TOCTOU-racy:
+   * N concurrent spawns can all read under the ceiling and all insert. This
+   * serializes the count-and-insert under a per-owner Postgres advisory lock
+   * (the same primitive `credit-gate.ts`'s billing-off ceiling uses), so two
+   * concurrent callers for the SAME owner cannot both win, while spawns for
+   * DIFFERENT owners never contend.
+   */
+  createIfUnderLimit(
+    input: NewAgentSessionInput & { maxActive: number },
+  ): Promise<{ ok: true; session: AgentSessionRecord } | { ok: false; reason: 'limit_reached' }>;
+  /**
+   * ACTIVE sessions only (`endedAt IS NULL`), newest activity first
+   * (`lastActiveAt DESC NULLS LAST, createdAt DESC`), capped at
+   * {@link SESSION_LIST_LIMIT}. Ended rows are retained for lifecycle/billing
+   * but are not listings: the sidebar polls this every few seconds, and an
+   * unbounded, unordered enumeration that never forgets grew without limit
+   * and reshuffled between polls (review M3/M4).
+   */
   list(filter: AgentSessionListFilter): Promise<AgentSessionRecord[]>;
+  /**
+   * Count this owner's ACTIVE (not-ended) sessions — the spawn ceiling's
+   * input. Distinct from `countLive`, which counts live SANDBOXES for the
+   * concurrency quota: a spawned-but-never-provisioned session is active
+   * without being live, and unbounded row minting is what this bounds
+   * (review M6/F4).
+   */
+  countActive(ownerId: string): Promise<number>;
   /**
    * Count this owner's LIVE sessions — `sandboxId IS NOT NULL AND
    * spriteTornDownAt IS NULL` — for the agent-session concurrency quota
@@ -94,17 +133,37 @@ export interface AgentSessionStore {
   countLive(ownerId: string): Promise<number>;
   /**
    * Persist an opportunistic storage measurement (see
-   * `services/sandbox/sandbox-storage-measure.ts`). Separate from
-   * `updateSpriteIdentity` because it is a pure billing observation, not a
-   * lifecycle transition: it carries no CAS and must never disturb identity or
-   * teardown stamps.
+   * `services/sandbox/sandbox-storage-measure.ts`). Not a lifecycle transition —
+   * a pure billing observation that must never disturb identity or teardown
+   * stamps — but it IS generation-scoped, so it carries a CAS of its own.
    *
-   * Guarded on the row still being live (`spriteTornDownAt IS NULL`): a
-   * measurement that lands after teardown describes a filesystem that no longer
-   * exists, and writing it would bill the next generation against a dead disk.
+   * The CAS is on `spriteInstanceId`, the id of the VM actually measured, and it
+   * has to be: `sandboxId` is the HMAC-derived NAME, identical across every
+   * generation of one session, so it cannot tell A from B. `SandboxHandle` says
+   * this outright — "anything that must act on THIS VM (a kill, a CAS against a
+   * tracking row) keys on this".
+   *
+   * A liveness guard alone (`spriteTornDownAt IS NULL`) does NOT cover it. The
+   * measurement is fire-and-forget, so a `du` against generation A can still be
+   * in flight when A is torn down and B provisioned — and B's own stamps clear
+   * `spriteTornDownAt` AND null the measurement columns
+   * (`plan-session-lifecycle.ts`), so the late write finds a live row, lands A's
+   * bytes on B, and stamps a fresh `storageMeasuredAt` that suppresses B's real
+   * measurement for the whole throttle window. The reconcile then bills B's
+   * interval against A's disk. The teardown-only guard is the one case where the
+   * row is never revived.
+   *
+   * A stale write is DROPPED, not retried: the next wake re-measures, and a
+   * billing observation is worth less than a wrong one.
    */
   recordStorageMeasurement(input: {
     sessionId: string;
+    /**
+     * The instance actually measured. Null when the driver reports none — then
+     * the row's own null matches and the CAS degrades to the liveness guard,
+     * which is the most any caller can know without a generation id.
+     */
+    spriteInstanceId: string | null;
     measuredBytes: number;
     measuredAt: Date;
   }): Promise<void>;
@@ -129,8 +188,33 @@ export interface AgentSessionStore {
     stamps: AgentSessionRowStamps;
     now: Date;
   }): Promise<boolean>;
-  /** Write a verdict's stamps with no CAS — for verdicts that change no identity (a resume's activity touch, ending a session that never provisioned). */
-  applyStamps(input: { sessionId: string; stamps: AgentSessionRowStamps }): Promise<void>;
+  /**
+   * Write a verdict's stamps — CAS-guarded whenever the verdict was planned
+   * from a read that a concurrent identity or lifecycle write could have
+   * since invalidated (review #2261/1). Two shapes of guard, matching the two
+   * ways a stale plan can corrupt the row:
+   *
+   *  - `cas.sandboxId` — for a plan computed from a `sandboxId` that could
+   *    have been claimed by a concurrent provision in between (the `end`
+   *    intent's never-provisioned noop): refuses if the row's CURRENT
+   *    `sandboxId` no longer matches, rather than stamping `endedAt` onto a
+   *    session a concurrent `ensure` just revived.
+   *  - `cas.endedAt` — for an "activity refresh" computed under the
+   *    assumption the row was NOT ended (the `resume`/`attach` arm's
+   *    `endedAt: null, teardownRequestedAt: null` stamps): refuses if the
+   *    row's CURRENT `endedAt` no longer matches, rather than silently
+   *    erasing a concurrent `end`'s teardown intent.
+   *
+   * Absent entirely for verdicts with nothing to race (an already-ended
+   * noop's empty stamps). Returns whether the write landed — `true` when no
+   * `cas` was given (nothing to have raced) or the CAS matched, `false` when
+   * a `cas` was given and refused.
+   */
+  applyStamps(input: {
+    sessionId: string;
+    stamps: AgentSessionRowStamps;
+    cas?: { sandboxId?: string | null; endedAt?: Date | null };
+  }): Promise<boolean>;
   /**
    * Record the durable teardown INTENT, BEFORE the kill. The one stamp written
    * ahead of its IO: its entire job is to survive a crash between "we decided to
@@ -238,15 +322,22 @@ export function revivedAgentSessionColumns(input: {
  * Production DB-backed implementation. Lazily resolves the db client, schema
  * tables and operators so callers that inject a fake (in tests) never load the
  * DB module graph.
+ *
+ * `now` defaults to the wall clock — every OTHER write in this store takes its
+ * timestamp from a caller-supplied `now`, via the lifecycle planner; these two
+ * calls are the store's own bookkeeping touch (an `updatedAt` bump alongside a
+ * verdict that names no `lastActiveAt` of its own), which is why they were the
+ * one place still reaching for `new Date()` directly. Injectable so a test can
+ * pin it rather than asserting "some recent timestamp".
  */
-export async function createDbAgentSessionStore(): Promise<AgentSessionStore> {
-  const [{ db }, { eq, and, eqOrIsNull, isNotNull, isNull, sql, count }, { agentSessions }, { machineSpriteReclaims }, { pages }] =
+export async function createDbAgentSessionStore(now: () => Date = () => new Date()): Promise<AgentSessionStore> {
+  const [{ db }, { eq, and, eqOrIsNull, isNotNull, isNull, sql, count, desc }, { agentSessions }, { machineSpriteReclaims }, { conversations }] =
     await Promise.all([
       import('@pagespace/db/db'),
       import('@pagespace/db/operators'),
       import('@pagespace/db/schema/agent-sessions'),
       import('@pagespace/db/schema/machine-sprite-reclaims'),
-      import('@pagespace/db/schema/core'),
+      import('@pagespace/db/schema/conversations'),
     ]);
 
   return {
@@ -254,42 +345,68 @@ export async function createDbAgentSessionStore(): Promise<AgentSessionStore> {
       const [row] = await db
         .select()
         .from(agentSessions)
-        .where(eq(agentSessions.conversationId, sessionId))
+        .where(eq(agentSessions.id, sessionId))
         .limit(1);
       return (row as AgentSessionRecord) ?? null;
     },
 
-    async insertIfAbsent(input) {
-      await db
+    async findByConversation(conversationId) {
+      // conversations.sessionId is the binding; a null FK (plain chat, or a
+      // session deleted out from under its history) resolves to null, never to
+      // some fallback session — the tool layer's no-session denial depends on
+      // that honesty.
+      const [row] = await db
+        .select({ session: agentSessions })
+        .from(conversations)
+        .innerJoin(agentSessions, eq(agentSessions.id, conversations.sessionId))
+        .where(eq(conversations.id, conversationId))
+        .limit(1);
+      return (row?.session as AgentSessionRecord) ?? null;
+    },
+
+    async create(input) {
+      const [row] = await db
         .insert(agentSessions)
         .values({
-          conversationId: input.conversationId,
           ownerId: input.ownerId,
-          agentPageId: input.agentPageId,
+          driveId: input.driveId,
           name: input.name,
           createdAt: input.now,
           updatedAt: input.now,
         })
-        // The PK is the conversation id, so this is the whole concurrency story:
-        // whichever first touch of a conversation gets there first wins, and the
-        // other proceeds as if it had.
-        .onConflictDoNothing({ target: agentSessions.conversationId });
+        .returning();
+      return row as AgentSessionRecord;
+    },
+
+    async createIfUnderLimit({ ownerId, driveId, name, now, maxActive }) {
+      return db.transaction(async (tx) => {
+        // Per-owner advisory lock, held for this transaction only — same
+        // primitive `credit-gate.ts`'s billing-off daily ceiling uses.
+        // Serializes concurrent spawns for THIS owner (so the count read
+        // below cannot go stale before the insert) without contending with
+        // any other owner's spawn at all.
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${'agent-session-spawn:' + ownerId}))`);
+        const [{ n }] = await tx
+          .select({ n: count() })
+          .from(agentSessions)
+          .where(and(eq(agentSessions.ownerId, ownerId), isNull(agentSessions.endedAt)));
+        if (n >= maxActive) return { ok: false as const, reason: 'limit_reached' as const };
+        const [row] = await tx
+          .insert(agentSessions)
+          .values({ ownerId, driveId, name, createdAt: now, updatedAt: now })
+          .returning();
+        return { ok: true as const, session: row as AgentSessionRecord };
+      });
     },
 
     async list(filter) {
       const conditions = [];
-      if ('agentPageId' in filter) conditions.push(eq(agentSessions.agentPageId, filter.agentPageId));
       if (filter.ownerId !== undefined) conditions.push(eq(agentSessions.ownerId, filter.ownerId));
       if ('driveId' in filter) {
-        // A session's drive is its agent page's drive; a global-assistant
-        // session (null `agentPageId`) belongs to no drive and so never appears
-        // in a drive-scoped listing. The inner join expresses both.
-        const rows = await db
-          .select({ session: agentSessions })
-          .from(agentSessions)
-          .innerJoin(pages, eq(pages.id, agentSessions.agentPageId))
-          .where(and(eq(pages.driveId, filter.driveId), ...conditions));
-        return rows.map((row) => row.session as AgentSessionRecord);
+        // driveId is a real column now — a session IS drive-scoped, and a
+        // global-assistant session (null driveId) never appears in a
+        // drive-scoped listing because NULL never equals the filter.
+        conditions.push(eq(agentSessions.driveId, filter.driveId));
       }
       if (conditions.length === 0) {
         // Unreachable through `AgentSessionListFilter`, which requires a
@@ -297,8 +414,22 @@ export async function createDbAgentSessionStore(): Promise<AgentSessionStore> {
         // cross-tenant read, so it fails loudly rather than returning it.
         throw new Error('listAgentSessions requires at least one filter');
       }
-      const rows = await db.select().from(agentSessions).where(and(...conditions));
+      conditions.push(isNull(agentSessions.endedAt));
+      const rows = await db
+        .select()
+        .from(agentSessions)
+        .where(and(...conditions))
+        .orderBy(sql`${agentSessions.lastActiveAt} DESC NULLS LAST`, desc(agentSessions.createdAt))
+        .limit(SESSION_LIST_LIMIT);
       return rows as AgentSessionRecord[];
+    },
+
+    async countActive(ownerId) {
+      const [row] = await db
+        .select({ n: count() })
+        .from(agentSessions)
+        .where(and(eq(agentSessions.ownerId, ownerId), isNull(agentSessions.endedAt)));
+      return row?.n ?? 0;
     },
 
     async countLive(ownerId) {
@@ -315,14 +446,18 @@ export async function createDbAgentSessionStore(): Promise<AgentSessionStore> {
       return row?.n ?? 0;
     },
 
-    async recordStorageMeasurement({ sessionId, measuredBytes, measuredAt }) {
+    async recordStorageMeasurement({ sessionId, spriteInstanceId, measuredBytes, measuredAt }) {
       await db
         .update(agentSessions)
         .set({ storageMeasuredBytes: measuredBytes, storageMeasuredAt: measuredAt })
         .where(
           and(
-            eq(agentSessions.conversationId, sessionId),
+            eq(agentSessions.id, sessionId),
             isNull(agentSessions.spriteTornDownAt),
+            // CAS on the generation measured. `eqOrIsNull` so a driver that
+            // reports no instance id still matches its own null row rather than
+            // never persisting — plain `eq` never matches null in SQL.
+            eqOrIsNull(agentSessions.spriteInstanceId, spriteInstanceId),
           ),
         );
     },
@@ -342,27 +477,37 @@ export async function createDbAgentSessionStore(): Promise<AgentSessionStore> {
         .set(revivedAgentSessionColumns({ sessionKey, sandboxId, spriteInstanceId, egressPolicyToken, stamps, now }))
         .where(
           and(
-            eq(agentSessions.conversationId, sessionId),
+            eq(agentSessions.id, sessionId),
             // CAS on the CURRENT sandboxId: null for a first provision, the
             // vanished/replaced name for a re-provision. `eqOrIsNull` matches
             // the null case, which plain `eq` never does in SQL.
             eqOrIsNull(agentSessions.sandboxId, previousSandboxId),
           ),
         )
-        .returning({ id: agentSessions.conversationId });
+        .returning({ id: agentSessions.id });
       return updated.length > 0;
     },
 
-    async applyStamps({ sessionId, stamps }) {
+    async applyStamps({ sessionId, stamps, cas }) {
       const columns = stampColumns(stamps);
       // Nothing to write is a legitimate verdict (a noop that stamps nothing);
       // an empty `set` is a SQL error, so it is skipped rather than special-cased
       // by every caller.
-      if (Object.keys(columns).length === 0) return;
-      await db
+      if (Object.keys(columns).length === 0) return true;
+      const conditions = [eq(agentSessions.id, sessionId)];
+      if (cas?.sandboxId !== undefined) conditions.push(eqOrIsNull(agentSessions.sandboxId, cas.sandboxId));
+      if (cas?.endedAt !== undefined) conditions.push(eqOrIsNull(agentSessions.endedAt, cas.endedAt));
+      const updated = await db
         .update(agentSessions)
-        .set({ ...columns, updatedAt: new Date() })
-        .where(eq(agentSessions.conversationId, sessionId));
+        .set({ ...columns, updatedAt: now() })
+        .where(and(...conditions))
+        .returning({ id: agentSessions.id });
+      // No guard requested: the caller accepted whatever the row currently is
+      // (there was nothing this write could have raced), so a miss (e.g. the
+      // row was deleted) is not a refusal — matches the prior unconditional
+      // behavior.
+      if (!cas) return true;
+      return updated.length > 0;
     },
 
     async requestTeardown({ sessionId, sandboxId, spriteInstanceId, at }) {
@@ -371,7 +516,7 @@ export async function createDbAgentSessionStore(): Promise<AgentSessionStore> {
         .set({ teardownRequestedAt: at, updatedAt: at })
         .where(
           and(
-            eq(agentSessions.conversationId, sessionId),
+            eq(agentSessions.id, sessionId),
             eq(agentSessions.sandboxId, sandboxId),
             eqOrIsNull(agentSessions.spriteInstanceId, spriteInstanceId),
           ),
@@ -381,18 +526,18 @@ export async function createDbAgentSessionStore(): Promise<AgentSessionStore> {
     async stampSpriteTornDown({ sessionId, sandboxId, spriteInstanceId, stamps }) {
       const updated = await db
         .update(agentSessions)
-        .set({ ...stampColumns(stamps), updatedAt: new Date() })
+        .set({ ...stampColumns(stamps), updatedAt: now() })
         // CAS on the INSTANCE, not just the name: a concurrent re-provision may
         // have written a LIVE replacement into this row, and stamping that as
         // torn down would hide a billing VM from the reconciler forever.
         .where(
           and(
-            eq(agentSessions.conversationId, sessionId),
+            eq(agentSessions.id, sessionId),
             eq(agentSessions.sandboxId, sandboxId),
             eqOrIsNull(agentSessions.spriteInstanceId, spriteInstanceId),
           ),
         )
-        .returning({ id: agentSessions.conversationId });
+        .returning({ id: agentSessions.id });
       return updated.length > 0;
     },
 
@@ -400,7 +545,7 @@ export async function createDbAgentSessionStore(): Promise<AgentSessionStore> {
       const [row] = await db
         .select({ sandboxId: agentSessions.sandboxId, spriteInstanceId: agentSessions.spriteInstanceId })
         .from(agentSessions)
-        .where(eq(agentSessions.conversationId, sessionId))
+        .where(eq(agentSessions.id, sessionId))
         .limit(1);
       return row ?? null;
     },

@@ -60,9 +60,10 @@ export interface ShellCheckAuthDeps {
   checkSessionAccess: (input: { requesterId: string; sessionId: string }) => Promise<ShellSessionAccessResult>;
   /**
    * Who pays for this session's runtime, and which drive an audit row lands
-   * under. Payer = the agent page's drive owner, falling back to the session's
-   * own owner when there is no page (a global-assistant session) or the page's
-   * owner cannot be resolved — the `agentPageId ?? ownerId` attribution rule.
+   * under. Payer = the session's own DRIVE owner, falling back to the
+   * session's own owner when there is no drive (a global-assistant session)
+   * or the drive has vanished — the drive-owner ?? session-owner attribution
+   * rule.
    */
   resolvePayer: (session: AgentSessionAccessSubject) => Promise<{ payerId: string; driveId: string | null }>;
   /** The requester's tier (slot accounting) + email (audit), or undefined when the row is missing. */
@@ -138,8 +139,8 @@ export function buildShellCheckAuth(deps: ShellCheckAuthDeps): ShellCheckAuthFn 
       // any sandbox work is warranted at all.
       sessionKey: deps.buildSessionKey({ shellId }),
       payerId,
-      /** Billing attribution: the session's agent page, or null for an owner-attributed global-assistant session. */
-      agentPageId: access.session.agentPageId,
+      /** Billing attribution scope: the session's drive, or null for an owner-attributed global-assistant session. A session is not page-anchored, so there is no pageId to attribute. */
+      driveId: access.session.driveId,
 
       /**
        * Reserve the concurrency slot and resolve the Sprite for a FRESH PTY —

@@ -9,6 +9,21 @@ export class ConversationOwnershipError extends Error {
   }
 }
 
+/**
+ * The conversation exists but its session binding disagrees with the one the
+ * caller asked for. A thread is BORN into its session (set at creation,
+ * permanent — contract invariant 1); satisfying this request would be a
+ * rebind, so it is refused rather than performed. Distinct from
+ * {@link ConversationOwnershipError} because the caller may well OWN the
+ * thread — the refusal is about the binding, not the owner.
+ */
+export class ConversationBindingConflictError extends Error {
+  constructor() {
+    super('Conversation is already bound to a different session');
+    this.name = 'ConversationBindingConflictError';
+  }
+}
+
 // CUID2 format: starts with lowercase letter, followed by 1–31 lowercase alphanumeric chars.
 const CUID2_RE = /^[a-z][a-z0-9]{1,31}$/;
 
@@ -35,6 +50,17 @@ export async function resolveOrCreateConversation(
   userId: string,
   conversationId: string,
   db: Db = defaultDb,
+  opts?: {
+    /**
+     * Bind the conversation to this session AT CREATION (the only moment a
+     * binding may be written — invariant 1). For an already-existing row the
+     * binding must MATCH (an idempotent retry), or the resolve is refused
+     * with {@link ConversationBindingConflictError} — never rebound.
+     */
+    sessionId?: string;
+    /** Display label for the new row (spawned workers are labeled at birth). Ignored for an existing row. */
+    title?: string;
+  },
 ): Promise<ResolveOrCreateResult> {
   if (!CUID2_RE.test(conversationId)) {
     throw new ConversationOwnershipError();
@@ -52,6 +78,9 @@ export async function resolveOrCreateConversation(
   if (existing) {
     if (existing.userId !== userId) throw new ConversationOwnershipError();
     if (existing.type !== 'global') throw new ConversationOwnershipError();
+    if (opts?.sessionId !== undefined && existing.sessionId !== opts.sessionId) {
+      throw new ConversationBindingConflictError();
+    }
     return { conversation: existing, isNew: false };
   }
 
@@ -63,6 +92,8 @@ export async function resolveOrCreateConversation(
       userId,
       type: 'global',
       isActive: true,
+      sessionId: opts?.sessionId ?? null,
+      title: opts?.title ?? null,
     })
     .onConflictDoNothing()
     .returning();
@@ -78,5 +109,10 @@ export async function resolveOrCreateConversation(
 
   if (!winner) throw new Error(`Failed to resolve conversation ${conversationId}`);
   if (winner.userId !== userId) throw new ConversationOwnershipError();
+  if (opts?.sessionId !== undefined && winner.sessionId !== opts.sessionId) {
+    // The racing insert won without our binding — same refusal as any other
+    // existing-row mismatch.
+    throw new ConversationBindingConflictError();
+  }
   return { conversation: winner, isNew: true };
 }

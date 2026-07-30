@@ -11,8 +11,13 @@
  * the sidebar's `SidebarMessagesContent`, chrome-free and narrow-width safe).
  *
  * Self-contained by design (`@container`, `h-full min-w-0 min-h-0`, identity
- * via props, no layout props) so a future pane grid can embed this unchanged —
- * see the design doc's "v1 = tabs, not split panes" note.
+ * via props, no layout props) — which is exactly what lets the pane grid
+ * embed it unchanged.
+ *
+ * The presentation itself is `SessionChatView`, split out so the GLOBAL
+ * ASSISTANT (`AssistantSessionChat`, whose state comes from the other chat
+ * pipeline via `useAssistantSessionChat`) renders the identical surface — one
+ * view, two state hooks, per the "one chat surface" rule.
  */
 import React, { useCallback, useState } from 'react';
 import { Loader2 } from 'lucide-react';
@@ -25,12 +30,12 @@ import { Conversation, ConversationScrollButton } from '@/components/ai/ui/conve
 import { SidebarMessagesContent } from '@/components/layout/right-sidebar/ai-assistant/SidebarChatTab';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 import type { AgentInfo } from '@/types/agent';
-import { useAgentSessionChat } from './useAgentSessionChat';
+import { useAgentSessionChat, type UseAgentSessionChatReturn } from './useAgentSessionChat';
 
 export interface SessionChatProps {
   /** The fixed agent this conversation belongs to. */
   agent: AgentInfo;
-  /** ≡ the sessionId. */
+  /** The thread — its session (and sandbox) resolves server-side from the row's binding. */
   conversationId: string;
   /** Which renderer/chrome to use — the only thing that differs between surfaces. */
   context: 'page' | 'console';
@@ -44,11 +49,39 @@ export default function SessionChat({
   context,
   isReadOnly = false,
 }: SessionChatProps) {
+  const chat = useAgentSessionChat({ agent, conversationId });
+  return (
+    <SessionChatView
+      chat={chat}
+      name={agent.title}
+      visionModel={agent.aiModel || ''}
+      context={context}
+      isReadOnly={isReadOnly}
+    />
+  );
+}
+
+export interface SessionChatViewProps {
+  /** The chat's whole state — from either pipeline's hook. */
+  chat: UseAgentSessionChatReturn;
+  /** The counterpart's display name (composer placeholder, compact-renderer label). */
+  name: string;
+  /** The model whose vision capability gates image attachment — '' = none. */
+  visionModel: string;
+  context: 'page' | 'console';
+  isReadOnly?: boolean;
+}
+
+export function SessionChatView({
+  chat,
+  name,
+  visionModel,
+  context,
+  isReadOnly = false,
+}: SessionChatViewProps) {
   const [input, setInput] = useState('');
   const [showError, setShowError] = useState(true);
   const [undoMessageId, setUndoMessageId] = useState<string | null>(null);
-
-  const chat = useAgentSessionChat({ agent, conversationId });
 
   const handleSendClick = useCallback(async () => {
     const text = input;
@@ -118,11 +151,11 @@ export default function SessionChat({
           <Conversation className="h-full">
             <SidebarMessagesContent
               messages={chat.messages}
-              assistantName={agent.title}
+              assistantName={name}
               contextLabel={null}
-              handleEdit={chat.handleEdit}
-              handleDelete={chat.handleDelete}
-              handleRetry={chat.handleRetry}
+              handleEdit={!isReadOnly ? chat.handleEdit : undefined}
+              handleDelete={!isReadOnly ? chat.handleDelete : undefined}
+              handleRetry={!isReadOnly ? chat.handleRetry : undefined}
               handleUndoFromHere={(messageId) => setUndoMessageId(messageId)}
               lastAssistantMessageId={chat.lastAssistantMessageId}
               lastUserMessageId={chat.lastUserMessageId}
@@ -153,10 +186,10 @@ export default function SessionChat({
           onStop={() => void chat.handleStop()}
           isStreaming={chat.displayIsStreaming}
           disabled={isReadOnly}
-          placeholder={isReadOnly ? 'View only' : `Message ${agent.title}...`}
+          placeholder={isReadOnly ? 'View only' : `Message ${name}...`}
           hideModelSelector
           variant={context === 'console' ? 'sidebar' : 'main'}
-          hasVision={hasVisionCapability(agent.aiModel || '')}
+          hasVision={hasVisionCapability(visionModel)}
           remoteStreamingUser={remoteStreamingUser}
         />
       </div>

@@ -45,7 +45,7 @@ function makeDeps(over: Partial<SandboxRunDeps> = {}) {
   const sandbox = over.reconnect ? undefined : makeSandbox();
   const deps: SandboxRunDeps = {
     isEnabled: () => true,
-    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' }),
     reconnect: async () => sandbox ?? null,
     quota: {
       acquireSlot: () => {
@@ -80,7 +80,7 @@ describe('runBashInSandbox', () => {
     const { deps, audits } = makeDeps({
       acquireSandbox: async () => {
         acquireCalls += 1;
-        return { ok: true, sandboxId: 'sbx-1', resumed: false };
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' };
       },
     });
     const result = await runBashInSandbox({
@@ -99,7 +99,7 @@ describe('runBashInSandbox', () => {
     const { deps, audits } = makeDeps({
       acquireSandbox: async () => {
         acquireCalls += 1;
-        return { ok: true, sandboxId: 'sbx-1', resumed: false };
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' };
       },
     });
     const result = await runBashInSandbox({ command: 'gh pr list', ctx: makeCtx(), deps });
@@ -133,7 +133,7 @@ describe('runBashInSandbox', () => {
     const { deps } = makeDeps({
       acquireSandbox: async (input) => {
         seen.push(input);
-        return { ok: true, sandboxId: 'sbx-1', resumed: false };
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' };
       },
     });
     await runBashInSandbox({
@@ -153,6 +153,30 @@ describe('runBashInSandbox', () => {
     const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
     expect(result).toMatchObject({ success: false, reason: 'no_machine' });
     expect(slots.released).toBe(1);
+  });
+
+  it("given a conversation with no session (a legacy pre-session thread), should log the denial at WARN — not ERROR — since it's an expected refusal, not an infra fault", async () => {
+    const warnings: Array<[string, Record<string, unknown> | undefined]> = [];
+    const errors: Array<[string, unknown]> = [];
+    const { deps, slots } = makeDeps({
+      acquireSandbox: async () => ({ ok: false, reason: 'no_session' }),
+      logger: {
+        warn: (message, metadata) => {
+          warnings.push([message, metadata]);
+        },
+        error: (message, error) => {
+          errors.push([message, error]);
+        },
+      },
+    });
+
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
+    expect(result).toMatchObject({ success: false, reason: 'no_session' });
+    expect(slots.released).toBe(1);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0][0]).toBe('Sandbox access denied');
+    expect(errors).toHaveLength(0);
   });
 
   it('given an authz denial from acquire and a throwing logger, should still release the slot and map the reason', async () => {
@@ -230,7 +254,7 @@ describe('runBashInSandbox', () => {
   it('given a successful run, should notify the session\'s shell activity feed', async () => {
     const notified: unknown[] = [];
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1', pageId: 'terminal-page-1' }),
       notifyShellActivity: async (input) => {
         notified.push(input);
       },
@@ -243,7 +267,7 @@ describe('runBashInSandbox', () => {
     expect(result).toMatchObject({ success: true });
     expect(notified).toEqual([
       {
-        sessionId: 'c1',
+        sessionId: 'ws-1',
         command: 'echo hi',
         output: 'ok',
         exitCode: 0,
@@ -255,7 +279,7 @@ describe('runBashInSandbox', () => {
   it('given a successful run, should measure the SESSION\'s storage with the live sandbox', async () => {
     const measured: Array<{ sandbox: unknown; sessionId: string }> = [];
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1', pageId: 'terminal-page-1' }),
       measureStorage: async (input) => {
         measured.push(input);
       },
@@ -265,7 +289,7 @@ describe('runBashInSandbox', () => {
     // Fire-and-forget: give the microtask a tick to run.
     await Promise.resolve();
     expect(measured).toHaveLength(1);
-    expect(measured[0].sessionId).toBe('c1');
+    expect(measured[0].sessionId).toBe('ws-1');
   });
 
   it('should measure AFTER the command runs, not before — the whole point of the seam', async () => {
@@ -276,7 +300,7 @@ describe('runBashInSandbox', () => {
     // from `release` (a `finally`, after the op) rather than from acquisition.
     const order: string[] = [];
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'p1' }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1', pageId: 'p1' }),
       reconnect: async () =>
         makeSandbox({
           runCommand: async () => {
@@ -300,7 +324,7 @@ describe('runBashInSandbox', () => {
     // activity feed: the old gate was `acquired.pageId`, which they never have.
     const measured: Array<{ sessionId: string }> = [];
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' }),
       measureStorage: async (input) => {
         measured.push(input);
       },
@@ -308,13 +332,17 @@ describe('runBashInSandbox', () => {
     const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ agentPageId: undefined }), deps });
     expect(result).toMatchObject({ success: true });
     await Promise.resolve();
-    expect(measured[0]?.sessionId).toBe('c1');
+    expect(measured[0]?.sessionId).toBe('ws-1');
   });
 
-  it('given no conversation id, should never measure — there is no session to attribute bytes to', async () => {
-    const measured: unknown[] = [];
+  it('measures even with NO conversation id — the key is the acquired SESSION, not the conversation', async () => {
+    // The old gate keyed on the conversation and silently skipped measurement
+    // whenever the two ids diverged (codex review, P1: underbilling). The
+    // session id comes from the acquire itself, so it is always present on a
+    // successful run.
+    const measured: Array<{ sessionId: string }> = [];
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' }),
       measureStorage: async (input) => {
         measured.push(input);
       },
@@ -322,12 +350,12 @@ describe('runBashInSandbox', () => {
     const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ conversationId: undefined }), deps });
     expect(result).toMatchObject({ success: true });
     await Promise.resolve();
-    expect(measured).toEqual([]);
+    expect(measured).toMatchObject([{ sessionId: 'ws-1' }]);
   });
 
   it('given a throwing storage measurement, should still return the successful result (best-effort)', async () => {
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1', pageId: 'terminal-page-1' }),
       measureStorage: async () => {
         throw new Error('measure failed');
       },
@@ -343,32 +371,35 @@ describe('runBashInSandbox', () => {
     // feed. The session id is the address now, and every session has one.
     const notified: Array<{ sessionId: string }> = [];
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' }),
       notifyShellActivity: async (input) => {
         notified.push(input);
       },
     });
     const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ agentPageId: undefined }), deps });
     expect(result).toMatchObject({ success: true });
-    expect(notified[0]?.sessionId).toBe('c1');
+    expect(notified[0]?.sessionId).toBe('ws-1');
   });
 
-  it('given no conversation id, should never call the activity feed — there is nothing to address', async () => {
-    const notified: unknown[] = [];
+  it('notifies even with NO conversation id — the feed is addressed by the acquired SESSION', async () => {
+    // Same inversion as the measurement case: the conversation id was never
+    // the feed's address, and gating on it dropped notifications whenever the
+    // namespaces diverged.
+    const notified: Array<{ sessionId: string }> = [];
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' }),
       notifyShellActivity: async (input) => {
         notified.push(input);
       },
     });
     const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ conversationId: undefined }), deps });
     expect(result).toMatchObject({ success: true });
-    expect(notified).toEqual([]);
+    expect(notified).toMatchObject([{ sessionId: 'ws-1' }]);
   });
 
   it('given a throwing activity feed, should still return the successful result', async () => {
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1', pageId: 'terminal-page-1' }),
       notifyShellActivity: async () => {
         throw new Error('feed down');
       },
@@ -383,7 +414,7 @@ describe('runBashInSandbox', () => {
       releaseFeed = resolve;
     });
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1', pageId: 'terminal-page-1' }),
       notifyShellActivity: async () => {
         await feedGate; // Never resolves during this test unless we release it.
       },
@@ -398,7 +429,7 @@ describe('runBashInSandbox', () => {
   it('given both stdout and stderr, should combine them for the activity feed instead of dropping stderr', async () => {
     const notified: Array<{ output: string }> = [];
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1', pageId: 'terminal-page-1' }),
       reconnect: async () =>
         makeSandbox({ runCommand: async () => ({ exitCode: 0, stdout: 'out-line', stderr: 'err-line' }) }),
       notifyShellActivity: async (input) => {
@@ -412,7 +443,7 @@ describe('runBashInSandbox', () => {
   it('given no actorDisplayName, should fall back to a generic label instead of the actor\'s raw email (PII)', async () => {
     const notified: Array<{ agentLabel: string }> = [];
     const { deps } = makeDeps({
-      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1', pageId: 'terminal-page-1' }),
       notifyShellActivity: async (input) => {
         notified.push(input);
       },
@@ -518,7 +549,7 @@ describe('runBashInSandbox', () => {
     const { deps, audits } = makeDeps({
       acquireSandbox: async () => {
         acquired = true;
-        return { ok: true, sandboxId: 'sbx-1', resumed: false };
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' };
       },
     });
     const result = await runBashInSandbox({ command: 'ls', cwd: '../../etc', ctx: makeCtx(), deps });
@@ -924,7 +955,7 @@ describe('editSandboxFile', () => {
     const { deps, audits } = makeDeps({
       acquireSandbox: async () => {
         acquired = true;
-        return { ok: true, sandboxId: 'sbx-1', resumed: false };
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' };
       },
     });
     const result = await editSandboxFile({
@@ -1023,7 +1054,7 @@ describe('readSandboxFile', () => {
     const { deps } = makeDeps({
       acquireSandbox: async () => {
         acquired = true;
-        return { ok: true, sandboxId: 'sbx-1', resumed: false };
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' };
       },
     });
     const result = await readSandboxFile({ path: '/etc/passwd', ctx: makeCtx(), deps });
@@ -1080,19 +1111,19 @@ function makeMutableClock(startMs: number) {
 
 function makeBilling(over: Partial<SandboxRunDeps['billing']> = {}): {
   billing: NonNullable<SandboxRunDeps['billing']>;
-  resolvePayerIdCalls: Array<{ tenantId: string; agentPageId?: string }>;
+  resolvePayerIdCalls: Array<{ driveId: string | null; ownerId: string }>;
   gateCalls: Array<{ payerId: string }>;
-  trackUsageCalls: Array<{ payerId: string; holdId?: string; activeSeconds: number; pageId?: string }>;
+  trackUsageCalls: Array<{ payerId: string; holdId?: string; activeSeconds: number; pageId?: string; driveId?: string; sessionId?: string }>;
   releaseHoldCalls: string[];
 } {
-  const resolvePayerIdCalls: Array<{ tenantId: string; agentPageId?: string }> = [];
+  const resolvePayerIdCalls: Array<{ driveId: string | null; ownerId: string }> = [];
   const gateCalls: Array<{ payerId: string }> = [];
-  const trackUsageCalls: Array<{ payerId: string; holdId?: string; activeSeconds: number; pageId?: string }> = [];
+  const trackUsageCalls: Array<{ payerId: string; holdId?: string; activeSeconds: number; pageId?: string; driveId?: string; sessionId?: string }> = [];
   const releaseHoldCalls: string[] = [];
   const billing: NonNullable<SandboxRunDeps['billing']> = {
     resolvePayerId: async (input) => {
       resolvePayerIdCalls.push(input);
-      return input.tenantId;
+      return input.ownerId;
     },
     gate: async (input) => {
       gateCalls.push(input);
@@ -1109,6 +1140,24 @@ function makeBilling(over: Partial<SandboxRunDeps['billing']> = {}): {
   return { billing, resolvePayerIdCalls, gateCalls, trackUsageCalls, releaseHoldCalls };
 }
 
+/**
+ * The billing seam's session resolve (`resolveBillingSession`) — a fake
+ * mirroring `sandbox-tools-runtime.ts`'s real wiring, which reads the
+ * ACQUIRED session's own driveId/ownerId (never `ctx.tenantId`/`ctx.driveId`,
+ * the caller's surface facts). Defaults to a session whose facts happen to
+ * equal the ctx's (the common single-conversation-drive case); tests proving
+ * the session/surface DIVERGE override this explicitly instead of ctx.
+ */
+function makeBillingSession(
+  over: Partial<{ sessionId: string; driveId: string | null; ownerId: string }> = {},
+): NonNullable<SandboxRunDeps['resolveBillingSession']> {
+  return async (ctx) => ({
+    sessionId: over.sessionId ?? 'ws-1',
+    driveId: over.driveId !== undefined ? over.driveId : (ctx.driveId ?? null),
+    ownerId: over.ownerId ?? ctx.tenantId,
+  });
+}
+
 describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
   it('given no billing deps, runs unmetered (no gate, no trackUsage, no releaseHold)', async () => {
     const { deps } = makeDeps();
@@ -1116,10 +1165,25 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
     expect(result).toMatchObject({ success: true });
   });
 
-  it('places a hold BEFORE the machine is acquired, keyed to the resolved payerId', async () => {
+  it('given billing but no resolveBillingSession dep (or one that resolves null — a legacy pre-session conversation), runs unmetered and lets acquire surface the denial', async () => {
+    const { billing, gateCalls, trackUsageCalls } = makeBilling();
+    const { deps } = makeDeps({
+      billing,
+      resolveBillingSession: async () => null,
+      acquireSandbox: async () => ({ ok: false, reason: 'no_session' }),
+    });
+
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
+    expect(result).toMatchObject({ success: false, reason: 'no_session' });
+    expect(gateCalls).toEqual([]);
+    expect(trackUsageCalls).toEqual([]);
+  });
+
+  it('places a hold BEFORE the machine is acquired, keyed to the payer resolved from the SESSION', async () => {
     const { billing, gateCalls } = makeBilling();
-    const { deps } = makeDeps({ billing });
-    await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ tenantId: 'owner-42' }), deps });
+    const { deps } = makeDeps({ billing, resolveBillingSession: makeBillingSession({ ownerId: 'owner-42' }) });
+    await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
     expect(gateCalls).toEqual([{ payerId: 'owner-42' }]);
   });
 
@@ -1132,12 +1196,19 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
       },
     });
     const { billing, trackUsageCalls, releaseHoldCalls } = makeBilling();
-    const { deps } = makeDeps({ billing, reconnect: async () => sandbox, now: clock.now });
+    const { deps } = makeDeps({
+      billing,
+      resolveBillingSession: makeBillingSession({ ownerId: 'owner-42', driveId: 'd1', sessionId: 'ws-1' }),
+      reconnect: async () => sandbox,
+      now: clock.now,
+    });
 
-    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ tenantId: 'owner-42' }), deps });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
 
     expect(result).toMatchObject({ success: true });
-    expect(trackUsageCalls).toEqual([{ payerId: 'owner-42', holdId: 'hold-1', activeSeconds: 5 }]);
+    expect(trackUsageCalls).toEqual([
+      { payerId: 'owner-42', holdId: 'hold-1', activeSeconds: 5, pageId: undefined, driveId: 'd1', sessionId: 'ws-1' },
+    ]);
     expect(releaseHoldCalls).toEqual([]);
   });
 
@@ -1148,9 +1219,10 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
     });
     const { deps } = makeDeps({
       billing,
+      resolveBillingSession: makeBillingSession(),
       acquireSandbox: async () => {
         acquireCalls += 1;
-        return { ok: true, sandboxId: 'sbx-1', resumed: false };
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' };
       },
     });
     const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
@@ -1165,7 +1237,7 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
       },
     });
     const { billing, trackUsageCalls, releaseHoldCalls } = makeBilling();
-    const { deps } = makeDeps({ billing, reconnect: async () => sandbox });
+    const { deps } = makeDeps({ billing, resolveBillingSession: makeBillingSession(), reconnect: async () => sandbox });
 
     const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
 
@@ -1178,6 +1250,7 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
     const { billing, trackUsageCalls, releaseHoldCalls } = makeBilling();
     const { deps } = makeDeps({
       billing,
+      resolveBillingSession: makeBillingSession(),
       quota: { acquireSlot: () => false, releaseSlot: () => {} },
     });
 
@@ -1188,9 +1261,12 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
     expect(releaseHoldCalls).toEqual(['hold-1']);
   });
 
-  it("resolves agentPageId from ctx.agentPageId and forwards both to billing.resolvePayerId", async () => {
+  it("resolves the payer from the SESSION's driveId/ownerId — never ctx.tenantId/ctx.agentPageId", async () => {
     const { billing, resolvePayerIdCalls } = makeBilling();
-    const { deps } = makeDeps({ billing });
+    const { deps } = makeDeps({
+      billing,
+      resolveBillingSession: makeBillingSession({ driveId: 'session-drive-1', ownerId: 'session-owner-1' }),
+    });
 
     await runBashInSandbox({
       command: 'echo hi',
@@ -1198,10 +1274,10 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
       deps,
     });
 
-    expect(resolvePayerIdCalls).toEqual([{ tenantId: 'owner-1', agentPageId: 'own-agent-page' }]);
+    expect(resolvePayerIdCalls).toEqual([{ driveId: 'session-drive-1', ownerId: 'session-owner-1' }]);
   });
 
-  it("forwards the resolved agentPageId as pageId to trackUsage, so usage-breakdown can attribute cost to the right agent page", async () => {
+  it("forwards ctx.agentPageId as pageId to trackUsage (purely descriptive per-agent attribution), so usage-breakdown can attribute cost to the right agent page", async () => {
     const clock = makeMutableClock(new Date('2026-06-01T12:00:00.000Z').getTime());
     const sandbox = makeSandbox({
       runCommand: async () => {
@@ -1210,7 +1286,12 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
       },
     });
     const { billing, trackUsageCalls } = makeBilling();
-    const { deps } = makeDeps({ billing, reconnect: async () => sandbox, now: clock.now });
+    const { deps } = makeDeps({
+      billing,
+      resolveBillingSession: makeBillingSession({ ownerId: 'acting-user', driveId: 'd1', sessionId: 'ws-1' }),
+      reconnect: async () => sandbox,
+      now: clock.now,
+    });
 
     await runBashInSandbox({
       command: 'echo hi',
@@ -1222,11 +1303,11 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
     });
 
     expect(trackUsageCalls).toEqual([
-      { payerId: 'acting-user', holdId: 'hold-1', activeSeconds: 3, pageId: 'other-terminal-page' },
+      { payerId: 'acting-user', holdId: 'hold-1', activeSeconds: 3, pageId: 'other-terminal-page', driveId: 'd1', sessionId: 'ws-1' },
     ]);
   });
 
-  it("gates and settles usage against the PAYER resolvePayerId returns, not the raw tenantId, when they differ (owner-pays for a page owned by someone else)", async () => {
+  it("gates and settles usage against the PAYER resolvePayerId returns, not the session's raw ownerId, when they differ (owner-pays for a drive owned by someone else)", async () => {
     const clock = makeMutableClock(new Date('2026-06-01T12:00:00.000Z').getTime());
     const sandbox = makeSandbox({
       runCommand: async () => {
@@ -1237,7 +1318,12 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
     const { billing, gateCalls, trackUsageCalls } = makeBilling({
       resolvePayerId: async () => 'real-owner-99',
     });
-    const { deps } = makeDeps({ billing, reconnect: async () => sandbox, now: clock.now });
+    const { deps } = makeDeps({
+      billing,
+      resolveBillingSession: makeBillingSession({ ownerId: 'session-owner', driveId: 'd1', sessionId: 'ws-1' }),
+      reconnect: async () => sandbox,
+      now: clock.now,
+    });
 
     const result = await runBashInSandbox({
       command: 'echo hi',
@@ -1251,7 +1337,73 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
     expect(result).toMatchObject({ success: true });
     expect(gateCalls).toEqual([{ payerId: 'real-owner-99' }]);
     expect(trackUsageCalls).toEqual([
-      { payerId: 'real-owner-99', holdId: 'hold-1', activeSeconds: 2, pageId: 'other-terminal-page' },
+      { payerId: 'real-owner-99', holdId: 'hold-1', activeSeconds: 2, pageId: 'other-terminal-page', driveId: 'd1', sessionId: 'ws-1' },
+    ]);
+  });
+
+  // KEY ACCEPTANCE TEST (issue #2260): a session whose driveId differs from the
+  // caller's SURFACE drive must bill the SESSION's payer, not the surface's.
+  // Fails on master's `withMachineBilling` (which resolved payerId from
+  // `ctx.tenantId`/`ctx.agentPageId` — the caller's client-influenceable
+  // surface — via `resolveSandboxPayerId`, ignoring the session entirely).
+  it("bills the SESSION's payer, not the caller's surface drive/tenant, when a session hosts a conversation from a DIFFERENT drive than the one it was spawned in", async () => {
+    const clock = makeMutableClock(new Date('2026-06-01T12:00:00.000Z').getTime());
+    const sandbox = makeSandbox({
+      runCommand: async () => {
+        clock.advance(4000);
+        return { exitCode: 0, stdout: 'ok', stderr: '' };
+      },
+    });
+    const resolvePayerIdCalls: Array<{ driveId: string | null; ownerId: string }> = [];
+    const { billing, gateCalls, trackUsageCalls } = makeBilling({
+      // Mirrors the real resolveSessionPayerId rule: drive owner when set.
+      resolvePayerId: async (input) => {
+        resolvePayerIdCalls.push(input);
+        return input.driveId ? `owner-of-${input.driveId}` : 'unreachable';
+      },
+    });
+    const { deps } = makeDeps({
+      billing,
+      // The SESSION's own facts — a DIFFERENT drive than the surface the agent
+      // is chatting through (ctx below), and a different owner entirely. This
+      // is exactly the R0 scenario: one session hosts many conversations,
+      // possibly from agents in other drives.
+      resolveBillingSession: async () => ({
+        sessionId: 'shared-session-1',
+        driveId: 'session-own-drive',
+        ownerId: 'session-own-owner',
+      }),
+      reconnect: async () => sandbox,
+      now: clock.now,
+    });
+
+    const result = await runBashInSandbox({
+      command: 'echo hi',
+      ctx: makeCtx({
+        // The SURFACE the caller happens to be chatting from — deliberately
+        // DIFFERENT from the session's own drive/owner above.
+        tenantId: 'surface-tenant-should-never-be-billed',
+        driveId: 'surface-drive-should-never-be-billed',
+        agentPageId: 'surface-agent-page',
+      }),
+      deps,
+    });
+
+    expect(result).toMatchObject({ success: true });
+    // The payer was resolved from the SESSION's driveId, never the surface's.
+    expect(resolvePayerIdCalls).toEqual([{ driveId: 'session-own-drive', ownerId: 'session-own-owner' }]);
+    expect(gateCalls).toEqual([{ payerId: 'owner-of-session-own-drive' }]);
+    expect(trackUsageCalls).toEqual([
+      {
+        payerId: 'owner-of-session-own-drive',
+        holdId: 'hold-1',
+        activeSeconds: 4,
+        // Still descriptive of which surface agent page the call came
+        // through — just never the PAYER source.
+        pageId: 'surface-agent-page',
+        driveId: 'session-own-drive',
+        sessionId: 'shared-session-1',
+      },
     ]);
   });
 });

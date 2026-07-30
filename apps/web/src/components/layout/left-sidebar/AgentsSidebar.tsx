@@ -2,9 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { Bot, ChevronDown, ChevronRight, MessageSquarePlus, Plus } from 'lucide-react';
+import { Bot, ChevronDown, ChevronRight, CircleStop, MessageSquarePlus, Plus, SquareTerminal } from 'lucide-react';
 import { toast } from 'sonner';
+import useSWR from 'swr';
 
+import EndSessionDialog from '@/components/agents/EndSessionDialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn, isElectron } from '@/lib/utils';
 import type { SidebarProps } from './index';
@@ -17,47 +19,34 @@ import { useAuth } from '@/hooks/useAuth';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
 import { useDriveStore } from '@/hooks/useDrive';
 import { canManageDrive } from '@/hooks/usePermissions';
-import { usePageAgents, type AgentSummary, type DriveWithAgents } from '@/hooks/page-agents/usePageAgents';
-import { useConversations } from '@/lib/ai/shared';
-import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
-import { useUserActiveStreams } from '@/hooks/useUserActiveStreams';
-import { deriveRunningBadges, type UserActiveStream } from '@/lib/agents/running-badges';
+import { usePageAgents, type DriveWithAgents } from '@/hooks/page-agents/usePageAgents';
 import { useAgentSurfaceStore, SHEET_BREAKPOINT_QUERY } from '@/stores/agents/useAgentSurfaceStore';
-import { post } from '@/lib/auth/auth-fetch';
-import { PageType } from '@pagespace/lib/utils/enums';
-import { getDefaultContent } from '@pagespace/lib/content/page-types.config';
+import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
+import { fetchWithAuth, post, del } from '@/lib/auth/auth-fetch';
+import { groupSessionsByDrive, ASSISTANT_GROUP_KEY } from './session-groups';
 
 /**
- * The Agents console's left sidebar: Drive → Agent → Conversation.
+ * The Agents console's left sidebar: **Drive → Session → conversations.**
  *
- * Two modes, one component (mirroring how `resolveSidebarVariant` routes both
- * Agents URL shapes here):
+ * A SESSION is the tree's second level — a drive-level workspace that owns one
+ * sandbox and hosts conversations (with any of the drive's agents) plus shells.
+ * Agents are NOT a tree level: they are what you pick when spawning a session
+ * or a pane. And PANES are never listed here — layout is centre-view state
+ * (the old sidebar's `WorkspaceLeaves` pattern is deliberately not restored).
  *
- * - **Drive-scoped** (`driveId` present): every agent in that drive.
- * - **Global** (`/dashboard/agents`): every agent across every accessible drive,
+ * Two modes, one component:
+ * - **Drive-scoped** (`driveId` present): that drive's sessions.
+ * - **Global** (`/dashboard/agents`): every accessible drive's sessions,
  *   grouped under a drive header.
  *
- * Structurally this is `DevelopmentSidebar`'s shell — DriveSwitcher →
- * PrimaryNavigation → ScrollArea → footer, the same `resolveListNotice`
- * ordering, the same admin gate — with a completely different tree under it and
- * one behavioural difference that matters more than all of them:
- *
  * **Clicking a row does not navigate.** Selection goes to
- * `useAgentSurfaceStore`, which mirrors it to `?agent=&c=` via `pushState`. The
- * route never changes, so nothing above or beside this component remounts, so
- * live shells and streaming chats survive every click. (That is also why this
- * sidebar has to close the mobile sheet itself — see the store: navigation used
- * to do it for free.)
- *
- * Deliberately NOT carried over from the Development sidebar: `MachineTree`,
- * `WorkspaceLeaves`, `useMachineWorkspaceSync`, and the pending-workspace
- * intent store. Those existed to reconcile a server-synced pane layout across a
- * remount; there is no remount and no server-synced layout here.
+ * `useAgentSurfaceStore`, which mirrors it to `?session=&c=&agent=` via
+ * `pushState`. The route never changes, so nothing above or beside this
+ * component remounts, so live shells and streaming chats survive every click.
  */
 export default function AgentsSidebar({ className }: SidebarProps) {
   const params = useParams();
   const [isElectronMac, setIsElectronMac] = useState(false);
-  // One matchMedia listener for the whole sidebar, passed down — not one per row.
   const isSheetBreakpoint = useBreakpoint(SHEET_BREAKPOINT_QUERY);
 
   const driveIdParams = params?.driveId;
@@ -74,14 +63,25 @@ export default function AgentsSidebar({ className }: SidebarProps) {
   // the list has no business fetching it either.
   const isAdmin = user?.role === 'admin';
 
+  const sessionsKey = isAdmin
+    ? driveId
+      ? `/api/agent-sessions?driveId=${encodeURIComponent(driveId)}`
+      : '/api/agent-sessions'
+    : null;
   const {
-    agentsByDrive,
-    isLoading: agentsLoading,
-    isError: agentsError,
-    mutate: retryAgents,
-  } = usePageAgents(driveId, { enabled: isAdmin });
+    data,
+    error: sessionsError,
+    isLoading: sessionsLoading,
+    mutate: retrySessions,
+  } = useSWR<{ sessions: SessionListEntry[] }>(sessionsKey, sessionsFetcher, {
+    revalidateOnFocus: false,
+    // Modest poll: session/conversation rows change on spawn and end, which
+    // other tabs and agents can do. The pane grid itself never lives here.
+    refreshInterval: 20_000,
+  });
 
-  const { streams } = useUserActiveStreams({ enabled: isAdmin });
+  // The spawn chooser's agent list rides the same fetch both modes already use.
+  const { agentsByDrive } = usePageAgents(driveId, { enabled: isAdmin });
 
   useEffect(() => {
     setIsElectronMac(isElectron() && /Mac/.test(navigator.platform));
@@ -103,15 +103,16 @@ export default function AgentsSidebar({ className }: SidebarProps) {
 
         <ScrollArea className="flex-1 min-h-0">
           <div className="space-y-1">
-            <AgentList
+            <SessionList
               authLoading={authLoading}
               isAdmin={isAdmin}
               driveId={driveId}
+              sessions={data?.sessions ?? []}
+              isLoading={sessionsLoading && !data}
+              hasError={!!sessionsError}
+              onRetry={() => void retrySessions()}
               agentsByDrive={agentsByDrive}
-              isLoading={agentsLoading}
-              hasError={agentsError}
-              onRetry={retryAgents}
-              streams={streams}
+              onChanged={() => void retrySessions()}
             />
           </div>
         </ScrollArea>
@@ -122,22 +123,33 @@ export default function AgentsSidebar({ className }: SidebarProps) {
   );
 }
 
+interface SessionConversationEntry {
+  conversationId: string;
+  title: string | null;
+  agentPageId: string | null;
+}
+
+interface SessionListEntry {
+  sessionId: string;
+  driveId: string | null;
+  name: string;
+  sandboxStatus: 'none' | 'starting' | 'running' | 'ended';
+  conversations: SessionConversationEntry[];
+  shells: Array<{ shellId: string; name: string }>;
+}
+
+async function sessionsFetcher(url: string): Promise<{ sessions: SessionListEntry[] }> {
+  const response = await fetchWithAuth(url);
+  if (!response.ok) throw new Error(`Failed to list sessions (${response.status})`);
+  return response.json();
+}
+
 /**
- * The one ordering-sensitive guard chain the list needs — carried over verbatim
- * from `DevelopmentSidebar`, along with the reasoning that fixed it there.
- *
- * Order matters: auth-pending and non-admin come first so a cold load or a
- * refused user never sees "Failed"/"empty" wording instead. Loading is checked
- * ahead of error so that a Retry click — which sets `isLoading` back to `true`
- * (SWR does this whenever cached `data` is still `undefined`, exactly the
- * "nothing loaded yet" state a failed fetch leaves behind) while `error` stays
- * at its stale, pre-retry value until the new attempt settles — shows the
- * loading state and not a rerun of the same "Failed" text with no visible
- * reaction to the click. Error is then checked ahead of empty because SWR
- * reports `isLoading: false` with no data on its error path — indistinguishable
- * from "genuinely empty" unless error is checked first — but only when there's
- * nothing to show yet: a background poll's error must not tear down a list the
- * caller already has.
+ * The one ordering-sensitive guard chain the list needs — auth-pending and
+ * non-admin first, loading ahead of error (a Retry click must show loading, not
+ * a rerun of the failure text), error ahead of empty (SWR's error path is
+ * indistinguishable from empty unless checked first), and a background poll's
+ * error never tears down a list the caller already has.
  */
 function resolveListNotice({
   authLoading,
@@ -158,11 +170,11 @@ function resolveListNotice({
 }): React.ReactNode {
   if (authLoading) return <SidebarLoading message="Loading…" />;
   if (!isAdmin) return <SidebarNotice title="Agent sandboxes require administrator privileges" />;
-  if (isLoading) return <SidebarLoading message="Loading agents…" />;
+  if (isLoading) return <SidebarLoading message="Loading sessions…" />;
   if (hasError && isEmpty) {
     return (
       <SidebarNotice
-        title="Failed to load agents"
+        title="Failed to load sessions"
         description="Check your connection and try again."
         tone="destructive"
         actionLabel="Retry"
@@ -174,164 +186,251 @@ function resolveListNotice({
   return null;
 }
 
-/** Stable identity so the per-agent badge memos don't recompute every render. */
-const NO_CONVERSATION_IDS: string[] = [];
-
-/**
- * Both modes' list body. The only difference between them is the drive header —
- * the drive-scoped fetch is the global one filtered (same SWR cache, see
- * `usePageAgents`), so there is no second data path to keep in sync.
- */
-function AgentList({
+function SessionList({
   authLoading,
   isAdmin,
   driveId,
-  agentsByDrive,
+  sessions,
   isLoading,
   hasError,
   onRetry,
-  streams,
+  agentsByDrive,
+  onChanged,
 }: {
   authLoading: boolean;
   isAdmin: boolean;
   driveId: string | undefined;
-  agentsByDrive: DriveWithAgents[];
+  sessions: SessionListEntry[];
   isLoading: boolean;
   hasError: boolean;
   onRetry: () => void;
-  streams: UserActiveStream[];
+  agentsByDrive: DriveWithAgents[];
+  onChanged: () => void;
 }) {
-  // Agent dots come from the streams' own channel ids, so an agent whose
-  // conversations have never been expanded still lights up — see
-  // `deriveRunningBadges`.
-  const agentBadges = useMemo(() => deriveRunningBadges(streams, NO_CONVERSATION_IDS).byAgent, [streams]);
-
   const notice = resolveListNotice({
     authLoading,
     isAdmin,
     hasError,
     isLoading,
-    isEmpty: agentsByDrive.length === 0,
-    emptyTitle: driveId ? 'No agents in this drive yet' : 'No agents across your drives yet',
+    isEmpty: sessions.length === 0,
+    emptyTitle: driveId ? 'No sessions in this drive yet' : 'No sessions yet',
     onRetry,
   });
-  if (notice) {
-    // A drive with no agents in it yet still needs the one affordance that
-    // fixes that — otherwise the empty state is a dead end. Only in
-    // drive-scoped mode: the global view has no single drive to create in, and
-    // guessing one would put the agent somewhere the user didn't choose.
-    if (driveId && isAdmin && !authLoading && !isLoading && !hasError) {
-      return (
-        <>
-          {notice}
-          <NewAgentButton driveId={driveId} onCreated={onRetry} />
-        </>
-      );
-    }
-    return notice;
-  }
+
+  const canSpawn = isAdmin && !authLoading;
+  // The Assistant group exists in global mode even with zero sessions — the
+  // affordance to start one IS the group. Not while loading or on a dead
+  // fetch, though: an offer to spawn under a spinner would remount mid-click.
+  const showEmptyAssistantGroup = !driveId && canSpawn && !isLoading && !(hasError && sessions.length === 0);
+
+  // Group by drive in global mode (Assistant first — it is the user's own,
+  // sorted there deterministically rather than by fetch order); a single
+  // implicit group in drive mode.
+  const groups = useMemo(() => {
+    if (driveId) return sessions.length > 0 || notice === null ? [{ driveId, sessions }] : [];
+    return groupSessionsByDrive(sessions, { seedEmptyAssistantGroup: showEmptyAssistantGroup });
+  }, [driveId, sessions, notice, showEmptyAssistantGroup]);
+
+  const driveTitle = useCallback(
+    (id: string) => {
+      if (id === ASSISTANT_GROUP_KEY) return 'Assistant';
+      return agentsByDrive.find((entry) => entry.driveId === id)?.driveName ?? id;
+    },
+    [agentsByDrive],
+  );
 
   return (
-    <>
-      {agentsByDrive.map((driveGroup) => (
-        <div key={driveGroup.driveId} className="space-y-1">
-          {/* Only the aggregated view needs to say which drive a row belongs to. */}
+    <div className="space-y-2">
+      {groups.map((group) => (
+        <div key={group.driveId}>
           {!driveId && (
-            <div className="px-2 pt-1 text-xs font-normal uppercase tracking-wide text-muted-foreground leading-none">
-              {driveGroup.driveName}
-            </div>
+            <div className="px-2 pb-1 pt-2 text-xs font-medium text-muted-foreground">{driveTitle(group.driveId)}</div>
           )}
-          {driveGroup.agents.map((agent) => (
-            <AgentRow key={agent.id} agent={agent} streams={streams} runningCount={agentBadges[agent.id] ?? 0} />
+          {group.sessions.map((session) => (
+            <SessionRow key={session.sessionId} session={session} onChanged={onChanged} />
           ))}
-          <NewAgentButton driveId={driveGroup.driveId} onCreated={onRetry} />
+          <NewSessionRow
+            driveId={group.driveId === ASSISTANT_GROUP_KEY ? null : group.driveId}
+            agentsByDrive={agentsByDrive}
+            onSpawned={onChanged}
+          />
         </div>
       ))}
-    </>
+      {notice}
+      {sessions.length === 0 && !isLoading && canSpawn && driveId !== undefined && (
+        // Even an empty drive can start its first session. Not during the cold
+        // load, though — the loaded list would replace this row and throw away
+        // an open chooser mid-click.
+        <NewSessionRow driveId={driveId} agentsByDrive={agentsByDrive} onSpawned={onChanged} />
+      )}
+    </div>
   );
 }
 
-/**
- * One agent, and its conversations when expanded.
- *
- * Expansion is what gates the conversations fetch (`enabled`): N agents on
- * screen must not mean N conversation requests on mount, the same reason the
- * Development sidebar's machine rows started collapsed.
- */
-function AgentRow({
-  agent,
-  streams,
-  runningCount,
-}: {
-  agent: AgentSummary;
-  streams: UserActiveStream[];
-  runningCount: number;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const selectedAgentId = useAgentSurfaceStore((state) => state.selectedAgentId);
+/** One session: name + running dot, expanding to its conversations (never its panes). */
+function SessionRow({ session, onChanged }: { session: SessionListEntry; onChanged: () => void }) {
+  const selectedSessionId = useAgentSurfaceStore((state) => state.selectedSessionId);
   const selectedConversationId = useAgentSurfaceStore((state) => state.selectedConversationId);
-  const selectAgent = useAgentSurfaceStore((state) => state.selectAgent);
   const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
+  const selectSession = useAgentSurfaceStore((state) => state.selectSession);
+  const forgetWorkspace = useAgentWorkspaceStore((state) => state.forgetWorkspace);
+  const [expanded, setExpanded] = useState(false);
+  const [confirmingEnd, setConfirmingEnd] = useState(false);
+  const [ending, setEnding] = useState(false);
+  const isSelected = selectedSessionId === session.sessionId;
+  const isRunning = session.sandboxStatus === 'running' || session.sandboxStatus === 'starting';
 
-  const onConversationCreate = useCallback(
-    (conversationId: string) => {
-      // A just-minted id has no server rows — mark it loaded-empty so nothing
-      // fetches for it and no loading state shows. (Same move as
-      // `usePageAgentDashboardStore.createNewConversation`, which this mirrors.)
-      conversationMessagesActions.seedConversation(conversationId);
-      selectConversation(conversationId, agent.id);
+  const openConversation = useCallback(
+    (conversation: SessionConversationEntry) => {
+      selectConversation({
+        sessionId: session.sessionId,
+        conversationId: conversation.conversationId,
+        agentId: conversation.agentPageId,
+      });
     },
-    [agent.id, selectConversation],
+    [selectConversation, session.sessionId],
   );
 
-  const { conversations, isLoading, createConversation } = useConversations({
-    agentId: agent.id,
-    currentConversationId: selectedConversationId,
-    enabled: expanded,
-    onConversationCreate,
-  });
+  const openSession = useCallback(() => {
+    // Selecting a SESSION opens its most recent conversation — the row is a
+    // workspace, and a workspace opens on its work, not on a placeholder.
+    setExpanded(true);
+    const first = session.conversations[0];
+    if (first) openConversation(first);
+  }, [openConversation, session.conversations]);
 
-  const conversationIds = useMemo(() => conversations.map((c) => c.id), [conversations]);
-  const conversationBadges = useMemo(
-    () => deriveRunningBadges(streams, conversationIds).byConversation,
-    [streams, conversationIds],
-  );
+  const newConversation = useCallback(async () => {
+    // A new thread defaults to the session's most recent conversation's
+    // counterpart — the full drive picker lives in the pane grid. A null
+    // agent (a global session, or a drive session whose latest thread is an
+    // assistant thread) means the ASSISTANT, created through the
+    // session-centric route since it has no agent page.
+    const agentPageId = session.conversations[0]?.agentPageId ?? null;
+    try {
+      const created =
+        agentPageId === null
+          ? await post<{ conversationId: string }>(
+              `/api/agent-sessions/${encodeURIComponent(session.sessionId)}/conversations`,
+              {},
+            )
+          : await post<{ conversationId: string }>(
+              `/api/ai/page-agents/${encodeURIComponent(agentPageId)}/conversations`,
+              { sessionId: session.sessionId },
+            );
+      onChanged();
+      selectConversation({
+        sessionId: session.sessionId,
+        conversationId: created.conversationId,
+        agentId: agentPageId,
+      });
+    } catch (error) {
+      console.error('Failed to start a conversation:', error);
+      toast.error('Could not start a conversation', {
+        description: error instanceof Error ? error.message : 'Please try again.',
+      });
+    }
+  }, [onChanged, selectConversation, session.conversations, session.sessionId]);
 
-  const title = agent.title || 'Untitled agent';
+  const endSession = useCallback(async () => {
+    setEnding(true);
+    try {
+      await del(`/api/agent-sessions/${encodeURIComponent(session.sessionId)}`);
+      // The session leaves the sidebar; its conversations remain as history in
+      // each agent's list. Drop the local grid too — its panes pointed at a
+      // sandbox that no longer exists.
+      forgetWorkspace(session.sessionId);
+      if (selectedSessionId === session.sessionId) selectSession(null);
+      setConfirmingEnd(false);
+      onChanged();
+    } catch (error) {
+      console.error('Failed to end session:', error);
+      toast.error('Could not end the session', {
+        description: error instanceof Error ? error.message : 'Please try again.',
+      });
+    } finally {
+      setEnding(false);
+    }
+  }, [forgetWorkspace, onChanged, selectSession, selectedSessionId, session.sessionId]);
 
   return (
     <div>
-      <TreeRow
-        expanded={expanded}
-        onToggleExpand={() => setExpanded((value) => !value)}
-        onSelect={() => selectAgent(agent.id)}
-        selected={agent.id === selectedAgentId}
-        icon={<Bot className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />}
-        label={title}
-        running={runningCount > 0}
+      <div
+        className={cn(
+          'group flex w-full items-center gap-1 rounded-md px-2 py-1.5 text-sm hover:bg-accent',
+          isSelected && 'bg-accent',
+        )}
+      >
+        <button
+          type="button"
+          aria-label={expanded ? `Collapse ${session.name || 'session'}` : `Expand ${session.name || 'session'}`}
+          className="shrink-0 text-muted-foreground hover:text-foreground"
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+        </button>
+        <button type="button" className="flex min-w-0 flex-1 items-center gap-1.5 text-left" onClick={openSession}>
+          {isRunning && (
+            // `role="img"` gives the span an accessible-name-bearing role — a
+            // plain `<span aria-label>` is not announced by most screen
+            // readers, since aria-label is only honoured on elements with a
+            // role that supports naming.
+            <span
+              role="img"
+              aria-label="Sandbox running"
+              className="size-1.5 shrink-0 rounded-full bg-emerald-500"
+            />
+          )}
+          <span className="truncate">{session.name || 'Session'}</span>
+        </button>
+        <button
+          type="button"
+          aria-label="New conversation in this session"
+          className="shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus:opacity-100 group-hover:opacity-100"
+          onClick={() => void newConversation()}
+        >
+          <MessageSquarePlus className="size-3.5" />
+        </button>
+        <button
+          type="button"
+          aria-label="End session"
+          className="shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus:opacity-100 group-hover:opacity-100"
+          onClick={() => setConfirmingEnd(true)}
+        >
+          <CircleStop className="size-3.5" />
+        </button>
+      </div>
+
+      <EndSessionDialog
+        open={confirmingEnd}
+        onOpenChange={setConfirmingEnd}
+        sessionName={session.name}
+        isEnding={ending}
+        onConfirm={() => void endSession()}
       />
 
       {expanded && (
-        <div className="ml-4 space-y-0.5 border-l border-[var(--separator)] pl-1">
-          {isLoading && conversations.length === 0 ? (
-            <SidebarLoading message="Loading conversations…" />
-          ) : (
-            <>
-              {conversations.map((conversation) => (
-                <TreeRow
-                  key={conversation.id}
-                  onSelect={() => selectConversation(conversation.id, agent.id)}
-                  selected={conversation.id === selectedConversationId}
-                  label={conversation.title || 'Untitled conversation'}
-                  running={(conversationBadges[conversation.id] ?? 0) > 0}
-                />
-              ))}
-              <InlineAction
-                icon={<MessageSquarePlus className="size-3.5 shrink-0" aria-hidden="true" />}
-                label="New conversation"
-                onClick={() => void createConversation()}
-              />
-            </>
+        <div className="ml-5 space-y-0.5 border-l border-border pl-2">
+          {session.conversations.map((conversation) => (
+            <button
+              key={conversation.conversationId}
+              type="button"
+              className={cn(
+                'flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm text-muted-foreground hover:bg-accent hover:text-foreground',
+                selectedConversationId === conversation.conversationId && 'bg-accent text-foreground',
+              )}
+              onClick={() => openConversation(conversation)}
+            >
+              <span className="truncate">{conversation.title || 'New conversation'}</span>
+            </button>
+          ))}
+          {session.shells.length > 0 && (
+            <div className="flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground">
+              <SquareTerminal className="size-3" aria-hidden="true" />
+              {session.shells.length === 1 ? '1 shell' : `${session.shells.length} shells`}
+            </div>
+          )}
+          {session.conversations.length === 0 && (
+            <div className="px-2 py-1 text-xs text-muted-foreground">No conversations</div>
           )}
         </div>
       )}
@@ -340,138 +439,93 @@ function AgentRow({
 }
 
 /**
- * Creating an agent is creating an AI_CHAT page — there is no separate "agent"
- * object, which is exactly why this surface could be built on top of what
- * already exists. Minimal on purpose: the full create flow (icon, prompt,
- * tools) lives on the page itself.
+ * "+ New session": one act — the server mints the session WITH its first
+ * conversation (a session is never empty).
+ *
+ * Two shapes, matching the two session kinds: a DRIVE row opens an inline
+ * agent chooser (the same choice the pane picker offers on a split) and spawns
+ * with that agent; the ASSISTANT row (`driveId null`) has nothing to choose —
+ * the assistant IS the counterpart — so the click spawns directly.
  */
-function NewAgentButton({ driveId, onCreated }: { driveId: string; onCreated: () => void }) {
-  const [isCreating, setIsCreating] = useState(false);
-  const selectAgent = useAgentSurfaceStore((state) => state.selectAgent);
-
-  const createAgent = useCallback(async () => {
-    if (isCreating) return;
-    setIsCreating(true);
-    try {
-      const page = await post<{ id: string }>('/api/pages', {
-        title: 'New agent',
-        type: PageType.AI_CHAT,
-        driveId,
-        parentId: null,
-        content: getDefaultContent(PageType.AI_CHAT),
-      });
-      onCreated();
-      selectAgent(page.id);
-    } catch (error) {
-      toast.error((error as Error).message || 'Failed to create agent');
-    } finally {
-      setIsCreating(false);
-    }
-  }, [driveId, isCreating, onCreated, selectAgent]);
-
-  return (
-    <InlineAction
-      icon={<Plus className="size-3.5 shrink-0" aria-hidden="true" />}
-      label={isCreating ? 'Creating…' : 'New agent'}
-      onClick={() => void createAgent()}
-      disabled={isCreating}
-    />
-  );
-}
-
-/** A muted "+ something" row. Reads as an affordance, not as tree content. */
-function InlineAction({
-  icon,
-  label,
-  onClick,
-  disabled,
+function NewSessionRow({
+  driveId,
+  agentsByDrive,
+  onSpawned,
 }: {
-  icon: React.ReactNode;
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
+  driveId: string | null;
+  agentsByDrive: DriveWithAgents[];
+  onSpawned: () => void;
 }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="flex w-full items-center gap-1 rounded-sm px-2 py-0.5 text-left text-xs text-muted-foreground hover:bg-accent/50 hover:text-foreground disabled:opacity-50"
-    >
-      {icon}
-      <span className="truncate leading-none">{label}</span>
-    </button>
-  );
-}
+  const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
+  const [choosing, setChoosing] = useState(false);
+  const [spawning, setSpawning] = useState(false);
 
-/**
- * One row of the tree. Same shape as the Machine tree's row (expand chevron,
- * label button, `aria-current` on the interactive element rather than the
- * wrapper) so the two surfaces read alike while the doomed component stays
- * where it is.
- */
-function TreeRow({
-  expanded,
-  onToggleExpand,
-  onSelect,
-  selected,
-  icon,
-  label,
-  running,
-}: {
-  expanded?: boolean;
-  onToggleExpand?: () => void;
-  onSelect: () => void;
-  selected: boolean;
-  icon?: React.ReactNode;
-  label: string;
-  /** A live assistant stream somewhere under this row. */
-  running?: boolean;
-}) {
+  const agents = useMemo(
+    () => agentsByDrive.find((entry) => entry.driveId === driveId)?.agents ?? [],
+    [agentsByDrive, driveId],
+  );
+
+  const spawn = useCallback(
+    async (agentPageId: string | null) => {
+      if (spawning) return;
+      setSpawning(true);
+      try {
+        const created = await post<{ session: { sessionId: string }; conversationId: string }>(
+          '/api/agent-sessions',
+          // Both-null is the global-assistant spawn shape.
+          agentPageId === null ? {} : { driveId, agentPageId },
+        );
+        setChoosing(false);
+        onSpawned();
+        // Land the user IN the new session's first conversation — no empty
+        // state is ever visible.
+        selectConversation({
+          sessionId: created.session.sessionId,
+          conversationId: created.conversationId,
+          agentId: agentPageId,
+        });
+      } catch (error) {
+        console.error('Failed to start a session:', error);
+        toast.error('Could not start a session', {
+          description: error instanceof Error ? error.message : 'Please try again.',
+        });
+      } finally {
+        setSpawning(false);
+      }
+    },
+    [driveId, onSpawned, selectConversation, spawning],
+  );
+
   return (
-    <div
-      className={cn(
-        'group flex items-center gap-1 rounded-sm py-0.5 pr-1 leading-none',
-        // Hover must not fight the selected state: `bg-accent` and
-        // `hover:bg-accent/50` are different variant groups, so twMerge keeps
-        // both and the hover rule wins — pointing at the selected row would
-        // LIGHTEN it, making it read as less selected than its siblings.
-        selected ? 'bg-accent' : 'hover:bg-accent/50',
-      )}
-    >
-      {onToggleExpand ? (
-        <button
-          type="button"
-          onClick={onToggleExpand}
-          className="shrink-0 rounded-sm p-0.5 hover:bg-accent"
-          aria-label={expanded ? 'Collapse' : 'Expand'}
-          data-testid="expand-chevron"
-        >
-          {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
-        </button>
-      ) : (
-        <span className="size-3 shrink-0" aria-hidden="true" />
-      )}
+    <div>
       <button
         type="button"
-        onClick={onSelect}
-        // `aria-current` belongs on the INTERACTIVE element, not the row
-        // wrapper: the wrapper has no role and isn't focusable, so a
-        // screen-reader user never reaches it and the selection would be
-        // conveyed by background colour alone.
-        aria-current={selected ? 'true' : undefined}
-        className="flex min-w-0 flex-1 items-center gap-1 text-left"
+        disabled={spawning}
+        className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+        onClick={() => (driveId === null ? void spawn(null) : setChoosing((value) => !value))}
       >
-        {icon}
-        <span className="truncate text-sm font-normal leading-none">{label}</span>
+        <Plus className="size-3.5" />
+        New session
       </button>
-      {running && (
-        <span
-          className="size-1.5 shrink-0 rounded-full bg-primary"
-          role="status"
-          aria-label="Running"
-          title="Running"
-        />
+      {choosing && (
+        <div className="ml-5 space-y-0.5 border-l border-border pl-2">
+          {agents.length === 0 ? (
+            <div className="px-2 py-1 text-xs text-muted-foreground">No agents in this drive yet</div>
+          ) : (
+            agents.map((agent) => (
+              <button
+                key={agent.id}
+                type="button"
+                disabled={spawning}
+                className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+                onClick={() => void spawn(agent.id)}
+              >
+                <Bot className="size-3" aria-hidden="true" />
+                <span className="truncate">{agent.title ?? 'Agent'}</span>
+              </button>
+            ))
+          )}
+        </div>
       )}
     </div>
   );

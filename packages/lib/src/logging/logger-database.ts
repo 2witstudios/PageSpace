@@ -204,6 +204,8 @@ export async function writeAiUsage(usage: {
   messageId?: string;
   pageId?: string;
   driveId?: string;
+  /** The `agent_sessions.id` this usage attributes to — terminal runtime/storage charges only. */
+  sessionId?: string;
   success?: boolean;
   error?: string;
   source?: string;
@@ -241,6 +243,7 @@ export async function writeAiUsage(usage: {
       messageId: usage.messageId,
       pageId: usage.pageId,
       driveId: usage.driveId,
+      sessionId: usage.sessionId,
       success: usage.success,
       error: usage.error,
       source: usage.source,

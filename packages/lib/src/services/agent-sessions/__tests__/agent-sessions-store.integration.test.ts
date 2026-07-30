@@ -29,6 +29,7 @@ const ownerId = createId();
 const driveId = createId();
 const agentPageId = createId();
 const conversationIds: string[] = [];
+const sessionIds: string[] = [];
 /**
  * Every sandbox id this file lets reach the DB, recorded AS IT IS WRITTEN.
  *
@@ -46,30 +47,34 @@ const sandboxIds = new Set<string>(['sbx-integration-outbox']);
 
 let store: Awaited<ReturnType<typeof createDbAgentSessionStore>>;
 
-/** A conversation row (the FK/PK target) plus its session row. */
+/** A session row (its own id), plus one conversation BOUND to it via conversations.sessionId. */
 async function seedSession(
-  over: Partial<{ sandboxId: string; spriteInstanceId: string; spriteTornDownAt: Date; endedAt: Date }> = {},
+  over: Partial<{ sandboxId: string; spriteInstanceId: string | null; spriteTornDownAt: Date; endedAt: Date }> = {},
 ) {
+  const sessionId = createId();
+  sessionIds.push(sessionId);
+  if (over.sandboxId) sandboxIds.add(over.sandboxId);
+  await db.insert(agentSessions).values({
+    id: sessionId,
+    ownerId,
+    driveId,
+    sandboxId: over.sandboxId ?? null,
+    spriteInstanceId: over.spriteInstanceId ?? null,
+    spriteTornDownAt: over.spriteTornDownAt ?? null,
+    endedAt: over.endedAt ?? null,
+    updatedAt: new Date(),
+  });
   const conversationId = createId();
   conversationIds.push(conversationId);
-  if (over.sandboxId) sandboxIds.add(over.sandboxId);
   await db.insert(conversations).values({
     id: conversationId,
     userId: ownerId,
     title: 'integration',
     type: 'page',
     contextId: agentPageId,
+    sessionId,
   });
-  await db.insert(agentSessions).values({
-    conversationId,
-    ownerId,
-    agentPageId,
-    sandboxId: over.sandboxId ?? null,
-    spriteInstanceId: over.spriteInstanceId ?? null,
-    spriteTornDownAt: over.spriteTornDownAt ?? null,
-    endedAt: over.endedAt ?? null,
-  });
-  return conversationId;
+  return sessionId;
 }
 
 beforeAll(async () => {
@@ -96,13 +101,13 @@ afterAll(async () => {
     const rows = await db
       .select({ sandboxId: agentSessions.sandboxId })
       .from(agentSessions)
-      .where(inArray(agentSessions.conversationId, conversationIds));
+      .where(inArray(agentSessions.id, sessionIds));
     for (const row of rows) {
       if (row.sandboxId) sandboxIds.add(row.sandboxId);
     }
     // agent_sessions cascades from conversations, but delete explicitly: the DB
     // is shared, so a leaked row is the next run's mystery, not this one's.
-    await db.delete(agentSessions).where(inArray(agentSessions.conversationId, conversationIds));
+    await db.delete(agentSessions).where(inArray(agentSessions.id, sessionIds));
     await db.delete(conversations).where(inArray(conversations.id, conversationIds));
   }
   await db.delete(machineSpriteReclaims).where(inArray(machineSpriteReclaims.sandboxId, [...sandboxIds]));
@@ -115,28 +120,54 @@ beforeEach(async () => {
   await db.delete(machineSpriteReclaims).where(eq(machineSpriteReclaims.sandboxId, 'sbx-integration-outbox'));
 });
 
-describe('insertIfAbsent (PK = conversationId)', () => {
-  it('given two inserts for one conversation, should keep exactly one row and neither should throw', async () => {
+describe('create + findByConversation', () => {
+  it('mints a session with its own id, and two bound conversations resolve the SAME row', async () => {
+    const created = await store.create({ ownerId, driveId, name: 'api refactor', now: new Date() });
+    sessionIds.push(created.id);
+
+    for (const convName of ['conv-x', 'conv-y']) {
+      const conversationId = createId();
+      conversationIds.push(conversationId);
+      await db.insert(conversations).values({
+        id: conversationId,
+        userId: ownerId,
+        title: convName,
+        type: 'page',
+        contextId: agentPageId,
+        sessionId: created.id,
+      });
+      // The payoff of the un-conflation, proven against real Postgres: every
+      // thread in a session resolves the one row whose id folds the ONE
+      // Sprite key.
+      const resolved = await store.findByConversation(conversationId);
+      expect(resolved?.id).toBe(created.id);
+    }
+  });
+
+  it('a thread with no session resolves null — never a fallback', async () => {
     const conversationId = createId();
     conversationIds.push(conversationId);
     await db.insert(conversations).values({
       id: conversationId,
       userId: ownerId,
-      title: 'dupe',
+      title: 'plain chat',
       type: 'page',
       contextId: agentPageId,
     });
+    expect(await store.findByConversation(conversationId)).toBeNull();
+  });
 
-    const input = { conversationId, ownerId, agentPageId, name: null, now: new Date() };
-    await store.insertIfAbsent(input);
-    // The whole concurrency contract of ensureAgentSession: the SECOND caller
-    // must not error, because both are legitimate first touches racing.
-    await expect(store.insertIfAbsent({ ...input, name: 'second' })).resolves.toBeUndefined();
+  it('deleting a session NULLs the binding and the thread survives as history', async () => {
+    const sessionId = await seedSession();
+    const [bound] = await db.select().from(conversations).where(eq(conversations.sessionId, sessionId));
+    expect(bound).toBeDefined();
 
-    const rows = await db.select().from(agentSessions).where(eq(agentSessions.conversationId, conversationId));
-    expect(rows).toHaveLength(1);
-    // ON CONFLICT DO NOTHING — the first writer's row stands.
-    expect(rows[0].name).toBeNull();
+    await db.delete(agentSessions).where(eq(agentSessions.id, sessionId));
+
+    const [after] = await db.select().from(conversations).where(eq(conversations.id, bound.id));
+    expect(after).toBeDefined();
+    expect(after.sessionId).toBeNull();
+    expect(await store.findByConversation(bound.id)).toBeNull();
   });
 });
 
@@ -156,7 +187,7 @@ describe('updateSpriteIdentity — CAS on the previous pointer', () => {
     });
 
     expect(ok).toBe(true);
-    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.conversationId, conversationId));
+    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.id, conversationId));
     expect(row.sandboxId).toBe('sbx-1');
     expect(row.spriteInstanceId).toBe('i-1');
   });
@@ -179,7 +210,7 @@ describe('updateSpriteIdentity — CAS on the previous pointer', () => {
     });
 
     expect(ok).toBe(false);
-    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.conversationId, conversationId));
+    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.id, conversationId));
     expect(row.sandboxId).toBe('sbx-existing');
   });
 
@@ -198,7 +229,7 @@ describe('updateSpriteIdentity — CAS on the previous pointer', () => {
     });
 
     expect(ok).toBe(true);
-    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.conversationId, conversationId));
+    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.id, conversationId));
     expect(row.sandboxId).toBe('sbx-new');
     expect(row.spriteTornDownAt).toBeNull();
   });
@@ -216,7 +247,7 @@ describe('stampSpriteTornDown — CAS on the INSTANCE', () => {
     });
 
     expect(ok).toBe(true);
-    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.conversationId, conversationId));
+    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.id, conversationId));
     expect(row.spriteTornDownAt).not.toBeNull();
   });
 
@@ -231,7 +262,7 @@ describe('stampSpriteTornDown — CAS on the INSTANCE', () => {
     });
 
     expect(ok).toBe(false);
-    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.conversationId, conversationId));
+    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.id, conversationId));
     expect(row.spriteTornDownAt).toBeNull();
   });
 });
@@ -262,27 +293,97 @@ describe('countLive', () => {
 
 describe('recordStorageMeasurement', () => {
   it('given a live row, should persist the measurement', async () => {
-    const conversationId = await seedSession({ sandboxId: 'sbx-1', spriteInstanceId: 'i' });
+    const sessionId = await seedSession({ sandboxId: 'sbx-1', spriteInstanceId: 'i' });
     const measuredAt = new Date();
 
-    await store.recordStorageMeasurement({ sessionId: conversationId, measuredBytes: 4096, measuredAt });
+    await store.recordStorageMeasurement({ sessionId, spriteInstanceId: 'i', measuredBytes: 4096, measuredAt });
 
-    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.conversationId, conversationId));
+    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.id, sessionId));
     expect(Number(row.storageMeasuredBytes)).toBe(4096);
     expect(row.storageMeasuredAt).not.toBeNull();
   });
 
   it('given a TORN-DOWN row, should not write — that filesystem no longer exists', async () => {
-    const conversationId = await seedSession({
+    const sessionId = await seedSession({
       sandboxId: 'sbx-1',
       spriteInstanceId: 'i',
       spriteTornDownAt: new Date(),
     });
 
-    await store.recordStorageMeasurement({ sessionId: conversationId, measuredBytes: 999, measuredAt: new Date() });
+    await store.recordStorageMeasurement({
+      sessionId,
+      spriteInstanceId: 'i',
+      measuredBytes: 999,
+      measuredAt: new Date(),
+    });
 
-    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.conversationId, conversationId));
+    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.id, sessionId));
     expect(row.storageMeasuredBytes).toBeNull();
+  });
+
+  it('given the Sprite generation moved on mid-measurement, should DROP the stale write', async () => {
+    // The window the liveness guard cannot close, because a re-provision REVIVES
+    // the row: measure generation A (fire-and-forget) → A torn down → B minted,
+    // which clears `spriteTornDownAt` and nulls the measurement columns → A's
+    // `du` finally lands. Guarded only on liveness it finds a live row and
+    // writes A's bytes onto B, with a fresh `storageMeasuredAt` that suppresses
+    // B's own measurement for the whole throttle window while the reconcile
+    // bills B's interval against A's disk.
+    //
+    // The name cannot arbitrate this: `sandboxId` is HMAC-derived from the
+    // session, so A and B share it. Only the instance id differs.
+    const sessionId = await seedSession({ sandboxId: 'sbx-stable-name', spriteInstanceId: 'instance-A' });
+
+    await db
+      .update(agentSessions)
+      .set({ spriteInstanceId: 'instance-B', spriteTornDownAt: null, storageMeasuredBytes: null, storageMeasuredAt: null })
+      .where(eq(agentSessions.id, sessionId));
+
+    await store.recordStorageMeasurement({
+      sessionId,
+      spriteInstanceId: 'instance-A',
+      measuredBytes: 5_000_000,
+      measuredAt: new Date(),
+    });
+
+    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.id, sessionId));
+    expect(row.storageMeasuredBytes).toBeNull();
+    // The timestamp matters as much as the bytes: a stale one silences the next
+    // real measurement without ever having recorded a real number.
+    expect(row.storageMeasuredAt).toBeNull();
+  });
+
+  it('given the same generation still on the row, should persist despite an identical sandbox NAME', async () => {
+    // The other half: the CAS must not reject a legitimate measurement just
+    // because the name is reused. Same name, same instance → this is the disk
+    // that was measured.
+    const sessionId = await seedSession({ sandboxId: 'sbx-stable-name', spriteInstanceId: 'instance-B' });
+
+    await store.recordStorageMeasurement({
+      sessionId,
+      spriteInstanceId: 'instance-B',
+      measuredBytes: 777,
+      measuredAt: new Date(),
+    });
+
+    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.id, sessionId));
+    expect(Number(row.storageMeasuredBytes)).toBe(777);
+  });
+
+  it('given a driver that reports no instance id, should still persist against a null row', async () => {
+    // Degrades to the liveness guard rather than never persisting — the most a
+    // caller can know when the platform gives it no generation id.
+    const sessionId = await seedSession({ sandboxId: 'sbx-no-instance', spriteInstanceId: null });
+
+    await store.recordStorageMeasurement({
+      sessionId,
+      spriteInstanceId: null,
+      measuredBytes: 321,
+      measuredAt: new Date(),
+    });
+
+    const [row] = await db.select().from(agentSessions).where(eq(agentSessions.id, sessionId));
+    expect(Number(row.storageMeasuredBytes)).toBe(321);
   });
 });
 
@@ -338,16 +439,20 @@ describe('reclaim trigger — every cascade path that can strand a live Sprite',
       type: over.withPage ? 'page' : 'global',
       contextId: over.withPage ? probePageId : null,
     });
+    const probeSessionId = createId();
     await db.insert(agentSessions).values({
-      conversationId,
+      id: probeSessionId,
       ownerId: probeUserId,
-      agentPageId: over.withPage ? probePageId : null,
+      // A drive-scoped session unless the probe wants a user-scoped one (the
+      // global-assistant shape) — withPage doubles as "drive-scoped" here.
+      driveId: over.withPage ? probeDriveId : null,
       sandboxId: over.sandboxId,
       spriteInstanceId: 'i',
       spriteTornDownAt: over.spriteTornDownAt ?? null,
+      updatedAt: new Date(),
     });
     sandboxIds.add(over.sandboxId);
-    return { probeUserId, probeDriveId, probePageId, conversationId };
+    return { probeUserId, probeDriveId, probePageId, conversationId, probeSessionId };
   }
 
   async function reclaimed(sandboxId: string): Promise<boolean> {
@@ -358,14 +463,19 @@ describe('reclaim trigger — every cascade path that can strand a live Sprite',
     return rows.length > 0;
   }
 
-  it('given the AGENT PAGE is deleted, should rescue the pointer', async () => {
+  it('given the AGENT PAGE is deleted, should NOT touch the session — sessions are not page-anchored', async () => {
+    // The old model cascaded sessions off their agent page. A session hosts
+    // many agents' conversations now, so a page delete must leave it alive.
     const probe = await seedProbe({ suffix: 'page', sandboxId: 'sbx-cascade-page', withPage: true });
     await db.delete(pages).where(eq(pages.id, probe.probePageId));
-    expect(await reclaimed('sbx-cascade-page')).toBe(true);
+    const rows = await db.select().from(agentSessions).where(eq(agentSessions.id, probe.probeSessionId));
+    expect(rows).toHaveLength(1);
+    expect(await reclaimed('sbx-cascade-page')).toBe(false);
     await db.delete(users).where(eq(users.id, probe.probeUserId));
+    expect(await reclaimed('sbx-cascade-page')).toBe(true);
   });
 
-  it('given the DRIVE is deleted, should rescue the pointer through two cascade hops', async () => {
+  it('given the DRIVE is deleted, should rescue the pointer — the direct driveId cascade', async () => {
     const probe = await seedProbe({ suffix: 'drive', sandboxId: 'sbx-cascade-drive', withPage: true });
     await db.delete(drives).where(eq(drives.id, probe.probeDriveId));
     expect(await reclaimed('sbx-cascade-drive')).toBe(true);
@@ -392,15 +502,100 @@ describe('reclaim trigger — every cascade path that can strand a live Sprite',
   });
 });
 
-describe('conversation delete cascade', () => {
-  it('given the conversation row is deleted, should take the session row with it', async () => {
-    // The PK-is-the-FK design in one assertion: no orphan cleanup code exists
-    // anywhere because this cascade is what removes sessions.
-    const conversationId = await seedSession({ sandboxId: 'sbx-cascade', spriteInstanceId: 'i' });
+describe('conversation delete', () => {
+  it('given a bound conversation is deleted, should leave the session ALIVE — threads do not own workspaces', async () => {
+    // The inversion of the old PK-is-the-FK design: a session hosts many
+    // threads, so one thread's deletion says nothing about the workspace.
+    const sessionId = await seedSession({ sandboxId: 'sbx-conv-delete', spriteInstanceId: 'i' });
+    const [bound] = await db.select().from(conversations).where(eq(conversations.sessionId, sessionId));
 
-    await db.delete(conversations).where(eq(conversations.id, conversationId));
+    await db.delete(conversations).where(eq(conversations.id, bound.id));
 
-    const rows = await db.select().from(agentSessions).where(eq(agentSessions.conversationId, conversationId));
-    expect(rows).toHaveLength(0);
+    const rows = await db.select().from(agentSessions).where(eq(agentSessions.id, sessionId));
+    expect(rows).toHaveLength(1);
+    expect(await reclaimedOutside('sbx-conv-delete')).toBe(false);
+  });
+});
+
+/** Outbox lookup usable outside the cascade describe's closure. */
+async function reclaimedOutside(sandboxId: string): Promise<boolean> {
+  const rows = await db
+    .select()
+    .from(machineSpriteReclaims)
+    .where(eq(machineSpriteReclaims.sandboxId, sandboxId));
+  return rows.length > 0;
+}
+
+describe('list bounds and ordering (review M3/M4)', () => {
+  it('excludes ENDED sessions — retained rows are lifecycle facts, not listings', async () => {
+    const active = await seedSession();
+    const ended = await seedSession({ endedAt: new Date() });
+
+    const listed = await store.list({ ownerId });
+    const ids = listed.map((row) => row.id);
+    expect(ids).toContain(active);
+    expect(ids).not.toContain(ended);
+  });
+
+  it('orders newest activity first, nulls last — a poll must not reshuffle between refreshes', async () => {
+    const older = await seedSession();
+    const newer = await seedSession();
+    const never = await seedSession();
+    await db.update(agentSessions).set({ lastActiveAt: new Date(Date.now() - 60_000) }).where(eq(agentSessions.id, older));
+    await db.update(agentSessions).set({ lastActiveAt: new Date() }).where(eq(agentSessions.id, newer));
+    await db.update(agentSessions).set({ lastActiveAt: null }).where(eq(agentSessions.id, never));
+
+    const listed = await store.list({ ownerId });
+    const ids = listed.map((row) => row.id).filter((id) => [older, newer, never].includes(id));
+    expect(ids).toEqual([newer, older, never]);
+  });
+
+  it('countActive counts NOT-ENDED rows — the spawn ceiling input, distinct from live sandboxes', async () => {
+    const before = await store.countActive(ownerId);
+    await seedSession(); // active, never provisioned (not "live")
+    await seedSession({ endedAt: new Date() }); // ended — excluded
+    const after = await store.countActive(ownerId);
+    expect(after).toBe(before + 1);
+  });
+});
+
+describe('createIfUnderLimit — the spawn ceiling made atomic (review #2261/2)', () => {
+  it('given the owner is under the ceiling, should mint a session', async () => {
+    const result = await store.createIfUnderLimit({
+      ownerId,
+      driveId,
+      name: 'ceiling test',
+      now: new Date(),
+      maxActive: 1_000_000,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    sessionIds.push(result.session.id);
+    expect(result.session.ownerId).toBe(ownerId);
+  });
+
+  it('given the owner is AT the ceiling, should refuse without inserting', async () => {
+    const before = await store.countActive(ownerId);
+    const result = await store.createIfUnderLimit({ ownerId, driveId, name: null, now: new Date(), maxActive: before });
+    expect(result).toEqual({ ok: false, reason: 'limit_reached' });
+    expect(await store.countActive(ownerId)).toBe(before);
+  });
+
+  it('given N concurrent spawns racing the SAME ceiling, should mint EXACTLY the remaining allowance — not N (the TOCTOU a count-then-insert pre-check left open)', async () => {
+    const before = await store.countActive(ownerId);
+    const allowance = 3;
+    const maxActive = before + allowance;
+    const attempts = 10;
+
+    const results = await Promise.all(
+      Array.from({ length: attempts }, () =>
+        store.createIfUnderLimit({ ownerId, driveId, name: null, now: new Date(), maxActive }),
+      ),
+    );
+    const minted = results.filter((r): r is Extract<typeof r, { ok: true }> => r.ok);
+    for (const r of minted) sessionIds.push(r.session.id);
+
+    expect(minted).toHaveLength(allowance);
+    expect(await store.countActive(ownerId)).toBe(maxActive);
   });
 });

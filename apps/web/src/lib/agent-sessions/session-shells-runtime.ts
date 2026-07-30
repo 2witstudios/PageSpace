@@ -14,10 +14,14 @@ import {
   listSessionShells,
   killSessionShellById,
   resolveSessionShellById,
+  toShellDTO,
   type SpawnSessionShellResult,
   type KillSessionShellResult,
   type ResolveSessionShellResult,
 } from '@pagespace/lib/services/agent-sessions/session-shells';
+import { db } from '@pagespace/db/db';
+import { inArray } from '@pagespace/db/operators';
+import { agentSessionShells } from '@pagespace/db/schema/agent-sessions';
 import type { ShellDTO } from '@pagespace/lib/agent-sessions/contract';
 import { getAgentSessionStore, getSandboxHost } from './agent-sessions-runtime';
 
@@ -45,6 +49,27 @@ export async function spawnShell(input: {
 export async function listShells(sessionId: string): Promise<ShellDTO[]> {
   const store = await getSessionShellStore();
   return listSessionShells({ sessionId, deps: { store } });
+}
+
+/**
+ * The shells of MANY sessions in one query, grouped by session — the
+ * collection GET's shape (review M4: it ran one query per session per
+ * sidebar poll). Same DTO projection as the per-session listing.
+ */
+export async function listShellsBulk(sessionIds: string[]): Promise<Map<string, ShellDTO[]>> {
+  const grouped = new Map<string, ShellDTO[]>();
+  if (sessionIds.length === 0) return grouped;
+  const rows = await db
+    .select()
+    .from(agentSessionShells)
+    .where(inArray(agentSessionShells.sessionId, sessionIds))
+    .orderBy(agentSessionShells.createdAt);
+  for (const row of rows) {
+    const bucket = grouped.get(row.sessionId) ?? [];
+    bucket.push(toShellDTO(row));
+    grouped.set(row.sessionId, bucket);
+  }
+  return grouped;
 }
 
 export async function resolveShellById(shellId: string): Promise<ResolveSessionShellResult> {

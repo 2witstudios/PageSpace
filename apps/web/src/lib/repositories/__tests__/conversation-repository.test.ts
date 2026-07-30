@@ -166,16 +166,27 @@ describe('conversationRepository.createConversation', () => {
   function mockChatMessagesLookup(rows: Array<{ userId: string | null }>) {
     return { where: vi.fn().mockResolvedValue(rows) };
   }
+  // The INSERT chain is values → onConflictDoNothing → returning. `rows` is
+  // what RETURNING yields: [{id}] = this call won the insert, [] = a
+  // concurrent writer beat it (conflict swallowed the insert).
+  function mockInsert(rows: Array<{ id: string }>) {
+    const returning = vi.fn().mockResolvedValue(rows);
+    const onConflictDoNothing = vi.fn().mockReturnValue({ returning });
+    const valuesMock = vi.fn().mockReturnValue({ onConflictDoNothing });
+    mockDb.insert = vi.fn().mockReturnValue({ values: valuesMock });
+    return { valuesMock, onConflictDoNothing, returning };
+  }
 
-  it('does nothing when a conversations row already exists (cheap indexed short-circuit)', async () => {
+  it("reports 'exists' when a conversations row already exists (cheap indexed short-circuit)", async () => {
     let call = 0;
     mockSelectChain.from.mockImplementation(() => {
       call += 1;
       return mockConversationsLookup([{ id: 'conv-a' }]);
     });
 
-    await conversationRepository.createConversation('conv-a', 'user-1', 'agent-1');
+    const outcome = await conversationRepository.createConversation('conv-a', 'user-1', 'agent-1');
 
+    expect(outcome).toBe('exists');
     expect(call).toBe(1); // only the conversations lookup — never touches chat_messages or inserts
     expect(mockDb.insert).not.toHaveBeenCalled();
   });
@@ -184,19 +195,61 @@ describe('conversationRepository.createConversation', () => {
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))
       .mockImplementationOnce(() => mockChatMessagesLookup([]));
-    const onConflictDoNothing = vi.fn().mockResolvedValue(undefined);
-    const valuesMock = vi.fn().mockReturnValue({ onConflictDoNothing });
-    mockDb.insert = vi.fn().mockReturnValue({ values: valuesMock });
+    const { valuesMock, onConflictDoNothing } = mockInsert([{ id: 'conv-new' }]);
 
-    await conversationRepository.createConversation('conv-new', 'user-1', 'agent-1');
+    const outcome = await conversationRepository.createConversation('conv-new', 'user-1', 'agent-1');
 
+    expect(outcome).toBe('created');
     expect(valuesMock).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'conv-new', userId: 'user-1', contextId: 'agent-1', isShared: false })
     );
     expect(onConflictDoNothing).toHaveBeenCalled();
   });
 
-  it('does NOT create the row when an existing message in this conversation belongs to a different user (Codex P2)', async () => {
+  it('carries sessionId and title inside the INSERT itself — binding is congenital, never an UPDATE', async () => {
+    mockSelectChain.from
+      .mockImplementationOnce(() => mockConversationsLookup([]))
+      .mockImplementationOnce(() => mockChatMessagesLookup([]));
+    const { valuesMock } = mockInsert([{ id: 'conv-bound' }]);
+
+    const outcome = await conversationRepository.createConversation('conv-bound', 'user-1', 'agent-1', {
+      sessionId: 'ses-1',
+      title: 'Worker: research',
+    });
+
+    expect(outcome).toBe('created');
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'conv-bound', sessionId: 'ses-1', title: 'Worker: research' })
+    );
+  });
+
+  it('defaults sessionId and title to null when opts omit them (sessionless page thread)', async () => {
+    mockSelectChain.from
+      .mockImplementationOnce(() => mockConversationsLookup([]))
+      .mockImplementationOnce(() => mockChatMessagesLookup([]));
+    const { valuesMock } = mockInsert([{ id: 'conv-unbound' }]);
+
+    await conversationRepository.createConversation('conv-unbound', 'user-1', 'agent-1');
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'conv-unbound', sessionId: null, title: null })
+    );
+  });
+
+  it("reports 'exists' when RETURNING yields no row — a concurrent first-write won and this caller's binding did NOT persist", async () => {
+    mockSelectChain.from
+      .mockImplementationOnce(() => mockConversationsLookup([]))
+      .mockImplementationOnce(() => mockChatMessagesLookup([]));
+    mockInsert([]);
+
+    const outcome = await conversationRepository.createConversation('conv-race', 'user-1', 'agent-1', {
+      sessionId: 'ses-1',
+    });
+
+    expect(outcome).toBe('exists');
+  });
+
+  it("reports 'message_owner_conflict' (no insert) when an existing message belongs to a different user (Codex P2)", async () => {
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))
       .mockImplementationOnce(() => mockChatMessagesLookup([
@@ -204,8 +257,9 @@ describe('conversationRepository.createConversation', () => {
         { userId: null },
       ]));
 
-    await conversationRepository.createConversation('conv-legacy', 'attacker-user', 'agent-1');
+    const outcome = await conversationRepository.createConversation('conv-legacy', 'attacker-user', 'agent-1');
 
+    expect(outcome).toBe('message_owner_conflict');
     expect(mockDb.insert).not.toHaveBeenCalled();
   });
 
@@ -227,9 +281,7 @@ describe('conversationRepository.createConversation', () => {
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))
       .mockImplementationOnce(() => ({ where: chatMessagesWhere }));
-    mockDb.insert = vi.fn().mockReturnValue({
-      values: vi.fn().mockReturnValue({ onConflictDoNothing: vi.fn().mockResolvedValue(undefined) }),
-    });
+    mockInsert([{ id: 'conv-victim' }]);
 
     await conversationRepository.createConversation('conv-victim', 'attacker-user', 'attacker-page');
 
@@ -248,12 +300,11 @@ describe('conversationRepository.createConversation', () => {
         { userId: 'user-1' },
         { userId: null },
       ]));
-    const onConflictDoNothing = vi.fn().mockResolvedValue(undefined);
-    const valuesMock = vi.fn().mockReturnValue({ onConflictDoNothing });
-    mockDb.insert = vi.fn().mockReturnValue({ values: valuesMock });
+    const { valuesMock } = mockInsert([{ id: 'conv-mine' }]);
 
-    await conversationRepository.createConversation('conv-mine', 'user-1', 'agent-1');
+    const outcome = await conversationRepository.createConversation('conv-mine', 'user-1', 'agent-1');
 
+    expect(outcome).toBe('created');
     expect(valuesMock).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'conv-mine', userId: 'user-1' })
     );
@@ -263,9 +314,7 @@ describe('conversationRepository.createConversation', () => {
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))
       .mockImplementationOnce(() => mockChatMessagesLookup([]));
-    const onConflictDoNothing = vi.fn().mockResolvedValue(undefined);
-    const valuesMock = vi.fn().mockReturnValue({ onConflictDoNothing });
-    mockDb.insert = vi.fn().mockReturnValue({ values: valuesMock });
+    const { valuesMock, onConflictDoNothing } = mockInsert([{ id: 'conv-shared' }]);
 
     await conversationRepository.createConversation('conv-shared', 'user-1', 'machine-1', { isShared: true });
 
@@ -279,9 +328,7 @@ describe('conversationRepository.createConversation', () => {
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))
       .mockImplementationOnce(() => mockChatMessagesLookup([]));
-    const onConflictDoNothing = vi.fn().mockResolvedValue(undefined);
-    const valuesMock = vi.fn().mockReturnValue({ onConflictDoNothing });
-    mockDb.insert = vi.fn().mockReturnValue({ values: valuesMock });
+    const { valuesMock } = mockInsert([{ id: 'conv-default' }]);
 
     await conversationRepository.createConversation('conv-default', 'user-1', 'agent-1', {});
 

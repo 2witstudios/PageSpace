@@ -23,7 +23,7 @@ const okGate: SandboxGate = async () => ({ ok: true });
 function fakeRunDeps(): SandboxRunDeps {
   return {
     isEnabled: () => true,
-    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx', resumed: false }),
+    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx', resumed: false, sessionId: 'ws-1' }),
     reconnect: async () => ({
       sandboxId: 'sbx',
       spriteInstanceId: null,
@@ -106,7 +106,7 @@ describe('createSandboxTools', () => {
     const runDeps = fakeRunDeps();
     runDeps.acquireSandbox = async () => {
       acquired = true;
-      return { ok: true, sandboxId: 'sbx', resumed: false };
+      return { ok: true, sandboxId: 'sbx', resumed: false, sessionId: 'ws-1' };
     };
     const tools = createSandboxTools({
       runDeps,
@@ -123,7 +123,7 @@ describe('createSandboxTools', () => {
     const runDeps = fakeRunDeps();
     runDeps.acquireSandbox = async () => {
       acquired = true;
-      return { ok: true, sandboxId: 'sbx', resumed: false };
+      return { ok: true, sandboxId: 'sbx', resumed: false, sessionId: 'ws-1' };
     };
     const tools = createSandboxTools({
       runDeps,

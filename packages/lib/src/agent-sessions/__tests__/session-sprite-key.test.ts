@@ -13,6 +13,24 @@ describe('deriveAgentSessionSpriteKey', () => {
     expect(deriveAgentSessionSpriteKey(base)).toMatch(/^pgs-ses-[0-9a-f]{64}$/);
   });
 
+  it('should derive under the v2 namespace — v1 folded conversation ids in the SAME keyspace', () => {
+    // v1 folded conversation cuids; v2 folds session cuids. Both are cuid2s, so
+    // same-namespace reuse could let a v2 session derive the name of a v1
+    // Sprite still awaiting reclaim. Pinned via a known-answer digest: any
+    // change to the namespace, delimiter, or algorithm moves this value — and
+    // reverting to v1 would too.
+    const key = deriveAgentSessionSpriteKey({
+      tenantId: 'tenant-fixed',
+      sessionId: 'session-fixed',
+      secret: 's'.repeat(32),
+    });
+    // Known answer computed independently (node, sha3-256 HMAC over
+    // 'agent-session-sprite:v2\0tenant-fixed\0session-fixed'), NOT derived from
+    // the function under test — a snapshot of the function's own output would
+    // pass under any namespace.
+    expect(key).toBe('pgs-ses-63d5a311c2fdcf458fdb147886cbf23abfb39f940f195cc4de927e99e1c6b9a9');
+  });
+
   it('given different session ids, should never collide (one session → one sandbox)', () => {
     const a = deriveAgentSessionSpriteKey({ ...base, sessionId: 'conv-1' });
     const b = deriveAgentSessionSpriteKey({ ...base, sessionId: 'conv-2' });
@@ -34,6 +52,18 @@ describe('deriveAgentSessionSpriteKey', () => {
     const a = deriveAgentSessionSpriteKey({ ...base, tenantId: 'a', sessionId: 'bc' });
     const b = deriveAgentSessionSpriteKey({ ...base, tenantId: 'ab', sessionId: 'c' });
     expect(a).not.toBe(b);
+  });
+
+  it('given a NUL inside tenantId, should throw — a smuggled delimiter re-spells the pair', () => {
+    // Without the guard, {tenant:'a\0b', session:'c'} and {tenant:'a',
+    // session:'b\0c'} fold to the SAME payload and therefore the same Sprite
+    // name. Both ids are server-minted cuids today, but this function is the
+    // security boundary, so injectivity is enforced here, not assumed.
+    expect(() => deriveAgentSessionSpriteKey({ ...base, tenantId: 'a\0b', sessionId: 'c' })).toThrow(/tenantId/);
+  });
+
+  it('given a NUL inside sessionId, should throw — the other half of the same collision', () => {
+    expect(() => deriveAgentSessionSpriteKey({ ...base, tenantId: 'a', sessionId: 'b\0c' })).toThrow(/sessionId/);
   });
 
   it('given an empty secret, should throw (fail closed — never derive an unkeyed name)', () => {

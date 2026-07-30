@@ -2,9 +2,9 @@
  * useAgentSessionChat Hook Tests — Phase 6.
  *
  * The ONE chat's state for a fixed agent + fixed conversation (no dual-mode
- * selector, no pendingPrompt — those are the machine pane's concerns, not an
- * AgentView's). Behavior under test, derived from useMachinePaneChat's
- * default-mode coverage:
+ * selector, no pendingPrompt — those are pane-picker concerns, not this
+ * hook's). Consumed by `SessionChat.tsx`, one chat pane inside an agent
+ * session's pane grid. Behavior under test:
  *
  * - loads the conversation into the shared cache keyed by (agentId, conversationId)
  * - sends { chatId: agentId, conversationId, ...agent config } through useChat
@@ -12,8 +12,7 @@
  * - renders from the shared conversation cache
  * - error cause is forwarded
  *
- * Template: useMachinePaneChat.test.ts (renderHook, auth-fetch mocked, real
- * swr, real conversation-messages store).
+ * renderHook, auth-fetch mocked, real swr, real conversation-messages store.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';

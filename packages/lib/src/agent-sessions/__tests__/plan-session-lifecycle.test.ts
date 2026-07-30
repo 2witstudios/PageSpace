@@ -298,6 +298,19 @@ describe('planAgentSessionLifecycle — end (instance-guarded teardown, row reta
     });
     expect(plan.action).toBe('teardown');
   });
+
+  it('given a NORMALLY-ended row (provisioned, CONFIRMED kill — the common shape), should noop rather than re-teardown', () => {
+    // review #2261/4: teardown never clears `sandboxId` (the row outlives its
+    // Sprite on purpose), so `tornDown`/`unprovisioned` above — both
+    // `sandboxId: null` — are the UNCOMMON shape. The common one, a session
+    // that was provisioned and then normally ended, still carries its
+    // `sandboxId`; that used to fall through to `teardown` on every re-end.
+    const endedProvisioned = row({ teardownRequestedAt: NOW, spriteTornDownAt: NOW, endedAt: NOW });
+    const plan = planAgentSessionLifecycle({ row: endedProvisioned, intent: 'end', canRun: true, now: NOW });
+    if (plan.action !== 'noop') throw new Error('expected noop');
+    expect(plan.reason).toBe('already_ended');
+    expect(plan.stamps).toEqual({});
+  });
 });
 
 describe('planAgentSessionLifecycle — reprovision (heal a row whose Sprite is unusable)', () => {

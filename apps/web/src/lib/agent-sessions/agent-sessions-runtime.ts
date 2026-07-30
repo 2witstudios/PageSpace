@@ -18,8 +18,8 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
-import { pages, drives } from '@pagespace/db/schema/core';
+import { and, count, eq, inArray, sql } from '@pagespace/db/operators';
+import { conversations } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
 import { checkAgentSessionConcurrency } from '@pagespace/lib/services/sandbox/quota';
 import {
@@ -37,13 +37,12 @@ import {
 import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { resolveSandboxNetworkOptions } from '@pagespace/lib/services/sandbox/network-options';
 import { getConfiguredEgressIpTag } from '@pagespace/lib/services/sandbox/egress-ip';
-import { canUserViewPage, canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import {
-  ensureAgentSession,
+  spawnAgentSession,
   endAgentSession,
   listAgentSessions,
   toAgentSessionDTO,
-  type EnsureAgentSessionResult,
+  type SpawnAgentSessionResult,
   type EndAgentSessionResult,
 } from '@pagespace/lib/services/agent-sessions/agent-sessions';
 import {
@@ -62,15 +61,29 @@ import {
   type AgentSessionAccessCheck,
   type AgentSessionAccessDeps,
 } from '@pagespace/lib/services/agent-sessions/agent-session-access';
+import {
+  resolveSessionTenantId,
+  resolveDriveMembership,
+  canRunCodeForSession,
+} from '@pagespace/lib/services/agent-sessions/agent-session-tenant';
 import type { AgentSessionDTO } from '@pagespace/lib/agent-sessions/contract';
 import { decideAgentSessionAccess } from '@pagespace/lib/agent-sessions/decide-session-access';
+import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-sessions/plan-spawn-session';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import {
-  resolveOrCreateConversation,
-  ConversationOwnershipError,
-} from '@/app/api/ai/global/[id]/messages/resolve-or-create-conversation';
+import { resolveOrCreateConversation } from '@/app/api/ai/global/[id]/messages/resolve-or-create-conversation';
+import { createConversationInSessionWith } from '@/lib/agent-sessions/create-conversation-in-session';
 
 export { isCodeExecutionEnabled };
+
+/**
+ * The most NOT-ENDED sessions one owner may hold. Spawn is deliberately
+ * instant and free (no sandbox), which meant the live-sandbox concurrency
+ * quota never applied to it — an authorized caller could mint unbounded rows
+ * (review M6/F4). The single source of truth: `spawnSession` below passes it
+ * as `spawnAgentSession`'s REQUIRED `maxActiveSessions` dep (review
+ * #2261/2), and the route imports it for its own advisory pre-check.
+ */
+export const MAX_ACTIVE_SESSIONS_PER_OWNER = 100;
 
 // ---------------------------------------------------------------------------
 // Lazy singletons — the store reconnects to one DB pool; the host is stateless.
@@ -119,49 +132,9 @@ export function getSandboxHost(): Promise<SandboxHost> {
 // Row-fact lookups (null-plumbing only)
 // ---------------------------------------------------------------------------
 
-/** The agent page's drive, or null when the page (or its drive) cannot be resolved. */
-export async function resolveAgentPageDriveId(agentPageId: string): Promise<string | null> {
-  const page = await db.query.pages.findFirst({
-    where: eq(pages.id, agentPageId),
-    columns: { driveId: true },
-  });
-  return page?.driveId ?? null;
-}
-
-/**
- * The tenant a session's Sprite key folds under: the agent page's drive OWNER
- * for a page-anchored session, the session owner themself for a global one
- * (the user is their own isolation boundary — same rule as
- * `resolveSandboxActorContext`).
- */
-export async function resolveSessionTenantId(session: {
-  agentPageId: string | null;
-  ownerId: string;
-}): Promise<string> {
-  if (session.agentPageId === null) return session.ownerId;
-  const driveId = await resolveAgentPageDriveId(session.agentPageId);
-  if (driveId === null) return session.ownerId;
-  const drive = await db.query.drives.findFirst({
-    where: eq(drives.id, driveId),
-    columns: { ownerId: true },
-  });
-  return drive?.ownerId ?? session.ownerId;
-}
-
-export interface SessionConversationFacts {
-  userId: string;
-  type: string;
-  contextId: string | null;
-  isShared: boolean;
-}
-
-/** The conversation row's identity facts, or null when it does not exist. */
-export async function findSessionConversation(
-  conversationId: string,
-): Promise<SessionConversationFacts | null> {
-  const row = await conversationRepository.getConversation(conversationId);
-  if (!row) return null;
-  return { userId: row.userId, type: row.type, contextId: row.contextId, isShared: row.isShared };
+/** The owner's not-ended session count — the spawn ceiling's input (store.countActive). */
+export async function countActiveSessionsForOwner(ownerId: string): Promise<number> {
+  return (await getAgentSessionStore()).countActive(ownerId);
 }
 
 export async function findSessionRecord(sessionId: string): Promise<AgentSessionRecord | null> {
@@ -177,28 +150,10 @@ function buildAccessDeps(): AgentSessionAccessDeps {
     findSession: async (sessionId) => {
       const row = await findSessionRecord(sessionId);
       if (!row) return null;
-      return { sessionId: row.conversationId, ownerId: row.ownerId, agentPageId: row.agentPageId };
+      return { sessionId: row.id, ownerId: row.ownerId, driveId: row.driveId };
     },
-    resolveConversationOwnership: async ({ conversationId, requesterId }) => {
-      const conversation = await findSessionConversation(conversationId);
-      if (!conversation) return 'none';
-      if (conversation.userId === requesterId) return 'owner';
-      return conversation.isShared ? 'shared' : 'none';
-    },
-    resolvePagePermission: async ({ userId, agentPageId }) => {
-      if (await canUserEditPage(userId, agentPageId)) return 'edit';
-      if (await canUserViewPage(userId, agentPageId)) return 'view';
-      return 'none';
-    },
-    canRunCode: async ({ userId, agentPageId }) => {
-      const driveId = agentPageId === null ? null : await resolveAgentPageDriveId(agentPageId);
-      const result = await canRunCode({
-        userId,
-        driveId: driveId ?? undefined,
-        requestOrigin: 'user',
-      });
-      return result.ok;
-    },
+    resolveDriveMembership,
+    canRunCode: canRunCodeForSession,
   };
 }
 
@@ -210,30 +165,27 @@ export async function checkSessionAccess(
 }
 
 /**
- * The same ONE pure decision, applied to a session that may not have a row yet
- * — the ensure path's subject is synthesized from the conversation row it is
- * about to anchor to (`sessionId` ≡ conversationId, `ownerId` = the
- * conversation's owner). This gathers the identical facts `buildAccessDeps`
- * gathers and hands them to `decideAgentSessionAccess`; no fifth fact and no
+ * The same ONE pure decision, applied BEFORE a row exists — the spawn path's
+ * subject is the session about to be minted (`ownerId` = the requester,
+ * `driveId` = where it will live). This gathers the identical facts
+ * `buildAccessDeps` gathers and hands them to `decideAgentSessionAccess`; no
  * extra rule exists here.
  */
 export async function checkAccessForSubject(
   requesterId: string,
-  subject: { sessionId: string; ownerId: string; agentPageId: string | null },
+  subject: { sessionId: string; ownerId: string; driveId: string | null },
 ): Promise<AgentSessionAccessCheck> {
   const deps = buildAccessDeps();
-  const [conversationOwnership, pagePermission, allowedToRunCode] = await Promise.all([
-    deps.resolveConversationOwnership({ conversationId: subject.sessionId, requesterId }),
-    subject.agentPageId === null
+  const [driveMembership, allowedToRunCode] = await Promise.all([
+    subject.driveId === null
       ? Promise.resolve(null)
-      : deps.resolvePagePermission({ userId: requesterId, agentPageId: subject.agentPageId }),
-    deps.canRunCode({ userId: requesterId, agentPageId: subject.agentPageId }),
+      : deps.resolveDriveMembership({ userId: requesterId, driveId: subject.driveId }),
+    deps.canRunCode({ userId: requesterId, driveId: subject.driveId }),
   ]);
   return decideAgentSessionAccess({
     requesterId,
     session: subject,
-    conversationOwnership,
-    pagePermission,
+    driveMembership,
     canRunCode: allowedToRunCode,
   });
 }
@@ -242,11 +194,10 @@ export async function checkSessionEndAccess(
   requesterId: string,
   sessionId: string,
 ): Promise<AgentSessionAccessCheck> {
-  const { findSession, resolveConversationOwnership, resolvePagePermission } = buildAccessDeps();
   return checkAgentSessionEndAccess({
     requesterId,
     sessionId,
-    deps: { findSession, resolveConversationOwnership, resolvePagePermission },
+    deps: buildAccessDeps(),
   });
 }
 
@@ -255,54 +206,163 @@ export async function checkSessionEndAccess(
 // ---------------------------------------------------------------------------
 
 /**
- * The squat-guarded conversation creators, one per anchor kind. Injected into
- * `ensureAgentSession` so the guard in the app repository stays the ONLY way a
- * conversation id is ever claimed (see `EnsureConversationFn`'s doc).
- * `resolveOrCreateConversation` throws `ConversationOwnershipError` for a
- * conversation someone else owns — rethrown as-is for the service to fold into
- * its `conversation_unavailable` result.
+ * Create a conversation BORN INTO a session. Decision logic lives in the pure
+ * module (`create-conversation-in-session.ts`) — this is only its production
+ * wiring: the squat-guarded repository creator for page threads, the
+ * ownership-guarded resolver for global ones, both carrying the binding
+ * INSIDE their INSERT (no `conversations.sessionId` UPDATE exists anywhere —
+ * rebinding is unrepresentable, per invariant 1).
+ *
+ * Throws `ConversationUnavailableError` (message `conversation_unavailable`)
+ * when the id cannot be claimed WITH this binding — foreign owner, legacy
+ * message-owner conflict, or an existing row whose binding disagrees.
  */
-async function ensureConversationRow({
-  conversationId,
-  userId,
-  agentPageId,
-}: {
+export async function createConversationInSession(input: {
   conversationId: string;
   userId: string;
+  /** null = a global-assistant conversation. */
   agentPageId: string | null;
+  sessionId: string;
+  /** Display label written at birth (a spawned worker's name). */
+  title?: string | null;
 }): Promise<void> {
-  if (agentPageId === null) {
-    try {
-      await resolveOrCreateConversation(userId, conversationId);
-    } catch (error) {
-      if (error instanceof ConversationOwnershipError) {
-        throw new Error('conversation_unavailable');
-      }
-      throw error;
-    }
-    return;
-  }
-  await conversationRepository.createConversation(conversationId, userId, agentPageId);
+  return createConversationInSessionWith(
+    {
+      createPageConversation: ({ conversationId, userId, agentPageId, sessionId, title }) =>
+        conversationRepository.createConversation(conversationId, userId, agentPageId, {
+          sessionId,
+          title: title ?? undefined,
+        }),
+      createGlobalConversation: async ({ conversationId, userId, sessionId, title }) => {
+        await resolveOrCreateConversation(userId, conversationId, undefined, {
+          sessionId,
+          title: title ?? undefined,
+        });
+      },
+      findConversation: async (conversationId) => {
+        const row = await conversationRepository.getConversation(conversationId);
+        if (!row) return null;
+        return { userId: row.userId, type: row.type, contextId: row.contextId, sessionId: row.sessionId };
+      },
+      findAgentDriveId: async (agentPageId) => {
+        const agent = await conversationRepository.getAiAgent(agentPageId);
+        return agent?.driveId ?? null;
+      },
+      findSessionDriveId: async (sessionId) => {
+        const row = await findSessionRecord(sessionId);
+        return row ? { driveId: row.driveId } : null;
+      },
+      countActiveConversations: async (sessionId) => {
+        const [row] = await db
+          .select({ n: count() })
+          .from(conversations)
+          .where(and(eq(conversations.sessionId, sessionId), eq(conversations.isActive, true)));
+        return row?.n ?? 0;
+      },
+    },
+    input,
+  );
 }
 
-export async function ensureSession(input: {
-  conversationId: string;
+export async function spawnSession(input: {
   userId: string;
-  agentPageId: string | null;
+  driveId: string | null;
   name?: string | null;
-}): Promise<EnsureAgentSessionResult> {
+}): Promise<SpawnAgentSessionResult> {
   const store = await getAgentSessionStore();
-  return ensureAgentSession({
-    userId: input.userId,
-    agentPageId: input.agentPageId,
-    conversationId: input.conversationId,
+  return spawnAgentSession({
+    ownerId: input.userId,
+    driveId: input.driveId,
     name: input.name,
-    deps: {
-      store,
-      ensureConversation: ensureConversationRow,
-      now: () => new Date(),
-    },
+    deps: { store, now: () => new Date(), maxActiveSessions: MAX_ACTIVE_SESSIONS_PER_OWNER },
   });
+}
+
+/** Resolve a conversation's session — how a chat turn finds its working context. Null = a plain chat. */
+export async function findSessionForConversation(conversationId: string): Promise<AgentSessionRecord | null> {
+  return (await getAgentSessionStore()).findByConversation(conversationId);
+}
+
+export interface SessionConversationEntry {
+  conversationId: string;
+  title: string | null;
+  /** The thread's agent page (`contextId` for a page chat), or null for a global-assistant thread. */
+  agentPageId: string | null;
+  lastMessageAt: Date | null;
+}
+
+/**
+ * The conversations of MANY sessions in one query, grouped by session —
+ * the collection GET's shape, which previously ran one query per session
+ * (review M4: 1+2N per sidebar poll). Newest activity first per session,
+ * capped at {@link MAX_SESSION_CONVERSATIONS} — the same ceiling
+ * `planSpawnWorkerSession`/`createConversationInSessionWith` enforce, so a
+ * session's own listing cap and its create-time cap agree by construction.
+ *
+ * The cap is enforced IN SQL via a `ROW_NUMBER() OVER (PARTITION BY
+ * sessionId ...)` filter (issue #2262 finding 4), not the JS `bucket.length`
+ * check the previous shape used: without a query-layer bound, a single
+ * session holding far more rows than its cap pulled its ENTIRE row set into
+ * app memory before the JS loop ever discarded the excess. The window
+ * function is what keeps the per-session fairness a flat `LIMIT` would lose
+ * — one hot session's rows cannot crowd another session's out of a shared cap
+ * ordered across all of them together.
+ *
+ * DELIBERATE metadata exposure (issue #2262 finding 6): every caller with
+ * access to a session (its owner, or any member whose own conversation lives
+ * there) sees every OTHER conversation's title and agent in that session,
+ * this way — including threads it did not create. Shared-workspace semantics,
+ * not a leak: a session is one shared sandbox by design. TRANSCRIPT content
+ * is a separate, still owner-gated read (`checkSessionAccess` /
+ * `openOwnSession` in the tool layer) — this listing carries no message
+ * bodies.
+ */
+export async function listSessionConversationsBulk(
+  sessionIds: string[],
+): Promise<Map<string, SessionConversationEntry[]>> {
+  const grouped = new Map<string, SessionConversationEntry[]>();
+  if (sessionIds.length === 0) return grouped;
+
+  const rankedConversations = db
+    .select({
+      sessionId: conversations.sessionId,
+      conversationId: conversations.id,
+      title: conversations.title,
+      type: conversations.type,
+      contextId: conversations.contextId,
+      lastMessageAt: conversations.lastMessageAt,
+      rowNumber: sql<number>`ROW_NUMBER() OVER (PARTITION BY ${conversations.sessionId} ORDER BY ${conversations.lastMessageAt} DESC)`.as(
+        'row_number',
+      ),
+    })
+    .from(conversations)
+    .where(and(inArray(conversations.sessionId, sessionIds), eq(conversations.isActive, true)))
+    .as('ranked_conversations');
+
+  const rows = await db
+    .select({
+      sessionId: rankedConversations.sessionId,
+      conversationId: rankedConversations.conversationId,
+      title: rankedConversations.title,
+      type: rankedConversations.type,
+      contextId: rankedConversations.contextId,
+      lastMessageAt: rankedConversations.lastMessageAt,
+    })
+    .from(rankedConversations)
+    .where(sql`${rankedConversations.rowNumber} <= ${MAX_SESSION_CONVERSATIONS}`);
+
+  for (const row of rows) {
+    if (row.sessionId === null) continue;
+    const bucket = grouped.get(row.sessionId) ?? [];
+    bucket.push({
+      conversationId: row.conversationId,
+      title: row.title,
+      agentPageId: row.type === 'page' ? row.contextId : null,
+      lastMessageAt: row.lastMessageAt,
+    });
+    grouped.set(row.sessionId, bucket);
+  }
+  return grouped;
 }
 
 /**
@@ -314,24 +374,30 @@ export async function provisionSessionSandbox(
   row: AgentSessionRecord,
   requesterId: string,
 ): Promise<EnsureAgentSessionSandboxResult> {
-  const [store, host, tenantId] = await Promise.all([
+  const [store, host, tenant] = await Promise.all([
     getAgentSessionStore(),
     getSandboxHost(),
     resolveSessionTenantId(row),
   ]);
+  // Fail CLOSED on a vanished drive — never fall back to the session owner.
+  // That fallback would fold the Sprite key under a DIFFERENT tenant than the
+  // one this session's key already folded under on a prior provision,
+  // splitting one session across two Sprite identities (audit #2265 finding 1).
+  if (!tenant.ok) {
+    return { ok: false, reason: 'provision_failed', detail: tenant.reason };
+  }
 
   return ensureAgentSessionSandbox({
-    row: { ...row, sessionId: row.conversationId },
+    row: { ...row, sessionId: row.id },
     intent: 'ensure',
-    actor: { userId: requesterId, tenantId },
+    actor: { userId: requesterId, tenantId: tenant.tenantId },
     deps: {
       store,
       host,
       substrate: { kind: 'sprite' },
-      options: resolveSandboxNetworkOptions({ surface: 'machine', egressIpTag: getConfiguredEgressIpTag() }),
+      options: resolveSandboxNetworkOptions({ surface: 'session', egressIpTag: getConfiguredEgressIpTag() }),
       secret: getSandboxSessionSecret(),
       authorize: canRunCode,
-      resolveDriveId: resolveAgentPageDriveId,
       checkFullEgressEnablement: async () =>
         decideFullEgressEnablement({
           adminGateEnabled: isCodeExecutionEnabled(),
@@ -359,6 +425,9 @@ export async function provisionSessionSandbox(
         await refreshSessionStorageMeasurement({
           handle,
           sessionId,
+          // The generation just minted — the CAS target for the write. Taken
+          // from the handle, not the row: this is the VM the `du` runs on.
+          spriteInstanceId: handle.spriteInstanceId ?? null,
           // NULL, not the row's value: this callback only fires on the `create`
           // arm, where the same operation resets the measurement columns (a new
           // Sprite generation is an empty filesystem). Passing the pre-provision
@@ -391,7 +460,15 @@ export async function provisionSessionSandbox(
  */
 export async function measureWarmSessionStorage(input: {
   sessionId: string;
-  attach: () => Promise<{ exec: SandboxHandle['exec'] } | null>;
+  /**
+   * Returns the sandbox to measure AND its own generation id. Both, because the
+   * two can disagree: this path is fed by a sandbox the tool run ALREADY
+   * acquired, so by the time the row is read below the session may have been
+   * torn down and re-provisioned — the row would say B while the handle in hand
+   * is still A. CASing on the row's value would then let A's bytes land on B
+   * under a CAS that "succeeded", which is the bug the CAS exists to stop.
+   */
+  attach: () => Promise<{ exec: SandboxHandle['exec']; spriteInstanceId: string | null } | null>;
 }): Promise<void> {
   try {
     const store = await getAgentSessionStore();
@@ -410,6 +487,11 @@ export async function measureWarmSessionStorage(input: {
     await refreshSessionStorageMeasurement({
       handle,
       sessionId: input.sessionId,
+      // The MEASURED handle's own generation, never the row's. The row is read
+      // for the throttle; the CAS has to describe the disk the `du` actually
+      // walked, or a handle captured before a re-provision would persist the
+      // old generation's bytes under the new generation's id.
+      spriteInstanceId: handle.spriteInstanceId,
       lastMeasuredAt: row.storageMeasuredAt ?? null,
       now: new Date(),
       persist: (measurement) => store.recordStorageMeasurement(measurement),

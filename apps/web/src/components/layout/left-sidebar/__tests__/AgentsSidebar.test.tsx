@@ -1,22 +1,27 @@
 /**
- * The Agents sidebar's wiring.
+ * The Agents sidebar's wiring — **Drive → Session → conversations**.
  *
  * The behaviour worth pinning hardest is the one that has no visible symptom
  * when it breaks: **clicking a row does not navigate**. Selection goes to the
- * store, which writes `?agent=&c=` with `pushState`, and the route never
- * changes — so nothing remounts and a live shell or streaming chat survives the
- * click. A regression to `router.push` would look identical on screen and would
- * silently tear down every PTY on the surface, which is exactly the failure the
- * old Development surface needed a keep-alive host to paper over.
+ * store, which writes `?session=&c=&agent=` with `pushState`, and the route
+ * never changes — so nothing remounts and a live shell or streaming chat
+ * survives the click. A regression to `router.push` would look identical on
+ * screen and would silently tear down every PTY on the surface.
  *
- * After that: the admin gate is a DISABLED FETCH, conversations load only when
- * an agent is expanded, and the notice ordering (auth → admin → loading → error
- * → empty) matches the Development sidebar's — which is where its reasoning is
- * written down.
+ * Structural invariants pinned here:
+ * - The tree's second level is the SESSION (workspace), and under it its
+ *   conversations — never its panes (layout is centre-view state).
+ * - Selecting a session opens its most recent CONVERSATION: session, c and
+ *   agent land as one transition, so the centre never shows a session with no
+ *   conversation resolved.
+ * - Spawning a session is ONE act: pick an agent, and the server answers with
+ *   the session AND its first conversation (a session is never empty).
+ * - The admin gate is a DISABLED FETCH (null SWR key), not a hidden list.
  */
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { SWRConfig } from 'swr';
 
 const mockPush = vi.fn();
 const mockUseAuth = vi.fn();
@@ -45,68 +50,37 @@ interface PageAgentsResult {
   mutate: () => void;
 }
 
-// Spied, not merely stubbed: the `enabled` argument IS the admin gate, so it is
-// the property under test — asserting only that no agent renders would still
-// pass if the gate were dropped, since the refusal notice short-circuits the
-// list anyway.
-const mockUsePageAgents = vi.fn(
-  (driveId?: string, options?: { enabled?: boolean }): PageAgentsResult => ({
-    agentsByDrive: options?.enabled
-      ? [
-          {
-            driveId: 'drive-1',
-            driveName: 'Alpha',
-            agentCount: 1,
-            agents: [{ id: 'agent-1', title: 'Researcher', driveId: 'drive-1' }],
-          },
-        ]
-      : [],
-    isLoading: false,
-    isError: false,
-    mutate: vi.fn(),
-  }),
-);
+// Spied, not merely stubbed: the `enabled` argument IS half the admin gate
+// (the other half is the null sessions SWR key) — asserting only that nothing
+// renders would still pass if the gate were dropped, since the refusal notice
+// short-circuits the list anyway.
+const defaultPageAgents = (driveId?: string, options?: { enabled?: boolean }): PageAgentsResult => ({
+  agentsByDrive: options?.enabled
+    ? [
+        {
+          driveId: 'drive-1',
+          driveName: 'Alpha',
+          agentCount: 1,
+          agents: [{ id: 'agent-1', title: 'Researcher', driveId: 'drive-1' }],
+        },
+      ]
+    : [],
+  isLoading: false,
+  isError: false,
+  mutate: vi.fn(),
+});
+const mockUsePageAgents = vi.fn(defaultPageAgents);
 vi.mock('@/hooks/page-agents/usePageAgents', () => ({
   usePageAgents: (driveId?: string, options?: { enabled?: boolean }) => mockUsePageAgents(driveId, options),
 }));
 
-const mockCreateConversation = vi.fn();
-const mockUseConversations = vi.fn(
-  (options: { agentId: string | null; enabled?: boolean; onConversationCreate?: (id: string) => void }) => ({
-    conversations: options.enabled
-      ? [{ id: 'conv-1', title: 'First chat' }, { id: 'conv-2', title: 'Second chat' }]
-      : [],
-    isLoading: false,
-    createConversation: () => {
-      options.onConversationCreate?.('conv-new');
-      return mockCreateConversation();
-    },
-  }),
-);
-vi.mock('@/lib/ai/shared', () => ({
-  useConversations: (options: Parameters<typeof mockUseConversations>[0]) => mockUseConversations(options),
-}));
-
-const mockUseUserActiveStreams = vi.fn(() => ({
-  streams: [] as { messageId: string; conversationId: string; channelId: string; startedAt: string }[],
-  isLoading: false,
-  error: undefined,
-  mutate: vi.fn(),
-}));
-vi.mock('@/hooks/useUserActiveStreams', () => ({
-  useUserActiveStreams: () => mockUseUserActiveStreams(),
-}));
-
-const mockSeedConversation = vi.fn();
-vi.mock('@/hooks/conversationMessagesActions', () => ({
-  conversationMessagesActions: { seedConversation: (id: string) => mockSeedConversation(id) },
-}));
-
+const mockFetchWithAuth = vi.fn();
 const mockPost = vi.fn();
+const mockDel = vi.fn();
 vi.mock('@/lib/auth/auth-fetch', () => ({
-  fetchWithAuth: vi.fn(),
+  fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args),
   post: (...args: unknown[]) => mockPost(...args),
-  del: vi.fn(),
+  del: (...args: unknown[]) => mockDel(...args),
 }));
 
 // Sidebar chrome that isn't under test.
@@ -115,110 +89,155 @@ vi.mock('../PrimaryNavigation', () => ({ default: () => <div /> }));
 vi.mock('../DriveFooter', () => ({ default: () => <div /> }));
 vi.mock('../DashboardFooter', () => ({ default: () => <div /> }));
 
+import { within } from '@testing-library/react';
 import AgentsSidebar from '../AgentsSidebar';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
+import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { useLayoutStore } from '@/stores/useLayoutStore';
+
+interface SessionFixture {
+  sessionId: string;
+  driveId: string | null;
+  name: string;
+  sandboxStatus: 'none' | 'starting' | 'running' | 'ended';
+  conversations: { conversationId: string; title: string | null; agentPageId: string | null }[];
+  shells: { shellId: string; name: string }[];
+}
+
+const SESSION: SessionFixture = {
+  sessionId: 'ses-1',
+  driveId: 'drive-1',
+  name: 'api refactor',
+  sandboxStatus: 'running',
+  conversations: [
+    { conversationId: 'conv-1', title: 'First chat', agentPageId: 'agent-1' },
+    { conversationId: 'conv-2', title: 'Second chat', agentPageId: 'agent-1' },
+  ],
+  shells: [],
+};
+
+const respondWithSessions = (sessions: SessionFixture[]) => {
+  mockFetchWithAuth.mockResolvedValue({
+    ok: true,
+    json: async () => ({ sessions }),
+  });
+};
+
+/** A fresh SWR cache per render — tests must not serve each other's sessions. */
+const renderSidebar = () =>
+  render(
+    <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+      <AgentsSidebar />
+    </SWRConfig>,
+  );
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // `clearAllMocks` clears calls, not implementations — a `mockImplementation`
+  // from one test would otherwise leak into the next.
+  mockUsePageAgents.mockImplementation(defaultPageAgents);
   window.history.replaceState({}, '', '/dashboard/drive-1/agents');
-  useAgentSurfaceStore.setState({ driveId: 'drive-1', selectedAgentId: null, selectedConversationId: null });
+  useAgentSurfaceStore.setState({
+    driveId: 'drive-1',
+    selectedSessionId: null,
+    selectedConversationId: null,
+    selectedAgentId: null,
+  });
   useLayoutStore.setState({ leftSheetOpen: false });
   mockUseAuth.mockReturnValue({ user: { role: 'admin' }, isLoading: false });
   mockUseParams.mockReturnValue({ driveId: 'drive-1' });
   mockUsePathname.mockReturnValue('/dashboard/drive-1/agents');
   mockUseBreakpoint.mockReturnValue(false);
-  // `clearAllMocks` clears calls, not implementations — a `mockReturnValue` from
-  // one test would otherwise leak into the next.
-  mockUseUserActiveStreams.mockReturnValue({ streams: [], isLoading: false, error: undefined, mutate: vi.fn() });
+  respondWithSessions([SESSION]);
 });
 
 describe('AgentsSidebar', () => {
-  test("lists the drive's agents for an admin", async () => {
-    render(<AgentsSidebar />);
-    expect(await screen.findByText('Researcher')).toBeDefined();
+  test("lists the drive's sessions for an admin", async () => {
+    renderSidebar();
+    expect(await screen.findByText('api refactor')).toBeDefined();
+    expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-sessions?driveId=drive-1');
   });
 
-  test('refuses a non-admin, and asks the API for no agents on their behalf', () => {
+  test('refuses a non-admin, and makes no request on their behalf', () => {
     mockUseAuth.mockReturnValue({ user: { role: 'user' }, isLoading: false });
 
-    render(<AgentsSidebar />);
+    renderSidebar();
 
     expect(screen.getByText(/administrator privileges/i)).toBeDefined();
-    expect(screen.queryByText('Researcher')).toBeNull();
-    // The load-bearing half: the request is never made, rather than made and
+    expect(screen.queryByText('api refactor')).toBeNull();
+    // The load-bearing half: neither fetch is ever made, rather than made and
     // discarded.
+    expect(mockFetchWithAuth).not.toHaveBeenCalled();
     expect(mockUsePageAgents).toHaveBeenCalledWith('drive-1', { enabled: false });
   });
 
   test('shows the cold-load state rather than the empty notice', () => {
-    mockUsePageAgents.mockReturnValueOnce({
-      agentsByDrive: [],
-      isLoading: true,
-      isError: false,
-      mutate: vi.fn(),
-    });
+    mockFetchWithAuth.mockReturnValue(new Promise(() => {})); // never resolves
 
-    render(<AgentsSidebar />);
+    renderSidebar();
 
-    expect(screen.getByText(/loading agents/i)).toBeDefined();
-    expect(screen.queryByText(/no agents in this drive/i)).toBeNull();
+    expect(screen.getByText(/loading sessions/i)).toBeDefined();
+    expect(screen.queryByText(/no sessions/i)).toBeNull();
   });
 
-  test('a failed poll keeps the tree rather than replacing it with an error', () => {
-    mockUsePageAgents.mockReturnValueOnce({
-      agentsByDrive: [
-        {
-          driveId: 'drive-1',
-          driveName: 'Alpha',
-          agentCount: 1,
-          agents: [{ id: 'agent-1', title: 'Researcher', driveId: 'drive-1' }],
-        },
-      ],
-      isLoading: false,
-      isError: true,
-      mutate: vi.fn(),
-    });
+  test('a failed load with nothing cached shows the error, with a way out', async () => {
+    mockFetchWithAuth.mockResolvedValue({ ok: false, status: 500, json: async () => ({}) });
 
-    render(<AgentsSidebar />);
+    renderSidebar();
 
-    expect(screen.getByText('Researcher')).toBeDefined();
-    expect(screen.queryByText(/failed to load agents/i)).toBeNull();
+    expect(await screen.findByText(/failed to load sessions/i)).toBeDefined();
+    expect(screen.getByText('Retry')).toBeDefined();
   });
 
-  test('shows the drive header only in the aggregated global view', () => {
-    render(<AgentsSidebar />);
-    expect(screen.queryByText('Alpha')).toBeNull();
+  test('an empty drive still offers the affordance that fixes it', async () => {
+    // An empty state with no way out of it is a dead end.
+    respondWithSessions([]);
 
-    mockUseParams.mockReturnValue({});
-    mockUsePathname.mockReturnValue('/dashboard/agents');
-    render(<AgentsSidebar />);
-    expect(screen.getAllByText('Alpha').length).toBeGreaterThan(0);
+    renderSidebar();
+
+    expect(await screen.findByText(/no sessions in this drive/i)).toBeDefined();
+    expect(screen.getByText('New session')).toBeDefined();
+  });
+
+  test('never lists panes — the second level is conversations', async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await user.click(await screen.findByLabelText(/expand api refactor/i));
+
+    // Conversations, yes; anything pane-shaped, no.
+    expect(screen.getByText('First chat')).toBeDefined();
+    expect(screen.queryByText(/pane/i)).toBeNull();
+    expect(screen.queryByText(/split/i)).toBeNull();
   });
 
   describe('selection', () => {
-    test('clicking an agent selects it WITHOUT navigating', async () => {
+    test('clicking a session opens its most recent conversation WITHOUT navigating', async () => {
       const user = userEvent.setup();
-      render(<AgentsSidebar />);
+      renderSidebar();
 
-      await user.click(await screen.findByText('Researcher'));
+      await user.click(await screen.findByText('api refactor'));
 
+      // One transition carrying all three ids — the centre never sees a
+      // session with no conversation resolved.
+      expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
+      expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-1');
       expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-1');
-      expect(window.location.search).toBe('?agent=agent-1');
+      expect(window.location.search).toBe('?session=ses-1&c=conv-1&agent=agent-1');
       // The whole point: no route change, so nothing remounts.
       expect(mockPush).not.toHaveBeenCalled();
     });
 
-    test('clicking a conversation selects it under its own agent, still without navigating', async () => {
+    test('clicking a conversation selects it under its session, still without navigating', async () => {
       const user = userEvent.setup();
-      render(<AgentsSidebar />);
+      renderSidebar();
 
-      await user.click(await screen.findByTestId('expand-chevron'));
-      await user.click(await screen.findByText('First chat'));
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      await user.click(await screen.findByText('Second chat'));
 
-      expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-1');
-      expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-1');
-      expect(window.location.search).toBe('?agent=agent-1&c=conv-1');
+      expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
+      expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-2');
+      expect(window.location.search).toBe('?session=ses-1&c=conv-2&agent=agent-1');
       expect(mockPush).not.toHaveBeenCalled();
     });
 
@@ -243,113 +262,228 @@ describe('AgentsSidebar', () => {
           }) as unknown as MediaQueryList,
       );
 
-      render(<AgentsSidebar />);
-      await user.click(await screen.findByText('Researcher'));
+      renderSidebar();
+      await user.click(await screen.findByText('api refactor'));
 
       expect(useLayoutStore.getState().leftSheetOpen).toBe(false);
       matchMediaSpy.mockRestore();
     });
   });
 
-  describe('conversations', () => {
-    test('does not fetch an agent\'s conversations until it is expanded', async () => {
-      const user = userEvent.setup();
-      render(<AgentsSidebar />);
-      await screen.findByText('Researcher');
-
-      // N agents on screen must not mean N conversation requests on mount.
-      expect(mockUseConversations).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }));
-      expect(screen.queryByText('First chat')).toBeNull();
-
-      await user.click(screen.getByTestId('expand-chevron'));
-
-      await waitFor(() =>
-        expect(mockUseConversations).toHaveBeenCalledWith(expect.objectContaining({ enabled: true })),
-      );
-      expect(screen.getByText('First chat')).toBeDefined();
+  describe('running dot', () => {
+    test('lights a session whose sandbox is running', async () => {
+      renderSidebar();
+      await screen.findByText('api refactor');
+      expect(screen.getByLabelText('Sandbox running')).toBeDefined();
     });
 
-    test('new conversation mints an id, seeds its cache, and selects it', async () => {
-      // Mirrors `usePageAgentDashboardStore.createNewConversation`: the id is
-      // known synchronously, the empty cache entry stops anything fetching for
-      // it, and the persist is fire-and-forget.
-      const user = userEvent.setup();
-      render(<AgentsSidebar />);
-      await user.click(await screen.findByTestId('expand-chevron'));
-      await user.click(screen.getByText('New conversation'));
+    test('shows no dot for a session with no sandbox', async () => {
+      respondWithSessions([{ ...SESSION, sandboxStatus: 'none' }]);
+      renderSidebar();
+      await screen.findByText('api refactor');
+      expect(screen.queryByLabelText('Sandbox running')).toBeNull();
+    });
 
-      expect(mockSeedConversation).toHaveBeenCalledWith('conv-new');
-      expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-new');
+    test('is announced as an image with its name — a plain span aria-label is not announced by most screen readers', async () => {
+      renderSidebar();
+      await screen.findByText('api refactor');
+      // getByRole('img', {name}) only matches elements a screen reader would
+      // actually announce as a named object — the bar a bare aria-label span
+      // fails.
+      expect(screen.getByRole('img', { name: 'Sandbox running' })).toBeDefined();
+    });
+  });
+
+  describe('new conversation in a session', () => {
+    test("posts into the session with the last conversation's agent and selects the new thread", async () => {
+      mockPost.mockResolvedValue({ conversationId: 'conv-new' });
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      await user.click(screen.getByLabelText('New conversation in this session'));
+
+      await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
+      expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-1/conversations', {
+        sessionId: 'ses-1',
+      });
+      await waitFor(() =>
+        expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-new'),
+      );
+      expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
       expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-1');
     });
   });
 
-  describe('running badges', () => {
-    test('lights an agent whose conversation is streaming, even while collapsed', async () => {
-      mockUseUserActiveStreams.mockReturnValue({
-        streams: [
-          {
-            messageId: 'msg-1',
-            conversationId: 'conv-1',
-            channelId: 'agent-1',
-            startedAt: '2026-07-28T00:00:00.000Z',
-          },
-        ],
-        isLoading: false,
-        error: undefined,
-        mutate: vi.fn(),
+  describe('new session', () => {
+    test('one act: pick an agent, get the session AND its first conversation, land inside it', async () => {
+      mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-new' });
+      const user = userEvent.setup();
+      renderSidebar();
+
+      // Let the session list land first: the loading state renders its own
+      // "New session" row, and clicking THAT one loses the open chooser when
+      // the loaded list replaces it.
+      await screen.findByText('api refactor');
+      await user.click(screen.getByText('New session'));
+      await user.click(await screen.findByText('Researcher'));
+
+      await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
+      expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
+        driveId: 'drive-1',
+        agentPageId: 'agent-1',
       });
-
-      render(<AgentsSidebar />);
-
-      await screen.findByText('Researcher');
-      expect(screen.getAllByLabelText('Running').length).toBe(1);
+      await waitFor(() =>
+        expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-new'),
+      );
+      // Landed IN the first conversation — no empty-session state is visible.
+      expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-new');
+      expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-1');
     });
 
-    test('shows no dot when nothing is running', async () => {
-      render(<AgentsSidebar />);
-      await screen.findByText('Researcher');
-      expect(screen.queryByLabelText('Running')).toBeNull();
-    });
-  });
-
-  describe('new agent', () => {
-    test('an empty drive still offers the affordance that fixes it', () => {
-      // An empty state with no way out of it is a dead end.
-      mockUsePageAgents.mockReturnValueOnce({
+    test('a drive with no agents says so instead of offering an empty chooser', async () => {
+      mockUsePageAgents.mockImplementation(() => ({
         agentsByDrive: [],
         isLoading: false,
         isError: false,
         mutate: vi.fn(),
-      });
-
-      render(<AgentsSidebar />);
-
-      expect(screen.getByText(/no agents in this drive/i)).toBeDefined();
-      expect(screen.getByText('New agent')).toBeDefined();
-    });
-
-    test('a refused user gets no create affordance', () => {
-      mockUseAuth.mockReturnValue({ user: { role: 'user' }, isLoading: false });
-
-      render(<AgentsSidebar />);
-
-      expect(screen.queryByText('New agent')).toBeNull();
-    });
-
-    test('creates an AI_CHAT page in the drive and selects it', async () => {
-      mockPost.mockResolvedValue({ id: 'agent-new' });
+      }));
       const user = userEvent.setup();
-      render(<AgentsSidebar />);
+      renderSidebar();
 
-      await user.click(await screen.findByText('New agent'));
+      await screen.findByText('api refactor');
+      await user.click(screen.getByText('New session'));
 
-      await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
-      expect(mockPost).toHaveBeenCalledWith(
-        '/api/pages',
-        expect.objectContaining({ type: 'AI_CHAT', driveId: 'drive-1' }),
+      expect(await screen.findByText(/no agents in this drive/i)).toBeDefined();
+    });
+  });
+
+  describe('end session', () => {
+    test('confirming ends it: DELETE, grid forgotten, selection cleared, list refetched', async () => {
+      mockDel.mockResolvedValue(undefined);
+      // The session is open in the centre, with a persisted pane grid.
+      useAgentSurfaceStore.setState({
+        selectedSessionId: 'ses-1',
+        selectedConversationId: 'conv-1',
+        selectedAgentId: 'agent-1',
+      });
+      useAgentWorkspaceStore
+        .getState()
+        .ensureWorkspace('ses-1', { kind: 'chat', name: 'x', targetId: 'conv-1', agentPageId: 'agent-1' });
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      await user.click(screen.getByLabelText('End session'));
+      // Destructive and irreversible-ish (the sandbox dies): confirmed, never
+      // one accidental hover-click.
+      const dialog = await screen.findByRole('alertdialog');
+      const fetchesBefore = mockFetchWithAuth.mock.calls.length;
+      await user.click(within(dialog).getByRole('button', { name: 'End session' }));
+
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1'));
+      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeUndefined();
+      expect(useAgentSurfaceStore.getState().selectedSessionId).toBeNull();
+      await waitFor(() => expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(fetchesBefore));
+    });
+
+    test('cancelling ends nothing', async () => {
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      await user.click(screen.getByLabelText('End session'));
+      const dialog = await screen.findByRole('alertdialog');
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+      expect(mockDel).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('global mode', () => {
+    beforeEach(() => {
+      mockUseParams.mockReturnValue({});
+      mockUsePathname.mockReturnValue('/dashboard/agents');
+      window.history.replaceState({}, '', '/dashboard/agents');
+      useAgentSurfaceStore.setState({ driveId: null });
+    });
+
+    test('fetches every accessible session and groups them under a drive header', async () => {
+      renderSidebar();
+
+      expect(await screen.findByText('api refactor')).toBeDefined();
+      expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-sessions');
+      // The drive name resolves through the agents-by-drive fetch.
+      expect(screen.getByText('Alpha')).toBeDefined();
+    });
+
+    test('the Assistant group exists with zero sessions, and spawning it is ONE click', async () => {
+      // The affordance to start an assistant session IS the group — and there
+      // is no agent to choose (the assistant is the counterpart), so the click
+      // spawns directly with the both-null shape.
+      mockPost.mockResolvedValue({ session: { sessionId: 'ses-a' }, conversationId: 'conv-a' });
+      respondWithSessions([]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      expect(await screen.findByText('Assistant')).toBeDefined();
+      await user.click(screen.getByText('New session'));
+
+      await waitFor(() => expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {}));
+      await waitFor(() => expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-a'));
+      expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-a');
+      expect(useAgentSurfaceStore.getState().selectedAgentId).toBeNull();
+    });
+
+    test('the Assistant group sorts first even when a drive session arrives before it in the fetch', async () => {
+      // Assistant first because it's the user's own — not because
+      // `showEmptyAssistantGroup` happened to seed the Map before this drive
+      // session was iterated. Here there's no empty-group seed at all: an
+      // assistant session is already present, ahead of the map-insertion-order
+      // bug this pins.
+      respondWithSessions([
+        SESSION,
+        {
+          ...SESSION,
+          sessionId: 'ses-g',
+          driveId: null,
+          name: 'assistant session',
+          conversations: [{ conversationId: 'conv-g', title: 'Thread', agentPageId: null }],
+        },
+      ]);
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      const headers = screen.getAllByText(/^(Alpha|Assistant)$/);
+      expect(headers.map((el) => el.textContent)).toEqual(['Assistant', 'Alpha']);
+    });
+
+    test('a new conversation in an assistant session goes through the session-centric creator', async () => {
+      // The assistant has no agent page, so the page-agents route has nothing
+      // to hang it on — the session route is the path.
+      mockPost.mockResolvedValue({ conversationId: 'conv-new' });
+      respondWithSessions([
+        {
+          ...SESSION,
+          sessionId: 'ses-g',
+          driveId: null,
+          name: 'assistant session',
+          conversations: [{ conversationId: 'conv-g', title: 'Thread', agentPageId: null }],
+        },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('assistant session');
+      await user.click(screen.getByLabelText('New conversation in this session'));
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions/ses-g/conversations', {}),
       );
-      await waitFor(() => expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-new'));
+      await waitFor(() =>
+        expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-new'),
+      );
+      expect(useAgentSurfaceStore.getState().selectedAgentId).toBeNull();
     });
   });
 });

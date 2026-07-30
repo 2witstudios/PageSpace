@@ -12,10 +12,14 @@ import type { ToolExecutionContext } from '../../core/types';
 const USER_ID = 'user-1';
 const CALLER_CONVERSATION = 'conv-caller';
 const CALLER_AGENT = 'page-agent-1';
+// The caller's WORKSPACE (agent_sessions.id) — deliberately a DIFFERENT id
+// namespace from the conversation. Review H2 hid behind fakes that reused the
+// conversation id here, so the always-false comparison always "passed".
+const WORKSPACE_ID = 'workspace-row-1';
 
 const SHELL = {
   shellId: 'shell-row-1',
-  sessionId: CALLER_CONVERSATION,
+  sessionId: WORKSPACE_ID,
   ownerId: USER_ID,
   name: 'shell-1',
   agentType: 'shell' as const,
@@ -25,16 +29,19 @@ const SHELL = {
 
 function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
   return {
-    listSessions: vi.fn(async () => []),
+    findOwnWorkspace: vi.fn(async () => ({ sessionId: WORKSPACE_ID })),
+    listSessionWorkers: vi.fn(async () => ({ sandbox: 'running' as const, workers: [], shells: [] })),
     findSession: vi.fn(async (sessionId: string) => ({
       sessionId,
       ownerId: USER_ID,
       agentPageId: CALLER_AGENT,
       name: 'worker',
       endedAt: null,
+      workspaceSessionId: WORKSPACE_ID,
     })),
     countActiveSessions: vi.fn(async () => 0),
     concurrencyLimit: vi.fn(async () => 5),
+    countSessionConversations: vi.fn(async () => 0),
     canUseAgent: vi.fn(async () => true),
     createWorkerSession: vi.fn(async () => ({ ok: true as const })),
     dispatch: vi.fn(async () => ({ ok: true as const, waited: false as const })),
@@ -42,7 +49,7 @@ function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
     endSession: vi.fn(async () => ({ ok: true as const, spriteTornDown: true })),
     ensureOwnSessionSandbox: vi.fn(async () => ({ ok: true as const })),
     spawnShell: vi.fn(async () => ({ ok: true as const, shell: SHELL })),
-    findShell: vi.fn(async () => ({ shellId: SHELL.shellId, sessionId: CALLER_CONVERSATION, name: SHELL.name })),
+    findShell: vi.fn(async () => ({ shellId: SHELL.shellId, sessionId: WORKSPACE_ID, name: SHELL.name })),
     killShell: vi.fn(async () => ({ ok: true as const, killed: true })),
     shellIo: {
       read: vi.fn(async () => ({ ok: true as const, live: true, hasOutput: true, output: 'hello' })),
@@ -93,15 +100,35 @@ describe('the nine-tool surface', () => {
 });
 
 describe('list_sessions', () => {
-  it('should list the CALLER\'s sessions', async () => {
-    const listing = [
-      { sessionId: 's1', name: 'w', status: 'running' as const, agent: null, shells: [] },
-    ];
-    const deps = makeDeps({ listSessions: vi.fn(async () => listing) });
+  it("lists the caller's WORKSPACE: workers in the verbs' own address namespace, plus shells and the shared sandbox", async () => {
+    const listing = {
+      sandbox: 'running' as const,
+      workers: [
+        { sessionId: 'conv-worker-1', name: 'w', agent: { agentId: CALLER_AGENT, title: 'Agent' }, isCaller: false },
+        { sessionId: CALLER_CONVERSATION, name: 'me', agent: null, isCaller: true },
+      ],
+      shells: [{ shellId: SHELL.shellId, name: SHELL.name, createdAt: SHELL.createdAt }],
+    };
+    const deps = makeDeps({ listSessionWorkers: vi.fn(async () => listing) });
     const tools = createSessionTools(deps);
     const result = await run(tools.list_sessions, {}, contextOptions());
-    expect(result).toEqual({ success: true, sessions: listing });
-    expect(deps.listSessions).toHaveBeenCalledWith(USER_ID);
+    expect(result).toEqual({ success: true, ...listing });
+    // Review H2b's pin: the listing is resolved from the caller's workspace,
+    // and every worker id it returns is a conversation id — the exact address
+    // send_session/read_session/kill_session take.
+    expect(deps.listSessionWorkers).toHaveBeenCalledWith({
+      workspaceSessionId: WORKSPACE_ID,
+      callerConversationId: CALLER_CONVERSATION,
+    });
+  });
+
+  it('a conversation with NO session says so instead of listing nothing', async () => {
+    const deps = makeDeps({ findOwnWorkspace: vi.fn(async () => null) });
+    const tools = createSessionTools(deps);
+    const result = await run(tools.list_sessions, {}, contextOptions());
+    expect(result).toMatchObject({ success: true, sandbox: 'none', workers: [], shells: [] });
+    expect(result.note).toContain('no session');
+    expect(deps.listSessionWorkers).not.toHaveBeenCalled();
   });
 
   it('given no authenticated user, should refuse', async () => {
@@ -125,6 +152,8 @@ describe('spawn_session', () => {
     );
     expect(deps.createWorkerSession).toHaveBeenCalledWith({
       sessionId: 'new-session-id',
+      // The worker joins its SPAWNER's workspace — same session, same sandbox.
+      callerConversationId: CALLER_CONVERSATION,
       ownerId: USER_ID,
       agentPageId: CALLER_AGENT,
       name: 'worker',
@@ -255,6 +284,7 @@ describe('send_session', () => {
         agentPageId: null,
         name: '',
         endedAt: null,
+        workspaceSessionId: WORKSPACE_ID,
       })),
     });
     const tools = createSessionTools(deps);
@@ -277,6 +307,86 @@ describe('send_session', () => {
     const tools = createSessionTools(deps);
     const result = await run(tools.send_session, { sessionId: 's1', input: 'x', wait: true }, contextOptions());
     expect(result).toEqual(expect.objectContaining({ success: true, reply: 'the answer' }));
+  });
+});
+
+describe('worker verbs target only the CALLER\'s own workspace (issue #2262 H2 parity with shells)', () => {
+  // The blast-radius case the shells fix (H2) never reached workers: a
+  // prompt-injected agent could aim send/read/kill_session at ANY conversation
+  // its user owns — another session's worker, another drive's thread, a plain
+  // session-less chat — and exfiltrate a private transcript or dispatch turns
+  // into a foreign sandbox. One address namespace per verb family means a
+  // worker verb resolves ONLY siblings in the caller's own session.
+  const CROSS_SESSION_ROW = {
+    sessionId: 'conv-other',
+    ownerId: USER_ID, // the caller's OWN conversation — ownership alone must not admit it
+    agentPageId: CALLER_AGENT,
+    name: 'private thread',
+    endedAt: null,
+    workspaceSessionId: 'someone-elses-workspace',
+  };
+
+  it('a conversation in ANOTHER session — even the caller\'s own — reads as nonexistent', async () => {
+    const deps = makeDeps({ findSession: vi.fn(async () => CROSS_SESSION_ROW) });
+    const tools = createSessionTools(deps);
+
+    const sent = await run(tools.send_session, { sessionId: 'conv-other', input: 'x' }, contextOptions());
+    expect(sent.success).toBe(false);
+    expect(deps.dispatch).not.toHaveBeenCalled();
+
+    const readResult = await run(tools.read_session, { sessionId: 'conv-other' }, contextOptions());
+    expect(readResult.success).toBe(false);
+    expect(deps.readTranscript).not.toHaveBeenCalled();
+
+    const killed = await run(tools.kill_session, { sessionId: 'conv-other' }, contextOptions());
+    expect(killed.success).toBe(false);
+    expect(deps.endSession).not.toHaveBeenCalled();
+  });
+
+  it('a SESSION-LESS conversation reads as nonexistent — it is not a worker anywhere', async () => {
+    const deps = makeDeps({
+      findSession: vi.fn(async () => ({ ...CROSS_SESSION_ROW, workspaceSessionId: null })),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(tools.read_session, { sessionId: 'conv-other' }, contextOptions());
+    expect(result.success).toBe(false);
+    expect(deps.readTranscript).not.toHaveBeenCalled();
+  });
+
+  it('a caller whose conversation has NO workspace cannot address any worker', async () => {
+    const deps = makeDeps({ findOwnWorkspace: vi.fn(async () => null) });
+    const tools = createSessionTools(deps);
+    const result = await run(tools.send_session, { sessionId: 's1', input: 'x' }, contextOptions());
+    expect(result.success).toBe(false);
+    expect(deps.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('a caller with no conversation at all cannot address any worker', async () => {
+    const deps = makeDeps();
+    const tools = createSessionTools(deps);
+    const result = await run(
+      tools.read_session,
+      { sessionId: 's1' },
+      contextOptions({ conversationId: undefined }),
+    );
+    expect(result.success).toBe(false);
+    expect(deps.readTranscript).not.toHaveBeenCalled();
+  });
+
+  it('the refusal reads exactly like a nonexistent session — nothing to learn from the difference', async () => {
+    const deps = makeDeps({ findSession: vi.fn(async () => CROSS_SESSION_ROW) });
+    const noRowDeps = makeDeps({ findSession: vi.fn(async () => null) });
+    const crossSession = await run(
+      createSessionTools(deps).send_session,
+      { sessionId: 'conv-other', input: 'x' },
+      contextOptions(),
+    );
+    const noRow = await run(
+      createSessionTools(noRowDeps).send_session,
+      { sessionId: 'conv-other', input: 'x' },
+      contextOptions(),
+    );
+    expect(crossSession).toEqual(noRow);
   });
 });
 
@@ -390,7 +500,7 @@ describe('spawn_shell', () => {
 describe('send_shell / read_shell — shells target only the CALLER\'s own session', () => {
   it('given a shell of ANOTHER session, should read as nonexistent', async () => {
     const deps = makeDeps({
-      findShell: vi.fn(async () => ({ shellId: 'x', sessionId: 'other-conversation', name: 's' })),
+      findShell: vi.fn(async () => ({ shellId: 'x', sessionId: 'someone-elses-workspace', name: 's' })),
     });
     const tools = createSessionTools(deps);
     const sent = await run(tools.send_shell, { shellId: 'x', keystrokes: 'ls\n' }, contextOptions());
@@ -412,7 +522,7 @@ describe('send_shell / read_shell — shells target only the CALLER\'s own sessi
   it('should read scrollback, threading the cold-tail record through', async () => {
     const cold = { tail: 'bye', at: new Date(), hasOutput: true };
     const deps = makeDeps({
-      findShell: vi.fn(async () => ({ shellId: SHELL.shellId, sessionId: CALLER_CONVERSATION, name: SHELL.name, cold })),
+      findShell: vi.fn(async () => ({ shellId: SHELL.shellId, sessionId: WORKSPACE_ID, name: SHELL.name, cold })),
     });
     const tools = createSessionTools(deps);
     const result = await run(tools.read_shell, { shellId: SHELL.shellId, tail: 50 }, contextOptions());
@@ -442,5 +552,39 @@ describe('kill_shell', () => {
     const tools = createSessionTools(deps);
     const result = await run(tools.kill_shell, { shellId: SHELL.shellId }, contextOptions());
     expect(result).toEqual(expect.objectContaining({ success: false, reason: 'error' }));
+  });
+});
+
+describe('shell addressing across the two id namespaces (review H2)', () => {
+  it('send_shell reaches a shell whose row carries the WORKSPACE id, not the conversation id', async () => {
+    // The regression this whole fixture-shape exists for: rows store
+    // agent_sessions.id, context carries the conversation id, and the old
+    // comparison across the two namespaces refused every real shell ever.
+    const deps = makeDeps();
+    const tools = createSessionTools(deps);
+    const result = await run(tools.send_shell, { shellId: SHELL.shellId, keystrokes: 'ls\n' }, contextOptions());
+    expect(result).toMatchObject({ success: true });
+    expect(deps.findOwnWorkspace).toHaveBeenCalledWith(CALLER_CONVERSATION);
+  });
+
+  it('a caller whose conversation has NO workspace cannot address any shell', async () => {
+    const deps = makeDeps({ findOwnWorkspace: vi.fn(async () => null) });
+    const tools = createSessionTools(deps);
+    const sent = await run(tools.send_shell, { shellId: SHELL.shellId, keystrokes: 'ls\n' }, contextOptions());
+    expect(sent.success).toBe(false);
+    const killed = await run(tools.kill_shell, { shellId: SHELL.shellId }, contextOptions());
+    // kill answers already-gone (fail-closed success), and never kills.
+    expect(killed).toMatchObject({ success: true, killed: false });
+    expect(deps.killShell).not.toHaveBeenCalled();
+  });
+
+  it("kill_shell treats another workspace's shell as already gone and never kills it", async () => {
+    const deps = makeDeps({
+      findShell: vi.fn(async () => ({ shellId: SHELL.shellId, sessionId: 'someone-elses-workspace', name: SHELL.name })),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(tools.kill_shell, { shellId: SHELL.shellId }, contextOptions());
+    expect(result).toMatchObject({ success: true, killed: false });
+    expect(deps.killShell).not.toHaveBeenCalled();
   });
 });

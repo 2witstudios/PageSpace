@@ -108,6 +108,13 @@ function gateDenial(
   };
 }
 
+/**
+ * The core sandbox tool names, exported for the per-agent `sandboxEnabled`
+ * gate (tool-filtering.ts) — the return type of `createSandboxTools` below is
+ * the source of truth, and this list's own test pins the two never drift.
+ */
+export const SANDBOX_CORE_TOOL_NAMES: readonly string[] = ['bash', 'writeFile', 'readFile', 'editFile'];
+
 export function createSandboxTools({ runDeps, resolveContext, gate }: SandboxToolsDeps): {
   bash: Tool;
   writeFile: Tool;

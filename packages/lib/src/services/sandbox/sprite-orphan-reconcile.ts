@@ -124,7 +124,20 @@ export interface ReconcileOrphanSpritesDeps {
   killSprite: (input: {
     sandboxId: string;
     spriteInstanceId: string | null;
-  }) => Promise<{ ok: true } | { ok: false; error: unknown }>;
+  }) => Promise<
+    | { ok: true }
+    | { ok: false; error: unknown }
+    /**
+     * A DIFFERENT VM holds this name now — our target is already gone, but what
+     * that MEANS depends on `row.kind` (see #2254). For an `agent-session` row
+     * the session's own identity CAS still protects a live replacement, so this
+     * is handled exactly like `ok: true`. For a `reclaim` row the outbox entry
+     * is the LAST pointer to whatever VM exists here — there is no row left to
+     * protect it — so treating this as "confirmed gone" would delete the only
+     * pointer to a Sprite that is still alive under `actualInstanceId`.
+     */
+    | { ok: 'replaced'; actualInstanceId: string }
+  >;
   /** CAS-stamp `spriteTornDownAt` on the session row (never delete it — it is re-provisionable identity): only if the row still points at the INSTANCE we killed. Reports whether it actually wrote. */
   markSessionTornDown: (input: {
     sessionId: string;
@@ -135,6 +148,15 @@ export interface ReconcileOrphanSpritesDeps {
   releaseReclaim: (sandboxId: string) => Promise<void>;
   /** Record a failed kill against its outbox row (attempts/lastError) so a Sprite that cannot be killed becomes visible rather than silently retried forever. */
   noteReclaimFailure: (input: { sandboxId: string; error: unknown }) => Promise<void>;
+  /**
+   * Re-point a `reclaim` outbox row at the instance actually alive now, after a
+   * kill refused with `SandboxSpriteReplacedError` — never release the row for
+   * this case, only chase it. Mirrors the AFTER-DELETE trigger's own
+   * `ON CONFLICT DO UPDATE ... COALESCE` (0209/0219/0229 migration comments):
+   * "a newer generation took this name; the pointer must chase the VM that is
+   * actually alive now, not the one a stale row remembers." Idempotent.
+   */
+  chaseReclaimInstance: (input: { sandboxId: string; actualInstanceId: string }) => Promise<void>;
 }
 
 export interface ReconcileOrphanSpritesResult {
@@ -185,6 +207,25 @@ export async function reconcileOrphanSprites(
         sandboxId: row.sandboxId,
         spriteInstanceId: row.spriteInstanceId,
       });
+
+      if (killed.ok === 'replaced' && row.kind === 'reclaim') {
+        // The outbox is the LAST pointer to whatever VM exists under this name.
+        // A replaced-instance refusal here must never read as "done" (#2254):
+        // chase the pointer at the live instance and retry next tick, rather
+        // than confirming a kill that never touched the VM actually running.
+        try {
+          await deps.chaseReclaimInstance({ sandboxId: row.sandboxId, actualInstanceId: killed.actualInstanceId });
+        } catch (chaseError) {
+          loggers.ai.error(
+            'Failed to chase a replaced outbox Sprite instance; stale pointer retained for retry',
+            chaseError instanceof Error ? chaseError : new Error(String(chaseError)),
+            { sandboxId: row.sandboxId, actualInstanceId: killed.actualInstanceId },
+          );
+        }
+        skipped += 1;
+        continue;
+      }
+
       if (!killed.ok) {
         // Leave the row EXACTLY as it is: it is the only pointer to this
         // sandboxId. The next run retries it.
