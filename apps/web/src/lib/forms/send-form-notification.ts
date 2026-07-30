@@ -37,6 +37,9 @@ function buildEntries(
  * Best-effort notification email on a form submission. Never throws —
  * a Resend failure must not affect the submission that already succeeded
  * (the row is already appended) or force the public route to return an error.
+ *
+ * Skips sendEmail's default 3/hr rate limit since form submissions are
+ * already rate-limited at the route level (per-IP and per-token-prefix).
  */
 export function sendFormSubmissionNotification(params: {
   formTarget: FormTarget;
@@ -47,13 +50,13 @@ export function sendFormSubmissionNotification(params: {
 
   return sendEmail({
     to: formTarget.notificationEmail!,
-    subject: `New submission: ${formTarget.fields[0]?.label ?? 'Form'} form`,
+    subject: 'New form submission',
     react: React.createElement(FormSubmissionNotificationEmail, {
-      formName: formTarget.fields[0]?.label ?? 'Contact',
       entries: buildEntries(formTarget.fields, values),
       submittedAt: formatTimestamp(submittedAt),
       sheetUrl: `${resolveAppUrl()}/dashboard/${formTarget.driveId}/${formTarget.pageId}`,
     }),
+    bypassRateLimit: true,
   }).catch((error) => {
     loggers.api.error(
       'Failed to send form submission notification',

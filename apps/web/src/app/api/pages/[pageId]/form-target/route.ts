@@ -64,6 +64,8 @@ const patchBodySchema = z.object({
   status: z.enum(['active', 'paused']).optional(),
   reason: z.string().optional(),
   notificationEmail: z.string().email().nullable().optional(),
+}).refine((data) => data.status !== undefined || data.notificationEmail !== undefined, {
+  message: 'At least one of status or notificationEmail must be provided',
 });
 
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
@@ -205,7 +207,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
         operation: 'form-target-update',
         formTargetId: body.formTargetId,
         ...(body.status !== undefined ? { status: body.status } : {}),
-        ...(body.notificationEmail !== undefined ? { notificationEmail: body.notificationEmail } : {}),
+        ...(body.notificationEmail !== undefined ? { notificationEmailUpdated: true } : {}),
       },
     });
 

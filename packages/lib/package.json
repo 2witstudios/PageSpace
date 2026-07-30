@@ -2040,6 +2040,12 @@
       "email-templates/PaymentReceiptEmail": [
         "./dist/email-templates/PaymentReceiptEmail.d.ts"
       ],
+      "email-templates/FormSubmissionNotificationEmail": [
+        "./dist/email-templates/FormSubmissionNotificationEmail.d.ts"
+      ],
+      "email-templates/FormSubmissionNotificationEmail": [
+        "./dist/email-templates/FormSubmissionNotificationEmail.d.ts"
+      ],
       "email-templates/render-email": [
         "./dist/email-templates/render-email.d.ts"
       ],

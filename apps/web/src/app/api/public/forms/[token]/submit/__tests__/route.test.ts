@@ -27,8 +27,16 @@ vi.mock('@/services/api/form-target-service', () => ({
   appendFormSubmission: mockAppendFormSubmission,
 }));
 
+vi.mock('next/server', () => ({
+  after: mockAfter,
+}));
+
 vi.mock('@/lib/forms/send-form-notification', () => ({
   sendFormSubmissionNotification: mockSendFormSubmissionNotification,
+}));
+
+vi.mock('next/server', () => ({
+  after: vi.fn((fn: () => unknown) => { void fn(); }),
 }));
 
 vi.mock('@/lib/auth/auth-helpers', () => ({
@@ -242,7 +250,7 @@ describe('POST /api/public/forms/[token]/submit', () => {
       expect(mockSendFormSubmissionNotification).not.toHaveBeenCalled();
     });
 
-    it('still returns 200 even if the notification email fails', async () => {
+    it('returns 200 even when the notification send rejects (best-effort)', async () => {
       mockLookupActiveFormTarget.mockResolvedValue({
         ...activeFormTarget,
         notificationEmail: 'owner@example.com',
@@ -250,8 +258,7 @@ describe('POST /api/public/forms/[token]/submit', () => {
         driveId: 'drive-1',
         pageId: 'sheet-1',
       });
-      // sendFormSubmissionNotification swallows errors internally (best-effort),
-      // but the test verifies the route is not awaiting it (void).
+      mockSendFormSubmissionNotification.mockRejectedValue(new Error('Resend timeout'));
 
       const request = createRequest({ name: 'Ada Lovelace', email: 'ada@example.com' });
       const response = await POST(request, params());

@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { detectFormTags, type DetectedFormTag, type FormFieldDef } from './parse-form-tags';
+import { Input } from '@/components/ui/input';
 
 interface FormTarget {
   id: string;
@@ -104,7 +105,16 @@ function UnwiredFormCard({
             <span className="text-sm text-muted-foreground">Loading…</span>
           )}
         </div>
-        <Button
+        <div className="space-y-1.5">
+          <Label>Notification Email (optional)</Label>
+          <Input
+            type="email"
+            placeholder="you@example.com"
+            value={notificationEmail}
+            onChange={(e) => setNotificationEmail(e.target.value)}
+            disabled={isBusy}
+          />
+        </div>
           type="button"
           disabled={isBusy || !sheetPageId || tag.fields.length === 0}
           onClick={() => sheetPageId && onWire(sheetPageId)}
@@ -137,31 +147,53 @@ function WiredFormCard({
           {formTarget.lastSubmittedAt ? ` · last ${new Date(formTarget.lastSubmittedAt).toLocaleString()}` : ''}
         </CardDescription>
       </CardHeader>
-      <CardContent className="flex items-center gap-2">
-        <Label className="text-sm">Status</Label>
-        <Select
-          value={formTarget.status === 'archived' ? 'active' : formTarget.status}
-          onValueChange={(v: 'active' | 'paused') => onSetStatus(v)}
-          disabled={isBusy}
-        >
-          <SelectTrigger className="w-32">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="active">Active</SelectItem>
-            <SelectItem value="paused">Paused</SelectItem>
-          </SelectContent>
-        </Select>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          disabled={isBusy}
-          onClick={onDelete}
-          className="ml-auto gap-1 text-xs text-destructive"
-        >
-          <Trash2 className="h-3.5 w-3.5" /> Delete
-        </Button>
+      <CardContent className="space-y-3">
+        <div className="flex items-center gap-2">
+          <Label className="text-sm">Status</Label>
+          <Select
+            value={formTarget.status === 'archived' ? 'active' : formTarget.status}
+            onValueChange={(v: 'active' | 'paused') => onSetStatus(v)}
+            disabled={isBusy}
+          >
+            <SelectTrigger className="w-32">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="active">Active</SelectItem>
+              <SelectItem value="paused">Paused</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={isBusy}
+            onClick={onDelete}
+            className="ml-auto gap-1 text-xs text-destructive"
+          >
+            <Trash2 className="h-3.5 w-3.5" /> Delete
+          </Button>
+        </div>
+        <div className="flex items-center gap-2">
+          <Label className="text-sm shrink-0">Notify</Label>
+          <Input
+            type="email"
+            placeholder="you@example.com"
+            value={emailDraft}
+            onChange={(e) => setEmailDraft(e.target.value)}
+            disabled={isBusy}
+            className="flex-1"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={isBusy || emailDraft === (formTarget.notificationEmail ?? '')}
+            onClick={() => onSetNotificationEmail(emailDraft || null)}
+          >
+            Save
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );
@@ -347,6 +379,7 @@ export default function CanvasFormsSettingsTab({ pageId, content, onContentChang
               formTarget={wired}
               isBusy={busyKey === wired.id}
               onSetStatus={(status) => handleSetStatus(wired.id, status)}
+              onSetNotificationEmail={(email) => handleSetNotificationEmail(wired.id, email)}
               onDelete={() => handleDelete(wired.id)}
             />
           );

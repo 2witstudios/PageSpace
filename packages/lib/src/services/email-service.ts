@@ -57,6 +57,12 @@ export interface SendEmailOptions {
    */
   headers?: Record<string, string>;
   /**
+   * Skip the default per-recipient rate limit (3/hr). Use for notification
+   * streams that are already gated by their own rate limiting upstream
+   * (e.g. form submissions, which have their own IP/token rate limits).
+   */
+  skipRateLimit?: boolean;
+  /**
    * Stable key that lets Resend collapse a retry into the original send.
    *
    * Without it, a send that Resend ACCEPTS but whose response we never receive
@@ -79,14 +85,16 @@ export async function sendEmail(options: SendEmailOptions): Promise<void> {
 
   // Rate limit email sending (3 per hour per recipient).
   // Postgres-backed so the limit survives restarts and spans replicas (#977).
-  const rateLimit = await checkDistributedRateLimit(`email:${options.to}`, {
-    maxAttempts: 3,
-    windowMs: 60 * 60 * 1000, // 1 hour
-    blockDurationMs: 60 * 60 * 1000,
-  });
+  if (!options.skipRateLimit) {
+    const rateLimit = await checkDistributedRateLimit(`email:${options.to}`, {
+      maxAttempts: 3,
+      windowMs: 60 * 60 * 1000, // 1 hour
+      blockDurationMs: 60 * 60 * 1000,
+    });
 
-  if (!rateLimit.allowed) {
-    throw new Error(`Too many emails sent to ${options.to}. Please try again later.`);
+    if (!rateLimit.allowed) {
+      throw new Error(`Too many emails sent to ${options.to}. Please try again later.`);
+    }
   }
 
   const payload = {

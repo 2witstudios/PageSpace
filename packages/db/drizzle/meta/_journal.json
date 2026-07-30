@@ -1646,6 +1646,13 @@
       "when": 1785291927178,
       "tag": "0234_phase8_teardown_machines_world",
       "breakpoints": true
+    },
+    {
+      "idx": 235,
+      "version": "7",
+      "when": 1785373321664,
+      "tag": "0235_perfect_spot",
+      "breakpoints": true
     }
   ]
 }

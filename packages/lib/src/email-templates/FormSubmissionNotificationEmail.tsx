@@ -17,14 +17,12 @@ export interface FormSubmissionEntry {
 }
 
 interface FormSubmissionNotificationEmailProps {
-  formName: string;
-  entries: FormSubmissionEntry[];
   submittedAt: string;
+  entries: FormSubmissionEntry[];
   sheetUrl: string;
 }
 
 export function FormSubmissionNotificationEmail({
-  formName,
   entries,
   submittedAt,
   sheetUrl,
@@ -40,7 +38,7 @@ export function FormSubmissionNotificationEmail({
           <Section style={emailStyles.content}>
             <Text style={emailStyles.contentHeading}>New Form Submission</Text>
             <Text style={emailStyles.paragraph}>
-              Someone submitted your <strong>{formName}</strong> form.
+              Someone submitted your form.
             </Text>
             {entries.map((entry) => (
               <Section key={entry.label} style={emailStyles.messageBox}>
