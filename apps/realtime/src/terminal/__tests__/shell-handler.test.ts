@@ -1696,10 +1696,10 @@ describe('buildShellHandlers', () => {
       expect(sessionMap.getByKey('shell:shl-1')).toBeUndefined();
     });
 
-    it('given a GLOBAL-ASSISTANT session (no agent page), settles usage with no pageId so it attributes to the owner alone', async () => {
+    it('given a GLOBAL-ASSISTANT session (no drive), settles usage with a null driveId so it attributes to the owner alone', async () => {
       // driveId is nullable by design: a global-assistant conversation has
-      // no agent page to attribute against, and the payer falls back to the
-      // session owner. Attaching someone else's pageId here would misattribute
+      // no drive to attribute against, and the payer falls back to the
+      // session owner. Attaching someone else's driveId here would misattribute
       // the usage on the billing dashboard.
       const globalCheckAuth = vi.fn(async () => makeAuthSuccess({ driveId: null }));
       const billing = makeBilling();

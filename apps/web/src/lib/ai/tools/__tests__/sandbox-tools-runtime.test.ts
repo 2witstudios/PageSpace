@@ -9,14 +9,14 @@ const {
   mockFindSessionForConversation,
   mockProvisionSessionSandbox,
   mockMeasureWarmSessionStorage,
-  mockCheckMachineRuntimeGuardrail,
-  mockRecordMachineActivity,
+  mockCheckSessionRuntimeGuardrail,
+  mockRecordSessionActivity,
 } = vi.hoisted(() => ({
   mockFindSessionForConversation: vi.fn(),
   mockProvisionSessionSandbox: vi.fn(),
   mockMeasureWarmSessionStorage: vi.fn(async () => {}),
-  mockCheckMachineRuntimeGuardrail: vi.fn(),
-  mockRecordMachineActivity: vi.fn(),
+  mockCheckSessionRuntimeGuardrail: vi.fn(),
+  mockRecordSessionActivity: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/db', () => ({ db: {} }));
@@ -32,8 +32,8 @@ vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
 vi.mock('@pagespace/lib/services/sandbox/quota', () => ({
   acquireCodeExecutionSlot: vi.fn(() => true),
   releaseCodeExecutionSlot: vi.fn(),
-  checkMachineRuntimeGuardrail: mockCheckMachineRuntimeGuardrail,
-  recordMachineActivity: mockRecordMachineActivity,
+  checkSessionRuntimeGuardrail: mockCheckSessionRuntimeGuardrail,
+  recordSessionActivity: mockRecordSessionActivity,
 }));
 vi.mock('@pagespace/lib/services/sandbox/sandbox-billing', () => ({
   defaultSandboxBillingDeps: {
@@ -286,7 +286,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockCheckMachineRuntimeGuardrail.mockReturnValue({ allowed: true });
+    mockCheckSessionRuntimeGuardrail.mockReturnValue({ allowed: true });
     mockFindSessionForConversation.mockResolvedValue(sessionRecord);
     mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' });
   });
@@ -312,21 +312,21 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     expect(result).toEqual({ ok: false, reason: 'provision_failed', cause: 'missing_conversation_id' });
     expect(mockFindSessionForConversation).not.toHaveBeenCalled();
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
-    expect(mockCheckMachineRuntimeGuardrail).not.toHaveBeenCalled();
+    expect(mockCheckSessionRuntimeGuardrail).not.toHaveBeenCalled();
   });
 
   it('given the runtime guardrail denies, should short-circuit BEFORE provisioning — keyed by the SESSION id', async () => {
-    mockCheckMachineRuntimeGuardrail.mockReturnValue({ allowed: false, reason: 'machine_runtime_exceeded' });
+    mockCheckSessionRuntimeGuardrail.mockReturnValue({ allowed: false, reason: 'session_runtime_exceeded' });
     const deps = buildRealSandboxRunDeps();
     const result = await deps.acquireSandbox(baseInput());
-    expect(result).toEqual({ ok: false, reason: 'machine_runtime_exceeded' });
+    expect(result).toEqual({ ok: false, reason: 'session_runtime_exceeded' });
     // One runtime budget per WORKSPACE, however many threads work in it.
-    expect(mockCheckMachineRuntimeGuardrail).toHaveBeenCalledWith({
-      machineKey: 'ses-1',
+    expect(mockCheckSessionRuntimeGuardrail).toHaveBeenCalledWith({
+      sessionId: 'ses-1',
       now: expect.any(Number),
     });
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
-    expect(mockRecordMachineActivity).not.toHaveBeenCalled();
+    expect(mockRecordSessionActivity).not.toHaveBeenCalled();
   });
 
   it('given a conversation with NO session, should DENY — never lazily mint a per-thread environment', async () => {
@@ -337,7 +337,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     const result = await deps.acquireSandbox(baseInput());
     expect(result).toEqual({ ok: false, reason: 'no_session' });
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
-    expect(mockRecordMachineActivity).not.toHaveBeenCalled();
+    expect(mockRecordSessionActivity).not.toHaveBeenCalled();
   });
 
   it('given two conversations bound to ONE session, both should acquire the SAME sandbox', async () => {
@@ -363,7 +363,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     const deps = buildRealSandboxRunDeps();
     const result = await deps.acquireSandbox(baseInput());
     expect(result).toEqual({ ok: false, reason: 'no_drive_access' });
-    expect(mockRecordMachineActivity).not.toHaveBeenCalled();
+    expect(mockRecordSessionActivity).not.toHaveBeenCalled();
   });
 
   it('given provisioning is denied for any other reason, should map to provision_failed with the denial as the cause', async () => {
@@ -394,8 +394,8 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: true, sessionId: 'ses-1', pageId: 'agent-1' });
     expect(mockFindSessionForConversation).toHaveBeenCalledWith('conv-1');
     expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(sessionRecord, 'u1');
-    expect(mockRecordMachineActivity).toHaveBeenCalledWith({
-      machineKey: 'ses-1',
+    expect(mockRecordSessionActivity).toHaveBeenCalledWith({
+      sessionId: 'ses-1',
       now: expect.any(Number),
     });
   });

@@ -60,9 +60,10 @@ export interface ShellCheckAuthDeps {
   checkSessionAccess: (input: { requesterId: string; sessionId: string }) => Promise<ShellSessionAccessResult>;
   /**
    * Who pays for this session's runtime, and which drive an audit row lands
-   * under. Payer = the agent page's drive owner, falling back to the session's
-   * own owner when there is no page (a global-assistant session) or the page's
-   * owner cannot be resolved — the drive-owner ?? session-owner attribution rule.
+   * under. Payer = the session's own DRIVE owner, falling back to the
+   * session's own owner when there is no drive (a global-assistant session)
+   * or the drive has vanished — the drive-owner ?? session-owner attribution
+   * rule.
    */
   resolvePayer: (session: AgentSessionAccessSubject) => Promise<{ payerId: string; driveId: string | null }>;
   /** The requester's tier (slot accounting) + email (audit), or undefined when the row is missing. */

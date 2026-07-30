@@ -677,6 +677,11 @@
       "import": "./dist/services/agent-sessions/agent-session-sprite.js",
       "require": "./dist/services/agent-sessions/agent-session-sprite.js"
     },
+    "./services/agent-sessions/agent-session-tenant": {
+      "types": "./dist/services/agent-sessions/agent-session-tenant.d.ts",
+      "import": "./dist/services/agent-sessions/agent-session-tenant.js",
+      "require": "./dist/services/agent-sessions/agent-session-tenant.js"
+    },
     "./services/agent-sessions/agent-sessions": {
       "types": "./dist/services/agent-sessions/agent-sessions.d.ts",
       "import": "./dist/services/agent-sessions/agent-sessions.js",
