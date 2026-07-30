@@ -1,12 +1,14 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useTheme } from 'next-themes';
 import { renderCanvasDocument } from '@pagespace/lib/canvas/render-document';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import {
   extractDashboardFileViewRefs,
   rewriteDashboardFileViewLinks,
+  isDashboardPageLink,
 } from '@/lib/canvas/file-view-links';
 import { useNonce } from '@/contexts/NonceContext';
 
@@ -28,6 +30,29 @@ interface CanvasFrameProps {
 export const CANVAS_IFRAME_SANDBOX = 'allow-scripts allow-popups allow-popups-to-escape-sandbox';
 
 /**
+ * True if the top-level document has a currently-active (transient) user
+ * activation — i.e. a real click/keypress happened recently, not a script
+ * calling an API on its own. Used to gate `pagespace-navigate` postMessage
+ * handling: the User Activation API's "activation notification" algorithm
+ * (https://html.spec.whatwg.org/multipage/interaction.html#activation-notification)
+ * walks up through every ancestor navigable — including this cross-origin,
+ * sandboxed iframe's ancestors — on a genuine click, so a real click inside
+ * the canvas iframe DOES register here in the parent. It's the same browser
+ * mechanism that already gates the iframe's `allow-popups` (a script-only
+ * `window.open()` with no real click is blocked as a popup); this reuses it
+ * to gate the navigation bridge the same way.
+ *
+ * Browsers without `navigator.userActivation` (very old) fall back to the
+ * pre-gate (permissive) behavior — bounded residual risk, since the message
+ * is separately validated to only ever be an internal dashboard PAGE link
+ * (`isDashboardPageLink`), never an arbitrary external URL.
+ */
+function hasRecentUserActivation(): boolean {
+  if (typeof navigator === 'undefined' || !('userActivation' in navigator)) return true;
+  return Boolean(navigator.userActivation?.isActive);
+}
+
+/**
  * In-app renderer for canvas pages.
  *
  * Replaces the old Shadow-DOM approach (which could not isolate scripts and so
@@ -46,6 +71,7 @@ export const CANVAS_IFRAME_SANDBOX = 'allow-scripts allow-popups allow-popups-to
  */
 export function CanvasFrame({ html, title }: CanvasFrameProps) {
   const nonce = useNonce();
+  const router = useRouter();
   const [previewHtml, setPreviewHtml] = useState(html);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const { resolvedTheme } = useTheme();
@@ -95,8 +121,11 @@ export function CanvasFrame({ html, title }: CanvasFrameProps) {
   // so default links to a new tab (works with the iframe's allow-popups).
   // injectThemeBridge: true injects a script that listens for theme messages
   // so the canvas iframe's dark/light state matches the app's current theme.
+  // navigationBridge: true injects a script that intercepts clicks on internal
+  // dashboard page links and hands them to the message handler below, so they
+  // route in-app instead of falling through to baseTarget's new-tab behavior.
   const srcDoc = useMemo(
-    () => renderCanvasDocument({ html: previewHtml, title, baseTarget: '_blank', injectThemeBridge: true, nonce }),
+    () => renderCanvasDocument({ html: previewHtml, title, baseTarget: '_blank', injectThemeBridge: true, navigationBridge: true, nonce }),
     [previewHtml, title, nonce],
   );
 
@@ -115,20 +144,43 @@ export function CanvasFrame({ html, title }: CanvasFrameProps) {
     );
   }, [resolvedTheme, srcDoc]);
 
-  // Respond to the iframe's initial theme request, which fires on load before
-  // the resolvedTheme effect above catches it.
+  // Respond to the iframe's initial theme request (fires on load before the
+  // resolvedTheme effect above catches it) and handle in-app navigation
+  // requests from the injected click-interceptor script (navigationBridge).
   useEffect(() => {
     function handleMessage(e: MessageEvent) {
       if (e.source !== iframeRef.current?.contentWindow) return;
-      if (e.data?.type !== 'pagespace-theme-request') return;
-      iframeRef.current?.contentWindow?.postMessage(
-        { type: 'pagespace-theme', isDark: resolvedTheme === 'dark' },
-        '*',
-      );
+
+      if (e.data?.type === 'pagespace-theme-request') {
+        iframeRef.current?.contentWindow?.postMessage(
+          { type: 'pagespace-theme', isDark: resolvedTheme === 'dark' },
+          '*',
+        );
+        return;
+      }
+
+      // Independently re-validate: the injected click-interceptor's own
+      // regex check (render-document.ts) is a UX nicety, not a trust
+      // boundary — author JS in the sandboxed-but-scripted iframe can post
+      // this message type directly, so we must not route on an unvalidated
+      // href. Also require a genuine, recent user gesture (see
+      // hasRecentUserActivation doc below) — without it, author JS calling
+      // `postMessage({type:'pagespace-navigate', href:'...'}, '*')` on load
+      // (no real click at all) would force-navigate the app's own tab,
+      // reopening exactly the hole `CANVAS_IFRAME_SANDBOX` deliberately
+      // closes by omitting `allow-top-navigation*`.
+      if (
+        e.data?.type === 'pagespace-navigate' &&
+        typeof e.data.href === 'string' &&
+        isDashboardPageLink(e.data.href) &&
+        hasRecentUserActivation()
+      ) {
+        router.push(e.data.href);
+      }
     }
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [resolvedTheme]);
+  }, [resolvedTheme, router]);
 
   return (
     <iframe

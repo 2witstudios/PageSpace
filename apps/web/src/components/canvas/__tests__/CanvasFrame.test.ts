@@ -1,6 +1,6 @@
 import React from 'react';
 import { flushSync } from 'react-dom';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 
 const fetchWithAuthMock = vi.fn();
@@ -11,6 +11,11 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
 const useThemeMock = vi.fn();
 vi.mock('next-themes', () => ({
   useTheme: () => useThemeMock(),
+}));
+
+const routerPushMock = vi.fn();
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: routerPushMock }),
 }));
 
 import { CANVAS_IFRAME_SANDBOX, CanvasFrame } from '../CanvasFrame';
@@ -213,5 +218,168 @@ describe('CanvasFrame — theme sync', () => {
     }));
 
     expect(mockPostMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('CanvasFrame — navigation bridge', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useThemeMock.mockReturnValue({ resolvedTheme: 'dark' });
+    fetchWithAuthMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ links: [] }),
+    });
+  });
+
+  it('given navigationBridge, should pass it to renderCanvasDocument so the srcDoc contains the bridge script', () => {
+    render(React.createElement(CanvasFrame, {
+      html: '<p>x</p>',
+      title: 'Canvas',
+    }));
+
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    expect(iframe.srcdoc).toContain('pagespace-navigate');
+  });
+
+  it('given a pagespace-navigate message with a valid dashboard page href from the iframe, should router.push it', () => {
+    const mockContentWindow = { postMessage: vi.fn() };
+
+    render(React.createElement(CanvasFrame, {
+      html: '<p>x</p>',
+      title: 'Canvas',
+    }));
+
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: mockContentWindow,
+      configurable: true,
+    });
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'pagespace-navigate', href: '/dashboard/drive-1/page-1' },
+      source: mockContentWindow as unknown as MessageEventSource,
+    }));
+
+    expect(routerPushMock).toHaveBeenCalledWith('/dashboard/drive-1/page-1');
+  });
+
+  it('given a pagespace-navigate message with a forged/invalid href, should NOT router.push (independent re-validation)', () => {
+    const mockContentWindow = { postMessage: vi.fn() };
+
+    render(React.createElement(CanvasFrame, {
+      html: '<p>x</p>',
+      title: 'Canvas',
+    }));
+
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: mockContentWindow,
+      configurable: true,
+    });
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'pagespace-navigate', href: 'https://evil.example.com' },
+      source: mockContentWindow as unknown as MessageEventSource,
+    }));
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'pagespace-navigate', href: '/dashboard/drive-1/page-1/view' },
+      source: mockContentWindow as unknown as MessageEventSource,
+    }));
+
+    expect(routerPushMock).not.toHaveBeenCalled();
+  });
+
+  it('given a pagespace-navigate message from a different source, should NOT router.push', () => {
+    const mockContentWindow = { postMessage: vi.fn() };
+
+    render(React.createElement(CanvasFrame, {
+      html: '<p>x</p>',
+      title: 'Canvas',
+    }));
+
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: mockContentWindow,
+      configurable: true,
+    });
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'pagespace-navigate', href: '/dashboard/drive-1/page-1' },
+      source: window,
+    }));
+
+    expect(routerPushMock).not.toHaveBeenCalled();
+  });
+
+  // Regression: without a user-activation gate, author JS inside the canvas
+  // iframe could postMessage `pagespace-navigate` on load (no real click at
+  // all) and force the app's own tab to navigate — reopening the exact hole
+  // CANVAS_IFRAME_SANDBOX closes by omitting allow-top-navigation*. jsdom has
+  // no navigator.userActivation at all (verified separately), so the tests
+  // above exercise the "API unsupported" fallback path; these explicitly
+  // stub the API to exercise the gate itself.
+  describe('given the User Activation API is available', () => {
+    const originalDescriptor = Object.getOwnPropertyDescriptor(window.navigator, 'userActivation');
+
+    afterEach(() => {
+      if (originalDescriptor) {
+        Object.defineProperty(window.navigator, 'userActivation', originalDescriptor);
+      } else {
+        delete (window.navigator as { userActivation?: unknown }).userActivation;
+      }
+    });
+
+    function stubUserActivation(isActive: boolean) {
+      Object.defineProperty(window.navigator, 'userActivation', {
+        value: { isActive, hasBeenActive: isActive },
+        configurable: true,
+      });
+    }
+
+    it('given no recent user gesture (isActive: false), should NOT router.push even for a valid href', () => {
+      stubUserActivation(false);
+      const mockContentWindow = { postMessage: vi.fn() };
+
+      render(React.createElement(CanvasFrame, {
+        html: '<p>x</p>',
+        title: 'Canvas',
+      }));
+
+      const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        configurable: true,
+      });
+
+      window.dispatchEvent(new MessageEvent('message', {
+        data: { type: 'pagespace-navigate', href: '/dashboard/drive-1/page-1' },
+        source: mockContentWindow as unknown as MessageEventSource,
+      }));
+
+      expect(routerPushMock).not.toHaveBeenCalled();
+    });
+
+    it('given a recent user gesture (isActive: true), should router.push a valid href', () => {
+      stubUserActivation(true);
+      const mockContentWindow = { postMessage: vi.fn() };
+
+      render(React.createElement(CanvasFrame, {
+        html: '<p>x</p>',
+        title: 'Canvas',
+      }));
+
+      const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: mockContentWindow,
+        configurable: true,
+      });
+
+      window.dispatchEvent(new MessageEvent('message', {
+        data: { type: 'pagespace-navigate', href: '/dashboard/drive-1/page-1' },
+        source: mockContentWindow as unknown as MessageEventSource,
+      }));
+
+      expect(routerPushMock).toHaveBeenCalledWith('/dashboard/drive-1/page-1');
+    });
   });
 });
