@@ -368,16 +368,19 @@ function SessionRow({ session, onChanged }: { session: SessionListEntry; onChang
     }
   }, [forgetWorkspace, onChanged, selectSession, selectedSessionId, session.sessionId]);
 
-  const menuItems: RowMenuItem[] = [
-    { label: 'New conversation', icon: MessageSquarePlus, onSelect: () => void newConversation() },
-    {
-      label: 'End session',
-      icon: X,
-      onSelect: () => setConfirmingEnd(true),
-      destructive: true,
-      separatorBefore: true,
-    },
-  ];
+  const menuItems: RowMenuItem[] = useMemo(
+    () => [
+      { label: 'New conversation', icon: MessageSquarePlus, onSelect: () => void newConversation() },
+      {
+        label: 'End session',
+        icon: X,
+        onSelect: () => setConfirmingEnd(true),
+        destructive: true,
+        separatorBefore: true,
+      },
+    ],
+    [newConversation],
+  );
 
   return (
     <div>
