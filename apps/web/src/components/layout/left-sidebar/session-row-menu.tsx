@@ -22,7 +22,7 @@ import { cn } from '@/lib/utils';
 
 export interface RowMenuItem {
   label: string;
-  icon: ComponentType<{ className?: string }>;
+  icon: ComponentType<{ className?: string; 'aria-hidden'?: boolean | 'true' | 'false' }>;
   onSelect: () => void;
   destructive?: boolean;
   /** Renders a separator immediately before this item — the item list stays flat. */
