@@ -56,7 +56,7 @@ export function sendFormSubmissionNotification(params: {
       submittedAt: formatTimestamp(submittedAt),
       sheetUrl: `${resolveAppUrl()}/dashboard/${formTarget.driveId}/${formTarget.pageId}`,
     }),
-    bypassRateLimit: true,
+    skipRateLimit: true,
   }).catch((error) => {
     loggers.api.error(
       'Failed to send form submission notification',
