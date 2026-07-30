@@ -45,12 +45,14 @@ vi.mock('../panes/AgentPanes', () => ({
     sessionId,
     initialConversation,
     chatContext,
+    isReadOnly,
   }: {
     sessionId: string;
     initialConversation: { conversationId: string };
     chatContext?: string;
+    isReadOnly?: boolean;
   }) => (
-    <div data-testid="agent-panes" data-chat-context={chatContext}>
+    <div data-testid="agent-panes" data-chat-context={chatContext} data-readonly={String(!!isReadOnly)}>
       {sessionId}/{initialConversation.conversationId}
     </div>
   ),
@@ -174,6 +176,29 @@ describe('AgentPageView', () => {
     await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-1'));
     expect(screen.getByTestId('agent-panes')).toHaveAttribute('data-chat-context', 'page');
     expect(screen.queryByTestId('plain-chat')).not.toBeInTheDocument();
+  });
+
+  it('a NON-session user gets the plain chat even for a session-bound conversation (review M2)', async () => {
+    // A shared session-bound thread can be a non-admin's most-recent
+    // conversation; a grid whose every affordance 403s — except the
+    // destructive last-pane-close — is worse than the chat they can use.
+    authState.current = { user: { id: 'user-2', role: 'user' } };
+    resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
+    expect(screen.queryByTestId('agent-panes')).not.toBeInTheDocument();
+  });
+
+  it('the grid receives the read-only verdict (review M2)', async () => {
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.endsWith('/permissions/check')) return jsonResponse({ canEdit: false });
+      return jsonResponse({});
+    });
+    resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveAttribute('data-readonly', 'true'));
   });
 
   it('a pre-session conversation renders the plain chat — no grid, no splits', async () => {

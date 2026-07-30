@@ -153,9 +153,9 @@ export function SessionChatView({
               messages={chat.messages}
               assistantName={name}
               contextLabel={null}
-              handleEdit={chat.handleEdit}
-              handleDelete={chat.handleDelete}
-              handleRetry={chat.handleRetry}
+              handleEdit={!isReadOnly ? chat.handleEdit : undefined}
+              handleDelete={!isReadOnly ? chat.handleDelete : undefined}
+              handleRetry={!isReadOnly ? chat.handleRetry : undefined}
               handleUndoFromHere={(messageId) => setUndoMessageId(messageId)}
               lastAssistantMessageId={chat.lastAssistantMessageId}
               lastUserMessageId={chat.lastUserMessageId}

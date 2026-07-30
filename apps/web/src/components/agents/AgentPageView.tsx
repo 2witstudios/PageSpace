@@ -265,10 +265,13 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
           </div>
         </div>
 
-        {/* Chat Tab — the pane grid for a session-bound conversation, the plain
-            chat for a pre-session one. */}
+        {/* Chat Tab — the pane grid for a session-bound conversation, ONLY for
+            users with the session capability: a non-admin can land on a shared
+            session-bound thread (review M2), and handing them a grid whose
+            every affordance 403s — except last-pane-close, which destroys the
+            session — is worse than the plain chat they can actually use. */}
         <TabsContent value="chat" className="mt-0 flex min-h-0 flex-1 flex-col overflow-hidden">
-          {current.sessionId ? (
+          {current.sessionId && canUseSessions ? (
             <AgentPanes
               key={current.sessionId}
               sessionId={current.sessionId}
@@ -279,6 +282,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
                 name: 'Conversation',
               }}
               chatContext="page"
+              isReadOnly={isReadOnly}
               onSessionEnded={() => void handleCreateNew()}
             />
           ) : agentLoading ? (

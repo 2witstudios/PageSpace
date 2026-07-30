@@ -59,6 +59,8 @@ export interface AgentPanesProps {
    * the full renderer, the console with the compact one. Layout is identical.
    */
   chatContext?: 'page' | 'console';
+  /** Read-only viewers get history but no send/edit/delete/retry in any chat pane. */
+  isReadOnly?: boolean;
 }
 
 export default function AgentPanes({
@@ -67,6 +69,7 @@ export default function AgentPanes({
   initialConversation,
   onSessionEnded,
   chatContext = 'console',
+  isReadOnly = false,
 }: AgentPanesProps) {
   const workspaces = useAgentWorkspaceStore((state) => state.workspaces);
   const openConversation = useAgentWorkspaceStore((state) => state.openConversation);
@@ -235,7 +238,12 @@ export default function AgentPanes({
               <Loader2 className="size-4 animate-spin text-muted-foreground" />
             </div>
           ) : surface.surface === 'chat' ? (
-            <PaneChat conversationId={surface.conversationId} agentPageId={surface.agentPageId} context={chatContext} />
+            <PaneChat
+              conversationId={surface.conversationId}
+              agentPageId={surface.agentPageId}
+              context={chatContext}
+              isReadOnly={isReadOnly}
+            />
           ) : (
             <Shell shellId={surface.shellId} name={pane.scope?.name} />
           )}
