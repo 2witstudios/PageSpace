@@ -363,6 +363,37 @@ describe('handleShellSendRequest', () => {
       expected: { status: 400, error: 'Missing or invalid shellId' },
     });
   });
+
+  it('given a blank userId, should refuse with 400 naming userId — distinct from an absent one', async () => {
+    // `userId` is optional on the wire (the liveness sweep sends neither), so
+    // an ABSENT one passes the schema and is rejected later by
+    // `planSessionStart`. A PRESENT but blank one is a shape violation the
+    // schema itself refuses — the two paths report the same message through
+    // different code, and this pins the schema-level one.
+    const result = await handleShellSendRequest(deps(), sendBody({ userId: '' }));
+
+    assert({
+      given: 'a send whose userId is present but empty',
+      should: 'refuse with 400 — a blank identity is not a usable one',
+      actual: { status: result.status, error: result.body.error },
+      expected: { status: 400, error: 'Missing or invalid userId' },
+    });
+  });
+
+  it('given a payload that is not an object at all, should refuse with a generic 400', async () => {
+    // An array passes the handler's own `typeof === 'object'` guard (arrays
+    // ARE objects), so it reaches the zod schema, which reports a root-level
+    // issue with an EMPTY path — none of the named fields, hence the
+    // catch-all message.
+    const result = await handleShellSendRequest(deps(), JSON.stringify([]));
+
+    assert({
+      given: 'a JSON array where an object was expected',
+      should: 'refuse with 400 and the generic invalid-payload message',
+      actual: { status: result.status, error: result.body.error },
+      expected: { status: 400, error: 'Invalid payload' },
+    });
+  });
 });
 
 /**
