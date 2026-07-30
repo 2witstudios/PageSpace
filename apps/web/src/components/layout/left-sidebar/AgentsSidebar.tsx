@@ -237,6 +237,11 @@ function SessionList({
     [canSpawn, drives],
   );
 
+  // A trashed drive with a lingering session becomes an orphan group (it's
+  // excluded from the roster above) — it must still surface its existing
+  // session, but must not offer to spawn a NEW one into a trashed drive.
+  const trashedDriveIds = useMemo(() => new Set(drives.filter((d) => d.isTrashed).map((d) => d.id)), [drives]);
+
   // Group by drive in global mode (roster ∪ session-implied drives, Assistant
   // first — see session-groups.ts for the ordering rule); a single implicit
   // group in drive mode.
@@ -257,11 +262,13 @@ function SessionList({
           {group.sessions.map((session) => (
             <SessionRow key={session.sessionId} session={session} onChanged={onChanged} />
           ))}
-          <NewSessionRow
-            driveId={group.driveId === ASSISTANT_GROUP_KEY ? null : group.driveId}
-            agentsByDrive={agentsByDrive}
-            onSpawned={onChanged}
-          />
+          {!trashedDriveIds.has(group.driveId) && (
+            <NewSessionRow
+              driveId={group.driveId === ASSISTANT_GROUP_KEY ? null : group.driveId}
+              agentsByDrive={agentsByDrive}
+              onSpawned={onChanged}
+            />
+          )}
         </div>
       ))}
       {notice}

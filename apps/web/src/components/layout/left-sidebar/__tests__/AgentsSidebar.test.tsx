@@ -468,6 +468,25 @@ describe('AgentsSidebar', () => {
       expect(screen.queryByText('Gamma')).toBeNull();
     });
 
+    test('a trashed drive with a lingering session keeps it visible but offers no new-session spawn', async () => {
+      // The trashed drive is excluded from the roster, so its lingering
+      // session surfaces as an orphan group (session-groups.ts never drops a
+      // session) — but that orphan group must not let an admin spawn a NEW
+      // session into a drive that was explicitly excluded for being trashed.
+      useDriveStore.setState({
+        drives: [driveFixture('drive-1', 'Alpha'), driveFixture('drive-2', 'Gamma', { isTrashed: true })],
+      });
+      respondWithSessions([{ ...SESSION, sessionId: 'ses-trashed', driveId: 'drive-2', name: 'lingering session' }]);
+      renderSidebar();
+
+      await screen.findByText('lingering session');
+      // The orphan header falls back to the raw id — the trash-filtered
+      // roster has no name to offer for it.
+      expect(within(groupContainer('drive-2')).queryByText('New session')).toBeNull();
+      // An active roster drive is unaffected.
+      expect(within(groupContainer('Alpha')).getByText('New session')).toBeDefined();
+    });
+
     test('shows no roster groups for a non-admin — refusal-only, not a dead spawn chooser', () => {
       // The admin gate must cover the roster too: previously only the
       // Assistant group's visibility was tied to admin status, so a
