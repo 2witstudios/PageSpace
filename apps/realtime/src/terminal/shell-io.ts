@@ -36,12 +36,15 @@
  */
 
 import type { TerminalSession, TerminalSessionMap } from './terminal-session-map';
-import type {
-  ShellReadPayload,
-  ShellReadEntry,
-  ShellReadResult,
-  ShellSendPayload,
-  ShellSendResult,
+import {
+  shellReadPayloadSchema,
+  shellSendPayloadSchema,
+  MAX_SHELL_INPUT_BYTES,
+  type ShellReadPayload,
+  type ShellReadEntry,
+  type ShellReadResult,
+  type ShellSendPayload,
+  type ShellSendResult,
 } from '@pagespace/lib/agent-sessions/contract';
 import { resumeBillingClock } from './shell-handler';
 import {
@@ -61,8 +64,12 @@ export { MAX_SCROLLBACK_TAIL_BYTES };
 /** Tail size when the caller does not ask for one. */
 export const DEFAULT_SCROLLBACK_TAIL_LINES = 100;
 
-/** Upper bound on a single stdin write — mirrors the socket path's `MAX_INPUT_BYTES`. */
-export const MAX_SHELL_INPUT_BYTES = 4096;
+/**
+ * Upper bound on a single stdin write — declared in the contract module with
+ * the rest of the wire bounds (it mirrors the socket path's `MAX_INPUT_BYTES`),
+ * re-exported so importers of this bridge need not know where it lives.
+ */
+export { MAX_SHELL_INPUT_BYTES };
 
 export interface ShellIoDeps {
   sessionMap: Pick<TerminalSessionMap, 'getByKey'>;
@@ -213,22 +220,20 @@ export async function handleShellSendRequest(
   /** Has the caller given up on this request? See `ShellIoDeps.startSession`. */
   abandoned: () => boolean = () => false,
 ): Promise<{ status: number; body: ShellSendResult }> {
-  const payload = parseBody<ShellSendPayload>(body);
-  if (!payload || typeof payload !== 'object') {
+  const raw = parseBody<unknown>(body);
+  if (!raw || typeof raw !== 'object') {
     return { status: 400, body: { success: false, error: 'Invalid JSON' } };
   }
 
-  if (!isNonEmptyString(payload.shellId)) {
-    return { status: 400, body: { success: false, error: 'Missing or invalid shellId' } };
+  // The contract schema is the validation: shellId addresses, input is
+  // non-empty and byte-capped (refused, never truncated — half a command typed
+  // into a live shell is a command the caller never wrote, and the PTY would
+  // run it), and the start half is well-typed.
+  const parsed = shellSendPayloadSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { status: 400, body: { success: false, error: invalidFieldMessage(parsed.error) } };
   }
-  // Refused, never truncated: half a command typed into a live shell is a
-  // command the caller never wrote, and the PTY would run it.
-  if (
-    !isNonEmptyString(payload.input) ||
-    Buffer.byteLength(payload.input, 'utf8') > MAX_SHELL_INPUT_BYTES
-  ) {
-    return { status: 400, body: { success: false, error: 'Missing or invalid input' } };
-  }
+  const payload: ShellSendPayload = parsed.data;
 
   const startPlan = planSessionStart(payload, { addressable: true, hasStarter: deps.startSession !== undefined });
   if (!startPlan.ok) return { status: 400, body: { success: false, error: startPlan.error } };
@@ -284,9 +289,6 @@ export async function handleShellSendRequest(
   };
 }
 
-/** How many shells one read may ask about — a session's listing, not a crawl. */
-const MAX_SHELLS_PER_READ = 100;
-
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
 }
@@ -296,6 +298,34 @@ function parseBody<T>(body: string): T | undefined {
     return JSON.parse(body) as T;
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * Map a contract-schema failure onto the per-field messages this endpoint has
+ * always answered with — the caller-facing vocabulary predates the schema, and
+ * agents act on these strings, so the parse must not rename them.
+ *
+ * Typed structurally (not as zod's own `ZodError`): the workspace resolves two
+ * copies of the `zod` package across its lockfile, and a nominal import here
+ * would tie this signature to whichever one happened to resolve first.
+ */
+function invalidFieldMessage(error: { issues: Array<{ path: PropertyKey[] }> }): string {
+  switch (error.issues[0]?.path[0]) {
+    case 'shellId':
+      return 'Missing or invalid shellId';
+    case 'input':
+      return 'Missing or invalid input';
+    case 'shellIds':
+      return 'Missing or invalid shellIds';
+    case 'limit':
+      return 'Invalid limit';
+    case 'start':
+      return 'Invalid start';
+    case 'userId':
+      return 'Missing or invalid userId';
+    default:
+      return 'Invalid payload';
   }
 }
 
@@ -360,23 +390,21 @@ export async function handleShellReadRequest(
   /** Has the caller given up on this request? See `ShellIoDeps.startSession`. */
   abandoned: () => boolean = () => false,
 ): Promise<{ status: number; body: ShellReadResult }> {
-  const payload = parseBody<ShellReadPayload>(body);
-  if (!payload || typeof payload !== 'object') {
+  const raw = parseBody<unknown>(body);
+  if (!raw || typeof raw !== 'object') {
     return { status: 400, body: { success: false, error: 'Invalid JSON' } };
   }
 
-  const { shellIds } = payload;
-  if (!Array.isArray(shellIds) || shellIds.length === 0 || shellIds.length > MAX_SHELLS_PER_READ || !shellIds.every(isNonEmptyString)) {
-    return { status: 400, body: { success: false, error: 'Missing or invalid shellIds' } };
+  // The contract schema is the validation: 1..MAX_SHELLS_PER_READ non-empty
+  // ids, a bounded non-negative integer limit, a well-typed start half.
+  const parsed = shellReadPayloadSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { status: 400, body: { success: false, error: invalidFieldMessage(parsed.error) } };
   }
+  const payload: ShellReadPayload = parsed.data;
 
-  const limit =
-    payload.limit === undefined
-      ? DEFAULT_SCROLLBACK_TAIL_LINES
-      : typeof payload.limit === 'number' && Number.isInteger(payload.limit) && payload.limit >= 0
-        ? payload.limit
-        : undefined;
-  if (limit === undefined) return { status: 400, body: { success: false, error: 'Invalid limit' } };
+  const { shellIds } = payload;
+  const limit = payload.limit ?? DEFAULT_SCROLLBACK_TAIL_LINES;
 
   // A start is only ever addressable when the read names ONE shell — see
   // `planSessionStart`. The liveness sweep names many, so it cannot start

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { stampColumns, revivedAgentSessionColumns } from '../agent-sessions-store';
-import { NOW } from './fakes';
+import { SESSION_LIST_LIMIT, stampColumns, revivedAgentSessionColumns } from '../agent-sessions-store';
+import { NOW, OWNER_ID, makeAgentSessionStore, makeSessionRecord } from './fakes';
 
 /**
  * The two pure halves of the store: how a lifecycle verdict's stamps become
@@ -97,5 +97,63 @@ describe('revivedAgentSessionColumns', () => {
 
   it('should carry a null spriteInstanceId through (the driver could not report one)', () => {
     expect(revivedAgentSessionColumns({ ...base, spriteInstanceId: null, stamps: {} }).spriteInstanceId).toBeNull();
+  });
+});
+
+/**
+ * The in-memory fake claims to mirror the real store's `list`/`applyStamps`/
+ * `stampSpriteTornDown` behavior — pinned here so drift between the two shows
+ * up as a failing test rather than a fake that quietly answers a query shape
+ * the real store never allows (review #2266).
+ */
+describe("fake store — mirrors the real store's pinned behaviors", () => {
+  it('given more active sessions than SESSION_LIST_LIMIT, list should cap at the limit', async () => {
+    const seed = Array.from({ length: SESSION_LIST_LIMIT + 5 }, (_, index) =>
+      makeSessionRecord({ id: `ses-cap-${index}`, lastActiveAt: new Date(NOW.getTime() - index) }),
+    );
+    const store = makeAgentSessionStore(seed);
+
+    const listed = await store.store.list({ ownerId: OWNER_ID });
+
+    expect(listed).toHaveLength(SESSION_LIST_LIMIT);
+    // Newest activity first: the kept slice is the first SESSION_LIST_LIMIT rows.
+    expect(listed[0].id).toBe('ses-cap-0');
+    expect(listed[listed.length - 1].id).toBe(`ses-cap-${SESSION_LIST_LIMIT - 1}`);
+  });
+
+  it("applyStamps should bump updatedAt, mirroring the real store's own bookkeeping touch", async () => {
+    const later = new Date(NOW.getTime() + 60_000);
+    const row = makeSessionRecord();
+    const store = makeAgentSessionStore([row], () => later);
+
+    await store.store.applyStamps({ sessionId: row.id, stamps: { lastActiveAt: later } });
+
+    expect(store.rows.get(row.id)!.updatedAt).toEqual(later);
+  });
+
+  it('applyStamps with nothing to write should leave updatedAt untouched — an empty verdict is a real no-op', async () => {
+    const later = new Date(NOW.getTime() + 60_000);
+    const row = makeSessionRecord();
+    const store = makeAgentSessionStore([row], () => later);
+
+    await store.store.applyStamps({ sessionId: row.id, stamps: {} });
+
+    expect(store.rows.get(row.id)!.updatedAt).toEqual(NOW);
+  });
+
+  it('stampSpriteTornDown should bump updatedAt on a successful CAS', async () => {
+    const later = new Date(NOW.getTime() + 60_000);
+    const provisioned = makeSessionRecord({ sandboxId: 'sbx-1', spriteInstanceId: 'inst-1' });
+    const store = makeAgentSessionStore([provisioned], () => later);
+
+    const ok = await store.store.stampSpriteTornDown({
+      sessionId: provisioned.id,
+      sandboxId: 'sbx-1',
+      spriteInstanceId: 'inst-1',
+      stamps: { spriteTornDownAt: later },
+    });
+
+    expect(ok).toBe(true);
+    expect(store.rows.get(provisioned.id)!.updatedAt).toEqual(later);
   });
 });

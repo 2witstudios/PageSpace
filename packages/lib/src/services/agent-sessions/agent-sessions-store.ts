@@ -264,8 +264,15 @@ export function revivedAgentSessionColumns(input: {
  * Production DB-backed implementation. Lazily resolves the db client, schema
  * tables and operators so callers that inject a fake (in tests) never load the
  * DB module graph.
+ *
+ * `now` defaults to the wall clock — every OTHER write in this store takes its
+ * timestamp from a caller-supplied `now`, via the lifecycle planner; these two
+ * calls are the store's own bookkeeping touch (an `updatedAt` bump alongside a
+ * verdict that names no `lastActiveAt` of its own), which is why they were the
+ * one place still reaching for `new Date()` directly. Injectable so a test can
+ * pin it rather than asserting "some recent timestamp".
  */
-export async function createDbAgentSessionStore(): Promise<AgentSessionStore> {
+export async function createDbAgentSessionStore(now: () => Date = () => new Date()): Promise<AgentSessionStore> {
   const [{ db }, { eq, and, eqOrIsNull, isNotNull, isNull, sql, count, desc }, { agentSessions }, { machineSpriteReclaims }, { conversations }] =
     await Promise.all([
       import('@pagespace/db/db'),
@@ -406,7 +413,7 @@ export async function createDbAgentSessionStore(): Promise<AgentSessionStore> {
       if (Object.keys(columns).length === 0) return;
       await db
         .update(agentSessions)
-        .set({ ...columns, updatedAt: new Date() })
+        .set({ ...columns, updatedAt: now() })
         .where(eq(agentSessions.id, sessionId));
     },
 
@@ -426,7 +433,7 @@ export async function createDbAgentSessionStore(): Promise<AgentSessionStore> {
     async stampSpriteTornDown({ sessionId, sandboxId, spriteInstanceId, stamps }) {
       const updated = await db
         .update(agentSessions)
-        .set({ ...stampColumns(stamps), updatedAt: new Date() })
+        .set({ ...stampColumns(stamps), updatedAt: now() })
         // CAS on the INSTANCE, not just the name: a concurrent re-provision may
         // have written a LIVE replacement into this row, and stamping that as
         // torn down would hide a billing VM from the reconciler forever.

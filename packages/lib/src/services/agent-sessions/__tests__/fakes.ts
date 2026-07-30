@@ -20,7 +20,7 @@ import type {
 } from '../../sandbox/sandbox-host';
 import { SandboxSpriteReplacedError } from '../../sandbox/sandbox-host';
 import type { AgentSessionRecord, AgentSessionStore } from '../agent-sessions-store';
-import { stampColumns } from '../agent-sessions-store';
+import { SESSION_LIST_LIMIT, stampColumns } from '../agent-sessions-store';
 import type { SessionShellRecord, SessionShellStore } from '../session-shells-store';
 
 export const NOW = new Date('2026-07-28T12:00:00.000Z');
@@ -64,7 +64,11 @@ export interface FakeAgentSessionStore {
   conversationBindings: Map<string, string>;
 }
 
-export function makeAgentSessionStore(seed: AgentSessionRecord[] = []): FakeAgentSessionStore {
+export function makeAgentSessionStore(
+  seed: AgentSessionRecord[] = [],
+  /** Mirrors the real store's own `updatedAt` bump on a no-identity stamp write. */
+  now: () => Date = () => NOW,
+): FakeAgentSessionStore {
   const rows = new Map<string, AgentSessionRecord>();
   for (const row of seed) rows.set(row.id, row);
   const reclaims = new Map<string, string | null>();
@@ -102,7 +106,10 @@ export function makeAgentSessionStore(seed: AgentSessionRecord[] = []): FakeAgen
     },
 
     async list(filter) {
-      // Mirrors the real store: active rows only, newest activity first.
+      // Mirrors the real store: active rows only, newest activity first,
+      // capped at SESSION_LIST_LIMIT (the sidebar polls this every few
+      // seconds — an unbounded fake would let a test pass against a query
+      // shape the real store never allows).
       return [...rows.values()]
         .filter((row) => {
           if ('driveId' in filter && row.driveId !== filter.driveId) return false;
@@ -114,7 +121,8 @@ export function makeAgentSessionStore(seed: AgentSessionRecord[] = []): FakeAgen
           const bAt = b.lastActiveAt?.getTime() ?? -1;
           if (aAt !== bAt) return bAt - aAt;
           return b.createdAt.getTime() - a.createdAt.getTime();
-        });
+        })
+        .slice(0, SESSION_LIST_LIMIT);
     },
 
     async countActive(ownerId) {
@@ -159,7 +167,12 @@ export function makeAgentSessionStore(seed: AgentSessionRecord[] = []): FakeAgen
     async applyStamps({ sessionId, stamps }) {
       const row = rows.get(sessionId);
       if (!row) return;
-      rows.set(sessionId, { ...row, ...stampColumns(stamps) });
+      // Mirrors the real store: a stamp write with nothing to write is a
+      // legitimate no-op verdict, and must not bump updatedAt on a row it
+      // otherwise leaves untouched.
+      const columns = stampColumns(stamps);
+      if (Object.keys(columns).length === 0) return;
+      rows.set(sessionId, { ...row, ...columns, updatedAt: now() });
     },
 
     async requestTeardown({ sessionId, sandboxId, spriteInstanceId, at }) {
@@ -177,7 +190,7 @@ export function makeAgentSessionStore(seed: AgentSessionRecord[] = []): FakeAgen
       if (!row) return false;
       if (row.sandboxId !== sandboxId) return false;
       if ((row.spriteInstanceId ?? null) !== (spriteInstanceId ?? null)) return false;
-      rows.set(sessionId, { ...row, ...stampColumns(stamps) });
+      rows.set(sessionId, { ...row, ...stampColumns(stamps), updatedAt: now() });
       return true;
     },
 

@@ -10,6 +10,7 @@ import {
   type ShellIoDeps,
 } from '../shell-io';
 import { appendScrollback, type TerminalSession } from '../terminal-session-map';
+import { MAX_SHELLS_PER_READ, MAX_SCROLLBACK_TAIL_LINES } from '@pagespace/lib/agent-sessions/contract';
 
 function makeSession(over: Partial<TerminalSession> = {}): TerminalSession {
   return {
@@ -89,6 +90,27 @@ describe('handleShellReadRequest — validation', () => {
         { status: 400, error: 'Invalid limit' },
         { status: 400, error: 'Invalid limit' },
       ],
+    });
+  });
+
+  it('given a limit over the contract bound, should refuse with 400 — no unbounded number crosses the hop', async () => {
+    const result = await handleShellReadRequest(deps(), readBody({ limit: MAX_SCROLLBACK_TAIL_LINES + 1 }));
+    assert({
+      given: 'a limit beyond what the byte-capped answer could ever ship',
+      should: 'refuse with 400 rather than accepting an unbounded ask',
+      actual: { status: result.status, error: result.body.error },
+      expected: { status: 400, error: 'Invalid limit' },
+    });
+  });
+
+  it('given more shellIds than one listing can mean, should refuse with 400', async () => {
+    const shellIds = Array.from({ length: MAX_SHELLS_PER_READ + 1 }, (_, index) => `sh-${index}`);
+    const result = await handleShellReadRequest(deps(), readBody({ shellIds }));
+    assert({
+      given: 'a read naming more shells than the sweep bound',
+      should: 'refuse with 400 — a read is a session\'s listing, not a crawl',
+      actual: { status: result.status, error: result.body.error },
+      expected: { status: 400, error: 'Missing or invalid shellIds' },
     });
   });
 });
@@ -339,6 +361,37 @@ describe('handleShellSendRequest', () => {
       should: 'refuse with 400',
       actual: { status: result.status, error: result.body.error },
       expected: { status: 400, error: 'Missing or invalid shellId' },
+    });
+  });
+
+  it('given a blank userId, should refuse with 400 naming userId — distinct from an absent one', async () => {
+    // `userId` is optional on the wire (the liveness sweep sends neither), so
+    // an ABSENT one passes the schema and is rejected later by
+    // `planSessionStart`. A PRESENT but blank one is a shape violation the
+    // schema itself refuses — the two paths report the same message through
+    // different code, and this pins the schema-level one.
+    const result = await handleShellSendRequest(deps(), sendBody({ userId: '' }));
+
+    assert({
+      given: 'a send whose userId is present but empty',
+      should: 'refuse with 400 — a blank identity is not a usable one',
+      actual: { status: result.status, error: result.body.error },
+      expected: { status: 400, error: 'Missing or invalid userId' },
+    });
+  });
+
+  it('given a payload that is not an object at all, should refuse with a generic 400', async () => {
+    // An array passes the handler's own `typeof === 'object'` guard (arrays
+    // ARE objects), so it reaches the zod schema, which reports a root-level
+    // issue with an EMPTY path — none of the named fields, hence the
+    // catch-all message.
+    const result = await handleShellSendRequest(deps(), JSON.stringify([]));
+
+    assert({
+      given: 'a JSON array where an object was expected',
+      should: 'refuse with 400 and the generic invalid-payload message',
+      actual: { status: result.status, error: result.body.error },
+      expected: { status: 400, error: 'Invalid payload' },
     });
   });
 });

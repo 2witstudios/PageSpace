@@ -1681,6 +1681,13 @@
       "when": 1785376763777,
       "tag": "0239_faithful_klaw",
       "breakpoints": true
+    },
+    {
+      "idx": 240,
+      "version": "7",
+      "when": 1785393248827,
+      "tag": "0240_naive_annihilus",
+      "breakpoints": true
     }
   ]
 }

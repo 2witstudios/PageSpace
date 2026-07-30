@@ -14,6 +14,11 @@ import {
   SHELL_AGENT_TYPES,
   PANE_KINDS,
   paneScopeSchema,
+  shellReadPayloadSchema,
+  shellSendPayloadSchema,
+  MAX_SHELLS_PER_READ,
+  MAX_SHELL_INPUT_BYTES,
+  MAX_SCROLLBACK_TAIL_LINES,
 } from '../contract';
 
 const session = {
@@ -187,6 +192,81 @@ describe('shellConnectPayloadSchema', () => {
     expect(parsed.projectName).toBeUndefined();
     expect(parsed.branchName).toBeUndefined();
     expect(parsed.sessionId).toBeUndefined();
+  });
+});
+
+describe('shellReadPayloadSchema', () => {
+  it('given a single-shell read with a limit, should parse', () => {
+    expect(shellReadPayloadSchema.parse({ shellIds: ['sh-1'], limit: 100 })).toEqual({
+      shellIds: ['sh-1'],
+      limit: 100,
+    });
+  });
+
+  it('given the start half, should carry it — the semantics stay planSessionStart\'s decision', () => {
+    expect(shellReadPayloadSchema.parse({ shellIds: ['sh-1'], start: true, userId: 'user-1' })).toEqual({
+      shellIds: ['sh-1'],
+      start: true,
+      userId: 'user-1',
+    });
+  });
+
+  it('given no shellIds, an empty list, or a blank id, should fail — ids address', () => {
+    expect(shellReadPayloadSchema.safeParse({ limit: 0 }).success).toBe(false);
+    expect(shellReadPayloadSchema.safeParse({ shellIds: [] }).success).toBe(false);
+    expect(shellReadPayloadSchema.safeParse({ shellIds: [''] }).success).toBe(false);
+  });
+
+  it('given more shellIds than one listing can mean, should fail — a read is a session\'s listing, not a crawl', () => {
+    const shellIds = Array.from({ length: MAX_SHELLS_PER_READ + 1 }, (_, index) => `sh-${index}`);
+    expect(shellReadPayloadSchema.safeParse({ shellIds }).success).toBe(false);
+    expect(shellReadPayloadSchema.safeParse({ shellIds: shellIds.slice(0, MAX_SHELLS_PER_READ) }).success).toBe(true);
+  });
+
+  it('given a negative, fractional, or unbounded limit, should fail — no unbounded number crosses this hop', () => {
+    expect(shellReadPayloadSchema.safeParse({ shellIds: ['sh-1'], limit: -1 }).success).toBe(false);
+    expect(shellReadPayloadSchema.safeParse({ shellIds: ['sh-1'], limit: 1.5 }).success).toBe(false);
+    expect(shellReadPayloadSchema.safeParse({ shellIds: ['sh-1'], limit: MAX_SCROLLBACK_TAIL_LINES + 1 }).success).toBe(false);
+    expect(shellReadPayloadSchema.safeParse({ shellIds: ['sh-1'], limit: 0 }).success).toBe(true);
+  });
+
+  it('given a non-boolean start or blank userId, should fail rather than coerce', () => {
+    expect(shellReadPayloadSchema.safeParse({ shellIds: ['sh-1'], start: 'yes' }).success).toBe(false);
+    expect(shellReadPayloadSchema.safeParse({ shellIds: ['sh-1'], userId: '' }).success).toBe(false);
+  });
+});
+
+describe('shellSendPayloadSchema', () => {
+  it('given a well-formed send, should parse', () => {
+    expect(shellSendPayloadSchema.parse({ shellId: 'sh-1', input: 'ls\n' })).toEqual({
+      shellId: 'sh-1',
+      input: 'ls\n',
+    });
+  });
+
+  it('given a missing or blank shellId, should fail', () => {
+    expect(shellSendPayloadSchema.safeParse({ input: 'ls' }).success).toBe(false);
+    expect(shellSendPayloadSchema.safeParse({ shellId: '', input: 'ls' }).success).toBe(false);
+  });
+
+  it('given an empty input, should fail — there is nothing to type', () => {
+    expect(shellSendPayloadSchema.safeParse({ shellId: 'sh-1', input: '' }).success).toBe(false);
+  });
+
+  it('given input over the byte cap, should fail — refused, never truncated', () => {
+    expect(
+      shellSendPayloadSchema.safeParse({ shellId: 'sh-1', input: 'x'.repeat(MAX_SHELL_INPUT_BYTES + 1) }).success,
+    ).toBe(false);
+    expect(
+      shellSendPayloadSchema.safeParse({ shellId: 'sh-1', input: 'x'.repeat(MAX_SHELL_INPUT_BYTES) }).success,
+    ).toBe(true);
+  });
+
+  it('should count the cap in BYTES, not code units — what the PTY receives is bytes', () => {
+    // '€' is 3 UTF-8 bytes: 1366 of them fit in 4096 code units but not 4096 bytes.
+    expect(
+      shellSendPayloadSchema.safeParse({ shellId: 'sh-1', input: '€'.repeat(1366) }).success,
+    ).toBe(false);
   });
 });
 
