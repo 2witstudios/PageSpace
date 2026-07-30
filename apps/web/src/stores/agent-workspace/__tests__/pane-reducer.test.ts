@@ -8,10 +8,13 @@ import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
 import {
   newWorkspace,
   assignPane,
+  assignPaneShowing,
   dismissPicker,
   splitRight,
   splitDown,
   closePane,
+  isLastPane,
+  resetPane,
   selectPane,
   panesOf,
   paneShowing,
@@ -213,5 +216,61 @@ describe('panesOf / paneShowing', () => {
     const state = splitRight(base(), 'pane-1', 'col-2', 'pane-2');
     expect(panesOf(state)[1].scope).toBeNull();
     expect(paneShowing(state, 'conv-1')?.id).toBe('pane-1');
+  });
+});
+
+describe('isLastPane', () => {
+  it('given the only pane in the grid, should say so', () => {
+    expect(isLastPane(base(), 'pane-1')).toBe(true);
+  });
+
+  it('given one of several panes, should say no', () => {
+    const state = splitRight(base(), 'pane-1', 'col-2', 'pane-2');
+    expect(isLastPane(state, 'pane-1')).toBe(false);
+    expect(isLastPane(state, 'pane-2')).toBe(false);
+  });
+
+  it('given an unresolvable pane, should say no rather than throw', () => {
+    expect(isLastPane(base(), 'ghost')).toBe(false);
+  });
+});
+
+describe('resetPane', () => {
+  it('should unbind the pane back to null scope', () => {
+    const state = resetPane(base(), 'pane-1');
+    expect(state.columns[0].panes[0].scope).toBeNull();
+  });
+
+  it('should focus the reset pane\'s picker, same as a fresh split', () => {
+    const state = resetPane(base(), 'pane-1');
+    expect(state.pendingPickerPaneId).toBe('pane-1');
+  });
+
+  it('given an unresolvable pane, should no-op', () => {
+    const state = base();
+    expect(resetPane(state, 'ghost')).toBe(state);
+  });
+
+  it('should leave sibling panes untouched', () => {
+    let state = splitRight(base(), 'pane-1', 'col-2', 'pane-2');
+    state = assignPane(state, 'pane-2', terminalScope('shell-9'));
+    state = resetPane(state, 'pane-1');
+    expect(panesOf(state).find((p) => p.id === 'pane-2')?.scope).toEqual(terminalScope('shell-9'));
+  });
+});
+
+describe('assignPaneShowing', () => {
+  it('should assign the pane currently showing the old target to a new scope', () => {
+    let state = splitRight(base(), 'pane-1', 'col-2', 'pane-2');
+    state = assignPane(state, 'pane-2', chatScope('conv-2', 'agent-2'));
+
+    state = assignPaneShowing(state, 'conv-2', chatScope('conv-3', 'agent-3'));
+
+    expect(panesOf(state).find((p) => p.id === 'pane-2')?.scope).toEqual(chatScope('conv-3', 'agent-3'));
+  });
+
+  it('given a target shown nowhere, should no-op — nothing stale to prune', () => {
+    const state = base();
+    expect(assignPaneShowing(state, 'never-shown', chatScope('conv-9'))).toBe(state);
   });
 });

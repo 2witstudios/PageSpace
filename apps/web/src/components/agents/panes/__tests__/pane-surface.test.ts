@@ -65,4 +65,15 @@ describe('resolvePaneSurface', () => {
     const surfaces = [chat('conv-1'), chat(null), chat('conv-1', null)].map(resolvePaneSurface);
     expect(surfaces.some((s) => s.surface === 'terminal')).toBe(false);
   });
+
+  it('given a scope with a kind neither validation nor the type system caught, should hold rather than mount a PTY', () => {
+    // The concrete bug (issue #2263, finding 6): the old branch was a
+    // chat-or-else ternary, so ANY non-'chat' kind — including one that
+    // slipped past `paneScopeSchema` (a stale persisted value, a corrupted
+    // store) — fell into the terminal branch. Persist-time validation is the
+    // primary defense; this is the second one, because a pane resolver that
+    // trusts its input is exactly the hazard this module exists to rule out.
+    const corrupted = { kind: 'legacy-ssh', name: 'x', targetId: 'row-1', agentPageId: null } as unknown as PaneScope;
+    expect(resolvePaneSurface(corrupted)).toEqual({ surface: 'loading' });
+  });
 });

@@ -5,6 +5,7 @@ import { Bot } from 'lucide-react';
 import useSWR from 'swr';
 
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
+import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import AgentPanes from './panes/AgentPanes';
 
@@ -55,6 +56,19 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
   // The session's own drive wins; the surface's drive covers the in-flight
   // window (they agree in drive mode, and global mode has nothing better).
   const sessionDriveId = sessionData?.session?.driveId ?? storeDriveId;
+
+  // The server is the authority on whether the selected session still
+  // exists. `session: null` means it doesn't (ended elsewhere, reaped,
+  // never existed) — forget its persisted grid rather than let a dead
+  // workspace sit in `localStorage` forever, and back out of it the same way
+  // a deep link to nothing does (issue #2263, finding 6: GC on the one
+  // signal this surface already has, rather than a new sweep).
+  useEffect(() => {
+    if (selectedSessionId && sessionData && sessionData.session === null) {
+      useAgentWorkspaceStore.getState().forgetWorkspace(selectedSessionId);
+      selectSession(null);
+    }
+  }, [selectedSessionId, sessionData, selectSession]);
 
   // Deep link, refresh, and Back are the same operation: read the URL. `popstate`
   // needs nothing beyond re-reading it, because the browser has already restored

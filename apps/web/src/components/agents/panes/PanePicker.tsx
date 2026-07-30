@@ -23,10 +23,23 @@ export interface PickableAgent {
   title: string;
 }
 
+/** A shell already open in this session but not currently shown in any pane. */
+export interface ReattachableShell {
+  shellId: string;
+  name: string;
+}
+
 export interface PanePickerProps {
   agents: readonly PickableAgent[];
   /** No agents resolved yet — distinct from "this drive has none". */
   isLoading?: boolean;
+  /**
+   * Shells this session already has running, not bound to any pane right
+   * now — offered above "Shell" so reopening one is a click rather than a
+   * dead end (issue #2263, finding 3: closing a terminal pane used to have
+   * no way back to it short of the sidebar's stale count).
+   */
+  existingShells?: readonly ReattachableShell[];
   /**
    * Takes focus on mount. A split sets this on the pane it just made, so the
    * user lands in the picker rather than a blank rectangle with a control to go
@@ -44,6 +57,8 @@ export interface PanePickerProps {
   /** `null` starts a global-assistant conversation, which has no agent page. */
   onPickAgent(agentPageId: string | null): void;
   onPickShell(): void;
+  /** Bind this pane to an already-running shell instead of spawning a new one. */
+  onReattachShell?(shellId: string, name: string): void;
 }
 
 export default function PanePicker({
@@ -51,8 +66,10 @@ export default function PanePicker({
   isLoading = false,
   autoFocus = false,
   canPickAssistant = false,
+  existingShells = [],
   onPickAgent,
   onPickShell,
+  onReattachShell,
 }: PanePickerProps) {
   const firstRef = useRef<HTMLButtonElement>(null);
 
@@ -93,6 +110,28 @@ export default function PanePicker({
           </Button>
         )}
       </div>
+
+      {/* Shells this session already has, not shown anywhere right now — above
+          the drive's agents since reattaching an existing thing outranks
+          spawning a new one. */}
+      {existingShells.length > 0 && (
+        <div className="flex min-h-0 flex-col gap-1">
+          <p className="shrink-0 pt-1 text-xs font-medium text-muted-foreground">Reattach a shell</p>
+          {existingShells.map((shell) => (
+            <Button
+              key={shell.shellId}
+              variant="ghost"
+              size="sm"
+              className="h-8 justify-start gap-2 px-2"
+              onClick={() => onReattachShell?.(shell.shellId, shell.name)}
+              data-testid={`reattach-shell-${shell.shellId}`}
+            >
+              <TerminalSquare className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <span className="truncate">{shell.name}</span>
+            </Button>
+          ))}
+        </div>
+      )}
 
       {/* The agents of this drive. Listed BELOW the two fixed choices rather than
           merged with them: this list is unbounded, and a drive with forty agents

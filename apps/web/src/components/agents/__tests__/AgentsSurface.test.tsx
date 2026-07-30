@@ -36,9 +36,12 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
 
 import AgentsSurface from '../AgentsSurface';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
+import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 
 beforeEach(() => {
-  mockFetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({ session: null }) });
+  // A selected session exists by default — the tests that care about a GONE
+  // session (finding 6's GC) set their own `{ session: null }` response.
+  mockFetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({ session: { driveId: null } }) });
   window.history.replaceState({}, '', '/dashboard/agents');
   useAgentSurfaceStore.setState({
     driveId: null,
@@ -125,6 +128,46 @@ describe('AgentsSurface', () => {
     window.history.replaceState({}, '', '/dashboard/agents?session=ses-1&c=conv-1');
     render(<AgentsSurface />);
     expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-1/no-agent');
+  });
+});
+
+describe('GC when the server says the session is gone (issue #2263, finding 6)', () => {
+  beforeEach(() => {
+    useAgentWorkspaceStore.setState({ workspaces: {} });
+  });
+
+  it('forgets the persisted grid and backs out to the empty state', async () => {
+    mockFetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({ session: null }) });
+    useAgentWorkspaceStore.getState().ensureWorkspace('ses-gone', {
+      kind: 'chat',
+      name: 'x',
+      targetId: 'conv-1',
+      agentPageId: 'agent-1',
+    });
+    window.history.replaceState({}, '', '/dashboard/agents?session=ses-gone&c=conv-1&agent=agent-1');
+
+    render(<AgentsSurface />);
+
+    await waitFor(() => expect(useAgentSurfaceStore.getState().selectedSessionId).toBeNull());
+    expect(useAgentWorkspaceStore.getState().workspaces['ses-gone']).toBeUndefined();
+    expect(screen.getByText('Select a session')).toBeDefined();
+  });
+
+  it('a session the server confirms exists is left untouched', async () => {
+    mockFetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({ session: { driveId: null } }) });
+    useAgentWorkspaceStore.getState().ensureWorkspace('ses-live', {
+      kind: 'chat',
+      name: 'x',
+      targetId: 'conv-1',
+      agentPageId: 'agent-1',
+    });
+    window.history.replaceState({}, '', '/dashboard/agents?session=ses-live&c=conv-1&agent=agent-1');
+
+    render(<AgentsSurface />);
+
+    await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+    expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-live');
+    expect(useAgentWorkspaceStore.getState().workspaces['ses-live']).toBeDefined();
   });
 });
 

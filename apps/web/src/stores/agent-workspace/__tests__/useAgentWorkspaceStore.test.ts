@@ -112,6 +112,59 @@ describe('transitions', () => {
   });
 });
 
+describe('resetPane', () => {
+  beforeEach(() => {
+    store().ensureWorkspace('ses-1', scope());
+  });
+
+  it('should unbind the pane so it renders the picker again', () => {
+    store().resetPane('ses-1', grid().activePaneId);
+    expect(panesOf(grid())[0].scope).toBeNull();
+  });
+
+  it('should no-op against a grid that is gone', () => {
+    store().forgetWorkspace('ses-1');
+    expect(() => store().resetPane('ses-1', 'pane-1')).not.toThrow();
+    expect(store().workspaces['ses-1']).toBeUndefined();
+  });
+});
+
+describe('replaceConversation — pruning the pane a deleted conversation left behind', () => {
+  const replacement: PaneScope = { kind: 'chat', name: 'New conversation', targetId: 'conv-new', agentPageId: 'agent-1' };
+
+  it('should assign the pane that was showing the deleted conversation to its replacement', () => {
+    store().ensureWorkspace('ses-1', scope());
+    const paneId = grid().activePaneId;
+
+    store().replaceConversation('ses-1', 'conv-1', replacement);
+
+    expect(panesOf(grid()).find((p) => p.id === paneId)?.scope).toEqual(replacement);
+  });
+
+  it('should target the pane holding the OLD id even when it is not the active pane', () => {
+    store().ensureWorkspace('ses-1', scope());
+    const original = grid().activePaneId;
+    store().splitRight('ses-1', original);
+    // The split moved active focus to the new pane; the deleted conversation
+    // is still in the ORIGINAL one.
+    expect(grid().activePaneId).not.toBe(original);
+
+    store().replaceConversation('ses-1', 'conv-1', replacement);
+
+    expect(panesOf(grid()).find((p) => p.id === original)?.scope).toEqual(replacement);
+  });
+
+  it('given a conversation shown nowhere, should no-op', () => {
+    store().ensureWorkspace('ses-1', scope());
+    expect(() => store().replaceConversation('ses-1', 'never-shown', replacement)).not.toThrow();
+    expect(panesOf(grid())[0].scope).toEqual(scope());
+  });
+
+  it('should no-op against a grid that is gone', () => {
+    expect(() => store().replaceConversation('never-existed', 'conv-1', replacement)).not.toThrow();
+  });
+});
+
 describe('a transition aimed at a grid that is gone', () => {
   it('should no-op rather than throw or fabricate one', () => {
     // A close can land after the conversation was deleted and its grid
@@ -199,5 +252,57 @@ describe('openConversation — selection means SHOW it (review M1)', () => {
     expect(panes).toHaveLength(2);
     expect(panes.filter((p) => p.scope?.kind === 'terminal')).toHaveLength(1);
     expect(panes.find((p) => p.scope?.targetId === 'conv-2')).toBeDefined();
+  });
+
+  it('never clobbers a pane whose mint is still in flight (review low-batch #1)', () => {
+    // The active pane is bound to a KIND but has no row yet (the picker just
+    // chose it, the POST hasn't resolved) — picking a DIFFERENT conversation
+    // from history in the meantime must not land on top of it, or the mint's
+    // own success callback later overwrites the user's newer selection.
+    store().openConversation('ses-1', conv('conv-1'));
+    const inFlightPane = panesOf(grid())[0];
+    store().assignPane('ses-1', inFlightPane.id, {
+      kind: 'chat',
+      name: 'New conversation',
+      targetId: null,
+      agentPageId: 'agent-2',
+    });
+
+    store().openConversation('ses-1', conv('conv-2'));
+
+    const panes = panesOf(grid());
+    expect(panes).toHaveLength(2);
+    expect(panes.find((p) => p.id === inFlightPane.id)?.scope?.targetId).toBeNull();
+    expect(panes.find((p) => p.scope?.targetId === 'conv-2')).toBeDefined();
+  });
+});
+
+describe('persistence', () => {
+  it('is versioned, so a future shape change can migrate rather than silently misreading old storage', () => {
+    expect(useAgentWorkspaceStore.persist.getOptions().version).toBe(1);
+  });
+
+  it('drops a corrupted grid on rehydrate rather than letting it reach the store', async () => {
+    const storage = useAgentWorkspaceStore.persist.getOptions().storage;
+    expect(storage).toBeDefined();
+    await storage!.setItem('agent-workspace-storage', {
+      state: {
+        workspaces: {
+          'ses-corrupt': { id: 'ses-corrupt', columns: [], activePaneId: '', pendingPickerPaneId: null },
+          'ses-1': {
+            id: 'ses-1',
+            columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: scope() }] }],
+            activePaneId: 'pane-1',
+            pendingPickerPaneId: null,
+          },
+        },
+      },
+      version: 1,
+    });
+
+    await useAgentWorkspaceStore.persist.rehydrate();
+
+    expect(store().workspaces['ses-corrupt']).toBeUndefined();
+    expect(store().workspaces['ses-1']).toBeDefined();
   });
 });

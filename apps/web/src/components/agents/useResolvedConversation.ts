@@ -51,11 +51,27 @@ export async function createPageConversation({
   agentId,
   driveId,
   canUseSessions,
+  sessionId,
 }: {
   agentId: string;
   driveId: string;
   canUseSessions: boolean;
+  /**
+   * Mint the replacement INTO this session rather than spawning a new one —
+   * set when the conversation being replaced was itself session-bound
+   * (deleting the current conversation must never abandon its session).
+   * Takes priority over `canUseSessions`: reuse is never downgraded to a
+   * fresh spawn.
+   */
+  sessionId?: string | null;
 }): Promise<ResolvedConversation> {
+  if (sessionId) {
+    const conversationId = createId();
+    conversationMessagesActions.seedConversation(conversationId);
+    await post(`/api/ai/page-agents/${encodeURIComponent(agentId)}/conversations`, { conversationId, sessionId });
+    return { conversationId, sessionId };
+  }
+
   if (canUseSessions) {
     try {
       const created = await post<{ session: { sessionId: string }; conversationId: string }>(

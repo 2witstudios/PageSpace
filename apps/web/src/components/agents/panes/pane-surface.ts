@@ -35,7 +35,13 @@ export function resolvePaneSurface(scope: PaneScope | null): PaneSurface {
   // — and, more importantly, from opening a PTY stream it would have to close.
   if (scope.targetId === null) return { surface: 'loading' };
 
-  return scope.kind === 'chat'
-    ? { surface: 'chat', conversationId: scope.targetId, agentPageId: scope.agentPageId }
-    : { surface: 'terminal', shellId: scope.targetId };
+  if (scope.kind === 'chat') return { surface: 'chat', conversationId: scope.targetId, agentPageId: scope.agentPageId };
+  if (scope.kind === 'terminal') return { surface: 'terminal', shellId: scope.targetId };
+
+  // A `kind` this module has never heard of — a stale persisted value that
+  // predates a schema change, or a corrupted store slipping past
+  // `paneScopeSchema` — must never fall through to a live PTY. The old
+  // `scope.kind === 'chat' ? chat : terminal` ternary treated "not chat" as
+  // "therefore terminal," which is exactly backwards for an unknown value.
+  return { surface: 'loading' };
 }
