@@ -96,7 +96,7 @@ import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspa
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore, type Drive } from '@/hooks/useDrive';
 
-const driveFixture = (id: string, name: string): Drive => ({
+const driveFixture = (id: string, name: string, overrides: Partial<Drive> = {}): Drive => ({
   id,
   name,
   slug: name.toLowerCase(),
@@ -106,6 +106,7 @@ const driveFixture = (id: string, name: string): Drive => ({
   createdAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',
   isOwned: true,
+  ...overrides,
 });
 
 interface SessionFixture {
@@ -451,6 +452,39 @@ describe('AgentsSidebar', () => {
       // Every roster drive gets its own spawn affordance, whether or not it has
       // a session — plus the Assistant group's own.
       expect(screen.getAllByText('New session')).toHaveLength(3);
+    });
+
+    test('excludes trashed drives from the roster, matching DriveSwitcher and the multi-drive agents API', async () => {
+      // useDriveStore can legitimately hold trashed drives — useGlobalDriveSocket
+      // refetches with includeTrash: true on drive events — so the roster must
+      // filter them out itself rather than trusting the store's contents.
+      useDriveStore.setState({
+        drives: [driveFixture('drive-1', 'Alpha'), driveFixture('drive-2', 'Gamma', { isTrashed: true })],
+      });
+      respondWithSessions([]);
+      renderSidebar();
+
+      expect(await screen.findByText('Alpha')).toBeDefined();
+      expect(screen.queryByText('Gamma')).toBeNull();
+    });
+
+    test('shows no roster groups for a non-admin — refusal-only, not a dead spawn chooser', () => {
+      // The admin gate must cover the roster too: previously only the
+      // Assistant group's visibility was tied to admin status, so a
+      // non-admin with drives in the persisted store would see every
+      // roster drive's header and "+ New session" row alongside the
+      // refusal notice, each expanding into an empty chooser since
+      // usePageAgents is disabled for them.
+      mockUseAuth.mockReturnValue({ user: { role: 'user' }, isLoading: false });
+      useDriveStore.setState({ drives: [driveFixture('drive-1', 'Alpha')] });
+
+      renderSidebar();
+
+      expect(screen.getByText(/administrator privileges/i)).toBeDefined();
+      expect(screen.queryByText('Alpha')).toBeNull();
+      expect(screen.queryByText('Assistant')).toBeNull();
+      expect(screen.queryByText('New session')).toBeNull();
+      expect(mockFetchWithAuth).not.toHaveBeenCalled();
     });
 
     test('spawning from a roster drive with zero sessions posts its driveId + the chosen agent', async () => {

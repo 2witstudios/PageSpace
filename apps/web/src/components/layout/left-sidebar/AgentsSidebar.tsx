@@ -227,7 +227,15 @@ function SessionList({
   // `agentsByDrive`: that fetch's drive enumeration is an implementation
   // detail of the multi-drive agents feature, and coupling the sidebar's
   // drive list to it would regress silently if that feature's shape changes.
-  const roster = useMemo(() => drives.map((d) => ({ driveId: d.id, driveName: d.name })), [drives]);
+  // Empty for a non-admin (or while auth is still resolving): this is a
+  // refusal-only surface for them, and `useDriveStore` can otherwise hold
+  // trashed drives too — `useGlobalDriveSocket` refetches with
+  // `includeTrash: true` on drive events — so those are filtered out to match
+  // DriveSwitcher and the multi-drive agents API, both active-drives-only.
+  const roster = useMemo(
+    () => (canSpawn ? drives.filter((d) => !d.isTrashed).map((d) => ({ driveId: d.id, driveName: d.name })) : []),
+    [canSpawn, drives],
+  );
 
   // Group by drive in global mode (roster ∪ session-implied drives, Assistant
   // first — see session-groups.ts for the ordering rule); a single implicit
