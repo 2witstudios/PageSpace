@@ -10,6 +10,7 @@ import {
   type ShellIoDeps,
 } from '../shell-io';
 import { appendScrollback, type TerminalSession } from '../terminal-session-map';
+import { MAX_SHELLS_PER_READ, MAX_SCROLLBACK_TAIL_LINES } from '@pagespace/lib/agent-sessions/contract';
 
 function makeSession(over: Partial<TerminalSession> = {}): TerminalSession {
   return {
@@ -89,6 +90,27 @@ describe('handleShellReadRequest — validation', () => {
         { status: 400, error: 'Invalid limit' },
         { status: 400, error: 'Invalid limit' },
       ],
+    });
+  });
+
+  it('given a limit over the contract bound, should refuse with 400 — no unbounded number crosses the hop', async () => {
+    const result = await handleShellReadRequest(deps(), readBody({ limit: MAX_SCROLLBACK_TAIL_LINES + 1 }));
+    assert({
+      given: 'a limit beyond what the byte-capped answer could ever ship',
+      should: 'refuse with 400 rather than accepting an unbounded ask',
+      actual: { status: result.status, error: result.body.error },
+      expected: { status: 400, error: 'Invalid limit' },
+    });
+  });
+
+  it('given more shellIds than one listing can mean, should refuse with 400', async () => {
+    const shellIds = Array.from({ length: MAX_SHELLS_PER_READ + 1 }, (_, index) => `sh-${index}`);
+    const result = await handleShellReadRequest(deps(), readBody({ shellIds }));
+    assert({
+      given: 'a read naming more shells than the sweep bound',
+      should: 'refuse with 400 — a read is a session\'s listing, not a crawl',
+      actual: { status: result.status, error: result.body.error },
+      expected: { status: 400, error: 'Missing or invalid shellIds' },
     });
   });
 });

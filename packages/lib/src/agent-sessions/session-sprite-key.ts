@@ -58,8 +58,18 @@ export function deriveAgentSessionSpriteKey({ tenantId, sessionId, secret }: Age
   if (sessionId.length === 0) {
     throw new Error('deriveAgentSessionSpriteKey requires a non-empty sessionId');
   }
+  // The NUL delimiter only makes the fold injective if neither component can
+  // carry one — enforced, not assumed: without this, {tenant:'a\0b',
+  // session:'c'} and {tenant:'a', session:'b\0c'} derive the SAME key. Both
+  // ids are server-minted cuids today, but this function is the boundary.
+  if (tenantId.includes('\0')) {
+    throw new Error('deriveAgentSessionSpriteKey requires a tenantId without the NUL delimiter');
+  }
+  if (sessionId.includes('\0')) {
+    throw new Error('deriveAgentSessionSpriteKey requires a sessionId without the NUL delimiter');
+  }
   // NUL-delimited so no (tenant, session) pair can be re-spelled as another —
-  // neither component can contain the delimiter.
+  // neither component can contain the delimiter (rejected above).
   const payload = [NAMESPACE_VERSION, tenantId, sessionId].join('\0');
   // codeql[js/insufficient-password-hash] not a password hash — a keyed HMAC over SANDBOX_SESSION_SECRET (a >=32-char server secret, never user input) deriving a deterministic Sprite-name pseudonym, same as machine-session-manager.ts's deriveMachineSessionKey
   const digest = createHmac('sha3-256', secret).update(payload).digest('hex');

@@ -256,7 +256,7 @@ describe('agent sessions relations', () => {
   });
 });
 
-describe('agent_sessions sprite reclaim trigger (0233)', () => {
+describe('agent_sessions sprite reclaim trigger (0238)', () => {
   it('fires AFTER DELETE, per row, on agent_sessions', () => {
     expect(triggerSql).toMatch(/CREATE TRIGGER agent_sessions_sprite_reclaim/);
     expect(triggerSql).toMatch(/AFTER DELETE ON agent_sessions/);

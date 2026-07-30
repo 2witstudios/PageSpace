@@ -1,5 +1,5 @@
 import { pgTable, text, timestamp, boolean, bigint, index, uniqueIndex } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 import { drives } from './core';
@@ -142,6 +142,14 @@ export const agentSessions = pgTable('agent_sessions', {
 }, (table) => ({
   driveIdIdx: index('agent_sessions_drive_id_idx').on(table.driveId),
   ownerIdIdx: index('agent_sessions_owner_id_idx').on(table.ownerId),
+  // The cron scans this exact predicate (`sandbox-storage-billing.ts`,
+  // `agent-session-orphan-reconcile-runtime.ts`): "still believed live". A
+  // partial index keeps it to the live slice rather than a seq scan over
+  // every ended/never-provisioned row, which is the overwhelming majority at
+  // any real scale.
+  liveSpriteIdx: index('agent_sessions_live_sprite_idx')
+    .on(table.sandboxId, table.spriteTornDownAt)
+    .where(sql`${table.sandboxId} IS NOT NULL AND ${table.spriteTornDownAt} IS NULL`),
 }));
 
 /**

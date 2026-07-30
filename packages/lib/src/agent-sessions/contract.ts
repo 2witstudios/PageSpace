@@ -245,6 +245,20 @@ export type ShellBridgeRoute = (typeof SHELL_BRIDGE_ROUTES)[keyof typeof SHELL_B
  * nothing fails until production. One declaration cannot disagree with itself.
  */
 
+/** How many shells one read may ask about — a session's listing, not a crawl. */
+export const MAX_SHELLS_PER_READ = 100;
+
+/** Upper bound on a single stdin write — mirrors the socket path's `MAX_INPUT_BYTES`. */
+export const MAX_SHELL_INPUT_BYTES = 4096;
+
+/**
+ * Upper bound on the requested scrollback tail, in lines. The answer is
+ * byte-capped anyway (`MAX_SCROLLBACK_TAIL_BYTES`) and the ring holds 64 KiB,
+ * so any larger ask is indistinguishable from this one — bounded here so the
+ * wire shape carries no unbounded number at all.
+ */
+export const MAX_SCROLLBACK_TAIL_LINES = 10_000;
+
 /**
  * Opting IN to starting a never-run PTY.
  *
@@ -252,24 +266,31 @@ export type ShellBridgeRoute = (typeof SHELL_BRIDGE_ROUTES)[keyof typeof SHELL_B
  * concurrency slot and begins billing a payer — an effect no caller should get
  * by accident — and `userId` because that start is authorized, metered and
  * audited against a real person, exactly as a socket connect is. A caller that
- * omits them gets the no-start answer.
+ * omits them gets the no-start answer. Whether a start is actually attempted
+ * (userId required with `start: true`, single-addressed reads only) is the
+ * bridge's pure `planSessionStart` decision, not a shape question — the schema
+ * validates each field on its own terms.
  */
-export interface ShellStartRequest {
-  start?: boolean;
-  userId?: string;
-}
+export const shellStartRequestSchema = z.object({
+  start: z.boolean().optional(),
+  userId: z.string().min(1).optional(),
+});
 
-export interface ShellReadPayload extends ShellStartRequest {
+export type ShellStartRequest = z.infer<typeof shellStartRequestSchema>;
+
+export const shellReadPayloadSchema = shellStartRequestSchema.extend({
   /**
    * A list because this endpoint also serves the multi-shell liveness sweep.
    * `read_shell` always names exactly one — and that is load-bearing, not
    * stylistic: the bridge only STARTS a never-run PTY for a single-addressed
    * read, so naming one id is what keeps start-on-first-read working.
    */
-  shellIds: string[];
+  shellIds: z.array(z.string().min(1)).min(1).max(MAX_SHELLS_PER_READ),
   /** Lines of scrollback tail; `0` asks for liveness only. */
-  limit?: number;
-}
+  limit: z.number().int().min(0).max(MAX_SCROLLBACK_TAIL_LINES).optional(),
+});
+
+export type ShellReadPayload = z.infer<typeof shellReadPayloadSchema>;
 
 export interface ShellReadEntry {
   shellId: string;
@@ -300,10 +321,22 @@ export interface ShellReadResult {
   error?: string;
 }
 
-export interface ShellSendPayload extends ShellStartRequest {
-  shellId: string;
-  input: string;
-}
+export const shellSendPayloadSchema = shellStartRequestSchema.extend({
+  shellId: z.string().min(1),
+  // Bounded in BYTES, not code units (multi-byte characters count as what the
+  // PTY receives), and refused rather than truncated: half a command typed
+  // into a live shell is a command the caller never wrote, and the PTY would
+  // run it. `TextEncoder` rather than `Buffer` because this schema is parsed
+  // on both sides of the hop, including in the browser bundle.
+  input: z
+    .string()
+    .min(1)
+    .refine((value) => new TextEncoder().encode(value).length <= MAX_SHELL_INPUT_BYTES, {
+      message: `input exceeds ${MAX_SHELL_INPUT_BYTES} bytes`,
+    }),
+});
+
+export type ShellSendPayload = z.infer<typeof shellSendPayloadSchema>;
 
 export interface ShellSendResult {
   success: boolean;

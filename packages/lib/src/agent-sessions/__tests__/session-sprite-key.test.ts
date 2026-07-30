@@ -54,6 +54,18 @@ describe('deriveAgentSessionSpriteKey', () => {
     expect(a).not.toBe(b);
   });
 
+  it('given a NUL inside tenantId, should throw — a smuggled delimiter re-spells the pair', () => {
+    // Without the guard, {tenant:'a\0b', session:'c'} and {tenant:'a',
+    // session:'b\0c'} fold to the SAME payload and therefore the same Sprite
+    // name. Both ids are server-minted cuids today, but this function is the
+    // security boundary, so injectivity is enforced here, not assumed.
+    expect(() => deriveAgentSessionSpriteKey({ ...base, tenantId: 'a\0b', sessionId: 'c' })).toThrow(/tenantId/);
+  });
+
+  it('given a NUL inside sessionId, should throw — the other half of the same collision', () => {
+    expect(() => deriveAgentSessionSpriteKey({ ...base, tenantId: 'a', sessionId: 'b\0c' })).toThrow(/sessionId/);
+  });
+
   it('given an empty secret, should throw (fail closed — never derive an unkeyed name)', () => {
     expect(() => deriveAgentSessionSpriteKey({ ...base, secret: '' })).toThrow(/secret/);
   });
