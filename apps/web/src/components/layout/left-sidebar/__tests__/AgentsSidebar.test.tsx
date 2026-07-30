@@ -407,5 +407,51 @@ describe('AgentsSidebar', () => {
       // The drive name resolves through the agents-by-drive fetch.
       expect(screen.getByText('Alpha')).toBeDefined();
     });
+
+    test('the Assistant group exists with zero sessions, and spawning it is ONE click', async () => {
+      // The affordance to start an assistant session IS the group — and there
+      // is no agent to choose (the assistant is the counterpart), so the click
+      // spawns directly with the both-null shape.
+      mockPost.mockResolvedValue({ session: { sessionId: 'ses-a' }, conversationId: 'conv-a' });
+      respondWithSessions([]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      expect(await screen.findByText('Assistant')).toBeDefined();
+      await user.click(screen.getByText('New session'));
+
+      await waitFor(() => expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {}));
+      await waitFor(() => expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-a'));
+      expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-a');
+      expect(useAgentSurfaceStore.getState().selectedAgentId).toBeNull();
+    });
+
+    test('a new conversation in an assistant session goes through the session-centric creator', async () => {
+      // The assistant has no agent page, so the page-agents route has nothing
+      // to hang it on — the session route is the path.
+      mockPost.mockResolvedValue({ conversationId: 'conv-new' });
+      respondWithSessions([
+        {
+          ...SESSION,
+          sessionId: 'ses-g',
+          driveId: null,
+          name: 'assistant session',
+          conversations: [{ conversationId: 'conv-g', title: 'Thread', agentPageId: null }],
+        },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('assistant session');
+      await user.click(screen.getByLabelText('New conversation in this session'));
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions/ses-g/conversations', {}),
+      );
+      await waitFor(() =>
+        expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-new'),
+      );
+      expect(useAgentSurfaceStore.getState().selectedAgentId).toBeNull();
+    });
   });
 });

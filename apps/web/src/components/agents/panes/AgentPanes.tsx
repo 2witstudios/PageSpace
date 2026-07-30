@@ -113,12 +113,17 @@ export default function AgentPanes({ sessionId, driveId, initialConversation, on
       assignPane(sessionId, paneId, { kind: 'chat', name: 'New conversation', targetId: null, agentPageId });
       try {
         if (agentPageId === null) {
-          throw new Error('Global-assistant panes are not available yet.');
+          // The ASSISTANT: no agent page, so the session-centric creator is
+          // the path (page-agents has no page to hang this on).
+          await post(`/api/agent-sessions/${encodeURIComponent(sessionId)}/conversations`, {
+            conversationId,
+          });
+        } else {
+          await post(`/api/ai/page-agents/${encodeURIComponent(agentPageId)}/conversations`, {
+            conversationId,
+            sessionId,
+          });
         }
-        await post(`/api/ai/page-agents/${encodeURIComponent(agentPageId)}/conversations`, {
-          conversationId,
-          sessionId,
-        });
         assignPane(sessionId, paneId, { kind: 'chat', name: 'New conversation', targetId: conversationId, agentPageId });
       } catch (error) {
         console.error('Failed to start a conversation in this pane:', error);
@@ -201,6 +206,9 @@ export default function AgentPanes({ sessionId, driveId, initialConversation, on
             <PanePicker
               agents={pickableAgents}
               isLoading={driveId !== null && agentsLoading}
+              // The assistant identity path is live (AssistantSessionChat), so
+              // every session can host an assistant thread beside its agents.
+              canPickAssistant
               autoFocus={workspace.pendingPickerPaneId === pane.id}
               onPickAgent={(agentPageId) => void handlePickAgent(pane.id, agentPageId)}
               onPickShell={() => void handlePickShell(pane.id)}

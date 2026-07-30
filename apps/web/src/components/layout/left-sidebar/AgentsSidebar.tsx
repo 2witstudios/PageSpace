@@ -225,16 +225,25 @@ function SessionList({
     onRetry,
   });
 
-  // Group by drive in global mode; a single implicit group in drive mode.
+  const canSpawn = isAdmin && !authLoading;
+  // The Assistant group exists in global mode even with zero sessions — the
+  // affordance to start one IS the group. Not while loading or on a dead
+  // fetch, though: an offer to spawn under a spinner would remount mid-click.
+  const showEmptyAssistantGroup = !driveId && canSpawn && !isLoading && !(hasError && sessions.length === 0);
+
+  // Group by drive in global mode (Assistant first — it is the user's own);
+  // a single implicit group in drive mode.
   const groups = useMemo(() => {
     if (driveId) return sessions.length > 0 || notice === null ? [{ driveId, sessions }] : [];
-    const byDrive = new Map<string, SessionListEntry[]>();
+    const byDrive = new Map<string, SessionListEntry[]>(
+      showEmptyAssistantGroup ? [['global', []]] : [],
+    );
     for (const session of sessions) {
       const key = session.driveId ?? 'global';
       byDrive.set(key, [...(byDrive.get(key) ?? []), session]);
     }
     return [...byDrive.entries()].map(([id, list]) => ({ driveId: id, sessions: list }));
-  }, [driveId, sessions, notice]);
+  }, [driveId, sessions, notice, showEmptyAssistantGroup]);
 
   const driveTitle = useCallback(
     (id: string) => {
@@ -243,8 +252,6 @@ function SessionList({
     },
     [agentsByDrive],
   );
-
-  const canSpawn = isAdmin && !authLoading;
 
   return (
     <div className="space-y-2">
@@ -307,19 +314,23 @@ function SessionRow({ session, onChanged }: { session: SessionListEntry; onChang
   }, [openConversation, session.conversations]);
 
   const newConversation = useCallback(async () => {
-    const first = session.conversations[0];
-    // A new thread needs an agent; default to the session's most recent
-    // conversation's agent — the full drive picker lives in the pane grid.
-    const agentPageId = first?.agentPageId;
-    if (!agentPageId) {
-      toast.error('Open the session and use a pane to start a conversation.');
-      return;
-    }
+    // A new thread defaults to the session's most recent conversation's
+    // counterpart — the full drive picker lives in the pane grid. A null
+    // agent (a global session, or a drive session whose latest thread is an
+    // assistant thread) means the ASSISTANT, created through the
+    // session-centric route since it has no agent page.
+    const agentPageId = session.conversations[0]?.agentPageId ?? null;
     try {
-      const created = await post<{ conversationId: string }>(
-        `/api/ai/page-agents/${encodeURIComponent(agentPageId)}/conversations`,
-        { sessionId: session.sessionId },
-      );
+      const created =
+        agentPageId === null
+          ? await post<{ conversationId: string }>(
+              `/api/agent-sessions/${encodeURIComponent(session.sessionId)}/conversations`,
+              {},
+            )
+          : await post<{ conversationId: string }>(
+              `/api/ai/page-agents/${encodeURIComponent(agentPageId)}/conversations`,
+              { sessionId: session.sessionId },
+            );
       onChanged();
       selectConversation({
         sessionId: session.sessionId,
@@ -442,9 +453,13 @@ function SessionRow({ session, onChanged }: { session: SessionListEntry; onChang
 }
 
 /**
- * "+ New session": one act — pick the agent, and the server mints the session
- * WITH its first conversation (a session is never empty). The chooser is the
- * drive's agent list inline; the same choice the pane picker offers on a split.
+ * "+ New session": one act — the server mints the session WITH its first
+ * conversation (a session is never empty).
+ *
+ * Two shapes, matching the two session kinds: a DRIVE row opens an inline
+ * agent chooser (the same choice the pane picker offers on a split) and spawns
+ * with that agent; the ASSISTANT row (`driveId null`) has nothing to choose —
+ * the assistant IS the counterpart — so the click spawns directly.
  */
 function NewSessionRow({
   driveId,
@@ -465,13 +480,14 @@ function NewSessionRow({
   );
 
   const spawn = useCallback(
-    async (agentPageId: string) => {
-      if (spawning || driveId === null) return;
+    async (agentPageId: string | null) => {
+      if (spawning) return;
       setSpawning(true);
       try {
         const created = await post<{ session: { sessionId: string }; conversationId: string }>(
           '/api/agent-sessions',
-          { driveId, agentPageId },
+          // Both-null is the global-assistant spawn shape.
+          agentPageId === null ? {} : { driveId, agentPageId },
         );
         setChoosing(false);
         onSpawned();
@@ -494,18 +510,13 @@ function NewSessionRow({
     [driveId, onSpawned, selectConversation, spawning],
   );
 
-  if (driveId === null) {
-    // Global-assistant sessions await the assistant identity path (Phase R2 on
-    // the epic); offering a spawn with no renderer would be a dead menu item.
-    return null;
-  }
-
   return (
     <div>
       <button
         type="button"
-        className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
-        onClick={() => setChoosing((value) => !value)}
+        disabled={spawning}
+        className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+        onClick={() => (driveId === null ? void spawn(null) : setChoosing((value) => !value))}
       >
         <Plus className="size-3.5" />
         New session

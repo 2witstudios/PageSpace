@@ -8,13 +8,13 @@
  * here, which is also what lets one grid hold conversations with different
  * agents side by side.
  *
- * A null `agentPageId` is a global-assistant conversation; its identity path
- * does not exist yet (tracked on the epic, Phase R2), so it renders a plain
- * notice rather than a broken chat — the pane picker does not offer it until
- * that path lands (`canPickAssistant` defaults false).
+ * A null `agentPageId` is the GLOBAL ASSISTANT: no page to resolve, so no
+ * resolution step — `AssistantSessionChat` reads its identity from the
+ * assistant settings store and rides the global chat pipeline.
  */
 
 import { Loader2 } from 'lucide-react';
+import AssistantSessionChat from '../chat/AssistantSessionChat';
 import SessionChat from '../chat/SessionChat';
 import { useResolvedAgent } from '../useResolvedAgent';
 
@@ -25,14 +25,12 @@ export default function PaneChat({
   conversationId: string;
   agentPageId: string | null;
 }) {
+  // Hook order is safe across the branch: the hook itself branches on a null
+  // id (null SWR keys), so it runs unconditionally either way.
   const { agent, isLoading } = useResolvedAgent(agentPageId);
 
   if (agentPageId === null) {
-    return (
-      <div className="flex h-full items-center justify-center p-4 text-center text-sm text-muted-foreground">
-        Global assistant conversations are not available in panes yet.
-      </div>
-    );
+    return <AssistantSessionChat conversationId={conversationId} context="console" />;
   }
 
   if (isLoading || !agent) {

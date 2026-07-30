@@ -8,13 +8,10 @@
  *   conversation exists, is someone else's, or was never minted — so a probe
  *   learns nothing from it.
  *
- * POST   → 200 { session } — ensure the row + provision its sandbox,
- *   idempotent by the PK (a re-POST resumes). No body: the session's whole
- *   identity is READ off the conversation row (sessionId ≡ conversationId;
- *   anchor via the pure `sessionAnchorForConversation`), never claimed by a
- *   client. The row's owner is the CONVERSATION's owner even when a shared
- *   requester ensures first — otherwise the owner would flunk their own
- *   session's ownership cross-check forever.
+ * POST   → 200 { session } — provision the EXISTING session's sandbox,
+ *   idempotent by the session id (a re-POST resumes). No body: sessions are
+ *   born through the collection route's spawn; this route never mints one, so
+ *   an unknown id is a 404, not an ensure.
  *
  * DELETE → 200 { ok, spriteTornDown } — end the session: instance-guarded
  *   Sprite kill, row RETAINED (re-provisionable under the same key). Gated by

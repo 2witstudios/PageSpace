@@ -169,9 +169,28 @@ describe('POST /api/agent-sessions — spawn', () => {
     // the absence is structural.
   });
 
-  it('refuses a spawn without a drive and agent — the assistant path is not live yet', async () => {
+  it('spawns a GLOBAL-ASSISTANT session from the both-null shape', async () => {
     const response = await spawn({});
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(201);
+    const body = await response.json();
+    expect(typeof body.conversationId).toBe('string');
+    expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: null, name: null });
+    // The first conversation is an assistant thread: no agent page.
+    expect(mockCreateConversationInSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agentPageId: null, sessionId: 'ses-new' }),
+    );
+    // And the access decision saw the global subject (driveId null → owner-only).
+    expect(mockCheckAccessForSubject).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ driveId: null }),
+    );
+  });
+
+  it('refuses the half-specified shapes — an agent needs its drive, a drive needs an agent', async () => {
+    for (const body of [{ driveId: 'drive-1' }, { agentPageId: 'agent-1' }]) {
+      const response = await spawn(body);
+      expect(response.status).toBe(400);
+    }
     expect(mockSpawnSession).not.toHaveBeenCalled();
   });
 

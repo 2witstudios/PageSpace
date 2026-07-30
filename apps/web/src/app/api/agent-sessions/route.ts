@@ -88,16 +88,24 @@ export async function GET(request: Request) {
  *
  * One act, per the lifecycle invariant: a session is born with its first
  * conversation, so this creates the workspace row AND a conversation already
- * bound to it. The conversation's agent is the caller's choice (`agentPageId`;
- * omitted/null is reserved for the global assistant, which this route refuses
- * until its identity path lands — the client's picker does not offer it).
+ * bound to it. Two shapes, matching the two session kinds:
+ *
+ * - `{ driveId, agentPageId }` — a DRIVE session, first conversation with that
+ *   drive agent.
+ * - `{}` (both null/omitted) — a GLOBAL-ASSISTANT session: no drive, first
+ *   conversation is a `type: 'global'` assistant thread. Owner-only by the
+ *   access decision (there is no drive whose membership could admit anyone
+ *   else).
+ *
+ * Half-specified shapes are refused: an agent without its drive is
+ * unresolvable, and a drive without an agent would mint an empty session.
  *
  * Spawn is instant and free: NO sandbox is provisioned here. The first tool
  * call or shell open provisions lazily through the one shared path.
  *
- * Access: spawning into a drive requires drive membership + the code-execution
- * capability — the same pure decision every session surface uses, applied to
- * the row-to-be.
+ * Access: the same pure decision every session surface uses, applied to the
+ * row-to-be — drive membership + code-execution for a drive session, owner +
+ * code-execution for a global one.
  */
 export async function POST(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
@@ -114,11 +122,12 @@ export async function POST(request: Request) {
     typeof body.agentPageId === 'string' && body.agentPageId.length > 0 ? body.agentPageId : null;
   const name = typeof body.name === 'string' && body.name.trim().length > 0 ? body.name.trim() : null;
 
-  if (driveId === null || agentPageId === null) {
-    // Global-assistant sessions (null drive) are Phase R2's identity work;
-    // until then a spawn is always drive-scoped with a concrete agent.
+  if ((driveId === null) !== (agentPageId === null)) {
+    // Half-specified: an agent without its drive is unresolvable, and a drive
+    // without an agent would mint an empty session. Both-null is the
+    // global-assistant spawn; both-present is the drive spawn.
     return NextResponse.json(
-      { error: 'A session needs a drive and an agent to start with' },
+      { error: 'A session needs a drive and an agent to start with, or neither for the assistant' },
       { status: 400 },
     );
   }
@@ -133,11 +142,14 @@ export async function POST(request: Request) {
       eventType: 'authz.access.denied',
       userId: auth.userId,
       resourceType: 'agent_session',
-      resourceId: driveId,
+      resourceId: driveId ?? 'global',
       details: { reason: access.reason, method: 'POST', route: 'agent-sessions' },
       riskScore: 0.5,
     });
-    return NextResponse.json({ error: 'You cannot start a session in this drive' }, { status: 403 });
+    return NextResponse.json(
+      { error: driveId ? 'You cannot start a session in this drive' : 'You cannot start an assistant session' },
+      { status: 403 },
+    );
   }
 
   const spawned = await spawnSession({ userId: auth.userId, driveId, name });
