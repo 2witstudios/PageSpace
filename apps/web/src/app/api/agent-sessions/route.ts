@@ -191,13 +191,9 @@ export async function POST(request: Request) {
 
   const activeCount = await countActiveSessionsForOwner(auth.userId);
   if (activeCount >= MAX_ACTIVE_SESSIONS_PER_OWNER) {
-    return sessionQuotaExceeded(
-      request,
-      auth.userId,
-      'about-to-be-minted',
-      'agent-sessions',
-      `You have ${activeCount} active sessions — end some before starting more.`,
-    );
+    return sessionQuotaExceeded(request, auth.userId, 'about-to-be-minted', 'agent-sessions', {
+      message: `You have ${activeCount} active sessions — end some before starting more.`,
+    });
   }
 
   const access = await checkAccessForSubject(auth.userId, {

@@ -21,6 +21,22 @@ export interface SessionRefreshResult {
   shouldLogout: boolean;
 }
 
+/**
+ * Thrown by `fetchJSON`/`post`/etc. on a non-2xx response. A plain `Error`
+ * loses the status code the moment it's thrown, which callers need to tell a
+ * quota refusal (429) apart from a capability one (403) — `instanceof Error`
+ * still holds for every existing catch site.
+ */
+export class ApiRequestError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiRequestError';
+    this.status = status;
+  }
+}
+
 class AuthFetch {
   private isRefreshing = false;
   private refreshQueue: QueuedRequest[] = [];
@@ -1147,11 +1163,11 @@ class AuthFetch {
       // Try to parse JSON error response and extract error message
       try {
         const json = JSON.parse(text);
-        throw new Error(json.error || json.message || text);
+        throw new ApiRequestError(json.error || json.message || text, response.status);
       } catch (parseError) {
         // If parsing fails, it's not JSON - use the raw text
         if (parseError instanceof SyntaxError) {
-          throw new Error(text);
+          throw new ApiRequestError(text, response.status);
         }
         // Re-throw if it's our Error from above
         throw parseError;

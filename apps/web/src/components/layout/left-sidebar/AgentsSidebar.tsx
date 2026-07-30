@@ -23,6 +23,7 @@ import { usePageAgents, type DriveWithAgents } from '@/hooks/page-agents/usePage
 import { useAgentSurfaceStore, SHEET_BREAKPOINT_QUERY } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { fetchWithAuth, post, del } from '@/lib/auth/auth-fetch';
+import { groupSessionsByDrive, ASSISTANT_GROUP_KEY } from './session-groups';
 
 /**
  * The Agents console's left sidebar: **Drive → Session → conversations.**
@@ -222,23 +223,17 @@ function SessionList({
   // fetch, though: an offer to spawn under a spinner would remount mid-click.
   const showEmptyAssistantGroup = !driveId && canSpawn && !isLoading && !(hasError && sessions.length === 0);
 
-  // Group by drive in global mode (Assistant first — it is the user's own);
-  // a single implicit group in drive mode.
+  // Group by drive in global mode (Assistant first — it is the user's own,
+  // sorted there deterministically rather than by fetch order); a single
+  // implicit group in drive mode.
   const groups = useMemo(() => {
     if (driveId) return sessions.length > 0 || notice === null ? [{ driveId, sessions }] : [];
-    const byDrive = new Map<string, SessionListEntry[]>(
-      showEmptyAssistantGroup ? [['global', []]] : [],
-    );
-    for (const session of sessions) {
-      const key = session.driveId ?? 'global';
-      byDrive.set(key, [...(byDrive.get(key) ?? []), session]);
-    }
-    return [...byDrive.entries()].map(([id, list]) => ({ driveId: id, sessions: list }));
+    return groupSessionsByDrive(sessions, { seedEmptyAssistantGroup: showEmptyAssistantGroup });
   }, [driveId, sessions, notice, showEmptyAssistantGroup]);
 
   const driveTitle = useCallback(
     (id: string) => {
-      if (id === 'global') return 'Assistant';
+      if (id === ASSISTANT_GROUP_KEY) return 'Assistant';
       return agentsByDrive.find((entry) => entry.driveId === id)?.driveName ?? id;
     },
     [agentsByDrive],
@@ -255,7 +250,7 @@ function SessionList({
             <SessionRow key={session.sessionId} session={session} onChanged={onChanged} />
           ))}
           <NewSessionRow
-            driveId={group.driveId === 'global' ? null : group.driveId}
+            driveId={group.driveId === ASSISTANT_GROUP_KEY ? null : group.driveId}
             agentsByDrive={agentsByDrive}
             onSpawned={onChanged}
           />
@@ -374,7 +369,17 @@ function SessionRow({ session, onChanged }: { session: SessionListEntry; onChang
           {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
         </button>
         <button type="button" className="flex min-w-0 flex-1 items-center gap-1.5 text-left" onClick={openSession}>
-          {isRunning && <span aria-label="Sandbox running" className="size-1.5 shrink-0 rounded-full bg-emerald-500" />}
+          {isRunning && (
+            // `role="img"` gives the span an accessible-name-bearing role — a
+            // plain `<span aria-label>` is not announced by most screen
+            // readers, since aria-label is only honoured on elements with a
+            // role that supports naming.
+            <span
+              role="img"
+              aria-label="Sandbox running"
+              className="size-1.5 shrink-0 rounded-full bg-emerald-500"
+            />
+          )}
           <span className="truncate">{session.name || 'Session'}</span>
         </button>
         <button

@@ -283,6 +283,15 @@ describe('AgentsSidebar', () => {
       await screen.findByText('api refactor');
       expect(screen.queryByLabelText('Sandbox running')).toBeNull();
     });
+
+    test('is announced as an image with its name — a plain span aria-label is not announced by most screen readers', async () => {
+      renderSidebar();
+      await screen.findByText('api refactor');
+      // getByRole('img', {name}) only matches elements a screen reader would
+      // actually announce as a named object — the bar a bare aria-label span
+      // fails.
+      expect(screen.getByRole('img', { name: 'Sandbox running' })).toBeDefined();
+    });
   });
 
   describe('new conversation in a session', () => {
@@ -424,6 +433,29 @@ describe('AgentsSidebar', () => {
       await waitFor(() => expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-a'));
       expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-a');
       expect(useAgentSurfaceStore.getState().selectedAgentId).toBeNull();
+    });
+
+    test('the Assistant group sorts first even when a drive session arrives before it in the fetch', async () => {
+      // Assistant first because it's the user's own — not because
+      // `showEmptyAssistantGroup` happened to seed the Map before this drive
+      // session was iterated. Here there's no empty-group seed at all: an
+      // assistant session is already present, ahead of the map-insertion-order
+      // bug this pins.
+      respondWithSessions([
+        SESSION,
+        {
+          ...SESSION,
+          sessionId: 'ses-g',
+          driveId: null,
+          name: 'assistant session',
+          conversations: [{ conversationId: 'conv-g', title: 'Thread', agentPageId: null }],
+        },
+      ]);
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      const headers = screen.getAllByText(/^(Alpha|Assistant)$/);
+      expect(headers.map((el) => el.textContent)).toEqual(['Assistant', 'Alpha']);
     });
 
     test('a new conversation in an assistant session goes through the session-centric creator', async () => {

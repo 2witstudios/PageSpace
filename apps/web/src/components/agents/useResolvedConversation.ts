@@ -22,13 +22,21 @@
  * Only the INITIAL value: once resolved, the caller owns switching
  * conversations (history select, new, delete) as plain local state — this
  * hook never re-resolves for an agentId it has already settled.
+ *
+ * `authLoading` gates the FIRST resolve: on a hard refresh `useAuth` starts
+ * out loading, so `canUseSessions` reads as false before the role is known.
+ * Resolving anyway would mint a fresh agent's first conversation as a PLAIN
+ * one — and thread→session binding is congenital and permanent, so that
+ * conversation could never gain a grid afterward. Waiting costs nothing: the
+ * caller is already rendering its own loading state for an unresolved auth.
  */
 import { useEffect, useRef, useState } from 'react';
 import { createId } from '@paralleldrive/cuid2';
 import { fetchMostRecentAgentConversation, createAgentConversation } from '@/lib/ai/shared/agent-conversations';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
-import { post } from '@/lib/auth/auth-fetch';
+import { post, ApiRequestError } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
+import { classifySpawnRefusal } from './spawn-refusal';
 
 export interface ResolvedConversation {
   conversationId: string;
@@ -83,8 +91,16 @@ export async function createPageConversation({
     } catch (error) {
       // The role gate is a cheap client-side approximation; the server's
       // access decision (drive membership + code-execution) is the truth.
-      // A refusal means "no workspace for you", not "no conversation".
+      // A refusal means "no workspace for you", not "no conversation" — but
+      // QUOTA is worth interrupting the user for (they have the capability
+      // and simply ran out of allowance); every other refusal degrades
+      // silently, the same as a role that hasn't loaded yet.
+      const status = error instanceof ApiRequestError ? error.status : undefined;
+      const refusal = classifySpawnRefusal(status, error instanceof Error ? error.message : null);
       console.warn('Session spawn refused; falling back to a plain conversation:', error);
+      if (refusal.kind === 'quota') {
+        toast.error('Workspace unavailable — plain chat', { description: refusal.message });
+      }
     }
   }
 
@@ -96,7 +112,7 @@ export async function createPageConversation({
 
 export function useResolvedConversation(
   agentId: string,
-  { driveId, canUseSessions }: { driveId: string; canUseSessions: boolean },
+  { driveId, canUseSessions, authLoading }: { driveId: string; canUseSessions: boolean; authLoading: boolean },
 ): UseResolvedConversationResult {
   const [resolved, setResolved] = useState<ResolvedConversation | null>(null);
   const resolvingAgentIdRef = useRef<string | null>(null);
@@ -106,8 +122,25 @@ export function useResolvedConversation(
   canUseSessionsRef.current = canUseSessions;
   const driveIdRef = useRef(driveId);
   driveIdRef.current = driveId;
+  // The agentId resolution has already been KICKED OFF for. `authLoading` is
+  // in the effect's deps only so a still-loading mount can wait for it once —
+  // not so every later loading blip (token refresh, forced reload) restarts
+  // resolution and clobbers a conversation the user is already typing into.
+  const startedForAgentIdRef = useRef<string | null>(null);
 
   useEffect(() => {
+    // `user` (and so `canUseSessions`) is undefined/false while auth is still
+    // loading. Resolving now would mint a fresh agent's first conversation as
+    // a PLAIN one — and thread→session binding is congenital and permanent,
+    // so a hard refresh could never give it a grid afterward. Wait it out;
+    // the ref above already guarantees the capability read at resolve time is
+    // the settled one.
+    if (authLoading) return;
+    // Already started (or finished) for this exact agent — a later
+    // authLoading flip is not a reason to redo it.
+    if (startedForAgentIdRef.current === agentId) return;
+    startedForAgentIdRef.current = agentId;
+
     resolvingAgentIdRef.current = agentId;
     setResolved(null);
 
@@ -149,7 +182,7 @@ export function useResolvedConversation(
       }
     };
     void resolve();
-  }, [agentId]);
+  }, [agentId, authLoading]);
 
   return { resolved, isLoading: resolved === null };
 }

@@ -113,7 +113,9 @@ export async function POST(request: Request, context: RouteContext) {
       // A plan-limit refusal is not an access denial — separate response and
       // separate audit event (see quotaExceeded).
       if (provisioned.denial === 'session_limit_reached') {
-        return sessionQuotaExceeded(request, auth.userId, sessionId, 'agent-sessions/[sessionId]/shells', provisioned.detail);
+        return sessionQuotaExceeded(request, auth.userId, sessionId, 'agent-sessions/[sessionId]/shells', {
+          reasonCode: provisioned.detail,
+        });
       }
       return denied(request, auth.userId, sessionId, provisioned.denial ?? 'denied');
     }

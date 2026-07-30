@@ -12,8 +12,18 @@
  * perfectly well to whoever wrote it. Only a reader who knows the convention
  * would catch it, and conventions with no test decay.
  */
-import { describe, it, expect } from 'vitest';
-import { SESSION_QUOTA_MESSAGE } from '../quota-response';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import {
+  SESSION_QUOTA_MESSAGE,
+  SESSION_CONVERSATION_LIMIT_MESSAGE,
+  sessionQuotaExceeded,
+  sessionConversationLimitExceeded,
+} from '../quota-response';
+
+const mockAuditRequest = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: (...args: unknown[]) => mockAuditRequest(...args),
+}));
 
 describe('SESSION_QUOTA_MESSAGE', () => {
   it('should not use the backend vocabulary a human never sees', () => {
@@ -25,5 +35,112 @@ describe('SESSION_QUOTA_MESSAGE', () => {
     // this one clears by stopping a sandbox, never by waiting.
     expect(SESSION_QUOTA_MESSAGE.toLowerCase()).toContain('sandbox');
     expect(SESSION_QUOTA_MESSAGE.toLowerCase()).toMatch(/stop|end/);
+  });
+});
+
+describe('sessionQuotaExceeded', () => {
+  const request = new Request('https://example.test/api/agent-sessions/ses-1');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("a provisioner's raw diagnostic code NEVER reaches the response body — the human sentence does", async () => {
+    // Mutation check: this is the live P1 PR #2253 caught — the provisioner's
+    // denial always sets a diagnostic enum (`quota.reason`, e.g.
+    // 'concurrency_limit'), so restoring the old `detail ?? SESSION_QUOTA_MESSAGE`
+    // shape (feeding that enum straight into `error`) makes this assertion fail:
+    // the body would read 'concurrency_limit' instead of the sandbox sentence.
+    const response = sessionQuotaExceeded(request, 'user-1', 'ses-1', 'agent-sessions/[sessionId]', {
+      reasonCode: 'concurrency_limit',
+    });
+
+    expect(response.status).toBe(429);
+    const body = await response.json();
+    expect(body.error).toBe(SESSION_QUOTA_MESSAGE);
+    expect(body.error).not.toContain('concurrency_limit');
+  });
+
+  it('records the diagnostic code in the audit row, not the response', () => {
+    sessionQuotaExceeded(request, 'user-1', 'ses-1', 'agent-sessions/[sessionId]', {
+      reasonCode: 'concurrency_limit',
+    });
+
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      request,
+      expect.objectContaining({
+        eventType: 'security.rate.limited',
+        details: expect.objectContaining({
+          reason: 'session_limit_reached',
+          route: 'agent-sessions/[sessionId]',
+          reasonCode: 'concurrency_limit',
+        }),
+      }),
+    );
+  });
+
+  it('an already-human message override (e.g. a live count) is used verbatim — not replaced by the generic sentence', async () => {
+    const response = sessionQuotaExceeded(request, 'user-1', 'about-to-be-minted', 'agent-sessions', {
+      message: 'You have 100 active sessions — end some before starting more.',
+    });
+
+    const body = await response.json();
+    expect(body.error).toBe('You have 100 active sessions — end some before starting more.');
+  });
+
+  it('with neither reasonCode nor message, falls back to the generic sentence and audits no reason code', () => {
+    const response = sessionQuotaExceeded(request, 'user-1', 'ses-1', 'agent-sessions/[sessionId]');
+
+    return response.json().then((body) => {
+      expect(body.error).toBe(SESSION_QUOTA_MESSAGE);
+      const [, details] = mockAuditRequest.mock.calls[0];
+      expect(details.details).not.toHaveProperty('reasonCode');
+    });
+  });
+});
+
+describe('sessionConversationLimitExceeded', () => {
+  // The PER-SESSION conversation ceiling (`SessionFullError`, PR #2269) — a
+  // second quota refusal added to this file alongside the sandbox-count one
+  // above. It takes no `detail`/`reasonCode` parameter at all today, so there
+  // is currently no path for a diagnostic enum to reach its body — this pins
+  // that shape so it can't regress the same way `sessionQuotaExceeded` did:
+  // the body is ALWAYS the fixed human sentence, never anything computed or
+  // passed through from a caller.
+  const request = new Request('https://example.test/api/agent-sessions/ses-1/conversations');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('always answers with the fixed human sentence — there is no parameter that could leak a diagnostic code', async () => {
+    const response = sessionConversationLimitExceeded(
+      request,
+      'user-1',
+      'ses-1',
+      'agent-sessions/[sessionId]/conversations',
+    );
+
+    expect(response.status).toBe(429);
+    const body = await response.json();
+    expect(body.error).toBe(SESSION_CONVERSATION_LIMIT_MESSAGE);
+    // Guards against ever widening the signature to accept a raw code and
+    // splicing it into the body the way the sandbox-quota path once did.
+    expect(sessionConversationLimitExceeded.length).toBeLessThanOrEqual(4);
+  });
+
+  it('records the conversation-limit reason in the audit row, distinct from the sandbox-quota reason', () => {
+    sessionConversationLimitExceeded(request, 'user-1', 'ses-1', 'agent-sessions/[sessionId]/conversations');
+
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      request,
+      expect.objectContaining({
+        eventType: 'security.rate.limited',
+        details: expect.objectContaining({
+          reason: 'session_conversation_limit_reached',
+          route: 'agent-sessions/[sessionId]/conversations',
+        }),
+      }),
+    );
   });
 });

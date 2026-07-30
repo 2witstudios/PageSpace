@@ -69,7 +69,7 @@ export interface AgentPageViewProps {
 }
 
 export default function AgentPageView({ page }: AgentPageViewProps) {
-  const { user } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
   // The same gate every session surface uses — the server still decides
   // (drive membership + code-execution) on every spawn.
   const canUseSessions = user?.role === 'admin';
@@ -77,6 +77,10 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   const { resolved: initialResolved } = useResolvedConversation(page.id, {
     driveId: page.driveId,
     canUseSessions,
+    // A hard refresh starts `user` (and so `canUseSessions`) undefined/false
+    // before the role loads — resolving then would mint the agent's first
+    // conversation as permanently session-less. Wait it out.
+    authLoading,
   });
   const [override, setOverride] = useState<ResolvedConversation | null>(null);
   // The conversation on screen: the user's own switching (history select, new,
