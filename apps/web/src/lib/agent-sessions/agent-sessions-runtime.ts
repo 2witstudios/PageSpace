@@ -19,7 +19,7 @@
 
 import { db } from '@pagespace/db/db';
 import { and, desc, eq, isNotNull } from '@pagespace/db/operators';
-import { pages, drives } from '@pagespace/db/schema/core';
+import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
@@ -120,15 +120,6 @@ export function getSandboxHost(): Promise<SandboxHost> {
 // Row-fact lookups (null-plumbing only)
 // ---------------------------------------------------------------------------
 
-/** The agent page's drive, or null when the page (or its drive) cannot be resolved. */
-export async function resolveAgentPageDriveId(agentPageId: string): Promise<string | null> {
-  const page = await db.query.pages.findFirst({
-    where: eq(pages.id, agentPageId),
-    columns: { driveId: true },
-  });
-  return page?.driveId ?? null;
-}
-
 /**
  * The tenant a session's Sprite key folds under: the agent page's drive OWNER
  * for a page-anchored session, the session owner themself for a global one
@@ -145,22 +136,6 @@ export async function resolveSessionTenantId(session: {
     columns: { ownerId: true },
   });
   return drive?.ownerId ?? session.ownerId;
-}
-
-export interface SessionConversationFacts {
-  userId: string;
-  type: string;
-  contextId: string | null;
-  isShared: boolean;
-}
-
-/** The conversation row's identity facts, or null when it does not exist. */
-export async function findSessionConversation(
-  conversationId: string,
-): Promise<SessionConversationFacts | null> {
-  const row = await conversationRepository.getConversation(conversationId);
-  if (!row) return null;
-  return { userId: row.userId, type: row.type, contextId: row.contextId, isShared: row.isShared };
 }
 
 export async function findSessionRecord(sessionId: string): Promise<AgentSessionRecord | null> {
