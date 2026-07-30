@@ -1688,6 +1688,13 @@
       "when": 1785393248827,
       "tag": "0240_naive_annihilus",
       "breakpoints": true
+    },
+    {
+      "idx": 241,
+      "version": "7",
+      "when": 1785427057198,
+      "tag": "0241_tranquil_wallflower",
+      "breakpoints": true
     }
   ]
 }

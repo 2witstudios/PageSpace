@@ -952,6 +952,11 @@
       "import": "./dist/email-templates/PaymentReceiptEmail.js",
       "require": "./dist/email-templates/PaymentReceiptEmail.js"
     },
+    "./email-templates/FormSubmissionNotificationEmail": {
+      "types": "./dist/email-templates/FormSubmissionNotificationEmail.d.ts",
+      "import": "./dist/email-templates/FormSubmissionNotificationEmail.js",
+      "require": "./dist/email-templates/FormSubmissionNotificationEmail.js"
+    },
     "./auth/secure-compare": {
       "types": "./dist/auth/secure-compare.d.ts",
       "import": "./dist/auth/secure-compare.js",
@@ -2044,6 +2049,9 @@
       ],
       "email-templates/PaymentReceiptEmail": [
         "./dist/email-templates/PaymentReceiptEmail.d.ts"
+      ],
+      "email-templates/FormSubmissionNotificationEmail": [
+        "./dist/email-templates/FormSubmissionNotificationEmail.d.ts"
       ],
       "email-templates/render-email": [
         "./dist/email-templates/render-email.d.ts"

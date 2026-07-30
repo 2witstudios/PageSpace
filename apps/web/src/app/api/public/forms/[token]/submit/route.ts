@@ -4,7 +4,8 @@
  * - Origin/Referer are NEVER the authorization decision (middleware only logs
  *   them for this route; valid callers are arbitrary published-site hosts).
  * - The ONLY thing that authorizes a write is the token hash lookup below.
- * - Rate limited per-IP AND per-token-prefix (10/min each).
+ * - Rate limited per-IP AND per-token-prefix (10/min each); notification
+ *   email dispatch is separately capped per form target (20/hr).
  * - Payload size cap: 8KB.
  * - Honeypot-triggered submissions get a 200 with no row appended, and no
  *   signal to the caller that anything was detected.
@@ -20,7 +21,9 @@ import { buildSubmissionSchema } from '@pagespace/lib/forms/submission-schema';
 import { isHoneypotTriggered, HONEYPOT_FIELD_NAME } from '@pagespace/lib/forms/honeypot';
 import { getClientIP } from '@/lib/auth/auth-helpers';
 import { lookupActiveFormTarget, appendFormSubmission } from '@/services/api/form-target-service';
+import { sendFormSubmissionNotification } from '@/lib/forms/send-form-notification';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { after } from 'next/server';
 
 const MAX_PAYLOAD_BYTES = 8 * 1024;
 
@@ -158,6 +161,31 @@ export async function POST(request: Request, context: { params: Promise<{ token:
       values: validation.data,
       submitterIpHash: hashToken(ip),
     });
+
+    // 8. Notification email — best-effort, post-response via after() so the
+    // send is not killed by serverless lifecycle. The submission already
+    // succeeded (row appended). A Resend failure is logged, never surfaced
+    // to the visitor. Rate limited per form target (not per IP/token — see
+    // DISTRIBUTED_RATE_LIMITS.FORM_SUBMISSION_NOTIFICATION) since this
+    // dispatch skips sendEmail's own recipient-wide cap; a submitter rotating
+    // IPs could otherwise mail-bomb the configured recipient once per
+    // accepted submission. The row is appended either way — only the email
+    // is capped.
+    if (formTarget.notificationEmail) {
+      const notifyLimit = await checkDistributedRateLimit(
+        `form:notify:${formTarget.id}`,
+        DISTRIBUTED_RATE_LIMITS.FORM_SUBMISSION_NOTIFICATION
+      );
+      if (notifyLimit.allowed) {
+        after(() => sendFormSubmissionNotification({
+          formTarget,
+          values: validation.data,
+          submittedAt: new Date(),
+        }));
+      } else {
+        loggers.api.warn('Form notification rate limit exceeded', { formTargetId: formTarget.id });
+      }
+    }
 
     return corsJson({ success: true }, { status: 200 });
   } catch (error) {
