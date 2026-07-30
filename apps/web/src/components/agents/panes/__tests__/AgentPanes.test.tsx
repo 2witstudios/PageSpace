@@ -378,20 +378,44 @@ describe('AgentPanes', () => {
       });
     }
 
+    /** Every interactive test needs the switch-decision data loaded first — see the disabled-while-loading test below for why. */
+    async function findEnabledSelector(name: RegExp) {
+      const button = await screen.findByRole('button', { name });
+      await waitFor(() => expect(button).not.toBeDisabled());
+      return button;
+    }
+
     it("shows the pane's current agent as the bar identity", async () => {
       renderPanes();
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
       expect(await screen.findByRole('button', { name: /Researcher/ })).toBeInTheDocument();
     });
 
+    it('is disabled until the session conversation list — the switch decision\'s own data — has loaded at least once', async () => {
+      let resolveSessions!: () => void;
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url.includes('/api/agent-sessions')) {
+          return new Promise((resolve) => {
+            resolveSessions = () => resolve(jsonOk({ sessions: [] }));
+          });
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+
+      const button = await screen.findByRole('button', { name: /Researcher/ });
+      expect(button).toBeDisabled();
+
+      resolveSessions();
+      await waitFor(() => expect(button).not.toBeDisabled());
+    });
+
     it('selecting the pane\'s current agent again is a no-op', async () => {
       mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
       renderPanes();
-      await waitFor(() =>
-        expect(mockFetchWithAuth).toHaveBeenCalledWith(expect.stringContaining('/api/agent-sessions?driveId=drive-1')),
-      );
       const user = userEvent.setup();
-      await user.click(await screen.findByRole('button', { name: /Researcher/ }));
+      await user.click(await findEnabledSelector(/Researcher/));
       await user.click(await screen.findByRole('menuitem', { name: /Researcher/ }));
 
       expect(mockPost).not.toHaveBeenCalled();
@@ -407,11 +431,8 @@ describe('AgentPanes', () => {
         { conversationId: 'conv-existing-2', agentPageId: 'agent-2' },
       ]);
       renderPanes();
-      await waitFor(() =>
-        expect(mockFetchWithAuth).toHaveBeenCalledWith(expect.stringContaining('/api/agent-sessions?driveId=drive-1')),
-      );
       const user = userEvent.setup();
-      await user.click(await screen.findByRole('button', { name: /Researcher/ }));
+      await user.click(await findEnabledSelector(/Researcher/));
       await user.click(await screen.findByText('Writer'));
 
       expect(mockPost).not.toHaveBeenCalled();
@@ -428,11 +449,8 @@ describe('AgentPanes', () => {
       mockPost.mockResolvedValue({});
       mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
       renderPanes();
-      await waitFor(() =>
-        expect(mockFetchWithAuth).toHaveBeenCalledWith(expect.stringContaining('/api/agent-sessions?driveId=drive-1')),
-      );
       const user = userEvent.setup();
-      await user.click(await screen.findByRole('button', { name: /Researcher/ }));
+      await user.click(await findEnabledSelector(/Researcher/));
       await user.click(await screen.findByText('Writer'));
 
       await waitFor(() =>
@@ -444,7 +462,45 @@ describe('AgentPanes', () => {
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('new-id-1'));
     });
 
+    it('records the freshly minted conversation locally, so switching straight back to it focuses rather than mints again', async () => {
+      mockPost.mockResolvedValue({});
+      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+      renderPanes();
+      const user = userEvent.setup();
+      await user.click(await findEnabledSelector(/Researcher/));
+      await user.click(await screen.findByText('Writer'));
+      await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('new-id-1'));
+
+      // Switch back to the ORIGINAL agent, then forward to the one just
+      // minted — all inside the SWR poll's 20s window, with the sessions
+      // endpoint still answering its ORIGINAL (pre-mint) fixture. Without a
+      // local record of the mint, this reaches `selectPaneAgent` with a list
+      // that still doesn't know agent-2 has a thread — a second mint.
+      await user.click(await findEnabledSelector(/Writer/));
+      await user.click(await screen.findByRole('menuitem', { name: /Researcher/ }));
+      await waitFor(() =>
+        expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].scope).toMatchObject({
+          targetId: 'conv-1',
+        }),
+      );
+
+      await user.click(await findEnabledSelector(/Researcher/));
+      await user.click(await screen.findByRole('menuitem', { name: /Writer/ }));
+
+      await waitFor(() =>
+        expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].scope).toMatchObject({
+          targetId: 'new-id-1',
+          agentPageId: 'agent-2',
+        }),
+      );
+      // Exactly the one mint from the first switch — the second forward
+      // switch focused the recorded conversation instead of minting again.
+      expect(mockPost).toHaveBeenCalledTimes(1);
+    });
+
     it("disables the selector while the pane's chat is streaming", async () => {
+      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
       usePendingStreamsStore.getState().addStream({
         messageId: 'msg-1',
         pageId: 'agent-1',
@@ -454,6 +510,11 @@ describe('AgentPanes', () => {
       });
       renderPanes();
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      // Let the (now-loaded) conversation list rule itself out as the cause,
+      // isolating the assertion to the streaming guard.
+      await waitFor(() =>
+        expect(mockFetchWithAuth).toHaveBeenCalledWith(expect.stringContaining('/api/agent-sessions?driveId=drive-1')),
+      );
 
       expect(await screen.findByRole('button', { name: /Researcher/ })).toBeDisabled();
     });

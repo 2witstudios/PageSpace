@@ -155,7 +155,11 @@ export default function AgentPanes({
   // The pane bar selector's switch decision needs to know which of the
   // session's conversations already exist, per agent — the same list the
   // sidebar's expansion already shows.
-  const { data: sessionsData } = useSWR(
+  const {
+    data: sessionsData,
+    isLoading: sessionConversationsLoading,
+    mutate: mutateSessionConversations,
+  } = useSWR(
     driveId !== null ? `/api/agent-sessions?driveId=${encodeURIComponent(driveId)}` : '/api/agent-sessions',
     sessionsFetcher,
     { revalidateOnFocus: false, refreshInterval: 20_000 },
@@ -163,6 +167,33 @@ export default function AgentPanes({
   const sessionConversations: SessionConversationSummary[] = useMemo(
     () => (sessionsData?.sessions ?? []).find((session) => session.sessionId === sessionId)?.conversations ?? [],
     [sessionsData, sessionId],
+  );
+
+  // A successful mint writes straight into the pane store, but the switch
+  // DECISION reads `sessionConversations` from this SWR cache, which only
+  // catches up on its next 20s poll. Left alone, switching away from a
+  // freshly-minted agent and back to it inside that window re-runs
+  // `selectPaneAgent` against a list that still doesn't know the mint
+  // happened — a second `mint` for the same agent, a duplicate conversation.
+  // Writing the new row in here, locally, closes that window without
+  // waiting on the network.
+  const recordMintedConversation = useCallback(
+    (conversationId: string, agentPageId: string | null) => {
+      void mutateSessionConversations((current) => {
+        if (!current) return current;
+        return {
+          sessions: current.sessions.map((session) =>
+            session.sessionId === sessionId
+              ? {
+                  ...session,
+                  conversations: [{ conversationId, agentPageId, lastMessageAt: null }, ...session.conversations],
+                }
+              : session,
+          ),
+        };
+      }, { revalidate: false });
+    },
+    [mutateSessionConversations, sessionId],
   );
 
   // Selection IS an instruction to show the conversation (review M1): on
@@ -299,6 +330,7 @@ export default function AgentPanes({
           return;
         }
         assignPane(sessionId, paneId, { kind: 'chat', name: 'New conversation', targetId: conversationId, agentPageId });
+        recordMintedConversation(conversationId, agentPageId);
       } catch (error) {
         console.error('Failed to start a conversation in this pane:', error);
         toast.error('Could not start a conversation', {
@@ -307,7 +339,7 @@ export default function AgentPanes({
         resetPane(sessionId, paneId);
       }
     },
-    [assignPane, resetPane, sessionId, paneStillExists, cleanupOrphanedConversation],
+    [assignPane, resetPane, sessionId, paneStillExists, cleanupOrphanedConversation, recordMintedConversation],
   );
 
   // The pane bar selector's switch — focus-or-mint, decided by the pure
@@ -404,6 +436,7 @@ export default function AgentPanes({
                 surface={surface}
                 pickableAgents={pickableAgents}
                 agentsLoading={driveId !== null && agentsLoading}
+                conversationsLoading={sessionConversationsLoading}
                 driveId={driveId}
                 onSelectAgent={(nextAgentPageId) =>
                   handleSwitchAgent(pane.id, pane.scope!.agentPageId, nextAgentPageId)
@@ -494,6 +527,7 @@ function ChatPaneIdentity({
   surface,
   pickableAgents,
   agentsLoading,
+  conversationsLoading,
   driveId,
   onSelectAgent,
 }: {
@@ -502,6 +536,14 @@ function ChatPaneIdentity({
   surface: PaneSurface;
   pickableAgents: PickableAgent[];
   agentsLoading: boolean;
+  /**
+   * Still on the FIRST fetch of the session's conversation list. Before that
+   * list has ever loaded, `selectPaneAgent` sees an empty array — indistinguishable
+   * from "no conversation with this agent exists yet" — and a switch to an
+   * agent that already HAS a thread would wrongly mint a duplicate instead of
+   * focusing it. Disabled here rather than raced.
+   */
+  conversationsLoading: boolean;
   driveId: string | null;
   onSelectAgent: (agentPageId: string | null) => void;
 }) {
@@ -513,9 +555,10 @@ function ChatPaneIdentity({
   // (`useAssistantSessionChat`'s own scoping, mirrored here).
   const streamPageId = scope.agentPageId ?? (user?.id ? globalChannelId(user.id) : null);
   const activeStream = useConversationActiveStream(streamPageId, conversationId);
-  // Mid-mint (the row isn't there yet) or mid-stream: switching now has
-  // nothing stable to point at, or would abandon a running send.
-  const disabled = surface.surface === 'loading' || activeStream !== undefined;
+  // Mid-mint (the row isn't there yet), mid-stream, or the switch decision's
+  // own data hasn't loaded yet: none of these have anything safe to switch
+  // against.
+  const disabled = surface.surface === 'loading' || activeStream !== undefined || conversationsLoading;
 
   return (
     <AISelector
