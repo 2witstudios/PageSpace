@@ -455,3 +455,36 @@ async function reclaimedOutside(sandboxId: string): Promise<boolean> {
     .where(eq(machineSpriteReclaims.sandboxId, sandboxId));
   return rows.length > 0;
 }
+
+describe('list bounds and ordering (review M3/M4)', () => {
+  it('excludes ENDED sessions — retained rows are lifecycle facts, not listings', async () => {
+    const active = await seedSession();
+    const ended = await seedSession({ endedAt: new Date() });
+
+    const listed = await store.list({ ownerId });
+    const ids = listed.map((row) => row.id);
+    expect(ids).toContain(active);
+    expect(ids).not.toContain(ended);
+  });
+
+  it('orders newest activity first, nulls last — a poll must not reshuffle between refreshes', async () => {
+    const older = await seedSession();
+    const newer = await seedSession();
+    const never = await seedSession();
+    await db.update(agentSessions).set({ lastActiveAt: new Date(Date.now() - 60_000) }).where(eq(agentSessions.id, older));
+    await db.update(agentSessions).set({ lastActiveAt: new Date() }).where(eq(agentSessions.id, newer));
+    await db.update(agentSessions).set({ lastActiveAt: null }).where(eq(agentSessions.id, never));
+
+    const listed = await store.list({ ownerId });
+    const ids = listed.map((row) => row.id).filter((id) => [older, newer, never].includes(id));
+    expect(ids).toEqual([newer, older, never]);
+  });
+
+  it('countActive counts NOT-ENDED rows — the spawn ceiling input, distinct from live sandboxes', async () => {
+    const before = await store.countActive(ownerId);
+    await seedSession(); // active, never provisioned (not "live")
+    await seedSession({ endedAt: new Date() }); // ended — excluded
+    const after = await store.countActive(ownerId);
+    expect(after).toBe(before + 1);
+  });
+});
