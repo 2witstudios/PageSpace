@@ -62,12 +62,22 @@ function mostRecentlyActive<T extends { lastMessageAt: string | null }>(listings
 /**
  * The grid-last fallback shared by both branches below: with no conversation
  * of its own to close, the only question left is whether the session has
- * ANY other open listing to rebind this last pane to. `null` (unloaded) or
- * empty means genuinely nothing to fall back to — end the session, same as
- * before this fallback existed.
+ * ANY other open listing to rebind this last pane to.
+ *
+ * `null` (the listing has never resolved — still in flight, or the fetch
+ * failed) is NOT treated the same as a confirmed-empty one: offering to end
+ * the session on a guess would, if the session actually has other open
+ * conversations elsewhere, delete their shared sandbox out from under them
+ * the moment the user confirms a dialog that never should have appeared
+ * (caught in review). `noop` here — nothing happens, the close can be
+ * retried once the listing is known, same discipline as every other
+ * never-act-on-an-unverified-fact branch in this module. Only a CONFIRMED
+ * empty array (the session genuinely has no other open listing) ends the
+ * session, exactly as before this fallback existed.
  */
 function gridLastFallback(activeConversations: readonly SessionConversationSummary[] | null): ClosePaneDecision {
-  if (!activeConversations || activeConversations.length === 0) return { action: 'end-session' };
+  if (activeConversations === null) return { action: 'noop' };
+  if (activeConversations.length === 0) return { action: 'end-session' };
   const target = mostRecentlyActive(activeConversations);
   return { action: 'rebind-pane', conversationId: target.conversationId, agentPageId: target.agentPageId };
 }

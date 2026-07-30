@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { Bot } from 'lucide-react';
 import useSWR from 'swr';
 
@@ -81,6 +81,18 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
     return () => window.removeEventListener('popstate', onPopState);
   }, [hydrateFromSearch, driveId]);
 
+  // The LATEST selection, read at completion time rather than trusted from a
+  // closure captured before an await: `AgentPanes`' close DELETE can still be
+  // in flight when the user picks a different conversation in this SAME
+  // session, and the callback that eventually fires is the ONE that closed
+  // over the selection at the moment the close started — a plain destructure
+  // here would still match the now-stale `conversationId` and clobber the
+  // user's newer pick with the computed rebind target (caught in review).
+  const selectionRef = useRef({ selectedConversationId, selectedSessionId });
+  useEffect(() => {
+    selectionRef.current = { selectedConversationId, selectedSessionId };
+  }, [selectedConversationId, selectedSessionId]);
+
   // The grid closed the conversation THIS surface has selected (its last
   // pane, closed) — follow its rebind so this surface's own selection (and
   // the URL it mirrors to) stays truthful. A closed conversation this surface
@@ -90,10 +102,12 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
   // no reason (the grid itself never emptied).
   const handleConversationClosed = useCallback(
     (event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => {
-      if (event.conversationId !== selectedConversationId || event.next === null || !selectedSessionId) return;
-      selectConversation({ sessionId: selectedSessionId, conversationId: event.next, agentId: event.nextAgentPageId });
+      const { selectedConversationId: currentConversationId, selectedSessionId: currentSessionId } =
+        selectionRef.current;
+      if (event.conversationId !== currentConversationId || event.next === null || !currentSessionId) return;
+      selectConversation({ sessionId: currentSessionId, conversationId: event.next, agentId: event.nextAgentPageId });
     },
-    [selectedConversationId, selectedSessionId, selectConversation],
+    [selectConversation],
   );
 
   return (

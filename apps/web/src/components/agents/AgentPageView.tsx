@@ -139,6 +139,18 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
     [page.id, page.driveId, canUseSessions],
   );
 
+  // The LATEST `current`, read at completion time rather than trusted from a
+  // closure captured before an await — `mintReplacementForCurrent` runs after
+  // an async gap (a conversation-close DELETE, or `deleteConversation`), and
+  // the user can select a different thread while that request is in flight.
+  // Without this, a slow request's callback still holds the OLD `current` it
+  // closed over, wrongly matches the just-closed id, and overwrites the
+  // user's newer selection with an unwanted replacement (caught in review).
+  const currentRef = useRef(current);
+  useEffect(() => {
+    currentRef.current = current;
+  }, [current]);
+
   // Shared by the History-tab delete AND a session-grid listing close: both
   // leave `current` pointing at a conversation that is no longer usable here,
   // and both recover the SAME way — mint this agent's replacement INTO the
@@ -147,8 +159,8 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   // wherever it lives in the grid (not necessarily the active pane: the
   // grid's own selection and this page's `current` are independent state).
   const mintReplacementForCurrent = useCallback(() => {
-    const staleConversationId = current?.conversationId ?? null;
-    const sessionId = current?.sessionId ?? null;
+    const staleConversationId = currentRef.current?.conversationId ?? null;
+    const sessionId = currentRef.current?.sessionId ?? null;
     void (async () => {
       const created = await newConversation(sessionId);
       if (sessionId && staleConversationId) {
@@ -160,7 +172,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
         });
       }
     })();
-  }, [current, newConversation, page.id]);
+  }, [newConversation, page.id]);
 
   const {
     conversations,
@@ -186,10 +198,10 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   // does: mint a fresh one for this agent into the same session.
   const handleConversationClosed = useCallback(
     (event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => {
-      if (event.conversationId !== current?.conversationId) return;
+      if (event.conversationId !== currentRef.current?.conversationId) return;
       mintReplacementForCurrent();
     },
-    [current, mintReplacementForCurrent],
+    [mintReplacementForCurrent],
   );
 
   const handleSelectConversation = useCallback(

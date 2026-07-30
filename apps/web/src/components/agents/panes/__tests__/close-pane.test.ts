@@ -110,9 +110,13 @@ describe('decideClosePane', () => {
         ).toEqual({ action: 'rebind-pane', conversationId: 'conv-1', agentPageId: 'agent-1' });
       });
 
-      it('given an unloaded (null) listing, never guesses — ends the session, same as an empty one', () => {
+      it('given an unloaded (null) listing, never guesses at ending the session — no-ops instead', () => {
+        // Unlike a CONFIRMED-empty listing (which still ends the session),
+        // never-resolved is unknown: offering "End session" here could
+        // delete another still-open conversation's shared sandbox on a
+        // guess. Nothing happens; the close can be retried once known.
         expect(decideClosePane({ panes: [terminalPane('p1')], paneId: 'p1', activeConversations: null })).toEqual({
-          action: 'end-session',
+          action: 'noop',
         });
       });
     });
@@ -141,10 +145,10 @@ describe('decideClosePane', () => {
       ).toEqual({ action: 'close-pane' });
     });
 
-    it('given a null listing AND the pane is grid-last, should end the session', () => {
+    it('given a null listing AND the pane is grid-last, should no-op rather than guess at ending the session', () => {
       expect(
         decideClosePane({ panes: [chatPane('p1', 'conv-1')], paneId: 'p1', activeConversations: null }),
-      ).toEqual({ action: 'end-session' });
+      ).toEqual({ action: 'noop' });
     });
 
     it('given the conversation absent from a loaded listing (closed elsewhere), should fall back the same way', () => {

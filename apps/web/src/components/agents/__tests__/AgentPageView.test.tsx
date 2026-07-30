@@ -44,6 +44,14 @@ const agentPanesState = vi.hoisted(() => ({
   lastOnConversationClosed: null as
     | ((event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => void)
     | null,
+  // Captured ONCE, on the first render that supplies a callback — models the
+  // closure a real in-flight `closeConversationListing` call would hold,
+  // unaffected by whatever `onConversationClosed` a LATER render passes
+  // (e.g. after the user picks a different conversation while a close DELETE
+  // is still pending).
+  firstOnConversationClosed: null as
+    | ((event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => void)
+    | null,
 }));
 
 vi.mock('../panes/AgentPanes', () => ({
@@ -61,6 +69,9 @@ vi.mock('../panes/AgentPanes', () => ({
     onConversationClosed?: (event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => void;
   }) => {
     agentPanesState.lastOnConversationClosed = onConversationClosed ?? null;
+    if (agentPanesState.firstOnConversationClosed === null) {
+      agentPanesState.firstOnConversationClosed = onConversationClosed ?? null;
+    }
     return (
       <div data-testid="agent-panes" data-chat-context={chatContext} data-readonly={String(!!isReadOnly)}>
         {sessionId}/{initialConversation.conversationId}
@@ -170,6 +181,7 @@ beforeEach(() => {
   };
   conversationsState.lastOnConversationDelete = null;
   agentPanesState.lastOnConversationClosed = null;
+  agentPanesState.firstOnConversationClosed = null;
   useAgentWorkspaceStore.setState({ workspaces: {} });
   mockFetchWithAuth.mockImplementation(async (url: string) => {
     if (url.endsWith('/permissions/check')) return jsonResponse({ canEdit: true });
@@ -443,6 +455,29 @@ describe('AgentPageView', () => {
 
       expect(mockCreatePageConversation).not.toHaveBeenCalled();
       expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-1');
+    });
+
+    it('a stale close (captured before the user selected a different thread) does not mint an unwanted replacement', async () => {
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      conversationsState.current.conversations = [{ id: 'conv-2', sessionId: 'ses-1' }];
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+      const staleCallback = agentPanesState.firstOnConversationClosed;
+
+      // The user selects a different history thread WHILE a close DELETE for
+      // conv-1 is still in flight — `current` moves on before that request's
+      // own callback (captured on the earlier render) ever fires.
+      await userEvent.click(screen.getByRole('tab', { name: /history/i }));
+      fireEvent.click(await screen.findByTestId('history-select-conv-2'));
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2'));
+
+      staleCallback?.({ conversationId: 'conv-1', next: null, nextAgentPageId: null });
+
+      // 'conv-1' no longer matches the CURRENT tracked conversation
+      // ('conv-2'), so the stale callback must be a no-op — not mint an
+      // unnecessary replacement and not disturb the user's newer selection.
+      expect(mockCreatePageConversation).not.toHaveBeenCalled();
+      expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2');
     });
   });
 });
