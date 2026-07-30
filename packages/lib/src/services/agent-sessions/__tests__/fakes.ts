@@ -102,11 +102,23 @@ export function makeAgentSessionStore(seed: AgentSessionRecord[] = []): FakeAgen
     },
 
     async list(filter) {
-      return [...rows.values()].filter((row) => {
-        if ('driveId' in filter && row.driveId !== filter.driveId) return false;
-        if (filter.ownerId !== undefined && row.ownerId !== filter.ownerId) return false;
-        return true;
-      });
+      // Mirrors the real store: active rows only, newest activity first.
+      return [...rows.values()]
+        .filter((row) => {
+          if ('driveId' in filter && row.driveId !== filter.driveId) return false;
+          if (filter.ownerId !== undefined && row.ownerId !== filter.ownerId) return false;
+          return row.endedAt === null;
+        })
+        .sort((a, b) => {
+          const aAt = a.lastActiveAt?.getTime() ?? -1;
+          const bAt = b.lastActiveAt?.getTime() ?? -1;
+          if (aAt !== bAt) return bAt - aAt;
+          return b.createdAt.getTime() - a.createdAt.getTime();
+        });
+    },
+
+    async countActive(ownerId) {
+      return [...rows.values()].filter((row) => row.ownerId === ownerId && row.endedAt === null).length;
     },
 
     async countLive(ownerId) {

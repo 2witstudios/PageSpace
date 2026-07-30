@@ -70,6 +70,9 @@ export type AgentSessionListFilter =
   | { driveId: string; ownerId?: string }
   | { ownerId: string };
 
+/** The most sessions one listing returns — the sidebar shows the newest slice, not an archive. */
+export const SESSION_LIST_LIMIT = 100;
+
 export interface AgentSessionStore {
   findById(sessionId: string): Promise<AgentSessionRecord | null>;
   /**
@@ -90,7 +93,23 @@ export interface AgentSessionStore {
    * none).
    */
   create(input: NewAgentSessionInput): Promise<AgentSessionRecord>;
+  /**
+   * ACTIVE sessions only (`endedAt IS NULL`), newest activity first
+   * (`lastActiveAt DESC NULLS LAST, createdAt DESC`), capped at
+   * {@link SESSION_LIST_LIMIT}. Ended rows are retained for lifecycle/billing
+   * but are not listings: the sidebar polls this every few seconds, and an
+   * unbounded, unordered enumeration that never forgets grew without limit
+   * and reshuffled between polls (review M3/M4).
+   */
   list(filter: AgentSessionListFilter): Promise<AgentSessionRecord[]>;
+  /**
+   * Count this owner's ACTIVE (not-ended) sessions — the spawn ceiling's
+   * input. Distinct from `countLive`, which counts live SANDBOXES for the
+   * concurrency quota: a spawned-but-never-provisioned session is active
+   * without being live, and unbounded row minting is what this bounds
+   * (review M6/F4).
+   */
+  countActive(ownerId: string): Promise<number>;
   /**
    * Count this owner's LIVE sessions — `sandboxId IS NOT NULL AND
    * spriteTornDownAt IS NULL` — for the agent-session concurrency quota
@@ -247,7 +266,7 @@ export function revivedAgentSessionColumns(input: {
  * DB module graph.
  */
 export async function createDbAgentSessionStore(): Promise<AgentSessionStore> {
-  const [{ db }, { eq, and, eqOrIsNull, isNotNull, isNull, sql, count }, { agentSessions }, { machineSpriteReclaims }, { conversations }] =
+  const [{ db }, { eq, and, eqOrIsNull, isNotNull, isNull, sql, count, desc }, { agentSessions }, { machineSpriteReclaims }, { conversations }] =
     await Promise.all([
       import('@pagespace/db/db'),
       import('@pagespace/db/operators'),
@@ -309,8 +328,22 @@ export async function createDbAgentSessionStore(): Promise<AgentSessionStore> {
         // cross-tenant read, so it fails loudly rather than returning it.
         throw new Error('listAgentSessions requires at least one filter');
       }
-      const rows = await db.select().from(agentSessions).where(and(...conditions));
+      conditions.push(isNull(agentSessions.endedAt));
+      const rows = await db
+        .select()
+        .from(agentSessions)
+        .where(and(...conditions))
+        .orderBy(sql`${agentSessions.lastActiveAt} DESC NULLS LAST`, desc(agentSessions.createdAt))
+        .limit(SESSION_LIST_LIMIT);
       return rows as AgentSessionRecord[];
+    },
+
+    async countActive(ownerId) {
+      const [row] = await db
+        .select({ n: count() })
+        .from(agentSessions)
+        .where(and(eq(agentSessions.ownerId, ownerId), isNull(agentSessions.endedAt)));
+      return row?.n ?? 0;
     },
 
     async countLive(ownerId) {
