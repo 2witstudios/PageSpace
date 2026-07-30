@@ -218,7 +218,7 @@ describe('AgentsSidebar', () => {
     renderSidebar();
 
     expect(await screen.findByText(/no sessions in this drive/i)).toBeDefined();
-    expect(screen.getByText('New session')).toBeDefined();
+    expect(screen.getByLabelText('New session')).toBeDefined();
   });
 
   test('never lists panes — the second level is conversations', async () => {
@@ -338,16 +338,13 @@ describe('AgentsSidebar', () => {
   });
 
   describe('new session', () => {
-    test('one act: pick an agent, get the session AND its first conversation, land inside it', async () => {
+    test('the inline "+" opens a searchable agent palette; picking an agent is one act: session AND its first conversation, land inside it', async () => {
       mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-new' });
       const user = userEvent.setup();
       renderSidebar();
 
-      // Let the session list land first: the loading state renders its own
-      // "New session" row, and clicking THAT one loses the open chooser when
-      // the loaded list replaces it.
       await screen.findByText('api refactor');
-      await user.click(screen.getByText('New session'));
+      await user.click(screen.getByLabelText('New session'));
       await user.click(await screen.findByText('Researcher'));
 
       await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
@@ -374,7 +371,7 @@ describe('AgentsSidebar', () => {
       renderSidebar();
 
       await screen.findByText('api refactor');
-      await user.click(screen.getByText('New session'));
+      await user.click(screen.getByLabelText('New session'));
 
       expect(await screen.findByText(/no agents in this drive/i)).toBeDefined();
     });
@@ -490,8 +487,14 @@ describe('AgentsSidebar', () => {
       useDriveStore.setState({ drives: [driveFixture('drive-1', 'Alpha')] });
     });
 
-    /** The group div wrapping a header, its sessions, and its "+ New session" row. */
-    const groupContainer = (headerText: string) => screen.getByText(headerText).parentElement as HTMLElement;
+    /**
+     * The group div wrapping a header row (name + inline "+") and its
+     * sessions. The name lives in a `<span>` inside the header row now (not
+     * the header row's own text), so it's two parents up: span → header row
+     * → group.
+     */
+    const groupContainer = (headerText: string) =>
+      screen.getByText(headerText).parentElement?.parentElement as HTMLElement;
 
     test('fetches every accessible session and groups them under a drive header', async () => {
       renderSidebar();
@@ -509,9 +512,9 @@ describe('AgentsSidebar', () => {
 
       expect(await screen.findByText('Alpha')).toBeDefined();
       expect(screen.getByText('Beta')).toBeDefined();
-      // Every roster drive gets its own spawn affordance, whether or not it has
-      // a session — plus the Assistant group's own.
-      expect(screen.getAllByText('New session')).toHaveLength(3);
+      // Every roster drive gets its own inline spawn affordance, whether or
+      // not it has a session — plus the Assistant group's own.
+      expect(screen.getAllByRole('button', { name: /^New session/i })).toHaveLength(3);
     });
 
     test('excludes trashed drives from the roster, matching DriveSwitcher and the multi-drive agents API', async () => {
@@ -542,18 +545,18 @@ describe('AgentsSidebar', () => {
       await screen.findByText('lingering session');
       // The orphan header falls back to the raw id — the trash-filtered
       // roster has no name to offer for it.
-      expect(within(groupContainer('drive-2')).queryByText('New session')).toBeNull();
+      expect(within(groupContainer('drive-2')).queryByRole('button', { name: /^New session/i })).toBeNull();
       // An active roster drive is unaffected.
-      expect(within(groupContainer('Alpha')).getByText('New session')).toBeDefined();
+      expect(within(groupContainer('Alpha')).getByRole('button', { name: /^New session/i })).toBeDefined();
     });
 
     test('shows no roster groups for a non-admin — refusal-only, not a dead spawn chooser', () => {
       // The admin gate must cover the roster too: previously only the
       // Assistant group's visibility was tied to admin status, so a
       // non-admin with drives in the persisted store would see every
-      // roster drive's header and "+ New session" row alongside the
-      // refusal notice, each expanding into an empty chooser since
-      // usePageAgents is disabled for them.
+      // roster drive's header and its inline "+" alongside the refusal
+      // notice, opening onto an empty palette since usePageAgents is
+      // disabled for them.
       mockUseAuth.mockReturnValue({ user: { role: 'user' }, isLoading: false });
       useDriveStore.setState({ drives: [driveFixture('drive-1', 'Alpha')] });
 
@@ -562,7 +565,7 @@ describe('AgentsSidebar', () => {
       expect(screen.getByText(/administrator privileges/i)).toBeDefined();
       expect(screen.queryByText('Alpha')).toBeNull();
       expect(screen.queryByText('Assistant')).toBeNull();
-      expect(screen.queryByText('New session')).toBeNull();
+      expect(screen.queryByRole('button', { name: /^New session/i })).toBeNull();
       expect(mockFetchWithAuth).not.toHaveBeenCalled();
     });
 
@@ -573,7 +576,7 @@ describe('AgentsSidebar', () => {
       renderSidebar();
 
       await screen.findByText('Alpha');
-      await user.click(within(groupContainer('Alpha')).getByText('New session'));
+      await user.click(within(groupContainer('Alpha')).getByRole('button', { name: /^New session/i }));
       await user.click(await screen.findByText('Researcher'));
 
       await waitFor(() =>
@@ -593,9 +596,9 @@ describe('AgentsSidebar', () => {
       renderSidebar();
 
       expect(await screen.findByText('Assistant')).toBeDefined();
-      // Scoped: the roster's own drive group also renders its own "New
-      // session" row now, so an unscoped query would be ambiguous.
-      await user.click(within(groupContainer('Assistant')).getByText('New session'));
+      // Scoped: the roster's own drive group also renders its own inline "+"
+      // now, so an unscoped query would be ambiguous.
+      await user.click(within(groupContainer('Assistant')).getByRole('button', { name: /^New session/i }));
 
       await waitFor(() => expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {}));
       await waitFor(() => expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-a'));
