@@ -218,6 +218,18 @@ describe('renderCanvasDocument — navigation bridge', () => {
     expect(out).toContain('/^\\/dashboard\\/');
   });
 
+  // Regression: a capture-phase listener runs BEFORE the clicked element's own
+  // onclick / bubbling ancestor handlers, so an author calling preventDefault()
+  // to cancel our routing would never have a chance to (we'd have already read
+  // e.defaultPrevented as false and posted the message). The listener must be
+  // bubble-phase (no `useCapture` / no trailing `,true` in addEventListener).
+  it('given navigationBridge: true, the click listener should be registered for the BUBBLE phase, not capture', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', navigationBridge: true });
+    expect(out).toContain("document.addEventListener('click',function(e){");
+    expect(out).not.toContain(',true);');
+    expect(NAVIGATION_BRIDGE_SCRIPT).not.toContain(',true);');
+  });
+
   it('given navigationBridge: true AND a nonce, should stamp the nonce onto the navigation-bridge script too', () => {
     const out = renderCanvasDocument({ html: '<p>x</p>', navigationBridge: true, nonce: 'app-nonce==' });
     // Both injected scripts (theme + navigation) would need the nonce if both

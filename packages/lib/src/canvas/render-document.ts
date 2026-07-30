@@ -235,14 +235,21 @@ export const THEME_BRIDGE_SCRIPT =
  *    existing behavior.
  *  - Skips clicks with modifier keys / non-primary button, and clicks
  *    already `defaultPrevented` by other author scripts, so ctrl/cmd/
- *    middle-click "open in new tab" keeps working as expected.
+ *    middle-click "open in new tab" keeps working as expected. The listener
+ *    is registered for the BUBBLE phase (no `useCapture`), not capture —
+ *    capture would run before the clicked element's own `onclick` (and any
+ *    bubbling ancestor handler), so an author's own `preventDefault()` call
+ *    (e.g. a canvas-internal JS router that wants to handle the click
+ *    itself) would never have a chance to run first and be observed here.
  *  - Only calls `preventDefault()` AFTER `postMessage` succeeds, so a link
  *    we can't hand off is never silently swallowed.
  *
  * `CanvasFrame.tsx` independently re-validates `href` against the same
  * pattern (`isDashboardPageLink` in `file-view-links.ts`) before acting on
- * the message — this script's own check is a UX nicety, not a trust
- * boundary, since sandboxed author JS could forge the postMessage directly.
+ * the message, AND gates on a genuine recent user gesture — this script's
+ * own checks are a UX nicety, not a trust boundary, since sandboxed author
+ * JS could forge the postMessage directly (see the gating doc comment on
+ * CanvasFrame.tsx's message handler).
  */
 export const NAVIGATION_BRIDGE_SCRIPT =
   "<script>(function(){" +
@@ -257,7 +264,7 @@ export const NAVIGATION_BRIDGE_SCRIPT =
   "window.parent.postMessage({type:'pagespace-navigate',href:href},'*');" +
   "e.preventDefault();" +
   "}catch(err){}" +
-  "},true);" +
+  "});" +
   "})();</script>";
 
 // Re-exported for existing consumers — the implementation lives in a
