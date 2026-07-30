@@ -2,10 +2,20 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { Bot, ChevronDown, ChevronRight, MessageSquarePlus, Plus, SquareTerminal } from 'lucide-react';
+import { Bot, ChevronDown, ChevronRight, CircleStop, MessageSquarePlus, Plus, SquareTerminal } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR from 'swr';
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn, isElectron } from '@/lib/utils';
 import type { SidebarProps } from './index';
@@ -20,7 +30,8 @@ import { useDriveStore } from '@/hooks/useDrive';
 import { canManageDrive } from '@/hooks/usePermissions';
 import { usePageAgents, type DriveWithAgents } from '@/hooks/page-agents/usePageAgents';
 import { useAgentSurfaceStore, SHEET_BREAKPOINT_QUERY } from '@/stores/agents/useAgentSurfaceStore';
-import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
+import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
+import { fetchWithAuth, post, del } from '@/lib/auth/auth-fetch';
 
 /**
  * The Agents console's left sidebar: **Drive → Session → conversations.**
@@ -268,7 +279,11 @@ function SessionRow({ session, onChanged }: { session: SessionListEntry; onChang
   const selectedSessionId = useAgentSurfaceStore((state) => state.selectedSessionId);
   const selectedConversationId = useAgentSurfaceStore((state) => state.selectedConversationId);
   const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
+  const selectSession = useAgentSurfaceStore((state) => state.selectSession);
+  const forgetWorkspace = useAgentWorkspaceStore((state) => state.forgetWorkspace);
   const [expanded, setExpanded] = useState(false);
+  const [confirmingEnd, setConfirmingEnd] = useState(false);
+  const [ending, setEnding] = useState(false);
   const isSelected = selectedSessionId === session.sessionId;
   const isRunning = session.sandboxStatus === 'running' || session.sandboxStatus === 'starting';
 
@@ -319,6 +334,27 @@ function SessionRow({ session, onChanged }: { session: SessionListEntry; onChang
     }
   }, [onChanged, selectConversation, session.conversations, session.sessionId]);
 
+  const endSession = useCallback(async () => {
+    setEnding(true);
+    try {
+      await del(`/api/agent-sessions/${encodeURIComponent(session.sessionId)}`);
+      // The session leaves the sidebar; its conversations remain as history in
+      // each agent's list. Drop the local grid too — its panes pointed at a
+      // sandbox that no longer exists.
+      forgetWorkspace(session.sessionId);
+      if (selectedSessionId === session.sessionId) selectSession(null);
+      setConfirmingEnd(false);
+      onChanged();
+    } catch (error) {
+      console.error('Failed to end session:', error);
+      toast.error('Could not end the session', {
+        description: error instanceof Error ? error.message : 'Please try again.',
+      });
+    } finally {
+      setEnding(false);
+    }
+  }, [forgetWorkspace, onChanged, selectSession, selectedSessionId, session.sessionId]);
+
   return (
     <div>
       <div
@@ -347,7 +383,33 @@ function SessionRow({ session, onChanged }: { session: SessionListEntry; onChang
         >
           <MessageSquarePlus className="size-3.5" />
         </button>
+        <button
+          type="button"
+          aria-label="End session"
+          className="shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus:opacity-100 group-hover:opacity-100"
+          onClick={() => setConfirmingEnd(true)}
+        >
+          <CircleStop className="size-3.5" />
+        </button>
       </div>
+
+      <AlertDialog open={confirmingEnd} onOpenChange={setConfirmingEnd}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>End {session.name ? `“${session.name}”` : 'this session'}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Its sandbox is stopped and its shells close. Conversations stay in each
+              agent&apos;s history.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={ending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction disabled={ending} onClick={() => void endSession()}>
+              End session
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {expanded && (
         <div className="ml-5 space-y-0.5 border-l border-border pl-2">

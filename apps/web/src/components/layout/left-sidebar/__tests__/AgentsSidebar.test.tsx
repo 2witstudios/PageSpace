@@ -76,10 +76,11 @@ vi.mock('@/hooks/page-agents/usePageAgents', () => ({
 
 const mockFetchWithAuth = vi.fn();
 const mockPost = vi.fn();
+const mockDel = vi.fn();
 vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args),
   post: (...args: unknown[]) => mockPost(...args),
-  del: vi.fn(),
+  del: (...args: unknown[]) => mockDel(...args),
 }));
 
 // Sidebar chrome that isn't under test.
@@ -88,8 +89,10 @@ vi.mock('../PrimaryNavigation', () => ({ default: () => <div /> }));
 vi.mock('../DriveFooter', () => ({ default: () => <div /> }));
 vi.mock('../DashboardFooter', () => ({ default: () => <div /> }));
 
+import { within } from '@testing-library/react';
 import AgentsSidebar from '../AgentsSidebar';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
+import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 
 interface SessionFixture {
@@ -343,6 +346,48 @@ describe('AgentsSidebar', () => {
       await user.click(screen.getByText('New session'));
 
       expect(await screen.findByText(/no agents in this drive/i)).toBeDefined();
+    });
+  });
+
+  describe('end session', () => {
+    test('confirming ends it: DELETE, grid forgotten, selection cleared, list refetched', async () => {
+      mockDel.mockResolvedValue(undefined);
+      // The session is open in the centre, with a persisted pane grid.
+      useAgentSurfaceStore.setState({
+        selectedSessionId: 'ses-1',
+        selectedConversationId: 'conv-1',
+        selectedAgentId: 'agent-1',
+      });
+      useAgentWorkspaceStore
+        .getState()
+        .ensureWorkspace('ses-1', { kind: 'chat', name: 'x', targetId: 'conv-1', agentPageId: 'agent-1' });
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      await user.click(screen.getByLabelText('End session'));
+      // Destructive and irreversible-ish (the sandbox dies): confirmed, never
+      // one accidental hover-click.
+      const dialog = await screen.findByRole('alertdialog');
+      const fetchesBefore = mockFetchWithAuth.mock.calls.length;
+      await user.click(within(dialog).getByRole('button', { name: 'End session' }));
+
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1'));
+      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeUndefined();
+      expect(useAgentSurfaceStore.getState().selectedSessionId).toBeNull();
+      await waitFor(() => expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(fetchesBefore));
+    });
+
+    test('cancelling ends nothing', async () => {
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      await user.click(screen.getByLabelText('End session'));
+      const dialog = await screen.findByRole('alertdialog');
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+      expect(mockDel).not.toHaveBeenCalled();
     });
   });
 
