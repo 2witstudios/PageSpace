@@ -189,16 +189,25 @@ describe('POST /api/agent-sessions/[sessionId]/shells', () => {
     // their ceiling is not filed as data-access forensics), and the route tag,
     // which became a PARAMETER when the duplicated helper was extracted and can
     // therefore now be passed wrong.
+    //
+    // `detail: 'concurrency_limit'` here is the REAL shape `checkAgentSessionConcurrency`
+    // returns (packages/lib/src/services/sandbox/quota.ts) — a diagnostic enum,
+    // not a sentence. A mock without it (as this test previously had) hid the P1
+    // where that enum was rendered verbatim as `body.error` (PR #2253).
     mockProvisionSessionSandbox.mockResolvedValue({
       ok: false,
       reason: 'denied',
       denial: 'session_limit_reached',
+      detail: 'concurrency_limit',
     });
 
     const response = await post({});
 
     expect(response.status).toBe(429);
-    expect((await response.json()).error).toContain('sandbox');
+    const body = await response.json();
+    expect(body.error).toContain('sandbox');
+    // The diagnostic enum must never leak into what the user reads.
+    expect(body.error).not.toContain('concurrency_limit');
     expect(mockAuditRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -206,6 +215,8 @@ describe('POST /api/agent-sessions/[sessionId]/shells', () => {
         details: expect.objectContaining({
           reason: 'session_limit_reached',
           route: 'agent-sessions/[sessionId]/shells',
+          // ...but IS still recorded, for diagnosis — just in the audit row.
+          reasonCode: 'concurrency_limit',
         }),
       }),
     );

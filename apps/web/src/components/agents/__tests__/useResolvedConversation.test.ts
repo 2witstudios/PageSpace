@@ -2,9 +2,12 @@
  * The page's conversation resolution, now session-aware: resolution carries
  * `{conversationId, sessionId}` because the Chat tab renders a session-bound
  * thread as a pane grid and a plain one as the plain chat. What matters most:
- * the CAPABILITY SPLIT (session users spawn, everyone else creates plain) and
- * the FALLBACK (a refused spawn degrades to a plain conversation — the page
- * must never fail to open over a workspace it merely could not have).
+ * the CAPABILITY SPLIT (session users spawn, everyone else creates plain), the
+ * FALLBACK (a refused spawn degrades to a plain conversation — the page must
+ * never fail to open over a workspace it merely could not have), the
+ * AUTH-LOADING GATE (a hard refresh must never mint a permanently
+ * session-less first conversation while the role is still unknown), and the
+ * QUOTA-vs-CAPABILITY split in how a refusal is surfaced.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
@@ -20,15 +23,30 @@ vi.mock('@/hooks/conversationMessagesActions', () => ({
 }));
 
 const mockPost = vi.hoisted(() => vi.fn());
+const { MockApiRequestError } = vi.hoisted(() => ({
+  MockApiRequestError: class MockApiRequestError extends Error {
+    status: number;
+    constructor(message: string, status: number) {
+      super(message);
+      this.name = 'ApiRequestError';
+      this.status = status;
+    }
+  },
+}));
 vi.mock('@/lib/auth/auth-fetch', () => ({
   post: (...args: unknown[]) => mockPost(...args),
   fetchWithAuth: vi.fn(),
+  ApiRequestError: MockApiRequestError,
 }));
 
-import { useResolvedConversation, createPageConversation } from '../useResolvedConversation';
+const mockToastError = vi.hoisted(() => vi.fn());
+vi.mock('sonner', () => ({ toast: { error: mockToastError } }));
 
-const OPTS = { driveId: 'drive-1', canUseSessions: false };
-const SESSION_OPTS = { driveId: 'drive-1', canUseSessions: true };
+import { useResolvedConversation, createPageConversation } from '../useResolvedConversation';
+import { ApiRequestError } from '@/lib/auth/auth-fetch';
+
+const OPTS = { driveId: 'drive-1', canUseSessions: false, authLoading: false };
+const SESSION_OPTS = { driveId: 'drive-1', canUseSessions: true, authLoading: false };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -100,6 +118,83 @@ describe('useResolvedConversation', () => {
     await waitFor(() => expect(result.current.resolved).not.toBeNull());
     expect(result.current.resolved?.sessionId).toBeNull();
     expect(agentConversations.createAgentConversation).toHaveBeenCalled();
+  });
+
+  it('a CAPABILITY refusal (403) falls back silently — no toast', async () => {
+    agentConversations.fetchMostRecentAgentConversation.mockResolvedValue(null);
+    mockPost.mockRejectedValue(new ApiRequestError('Insufficient permissions to use this agent', 403));
+
+    const { result } = renderHook(() => useResolvedConversation('agent-1', SESSION_OPTS));
+
+    await waitFor(() => expect(result.current.resolved).not.toBeNull());
+    expect(result.current.resolved?.sessionId).toBeNull();
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  it('a QUOTA refusal (429) surfaces distinctly from the silent capability degrade', async () => {
+    // The caller HAS the capability and simply ran out of allowance — worth
+    // interrupting them for, unlike every other refusal.
+    agentConversations.fetchMostRecentAgentConversation.mockResolvedValue(null);
+    mockPost.mockRejectedValue(
+      new ApiRequestError('You have 100 active sessions — end some before starting more.', 429),
+    );
+
+    const { result } = renderHook(() => useResolvedConversation('agent-1', SESSION_OPTS));
+
+    await waitFor(() => expect(result.current.resolved).not.toBeNull());
+    expect(result.current.resolved?.sessionId).toBeNull();
+    expect(mockToastError).toHaveBeenCalledTimes(1);
+    expect(mockToastError).toHaveBeenCalledWith(
+      'Workspace unavailable — plain chat',
+      expect.objectContaining({ description: expect.stringContaining('100 active sessions') }),
+    );
+  });
+
+  it('while auth is still loading, resolution WAITS — then creates WITH the session capability once it resolves', async () => {
+    // Key acceptance case: a hard refresh must never mint an admin's first
+    // conversation session-less just because the role hasn't loaded yet.
+    agentConversations.fetchMostRecentAgentConversation.mockResolvedValue(null);
+    mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-new' });
+
+    const { result, rerender } = renderHook(
+      ({ authLoading, canUseSessions }: { authLoading: boolean; canUseSessions: boolean }) =>
+        useResolvedConversation('agent-1', { driveId: 'drive-1', canUseSessions, authLoading }),
+      { initialProps: { authLoading: true, canUseSessions: false } },
+    );
+
+    expect(result.current.isLoading).toBe(true);
+    expect(agentConversations.fetchMostRecentAgentConversation).not.toHaveBeenCalled();
+
+    // Auth settles: the caller now knows the admin role.
+    rerender({ authLoading: false, canUseSessions: true });
+
+    await waitFor(() => expect(result.current.resolved?.sessionId).toBe('ses-new'));
+    expect(result.current.resolved?.conversationId).toBe('conv-new');
+    expect(agentConversations.createAgentConversation).not.toHaveBeenCalled();
+  });
+
+  it('a later authLoading blip does not re-resolve an already-settled agent', async () => {
+    agentConversations.fetchMostRecentAgentConversation.mockResolvedValue({
+      id: 'conv-recent',
+      sessionId: 'ses-1',
+    });
+
+    const { result, rerender } = renderHook(
+      ({ authLoading }: { authLoading: boolean }) =>
+        useResolvedConversation('agent-1', { ...OPTS, authLoading }),
+      { initialProps: { authLoading: false } },
+    );
+
+    await waitFor(() => expect(result.current.resolved?.conversationId).toBe('conv-recent'));
+    expect(agentConversations.fetchMostRecentAgentConversation).toHaveBeenCalledTimes(1);
+
+    // A token-refresh-shaped loading blip, for the SAME agent, must not
+    // restart resolution and clobber the conversation the user is in.
+    rerender({ authLoading: true });
+    rerender({ authLoading: false });
+
+    expect(agentConversations.fetchMostRecentAgentConversation).toHaveBeenCalledTimes(1);
+    expect(result.current.resolved?.conversationId).toBe('conv-recent');
   });
 
   it('reports isLoading true until resolution settles', async () => {

@@ -106,10 +106,26 @@ describe('POST /api/agent-sessions/[sessionId]', () => {
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
   });
 
-  it('given a PLAN-LIMIT refusal, should 429 — not the 403 an authorization failure gets', async () => {
-    mockProvisionSessionSandbox.mockResolvedValue({ ok: false, reason: 'denied', denial: 'session_limit_reached' });
+  it('given a PLAN-LIMIT refusal, should 429 with the human sentence — not the provisioner\'s diagnostic enum', async () => {
+    // `detail: 'concurrency_limit'` is the REAL shape `checkAgentSessionConcurrency`
+    // returns — a diagnostic enum, not a sentence. It must reach the audit row
+    // and never the response body (PR #2253's live P1).
+    mockProvisionSessionSandbox.mockResolvedValue({
+      ok: false,
+      reason: 'denied',
+      denial: 'session_limit_reached',
+      detail: 'concurrency_limit',
+    });
     const response = await post();
     expect(response.status).toBe(429);
+    const body = await response.json();
+    expect(body.error).not.toContain('concurrency_limit');
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        details: expect.objectContaining({ reasonCode: 'concurrency_limit' }),
+      }),
+    );
   });
 
   it('given a provisioning denial, should 403 with the audit trail', async () => {

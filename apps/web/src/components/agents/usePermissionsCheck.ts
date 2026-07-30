@@ -12,6 +12,11 @@ export function usePermissionsCheck(pageId: string, userId: string | undefined):
   const [isReadOnly, setIsReadOnly] = useState(false);
 
   useEffect(() => {
+    // Fail-open for THIS page from the start — a previous page's `true` must
+    // never survive into a page whose own check hasn't answered yet (or
+    // errors out), since that reads as this page being read-only when it was
+    // simply never checked.
+    setIsReadOnly(false);
     if (!userId) return;
     let cancelled = false;
     (async () => {
