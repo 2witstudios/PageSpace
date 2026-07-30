@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { Bot, ChevronDown, ChevronRight, CircleStop, MessageSquarePlus, Plus, SquareTerminal } from 'lucide-react';
+import { Bot, ChevronDown, ChevronRight, MessageSquarePlus, Plus, SquareTerminal, X } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR from 'swr';
 
@@ -24,6 +24,7 @@ import { useAgentSurfaceStore, SHEET_BREAKPOINT_QUERY } from '@/stores/agents/us
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { fetchWithAuth, post, del } from '@/lib/auth/auth-fetch';
 import { buildSessionGroups, ASSISTANT_GROUP_KEY } from './session-groups';
+import { RowMenu, type RowMenuItem } from './session-row-menu';
 
 /**
  * The Agents console's left sidebar: **Drive → Session → conversations.**
@@ -102,7 +103,7 @@ export default function AgentsSidebar({ className }: SidebarProps) {
         <PrimaryNavigation driveId={driveId} />
 
         <ScrollArea className="flex-1 min-h-0">
-          <div className="space-y-1">
+          <div className="space-y-0.5">
             <SessionList
               authLoading={authLoading}
               isAdmin={isAdmin}
@@ -251,11 +252,11 @@ function SessionList({
   }, [driveId, sessions, notice, canSpawn, roster]);
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-1">
       {groups.map((group) => (
         <div key={group.driveId}>
           {!driveId && (
-            <div className="px-2 pb-1 pt-2 text-xs font-medium text-muted-foreground">
+            <div className="px-2 pb-0.5 pt-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground">
               {group.driveName ?? group.driveId}
             </div>
           )}
@@ -367,13 +368,23 @@ function SessionRow({ session, onChanged }: { session: SessionListEntry; onChang
     }
   }, [forgetWorkspace, onChanged, selectSession, selectedSessionId, session.sessionId]);
 
+  const menuItems: RowMenuItem[] = [
+    { label: 'New conversation', icon: MessageSquarePlus, onSelect: () => void newConversation() },
+    {
+      label: 'End session',
+      icon: X,
+      onSelect: () => setConfirmingEnd(true),
+      destructive: true,
+      separatorBefore: true,
+    },
+  ];
+
   return (
     <div>
-      <div
-        className={cn(
-          'group flex w-full items-center gap-1 rounded-md px-2 py-1.5 text-sm hover:bg-accent',
-          isSelected && 'bg-accent',
-        )}
+      <RowMenu
+        items={menuItems}
+        menuLabel="Session actions"
+        className={cn('gap-1 rounded-md px-1.5 py-1 text-[13px] hover:bg-accent', isSelected && 'bg-accent')}
       >
         <button
           type="button"
@@ -411,9 +422,9 @@ function SessionRow({ session, onChanged }: { session: SessionListEntry; onChang
           className="shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus:opacity-100 group-hover:opacity-100"
           onClick={() => setConfirmingEnd(true)}
         >
-          <CircleStop className="size-3.5" />
+          <X className="size-3.5" />
         </button>
-      </div>
+      </RowMenu>
 
       <EndSessionDialog
         open={confirmingEnd}
@@ -424,13 +435,16 @@ function SessionRow({ session, onChanged }: { session: SessionListEntry; onChang
       />
 
       {expanded && (
-        <div className="ml-5 space-y-0.5 border-l border-border pl-2">
+        <div className="ml-4 space-y-0.5 border-l border-border pl-1.5">
+          {/* Conversation rows have no row menu yet — their only item, "Close",
+              is the conversation-close route from #2277 (still open); it lands
+              here once that PR merges. */}
           {session.conversations.map((conversation) => (
             <button
               key={conversation.conversationId}
               type="button"
               className={cn(
-                'flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm text-muted-foreground hover:bg-accent hover:text-foreground',
+                'flex w-full items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left text-xs text-muted-foreground hover:bg-accent hover:text-foreground',
                 selectedConversationId === conversation.conversationId && 'bg-accent text-foreground',
               )}
               onClick={() => openConversation(conversation)}
@@ -439,7 +453,7 @@ function SessionRow({ session, onChanged }: { session: SessionListEntry; onChang
             </button>
           ))}
           {session.shells.length > 0 && (
-            <div className="flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground">
+            <div className="flex items-center gap-1.5 px-1.5 py-0.5 text-[11px] text-muted-foreground">
               <SquareTerminal className="size-3" aria-hidden="true" />
               {session.shells.length === 1 ? '1 shell' : `${session.shells.length} shells`}
             </div>
@@ -516,23 +530,23 @@ function NewSessionRow({
       <button
         type="button"
         disabled={spawning}
-        className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+        className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
         onClick={() => (driveId === null ? void spawn(null) : setChoosing((value) => !value))}
       >
         <Plus className="size-3.5" />
         New session
       </button>
       {choosing && (
-        <div className="ml-5 space-y-0.5 border-l border-border pl-2">
+        <div className="ml-4 space-y-0.5 border-l border-border pl-1.5">
           {agents.length === 0 ? (
-            <div className="px-2 py-1 text-xs text-muted-foreground">No agents in this drive yet</div>
+            <div className="px-1.5 py-0.5 text-xs text-muted-foreground">No agents in this drive yet</div>
           ) : (
             agents.map((agent) => (
               <button
                 key={agent.id}
                 type="button"
                 disabled={spawning}
-                className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+                className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
                 onClick={() => void spawn(agent.id)}
               >
                 <Bot className="size-3" aria-hidden="true" />

@@ -19,7 +19,7 @@
  * - The admin gate is a DISABLED FETCH (null SWR key), not a hidden list.
  */
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SWRConfig } from 'swr';
 
@@ -37,6 +37,9 @@ vi.mock('next/navigation', () => ({
 
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => mockUseAuth() }));
 vi.mock('@/hooks/useBreakpoint', () => ({ useBreakpoint: () => mockUseBreakpoint() }));
+
+const mockUseTouchDevice = vi.fn(() => false);
+vi.mock('@/hooks/useTouchDevice', () => ({ useTouchDevice: () => mockUseTouchDevice() }));
 
 interface PageAgentsResult {
   agentsByDrive: {
@@ -166,6 +169,7 @@ beforeEach(() => {
   mockUseParams.mockReturnValue({ driveId: 'drive-1' });
   mockUsePathname.mockReturnValue('/dashboard/drive-1/agents');
   mockUseBreakpoint.mockReturnValue(false);
+  mockUseTouchDevice.mockReturnValue(false);
   respondWithSessions([SESSION]);
 });
 
@@ -415,6 +419,62 @@ describe('AgentsSidebar', () => {
       await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
 
       expect(mockDel).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('session row menu', () => {
+    test('the 3-dots button is auto-revealed on a touch device', async () => {
+      mockUseTouchDevice.mockReturnValue(true);
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      expect(screen.getByLabelText('Session actions').className).toContain('opacity-100');
+    });
+
+    test('the 3-dots button is hover-revealed (opacity-0 at rest) on a non-touch device', async () => {
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      expect(screen.getByLabelText('Session actions').className).toContain('opacity-0');
+    });
+
+    test('right-click opens a context menu; "New conversation" drives the same handler as the inline icon', async () => {
+      mockPost.mockResolvedValue({ conversationId: 'conv-new' });
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      fireEvent.contextMenu(screen.getByText('api refactor'));
+      await user.click(await screen.findByText('New conversation'));
+
+      await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
+      expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-1/conversations', {
+        sessionId: 'ses-1',
+      });
+    });
+
+    test('"End session" from the context menu opens the same confirm dialog as the inline X', async () => {
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      fireEvent.contextMenu(screen.getByText('api refactor'));
+      await user.click(await screen.findByText('End session'));
+
+      expect(await screen.findByRole('alertdialog')).toBeDefined();
+    });
+
+    test('the 3-dots dropdown opens the same two items, driving the same handlers', async () => {
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      await user.click(screen.getByLabelText('Session actions'));
+
+      expect(await screen.findByText('New conversation')).toBeDefined();
+      await user.click(screen.getByText('End session'));
+
+      expect(await screen.findByRole('alertdialog')).toBeDefined();
     });
   });
 
