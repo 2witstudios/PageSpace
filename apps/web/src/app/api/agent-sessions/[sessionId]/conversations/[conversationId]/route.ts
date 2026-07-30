@@ -1,8 +1,8 @@
 /**
  * Close ONE conversation OUT of its session's listing.
  *
- * DELETE → 200 { ok: true } — the session's grid act (issue #2274 audit
- * follow-up): closing the last PANE bound to a conversation closes THAT
+ * DELETE → 200 { ok: true } — the session's grid act (a pane-close-lifecycle
+ * audit follow-up): closing the last PANE bound to a conversation closes THAT
  * listing, uniformly for page-agent and assistant threads alike (there is no
  * page to hang a page-agents-scoped delete on for an assistant thread, same
  * reason the sibling POST in this family exists). This is NOT the

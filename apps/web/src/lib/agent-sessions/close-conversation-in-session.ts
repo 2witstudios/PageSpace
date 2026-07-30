@@ -1,6 +1,6 @@
 /**
  * Close a conversation OUT of its session's listing — the missing level in
- * the pane grid's model (issue #2274 audit follow-up): session → conversation
+ * the pane grid's model (a pane-close-lifecycle audit follow-up): session → conversation
  * (agent listing) → panes. Closing the last PANE bound to a conversation
  * should close THAT listing; only closing the session's last listing should
  * end the session.
