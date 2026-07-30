@@ -5,8 +5,9 @@ const {
   mockAuthenticateRequest,
   mockAuditRequest,
   mockListSessions,
-  mockListShells,
-  mockListSessionConversations,
+  mockListShellsBulk,
+  mockListSessionConversationsBulk,
+  mockCountActiveSessionsForOwner,
   mockCheckAccessForSubject,
   mockCreateConversationInSession,
   mockEndSession,
@@ -17,8 +18,9 @@ const {
   mockAuthenticateRequest: vi.fn(),
   mockAuditRequest: vi.fn(),
   mockListSessions: vi.fn(),
-  mockListShells: vi.fn(),
-  mockListSessionConversations: vi.fn(),
+  mockListShellsBulk: vi.fn(),
+  mockListSessionConversationsBulk: vi.fn(),
+  mockCountActiveSessionsForOwner: vi.fn(),
   mockCheckAccessForSubject: vi.fn(),
   mockCreateConversationInSession: vi.fn(),
   mockEndSession: vi.fn(),
@@ -43,7 +45,8 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
   listSessions: (...args: unknown[]) => mockListSessions(...args),
-  listSessionConversations: (...args: unknown[]) => mockListSessionConversations(...args),
+  listSessionConversationsBulk: (...args: unknown[]) => mockListSessionConversationsBulk(...args),
+  countActiveSessionsForOwner: (...args: unknown[]) => mockCountActiveSessionsForOwner(...args),
   checkAccessForSubject: (...args: unknown[]) => mockCheckAccessForSubject(...args),
   createConversationInSession: (...args: unknown[]) => mockCreateConversationInSession(...args),
   endSession: (...args: unknown[]) => mockEndSession(...args),
@@ -51,7 +54,7 @@ vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
   toAgentSessionDTO: (row: { id: string }) => ({ sessionId: row.id, dto: true }),
 }));
 vi.mock('@/lib/agent-sessions/session-shells-runtime', () => ({
-  listShells: (...args: unknown[]) => mockListShells(...args),
+  listShellsBulk: (...args: unknown[]) => mockListShellsBulk(...args),
 }));
 
 import { GET, POST } from '../route';
@@ -91,8 +94,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockAuthenticateRequest.mockResolvedValue(AUTH_ADMIN);
   mockListSessions.mockResolvedValue([SESSION_DTO]);
-  mockListShells.mockResolvedValue([SHELL_DTO]);
-  mockListSessionConversations.mockResolvedValue([CONVERSATION_ENTRY]);
+  mockListShellsBulk.mockResolvedValue(new Map([['ses-1', [SHELL_DTO]]]));
+  mockListSessionConversationsBulk.mockResolvedValue(new Map([['ses-1', [CONVERSATION_ENTRY]]]));
+  mockCountActiveSessionsForOwner.mockResolvedValue(0);
 });
 
 describe('GET /api/agent-sessions', () => {
@@ -103,7 +107,10 @@ describe('GET /api/agent-sessions', () => {
       sessions: [{ ...SESSION_DTO, shells: [SHELL_DTO], conversations: [CONVERSATION_ENTRY] }],
     });
     expect(mockListSessions).toHaveBeenCalledWith({ ownerId: 'user-1' });
-    expect(mockListSessionConversations).toHaveBeenCalledWith('ses-1');
+    // ONE bulk call each, however many sessions — the poll must not be 1+2N.
+    expect(mockListSessionConversationsBulk).toHaveBeenCalledTimes(1);
+    expect(mockListSessionConversationsBulk).toHaveBeenCalledWith(['ses-1']);
+    expect(mockListShellsBulk).toHaveBeenCalledWith(['ses-1']);
   });
 
   it('given ?driveId=, should narrow WHERE but never WHOSE (ownerId still rides the filter)', async () => {
@@ -121,7 +128,7 @@ describe('GET /api/agent-sessions', () => {
     const response = await GET(new Request('http://localhost/api/agent-sessions'));
     expect(response.status).toBe(403);
     expect(mockListSessions).not.toHaveBeenCalled();
-    expect(mockListShells).not.toHaveBeenCalled();
+    expect(mockListShellsBulk).not.toHaveBeenCalled();
     expect(mockAuditRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ eventType: 'authz.access.denied' }),
@@ -162,6 +169,7 @@ describe('POST /api/agent-sessions — spawn', () => {
     mockEndSession.mockResolvedValue({ ok: true, spriteTornDown: false });
     mockGetAiAgent.mockResolvedValue({ id: 'agent-1', title: 'Agent', type: 'AI_CHAT', driveId: 'drive-1' });
     mockCanPrincipalViewPage.mockResolvedValue(true);
+    mockCountActiveSessionsForOwner.mockResolvedValue(0);
   });
 
   it('spawns ONE session with ONE bound conversation — and NO sandbox', async () => {
@@ -235,6 +243,7 @@ describe('POST /api/agent-sessions — spawn agent validation (review M6)', () =
     mockCreateConversationInSession.mockResolvedValue(undefined);
     mockGetAiAgent.mockResolvedValue({ id: 'agent-1', title: 'Agent', type: 'AI_CHAT', driveId: 'drive-1' });
     mockCanPrincipalViewPage.mockResolvedValue(true);
+    mockCountActiveSessionsForOwner.mockResolvedValue(0);
   });
 
   it('404s an unknown/non-agent page BEFORE minting anything', async () => {
@@ -268,5 +277,26 @@ describe('POST /api/agent-sessions — spawn agent validation (review M6)', () =
     expect(mockSpawnSession).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'x'.repeat(120) }),
     );
+  });
+});
+
+describe('POST /api/agent-sessions — spawn ceiling (review M6/F4)', () => {
+  const spawn = (body: unknown) =>
+    POST(
+      new Request('http://localhost/api/agent-sessions', {
+        method: 'POST',
+        body: JSON.stringify(body),
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+  it('429s at the active-session ceiling — spawn is free, but not unbounded', async () => {
+    mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+    mockGetAiAgent.mockResolvedValue({ id: 'agent-1', title: 'Agent', type: 'AI_CHAT', driveId: 'drive-1' });
+    mockCanPrincipalViewPage.mockResolvedValue(true);
+    mockCountActiveSessionsForOwner.mockResolvedValue(100);
+    const response = await spawn({ driveId: 'drive-1', agentPageId: 'agent-1' });
+    expect(response.status).toBe(429);
+    expect(mockSpawnSession).not.toHaveBeenCalled();
   });
 });

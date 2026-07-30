@@ -24,18 +24,29 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createId } from '@paralleldrive/cuid2';
 import {
   checkAccessForSubject,
+  countActiveSessionsForOwner,
   createConversationInSession,
   endSession,
   listSessions,
-  listSessionConversations,
+  listSessionConversationsBulk,
   spawnSession,
   toAgentSessionDTO,
   type AgentSessionListFilter,
 } from '@/lib/agent-sessions/agent-sessions-runtime';
-import { listShells } from '@/lib/agent-sessions/session-shells-runtime';
+import { listShellsBulk } from '@/lib/agent-sessions/session-shells-runtime';
+import { sessionQuotaExceeded } from '@/lib/agent-sessions/quota-response';
 
 /** Bound on the stored display label — rendered everywhere the session appears. */
 const MAX_SESSION_NAME_LENGTH = 120;
+
+/**
+ * The most NOT-ENDED sessions one owner may hold. Spawn is deliberately
+ * instant and free (no sandbox), which meant the live-sandbox concurrency
+ * quota never applied to it — an authorized caller could mint unbounded rows
+ * (review M6/F4). Matches SESSION_LIST_LIMIT: the sidebar shows at most this
+ * many anyway.
+ */
+const MAX_ACTIVE_SESSIONS_PER_OWNER = 100;
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -68,14 +79,20 @@ export async function GET(request: Request) {
 
   try {
     const sessions = await listSessions(filter);
-    const withChildren = await Promise.all(
-      sessions.map(async (session) => ({
-        ...session,
-        shells: await listShells(session.sessionId),
-        // The sidebar's expansion list: the threads living in this workspace.
-        conversations: await listSessionConversations(session.sessionId),
-      })),
-    );
+    // Children in TWO bulk queries, however many sessions listed — this is
+    // polled by every open sidebar, and the per-session shape was 1+2N
+    // queries per poll (review M4).
+    const sessionIds = sessions.map((session) => session.sessionId);
+    const [shellsBySession, conversationsBySession] = await Promise.all([
+      listShellsBulk(sessionIds),
+      listSessionConversationsBulk(sessionIds),
+    ]);
+    const withChildren = sessions.map((session) => ({
+      ...session,
+      shells: shellsBySession.get(session.sessionId) ?? [],
+      // The sidebar's expansion list: the threads living in this workspace.
+      conversations: conversationsBySession.get(session.sessionId) ?? [],
+    }));
     return NextResponse.json({ sessions: withChildren });
   } catch (error) {
     loggers.api.error(
@@ -170,6 +187,17 @@ export async function POST(request: Request) {
         { status: 403 },
       );
     }
+  }
+
+  const activeCount = await countActiveSessionsForOwner(auth.userId);
+  if (activeCount >= MAX_ACTIVE_SESSIONS_PER_OWNER) {
+    return sessionQuotaExceeded(
+      request,
+      auth.userId,
+      'about-to-be-minted',
+      'agent-sessions',
+      `You have ${activeCount} active sessions — end some before starting more.`,
+    );
   }
 
   const access = await checkAccessForSubject(auth.userId, {
