@@ -149,3 +149,72 @@ describe('a transition aimed at a grid that is gone', () => {
     expect(() => store().forgetWorkspace('conv-1')).not.toThrow();
   });
 });
+
+describe('openConversation — selection means SHOW it (review M1)', () => {
+  const conv = (targetId: string, name = 'Thread'): PaneScope => ({
+    kind: 'chat',
+    name,
+    targetId,
+    agentPageId: 'agent-1',
+  });
+  const shellScope = (targetId: string): PaneScope => ({
+    kind: 'terminal',
+    name: 'shell-1',
+    targetId,
+    agentPageId: null,
+  });
+
+  it('with no workspace, seeds the opening grid (ensure semantics)', () => {
+    store().openConversation('ses-1', conv('conv-1'));
+    expect(panesOf(grid())).toHaveLength(1);
+    expect(panesOf(grid())[0].scope?.targetId).toBe('conv-1');
+  });
+
+  it('focuses the pane already showing the conversation instead of duplicating it', () => {
+    store().openConversation('ses-1', conv('conv-1'));
+    const first = panesOf(grid())[0];
+    store().splitRight('ses-1', first.id);
+    const second = panesOf(grid()).find((p) => p.id !== first.id)!;
+    store().assignPane('ses-1', second.id, conv('conv-2'));
+    expect(grid().activePaneId).toBe(second.id);
+
+    store().openConversation('ses-1', conv('conv-1'));
+    expect(grid().activePaneId).toBe(first.id);
+    expect(panesOf(grid())).toHaveLength(2);
+  });
+
+  it('opens an unseen conversation in the ACTIVE pane when it is a chat', () => {
+    store().openConversation('ses-1', conv('conv-1'));
+    const paneId = panesOf(grid())[0].id;
+    store().openConversation('ses-1', conv('conv-2'));
+    expect(panesOf(grid())).toHaveLength(1);
+    expect(panesOf(grid())[0].id).toBe(paneId);
+    expect(panesOf(grid())[0].scope?.targetId).toBe('conv-2');
+  });
+
+  it('never opens OVER a terminal — a running PTY keeps its only surface', () => {
+    store().openConversation('ses-1', conv('conv-1'));
+    const chatPane = panesOf(grid())[0];
+    store().splitRight('ses-1', chatPane.id);
+    const termPane = panesOf(grid()).find((p) => p.id !== chatPane.id)!;
+    store().assignPane('ses-1', termPane.id, shellScope('shell-row-1'));
+    // Terminal is the ACTIVE pane now; the open must land on the chat pane.
+    store().openConversation('ses-1', conv('conv-2'));
+    const term = panesOf(grid()).find((p) => p.id === termPane.id)!;
+    expect(term.scope?.kind).toBe('terminal');
+    const chat = panesOf(grid()).find((p) => p.id === chatPane.id)!;
+    expect(chat.scope?.targetId).toBe('conv-2');
+  });
+
+  it('with EVERY pane a terminal, splits right rather than evicting one', () => {
+    store().openConversation('ses-1', conv('conv-1'));
+    const only = panesOf(grid())[0];
+    store().assignPane('ses-1', only.id, shellScope('shell-row-1'));
+
+    store().openConversation('ses-1', conv('conv-2'));
+    const panes = panesOf(grid());
+    expect(panes).toHaveLength(2);
+    expect(panes.filter((p) => p.scope?.kind === 'terminal')).toHaveLength(1);
+    expect(panes.find((p) => p.scope?.targetId === 'conv-2')).toBeDefined();
+  });
+});

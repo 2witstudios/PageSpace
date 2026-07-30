@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware';
 import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
 import {
   newWorkspace,
+  paneShowing,
   panesOf,
   assignPane as assignPaneIn,
   clearPanePrompt as clearPanePromptIn,
@@ -43,6 +44,17 @@ interface AgentWorkspaceState {
   workspaces: Record<string, WorkspaceState>;
   /** Give a session its opening grid, once. Idempotent. */
   ensureWorkspace(sessionId: string, scope: PaneScope): void;
+  /**
+   * Make a conversation VISIBLE in the session's grid — what a sidebar or
+   * history selection means (review M1: `ensureWorkspace` alone no-ops on a
+   * persisted grid, so clicking a conversation the layout didn't already show
+   * changed the URL and nothing else). Focus the pane already showing it;
+   * otherwise open it in the active pane when that pane is a chat/picker, or
+   * in the first chat pane — never over a TERMINAL (a running PTY loses its
+   * only surface; there is no reattach UI). With every pane a terminal, split
+   * the active pane right.
+   */
+  openConversation(sessionId: string, scope: PaneScope): void;
   splitRight(sessionId: string, fromPaneId: string): void;
   splitDown(sessionId: string, fromPaneId: string): void;
   /**
@@ -111,6 +123,40 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
             },
           };
         }),
+
+      openConversation: (sessionId, scope) => {
+        const state = useAgentWorkspaceStore.getState();
+        const workspace = state.workspaces[sessionId];
+        if (!workspace) {
+          state.ensureWorkspace(sessionId, scope);
+          return;
+        }
+        if (scope.targetId !== null) {
+          const showing = paneShowing(workspace, scope.targetId);
+          if (showing) {
+            state.selectPane(sessionId, showing.id);
+            return;
+          }
+        }
+        const panes = panesOf(workspace);
+        const active = panes.find((pane) => pane.id === workspace.activePaneId);
+        const replaceable =
+          active && active.scope?.kind !== 'terminal'
+            ? active
+            : panes.find((pane) => pane.scope?.kind !== 'terminal');
+        if (replaceable) {
+          state.assignPane(sessionId, replaceable.id, scope);
+          return;
+        }
+        // Every pane is a running terminal — open beside them.
+        set(
+          (current) =>
+            updateWorkspace(current, sessionId, (w) => {
+              const split = splitRightIn(w, w.activePaneId, mintId('col'), mintId('pane'));
+              return assignPaneIn(split, split.activePaneId, scope);
+            }) ?? {},
+        );
+      },
 
       splitRight: (sessionId, fromPaneId) =>
         set(

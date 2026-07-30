@@ -27,7 +27,7 @@
  * session) and tells its host, which owns what the empty state looks like.
  */
 
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import { createId } from '@paralleldrive/cuid2';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -69,7 +69,7 @@ export default function AgentPanes({
   chatContext = 'console',
 }: AgentPanesProps) {
   const workspaces = useAgentWorkspaceStore((state) => state.workspaces);
-  const ensureWorkspace = useAgentWorkspaceStore((state) => state.ensureWorkspace);
+  const openConversation = useAgentWorkspaceStore((state) => state.openConversation);
   const splitRight = useAgentWorkspaceStore((state) => state.splitRight);
   const splitDown = useAgentWorkspaceStore((state) => state.splitDown);
   const closePane = useAgentWorkspaceStore((state) => state.closePane);
@@ -87,14 +87,20 @@ export default function AgentPanes({
     .map((agent) => ({ id: agent.id, title: agent.title ?? 'Agent' }));
 
   const workspace = workspaces[sessionId];
-  if (!workspace) {
-    ensureWorkspace(sessionId, {
+  // Selection IS an instruction to show the conversation (review M1): on
+  // mount this seeds the first pane; on a later selection within the same
+  // session it focuses the pane already showing the thread, or opens it in a
+  // non-terminal pane — the store owns that policy (`openConversation`).
+  useEffect(() => {
+    openConversation(sessionId, {
       kind: 'chat',
       name: initialConversation.name,
       targetId: initialConversation.conversationId,
       agentPageId: initialConversation.agentPageId,
     });
-  }
+    // name/agentPageId describe the same conversation — the id is the identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, initialConversation.conversationId, openConversation]);
 
   const handleClosePane = useCallback(
     async (paneId: string) => {
@@ -171,7 +177,7 @@ export default function AgentPanes({
   );
 
   if (!workspace) {
-    // ensureWorkspace above lands on the next render tick.
+    // The openConversation effect seeds the grid on the next tick.
     return (
       <div className="flex h-full items-center justify-center">
         <Loader2 className="size-4 animate-spin text-muted-foreground" />
