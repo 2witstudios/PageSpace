@@ -500,12 +500,27 @@ describe('GET /api/pages/[pageId]/publish', () => {
     expect(findFirstDrive).not.toHaveBeenCalled();
   });
 
-  it('returns { published: false, available: true } when no row exists and publishing is configured', async () => {
+  it('returns { published: false, available: true, canEdit: true } when no row exists and publishing is configured', async () => {
     findFirstPublished.mockResolvedValue(undefined);
     const res = await GET(makeReq(), { params });
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json).toEqual({ published: false, available: true });
+    expect(json).toEqual({ published: false, available: true, canEdit: true });
+  });
+
+  it('given view-but-not-edit access to an unpublished page, returns canEdit: false (not just available)', async () => {
+    // Regression test: PublishControls decides whether to show an enabled
+    // Publish button from `available` alone on this branch — without
+    // `canEdit` here too, a view-only viewer would see an enabled button
+    // that only reveals the permission failure once its POST 403s.
+    canUserEditPage.mockResolvedValue(false);
+    canUserViewPage.mockResolvedValue(true);
+    findFirstPublished.mockResolvedValue(undefined);
+
+    const res = await GET(makeReq(), { params });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json).toEqual({ published: false, available: true, canEdit: false });
   });
 
   it('returns available: false when the page is in a Home drive (no published row)', async () => {
@@ -526,7 +541,7 @@ describe('GET /api/pages/[pageId]/publish', () => {
     const res = await GET(makeReq(), { params });
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json).toEqual({ published: false, available: false });
+    expect(json).toEqual({ published: false, available: false, canEdit: true });
   });
 
   it('reports available: false when the kill-switch is engaged even if the bucket is configured', async () => {
@@ -539,7 +554,7 @@ describe('GET /api/pages/[pageId]/publish', () => {
       expect(res.status).toBe(200);
       const json = await res.json();
       // POST would 503 ("temporarily disabled") here, so the UI must hide the control.
-      expect(json).toEqual({ published: false, available: false });
+      expect(json).toEqual({ published: false, available: false, canEdit: true });
     } finally {
       if (prev === undefined) delete process.env.CANVAS_PUBLISHING_DISABLED;
       else process.env.CANVAS_PUBLISHING_DISABLED = prev;

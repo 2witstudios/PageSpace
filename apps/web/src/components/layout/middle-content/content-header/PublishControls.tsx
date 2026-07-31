@@ -122,7 +122,6 @@ const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishCo
         return false;
       }
       const data = (await res.json()) as PublishStatusResponse & { url: string };
-      const prev = usePublishStatusStore.getState().statuses.get(pageId);
       setStatus(pageId, {
         published: true,
         // Reaching this line required a successful POST, which is itself
@@ -132,11 +131,16 @@ const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishCo
         available: true,
         isStale: false,
         hasLoadError: false,
-        // Read the effective settings back from the server rather than caching
-        // the request payload: when `overrides.ogImageFileId` was set, the
-        // request's `ogImageUrl` is a blank placeholder — the server resolves
-        // it to the real CDN URL and returns that resolved value here.
-        settings: overrides ? publishStatusFromResponse(data).settings : prev?.settings ?? publishStatusFromResponse(data).settings,
+        // Always read settings back from the server response, even when no
+        // `overrides` were passed: it's not just "whatever was persisted
+        // before" — an unpublish (DELETE) removes the published_pages row
+        // entirely, so a bare republish after one gets fresh server
+        // defaults, not the pre-unpublish settings. Caching the latter here
+        // would show (and let Save silently restore) values the server has
+        // already reset. This also covers the `overrides.ogImageFileId`
+        // case: the request's `ogImageUrl` is a blank placeholder that the
+        // server resolves to the real CDN URL, returned here.
+        settings: publishStatusFromResponse(data).settings,
       });
       toast.success(isUpdate ? 'Page updated' : 'Page published');
       return true;
@@ -180,13 +184,19 @@ const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishCo
     return <span className="px-4 py-2 text-sm text-muted-foreground">Loading…</span>;
   }
 
-  // Publishing isn't configured on this deployment (e.g. no PUBLISH_BUCKET), or
-  // this viewer lacks permission to publish (a definitive 403 — see
-  // `hasLoadError` on PublishStatus for the transient-failure case, handled
-  // separately). In the header (among other populated buttons) staying silent
-  // is fine; in a standalone panel (the canvas Settings tab) silence would
-  // leave the tab blank, so explain instead.
-  if (!status.available) {
+  // Publishing isn't configured on this deployment (e.g. no PUBLISH_BUCKET),
+  // or this viewer can view but not edit — the GET route now serves
+  // `published`/`available` to any viewer (see the route's view-permission
+  // comment) so the View tab's preview stays accurate for everyone, but
+  // that means this control must check `canEdit` itself rather than relying
+  // on a 403 to hide it: without this, a view-only viewer on an unpublished
+  // page would see an enabled Publish button that only reveals the
+  // permission failure once its own POST 403s. (A genuine 403 — no view
+  // access at all — still surfaces via `hasLoadError`'s transient-failure
+  // case, handled separately.) In the header (among other populated
+  // buttons) staying silent is fine; in a standalone panel (the canvas
+  // Settings tab) silence would leave the tab blank, so explain instead.
+  if (!status.available || !status.canEdit) {
     if (variant === 'panel') {
       return (
         <p className="text-sm text-muted-foreground">

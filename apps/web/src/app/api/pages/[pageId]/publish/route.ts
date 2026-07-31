@@ -88,7 +88,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
           if (drv?.kind === 'HOME') available = false;
         }
       }
-      return NextResponse.json({ published: false, available });
+      // `canEdit` matters even for an unpublished page: a view-only caller
+      // reaching here (canView but !canEdit) must not have PublishControls
+      // read `available` alone and offer an enabled Publish button that
+      // only reveals the permission failure once its POST 403s.
+      return NextResponse.json({ published: false, available, canEdit });
     }
 
     // View-only: stop here with just the rendering-relevant field. Skip the

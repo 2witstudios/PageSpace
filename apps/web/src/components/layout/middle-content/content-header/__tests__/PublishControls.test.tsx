@@ -1,5 +1,6 @@
 import { describe, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { assert } from '@/stores/__tests__/riteway';
 import { usePublishStatusStore } from '@/stores/usePublishStatusStore';
 
@@ -135,6 +136,24 @@ describe('PublishControls — unavailable-state branching', () => {
       expected: '',
     }));
   });
+
+  it('given view-but-not-edit access to an unpublished page (available: true, canEdit: false), header variant should render nothing', async () => {
+    // Regression test for a Codex-flagged bug: this branch used to key off
+    // `available` alone, so a view-only viewer on an unpublished page saw
+    // an enabled Publish button that only revealed the permission failure
+    // once its own POST 403'd.
+    mockFetchWithAuth.mockResolvedValue(
+      makeStatusResponse({ body: { published: false, available: true, canEdit: false } })
+    );
+
+    const { container } = render(<PublishControls pageId="page_1" />);
+    await waitFor(() => assert({
+      given: 'a view-only viewer on an unpublished-but-available page',
+      should: 'render nothing rather than an enabled Publish button',
+      actual: container.textContent,
+      expected: '',
+    }));
+  });
 });
 
 // ============================================================================
@@ -145,7 +164,7 @@ describe('PublishControls — unavailable-state branching', () => {
 // ============================================================================
 describe('PublishControls — available state (header variant)', () => {
   it('given an unpublished, available page, should render a clickable Publish button', async () => {
-    mockFetchWithAuth.mockResolvedValue(makeStatusResponse({ body: { published: false, available: true } }));
+    mockFetchWithAuth.mockResolvedValue(makeStatusResponse({ body: { published: false, available: true, canEdit: true } }));
 
     render(<PublishControls pageId="page_1" />);
 
@@ -160,7 +179,7 @@ describe('PublishControls — available state (header variant)', () => {
 
   it('given a published page, should render Copy link and Unpublish buttons', async () => {
     mockFetchWithAuth.mockResolvedValue(makeStatusResponse({
-      body: { published: true, available: true, url: 'https://acme.pagespace.site/welcome', isStale: false },
+      body: { published: true, canEdit: true, available: true, url: 'https://acme.pagespace.site/welcome', isStale: false },
     }));
 
     render(<PublishControls pageId="page_1" />);
@@ -172,6 +191,55 @@ describe('PublishControls — available state (header variant)', () => {
       should: 'render both the Copy link and Unpublish buttons',
       actual: [copyLink.tagName, unpublish.tagName],
       expected: ['BUTTON', 'BUTTON'],
+    });
+  });
+});
+
+// ============================================================================
+// Regression test for a Codex-flagged bug: unpublishing (DELETE) removes the
+// published_pages row entirely, so a bare republish (no dialog overrides)
+// gets fresh server defaults — but this component used to keep showing the
+// PRE-unpublish cached settings in that case, so the dialog (and for
+// Canvas, the live preview) disagreed with the published artifact and a
+// later Save could silently restore values the server had already reset.
+// ============================================================================
+describe('PublishControls — settings after unpublish/republish', () => {
+  it('given a bare republish after unpublishing, should adopt the server\'s fresh settings, not the pre-unpublish cache', async () => {
+    mockFetchWithAuth
+      // Initial GET on mount: published with a custom title and theme bridge off.
+      .mockResolvedValueOnce(makeStatusResponse({
+        body: {
+          published: true, canEdit: true, available: true, url: 'https://acme.pagespace.site/welcome',
+          title: 'Old Title', themeBridgeEnabled: false,
+        },
+      }))
+      // DELETE (Unpublish click): no body needed, just ok.
+      .mockResolvedValueOnce(makeStatusResponse({ body: {} }))
+      // POST (Publish click, no overrides): the server recreated the row
+      // with fresh defaults — no more custom title, theme bridge back on.
+      .mockResolvedValueOnce(makeStatusResponse({
+        body: {
+          published: true, url: 'https://acme.pagespace.site/welcome',
+          title: null, themeBridgeEnabled: true,
+        },
+      }));
+
+    render(<PublishControls pageId="page_1" />);
+
+    const unpublishButton = await screen.findByRole('button', { name: 'Unpublish' });
+    await userEvent.click(unpublishButton);
+
+    const publishButton = await screen.findByRole('button', { name: 'Publish' });
+    await userEvent.click(publishButton);
+
+    await waitFor(() => {
+      const status = usePublishStatusStore.getState().statuses.get('page_1');
+      assert({
+        given: 'a republish with no overrides, immediately after unpublishing',
+        should: "adopt the server's fresh (reset) settings instead of the pre-unpublish cache",
+        actual: [status?.settings.title, status?.settings.themeBridgeEnabled],
+        expected: ['', true],
+      });
     });
   });
 });
