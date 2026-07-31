@@ -50,23 +50,25 @@ export function TaskListWorkflowsDialog({
   };
 
   const handleCreate = async (data: WorkflowFormData) => {
-    await post('/api/workflows', {
+    const created = await post<{ warnings?: string[] }>('/api/workflows', {
       ...data,
       contextPageIds: ensurePageAnchor(data.contextPageIds),
       driveId,
     });
     mutate();
     toast.success('Workflow created');
+    created.warnings?.forEach((warning) => toast.warning(warning, { duration: 10000 }));
   };
 
   const handleUpdate = async (data: WorkflowFormData) => {
     if (!editing) return;
-    await patch(`/api/workflows/${editing.id}`, {
+    const updated = await patch<{ warnings?: string[] }>(`/api/workflows/${editing.id}`, {
       ...data,
       contextPageIds: ensurePageAnchor(data.contextPageIds),
     });
     mutate();
     toast.success('Workflow updated');
+    updated.warnings?.forEach((warning) => toast.warning(warning, { duration: 10000 }));
   };
 
   const handleRun = async (id: string) => {

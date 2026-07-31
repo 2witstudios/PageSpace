@@ -24,16 +24,18 @@ export function WorkflowsDashboard({ driveId, driveName }: WorkflowsDashboardPro
   const [deleteTarget, setDeleteTarget] = useState<Workflow | null>(null);
 
   const handleCreate = async (data: WorkflowFormData) => {
-    await post('/api/workflows', { ...data, driveId });
+    const created = await post<{ warnings?: string[] }>('/api/workflows', { ...data, driveId });
     mutate();
     toast.success('Workflow created');
+    created.warnings?.forEach((warning) => toast.warning(warning, { duration: 10000 }));
   };
 
   const handleUpdate = async (data: WorkflowFormData) => {
     if (!editingWorkflow) return;
-    await patch(`/api/workflows/${editingWorkflow.id}`, data);
+    const updated = await patch<{ warnings?: string[] }>(`/api/workflows/${editingWorkflow.id}`, data);
     mutate();
     toast.success('Workflow updated');
+    updated.warnings?.forEach((warning) => toast.warning(warning, { duration: 10000 }));
   };
 
   const handleRun = async (id: string) => {
