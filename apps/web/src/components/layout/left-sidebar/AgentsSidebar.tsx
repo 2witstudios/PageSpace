@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { Bot, ChevronDown, ChevronRight, MessageSquarePlus, Plus, SquareTerminal, X } from 'lucide-react';
+import { Bot, ChevronDown, ChevronRight, Plus, SquareTerminal, X } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR from 'swr';
 
@@ -250,6 +250,19 @@ function SessionList({
   // session, but must not offer to spawn a NEW one into a trashed drive.
   const trashedDriveIds = useMemo(() => new Set(drives.filter((d) => d.isTrashed).map((d) => d.id)), [drives]);
 
+  // Flattened once here (not per-SessionRow) so every session's conversation
+  // labels share one lookup instead of re-deriving it from `agentsByDrive` N
+  // times.
+  const agentNamesById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const drive of agentsByDrive) {
+      for (const agent of drive.agents) {
+        map.set(agent.id, agent.title ?? 'Agent');
+      }
+    }
+    return map;
+  }, [agentsByDrive]);
+
   // Group by drive in global mode (roster ∪ session-implied drives, Assistant
   // first — see session-groups.ts for the ordering rule); a single implicit
   // group in drive mode, always present (even with zero sessions) so its
@@ -368,7 +381,12 @@ function SessionList({
             />
           )}
           {group.sessions.map((session) => (
-            <SessionRow key={session.sessionId} session={session} onChanged={onChanged} />
+            <SessionRow
+              key={session.sessionId}
+              session={session}
+              onChanged={onChanged}
+              agentNamesById={agentNamesById}
+            />
           ))}
         </div>
       ))}
@@ -419,7 +437,15 @@ function SessionGroupHeader({
 }
 
 /** One session: name + running dot, expanding to its conversations (never its panes). */
-function SessionRow({ session, onChanged }: { session: SessionListEntry; onChanged: () => void }) {
+function SessionRow({
+  session,
+  onChanged,
+  agentNamesById,
+}: {
+  session: SessionListEntry;
+  onChanged: () => void;
+  agentNamesById: Map<string, string>;
+}) {
   const selectedSessionId = useAgentSurfaceStore((state) => state.selectedSessionId);
   const selectedConversationId = useAgentSurfaceStore((state) => state.selectedConversationId);
   const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
@@ -450,37 +476,18 @@ function SessionRow({ session, onChanged }: { session: SessionListEntry; onChang
     if (first) openConversation(first);
   }, [openConversation, session.conversations]);
 
-  const newConversation = useCallback(async () => {
-    // A new thread defaults to the session's most recent conversation's
-    // counterpart — the full drive picker lives in the pane grid. A null
-    // agent (a global session, or a drive session whose latest thread is an
-    // assistant thread) means the ASSISTANT, created through the
-    // session-centric route since it has no agent page.
-    const agentPageId = session.conversations[0]?.agentPageId ?? null;
-    try {
-      const created =
-        agentPageId === null
-          ? await post<{ conversationId: string }>(
-              `/api/agent-sessions/${encodeURIComponent(session.sessionId)}/conversations`,
-              {},
-            )
-          : await post<{ conversationId: string }>(
-              `/api/ai/page-agents/${encodeURIComponent(agentPageId)}/conversations`,
-              { sessionId: session.sessionId },
-            );
-      onChanged();
-      selectConversation({
-        sessionId: session.sessionId,
-        conversationId: created.conversationId,
-        agentId: agentPageId,
+  const openShell = useCallback(
+    (shell: { shellId: string; name: string }) => {
+      selectSession(session.sessionId);
+      useAgentWorkspaceStore.getState().openConversation(session.sessionId, {
+        kind: 'terminal',
+        name: shell.name,
+        targetId: shell.shellId,
+        agentPageId: null,
       });
-    } catch (error) {
-      console.error('Failed to start a conversation:', error);
-      toast.error('Could not start a conversation', {
-        description: error instanceof Error ? error.message : 'Please try again.',
-      });
-    }
-  }, [onChanged, selectConversation, session.conversations, session.sessionId]);
+    },
+    [selectSession, session.sessionId],
+  );
 
   const endSession = useCallback(async () => {
     setEnding(true);
@@ -530,16 +537,14 @@ function SessionRow({ session, onChanged }: { session: SessionListEntry; onChang
 
   const menuItems: RowMenuItem[] = useMemo(
     () => [
-      { label: 'New conversation', icon: MessageSquarePlus, onSelect: () => void newConversation() },
       {
         label: 'End session',
         icon: X,
         onSelect: () => setConfirmingEnd(true),
         destructive: true,
-        separatorBefore: true,
       },
     ],
-    [newConversation],
+    [],
   );
 
   return (
@@ -573,14 +578,6 @@ function SessionRow({ session, onChanged }: { session: SessionListEntry; onChang
         </button>
         <button
           type="button"
-          aria-label="New conversation in this session"
-          className="shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus:opacity-100 group-hover:opacity-100"
-          onClick={() => void newConversation()}
-        >
-          <MessageSquarePlus className="size-3.5" />
-        </button>
-        <button
-          type="button"
           aria-label="End session"
           className="shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus:opacity-100 group-hover:opacity-100"
           onClick={() => setConfirmingEnd(true)}
@@ -599,38 +596,50 @@ function SessionRow({ session, onChanged }: { session: SessionListEntry; onChang
 
       {expanded && (
         <div className="ml-4 space-y-0.5 border-l border-border pl-1.5">
-          {session.conversations.map((conversation) => (
-            <RowMenu
-              key={conversation.conversationId}
-              items={[
-                {
-                  label: 'Close',
-                  icon: X,
-                  onSelect: () => void closeConversation(conversation.conversationId),
-                  destructive: true,
-                },
-              ]}
-              menuLabel="Conversation actions"
-              className={cn(
-                'gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground',
-                selectedConversationId === conversation.conversationId && 'bg-accent text-foreground',
-              )}
-            >
-              <button
-                type="button"
-                className="flex min-w-0 flex-1 items-center text-left"
-                onClick={() => openConversation(conversation)}
+          {session.conversations.map((conversation) => {
+            const agentName =
+              conversation.agentPageId === null
+                ? 'Assistant'
+                : (agentNamesById.get(conversation.agentPageId) ?? 'Agent');
+            const label = conversation.title ? `${agentName} — ${conversation.title}` : agentName;
+            return (
+              <RowMenu
+                key={conversation.conversationId}
+                items={[
+                  {
+                    label: 'Close',
+                    icon: X,
+                    onSelect: () => void closeConversation(conversation.conversationId),
+                    destructive: true,
+                  },
+                ]}
+                menuLabel="Conversation actions"
+                className={cn(
+                  'gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground',
+                  selectedConversationId === conversation.conversationId && 'bg-accent text-foreground',
+                )}
               >
-                <span className="truncate">{conversation.title || 'New conversation'}</span>
-              </button>
-            </RowMenu>
+                <button
+                  type="button"
+                  className="flex min-w-0 flex-1 items-center text-left"
+                  onClick={() => openConversation(conversation)}
+                >
+                  <span className="truncate">{label}</span>
+                </button>
+              </RowMenu>
+            );
+          })}
+          {session.shells.map((shell) => (
+            <button
+              key={shell.shellId}
+              type="button"
+              className="flex min-w-0 w-full items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+              onClick={() => openShell(shell)}
+            >
+              <SquareTerminal className="size-3 shrink-0" aria-hidden="true" />
+              <span className="truncate">{shell.name}</span>
+            </button>
           ))}
-          {session.shells.length > 0 && (
-            <div className="flex items-center gap-1.5 px-1.5 py-0.5 text-[11px] text-muted-foreground">
-              <SquareTerminal className="size-3" aria-hidden="true" />
-              {session.shells.length === 1 ? '1 shell' : `${session.shells.length} shells`}
-            </div>
-          )}
           {session.conversations.length === 0 && (
             <div className="px-2 py-1 text-xs text-muted-foreground">No conversations</div>
           )}
