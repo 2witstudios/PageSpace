@@ -357,6 +357,13 @@ async function reconcileTaskTriggerWorkflows(
       .innerJoin(workflows, eq(workflows.id, taskTriggers.workflowId))
       .where(inArray(taskTriggers.taskItemId, batch))
     for (const row of rows) {
+      // workflows.agentPageId is nullable at the column level (step-based,
+      // deterministic-only workflows have no agent), but task-trigger-backed
+      // workflows are created exclusively through the agent-required
+      // task-trigger route and stay AI-only for the life of the trigger — a
+      // null here would mean that invariant broke elsewhere, not a case this
+      // reconciliation should silently mis-key under the string "null".
+      if (!row.agentPageId) continue
       const list = byAgent.get(row.agentPageId) ?? []
       list.push(row.workflowId)
       byAgent.set(row.agentPageId, list)
