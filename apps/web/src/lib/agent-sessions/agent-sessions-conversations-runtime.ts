@@ -2,9 +2,10 @@
  * Cross-type "past conversations" listing for the Agents surface's default
  * middle-panel view — every conversation the requester owns, whatever kind it
  * is (ran inside an agent-sandbox session, a plain page-agent chat, the
- * global assistant, or the rare API-only `type: 'drive'` conversation), newest
- * first, with real cursor pagination (agent_sessions rows are never deleted,
- * so history grows unbounded over a user's lifetime — the same reason
+ * global assistant, or the rare API-only `type: 'client'` conversation
+ * created via `POST /api/v1/conversations`), newest first, with real cursor
+ * pagination (agent_sessions rows are never deleted, so history grows
+ * unbounded over a user's lifetime — the same reason
  * `globalConversationRepository.listConversationsPaginated` exists rather
  * than a single unbounded fetch).
  *
@@ -29,13 +30,14 @@ export interface PastConversationRow {
   agentPageId: string | null;
   /** The agent page's own title (distinct from the conversation's own title), when `type === 'page'`. */
   pageTitle: string | null;
+  /** Real recency — see `recencyExpr` below. Never simply `conversations.lastMessageAt`, which stays null forever for `type: 'page'`. */
   lastMessageAt: Date | null;
   createdAt: Date;
   sessionId: string | null;
   /** '' when the session has no display name, mirroring `toAgentSessionDTO`'s `name ?? ''`. */
   sessionName: string | null;
   sessionEndedAt: Date | null;
-  /** Resolved from the page's drive, the session's drive, or (for `type: 'drive'`) the conversation's own contextId. Null only for a driveless global-assistant conversation. */
+  /** Resolved from the page's drive, the session's drive, or (for `type: 'client'`) the conversation's own contextId. Null only for a driveless global-assistant conversation. */
   driveId: string | null;
 }
 
@@ -58,15 +60,20 @@ export interface PaginatedPastConversationsResult {
  * Keeps conversations that never got a first message out of "history" — same
  * rule `globalConversationRepository` applies. NOT a single table: despite
  * `messages`' own doc comment claiming to be "unified... for all conversation
- * types", only `type: 'global'` (and, so far as this codebase shows, `type:
- * 'drive'`) content actually lands there — `type: 'page'` conversations
- * (including session-bound agent chats, which share the same page-agent send
- * path) write to the older `chat_messages` table instead, keyed by `pageId` +
- * a local `conversationId` grouping column (never an FK to `conversations.id`,
- * but the same value `conversations.id` holds for that row — see
- * `conversationRepository.conversationExists`, which queries it the same way).
- * Checking only `messages` here silently excluded every page-agent
- * conversation with real content from this listing (review finding).
+ * types", only `type: 'global'` content actually lands there — `type: 'page'`
+ * AND `type: 'client'` conversations write to the older `chat_messages` table
+ * instead (both share the same underlying send path,
+ * `saveMessageToDatabase`/`chatMessageRepository`). Checking only `messages`
+ * here silently excluded every one of those conversations from this listing
+ * (review finding).
+ *
+ * Matched on `chatMessages.conversationId` ALONE — no `pageId` join. A
+ * `type: 'client'` conversation's `chat_messages` rows can carry a DIFFERENT
+ * `pageId` per message (the v1 completions API lets each request target a
+ * different agent page; only `conversationId` scopes a thread), so a `pageId`
+ * equality would just never match for that type. `conversationId` is a
+ * cuid2 — already globally unique — so it never needed the extra key even
+ * for `type: 'page'`.
  */
 const hasActiveMessage = or(
   exists(
@@ -81,25 +88,46 @@ const hasActiveMessage = or(
       .from(chatMessages)
       .where(
         and(
-          eq(conversations.type, 'page'),
           eq(chatMessages.conversationId, conversations.id),
-          eq(chatMessages.pageId, conversations.contextId),
           eq(chatMessages.isActive, true),
+          sql`${chatMessages.status} != 'streaming'`,
         ),
       ),
   ),
 )!;
 
 /**
- * The sort/cursor key. NOT just `lastMessageAt`: unlike the global-chat
- * listing (which only ever lists conversations already known to have
- * messages), a brand-new agent-session conversation can have zero messages
- * yet — `lastMessageAt` null — and still needs a sensible recency position.
+ * The real "last activity" timestamp — NOT `conversations.lastMessageAt`,
+ * which nothing ever sets for `type: 'page'`/`type: 'client'` conversations
+ * (their send path writes only `chat_messages`; grepping every
+ * `.set({...lastMessageAt...})` call in this codebase turns up exactly two
+ * call sites, both in the global-assistant message routes). Sorting or
+ * displaying recency by `conversations.lastMessageAt` alone left every
+ * page-agent conversation permanently ordered by its CREATION time, however
+ * recently it was actually used (review finding). Mirrors
+ * `conversationRepository.listConversations`'s own `MAX(chat_messages."createdAt")
+ * GROUP BY "conversationId"` derivation, as a correlated subquery here since
+ * this listing needs ONE sortable expression across heterogeneous source
+ * tables. Falls back to `conversations.lastMessageAt` for `type: 'global'`
+ * rows (where that column IS the source of truth).
  */
-const sortKeyExpr = sql`COALESCE(${conversations.lastMessageAt}, ${conversations.createdAt})`;
+const recencyExpr = sql<Date | null>`COALESCE(
+  (SELECT MAX(${chatMessages.createdAt}) FROM chat_messages
+   WHERE ${chatMessages.conversationId} = ${conversations.id}
+     AND ${chatMessages.isActive} = true
+     AND ${chatMessages.status} != 'streaming'),
+  ${conversations.lastMessageAt}
+)`;
 
-/** `pages.driveId` for a page conversation, `agentSessions.driveId` for a session-bound one, the conversation's own contextId for a `type: 'drive'` one — else null (a driveless global-assistant conversation). */
-const resolvedDriveIdExpr = sql<string | null>`COALESCE(${pages.driveId}, ${agentSessions.driveId}, CASE WHEN ${conversations.type} = 'drive' THEN ${conversations.contextId} ELSE NULL END)`;
+/**
+ * The sort/cursor key. NOT just `recencyExpr`: a brand-new agent-session
+ * conversation can have zero messages yet — recency null — and still needs a
+ * sensible position (its own creation time).
+ */
+const sortKeyExpr = sql`COALESCE(${recencyExpr}, ${conversations.createdAt})`;
+
+/** `pages.driveId` for a page conversation, `agentSessions.driveId` for a session-bound one, the conversation's own contextId for a `type: 'client'` one (that column holds an optional driveId for API-managed conversations — see `buildCreateConversationPayload`) — else null (a driveless global-assistant conversation). */
+const resolvedDriveIdExpr = sql<string | null>`COALESCE(${pages.driveId}, ${agentSessions.driveId}, CASE WHEN ${conversations.type} = 'client' THEN ${conversations.contextId} ELSE NULL END)`;
 
 /**
  * Cursor pagination is unidirectional ("older than `cursor`") on purpose —
@@ -141,7 +169,7 @@ export async function listAllConversationsPaginated(
     conditions.push(sql`(
       (${conversations.type} = 'page' AND ${pages.driveId} = ${driveId})
       OR (${isNotNull(conversations.sessionId)} AND ${agentSessions.driveId} = ${driveId})
-      OR (${conversations.type} = 'drive' AND ${conversations.contextId} = ${driveId})
+      OR (${conversations.type} = 'client' AND ${conversations.contextId} = ${driveId})
     )`);
   }
 
@@ -165,7 +193,7 @@ export async function listAllConversationsPaginated(
       title: conversations.title,
       type: conversations.type,
       contextId: conversations.contextId,
-      lastMessageAt: conversations.lastMessageAt,
+      lastMessageAt: recencyExpr,
       createdAt: conversations.createdAt,
       sessionId: conversations.sessionId,
       sessionName: agentSessions.name,

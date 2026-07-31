@@ -43,19 +43,18 @@ describe('resolveNavigationTarget', () => {
     });
   });
 
-  it('a page conversation missing its agent/drive falls back to the global assistant rather than throwing', () => {
+  it('a page conversation missing its agent/drive is unavailable — never falls back to the global assistant', () => {
+    // The global assistant's loader reads the `messages` table; a page
+    // conversation's content lives in `chat_messages`, which that loader can
+    // never populate — routing there silently opened a blank, dead thread
+    // (review finding). "Nowhere to go" must be honest, not a fake target.
     const target = resolveNavigationTarget(row({ type: 'page', agentPageId: null, driveId: null }), 'drive-current');
-    expect(target).toEqual({ kind: 'global', conversationId: 'conv-1', driveId: 'drive-current' });
+    expect(target).toEqual({ kind: 'unavailable' });
   });
 
-  it('a drive-type conversation navigates to that drive\'s dashboard home', () => {
-    const target = resolveNavigationTarget(row({ type: 'drive', driveId: 'drive-9' }), undefined);
-    expect(target).toEqual({ kind: 'drive', driveId: 'drive-9' });
-  });
-
-  it('a drive-type conversation missing its driveId falls back to the global assistant', () => {
-    const target = resolveNavigationTarget(row({ type: 'drive', driveId: null }), 'drive-current');
-    expect(target).toEqual({ kind: 'global', conversationId: 'conv-1', driveId: 'drive-current' });
+  it('a client (API-managed) conversation is always unavailable — no in-app viewer exists for it', () => {
+    const target = resolveNavigationTarget(row({ type: 'client', driveId: 'drive-9' }), undefined);
+    expect(target).toEqual({ kind: 'unavailable' });
   });
 
   it('a global conversation navigates wherever the global assistant currently lives', () => {

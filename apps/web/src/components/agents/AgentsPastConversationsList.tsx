@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { formatDistanceToNow } from 'date-fns';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { toast } from 'sonner';
 import useSWR from 'swr';
 
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -53,6 +54,7 @@ function rowLabel(row: ConversationRowDTO): string {
   if (row.title) return row.title;
   if (row.type === 'page') return row.pageTitle ?? 'Untitled conversation';
   if (row.type === 'global') return 'Global assistant chat';
+  if (row.type === 'client') return 'API conversation';
   return 'Untitled conversation';
 }
 
@@ -64,6 +66,8 @@ function rowSubtitle(row: ConversationRowDTO, showDrive: boolean, driveName: str
     parts.push(row.pageTitle);
   } else if (row.type === 'global') {
     parts.push('Global assistant');
+  } else if (row.type === 'client') {
+    parts.push('Created via API');
   }
   if (showDrive && driveName) parts.push(driveName);
   return parts.join(' · ');
@@ -116,9 +120,6 @@ export default function AgentsPastConversationsList({ driveId }: { driveId?: str
           }`,
         );
         return;
-      case 'drive':
-        router.push(`/dashboard/${target.driveId}`);
-        return;
       case 'global':
         void loadConversation(target.conversationId);
         router.push(
@@ -126,6 +127,9 @@ export default function AgentsPastConversationsList({ driveId }: { driveId?: str
             ? `/dashboard/${target.driveId}?c=${encodeURIComponent(target.conversationId)}`
             : `/dashboard?c=${encodeURIComponent(target.conversationId)}`,
         );
+        return;
+      case 'unavailable':
+        toast.info("This conversation can't be opened here yet.");
         return;
     }
   };

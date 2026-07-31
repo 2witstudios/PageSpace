@@ -7,8 +7,14 @@
  * branch, which is what a bare `if/else if/else` chain would do.
  */
 
-/** Mirrors `conversations.type` (`packages/db/src/schema/conversations.ts`) — the only values ever written. */
-export type ConversationKind = 'global' | 'page' | 'drive';
+/**
+ * Mirrors `conversations.type` (`packages/db/src/schema/conversations.ts`) —
+ * the only values any production code path writes. `'client'` is the rare
+ * API-managed conversation created via `POST /api/v1/conversations` (never
+ * `'drive'` — that value was never actually written by any code path; it was
+ * a documentation mistake corrected once this got fixed).
+ */
+export type ConversationKind = 'global' | 'page' | 'client';
 
 export interface PastConversationRow {
   conversationId: string;
@@ -21,8 +27,20 @@ export interface PastConversationRow {
 export type NavigationTarget =
   | { kind: 'pane'; sessionId: string; conversationId: string; agentId: string | null }
   | { kind: 'page'; driveId: string; pageId: string; conversationId: string; sessionId: string | null }
-  | { kind: 'drive'; driveId: string }
-  | { kind: 'global'; conversationId: string; driveId: string | null };
+  | { kind: 'global'; conversationId: string; driveId: string | null }
+  /**
+   * No surface in the app can open this row today. NOT the same as an
+   * error — the row still belongs in "every conversation you own", it just
+   * has nowhere to click through to yet. Two real cases: a `type: 'page'`
+   * row missing its resolvable agent/drive, and a `type: 'client'`
+   * (API-managed) conversation, which has no dedicated in-app viewer.
+   * Deliberately NOT routed into the global assistant as a fallback — its
+   * loader reads the `messages` table, which a `chat_messages`-backed
+   * conversation (page/client) can never populate, so that fallback silently
+   * opened a blank thread that could never actually show the real history
+   * (review finding).
+   */
+  | { kind: 'unavailable' };
 
 /**
  * A session-bound conversation always wins, whatever its `type` — it opens in
@@ -38,11 +56,7 @@ export function resolveNavigationTarget(
 
   switch (row.type) {
     case 'page': {
-      if (!row.agentPageId || !row.driveId) {
-        // A page conversation with no resolvable page/drive is unreachable —
-        // the safest place to land is wherever the global assistant lives.
-        return { kind: 'global', conversationId: row.conversationId, driveId: currentDriveId ?? null };
-      }
+      if (!row.agentPageId || !row.driveId) return { kind: 'unavailable' };
       return {
         kind: 'page',
         driveId: row.driveId,
@@ -51,12 +65,11 @@ export function resolveNavigationTarget(
         sessionId: null,
       };
     }
-    case 'drive': {
-      if (!row.driveId) {
-        return { kind: 'global', conversationId: row.conversationId, driveId: currentDriveId ?? null };
-      }
-      return { kind: 'drive', driveId: row.driveId };
-    }
+    // API-managed (POST /api/v1/conversations) — always session-less (confirmed:
+    // nothing ever binds a `client` row to a session) and has no in-app chat
+    // surface to open into.
+    case 'client':
+      return { kind: 'unavailable' };
     case 'global':
       return { kind: 'global', conversationId: row.conversationId, driveId: currentDriveId ?? null };
     default: {

@@ -80,6 +80,9 @@ vi.mock('@/contexts/GlobalChatContext', () => ({
   useGlobalChatConversation: () => ({ loadConversation: mockLoadConversation }),
 }));
 
+const mockToastInfo = vi.hoisted(() => vi.fn());
+vi.mock('sonner', () => ({ toast: { info: mockToastInfo, error: vi.fn() } }));
+
 import AgentsSurface from '../AgentsSurface';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
@@ -554,5 +557,43 @@ describe('past conversations (default view, replacing the old static prompt)', (
     act(() => prevButton.click());
     await waitFor(() => expect(screen.queryByText(/Couldn't load this page/)).toBeNull());
     expect(getByText('Page 1 chat')).toBeDefined();
+  });
+
+  it('clicking a client (API-managed) conversation shows a toast instead of navigating — no in-app surface can open it', async () => {
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.includes('/api/agent-sessions/conversations')) {
+        return {
+          ok: true,
+          json: async () => ({
+            conversations: [
+              {
+                conversationId: 'conv-client-1',
+                title: 'My API thread',
+                type: 'client',
+                agentPageId: null,
+                pageTitle: null,
+                lastMessageAt: new Date().toISOString(),
+                createdAt: new Date().toISOString(),
+                sessionId: null,
+                sessionName: null,
+                sessionEndedAt: null,
+                driveId: 'drive-1',
+              },
+            ],
+            pagination: { hasMore: false, nextCursor: null, limit: 20 },
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({ session: { driveId: null } }) };
+    });
+
+    render(<AgentsSurface driveId="drive-past-convos-client" />);
+
+    const label = await screen.findByText('My API thread');
+    act(() => label.closest('button')!.click());
+
+    expect(mockToastInfo).toHaveBeenCalledTimes(1);
+    expect(mockLoadConversation).not.toHaveBeenCalled();
+    expect(useAgentSurfaceStore.getState().selectedSessionId).toBeNull();
   });
 });

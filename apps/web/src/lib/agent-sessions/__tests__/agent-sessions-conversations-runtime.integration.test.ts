@@ -90,4 +90,120 @@ describe('listAllConversationsPaginated — hasActiveMessage against real chat_m
 
     expect(result.conversations.find((c) => c.conversationId === conversationId)).toBeUndefined();
   });
+
+  it('sorts a page conversation by its ACTUAL last message time, not its creation time (P1 review finding)', async () => {
+    if (!dbAvailable) return;
+
+    // conversations.lastMessageAt is never set for type: 'page' (nothing writes
+    // it — the send path only touches chat_messages), so before the fix the
+    // sort/cursor key fell back to createdAt for every page conversation. An
+    // OLD thread (created first) that just received a message today must
+    // still sort AHEAD of a NEWER thread (created after it) with no recent
+    // activity — the opposite of createdAt order.
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const oldAgent = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Old Agent' });
+    const newAgent = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'New Agent' });
+
+    const oldConversationId = createId();
+    await db.insert(conversations).values({
+      id: oldConversationId,
+      userId: owner.id,
+      type: 'page',
+      contextId: oldAgent.id,
+      title: null,
+      isActive: true,
+      createdAt: new Date('2020-01-01'),
+    });
+    // Its only message is TODAY — real recent activity.
+    await db.insert(chatMessages).values({
+      id: createId(),
+      pageId: oldAgent.id,
+      conversationId: oldConversationId,
+      role: 'user',
+      content: 'still using this one',
+      isActive: true,
+      createdAt: new Date(),
+    });
+
+    const newConversationId = createId();
+    await db.insert(conversations).values({
+      id: newConversationId,
+      userId: owner.id,
+      type: 'page',
+      contextId: newAgent.id,
+      title: null,
+      isActive: true,
+      createdAt: new Date('2026-01-01'),
+    });
+    // Created much later, but its only message is old — no recent activity.
+    await db.insert(chatMessages).values({
+      id: createId(),
+      pageId: newAgent.id,
+      conversationId: newConversationId,
+      role: 'user',
+      content: 'sent right after creating, never touched again',
+      isActive: true,
+      createdAt: new Date('2026-01-01'),
+    });
+
+    const result = await listAllConversationsPaginated({ ownerId: owner.id });
+
+    const oldIndex = result.conversations.findIndex((c) => c.conversationId === oldConversationId);
+    const newIndex = result.conversations.findIndex((c) => c.conversationId === newConversationId);
+    expect(oldIndex).toBeGreaterThanOrEqual(0);
+    expect(newIndex).toBeGreaterThanOrEqual(0);
+    // Newest-first: the one with today's activity must come BEFORE the one
+    // whose only activity is from years ago, despite being created later.
+    expect(oldIndex).toBeLessThan(newIndex);
+
+    const oldRow = result.conversations.find((c) => c.conversationId === oldConversationId);
+    // The returned lastMessageAt must reflect the REAL message time, not stay
+    // null (conversations.lastMessageAt is never set for this type) and not
+    // silently fall back to createdAt while messages exist.
+    expect(oldRow?.lastMessageAt).not.toBeNull();
+    expect(new Date(oldRow!.lastMessageAt!).getFullYear()).toBeGreaterThan(2020);
+  });
+
+  it('surfaces a type: "client" (API-managed) conversation, whose messages can carry a DIFFERENT pageId per message', async () => {
+    if (!dbAvailable) return;
+
+    // v1-conversations.ts: a `client` conversation's own contextId is an
+    // optional driveId, never a pageId — its chat_messages rows are written
+    // by whatever page a given /v1/chat/completions call targeted, which can
+    // differ message-to-message. Matching hasActiveMessage on conversationId
+    // ALONE (no pageId equality) is what makes this findable at all.
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const agentPage = await factories.createPage(drive.id, { type: 'AI_CHAT' });
+    const conversationId = createId();
+
+    await db.insert(conversations).values({
+      id: conversationId,
+      userId: owner.id,
+      type: 'client',
+      contextId: drive.id,
+      title: 'My API thread',
+      isActive: true,
+    });
+    await db.insert(chatMessages).values({
+      id: createId(),
+      pageId: agentPage.id,
+      conversationId,
+      role: 'user',
+      content: 'hi from the API',
+      isActive: true,
+    });
+
+    const result = await listAllConversationsPaginated({ ownerId: owner.id });
+
+    const row = result.conversations.find((c) => c.conversationId === conversationId);
+    expect(row).toBeDefined();
+    expect(row?.type).toBe('client');
+    // Resolved directly from contextId (a driveId for this type), not via the
+    // `pages` join (which only ever matches type: 'page').
+    expect(row?.driveId).toBe(drive.id);
+    expect(row?.agentPageId).toBeNull();
+    expect(row?.pageTitle).toBeNull();
+  });
 });
