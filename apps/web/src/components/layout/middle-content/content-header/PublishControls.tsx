@@ -14,12 +14,12 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
-import { Switch } from '@/components/ui/switch';
-import { PagePickerPopover } from '@/components/common/PagePickerPopover';
-import { PageType } from '@pagespace/lib/utils/enums';
+import { PublishSettingsFields, type PublishSettings } from './PublishSettingsFields';
+import {
+  usePublishStatusStore,
+  publishStatusFromResponse,
+  type PublishSettingsSnapshot,
+} from '@/stores/usePublishStatusStore';
 
 interface PublishControlsProps {
   pageId: string;
@@ -34,49 +34,20 @@ interface PublishControlsProps {
   variant?: 'header' | 'panel';
 }
 
-/** Author-supplied SEO overrides for a published page. */
-interface PublishSettings {
-  title: string;
-  description: string;
-  ogImageUrl: string;
-  noindex: boolean;
-}
-
-interface PublishState {
-  published: boolean;
-  url: string | null;
-  // Whether the server can publish at all (dedicated public bucket configured).
-  // When false (e.g. a deployment without PUBLISH_BUCKET) the control is hidden
-  // rather than offering a Publish button that only ever 503s.
-  available: boolean;
-  isStale: boolean;
-  settings: PublishSettings;
-  // True only for a transient failure to load status (network error, 5xx) —
-  // distinct from `!available`, which means the status request succeeded (or
-  // definitively 403'd for a read-only viewer) and reported publishing as
-  // genuinely unavailable. Keeping these separate stops a blip from rendering
-  // the same "isn't available" message as a real, durable unavailability
-  // signal. Lives alongside `available` (rather than as its own useState) so
-  // every status-fetch outcome sets both fields in one atomic update.
-  hasLoadError: boolean;
-}
-
-const EMPTY_SETTINGS: PublishSettings = { title: '', description: '', ogImageUrl: '', noindex: false };
-
-const EMPTY_STATE: PublishState = {
-  published: false,
-  url: null,
-  available: false,
-  isStale: false,
-  settings: EMPTY_SETTINGS,
-  hasLoadError: false,
-};
-
-/** PublishSettings plus a transient "picked an uploaded file" alternative to
- *  pasting a URL — resolved server-side, never persisted as its own field. */
-interface PublishOverrides extends PublishSettings {
+/** PublishSettingsSnapshot plus a transient "picked an uploaded file"
+ *  alternative to pasting a URL — resolved server-side, never persisted as
+ *  its own field. */
+interface PublishOverrides extends PublishSettingsSnapshot {
   ogImageFileId?: string;
 }
+
+/** What `PublishSettingsDialog` can actually produce — the shared SEO fields
+ *  it renders, plus the same transient uploaded-file alternative. No
+ *  `themeBridgeEnabled`: the dialog is shared across every publishable page
+ *  type, and that field only means anything for canvas pages (see the
+ *  Appearance category) — `PublishControls` merges in the page's current
+ *  value before calling `handlePublish`. */
+type PublishDialogOverrides = PublishSettings & { ogImageFileId?: string };
 
 interface PublishStatusResponse {
   published: boolean;
@@ -87,14 +58,8 @@ interface PublishStatusResponse {
   description?: string | null;
   ogImageUrl?: string | null;
   noindex?: boolean;
+  themeBridgeEnabled?: boolean;
 }
-
-const settingsFromResponse = (data: PublishStatusResponse): PublishSettings => ({
-  title: data.title ?? '',
-  description: data.description ?? '',
-  ogImageUrl: data.ogImageUrl ?? '',
-  noindex: data.noindex ?? false,
-});
 
 const readError = async (res: Response): Promise<string> => {
   try {
@@ -108,58 +73,30 @@ const readError = async (res: Response): Promise<string> => {
 const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishControlsProps) => {
   const params = useParams<{ driveId?: string }>();
   const driveId = params?.driveId;
-  const [state, setState] = useState<PublishState>(EMPTY_STATE);
-  const [isLoading, setIsLoading] = useState(true);
+  // Shared across every surface showing this page's publish state (this
+  // header control, the canvas Settings tab's Publish/Appearance categories)
+  // so an action taken in one is immediately reflected in the others instead
+  // of each independently caching a stale snapshot from its own mount-time fetch.
+  const status = usePublishStatusStore((s) => s.statuses.get(pageId));
+  const fetchStatus = usePublishStatusStore((s) => s.fetchStatus);
+  const setStatus = usePublishStatusStore((s) => s.setStatus);
   const [isBusy, setIsBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const prevDirtyRef = useRef<boolean | undefined>(undefined);
 
   useEffect(() => {
-    let cancelled = false;
-    setIsLoading(true);
-    (async () => {
-      try {
-        const res = await fetchWithAuth(`/api/pages/${pageId}/publish`);
-        if (!res.ok) {
-          if (cancelled) return;
-          // 403 means the viewer definitively lacks permission to publish —
-          // a genuine unavailability signal, not a failed request. Anything
-          // else (5xx, etc.) is a real load failure.
-          setState({ ...EMPTY_STATE, hasLoadError: res.status !== 403 });
-          return;
-        }
-        const data = (await res.json()) as PublishStatusResponse;
-        if (!cancelled) {
-          setState({
-            published: data.published,
-            url: data.published ? data.url ?? null : null,
-            available: data.available ?? false,
-            isStale: data.isStale ?? false,
-            settings: settingsFromResponse(data),
-            hasLoadError: false,
-          });
-        }
-      } catch {
-        if (!cancelled) {
-          setState({ ...EMPTY_STATE, hasLoadError: true });
-        }
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [pageId]);
+    fetchStatus(pageId);
+  }, [pageId, fetchStatus]);
 
   // When a save completes (dirty → clean), mark the published version as stale
   // so the Update button appears without requiring a page reload.
   useEffect(() => {
     if (prevDirtyRef.current === true && contentDirty === false) {
-      setState(prev => prev.published ? { ...prev, isStale: true } : prev);
+      const current = usePublishStatusStore.getState().statuses.get(pageId);
+      if (current?.published) setStatus(pageId, { ...current, isStale: true });
     }
     prevDirtyRef.current = contentDirty;
-  }, [contentDirty]);
+  }, [contentDirty, pageId, setStatus]);
 
   // Publish (or re-publish) the page. `overrides`, when provided, carries the
   // author's SEO settings; omitting it preserves whatever is persisted.
@@ -173,6 +110,7 @@ const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishCo
             ogImageUrl: overrides.ogImageUrl,
             ogImageFileId: overrides.ogImageFileId,
             noindex: overrides.noindex,
+            themeBridgeEnabled: overrides.themeBridgeEnabled,
           })
         : undefined;
       const res = await fetchWithAuth(`/api/pages/${pageId}/publish`, {
@@ -184,18 +122,26 @@ const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishCo
         return false;
       }
       const data = (await res.json()) as PublishStatusResponse & { url: string };
-      setState((prev) => ({
-        ...prev,
+      setStatus(pageId, {
         published: true,
+        // Reaching this line required a successful POST, which is itself
+        // edit-gated server-side — this viewer can edit.
+        canEdit: true,
         url: data.url,
         available: true,
         isStale: false,
-        // Read the effective settings back from the server rather than caching
-        // the request payload: when `overrides.ogImageFileId` was set, the
-        // request's `ogImageUrl` is a blank placeholder — the server resolves
-        // it to the real CDN URL and returns that resolved value here.
-        settings: overrides ? settingsFromResponse(data) : prev.settings,
-      }));
+        hasLoadError: false,
+        // Always read settings back from the server response, even when no
+        // `overrides` were passed: it's not just "whatever was persisted
+        // before" — an unpublish (DELETE) removes the published_pages row
+        // entirely, so a bare republish after one gets fresh server
+        // defaults, not the pre-unpublish settings. Caching the latter here
+        // would show (and let Save silently restore) values the server has
+        // already reset. This also covers the `overrides.ogImageFileId`
+        // case: the request's `ogImageUrl` is a blank placeholder that the
+        // server resolves to the real CDN URL, returned here.
+        settings: publishStatusFromResponse(data).settings,
+      });
       toast.success(isUpdate ? 'Page updated' : 'Page published');
       return true;
     } catch {
@@ -204,7 +150,7 @@ const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishCo
     } finally {
       setIsBusy(false);
     }
-  }, [pageId]);
+  }, [pageId, setStatus]);
 
   const handleUnpublish = useCallback(async () => {
     setIsBusy(true);
@@ -214,40 +160,47 @@ const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishCo
         toast.error(await readError(res));
         return;
       }
-      setState((prev) => ({ ...prev, published: false, url: null, isStale: false }));
+      const prev = usePublishStatusStore.getState().statuses.get(pageId);
+      if (prev) setStatus(pageId, { ...prev, published: false, url: null, isStale: false });
       toast.success('Page unpublished');
     } catch {
       toast.error('Failed to unpublish page');
     } finally {
       setIsBusy(false);
     }
-  }, [pageId]);
+  }, [pageId, setStatus]);
 
   const handleCopy = useCallback(async () => {
-    if (!state.url) return;
+    if (!status?.url) return;
     try {
-      await navigator.clipboard.writeText(state.url);
+      await navigator.clipboard.writeText(status.url);
       toast.success('Link copied');
     } catch {
       toast.error('Failed to copy link');
     }
-  }, [state.url]);
+  }, [status?.url]);
 
-  if (isLoading) {
+  if (!status) {
     return <span className="px-4 py-2 text-sm text-muted-foreground">Loading…</span>;
   }
 
-  // Publishing isn't configured on this deployment (e.g. no PUBLISH_BUCKET), or
-  // this viewer lacks permission to publish (a definitive 403 — see
-  // `hasLoadError` on PublishState for the transient-failure case, handled
-  // separately). In the header (among other populated buttons) staying silent
-  // is fine; in a standalone panel (the canvas Settings tab) silence would
-  // leave the tab blank, so explain instead.
-  if (!state.available) {
+  // Publishing isn't configured on this deployment (e.g. no PUBLISH_BUCKET),
+  // or this viewer can view but not edit — the GET route now serves
+  // `published`/`available` to any viewer (see the route's view-permission
+  // comment) so the View tab's preview stays accurate for everyone, but
+  // that means this control must check `canEdit` itself rather than relying
+  // on a 403 to hide it: without this, a view-only viewer on an unpublished
+  // page would see an enabled Publish button that only reveals the
+  // permission failure once its own POST 403s. (A genuine 403 — no view
+  // access at all — still surfaces via `hasLoadError`'s transient-failure
+  // case, handled separately.) In the header (among other populated
+  // buttons) staying silent is fine; in a standalone panel (the canvas
+  // Settings tab) silence would leave the tab blank, so explain instead.
+  if (!status.available || !status.canEdit) {
     if (variant === 'panel') {
       return (
         <p className="text-sm text-muted-foreground">
-          {state.hasLoadError
+          {status.hasLoadError
             ? "Couldn't load publishing status. Try again shortly."
             : "Publishing isn't available for this page."}
         </p>
@@ -256,72 +209,87 @@ const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishCo
     return null;
   }
 
-  if (!state.published || !state.url) {
+  if (!status.published || !status.url) {
     return (
-      <button
-        className="px-4 py-2 text-sm disabled:opacity-50"
+      <Button
+        variant="ghost"
+        size="sm"
         onClick={() => handlePublish()}
         disabled={isBusy}
       >
         {isBusy ? 'Publishing…' : 'Publish'}
-      </button>
+      </Button>
     );
   }
+
+  // The dialog's SEO fields are shared across every publishable page type
+  // (see PublishSettingsFields) and don't include themeBridgeEnabled, which
+  // only canvas pages have any use for — see the Appearance category instead.
+  const dialogSettings: PublishSettings = {
+    title: status.settings.title,
+    description: status.settings.description,
+    ogImageUrl: status.settings.ogImageUrl,
+    noindex: status.settings.noindex,
+  };
 
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1 max-w-full">
       <a
-        href={state.url}
+        href={status.url}
         target="_blank"
         rel="noreferrer"
         className="min-w-0 max-w-[10rem] sm:max-w-[16rem] truncate text-sm text-blue-500 hover:underline"
-        title={state.url}
+        title={status.url}
       >
-        {state.url}
+        {status.url}
       </a>
       <div className="flex flex-wrap items-center gap-2">
-        {state.isStale && (
+        {status.isStale && (
           <>
             <span className="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400 whitespace-nowrap">
               Stale
             </span>
-            <button
-              className="px-2 py-2 text-sm whitespace-nowrap disabled:opacity-50"
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => handlePublish(true)}
               disabled={isBusy}
             >
               {isBusy ? 'Updating…' : 'Update'}
-            </button>
+            </Button>
           </>
         )}
-        <button
-          className="flex items-center gap-1 px-2 py-2 text-sm whitespace-nowrap"
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => setSettingsOpen(true)}
           aria-label="Publish settings"
         >
           <Settings2 className="h-4 w-4" />
           Settings
-        </button>
-        <button className="px-2 py-2 text-sm whitespace-nowrap" onClick={handleCopy}>
+        </Button>
+        <Button variant="ghost" size="sm" onClick={handleCopy}>
           Copy link
-        </button>
-        <button
-          className="px-2 py-2 text-sm whitespace-nowrap text-red-500 disabled:opacity-50"
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-red-500 hover:text-red-500"
           onClick={handleUnpublish}
           disabled={isBusy}
         >
           {isBusy ? 'Unpublishing…' : 'Unpublish'}
-        </button>
+        </Button>
       </div>
 
       <PublishSettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
-        initial={state.settings}
+        initial={dialogSettings}
         driveId={driveId}
         isBusy={isBusy}
         onSave={async (next) => {
-          const ok = await handlePublish(true, next);
+          const ok = await handlePublish(true, { ...next, themeBridgeEnabled: status.settings.themeBridgeEnabled });
           if (ok) setSettingsOpen(false);
         }}
       />
@@ -335,20 +303,27 @@ interface PublishSettingsDialogProps {
   initial: PublishSettings;
   driveId?: string;
   isBusy: boolean;
-  onSave: (settings: PublishOverrides) => void;
+  onSave: (settings: PublishDialogOverrides) => void;
 }
 
 function PublishSettingsDialog({ open, onOpenChange, initial, driveId, isBusy, onSave }: PublishSettingsDialogProps) {
   const [form, setForm] = useState<PublishSettings>(initial);
   const [pickedImageId, setPickedImageId] = useState<string | null>(null);
 
-  // Re-seed the form from the latest persisted values whenever the dialog opens.
+  // Re-seed the form from the latest persisted values on the closed→open
+  // transition only — `initial` is intentionally NOT a dependency. The
+  // parent recreates that object on every render (it's a plain literal
+  // derived from `status.settings`), so depending on it here would reseed
+  // (and clobber any in-progress edit) on every unrelated parent re-render
+  // while the dialog stays open — e.g. `contentDirty` flipping, or a shared
+  // publish-status refresh completing elsewhere.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (open) {
       setForm(initial);
       setPickedImageId(null);
     }
-  }, [open, initial]);
+  }, [open]);
 
   // Validate the share-image URL client-side so the user gets a specific message
   // instead of the server's generic rejection (the route also enforces this).
@@ -384,72 +359,14 @@ function PublishSettingsDialog({ open, onOpenChange, initial, driveId, isBusy, o
             Control how this page appears in search results and link previews. Leave a field blank to use the page&apos;s own content.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4 py-2">
-          <div className="space-y-1.5">
-            <Label htmlFor="publish-title">Title</Label>
-            <Input
-              id="publish-title"
-              value={form.title}
-              onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
-              placeholder="Defaults to the page title"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="publish-description">Description</Label>
-            <Textarea
-              id="publish-description"
-              value={form.description}
-              onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-              placeholder="Shown in search results and link unfurls"
-              rows={3}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="publish-og-image">Share image URL</Label>
-            <Input
-              id="publish-og-image"
-              type="url"
-              value={form.ogImageUrl}
-              onChange={(e) => setForm((f) => ({ ...f, ogImageUrl: e.target.value }))}
-              placeholder="https://… (1200×630 recommended)"
-              disabled={!!pickedImageId}
-            />
-          </div>
-          {driveId && (
-            pickedImageId ? (
-              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span>Using an uploaded image for this page&apos;s share image</span>
-                <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setPickedImageId(null)}>
-                  Remove
-                </Button>
-              </div>
-            ) : (
-              <div className="space-y-1.5">
-                <Label>Or pick an uploaded image</Label>
-                <PagePickerPopover
-                  driveId={driveId}
-                  value={null}
-                  onChange={setPickedImageId}
-                  pageType={PageType.FILE}
-                  imageOnly
-                  placeholder="Browse uploaded images…"
-                />
-              </div>
-            )
-          )}
-          <div className="flex items-center justify-between gap-4">
-            <div className="space-y-0.5">
-              <Label htmlFor="publish-noindex">Hide from search engines</Label>
-              <p className="text-xs text-muted-foreground">
-                Adds a noindex tag and keeps the page out of the sitemap.
-              </p>
-            </div>
-            <Switch
-              id="publish-noindex"
-              checked={form.noindex}
-              onCheckedChange={(checked) => setForm((f) => ({ ...f, noindex: checked }))}
-            />
-          </div>
+        <div className="py-2">
+          <PublishSettingsFields
+            value={form}
+            onChange={setForm}
+            pickedImageId={pickedImageId}
+            onPickedImageIdChange={setPickedImageId}
+            driveId={driveId}
+          />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isBusy}>

@@ -1,6 +1,6 @@
 /**
- * Authenticated Forms settings API for a Canvas page — lets the Forms tab
- * (apps/web/.../canvas/CanvasFormsSettingsTab.tsx) wire an existing <form>
+ * Authenticated Forms settings API for a Canvas page — lets the Forms category
+ * (apps/web/.../canvas/settings/CanvasFormsSettingsSection.tsx) wire an existing <form>
  * tag on the page to a Sheet, and manage the resulting grant, without going
  * through the AI tool (apps/web/src/lib/ai/tools/form-tools.ts). `pageId`
  * here is the CANVAS page's id, not the target Sheet's — targets are looked

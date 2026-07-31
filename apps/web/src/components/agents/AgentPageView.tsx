@@ -61,6 +61,7 @@ import {
   type ResolvedConversation,
 } from './useResolvedConversation';
 import { useResolvedAgent } from './useResolvedAgent';
+import { useSessionRecord } from './useSessionRecord';
 import SessionChat from './chat/SessionChat';
 import AgentPanes from './panes/AgentPanes';
 import { agentSessionsKey, isAgentSessionsKey, type SessionListEntry } from './panes/session-conversations';
@@ -90,6 +91,21 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   // The conversation on screen: the user's own switching (history select, new,
   // delete-replacement) wins over the initial resolution.
   const current = override ?? initialResolved;
+
+  // The SESSION's own driveId — usually `page.driveId`, but NOT when this
+  // conversation lives in a global-assistant session hosting a cross-drive
+  // agent (a global session may now host any accessible agent's conversation;
+  // see create-conversation-in-session.ts). `AgentPanes` needs the SESSION's
+  // real drive (null for global), never the agent page's fixed home drive, or
+  // its `agentSessionsKey`/picker scope to a workspace this session isn't in.
+  // Defaults to `page.driveId` while unresolved — correct for every
+  // pre-existing conversation, and self-corrects once the session record
+  // loads for the new cross-drive case. Checked as `sessionData?.session ? : `
+  // rather than `??` — a RESOLVED session's `driveId` can itself legitimately
+  // be `null` (a global session), which `??` would wrongly treat the same as
+  // "unresolved" and fall through to `page.driveId`.
+  const { data: sessionData } = useSessionRecord(current?.sessionId ?? null);
+  const panesDriveId = sessionData?.session ? sessionData.session.driveId : page.driveId;
 
   const [activeTab, setActiveTab] = useState<string>('chat');
   const [webhooksOpen, setWebhooksOpen] = useState(false);
@@ -198,8 +214,18 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
           // `recordMintedConversation` before it ever revalidates).
           if (created.sessionId) {
             const insertedSessionId = created.sessionId;
+            // A REUSED session (sessionId set) keeps its own drive — which for
+            // a global session hosting this cross-drive agent's conversation
+            // is NOT `page.driveId` — while a freshly SPAWNED one (sessionId
+            // null going in) is always minted scoped to this page's own drive
+            // (`createPageConversation`'s spawn branch). Using `page.driveId`
+            // unconditionally here silently patched the wrong SWR cache entry
+            // for the reused-global case (`agentSessionsKey`'s own doc
+            // comment warns against exactly this drift) — the broader
+            // `mutate(isAgentSessionsKey)` below still catches it, just not
+            // instantly.
             void mutate(
-              agentSessionsKey(page.driveId),
+              agentSessionsKey(sessionId !== null ? panesDriveId : page.driveId),
               (current: { sessions: SessionListEntry[] } | undefined) => {
                 if (!current) return current;
                 return {
@@ -259,7 +285,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
         }
       })();
     },
-    [newConversation, page.id, currentRef],
+    [newConversation, page.id, page.driveId, panesDriveId, currentRef],
   );
 
   const {
@@ -337,12 +363,18 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   const openInAgentsHref = useMemo(
     () =>
       buildAgentSelectionUrl({
-        driveId: page.driveId,
+        // The SESSION's own drive, not the hosted page's — for a global
+        // session hosting this cross-drive agent's conversation, that
+        // session only appears in the GLOBAL console (`/dashboard/agents`),
+        // not a drive-scoped one; `page.driveId` here would build a link to
+        // a console that self-corrects late (or, for the console's own
+        // pre-existing null/undefined-conflating fallback, not at all).
+        driveId: panesDriveId,
         sessionId: current?.sessionId ?? null,
         agentId: page.id,
         conversationId: current?.conversationId ?? null,
       }),
-    [page.driveId, page.id, current],
+    [panesDriveId, page.id, current],
   );
 
   if (!current) {
@@ -430,7 +462,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
             <AgentPanes
               key={current.sessionId}
               sessionId={current.sessionId}
-              driveId={page.driveId}
+              driveId={panesDriveId}
               initialConversation={{
                 conversationId: current.conversationId,
                 agentPageId: page.id,

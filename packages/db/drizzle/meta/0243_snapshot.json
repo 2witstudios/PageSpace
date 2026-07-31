@@ -1,5 +1,5 @@
 {
-  "id": "0a9f402a-3f2d-4996-ac42-71ce2dde9efe",
+  "id": "d378d2ee-9392-4284-ad8c-e6968b989367",
   "prevId": "55bee8af-6334-47b6-89fd-17f838c41652",
   "version": "7",
   "dialect": "postgresql",
@@ -14120,19 +14120,13 @@
           "name": "agentPageId",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "prompt": {
           "name": "prompt",
           "type": "text",
           "primaryKey": false,
           "notNull": true
-        },
-        "steps": {
-          "name": "steps",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
         },
         "contextPageIds": {
           "name": "contextPageIds",
@@ -14532,118 +14526,6 @@
           "tableTo": "workflows",
           "columnsFrom": [
             "workflowId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.workflow_run_steps": {
-      "name": "workflow_run_steps",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "runId": {
-          "name": "runId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "position": {
-          "name": "position",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "kind": {
-          "name": "kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "toolName": {
-          "name": "toolName",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "status": {
-          "name": "status",
-          "type": "WorkflowRunStepStatus",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'running'"
-        },
-        "error": {
-          "name": "error",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "durationMs": {
-          "name": "durationMs",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "startedAt": {
-          "name": "startedAt",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "endedAt": {
-          "name": "endedAt",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "workflow_run_steps_run_position_idx": {
-          "name": "workflow_run_steps_run_position_idx",
-          "columns": [
-            {
-              "expression": "runId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "position",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "workflow_run_steps_runId_workflow_runs_id_fk": {
-          "name": "workflow_run_steps_runId_workflow_runs_id_fk",
-          "tableFrom": "workflow_run_steps",
-          "tableTo": "workflow_runs",
-          "columnsFrom": [
-            "runId"
           ],
           "columnsTo": [
             "id"
@@ -16717,6 +16599,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
+        },
+        "theme_bridge_enabled": {
+          "name": "theme_bridge_enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
         },
         "published_by": {
           "name": "published_by",
@@ -20739,16 +20628,6 @@
         "success",
         "error",
         "cancelled"
-      ]
-    },
-    "public.WorkflowRunStepStatus": {
-      "name": "WorkflowRunStepStatus",
-      "schema": "public",
-      "values": [
-        "running",
-        "success",
-        "error",
-        "skipped"
       ]
     },
     "public.TaskTriggerType": {

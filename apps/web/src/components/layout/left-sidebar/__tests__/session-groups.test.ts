@@ -29,7 +29,7 @@ describe('buildSessionGroups', () => {
       drives: [drive('drive-2', 'Beta'), drive('drive-1', 'Alpha')],
     });
     expect(groups.map((group) => group.driveId)).toEqual([ASSISTANT_GROUP_KEY, 'drive-1', 'drive-2']);
-    expect(groups.map((group) => group.driveName)).toEqual(['Assistant', 'Alpha', 'Beta']);
+    expect(groups.map((group) => group.driveName)).toEqual(['Global Assistant', 'Alpha', 'Beta']);
   });
 
   it('merges a roster drive with its sessions — union, not a duplicate group', () => {

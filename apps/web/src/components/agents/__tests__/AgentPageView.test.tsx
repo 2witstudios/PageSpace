@@ -24,7 +24,18 @@ vi.mock('../useResolvedConversation', () => ({
 }));
 
 const mockMutate = vi.hoisted(() => vi.fn());
-vi.mock('swr', () => ({ mutate: (...args: unknown[]) => mockMutate(...args) }));
+// Defaults to "not yet loaded" (`data: undefined`) so `panesDriveId` falls
+// back to `page.driveId` — identical to every pre-existing test's behavior.
+// One dedicated test below overrides this to pin the cross-drive-session
+// correction (the session's OWN driveId, not the hosted agent page's). Shape
+// matches `useSessionRecord`'s raw session-record result, not a pre-coalesced
+// driveId.
+type MockSessionRecordData = { session: { driveId: string | null } | null } | undefined;
+const mockUseSWR = vi.hoisted(() => vi.fn((..._args: unknown[]) => ({ data: undefined as MockSessionRecordData })));
+vi.mock('swr', () => ({
+  default: (...args: unknown[]) => mockUseSWR(...args),
+  mutate: (...args: unknown[]) => mockMutate(...args),
+}));
 
 vi.mock('../useResolvedAgent', () => ({
   useResolvedAgent: () => ({
@@ -60,12 +71,14 @@ const agentPanesState = vi.hoisted(() => ({
 vi.mock('../panes/AgentPanes', () => ({
   default: ({
     sessionId,
+    driveId,
     initialConversation,
     chatContext,
     isReadOnly,
     onConversationClosed,
   }: {
     sessionId: string;
+    driveId: string | null;
     initialConversation: { conversationId: string };
     chatContext?: string;
     isReadOnly?: boolean;
@@ -76,7 +89,12 @@ vi.mock('../panes/AgentPanes', () => ({
       agentPanesState.firstOnConversationClosed = onConversationClosed ?? null;
     }
     return (
-      <div data-testid="agent-panes" data-chat-context={chatContext} data-readonly={String(!!isReadOnly)}>
+      <div
+        data-testid="agent-panes"
+        data-chat-context={chatContext}
+        data-readonly={String(!!isReadOnly)}
+        data-drive-id={driveId ?? ''}
+      >
         {sessionId}/{initialConversation.conversationId}
       </div>
     );
@@ -174,6 +192,11 @@ const resolveTo = (resolved: ResolvedConversation) => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // `vi.clearAllMocks()` clears call/result history but NOT a persistent
+  // `mockReturnValue` override — re-establish the documented default here so
+  // one test's override (the global-assistant-session test below) can never
+  // leak into whichever test happens to run next.
+  mockUseSWR.mockReturnValue({ data: undefined });
   resolvedConversation.current = { resolved: null, isLoading: true };
   authState.current = { user: { id: 'user-1', role: 'admin' } };
   conversationsState.current = {
@@ -217,7 +240,26 @@ describe('AgentPageView', () => {
 
     await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-1'));
     expect(screen.getByTestId('agent-panes')).toHaveAttribute('data-chat-context', 'page');
+    // Defaults to the agent page's own drive while the session record is
+    // unresolved — correct for the overwhelming common case.
+    expect(screen.getByTestId('agent-panes')).toHaveAttribute('data-drive-id', 'drive-1');
     expect(screen.queryByTestId('plain-chat')).not.toBeInTheDocument();
+  });
+
+  it('a conversation whose SESSION is a global-assistant session passes the SESSION drive (null), not the agent page drive', async () => {
+    // Reachable now that a global session can host any accessible agent's
+    // conversation (create-conversation-in-session.ts): this agent page's
+    // most-recent conversation can be bound to a global session. AgentPanes
+    // must scope to the session's OWN drive (null), never `page.driveId` —
+    // otherwise `agentSessionsKey`/the picker look in the wrong workspace.
+    // The raw session-record shape `useSessionRecord` resolves to (not a
+    // pre-coalesced driveId) — a RESOLVED global session, session.driveId null.
+    mockUseSWR.mockReturnValue({ data: { session: { driveId: null } } });
+    resolveTo({ conversationId: 'conv-1', sessionId: 'ses-global' });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-global/conv-1'));
+    expect(screen.getByTestId('agent-panes')).toHaveAttribute('data-drive-id', '');
   });
 
   it('a NON-session user gets the plain chat even for a session-bound conversation (review M2)', async () => {

@@ -39,6 +39,7 @@ vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ kind: 'eq', field, value })),
   and: vi.fn((...conds) => ({ kind: 'and', conds })),
   inArray: vi.fn((field, values) => ({ kind: 'inArray', field, values })),
+  isNull: vi.fn((field) => ({ kind: 'isNull', field })),
   sql: Object.assign(
     vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
       kind: 'sql',
@@ -54,6 +55,7 @@ vi.mock('@pagespace/db/schema/conversations', () => ({
     id: 'conversations.id',
     userId: 'conversations.userId',
     isShared: 'conversations.isShared',
+    title: 'conversations.title',
     updatedAt: 'conversations.updatedAt',
   },
 }));
@@ -345,6 +347,43 @@ describe('conversationRepository.createConversation', () => {
     await conversationRepository.createConversation('conv-legacy', 'attacker-user', 'machine-1', { isShared: true });
 
     expect(mockDb.insert).not.toHaveBeenCalled();
+  });
+});
+
+describe('conversationRepository.autoTitleConversation', () => {
+  // The IS-NULL guard lives in the SQL WHERE clause, not an in-memory check —
+  // that's what makes this safe to call on every message without a separate
+  // "is this the first message" lookup, and race-safe under concurrent calls.
+  it('updates title guarded by "title IS NULL" in the WHERE clause', async () => {
+    const whereMock = vi.fn().mockResolvedValue(undefined);
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    mockDb.update = vi.fn().mockReturnValue({ set: setMock });
+
+    await conversationRepository.autoTitleConversation('conv_abc', 'Summarize this doc');
+
+    expect(mockDb.update).toHaveBeenCalled();
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({ title: 'Summarize this doc' }));
+    const predicate = whereMock.mock.calls[0][0] as { kind: string; conds: Array<{ kind: string; field?: string }> };
+    const idCond = predicate.conds.find((c) => c.field === 'conversations.id');
+    const nullTitleCond = predicate.conds.find((c) => c.kind === 'isNull');
+    expect(idCond).toBeDefined();
+    expect(nullTitleCond).toEqual({ kind: 'isNull', field: 'conversations.title' });
+  });
+
+  it('never overwrites an existing title — the guard is baked into every UPDATE\'s WHERE clause, not an in-memory check', async () => {
+    // A row with a non-null title simply matches zero rows against the
+    // "title IS NULL" predicate. There is no in-memory "if title" branch
+    // for a race to slip through — the second of two concurrent calls
+    // still issues the same guarded UPDATE and updates zero rows.
+    const whereMock = vi.fn().mockResolvedValue(undefined);
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    mockDb.update = vi.fn().mockReturnValue({ set: setMock });
+
+    await conversationRepository.autoTitleConversation('conv_titled', 'New attempted title');
+
+    const predicate = whereMock.mock.calls[0][0] as { kind: string; conds: Array<{ kind: string; field?: string }> };
+    const nullTitleCond = predicate.conds.find((c) => c.kind === 'isNull');
+    expect(nullTitleCond).toEqual({ kind: 'isNull', field: 'conversations.title' });
   });
 });
 
