@@ -310,13 +310,20 @@ function PublishSettingsDialog({ open, onOpenChange, initial, driveId, isBusy, o
   const [form, setForm] = useState<PublishSettings>(initial);
   const [pickedImageId, setPickedImageId] = useState<string | null>(null);
 
-  // Re-seed the form from the latest persisted values whenever the dialog opens.
+  // Re-seed the form from the latest persisted values on the closed→open
+  // transition only — `initial` is intentionally NOT a dependency. The
+  // parent recreates that object on every render (it's a plain literal
+  // derived from `status.settings`), so depending on it here would reseed
+  // (and clobber any in-progress edit) on every unrelated parent re-render
+  // while the dialog stays open — e.g. `contentDirty` flipping, or a shared
+  // publish-status refresh completing elsewhere.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (open) {
       setForm(initial);
       setPickedImageId(null);
     }
-  }, [open, initial]);
+  }, [open]);
 
   // Validate the share-image URL client-side so the user gets a specific message
   // instead of the server's generic rejection (the route also enforces this).

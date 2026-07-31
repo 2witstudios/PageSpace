@@ -89,6 +89,11 @@ interface PublishStatusStoreState {
    *  instead of each independently fetching once on mount and going stale. */
   statuses: Map<string, PublishStatus>;
   inFlight: Map<string, Promise<void>>;
+  // Bumped on every `setStatus` call (a mutation's result, or a fetch's own
+  // applied result) AND captured by `fetchStatus` before it starts its
+  // network call. Lets an in-flight fetch detect it's been superseded —
+  // see `fetchStatus`'s comment for the race this closes.
+  generations: Map<string, number>;
   setStatus: (pageId: string, status: PublishStatus) => void;
   /** Fetches and caches this page's publish status. Concurrent calls for the
    *  same pageId (e.g. the header and the canvas Settings tab mounting at
@@ -99,11 +104,21 @@ interface PublishStatusStoreState {
 export const usePublishStatusStore = create<PublishStatusStoreState>((set, get) => ({
   statuses: new Map(),
   inFlight: new Map(),
+  generations: new Map(),
 
   setStatus: (pageId, status) => {
+    // Bump first: any fetchStatus call already in flight for this pageId
+    // captured an older generation number and will now see a mismatch when
+    // it resolves, so it discards its (potentially stale) result instead of
+    // overwriting this write — this is itself a legitimate, authoritative
+    // write (a mutation's result, or a fetch's own already-current result),
+    // not one being superseded.
+    const nextGen = (get().generations.get(pageId) ?? 0) + 1;
+    const nextGenerations = new Map(get().generations);
+    nextGenerations.set(pageId, nextGen);
     const next = new Map(get().statuses);
     next.set(pageId, status);
-    set({ statuses: next });
+    set({ statuses: next, generations: nextGenerations });
   },
 
   fetchStatus: (pageId) => {
@@ -123,18 +138,35 @@ export const usePublishStatusStore = create<PublishStatusStoreState>((set, get) 
       return prev ? { ...prev, hasLoadError: true } : { ...EMPTY_PUBLISH_STATUS, hasLoadError: true };
     };
 
+    // Claim the current generation before the network round-trip starts. If
+    // a mutation (publish/unpublish/save/toggle) commits its own setStatus
+    // while this fetch is still in flight, the generation bumps past
+    // `myGen` — this fetch's eventual response is then a stale read of a row
+    // a newer, authoritative write has already superseded (e.g. it read the
+    // page as published just before an Unpublish click, and would otherwise
+    // resurrect that state — including the header's Copy Link URL — right
+    // after the unpublish succeeded).
+    const myGen = (get().generations.get(pageId) ?? 0) + 1;
+    {
+      const nextGenerations = new Map(get().generations);
+      nextGenerations.set(pageId, myGen);
+      set({ generations: nextGenerations });
+    }
+    const isSuperseded = () => get().generations.get(pageId) !== myGen;
+
     const promise = (async () => {
       try {
         const res = await fetchWithAuth(`/api/pages/${pageId}/publish`);
         if (res.ok) {
-          get().setStatus(pageId, publishStatusFromResponse((await res.json()) as PublishStatusResponse));
+          const data = (await res.json()) as PublishStatusResponse;
+          if (!isSuperseded()) get().setStatus(pageId, publishStatusFromResponse(data));
         } else if (res.status === 403) {
-          get().setStatus(pageId, { ...EMPTY_PUBLISH_STATUS, hasLoadError: false });
+          if (!isSuperseded()) get().setStatus(pageId, { ...EMPTY_PUBLISH_STATUS, hasLoadError: false });
         } else {
-          get().setStatus(pageId, keepLastGoodOnFailure());
+          if (!isSuperseded()) get().setStatus(pageId, keepLastGoodOnFailure());
         }
       } catch {
-        get().setStatus(pageId, keepLastGoodOnFailure());
+        if (!isSuperseded()) get().setStatus(pageId, keepLastGoodOnFailure());
       } finally {
         const nextInFlight = new Map(get().inFlight);
         nextInFlight.delete(pageId);

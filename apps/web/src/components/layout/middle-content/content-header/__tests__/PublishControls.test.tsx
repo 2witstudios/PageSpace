@@ -1,5 +1,5 @@
 import { describe, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { assert } from '@/stores/__tests__/riteway';
 import { usePublishStatusStore } from '@/stores/usePublishStatusStore';
@@ -45,7 +45,7 @@ const makeStatusResponse = ({ status = 200, body = {} }: { status?: number; body
 // between tests so one test's cached status for "page_1" can't leak into the
 // next's initial render.
 beforeEach(() => {
-  usePublishStatusStore.setState({ statuses: new Map(), inFlight: new Map() });
+  usePublishStatusStore.setState({ statuses: new Map(), inFlight: new Map(), generations: new Map() });
 });
 
 describe('PublishControls — unavailable-state branching', () => {
@@ -240,6 +240,51 @@ describe('PublishControls — settings after unpublish/republish', () => {
         actual: [status?.settings.title, status?.settings.themeBridgeEnabled],
         expected: ['', true],
       });
+    });
+  });
+});
+
+// ============================================================================
+// Regression test for a Codex-flagged bug: PublishSettingsDialog re-seeded its
+// form whenever its `initial` prop changed — but the parent recreates that
+// object (a plain literal derived from `status.settings`) on every render, so
+// ANY unrelated parent re-render while the dialog stayed open (a shared
+// status refresh completing, contentDirty flipping) reset whatever the user
+// had already typed. Fixed by reseeding on the closed→open transition only.
+// ============================================================================
+describe('PublishControls — Publish settings dialog stays stable while open', () => {
+  it('given an unrelated store update while the dialog is open, should NOT reset an in-progress edit', async () => {
+    mockFetchWithAuth.mockResolvedValue(makeStatusResponse({
+      body: { published: true, canEdit: true, available: true, url: 'https://acme.pagespace.site/welcome', title: 'Original Title' },
+    }));
+
+    render(<PublishControls pageId="page_1" />);
+
+    const settingsButton = await screen.findByRole('button', { name: 'Publish settings' });
+    await userEvent.click(settingsButton);
+
+    const titleInput = await screen.findByLabelText('Title');
+    await userEvent.clear(titleInput);
+    await userEvent.type(titleInput, 'My In-Progress Edit');
+
+    // Simulates an unrelated parent re-render while the dialog stays open —
+    // e.g. a shared usePublishStatusStore refresh from another mounted
+    // consumer (a Settings category, CanvasPageView's preview) completing.
+    // This recreates PublishControls' `dialogSettings` object with the SAME
+    // underlying values, but a new reference — exactly what used to
+    // retrigger the dialog's reseed effect.
+    act(() => {
+      const current = usePublishStatusStore.getState().statuses.get('page_1');
+      if (current) {
+        usePublishStatusStore.getState().setStatus('page_1', { ...current, isStale: true });
+      }
+    });
+
+    assert({
+      given: 'an unrelated store update while the Publish settings dialog is open with an in-progress edit',
+      should: "keep showing the user's edited title, not reseed from the (unrelated) refreshed status",
+      actual: (screen.getByLabelText('Title') as HTMLInputElement).value,
+      expected: 'My In-Progress Edit',
     });
   });
 });

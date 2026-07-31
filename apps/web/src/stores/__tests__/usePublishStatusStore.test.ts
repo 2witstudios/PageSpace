@@ -24,7 +24,7 @@ const makeResponse = ({ status = 200, body = {} }: { status?: number; body?: unk
 
 describe('usePublishStatusStore', () => {
   beforeEach(() => {
-    usePublishStatusStore.setState({ statuses: new Map(), inFlight: new Map() });
+    usePublishStatusStore.setState({ statuses: new Map(), inFlight: new Map(), generations: new Map() });
     mockFetchWithAuth.mockReset();
   });
 
@@ -128,6 +128,36 @@ describe('usePublishStatusStore', () => {
 
     expect(usePublishStatusStore.getState().statuses.get('page-1')?.published).toBe(true);
     expect(usePublishStatusStore.getState().statuses.get('page-2')?.published).toBe(false);
+  });
+
+  it('given a mutation commits while an older fetch is still in flight, the fetch\'s stale response must not overwrite it', async () => {
+    // Regression test for a Codex-flagged race: mounting a settings category
+    // starts a GET while the header stays actionable. If the slower GET
+    // (reading the page as still published) resolves AFTER a faster
+    // Unpublish DELETE has already committed the newer "unpublished" state,
+    // applying the GET's response would resurrect a URL that was just
+    // successfully unpublished.
+    let resolveFetch: (r: Response) => void;
+    mockFetchWithAuth.mockReturnValueOnce(new Promise((resolve) => { resolveFetch = resolve; }));
+
+    const slowFetch = usePublishStatusStore.getState().fetchStatus('page-1');
+
+    // The mutation (e.g. PublishControls' handleUnpublish) commits directly
+    // via setStatus, the same as the real code path — no fetchStatus call.
+    usePublishStatusStore.getState().setStatus('page-1', {
+      ...EMPTY_PUBLISH_STATUS, published: false, url: null, available: true, canEdit: true,
+    });
+
+    // The slow GET now resolves with what it read before the unpublish.
+    resolveFetch!(makeResponse({
+      body: { published: true, canEdit: true, url: 'https://acme.pagespace.site/welcome', available: true },
+    }));
+    await slowFetch;
+
+    expect(usePublishStatusStore.getState().statuses.get('page-1')).toMatchObject({
+      published: false,
+      url: null,
+    });
   });
 
   it('given setStatus, every reader of that pageId sees the update — the fix for the cross-component staleness bug', () => {
