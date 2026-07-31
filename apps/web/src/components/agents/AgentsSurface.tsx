@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { Bot, Loader2 } from 'lucide-react';
 
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
@@ -37,6 +38,7 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
   const selectSession = useAgentSurfaceStore((state) => state.selectSession);
   const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
   const storeDriveId = useAgentSurfaceStore((state) => state.driveId);
+  const search = useSearchParams().toString();
 
   const { data: sessionData } = useSessionRecord(selectedSessionId);
   // Resolved vs. not — NOT the same question as "which drive". On the global
@@ -70,15 +72,29 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
     }
   }, [selectedSessionId, sessionData, selectSession]);
 
-  // Deep link, refresh, and Back are the same operation: read the URL. `popstate`
-  // needs nothing beyond re-reading it, because the browser has already restored
-  // the address by the time the event fires.
+  // Deep link, refresh, and any Next-router-driven navigation to this same
+  // route (mount included) all read the URL through `useSearchParams()` —
+  // which is what makes reactivating a DIFFERENT tab that also points at this
+  // pathname work: `router.push` there only changes the query string, so
+  // nothing here remounts, but `useSearchParams()` still updates and re-runs
+  // this effect (caught in review, P2 — without it, the panes kept showing
+  // whichever tab's selection was hydrated last, and picking a session could
+  // silently overwrite the WRONG tab's saved search).
   useEffect(() => {
-    hydrateFromSearch({ driveId });
+    hydrateFromSearch({ driveId, search });
+  }, [hydrateFromSearch, driveId, search]);
+
+  // The one address change `useSearchParams()` can't see: a raw
+  // `history.pushState` (this surface's own writes — see `useAgentSurfaceStore`)
+  // bypasses Next's router entirely, so a `popstate` restoring one of those
+  // entries needs its own listener re-reading `window.location` directly,
+  // because the browser has already restored the address by the time the
+  // event fires.
+  useEffect(() => {
     const onPopState = () => hydrateFromSearch();
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
-  }, [hydrateFromSearch, driveId]);
+  }, [hydrateFromSearch]);
 
   // The LATEST selection, read at completion time rather than trusted from a
   // closure captured before an await: `AgentPanes`' close DELETE can still be

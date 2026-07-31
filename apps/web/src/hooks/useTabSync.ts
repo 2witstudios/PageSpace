@@ -81,6 +81,24 @@ export function useTabSync() {
       return;
     }
 
+    // A URL change isn't always a NEW step — a native Back/Forward (or one
+    // driven by code that bypasses Next's router, e.g. the Agents surface's
+    // raw `history.pushState`) can restore an address this tab already has in
+    // its own history, adjacent to its current position. Recognize that by
+    // adjacency instead of always pushing: otherwise Back re-adds the entry
+    // being returned TO as a new forward step, and this tab's own Back/Forward
+    // buttons end up one entry off from what the browser just did.
+    if (activeTab && activeTab.history[activeTab.historyIndex - 1] === href) {
+      currentState.goBackInActiveTab();
+      lastSyncedHref.current = href;
+      return;
+    }
+    if (activeTab && activeTab.history[activeTab.historyIndex + 1] === href) {
+      currentState.goForwardInActiveTab();
+      lastSyncedHref.current = href;
+      return;
+    }
+
     // Navigate within the active tab
     currentState.navigateInActiveTab(pathname, search);
     lastSyncedHref.current = href;

@@ -249,4 +249,81 @@ describe('useTabSync', () => {
       expect(state.tabs[0].historyIndex).toBe(2);
     });
   });
+
+  describe('history reconciliation (Back/Forward, caught in review: chatgpt-codex-connector P2)', () => {
+    it('given a query-only Back after two selections, should move the index back instead of appending a new entry', async () => {
+      const { createTab } = useTabsStore.getState();
+      createTab({ path: '/dashboard/agents' });
+
+      mockPathname.mockReturnValue('/dashboard/agents');
+      mockSearchParams.mockReturnValue(new URLSearchParams('session=a'));
+      const { rerender } = renderHook(() => useTabSync());
+      await waitFor(() => {
+        expect(useTabsStore.getState().tabs[0].search).toBe('session=a');
+      });
+
+      mockSearchParams.mockReturnValue(new URLSearchParams('session=b'));
+      rerender();
+      await waitFor(() => {
+        expect(useTabsStore.getState().tabs[0].search).toBe('session=b');
+      });
+
+      expect(useTabsStore.getState().tabs[0].history).toEqual([
+        '/dashboard/agents',
+        '/dashboard/agents?session=a',
+        '/dashboard/agents?session=b',
+      ]);
+      expect(useTabsStore.getState().tabs[0].historyIndex).toBe(2);
+
+      // What a native Back does (or a popstate replaying a raw `history.pushState`
+      // entry Next's router never pushed itself, e.g. the Agents surface's
+      // selection store): the address returns to one this tab already recorded.
+      mockSearchParams.mockReturnValue(new URLSearchParams('session=a'));
+      rerender();
+
+      await waitFor(() => {
+        const tab = useTabsStore.getState().tabs[0];
+        expect(tab.search).toBe('session=a');
+        expect(tab.historyIndex).toBe(1);
+        // No new entry appended — the array is unchanged, just the index moved.
+        expect(tab.history).toEqual([
+          '/dashboard/agents',
+          '/dashboard/agents?session=a',
+          '/dashboard/agents?session=b',
+        ]);
+      });
+    });
+
+    it('given a query-only Forward back to the later entry, should move the index forward instead of appending', async () => {
+      const { createTab } = useTabsStore.getState();
+      createTab({ path: '/dashboard/agents' });
+
+      mockPathname.mockReturnValue('/dashboard/agents');
+      mockSearchParams.mockReturnValue(new URLSearchParams('session=a'));
+      const { rerender } = renderHook(() => useTabSync());
+      await waitFor(() => expect(useTabsStore.getState().tabs[0].search).toBe('session=a'));
+
+      mockSearchParams.mockReturnValue(new URLSearchParams('session=b'));
+      rerender();
+      await waitFor(() => expect(useTabsStore.getState().tabs[0].search).toBe('session=b'));
+
+      mockSearchParams.mockReturnValue(new URLSearchParams('session=a'));
+      rerender();
+      await waitFor(() => expect(useTabsStore.getState().tabs[0].historyIndex).toBe(1));
+
+      mockSearchParams.mockReturnValue(new URLSearchParams('session=b'));
+      rerender();
+
+      await waitFor(() => {
+        const tab = useTabsStore.getState().tabs[0];
+        expect(tab.search).toBe('session=b');
+        expect(tab.historyIndex).toBe(2);
+        expect(tab.history).toEqual([
+          '/dashboard/agents',
+          '/dashboard/agents?session=a',
+          '/dashboard/agents?session=b',
+        ]);
+      });
+    });
+  });
 });
