@@ -6,11 +6,13 @@ const {
   mockAuditRequest,
   mockListAllConversationsPaginated,
   mockGetBatchPagePermissions,
+  mockResolveDriveMembership,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
   mockAuditRequest: vi.fn(),
   mockListAllConversationsPaginated: vi.fn(),
   mockGetBatchPagePermissions: vi.fn(),
+  mockResolveDriveMembership: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -25,6 +27,9 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getBatchPagePermissions: (...args: unknown[]) => mockGetBatchPagePermissions(...args),
+}));
+vi.mock('@pagespace/lib/services/agent-sessions/agent-session-tenant', () => ({
+  resolveDriveMembership: (...args: unknown[]) => mockResolveDriveMembership(...args),
 }));
 vi.mock('@/lib/agent-sessions/agent-sessions-conversations-runtime', () => ({
   listAllConversationsPaginated: (...args: unknown[]) => mockListAllConversationsPaginated(...args),
@@ -63,6 +68,24 @@ const PAGE_ROW = {
   sessionName: null,
   sessionEndedAt: null,
   driveId: 'drive-1',
+};
+
+// A `type: 'global'` conversation bound to a drive-scoped agent session —
+// any accepted member of `driveId` may have created this (session access is
+// granted by drive membership, not session ownership), so this row can exist
+// even for a session `user-1` doesn't own.
+const SESSION_GLOBAL_ROW = {
+  conversationId: 'conv-session-global',
+  title: null,
+  type: 'global',
+  agentPageId: null,
+  pageTitle: null,
+  lastMessageAt: '2026-07-28T00:00:00.000Z',
+  createdAt: '2026-07-27T00:00:00.000Z',
+  sessionId: 'session-1',
+  sessionName: 'My Sandbox',
+  sessionEndedAt: null,
+  driveId: 'drive-2',
 };
 
 beforeEach(() => {
@@ -268,6 +291,133 @@ describe('GET /api/agent-sessions/conversations', () => {
       // reached — the caller can page again rather than being told (falsely)
       // that history has ended.
       expect(body.pagination).toEqual({ hasMore: true, nextCursor: 'cursor-5', limit: 20 });
+    });
+
+    it('accumulating past `limit` across internal fetches truncates to `limit` and derives nextCursor from the last KEPT row, not the raw DB cursor', async () => {
+      mockListAllConversationsPaginated
+        .mockResolvedValueOnce({
+          // Entirely dropped — forces a second internal fetch.
+          conversations: [PAGE_ROW],
+          pagination: { hasMore: true, nextCursor: 'cursor-1', limit: 2 },
+        })
+        .mockResolvedValueOnce({
+          // 3 visible rows against a limit of 2 — pushes `visible` past `limit`.
+          conversations: [
+            { ...GLOBAL_ROW, conversationId: 'conv-a', lastMessageAt: '2026-07-29T00:00:00.000Z' },
+            { ...GLOBAL_ROW, conversationId: 'conv-b', lastMessageAt: '2026-07-28T00:00:00.000Z' },
+            { ...GLOBAL_ROW, conversationId: 'conv-c', lastMessageAt: '2026-07-27T00:00:00.000Z' },
+          ],
+          pagination: { hasMore: true, nextCursor: 'cursor-2', limit: 2 },
+        });
+      mockGetBatchPagePermissions.mockResolvedValue(new Map([['agent-1', { canView: false }]]));
+
+      // Drive-scoped so the first fetch's row is DROPPED (not masked) —
+      // otherwise a masked-but-kept row would occupy one of the two `limit`
+      // slots itself, muddying what this test is isolating.
+      const response = await GET(new Request('http://localhost/api/agent-sessions/conversations?limit=2&driveId=drive-1'));
+      const body = await response.json();
+
+      // Truncated to the requested limit, not the 3 rows the second fetch found.
+      expect(body.conversations).toEqual([
+        expect.objectContaining({ conversationId: 'conv-a' }),
+        expect.objectContaining({ conversationId: 'conv-b' }),
+      ]);
+      expect(body.pagination.hasMore).toBe(true);
+      // The cursor must come from `conv-b` (the last KEPT row) — not `cursor-2`
+      // (the raw DB cursor, which would skip past `conv-b` and re-admit
+      // `conv-c` a second time on the next page if it leaked through instead).
+      const expectedCursor = Buffer.from(
+        JSON.stringify({ sortKey: new Date('2026-07-28T00:00:00.000Z').toISOString(), id: 'conv-b' }),
+      ).toString('base64url');
+      expect(body.pagination.nextCursor).toBe(expectedCursor);
+    });
+  });
+
+  describe('session-bound global rows: the session drive can belong to a different member than the requester', () => {
+    // A drive-scoped agent session is a shared working context — any
+    // accepted member may create their own `type: 'global'` conversation
+    // inside it (session access is granted by drive membership, not session
+    // ownership), so `conversations.userId` and the session's own `ownerId`
+    // can legitimately differ. Conversation ownership never lapses, but
+    // membership in that session's drive can — the same "authored it once,
+    // current access unproven" gap already covered above for pages.
+    beforeEach(() => {
+      mockListAllConversationsPaginated.mockResolvedValue({
+        conversations: [SESSION_GLOBAL_ROW, GLOBAL_ROW],
+        pagination: { hasMore: false, nextCursor: null, limit: 20 },
+      });
+    });
+
+    it('keeps the row in full when the requester still has access to the session drive', async () => {
+      mockResolveDriveMembership.mockResolvedValue('member');
+
+      const response = await GET(new Request('http://localhost/api/agent-sessions/conversations'));
+      const body = await response.json();
+
+      expect(mockResolveDriveMembership).toHaveBeenCalledWith({ userId: 'user-1', driveId: 'drive-2' });
+      expect(body.conversations).toEqual([SESSION_GLOBAL_ROW, GLOBAL_ROW]);
+    });
+
+    it('masks the session-derived fields (keeps the row, as the conversation is still readable) when unscoped and access is lost', async () => {
+      // The global-assistant message GET gates purely on `conversations.userId`
+      // — never session or drive membership — so the conversation's own
+      // content stays fully readable. Only the session-derived fields (which
+      // `resolveNavigationTarget` would otherwise use to route into a pane
+      // the requester can no longer open) are nulled.
+      mockResolveDriveMembership.mockResolvedValue('none');
+
+      const response = await GET(new Request('http://localhost/api/agent-sessions/conversations'));
+      const body = await response.json();
+
+      expect(body.conversations).toEqual([
+        { ...SESSION_GLOBAL_ROW, sessionId: null, driveId: null, sessionName: null, sessionEndedAt: null },
+        GLOBAL_ROW,
+      ]);
+    });
+
+    it('drops the row entirely when driveId is scoped and access is lost (same oracle risk as page rows)', async () => {
+      mockResolveDriveMembership.mockResolvedValue('none');
+
+      const response = await GET(new Request('http://localhost/api/agent-sessions/conversations?driveId=drive-2'));
+      const body = await response.json();
+
+      expect(mockListAllConversationsPaginated).toHaveBeenCalledWith(
+        { ownerId: 'user-1', driveId: 'drive-2' },
+        { limit: 20, cursor: undefined },
+      );
+      expect(body.conversations).toEqual([GLOBAL_ROW]);
+    });
+
+    it('keeps the row in full when driveId is scoped and access is NOT lost', async () => {
+      mockResolveDriveMembership.mockResolvedValue('owner');
+
+      const response = await GET(new Request('http://localhost/api/agent-sessions/conversations?driveId=drive-2'));
+      const body = await response.json();
+
+      expect(body.conversations).toEqual([SESSION_GLOBAL_ROW, GLOBAL_ROW]);
+    });
+
+    it('never checks drive membership for a driveless global-assistant conversation (no session, nothing to check)', async () => {
+      mockListAllConversationsPaginated.mockResolvedValue({
+        conversations: [GLOBAL_ROW],
+        pagination: { hasMore: false, nextCursor: null, limit: 20 },
+      });
+
+      await GET(new Request('http://localhost/api/agent-sessions/conversations'));
+
+      expect(mockResolveDriveMembership).not.toHaveBeenCalled();
+    });
+
+    it('batch-checks once per distinct driveId, never per-row (no N+1)', async () => {
+      mockListAllConversationsPaginated.mockResolvedValue({
+        conversations: [SESSION_GLOBAL_ROW, { ...SESSION_GLOBAL_ROW, conversationId: 'conv-session-global-2' }],
+        pagination: { hasMore: false, nextCursor: null, limit: 20 },
+      });
+      mockResolveDriveMembership.mockResolvedValue('member');
+
+      await GET(new Request('http://localhost/api/agent-sessions/conversations'));
+
+      expect(mockResolveDriveMembership).toHaveBeenCalledTimes(1);
     });
   });
 });

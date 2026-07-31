@@ -20,6 +20,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
+import { resolveDriveMembership } from '@pagespace/lib/services/agent-sessions/agent-session-tenant';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import {
   listAllConversationsPaginated,
@@ -48,21 +49,61 @@ const MAX_INTERNAL_FETCHES = 5;
 function maskOrDrop(
   row: PastConversationRow,
   canViewPage: (agentPageId: string) => boolean,
+  canAccessSessionDrive: (driveId: string) => boolean,
   scopedDriveId: string | undefined,
 ): PastConversationRow[] {
-  if (row.type !== 'page' || row.agentPageId === null || canViewPage(row.agentPageId)) return [row];
-  // Drive-scoped requests must DROP the row entirely, not just mask its
-  // fields: the drive filter itself runs against the page's CURRENT
-  // `driveId` before any permission check, so a masked-but-present row in
-  // a `?driveId=X` result already confirms "this inaccessible page
-  // currently belongs to drive X" — an oracle a caller could probe across
-  // candidate drive ids (review finding). Un-scoped (global) requests
-  // don't have this problem — presence there isn't tied to any specific
-  // drive being asked about — so masking (keep the row, as the
-  // requester's own history, but hide the page-derived fields) is still
-  // correct there, matching the `storage/info/route.ts` pattern.
-  if (scopedDriveId) return [];
-  return [{ ...row, pageTitle: null, driveId: null }];
+  if (row.type === 'page' && row.agentPageId !== null && !canViewPage(row.agentPageId)) {
+    // Drive-scoped requests must DROP the row entirely, not just mask its
+    // fields: the drive filter itself runs against the page's CURRENT
+    // `driveId` before any permission check, so a masked-but-present row in
+    // a `?driveId=X` result already confirms "this inaccessible page
+    // currently belongs to drive X" — an oracle a caller could probe across
+    // candidate drive ids (review finding). Un-scoped (global) requests
+    // don't have this problem — presence there isn't tied to any specific
+    // drive being asked about — so masking (keep the row, as the
+    // requester's own history, but hide the page-derived fields) is still
+    // correct there, matching the `storage/info/route.ts` pattern.
+    if (scopedDriveId) return [];
+    return [{ ...row, pageTitle: null, driveId: null }];
+  }
+
+  // A `type: 'global'` conversation can be bound to a DRIVE-SCOPED agent
+  // session — any accepted drive member may create their own global
+  // conversation inside another member's session (`decideAgentSessionAccess`
+  // grants access by drive membership, not session ownership), so
+  // `conversations.userId` and the joined `agent_sessions.ownerId` can
+  // legitimately differ. Conversation OWNERSHIP never lapses, but the
+  // requester's membership in that session's drive can — the identical
+  // "authored it once, current access unproven" gap already fixed above for
+  // pages, with the identical oracle risk: a drive-scoped `?driveId=X`
+  // request that still returns this row already confirms "this session
+  // currently belongs to drive X". Caught proactively (not yet a reviewer
+  // finding) by re-applying the exact fix this PR already established for
+  // pages, to the one other row shape with the same shared-resource shape.
+  if (row.type === 'global' && row.sessionId !== null && row.driveId !== null && !canAccessSessionDrive(row.driveId)) {
+    if (scopedDriveId) return [];
+    // Masking (not dropping) is safe unscoped: the global-assistant message
+    // GET gates purely on `conversations.userId` — never session or drive
+    // membership (`/api/ai/global/[id]/messages` route) — so the
+    // conversation's own content stays fully readable. Nulling the
+    // session-derived fields just stops it from presenting as session-bound;
+    // `resolveNavigationTarget` then falls through to the ordinary
+    // `case 'global'` branch on its own, no extra signal needed.
+    return [{ ...row, sessionId: null, driveId: null, sessionName: null, sessionEndedAt: null }];
+  }
+
+  return [row];
+}
+
+async function getBatchDriveMembership(userId: string, driveIds: string[]): Promise<Map<string, boolean>> {
+  const distinct = Array.from(new Set(driveIds));
+  const entries = await Promise.all(
+    distinct.map(async (driveId): Promise<[string, boolean]> => [
+      driveId,
+      (await resolveDriveMembership({ userId, driveId })) !== 'none',
+    ]),
+  );
+  return new Map(entries);
 }
 
 async function fetchVisiblePage(
@@ -91,8 +132,14 @@ async function fetchVisiblePage(
     const pagePermissions = pageIds.length > 0 ? await getBatchPagePermissions(ownerId, pageIds) : null;
     const canViewPage = (agentPageId: string) => pagePermissions?.get(agentPageId)?.canView ?? false;
 
+    const sessionDriveIds = result.conversations
+      .filter((c) => c.type === 'global' && c.sessionId !== null && c.driveId !== null)
+      .map((c) => c.driveId as string);
+    const driveMembership = sessionDriveIds.length > 0 ? await getBatchDriveMembership(ownerId, sessionDriveIds) : null;
+    const canAccessSessionDrive = (driveId: string) => driveMembership?.get(driveId) ?? false;
+
     for (const row of result.conversations) {
-      visible.push(...maskOrDrop(row, canViewPage, scopedDriveId));
+      visible.push(...maskOrDrop(row, canViewPage, canAccessSessionDrive, scopedDriveId));
     }
   }
 

@@ -559,6 +559,67 @@ describe('past conversations (default view, replacing the old static prompt)', (
     expect(getByText('Page 1 chat')).toBeDefined();
   });
 
+  it('the Next button is disabled while a page fetch is in flight — a fast double-click cannot skip a page', async () => {
+    // Without gating on `isValidating`, a second click before the first
+    // click's fetch resolves would read the same (still page-1) `nextCursor`
+    // twice, pushing it onto `cursorStack` for two different page indices
+    // and silently skipping whatever page actually follows page 2.
+    let resolvePageTwoFetch!: (value: { ok: true; json: () => Promise<unknown> }) => void;
+    const pageTwoFetch = new Promise<{ ok: true; json: () => Promise<unknown> }>((resolve) => {
+      resolvePageTwoFetch = resolve;
+    });
+
+    const pageResponse = (label: string, nextCursor: string | null) => ({
+      ok: true as const,
+      json: async () => ({
+        conversations: [
+          {
+            conversationId: `conv-${label}`,
+            title: label,
+            type: 'global',
+            agentPageId: null,
+            pageTitle: null,
+            lastMessageAt: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
+            sessionId: null,
+            sessionName: null,
+            sessionEndedAt: null,
+            driveId: null,
+          },
+        ],
+        pagination: { hasMore: nextCursor !== null, nextCursor, limit: 20 },
+      }),
+    });
+
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.includes('/api/agent-sessions/conversations')) {
+        const cursor = new URL(url, 'http://localhost').searchParams.get('cursor');
+        if (!cursor) return pageResponse('page-1', 'conv-page-1');
+        return pageTwoFetch;
+      }
+      return { ok: true, json: async () => ({ session: { driveId: null } }) };
+    });
+
+    const { getByText, findByText } = render(<AgentsSurface driveId="drive-race" />);
+    await findByText('page-1');
+
+    const nextButton = getByText('Next').closest('button')!;
+    act(() => nextButton.click());
+
+    // The fetch for page 2 is now in flight (not yet resolved) — the button
+    // must already be disabled, so a second click here is a no-op rather
+    // than queuing a second page-advance against the same stale cursor.
+    expect(nextButton).toBeDisabled();
+    act(() => nextButton.click());
+
+    resolvePageTwoFetch(pageResponse('page-2', null));
+    await findByText('page-2');
+
+    // Exactly one page-advance happened: still on page-2's content, not
+    // having silently skipped to a (nonexistent) page-3.
+    expect(screen.queryByText('page-1')).toBeNull();
+  });
+
   it('clicking a client (API-managed) conversation shows a toast instead of navigating — no in-app surface can open it', async () => {
     mockFetchWithAuth.mockImplementation(async (url: string) => {
       if (url.includes('/api/agent-sessions/conversations')) {

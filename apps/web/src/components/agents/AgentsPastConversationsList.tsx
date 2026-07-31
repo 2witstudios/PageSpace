@@ -90,7 +90,7 @@ export default function AgentsPastConversationsList({ driveId }: { driveId?: str
   const [pageIndex, setPageIndex] = useState(0);
   const cursor = cursorStack[pageIndex];
 
-  const { data, error, isLoading } = useSWR<ConversationsResponse>(
+  const { data, error, isLoading, isValidating } = useSWR<ConversationsResponse>(
     buildKey(driveId, cursor),
     conversationsFetcher,
     {
@@ -222,7 +222,12 @@ export default function AgentsPastConversationsList({ driveId }: { driveId?: str
         </button>
         <button
           type="button"
-          disabled={!data?.pagination.hasMore}
+          // `isValidating` also covers a fetch already in flight: without it,
+          // a fast double-click both reads the same (not-yet-updated)
+          // `data.pagination.nextCursor` before the first click's fetch
+          // resolves, pushing that identical cursor onto `cursorStack` twice
+          // and silently skipping a real page of history.
+          disabled={!data?.pagination.hasMore || isValidating}
           onClick={() => {
             const nextCursor = data?.pagination.nextCursor;
             if (!nextCursor) return;
