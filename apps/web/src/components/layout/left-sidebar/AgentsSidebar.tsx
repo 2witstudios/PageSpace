@@ -467,7 +467,7 @@ function SessionSearchHeader({
   actionLabel: string;
 }) {
   return (
-    <div className="flex items-center gap-1 px-2 pb-1 pt-1.5">
+    <div className="flex items-center gap-1 pl-2 pr-4 pb-1 pt-1.5">
       <div className="relative flex-1">
         <Search className="absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
         <Input
