@@ -383,3 +383,83 @@ describe('CanvasFrame — navigation bridge', () => {
     });
   });
 });
+
+describe('CanvasFrame — escape bridge', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useThemeMock.mockReturnValue({ resolvedTheme: 'dark' });
+    fetchWithAuthMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ links: [] }),
+    });
+  });
+
+  it('given no onEscape prop, should NOT inject the escape bridge script into the srcDoc', () => {
+    render(React.createElement(CanvasFrame, {
+      html: '<p>x</p>',
+      title: 'Canvas',
+    }));
+
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    expect(iframe.srcdoc).not.toContain('pagespace-escape');
+  });
+
+  it('given an onEscape prop, should inject the escape bridge script into the srcDoc', () => {
+    render(React.createElement(CanvasFrame, {
+      html: '<p>x</p>',
+      title: 'Canvas',
+      onEscape: vi.fn(),
+    }));
+
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    expect(iframe.srcdoc).toContain('pagespace-escape');
+  });
+
+  it('given a pagespace-escape message from the iframe, should call onEscape', () => {
+    const mockContentWindow = { postMessage: vi.fn() };
+    const onEscape = vi.fn();
+
+    render(React.createElement(CanvasFrame, {
+      html: '<p>x</p>',
+      title: 'Canvas',
+      onEscape,
+    }));
+
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: mockContentWindow,
+      configurable: true,
+    });
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'pagespace-escape' },
+      source: mockContentWindow as unknown as MessageEventSource,
+    }));
+
+    expect(onEscape).toHaveBeenCalledOnce();
+  });
+
+  it('given a pagespace-escape message from a different source, should NOT call onEscape', () => {
+    const mockContentWindow = { postMessage: vi.fn() };
+    const onEscape = vi.fn();
+
+    render(React.createElement(CanvasFrame, {
+      html: '<p>x</p>',
+      title: 'Canvas',
+      onEscape,
+    }));
+
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: mockContentWindow,
+      configurable: true,
+    });
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'pagespace-escape' },
+      source: window,
+    }));
+
+    expect(onEscape).not.toHaveBeenCalled();
+  });
+});

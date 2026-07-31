@@ -133,6 +133,25 @@ export interface RenderCanvasDocumentInput {
    */
   navigationBridge?: boolean;
   /**
+   * When true, injects a lightweight <script> into <head> that listens for a
+   * top-level `Escape` keydown inside the iframe's own document and posts
+   * `{ type: 'pagespace-escape' }` to the parent.
+   *
+   * Sandboxed/cross-origin iframes are a separate browsing context: keyboard
+   * events (including Escape) never bubble out to the parent document, so a
+   * parent-side modal (e.g. the in-app fullscreen canvas preview) built on a
+   * `keydown` listener never sees Escape once focus moves inside the iframe.
+   * This bridges it the same way the theme/navigation bridges cross the
+   * origin boundary — via `postMessage`, with the parent (CanvasFrame)
+   * deciding what "close" means.
+   *
+   * Pass ONLY from the in-app dashboard renderer, and only while something is
+   * actually listening (e.g. the fullscreen preview dialog is open) — see
+   * `navigationBridge` doc above for why the publish pipeline must not set
+   * this.
+   */
+  escapeBridge?: boolean;
+  /**
    * When set, used VERBATIM as the emitted CSP `<meta>` content instead of
    * `buildBaselineCsp(formActionOrigin)`. Lets other renderers (e.g. the
    * published-document pipeline, which needs `script-src 'none'`) reuse this
@@ -267,6 +286,24 @@ export const NAVIGATION_BRIDGE_SCRIPT =
   "});" +
   "})();</script>";
 
+/**
+ * Inline script injected when `escapeBridge` is true. Runs ONLY inside the
+ * in-app canvas iframe (see `escapeBridge` doc above).
+ *
+ * Listens on `document` for a bare `Escape` keydown (no modifier keys, so
+ * e.g. a canvas-internal "close panel on Cmd+Escape" shortcut is left alone)
+ * and posts `{ type: 'pagespace-escape' }` to the parent. Never calls
+ * `preventDefault()` — author JS retains full control of its own Escape
+ * handling; this is purely an additional notification to the parent.
+ */
+export const ESCAPE_BRIDGE_SCRIPT =
+  "<script>(function(){" +
+  "document.addEventListener('keydown',function(e){" +
+  "if(e.key!=='Escape'||e.metaKey||e.ctrlKey||e.altKey)return;" +
+  "try{window.parent.postMessage({type:'pagespace-escape'},'*');}catch(err){}" +
+  "});" +
+  "})();</script>";
+
 // Re-exported for existing consumers — the implementation lives in a
 // dependency-free shared module so non-canvas modules (e.g. forms) don't
 // couple to canvas internals to escape a string.
@@ -396,7 +433,7 @@ function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[], no
  * Render a complete, standalone HTML document for a canvas page.
  */
 export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
-  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, formActionOrigin, injectThemeBridge, navigationBridge, nonce, cspOverride } = input;
+  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, formActionOrigin, injectThemeBridge, navigationBridge, escapeBridge, nonce, cspOverride } = input;
   const csp = cspOverride ?? buildBaselineCsp(formActionOrigin);
 
   const { css, body } = extractAndSanitizeStyles(unwrapFullDocument(html ?? ''), allowedAssetHosts, nonce);
@@ -441,6 +478,7 @@ export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
     `<style>${BASELINE_RESET}${css}</style>` +
     (injectThemeBridge ? (nonce ? stampScriptNonce(THEME_BRIDGE_SCRIPT, nonce) : THEME_BRIDGE_SCRIPT) : '') +
     (navigationBridge ? (nonce ? stampScriptNonce(NAVIGATION_BRIDGE_SCRIPT, nonce) : NAVIGATION_BRIDGE_SCRIPT) : '') +
+    (escapeBridge ? (nonce ? stampScriptNonce(ESCAPE_BRIDGE_SCRIPT, nonce) : ESCAPE_BRIDGE_SCRIPT) : '') +
     '</head><body>' +
     body +
     '</body></html>'

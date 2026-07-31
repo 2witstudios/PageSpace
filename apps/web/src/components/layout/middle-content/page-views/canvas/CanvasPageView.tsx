@@ -52,6 +52,7 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
   }, [searchParams, pathname, router]);
 
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const closePreview = useCallback(() => setIsPreviewOpen(false), []);
   const containerRef = useRef<HTMLDivElement>(null);
   const hasInitializedRef = useRef(false);
   const isDirtyRef = useRef(false);
@@ -275,7 +276,7 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
           className="w-screen h-screen max-w-none max-h-none p-0 gap-0 rounded-none border-0 sm:max-w-none"
         >
           <DialogTitle className="sr-only">Canvas preview</DialogTitle>
-          <CanvasFrame html={content} title="Canvas preview" themeBridgeEnabled={themeBridgeEnabled} />
+          <CanvasFrame html={content} title="Canvas preview" themeBridgeEnabled={themeBridgeEnabled} onEscape={closePreview} />
         </DialogContent>
       </Dialog>
 
