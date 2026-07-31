@@ -12,11 +12,11 @@ import {
 } from '@/lib/workflows/workflow-executor';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
-import { WEBHOOK_DAILY_EXPOSURE_CAP_CENTS } from '@pagespace/lib/billing/credit-pricing';
+import { WEBHOOK_DAILY_EXPOSURE_CAP_CENTS, CREDIT_HOLD_ESTIMATE_CENTS } from '@pagespace/lib/billing/credit-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { resolveSteps, hasAiStep } from '@/lib/workflows/core/step-plan';
+import { resolveSteps, hasAiStep, countAiSteps } from '@/lib/workflows/core/step-plan';
 import { frameWebhookPayloadPrompt } from './webhook-payload-framing';
 
 const logger = loggers.api.child({ module: 'page-webhook-trigger-executor' });
@@ -185,6 +185,12 @@ export async function executePageWebhookTrigger(
     //    unconfigured deployments. Deterministic-only chains take no hold:
     //    their blast radius is bounded by the deterministic budget in the
     //    fan-out plus each tool's own permission checks.
+    //
+    //    A single gate call/hold covers the WHOLE run, not one AI call —
+    //    runStepChain bills provider usage once per ai step (up to
+    //    MAX_WORKFLOW_STEPS), so the reservation must be sized by the
+    //    chain's ai-step count or a multi-step chain blows straight through
+    //    the daily exposure ceiling this gate exists to enforce.
     let holdId: string | undefined;
     if (needsAi) {
       const [owner] = await db
@@ -194,7 +200,10 @@ export async function executePageWebhookTrigger(
       const gate = await canConsumeAI(
         workflow.createdBy,
         (owner?.subscriptionTier ?? 'free') as SubscriptionTier,
-        { dailyCapCeilingCents: WEBHOOK_DAILY_EXPOSURE_CAP_CENTS },
+        {
+          dailyCapCeilingCents: WEBHOOK_DAILY_EXPOSURE_CAP_CENTS,
+          estCostCents: CREDIT_HOLD_ESTIMATE_CENTS * countAiSteps(steps),
+        },
       );
       if (!gate.allowed) {
         logger.info('Page webhook trigger: skipped (credit gate denied)', {

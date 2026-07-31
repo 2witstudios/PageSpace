@@ -33,6 +33,16 @@ export function hasAiStep(steps: readonly WorkflowStep[]): boolean {
   return steps.some((step) => step.kind === 'ai');
 }
 
+/**
+ * Count of ai steps in a chain. A single credit-gate hold/ceiling-check
+ * covers the whole run, not one call — the caller must size its reservation
+ * by this count, not assume one AI invocation per fire (runStepChain calls
+ * runExecution, and therefore bills provider usage, once per ai step).
+ */
+export function countAiSteps(steps: readonly WorkflowStep[]): number {
+  return steps.filter((step) => step.kind === 'ai').length;
+}
+
 export type PlannedStepStatus = 'success' | 'error' | 'skipped';
 
 /**

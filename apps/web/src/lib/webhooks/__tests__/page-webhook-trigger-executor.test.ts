@@ -38,6 +38,7 @@ vi.mock('@pagespace/lib/billing/credit-gate', () => ({
 
 vi.mock('@pagespace/lib/billing/credit-pricing', () => ({
   WEBHOOK_DAILY_EXPOSURE_CAP_CENTS: 500,
+  CREDIT_HOLD_ESTIMATE_CENTS: 10,
 }));
 
 const mockReleaseHold = vi.fn();
@@ -108,7 +109,12 @@ describe('executePageWebhookTrigger', () => {
 
   it('bills the credit gate to workflow.createdBy and releases the hold', async () => {
     await executePageWebhookTrigger(TRIGGER, ENVELOPE);
-    expect(mockCanConsume).toHaveBeenCalledWith('user-1', 'pro', { dailyCapCeilingCents: 500 });
+    // Legacy workflow (no steps column) synthesizes exactly one ai step, so
+    // the reservation is 1x the per-call estimate.
+    expect(mockCanConsume).toHaveBeenCalledWith('user-1', 'pro', {
+      dailyCapCeilingCents: 500,
+      estCostCents: 10,
+    });
     expect(mockReleaseHold).toHaveBeenCalledWith('hold-1');
   });
 
@@ -121,6 +127,33 @@ describe('executePageWebhookTrigger', () => {
     // The env tier caps default to disabled, so the executor must pass an
     // explicit monetary ceiling that binds on unconfigured deployments too.
     expect(opts?.dailyCapCeilingCents).toBe(500);
+  });
+
+  it('scales the credit reservation by the number of ai steps in the chain — one canConsumeAI call must cover every runExecution call runStepChain will make', async () => {
+    // A multi-step chain still bills provider usage once PER ai step
+    // (runStepChain calls runExecution per step), so a flat 1-call
+    // reservation would let a leaked webhook secret force N model calls
+    // through a single gate check sized for 1 — exactly the gap this covers.
+    selectResults[0] = [
+      {
+        ...WORKFLOW,
+        agentPageId: null,
+        prompt: '',
+        steps: [
+          { kind: 'ai', prompt: 'summarize' },
+          { kind: 'tool', toolName: 'insert_content', args: {} },
+          { kind: 'ai', prompt: 'notify', agentPageId: 'agent-1' },
+          { kind: 'ai', prompt: 'follow up', agentPageId: 'agent-1' },
+        ],
+      },
+    ];
+
+    await executePageWebhookTrigger(TRIGGER, ENVELOPE);
+
+    expect(mockCanConsume).toHaveBeenCalledWith('user-1', 'pro', {
+      dailyCapCeilingCents: 500,
+      estCostCents: 30, // 3 ai steps * 10-cent per-call estimate
+    });
   });
 
   it('releases the credit hold even when executeWorkflow throws', async () => {

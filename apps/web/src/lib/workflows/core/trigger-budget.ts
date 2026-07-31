@@ -15,19 +15,24 @@ export type TriggerBudgetPlan = {
   creditHold: boolean;
   /** Cheaper deterministic budget applies (all-tool chains only). */
   deterministicBudget: boolean;
-  /** Per-webhook channel-post limit also applies (a send_channel_message step exists). */
-  channelLimit: boolean;
+  /**
+   * Number of send_channel_message steps in the chain. The shared per-webhook
+   * channel-post bucket must be charged this many tokens, not one flat charge
+   * per run — a chain can post this many messages in a single fire, and the
+   * bucket's whole purpose is bounding posts, not runs.
+   */
+  channelPostCount: number;
 };
 
 export function selectTriggerBudgets(steps: readonly WorkflowStep[]): TriggerBudgetPlan {
   const ai = hasAiStep(steps);
-  const channelLimit = steps.some(
+  const channelPostCount = steps.filter(
     (step) => step.kind === 'tool' && step.toolName === 'send_channel_message'
-  );
+  ).length;
   return {
     aiBudget: ai,
     creditHold: ai,
     deterministicBudget: !ai,
-    channelLimit,
+    channelPostCount,
   };
 }

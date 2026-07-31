@@ -222,6 +222,39 @@ describe('firePageWebhookTriggers — deterministic budget branch', () => {
     expect(mockSetError).toHaveBeenCalledWith('t1', 'rate_limited');
   });
 
+  it('charges the channel bucket once per send_channel_message step, not once per run', async () => {
+    // A chain with 3 posting steps must consume 3 tokens up front — charging
+    // only 1 would let a single fire post 3x what the bucket actually admitted.
+    mockWorkflowRows.rows = [
+      { id: 'wf_t1', steps: [channelStep, channelStep, channelStep], prompt: '', agentPageId: null },
+    ];
+    mockExecute.mockResolvedValue({ success: true, durationMs: 1 });
+
+    await firePageWebhookTriggers([aTrigger('t1')], envelope);
+
+    const channelCalls = mockRateLimit.mock.calls.filter(([key]) => key === 'page-webhook:wh_1');
+    expect(channelCalls).toHaveLength(3);
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks the run if the channel bucket runs out partway through the chain\'s tokens', async () => {
+    mockWorkflowRows.rows = [
+      { id: 'wf_t1', steps: [channelStep, channelStep, channelStep], prompt: '', agentPageId: null },
+    ];
+    let channelCalls = 0;
+    mockRateLimit.mockImplementation((key: string) => {
+      if (key !== 'page-webhook:wh_1') return Promise.resolve({ allowed: true });
+      channelCalls++;
+      return Promise.resolve({ allowed: channelCalls <= 2 });
+    });
+
+    await firePageWebhookTriggers([aTrigger('t1')], envelope);
+
+    expect(channelCalls).toBe(3);
+    expect(mockExecute).not.toHaveBeenCalled();
+    expect(mockSetError).toHaveBeenCalledWith('t1', 'rate_limited');
+  });
+
   it('mixed chains (ai + tool) stay on the AI budget', async () => {
     mockWorkflowRows.rows = [
       {

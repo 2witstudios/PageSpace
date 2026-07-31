@@ -75,7 +75,7 @@ export async function firePageWebhookTriggers(
     aiBudget: true,
     creditHold: true,
     deterministicBudget: false,
-    channelLimit: false,
+    channelPostCount: 0,
   };
 
   await Promise.allSettled(
@@ -113,14 +113,20 @@ export async function firePageWebhookTriggers(
           // Chains that post channel messages also draw from the SAME shared
           // 30/min per-webhook channel bucket the dispatch-map handler uses —
           // one combined channel-post cap per webhook, however the post
-          // happens.
-          if (budgets.channelLimit) {
+          // happens. checkDistributedRateLimit has no weighted/batch form (it
+          // always increments by exactly 1), and a chain can contain up to
+          // MAX_WORKFLOW_STEPS send_channel_message steps that will each post
+          // independently once the run executes — charging once per RUN
+          // instead of once per POST would let a single trigger emit up to
+          // 20x the bucket's actual admission for that fire. Charge one token
+          // per matching step, up front, before any of them run.
+          for (let i = 0; i < budgets.channelPostCount; i++) {
             const channelBlocked = await denyIfRateLimited(
               `page-webhook:${trigger.pageWebhookId}`,
               DISTRIBUTED_RATE_LIMITS.PAGE_WEBHOOK,
               trigger.id,
               'Page webhook trigger: channel-post limit exhausted',
-              { pageWebhookId: trigger.pageWebhookId },
+              { pageWebhookId: trigger.pageWebhookId, channelPostIndex: i, channelPostCount: budgets.channelPostCount },
             );
             if (channelBlocked) return;
           }

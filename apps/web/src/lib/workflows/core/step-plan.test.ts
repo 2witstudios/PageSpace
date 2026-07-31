@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   resolveSteps,
   hasAiStep,
+  countAiSteps,
   planStepStatuses,
   MAX_WORKFLOW_STEPS,
 } from './step-plan';
@@ -45,6 +46,22 @@ describe('hasAiStep', () => {
   });
   it('is false for empty lists', () => {
     expect(hasAiStep([])).toBe(false);
+  });
+});
+
+describe('countAiSteps', () => {
+  it('counts ai steps in a mixed chain', () => {
+    expect(countAiSteps([toolStep, aiStep, aiStep, toolStep])).toBe(2);
+  });
+  it('is 0 for all-deterministic chains', () => {
+    expect(countAiSteps([toolStep, toolStep])).toBe(0);
+  });
+  it('is 0 for empty lists', () => {
+    expect(countAiSteps([])).toBe(0);
+  });
+  it('counts every ai step at the max chain length', () => {
+    const chain = Array.from({ length: MAX_WORKFLOW_STEPS }, () => aiStep);
+    expect(countAiSteps(chain)).toBe(MAX_WORKFLOW_STEPS);
   });
 });
 

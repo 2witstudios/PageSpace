@@ -12,7 +12,7 @@ describe('selectTriggerBudgets', () => {
       aiBudget: true,
       creditHold: true,
       deterministicBudget: false,
-      channelLimit: false,
+      channelPostCount: 0,
     });
   });
 
@@ -21,7 +21,7 @@ describe('selectTriggerBudgets', () => {
       aiBudget: false,
       creditHold: false,
       deterministicBudget: true,
-      channelLimit: false,
+      channelPostCount: 0,
     });
   });
 
@@ -30,13 +30,14 @@ describe('selectTriggerBudgets', () => {
       aiBudget: true,
       creditHold: true,
       deterministicBudget: false,
-      channelLimit: false,
+      channelPostCount: 0,
     });
   });
 
-  it('channel limit applies whenever a send_channel_message tool step exists', () => {
-    expect(selectTriggerBudgets([channel]).channelLimit).toBe(true);
-    expect(selectTriggerBudgets([channel, ai]).channelLimit).toBe(true);
-    expect(selectTriggerBudgets([insert]).channelLimit).toBe(false);
+  it('channelPostCount counts every send_channel_message step, not just whether one exists', () => {
+    expect(selectTriggerBudgets([channel]).channelPostCount).toBe(1);
+    expect(selectTriggerBudgets([channel, channel, channel]).channelPostCount).toBe(3);
+    expect(selectTriggerBudgets([channel, ai, channel]).channelPostCount).toBe(2);
+    expect(selectTriggerBudgets([insert]).channelPostCount).toBe(0);
   });
 });
