@@ -12,7 +12,7 @@
 
 export const MAX_RESOLVED_STRING_LENGTH = 16 * 1024;
 export const MAX_PATH_SEGMENTS = 8;
-const MAX_ARGS_DEPTH = 16;
+export const MAX_ARGS_DEPTH = 16;
 
 const SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 const FORBIDDEN_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype']);

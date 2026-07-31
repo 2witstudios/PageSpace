@@ -383,6 +383,16 @@ export function WorkflowStepsEditor({ steps, onChange, agents }: WorkflowStepsEd
 
   const removeStep = (index: number) => {
     onChange(steps.filter((_, i) => i !== index));
+    // expanded tracks expand/collapse by array index — without remapping,
+    // every index above the removed one points at the wrong step.
+    setExpanded((prev) => {
+      const next = new Set<number>();
+      prev.forEach((i) => {
+        if (i < index) next.add(i);
+        else if (i > index) next.add(i - 1);
+      });
+      return next;
+    });
   };
 
   const moveStep = (index: number, direction: -1 | 1) => {
@@ -391,6 +401,18 @@ export function WorkflowStepsEditor({ steps, onChange, agents }: WorkflowStepsEd
     const next = [...steps];
     [next[index], next[target]] = [next[target], next[index]];
     onChange(next);
+    // Swap the expand/collapse flags along with the steps so the flag
+    // follows the step, not the array slot it used to occupy.
+    setExpanded((prev) => {
+      const hasIndex = prev.has(index);
+      const hasTarget = prev.has(target);
+      const nextExpanded = new Set(prev);
+      nextExpanded.delete(index);
+      nextExpanded.delete(target);
+      if (hasIndex) nextExpanded.add(target);
+      if (hasTarget) nextExpanded.add(index);
+      return nextExpanded;
+    });
   };
 
   const addStep = (kind: 'ai' | 'tool') => {

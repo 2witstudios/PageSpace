@@ -58,16 +58,35 @@ export async function firePageWebhookTriggers(
   // chains from the cheaper deterministic budget. A missing workflow row
   // falls back to the AI plan (tightest bucket) and fails naturally in the
   // executor.
+  //
+  // This query runs BEFORE the per-trigger Promise.allSettled, so it is not
+  // covered by that isolation — a transient DB failure here must not reject
+  // the whole function (this runs inside after(), and the whole point of
+  // this function, per its own doc comment, is that it never throws). On
+  // failure, every trigger falls back to the AI plan via the ?? below —
+  // the same safe default an unmatched workflow row already gets.
   const workflowIds = [...new Set(triggers.map((t) => t.workflowId))];
-  const workflowRows = await db
-    .select({
-      id: workflows.id,
-      steps: workflows.steps,
-      prompt: workflows.prompt,
-      agentPageId: workflows.agentPageId,
-    })
-    .from(workflows)
-    .where(inArray(workflows.id, workflowIds));
+  let workflowRows: Array<{
+    id: string;
+    steps: (typeof workflows.$inferSelect)['steps'];
+    prompt: string;
+    agentPageId: string | null;
+  }> = [];
+  try {
+    workflowRows = await db
+      .select({
+        id: workflows.id,
+        steps: workflows.steps,
+        prompt: workflows.prompt,
+        agentPageId: workflows.agentPageId,
+      })
+      .from(workflows)
+      .where(inArray(workflows.id, workflowIds));
+  } catch (e) {
+    logger.error('Page webhook fan-out: batch workflow lookup failed, falling back to AI plan for every trigger', {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
   const budgetByWorkflowId = new Map<string, TriggerBudgetPlan>(
     workflowRows.map((row) => [row.id, selectTriggerBudgets(resolveSteps(row))])
   );

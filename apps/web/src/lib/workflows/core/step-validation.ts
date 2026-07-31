@@ -12,7 +12,7 @@
  */
 
 import type { WorkflowStep, WorkflowToolStep } from '@pagespace/db/schema/workflows';
-import { isPayloadRef, validatePayloadPath } from './resolve-step-args';
+import { isPayloadRef, validatePayloadPath, MAX_ARGS_DEPTH } from './resolve-step-args';
 import { MAX_WORKFLOW_STEPS } from './step-plan';
 
 export type SchemaLike = {
@@ -30,7 +30,14 @@ export type ToolStepValidation =
 
 type RefCollection = { ok: true; refs: string[] } | { ok: false; error: string };
 
-function collectRefs(value: unknown, refs: string[]): RefCollection {
+// Mirrors resolveValue's depth cap in resolve-step-args.ts (same
+// MAX_ARGS_DEPTH constant) — save-time validation must reject what run-time
+// resolution would reject, or a deeply-nested args object can be saved
+// successfully and only fail once a trigger actually fires it.
+function collectRefs(value: unknown, refs: string[], depth = 0): RefCollection {
+  if (depth > MAX_ARGS_DEPTH) {
+    return { ok: false, error: `step args nest deeper than ${MAX_ARGS_DEPTH} levels` };
+  }
   if (isPayloadRef(value)) {
     if (Object.keys(value).length !== 1) {
       return { ok: false, error: 'malformed $payload reference: extra keys beside $payload' };
@@ -42,14 +49,14 @@ function collectRefs(value: unknown, refs: string[]): RefCollection {
   }
   if (Array.isArray(value)) {
     for (const item of value) {
-      const result = collectRefs(item, refs);
+      const result = collectRefs(item, refs, depth + 1);
       if (!result.ok) return result;
     }
     return { ok: true, refs };
   }
   if (typeof value === 'object' && value !== null) {
     for (const item of Object.values(value)) {
-      const result = collectRefs(item, refs);
+      const result = collectRefs(item, refs, depth + 1);
       if (!result.ok) return result;
     }
     return { ok: true, refs };

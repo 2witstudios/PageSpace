@@ -74,6 +74,29 @@ describe('validateToolStep', () => {
     };
     expect(validateToolStep(step, opts).ok).toBe(false);
   });
+
+  it('rejects args nested deeper than resolveStepArgs would accept at run time — save-time must not be laxer than run-time', () => {
+    // Same MAX_ARGS_DEPTH cap resolveValue enforces in resolve-step-args.ts.
+    // Without this, a deeply-nested args object saves successfully here and
+    // only fails once a trigger actually fires the step.
+    let deep: unknown = 'leaf';
+    for (let i = 0; i < 20; i++) deep = { nest: deep };
+    const step: WorkflowToolStep = { ...validStatic, args: { ...validStatic.args, content: deep } };
+    const result = validateToolStep(step, opts);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/nest deeper than/);
+  });
+
+  it('accepts args at exactly the depth cap', () => {
+    let atCap: unknown = 'leaf';
+    for (let i = 0; i < 15; i++) atCap = { nest: atCap };
+    const step: WorkflowToolStep = { ...validStatic, args: { ...validStatic.args, content: atCap } };
+    // Fails schema validation (content isn't a string) but NOT on depth —
+    // proves the cap itself, not schema shape, is what's being tested above.
+    const result = validateToolStep(step, opts);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).not.toMatch(/nest deeper than/);
+  });
 });
 
 describe('validateSteps', () => {

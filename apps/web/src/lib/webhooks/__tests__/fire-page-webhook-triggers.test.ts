@@ -4,15 +4,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const { mockWorkflowRows } = vi.hoisted(() => ({
   // Rows returned by the fan-out's batch workflow lookup. Empty = unknown
   // workflow → AI-plan fallback (the tightest budget), matching the legacy
-  // expectations below.
-  mockWorkflowRows: { rows: [] as unknown[] },
+  // expectations below. `error` set = the lookup rejects (DB failure mode).
+  mockWorkflowRows: { rows: [] as unknown[], error: null as Error | null },
 }));
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
     select: () => ({
       from: () => ({
-        where: () => Promise.resolve(mockWorkflowRows.rows),
+        where: () =>
+          mockWorkflowRows.error
+            ? Promise.reject(mockWorkflowRows.error)
+            : Promise.resolve(mockWorkflowRows.rows),
       }),
     }),
   },
@@ -57,6 +60,7 @@ const aTrigger = (id: string) => ({ id, workflowId: `wf_${id}`, pageWebhookId: '
 beforeEach(() => {
   vi.clearAllMocks();
   mockWorkflowRows.rows = [];
+  mockWorkflowRows.error = null;
   mockClaim.mockResolvedValue({ success: true, data: undefined });
   mockSetError.mockResolvedValue({ success: true, data: undefined });
   mockRateLimit.mockResolvedValue({ allowed: true });
@@ -173,6 +177,25 @@ describe('firePageWebhookTriggers', () => {
     await expect(
       firePageWebhookTriggers([aTrigger('t1')], envelope),
     ).resolves.toBeUndefined();
+  });
+
+  it('never throws when the batch workflow lookup itself fails, and falls back to the AI plan for every trigger', async () => {
+    // The batch lookup runs BEFORE the per-trigger Promise.allSettled, so a
+    // DB blip here isn't isolated by that machinery the way per-trigger
+    // failures are — this is the function's own "never throws" contract
+    // being tested at its actual weak point.
+    mockWorkflowRows.error = new Error('connection terminated');
+    mockExecute.mockResolvedValue({ success: true, durationMs: 1 });
+
+    await expect(
+      firePageWebhookTriggers([aTrigger('t1')], envelope),
+    ).resolves.toBeUndefined();
+
+    // Falls back to the AI plan (tightest budget) exactly like an unmatched
+    // workflow row would — not the deterministic budget, and not a crash.
+    const keys = mockRateLimit.mock.calls.map(([key]) => key);
+    expect(keys).toContain('page-webhook-ai-budget:wh_1');
+    expect(mockClaim).toHaveBeenCalledWith('t1');
   });
 });
 
