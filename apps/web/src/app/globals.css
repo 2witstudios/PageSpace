@@ -723,6 +723,16 @@ svg.lucide {
     background-color: hsl(var(--accent));
   }
 
+  /* Fully hidden scrollbar — scrolling still works, the bar never renders */
+  .scrollbar-none {
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* legacy Edge */
+  }
+
+  .scrollbar-none::-webkit-scrollbar {
+    display: none; /* Chrome/Safari/Electron */
+  }
+
   /* SVG Color Utilities - for dark mode support in SVG elements */
   .svg-bg {
     fill: var(--background);

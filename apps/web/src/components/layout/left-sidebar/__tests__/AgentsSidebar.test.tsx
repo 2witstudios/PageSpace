@@ -373,7 +373,7 @@ describe('AgentsSidebar', () => {
       expect(screen.queryByText(/—/)).toBeNull();
     });
 
-    test('falls back to "Assistant" for a null agentPageId, and "Agent" for an unknown one', async () => {
+    test('falls back to "Global Assistant" for a null agentPageId, and "Agent" for an unknown one', async () => {
       respondWithSessions([
         {
           ...SESSION,
@@ -388,7 +388,7 @@ describe('AgentsSidebar', () => {
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
 
-      expect(screen.getByText('Assistant')).toBeDefined();
+      expect(screen.getByText('Global Assistant')).toBeDefined();
       expect(screen.getByText('Agent')).toBeDefined();
     });
   });
@@ -453,6 +453,32 @@ describe('AgentsSidebar', () => {
       // Landed IN the first conversation — no empty-session state is visible.
       expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-new');
       expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-1');
+    });
+
+    test('the drive palette also offers Global Assistant, first — picking it spawns a session in THIS drive with no agent', async () => {
+      mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-new' });
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      await user.click(screen.getByLabelText('New session'));
+      await user.click(await screen.findByText('Global Assistant'));
+
+      const nameInput = await screen.findByPlaceholderText('Global Assistant');
+      expect(nameInput).toHaveValue('');
+      await user.type(nameInput, '{Enter}');
+
+      await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
+      // Drive-scoped, not the global assistant group: driveId stays 'drive-1'.
+      expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
+        driveId: 'drive-1',
+        agentPageId: null,
+        name: '',
+      });
+      await waitFor(() =>
+        expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-new'),
+      );
+      expect(useAgentSurfaceStore.getState().selectedAgentId).toBeNull();
     });
 
     test('spawning a shell-first session names its terminal pane from the SHELL\'s own auto-assigned name, not the session label', async () => {
@@ -782,7 +808,7 @@ describe('AgentsSidebar', () => {
       // now, so an unscoped query would be ambiguous.
       await user.click(within(groupContainer('Global Assistant')).getByRole('button', { name: /^New session/i }));
 
-      const nameInput = await screen.findByPlaceholderText('Assistant');
+      const nameInput = await screen.findByPlaceholderText('Global Assistant');
       expect(nameInput).toHaveValue('');
       await user.type(nameInput, '{Enter}');
 
