@@ -13,6 +13,14 @@ export interface PageRefreshConfig {
   refresh: () => Promise<void>;
   /** Reason why refresh is disabled (for debugging/UI hints) */
   disabledReason?: string;
+  /**
+   * True for page types (AI_CHAT, CHANNEL) that own their own internal scroll
+   * region and fill the container exactly — `CenterPanel` must not also wrap
+   * them in its own `overflow-auto` scroll area, or the two independent
+   * scroll containers fight and the inner one stops receiving wheel/touch
+   * scroll input.
+   */
+  managesOwnScroll: boolean;
 }
 
 /**
@@ -43,8 +51,14 @@ export function usePageRefresh(): PageRefreshConfig {
   // Create a stable no-op function
   const noOp = useCallback(async () => {}, []);
 
+  // Chat-shaped pages own their scroll end to end; see `managesOwnScroll` on
+  // `PageRefreshConfig`. Computed once here so it can be merged onto every
+  // branch below without repeating the check in each one.
+  const managesOwnScroll =
+    currentPage?.type === PageType.AI_CHAT || currentPage?.type === PageType.CHANNEL;
+
   // Determine refresh configuration based on page type and route
-  const config = useMemo<PageRefreshConfig>(() => {
+  const config = useMemo<Omit<PageRefreshConfig, 'managesOwnScroll'>>(() => {
     // Settings pages - can refresh settings data
     if (pathname.endsWith('/settings') || pathname.endsWith('/settings/mcp')) {
       return {
@@ -132,5 +146,5 @@ export function usePageRefresh(): PageRefreshConfig {
     };
   }, [currentPage, pathname, refreshTree, noOp]);
 
-  return config;
+  return { ...config, managesOwnScroll };
 }

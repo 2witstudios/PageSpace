@@ -36,8 +36,9 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { createId } from '@paralleldrive/cuid2';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Settings } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR, { mutate } from 'swr';
 import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
@@ -843,14 +844,30 @@ function ChatPaneIdentity({
   const disabled = surface.surface === 'loading' || activeStream !== undefined || !conversationsReady;
 
   return (
-    <AISelector
-      selectedAgent={scope.agentPageId === null ? null : agent}
-      onSelectAgent={(next) => onSelectAgent(next?.id ?? null)}
-      driveId={driveId ?? undefined}
-      agents={pickableAgents}
-      agentsLoading={agentsLoading}
-      disabled={disabled}
-      className="h-6 min-w-0 flex-1 justify-start gap-1 px-1.5 py-0 text-xs font-medium"
-    />
+    <div className="flex min-w-0 flex-1 items-center gap-0.5">
+      <AISelector
+        selectedAgent={scope.agentPageId === null ? null : agent}
+        onSelectAgent={(next) => onSelectAgent(next?.id ?? null)}
+        driveId={driveId ?? undefined}
+        agents={pickableAgents}
+        agentsLoading={agentsLoading}
+        disabled={disabled}
+        className="h-6 min-w-0 flex-1 justify-start gap-1 px-1.5 py-0 text-xs font-medium"
+      />
+      {/* The Assistant (agentPageId null) has no page, so no Settings — every
+          other pane's agent does. `/p/[pageId]` resolves the drive-scoped
+          URL without this component needing to know it. */}
+      {scope.agentPageId !== null && (
+        <Link
+          href={`/p/${scope.agentPageId}?tab=settings`}
+          aria-label={`${agent?.title ?? 'Agent'} settings`}
+          title="Agent settings"
+          className="flex shrink-0 items-center justify-center rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <Settings className="size-3" aria-hidden="true" />
+        </Link>
+      )}
+    </div>
   );
 }

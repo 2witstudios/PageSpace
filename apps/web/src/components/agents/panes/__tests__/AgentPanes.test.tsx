@@ -904,6 +904,23 @@ describe('AgentPanes', () => {
       expect(await screen.findByRole('button', { name: /Researcher/ })).toBeInTheDocument();
     });
 
+    it("links to the pane's agent settings — the console's only Settings entry point", async () => {
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+
+      const settingsLink = await screen.findByRole('link', { name: /researcher settings/i });
+      expect(settingsLink).toHaveAttribute('href', '/p/agent-1?tab=settings');
+    });
+
+    it('hides the settings link for the Assistant (no agent page, so no settings)', async () => {
+      renderPanes({
+        initialConversation: { conversationId: 'conv-1', agentPageId: null, name: 'Assistant' },
+      });
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+
+      expect(screen.queryByRole('link', { name: /settings/i })).not.toBeInTheDocument();
+    });
+
     it("is disabled until THIS session's entry appears in the switch decision's own data", async () => {
       let resolveSessions!: () => void;
       mockFetchWithAuth.mockImplementation(async (url: string) => {

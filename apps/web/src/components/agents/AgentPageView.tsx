@@ -80,32 +80,39 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   // (drive membership + code-execution) on every spawn.
   const canUseSessions = user?.role === 'admin';
 
-  // A deep link from the Agents surface's past-conversations list
-  // (`?conversationId=&sessionId=`) — one-time intent, not durable state like
-  // the Agents surface's own `?session=`/`?c=`/`?agent=`, so it's captured
-  // once at mount and never re-read afterward (a later History-tab pick or
-  // "new conversation" is not fighting a stale URL param).
+  // Deep links into this page — one-time intent, not durable state like the
+  // Agents surface's own `?session=`/`?c=`/`?agent=`, so every one of these is
+  // captured once at mount and never re-read afterward (a later History-tab
+  // pick, "new conversation", or tab click is not fighting a stale URL param):
+  // - `?conversationId=&sessionId=` — the Agents surface's past-conversations list
+  // - `?tab=` — the agents console's per-pane Settings link (via `/p/[pageId]`,
+  //   which forwards the query string verbatim)
   const searchParams = useSearchParams();
   const initialConversationIdRef = useRef(searchParams.get('conversationId') ?? undefined);
   const initialSessionIdRef = useRef(searchParams.get('sessionId'));
+  const initialTab = searchParams.get('tab');
+  const hadDeepLinkParams =
+    initialConversationIdRef.current !== undefined || initialSessionIdRef.current !== null || initialTab !== null;
 
   // Consume-once, for real: strip the params from the URL immediately after
-  // capturing them. Left in place, a refresh after the user later switches
-  // to a DIFFERENT conversation (History tab, "new") would remount this
-  // component, re-read the same stale `conversationId` from the URL, and
-  // silently reopen the original deep-linked thread instead of respecting
-  // where the user actually navigated to (review finding — this was
-  // previously dismissed as "cosmetic", but it's a real functional bug on
-  // refresh, not just an untidy address bar).
+  // capturing them. Left in place, a refresh after the user later switches to
+  // a DIFFERENT conversation (History tab, "new") or tab would remount this
+  // component, re-read the same stale params from the URL, and silently
+  // reopen the original deep-linked thread/tab instead of respecting where
+  // the user actually navigated to (review finding — this was previously
+  // dismissed as "cosmetic", but it's a real functional bug on refresh, not
+  // just an untidy address bar).
   useEffect(() => {
-    if (initialConversationIdRef.current === undefined) return;
+    if (!hadDeepLinkParams) return;
     const url = new URL(window.location.href);
     url.searchParams.delete('conversationId');
     url.searchParams.delete('sessionId');
+    url.searchParams.delete('tab');
     window.history.replaceState({}, '', url.toString());
-    // Deliberately empty deps: this runs once, immediately after the refs
-    // above captured their values on this same mount — never re-runs for
-    // this component instance.
+    // Deliberately empty deps: this runs once, immediately after the refs/
+    // values above captured their values on this same mount — never re-runs
+    // for this component instance.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const { resolved: initialResolved } = useResolvedConversation(page.id, {
@@ -138,7 +145,9 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   const { data: sessionData } = useSessionRecord(current?.sessionId ?? null);
   const panesDriveId = sessionData?.session ? sessionData.session.driveId : page.driveId;
 
-  const [activeTab, setActiveTab] = useState<string>('chat');
+  const [activeTab, setActiveTab] = useState<string>(
+    initialTab === 'history' || initialTab === 'settings' ? initialTab : 'chat',
+  );
   const [webhooksOpen, setWebhooksOpen] = useState(false);
   const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
   const [isSettingsSaving, setIsSettingsSaving] = useState(false);

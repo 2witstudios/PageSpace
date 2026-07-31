@@ -18,7 +18,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, count, eq, inArray, isNull, sql } from '@pagespace/db/operators';
+import { and, count, eq, inArray, isNull, isNotNull, sql, desc } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
 import { checkAgentSessionConcurrency } from '@pagespace/lib/services/sandbox/quota';
@@ -76,6 +76,10 @@ import {
   closeConversationInSessionWith,
   type CloseConversationOutcome,
 } from '@/lib/agent-sessions/close-conversation-in-session';
+import {
+  reopenConversationInSessionWith,
+  type ReopenConversationOutcome,
+} from '@/lib/agent-sessions/reopen-conversation-in-session';
 
 export { isCodeExecutionEnabled };
 
@@ -332,6 +336,101 @@ export async function closeConversationInSession(input: {
       input,
     );
   });
+}
+
+/**
+ * Reopen a conversation OUT of "closed" and back into its session's
+ * listing — the transactional wiring for `reopen-conversation-in-session.ts`'s
+ * pure decision. Same per-session advisory lock as `closeConversationInSession`
+ * (same lock key), so a reopen can never race a close — or another reopen —
+ * of the same session's listings.
+ */
+export async function reopenConversationInSession(input: {
+  conversationId: string;
+  sessionId: string;
+}): Promise<ReopenConversationOutcome> {
+  return db.transaction(async (tx) => {
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtext(${'agent-session-conversations:' + input.sessionId}))`,
+    );
+    return reopenConversationInSessionWith(
+      {
+        findConversation: async (conversationId) => {
+          const [row] = await tx
+            .select({
+              sessionId: conversations.sessionId,
+              closedInSessionAt: conversations.closedInSessionAt,
+              isActive: conversations.isActive,
+            })
+            .from(conversations)
+            .where(eq(conversations.id, conversationId))
+            .limit(1);
+          return row ?? null;
+        },
+        countOpenConversations: async (sessionId) => {
+          const [row] = await tx
+            .select({ n: count() })
+            .from(conversations)
+            .where(
+              and(
+                eq(conversations.sessionId, sessionId),
+                eq(conversations.isActive, true),
+                isNull(conversations.closedInSessionAt),
+              ),
+            );
+          return row?.n ?? 0;
+        },
+        reopenConversation: async (conversationId) => {
+          const updated = await tx
+            .update(conversations)
+            .set({ closedInSessionAt: null })
+            .where(and(eq(conversations.id, conversationId), isNotNull(conversations.closedInSessionAt)))
+            .returning({ id: conversations.id });
+          return updated.length > 0 ? 'reopened' : 'noop';
+        },
+      },
+      input,
+    );
+  });
+}
+
+/**
+ * A session's CLOSED conversations — the reopen affordance's listing. Mirrors
+ * `listSessionConversationsBulk`'s shape and cap for a single session, with
+ * the closed/open predicate flipped: `isActive` still gates history-deleted
+ * rows out, but `closedInSessionAt` must be SET rather than null. Newest
+ * activity first, capped at {@link MAX_SESSION_CONVERSATIONS} — history
+ * beyond that is reachable through the agent's own page History tab, not
+ * this session-scoped reopen list.
+ */
+export async function listClosedSessionConversations(sessionId: string): Promise<SessionConversationEntry[]> {
+  const rows = await db
+    .select({
+      conversationId: conversations.id,
+      title: conversations.title,
+      type: conversations.type,
+      contextId: conversations.contextId,
+      lastMessageAt: conversations.lastMessageAt,
+    })
+    .from(conversations)
+    .where(
+      and(
+        eq(conversations.sessionId, sessionId),
+        eq(conversations.isActive, true),
+        isNotNull(conversations.closedInSessionAt),
+      ),
+    )
+    .orderBy(desc(conversations.lastMessageAt))
+    .limit(MAX_SESSION_CONVERSATIONS);
+
+  return rows.map((row) => ({
+    conversationId: row.conversationId,
+    title: row.title,
+    // Same mapping `listSessionConversationsBulk` uses: `contextId` is only
+    // meaningful as an agent page id for a 'page' conversation.
+    agentPageId: row.type === 'page' ? row.contextId : null,
+    lastMessageAt: row.lastMessageAt,
+  }));
 }
 
 /**

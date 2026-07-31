@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { Bot, ChevronDown, ChevronRight, Folder, Plus, Search, SquareTerminal, X } from 'lucide-react';
+import { Bot, ChevronDown, ChevronRight, Folder, History, Loader2, Plus, Search, SquareTerminal, X } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR from 'swr';
 
@@ -151,6 +151,12 @@ interface SessionListEntry {
 async function sessionsFetcher(url: string): Promise<{ sessions: SessionListEntry[] }> {
   const response = await fetchWithAuth(url);
   if (!response.ok) throw new Error(`Failed to list sessions (${response.status})`);
+  return response.json();
+}
+
+async function closedConversationsFetcher(url: string): Promise<{ conversations: SessionConversationEntry[] }> {
+  const response = await fetchWithAuth(url);
+  if (!response.ok) throw new Error(`Failed to list closed conversations (${response.status})`);
   return response.json();
 }
 
@@ -537,8 +543,24 @@ function SessionRow({
   const [expanded, setExpanded] = useState(false);
   const [confirmingEnd, setConfirmingEnd] = useState(false);
   const [ending, setEnding] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [reopeningId, setReopeningId] = useState<string | null>(null);
   const isSelected = selectedSessionId === session.sessionId;
   const isRunning = session.sandboxStatus === 'running' || session.sandboxStatus === 'starting';
+
+  // Closed conversations — the reopen affordance's source list. Fetched only
+  // once the user actually opens History (not on every session row's mount),
+  // since most sessions are browsed without ever needing it.
+  const {
+    data: closedData,
+    error: closedError,
+    isLoading: closedLoading,
+    mutate: retryClosed,
+  } = useSWR<{ conversations: SessionConversationEntry[] }>(
+    showHistory ? `/api/agent-sessions/${encodeURIComponent(session.sessionId)}/conversations/closed` : null,
+    closedConversationsFetcher,
+    { revalidateOnFocus: false },
+  );
 
   const openConversation = useCallback(
     (conversation: SessionConversationEntry) => {
@@ -625,6 +647,49 @@ function SessionRow({
     [onChanged, session.sessionId],
   );
 
+  const reopenConversation = useCallback(
+    async (conversation: SessionConversationEntry) => {
+      setReopeningId(conversation.conversationId);
+      try {
+        await post(
+          `/api/agent-sessions/${encodeURIComponent(session.sessionId)}/conversations/${encodeURIComponent(conversation.conversationId)}/reopen`,
+        );
+        // Drop it from the closed list and refresh the open list — it now
+        // belongs in both places (the second matters even before the poll
+        // catches up, or the row a user just reopened looks like a no-op).
+        void retryClosed();
+        onChanged();
+        setExpanded(true);
+        openConversation(conversation);
+      } catch (error) {
+        if (error instanceof ApiRequestError && error.status === 404) {
+          // Someone else (or another tab) already history-deleted it —
+          // stale row in this list; drop it rather than leave a dead click.
+          void retryClosed();
+          return;
+        }
+        console.error('Failed to reopen this conversation:', error);
+        toast.error('Could not reopen this conversation', {
+          description: error instanceof Error ? error.message : 'Please try again.',
+        });
+      } finally {
+        setReopeningId(null);
+      }
+    },
+    [onChanged, openConversation, retryClosed, session.sessionId],
+  );
+
+  const conversationLabel = useCallback(
+    (conversation: SessionConversationEntry) => {
+      const agentName =
+        conversation.agentPageId === null
+          ? 'Global Assistant'
+          : (agentNamesById.get(conversation.agentPageId) ?? 'Agent');
+      return conversation.title ? `${agentName} — ${conversation.title}` : agentName;
+    },
+    [agentNamesById],
+  );
+
   const menuItems: RowMenuItem[] = useMemo(
     () => [
       {
@@ -686,39 +751,32 @@ function SessionRow({
 
       {expanded && (
         <div className="ml-4 space-y-0.5 border-l border-border pl-1.5">
-          {session.conversations.map((conversation) => {
-            const agentName =
-              conversation.agentPageId === null
-                ? 'Global Assistant'
-                : (agentNamesById.get(conversation.agentPageId) ?? 'Agent');
-            const label = conversation.title ? `${agentName} — ${conversation.title}` : agentName;
-            return (
-              <RowMenu
-                key={conversation.conversationId}
-                items={[
-                  {
-                    label: 'Close',
-                    icon: X,
-                    onSelect: () => void closeConversation(conversation.conversationId),
-                    destructive: true,
-                  },
-                ]}
-                menuLabel="Conversation actions"
-                className={cn(
-                  'gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground',
-                  selectedConversationId === conversation.conversationId && 'bg-accent text-foreground',
-                )}
+          {session.conversations.map((conversation) => (
+            <RowMenu
+              key={conversation.conversationId}
+              items={[
+                {
+                  label: 'Close',
+                  icon: X,
+                  onSelect: () => void closeConversation(conversation.conversationId),
+                  destructive: true,
+                },
+              ]}
+              menuLabel="Conversation actions"
+              className={cn(
+                'gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground',
+                selectedConversationId === conversation.conversationId && 'bg-accent text-foreground',
+              )}
+            >
+              <button
+                type="button"
+                className="flex min-w-0 flex-1 items-center text-left"
+                onClick={() => openConversation(conversation)}
               >
-                <button
-                  type="button"
-                  className="flex min-w-0 flex-1 items-center text-left"
-                  onClick={() => openConversation(conversation)}
-                >
-                  <span className="truncate">{label}</span>
-                </button>
-              </RowMenu>
-            );
-          })}
+                <span className="truncate">{conversationLabel(conversation)}</span>
+              </button>
+            </RowMenu>
+          ))}
           {session.shells.map((shell) => (
             <button
               key={shell.shellId}
@@ -732,6 +790,55 @@ function SessionRow({
           ))}
           {session.conversations.length === 0 && (
             <div className="px-2 py-1 text-xs text-muted-foreground">No conversations</div>
+          )}
+
+          <button
+            type="button"
+            aria-expanded={showHistory}
+            className="flex min-w-0 w-full items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+            onClick={() => setShowHistory((value) => !value)}
+          >
+            {showHistory ? <ChevronDown className="size-3 shrink-0" /> : <ChevronRight className="size-3 shrink-0" />}
+            <History className="size-3 shrink-0" aria-hidden="true" />
+            <span className="truncate">History</span>
+          </button>
+
+          {showHistory && (
+            <div className="ml-4 space-y-0.5 border-l border-border pl-1.5">
+              {closedLoading && (
+                <div className="flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground">
+                  <Loader2 className="size-3 shrink-0 animate-spin" aria-hidden="true" />
+                  Loading history…
+                </div>
+              )}
+              {closedError && !closedLoading && (
+                <button
+                  type="button"
+                  className="px-2 py-1 text-left text-xs text-destructive hover:underline"
+                  onClick={() => void retryClosed()}
+                >
+                  Failed to load history — retry
+                </button>
+              )}
+              {!closedLoading && !closedError && (closedData?.conversations.length ?? 0) === 0 && (
+                <div className="px-2 py-1 text-xs text-muted-foreground">No closed conversations</div>
+              )}
+              {closedData?.conversations.map((conversation) => (
+                <button
+                  key={conversation.conversationId}
+                  type="button"
+                  disabled={reopeningId === conversation.conversationId}
+                  className="flex min-w-0 w-full items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+                  onClick={() => void reopenConversation(conversation)}
+                  title="Reopen this conversation"
+                >
+                  {reopeningId === conversation.conversationId ? (
+                    <Loader2 className="size-3 shrink-0 animate-spin" aria-hidden="true" />
+                  ) : null}
+                  <span className="truncate">{conversationLabel(conversation)}</span>
+                </button>
+              ))}
+            </div>
           )}
         </div>
       )}

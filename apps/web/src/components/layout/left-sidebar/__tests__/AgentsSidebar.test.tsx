@@ -676,6 +676,77 @@ describe('AgentsSidebar', () => {
     });
   });
 
+  describe('history (reopening a closed conversation)', () => {
+    const CLOSED_CONVERSATION = { conversationId: 'conv-closed', title: 'Old chat', agentPageId: 'agent-1' };
+
+    const respondWithSessionsAndClosed = (
+      sessions: SessionFixture[],
+      closed: { conversationId: string; title: string | null; agentPageId: string | null }[],
+    ) => {
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url.includes('/conversations/closed')) {
+          return { ok: true, json: async () => ({ conversations: closed }) };
+        }
+        return { ok: true, json: async () => ({ sessions }) };
+      });
+    };
+
+    test('opening History fetches and lists the session\'s closed conversations', async () => {
+      respondWithSessionsAndClosed([SESSION], [CLOSED_CONVERSATION]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      await user.click(await screen.findByText('History'));
+
+      expect(await screen.findByText('Researcher — Old chat')).toBeDefined();
+      expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/closed');
+    });
+
+    test('an empty history says so rather than showing nothing', async () => {
+      respondWithSessionsAndClosed([SESSION], []);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      await user.click(await screen.findByText('History'));
+
+      expect(await screen.findByText(/no closed conversations/i)).toBeDefined();
+    });
+
+    test('clicking a closed conversation POSTs reopen and selects it, same as an open one', async () => {
+      respondWithSessionsAndClosed([SESSION], [CLOSED_CONVERSATION]);
+      mockPost.mockResolvedValue(undefined);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      await user.click(await screen.findByText('History'));
+      await user.click(await screen.findByText('Researcher — Old chat'));
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-closed/reopen'),
+      );
+      expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
+      expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-closed');
+      expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-1');
+    });
+
+    test('a reopen failure shows an error toast and leaves selection untouched', async () => {
+      respondWithSessionsAndClosed([SESSION], [CLOSED_CONVERSATION]);
+      mockPost.mockRejectedValue(new ApiRequestError('boom', 500));
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      await user.click(await screen.findByText('History'));
+      await user.click(await screen.findByText('Researcher — Old chat'));
+
+      await waitFor(() => expect(mockPost).toHaveBeenCalled());
+      expect(useAgentSurfaceStore.getState().selectedConversationId).not.toBe('conv-closed');
+    });
+  });
+
   describe('global mode', () => {
     beforeEach(() => {
       mockUseParams.mockReturnValue({});
