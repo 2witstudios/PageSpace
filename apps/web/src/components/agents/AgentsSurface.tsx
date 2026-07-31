@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect } from 'react';
-import { Bot } from 'lucide-react';
+import { Bot, Loader2 } from 'lucide-react';
 
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
@@ -39,8 +39,18 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
   const storeDriveId = useAgentSurfaceStore((state) => state.driveId);
 
   const { data: sessionData } = useSessionRecord(selectedSessionId);
+  // Resolved vs. not — NOT the same question as "which drive". On the global
+  // route (`storeDriveId` null), an unresolved DRIVE session must not render
+  // as global in the meantime: `AgentPanes` treats `driveId === null` as a
+  // CONFIRMED global session and offers every accessible agent, so a pick
+  // made during that window can hit the server's cross-drive gate and 400
+  // (caught in review — the picker's loading fallback was previously "no
+  // agents", harmless; once a null driveId means "show everyone", the same
+  // fallback became a live footgun). The grid only mounts once this is true.
+  const sessionDriveResolved = sessionData !== undefined;
   // The session's own drive wins; the surface's drive covers the in-flight
-  // window (they agree in drive mode, and global mode has nothing better).
+  // window (they agree in drive mode, and global mode has nothing better,
+  // but only reached this UNGATED by the `sessionDriveResolved` check above).
   // Checked as `sessionData?.session ?  : ` rather than `??` — `driveId` on a
   // RESOLVED session can itself legitimately be `null` (a global session),
   // which `??` would wrongly treat as "unresolved" and fall through to
@@ -125,18 +135,24 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
   return (
     <div className="flex h-full flex-col">
       {selectedSessionId && selectedConversationId ? (
-        <AgentPanes
-          key={selectedSessionId}
-          sessionId={selectedSessionId}
-          driveId={sessionDriveId}
-          initialConversation={{
-            conversationId: selectedConversationId,
-            agentPageId: selectedAgentId,
-            name: 'Conversation',
-          }}
-          onSessionEnded={() => selectSession(null)}
-          onConversationClosed={handleConversationClosed}
-        />
+        sessionDriveResolved ? (
+          <AgentPanes
+            key={selectedSessionId}
+            sessionId={selectedSessionId}
+            driveId={sessionDriveId}
+            initialConversation={{
+              conversationId: selectedConversationId,
+              agentPageId: selectedAgentId,
+              name: 'Conversation',
+            }}
+            onSessionEnded={() => selectSession(null)}
+            onConversationClosed={handleConversationClosed}
+          />
+        ) : (
+          <div className="flex h-full items-center justify-center">
+            <Loader2 className="size-4 animate-spin text-muted-foreground" aria-hidden="true" />
+          </div>
+        )
       ) : selectedSessionId ? (
         // A session is selected but its opening conversation has not resolved
         // from the URL (a hand-trimmed link). The sidebar's session rows always
