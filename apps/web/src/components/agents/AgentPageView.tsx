@@ -27,6 +27,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import {
   AlertCircle,
   ExternalLink,
@@ -78,6 +79,15 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   // (drive membership + code-execution) on every spawn.
   const canUseSessions = user?.role === 'admin';
 
+  // A deep link from the Agents surface's past-conversations list
+  // (`?conversationId=&sessionId=`) — one-time intent, not durable state like
+  // the Agents surface's own `?session=`/`?c=`/`?agent=`, so it's captured
+  // once at mount and never re-read afterward (a later History-tab pick or
+  // "new conversation" is not fighting a stale URL param).
+  const searchParams = useSearchParams();
+  const initialConversationIdRef = useRef(searchParams.get('conversationId') ?? undefined);
+  const initialSessionIdRef = useRef(searchParams.get('sessionId'));
+
   const { resolved: initialResolved } = useResolvedConversation(page.id, {
     driveId: page.driveId,
     canUseSessions,
@@ -85,6 +95,8 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
     // before the role loads — resolving then would mint the agent's first
     // conversation as permanently session-less. Wait it out.
     authLoading,
+    initialConversationId: initialConversationIdRef.current,
+    initialSessionId: initialSessionIdRef.current,
   });
   const [override, setOverride] = useState<ResolvedConversation | null>(null);
   // The conversation on screen: the user's own switching (history select, new,

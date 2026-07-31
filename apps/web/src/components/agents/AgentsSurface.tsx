@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect } from 'react';
-import { Bot } from 'lucide-react';
 import useSWR from 'swr';
 
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
@@ -10,6 +9,8 @@ import { panesOf } from '@/stores/agent-workspace/pane-reducer';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useLatestRef } from '@/hooks/useLatestRef';
 import AgentPanes from './panes/AgentPanes';
+import EmptyState from './EmptyState';
+import AgentsPastConversationsList from './AgentsPastConversationsList';
 
 /**
  * The selected session's own record — the authority on ITS drive. The surface
@@ -160,23 +161,8 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
           description="This session's conversations are listed under it in the sidebar."
         />
       ) : (
-        <EmptyState
-          title="Select a session"
-          description="Pick a session from the sidebar, or start a new one."
-        />
+        <AgentsPastConversationsList driveId={driveId} />
       )}
-    </div>
-  );
-}
-
-function EmptyState({ title, description }: { title: string; description: string }) {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
-      <Bot className="size-10 text-muted-foreground" aria-hidden="true" />
-      <div>
-        <h2 className="text-lg font-semibold">{title}</h2>
-        <p className="text-sm text-muted-foreground">{description}</p>
-      </div>
     </div>
   );
 }

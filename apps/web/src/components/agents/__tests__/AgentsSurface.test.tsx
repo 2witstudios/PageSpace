@@ -75,14 +75,30 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args),
 }));
 
+const mockLoadConversation = vi.hoisted(() => vi.fn());
+vi.mock('@/contexts/GlobalChatContext', () => ({
+  useGlobalChatConversation: () => ({ loadConversation: mockLoadConversation }),
+}));
+
 import AgentsSurface from '../AgentsSurface';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 
+/** Empty by default — the "no history yet" case is the common one across these tests; individual tests override with `mockFetchWithAuth.mockImplementation`. */
+const EMPTY_CONVERSATIONS = { conversations: [], pagination: { hasMore: false, nextCursor: null, prevCursor: null, limit: 20 } };
+
 beforeEach(() => {
-  // A selected session exists by default — the tests that care about a GONE
-  // session (finding 6's GC) set their own `{ session: null }` response.
-  mockFetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({ session: { driveId: null } }) });
+  // Two different endpoints share this mock — route by URL rather than one
+  // blanket response, since a session-fetch shape and a conversations-list
+  // shape are never interchangeable.
+  mockFetchWithAuth.mockImplementation(async (url: string) => {
+    if (url.includes('/api/agent-sessions/conversations')) {
+      return { ok: true, json: async () => EMPTY_CONVERSATIONS };
+    }
+    // A selected session exists by default — the tests that care about a GONE
+    // session (finding 6's GC) set their own `{ session: null }` response.
+    return { ok: true, json: async () => ({ session: { driveId: null } }) };
+  });
   window.history.replaceState({}, '', '/dashboard/agents');
   useAgentSurfaceStore.setState({
     driveId: null,
@@ -328,5 +344,82 @@ describe('onConversationClosed — following the grid\'s own close/rebind', () =
     // overwrite the user's newer pick with the stale rebind target.
     expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-switched');
     expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-switched');
+  });
+});
+
+describe('past conversations (default view, replacing the old static prompt)', () => {
+  it('renders the paginated list instead of the empty-state prompt when history exists', async () => {
+    // A drive scope no earlier test fetched — SWR's cache is module-global and
+    // an earlier test's empty answer for the SAME key would otherwise win here.
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.includes('/api/agent-sessions/conversations')) {
+        return {
+          ok: true,
+          json: async () => ({
+            conversations: [
+              {
+                conversationId: 'conv-hist-1',
+                title: 'A past chat',
+                type: 'global',
+                agentPageId: null,
+                pageTitle: null,
+                lastMessageAt: new Date().toISOString(),
+                createdAt: new Date().toISOString(),
+                sessionId: null,
+                sessionName: null,
+                sessionEndedAt: null,
+                driveId: null,
+              },
+            ],
+            pagination: { hasMore: false, nextCursor: null, prevCursor: null, limit: 20 },
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({ session: { driveId: null } }) };
+    });
+
+    render(<AgentsSurface driveId="drive-past-convos-render" />);
+
+    await waitFor(() => expect(screen.getByText('A past chat')).toBeDefined());
+    expect(screen.queryByText('Select a session')).toBeNull();
+  });
+
+  it('clicking a session-bound row opens it in the pane grid, same as picking it from the sidebar', async () => {
+    // A drive scope no earlier test fetched — see the cache note above.
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.includes('/api/agent-sessions/conversations')) {
+        return {
+          ok: true,
+          json: async () => ({
+            conversations: [
+              {
+                conversationId: 'conv-1',
+                title: 'Session chat',
+                type: 'page',
+                agentPageId: 'agent-1',
+                pageTitle: 'My Agent',
+                lastMessageAt: new Date().toISOString(),
+                createdAt: new Date().toISOString(),
+                sessionId: 'ses-1',
+                sessionName: 'My Session',
+                sessionEndedAt: null,
+                driveId: 'drive-1',
+              },
+            ],
+            pagination: { hasMore: false, nextCursor: null, prevCursor: null, limit: 20 },
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({ session: { driveId: null } }) };
+    });
+
+    render(<AgentsSurface driveId="drive-past-convos-click" />);
+
+    const label = await screen.findByText('Session chat');
+    act(() => label.closest('button')!.click());
+
+    expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
+    expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-1');
+    expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-1');
   });
 });
