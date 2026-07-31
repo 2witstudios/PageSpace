@@ -160,6 +160,43 @@ describe('usePublishStatusStore', () => {
     });
   });
 
+  it('given a fetchStatus already in flight, a force:true call should issue a fresh request rather than reuse it', async () => {
+    // Regression test for a Codex-flagged bug: CanvasHomePageSettingsSection
+    // PATCHes the drive's homePageId (which changes this page's published
+    // URL — root vs slug) then calls fetchStatus to refresh the header. If
+    // another consumer's mount-time fetchStatus was still in flight (having
+    // read the row *before* that PATCH), the plain in-flight dedup would
+    // hand back that same stale promise instead of reading fresh — so the
+    // header would keep showing/copying the pre-change URL.
+    let resolveSlow: (r: Response) => void;
+    let resolveForced: (r: Response) => void;
+    mockFetchWithAuth
+      .mockReturnValueOnce(new Promise((resolve) => { resolveSlow = resolve; }))
+      .mockReturnValueOnce(new Promise((resolve) => { resolveForced = resolve; }));
+
+    const slowFetch = usePublishStatusStore.getState().fetchStatus('page-1');
+    const forcedFetch = usePublishStatusStore.getState().fetchStatus('page-1', { force: true });
+
+    expect(mockFetchWithAuth).toHaveBeenCalledTimes(2);
+
+    // The forced (post-mutation) read resolves first with the fresh URL.
+    resolveForced!(makeResponse({
+      body: { published: true, canEdit: true, url: 'https://acme.pagespace.site/new-home', available: true },
+    }));
+    await forcedFetch;
+
+    // The older, slower fetch then resolves with what it read before the
+    // mutation — its result must be discarded, not overwrite the fresh one.
+    resolveSlow!(makeResponse({
+      body: { published: true, canEdit: true, url: 'https://acme.pagespace.site/welcome', available: true },
+    }));
+    await slowFetch;
+
+    expect(usePublishStatusStore.getState().statuses.get('page-1')).toMatchObject({
+      url: 'https://acme.pagespace.site/new-home',
+    });
+  });
+
   it('given setStatus, every reader of that pageId sees the update — the fix for the cross-component staleness bug', () => {
     // Simulates two independent consumers (e.g. the header and a canvas
     // Settings category) reading the same store slice.

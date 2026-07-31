@@ -51,9 +51,9 @@ describe('CanvasHomePageSettingsSection — publish status refresh', () => {
 
     assert({
       given: 'a successful drive PATCH setting this page as home',
-      should: "refetch usePublishStatusStore's cached status for this page (its url depends on isHomePage)",
+      should: "force-refetch usePublishStatusStore's cached status for this page (its url depends on isHomePage), bypassing any already-in-flight fetch that read the row before this mutation",
       actual: vi.mocked(usePublishStatusStore.getState().fetchStatus).mock.calls,
-      expected: [['page_1']],
+      expected: [['page_1', { force: true }]],
     });
   });
 });

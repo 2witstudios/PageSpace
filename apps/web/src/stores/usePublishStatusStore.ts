@@ -97,8 +97,14 @@ interface PublishStatusStoreState {
   setStatus: (pageId: string, status: PublishStatus) => void;
   /** Fetches and caches this page's publish status. Concurrent calls for the
    *  same pageId (e.g. the header and the canvas Settings tab mounting at
-   *  once) share one in-flight request instead of firing duplicates. */
-  fetchStatus: (pageId: string) => Promise<void>;
+   *  once) share one in-flight request instead of firing duplicates.
+   *  Pass `force: true` to start a fresh request even if one is already in
+   *  flight — for a caller that just committed a mutation the store can't
+   *  represent via `setStatus` alone (e.g. a drive-level home/404-page
+   *  change), an already-in-flight fetch may have read the row *before*
+   *  that mutation, so reusing it would apply a stale result once it
+   *  resolves. */
+  fetchStatus: (pageId: string, opts?: { force?: boolean }) => Promise<void>;
 }
 
 export const usePublishStatusStore = create<PublishStatusStoreState>((set, get) => ({
@@ -121,9 +127,9 @@ export const usePublishStatusStore = create<PublishStatusStoreState>((set, get) 
     set({ statuses: next, generations: nextGenerations });
   },
 
-  fetchStatus: (pageId) => {
+  fetchStatus: (pageId, opts) => {
     const existing = get().inFlight.get(pageId);
-    if (existing) return existing;
+    if (existing && !opts?.force) return existing;
 
     // On a transient failure (network error, 5xx), keep whatever was last
     // known good rather than wiping it to EMPTY_PUBLISH_STATUS — every
@@ -154,7 +160,11 @@ export const usePublishStatusStore = create<PublishStatusStoreState>((set, get) 
     }
     const isSuperseded = () => get().generations.get(pageId) !== myGen;
 
-    const promise = (async () => {
+    // Self-referencing IIFE: the `finally` below needs this promise's own
+    // identity to compare against, so it must be declared before assigned.
+    let promise!: Promise<void>;
+    // eslint-disable-next-line prefer-const
+    promise = (async () => {
       try {
         const res = await fetchWithAuth(`/api/pages/${pageId}/publish`);
         if (res.ok) {
@@ -168,9 +178,14 @@ export const usePublishStatusStore = create<PublishStatusStoreState>((set, get) 
       } catch {
         if (!isSuperseded()) get().setStatus(pageId, keepLastGoodOnFailure());
       } finally {
-        const nextInFlight = new Map(get().inFlight);
-        nextInFlight.delete(pageId);
-        set({ inFlight: nextInFlight });
+        // Only clear the slot if it still points at *this* request — a
+        // `force` call may have already replaced it with a newer one, and
+        // that newer request's own `finally` is what should clear it.
+        if (get().inFlight.get(pageId) === promise) {
+          const nextInFlight = new Map(get().inFlight);
+          nextInFlight.delete(pageId);
+          set({ inFlight: nextInFlight });
+        }
       }
     })();
 

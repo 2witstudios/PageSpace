@@ -48,8 +48,11 @@ export function CanvasHomePageSettingsSection({ pageId }: CanvasHomePageSettings
       // page (served at the root vs its slug — see the publish GET route),
       // so the header's cached PublishControls status is now stale: refetch
       // rather than leaving it showing (and letting Copy link copy) a URL
-      // that no longer matches what's actually being served.
-      usePublishStatusStore.getState().fetchStatus(pageId);
+      // that no longer matches what's actually being served. `force: true`
+      // because another consumer's mount-time fetch may still be in flight
+      // (reading the row from before this mutation) — reusing it here would
+      // apply that stale read once it resolves instead of a fresh one.
+      usePublishStatusStore.getState().fetchStatus(pageId, { force: true });
       toast.success(next ? 'Home page set.' : 'Home page removed.', { id: toastId });
     } catch {
       toast.error('Error updating home page.', { id: toastId });
