@@ -14,6 +14,8 @@ const {
   mockSpawnSession,
   mockGetAiAgent,
   mockCanPrincipalViewPage,
+  mockProvisionSessionSandbox,
+  mockSpawnShell,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
   mockAuditRequest: vi.fn(),
@@ -27,6 +29,8 @@ const {
   mockSpawnSession: vi.fn(),
   mockGetAiAgent: vi.fn(),
   mockCanPrincipalViewPage: vi.fn(),
+  mockProvisionSessionSandbox: vi.fn(),
+  mockSpawnShell: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -53,9 +57,11 @@ vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
   endSession: (...args: unknown[]) => mockEndSession(...args),
   spawnSession: (...args: unknown[]) => mockSpawnSession(...args),
   toAgentSessionDTO: (row: { id: string }) => ({ sessionId: row.id, dto: true }),
+  provisionSessionSandbox: (...args: unknown[]) => mockProvisionSessionSandbox(...args),
 }));
 vi.mock('@/lib/agent-sessions/session-shells-runtime', () => ({
   listShellsBulk: (...args: unknown[]) => mockListShellsBulk(...args),
+  spawnShell: (...args: unknown[]) => mockSpawnShell(...args),
 }));
 
 import { GET, POST } from '../route';
@@ -171,6 +177,12 @@ describe('POST /api/agent-sessions — spawn', () => {
     mockGetAiAgent.mockResolvedValue({ id: 'agent-1', title: 'Agent', type: 'AI_CHAT', driveId: 'drive-1' });
     mockCanPrincipalViewPage.mockResolvedValue(true);
     mockCountActiveSessionsForOwner.mockResolvedValue(0);
+    mockListSessions.mockResolvedValue([]);
+    mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sb-1', resumed: false });
+    mockSpawnShell.mockResolvedValue({
+      ok: true,
+      shell: { shellId: 'shell-new', sessionId: 'ses-new', ownerId: 'user-1', name: 'Shell', agentType: 'shell', command: null, createdAt: '2026-07-28T00:00:00.000Z' },
+    });
   });
 
   it('spawns ONE session with ONE bound conversation — and NO sandbox', async () => {
@@ -188,12 +200,12 @@ describe('POST /api/agent-sessions — spawn', () => {
     // the absence is structural.
   });
 
-  it('spawns a GLOBAL-ASSISTANT session from the both-null shape', async () => {
+  it('spawns a GLOBAL-ASSISTANT session from the both-null shape, auto-naming it "Assistant"', async () => {
     const response = await spawn({});
     expect(response.status).toBe(201);
     const body = await response.json();
     expect(typeof body.conversationId).toBe('string');
-    expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: null, name: null });
+    expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: null, name: 'Assistant' });
     // The first conversation is an assistant thread: no agent page.
     expect(mockCreateConversationInSession).toHaveBeenCalledWith(
       expect.objectContaining({ agentPageId: null, sessionId: 'ses-new' }),
@@ -223,6 +235,91 @@ describe('POST /api/agent-sessions — spawn', () => {
   it('given the first conversation fails, ENDS the just-minted session — no empty workspace exists', async () => {
     mockCreateConversationInSession.mockRejectedValue(new Error('squat guard refused'));
     const response = await spawn({ driveId: 'drive-1', agentPageId: 'agent-1' });
+    expect(response.status).toBe(502);
+    expect(mockEndSession).toHaveBeenCalledWith('ses-new');
+  });
+});
+
+describe("POST /api/agent-sessions — firstThing: 'shell'", () => {
+  const spawn = (body: unknown) =>
+    POST(
+      new Request('http://localhost/api/agent-sessions', {
+        method: 'POST',
+        body: JSON.stringify(body),
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+  beforeEach(() => {
+    mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+    mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-new' } });
+    mockEndSession.mockResolvedValue({ ok: true, spriteTornDown: false });
+    mockCountActiveSessionsForOwner.mockResolvedValue(0);
+    mockListSessions.mockResolvedValue([]);
+    mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sb-1', resumed: false });
+    mockSpawnShell.mockResolvedValue({
+      ok: true,
+      shell: { shellId: 'shell-new', sessionId: 'ses-new', ownerId: 'user-1', name: 'Shell', agentType: 'shell', command: null, createdAt: '2026-07-28T00:00:00.000Z' },
+    });
+    mockGetAiAgent.mockResolvedValue({ id: 'agent-1', title: 'Agent', type: 'AI_CHAT', driveId: 'drive-1' });
+    mockCanPrincipalViewPage.mockResolvedValue(true);
+    mockCreateConversationInSession.mockResolvedValue(undefined);
+  });
+
+  it("given firstThing: 'shell', should provision the sandbox then spawn a shell — NOT a conversation — and respond { session, shellId }", async () => {
+    const order: string[] = [];
+    mockProvisionSessionSandbox.mockImplementation(async () => {
+      order.push('provision');
+      return { ok: true, sandboxId: 'sb-1', resumed: false };
+    });
+    mockSpawnShell.mockImplementation(async () => {
+      order.push('spawn');
+      return {
+        ok: true,
+        shell: { shellId: 'shell-new', sessionId: 'ses-new', ownerId: 'user-1', name: 'Shell', agentType: 'shell', command: null, createdAt: '2026-07-28T00:00:00.000Z' },
+      };
+    });
+
+    const response = await spawn({ driveId: 'drive-1', firstThing: 'shell' });
+    expect(response.status).toBe(201);
+    const body = await response.json();
+    expect(body).toEqual({ session: { sessionId: 'ses-new', dto: true }, shellId: 'shell-new' });
+    expect(order).toEqual(['provision', 'spawn']);
+    expect(mockProvisionSessionSandbox).toHaveBeenCalledWith({ id: 'ses-new' }, 'user-1');
+    expect(mockSpawnShell).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'ses-new', ownerId: 'user-1' }));
+    expect(mockCreateConversationInSession).not.toHaveBeenCalled();
+  });
+
+  it("given firstThing omitted, should behave exactly as today — first conversation, no shell", async () => {
+    const response = await spawn({ driveId: 'drive-1', agentPageId: 'agent-1' });
+    expect(response.status).toBe(201);
+    const body = await response.json();
+    expect(typeof body.conversationId).toBe('string');
+    expect(body.shellId).toBeUndefined();
+    expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
+    expect(mockSpawnShell).not.toHaveBeenCalled();
+  });
+
+  it("given firstThing is some other value, should behave exactly as today — first conversation, no shell", async () => {
+    const response = await spawn({ driveId: 'drive-1', agentPageId: 'agent-1', firstThing: 'conversation' });
+    expect(response.status).toBe(201);
+    const body = await response.json();
+    expect(typeof body.conversationId).toBe('string');
+    expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
+    expect(mockSpawnShell).not.toHaveBeenCalled();
+  });
+
+  it('given the sandbox fails to provision, ENDS the just-minted session and never spawns a shell', async () => {
+    mockProvisionSessionSandbox.mockResolvedValue({ ok: false, reason: 'provision_failed' });
+    const response = await spawn({ driveId: 'drive-1', firstThing: 'shell' });
+    expect(response.status).toBe(502);
+    expect(mockEndSession).toHaveBeenCalledWith('ses-new');
+    expect(mockSpawnShell).not.toHaveBeenCalled();
+  });
+
+  it('given the first shell fails to spawn, ENDS the just-minted session', async () => {
+    mockSpawnShell.mockResolvedValue({ ok: false, reason: 'error' });
+    const response = await spawn({ driveId: 'drive-1', firstThing: 'shell' });
     expect(response.status).toBe(502);
     expect(mockEndSession).toHaveBeenCalledWith('ses-new');
   });
@@ -277,6 +374,113 @@ describe('POST /api/agent-sessions — spawn agent validation (review M6)', () =
     expect(response.status).toBe(201);
     expect(mockSpawnSession).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'x'.repeat(120) }),
+    );
+  });
+});
+
+describe('POST /api/agent-sessions — blank name auto-generates a unique one', () => {
+  const spawn = (body: unknown) =>
+    POST(
+      new Request('http://localhost/api/agent-sessions', {
+        method: 'POST',
+        body: JSON.stringify(body),
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+  beforeEach(() => {
+    mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+    mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-new' } });
+    mockCreateConversationInSession.mockResolvedValue(undefined);
+    mockEndSession.mockResolvedValue({ ok: true, spriteTornDown: false });
+    mockGetAiAgent.mockResolvedValue({ id: 'agent-1', title: 'Research Bot', type: 'AI_CHAT', driveId: 'drive-1' });
+    mockCanPrincipalViewPage.mockResolvedValue(true);
+    mockCountActiveSessionsForOwner.mockResolvedValue(0);
+    mockListSessions.mockResolvedValue([]);
+    mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sb-1', resumed: false });
+    mockSpawnShell.mockResolvedValue({
+      ok: true,
+      shell: { shellId: 'shell-new', sessionId: 'ses-new', ownerId: 'user-1', name: 'Shell', agentType: 'shell', command: null, createdAt: '2026-07-28T00:00:00.000Z' },
+    });
+  });
+
+  it('given a blank name with an agent, should derive the base label from the agent title', async () => {
+    const response = await spawn({ driveId: 'drive-1', agentPageId: 'agent-1', name: '' });
+    expect(response.status).toBe(201);
+    expect(mockListSessions).toHaveBeenCalledWith({ ownerId: 'user-1' });
+    expect(mockSpawnSession).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Research Bot' }),
+    );
+  });
+
+  it('given an omitted name with an agent, should derive the base label from the agent title', async () => {
+    const response = await spawn({ driveId: 'drive-1', agentPageId: 'agent-1' });
+    expect(response.status).toBe(201);
+    expect(mockSpawnSession).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Research Bot' }),
+    );
+  });
+
+  it("given a blank name with firstThing: 'shell', should derive the base label \"Shell\"", async () => {
+    const response = await spawn({ driveId: 'drive-1', firstThing: 'shell' });
+    expect(response.status).toBe(201);
+    expect(mockSpawnSession).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Shell' }),
+    );
+  });
+
+  it('given a blank name for the global-assistant shape, should derive the base label "Assistant"', async () => {
+    const response = await spawn({});
+    expect(response.status).toBe(201);
+    expect(mockSpawnSession).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Assistant' }),
+    );
+  });
+
+  it('given a non-blank name, should use it as-is — no collision lookup at all', async () => {
+    const response = await spawn({ driveId: 'drive-1', agentPageId: 'agent-1', name: 'api refactor' });
+    expect(response.status).toBe(201);
+    expect(mockListSessions).not.toHaveBeenCalled();
+    expect(mockSpawnSession).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'api refactor' }),
+    );
+  });
+
+  it('given the base label already taken, should append " 2" rather than collide', async () => {
+    mockListSessions.mockResolvedValue([
+      { sessionId: 'ses-old', driveId: null, ownerId: 'user-1', name: 'Shell', sandboxStatus: 'ended', createdAt: '2026-07-28T00:00:00.000Z', lastActiveAt: null, endedAt: null },
+    ]);
+    const response = await spawn({ driveId: 'drive-1', firstThing: 'shell' });
+    expect(response.status).toBe(201);
+    expect(mockSpawnSession).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Shell 2' }),
+    );
+  });
+
+  it('given two blank-named shell spawns back to back, should produce two distinct names', async () => {
+    mockListSessions.mockResolvedValueOnce([]);
+    const first = await spawn({ driveId: 'drive-1', firstThing: 'shell' });
+    expect(mockSpawnSession).toHaveBeenLastCalledWith(expect.objectContaining({ name: 'Shell' }));
+
+    mockListSessions.mockResolvedValueOnce([
+      { sessionId: 'ses-old', driveId: 'drive-1', ownerId: 'user-1', name: 'Shell', sandboxStatus: 'running', createdAt: '2026-07-28T00:00:00.000Z', lastActiveAt: null, endedAt: null },
+    ]);
+    const second = await spawn({ driveId: 'drive-1', firstThing: 'shell' });
+    expect(mockSpawnSession).toHaveBeenLastCalledWith(expect.objectContaining({ name: 'Shell 2' }));
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+  });
+
+  it('given "Shell" and "Shell 2" both taken, should scan past both collisions to "Shell 3"', async () => {
+    mockListSessions.mockResolvedValue([
+      { sessionId: 'ses-1', driveId: 'drive-1', ownerId: 'user-1', name: 'Shell', sandboxStatus: 'running', createdAt: '2026-07-28T00:00:00.000Z', lastActiveAt: null, endedAt: null },
+      { sessionId: 'ses-2', driveId: 'drive-1', ownerId: 'user-1', name: 'Shell 2', sandboxStatus: 'running', createdAt: '2026-07-28T00:00:00.000Z', lastActiveAt: null, endedAt: null },
+    ]);
+    const response = await spawn({ driveId: 'drive-1', firstThing: 'shell' });
+    expect(response.status).toBe(201);
+    expect(mockSpawnSession).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Shell 3' }),
     );
   });
 });
