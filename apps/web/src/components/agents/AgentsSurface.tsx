@@ -2,26 +2,13 @@
 
 import { useCallback, useEffect } from 'react';
 import { Bot } from 'lucide-react';
-import useSWR from 'swr';
 
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { panesOf } from '@/stores/agent-workspace/pane-reducer';
-import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useLatestRef } from '@/hooks/useLatestRef';
+import { useSessionRecord } from './useSessionRecord';
 import AgentPanes from './panes/AgentPanes';
-
-/**
- * The selected session's own record — the authority on ITS drive. The surface
- * store only knows the drive the CONSOLE is mounted under, which is null on
- * `/dashboard/agents`; passing that to the grid left every drive session's
- * pane picker with no agents to offer in global mode (review M5).
- */
-async function sessionFetcher(url: string): Promise<{ session: { driveId: string | null } | null }> {
-  const response = await fetchWithAuth(url);
-  if (!response.ok) throw new Error(`Failed to load session (${response.status})`);
-  return response.json();
-}
 
 /**
  * The Agents console: mounted for the lifetime of the route, whatever is
@@ -51,14 +38,14 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
   const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
   const storeDriveId = useAgentSurfaceStore((state) => state.driveId);
 
-  const { data: sessionData } = useSWR(
-    selectedSessionId ? `/api/agent-sessions/${encodeURIComponent(selectedSessionId)}` : null,
-    sessionFetcher,
-    { revalidateOnFocus: false, dedupingInterval: 30_000 },
-  );
+  const { data: sessionData } = useSessionRecord(selectedSessionId);
   // The session's own drive wins; the surface's drive covers the in-flight
   // window (they agree in drive mode, and global mode has nothing better).
-  const sessionDriveId = sessionData?.session?.driveId ?? storeDriveId;
+  // Checked as `sessionData?.session ?  : ` rather than `??` — `driveId` on a
+  // RESOLVED session can itself legitimately be `null` (a global session),
+  // which `??` would wrongly treat as "unresolved" and fall through to
+  // `storeDriveId` (caught alongside the AgentPageView cross-drive fix).
+  const sessionDriveId = sessionData?.session ? sessionData.session.driveId : storeDriveId;
 
   // The server is the authority on whether the selected session still
   // exists. `session: null` means it doesn't (ended elsewhere, reaped,

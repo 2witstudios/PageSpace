@@ -27,10 +27,11 @@ const mockMutate = vi.hoisted(() => vi.fn());
 // Defaults to "not yet loaded" (`data: undefined`) so `panesDriveId` falls
 // back to `page.driveId` — identical to every pre-existing test's behavior.
 // One dedicated test below overrides this to pin the cross-drive-session
-// correction (the session's OWN driveId, not the hosted agent page's).
-const mockUseSWR = vi.hoisted(() =>
-  vi.fn((..._args: unknown[]) => ({ data: undefined as string | null | undefined })),
-);
+// correction (the session's OWN driveId, not the hosted agent page's). Shape
+// matches `useSessionRecord`'s raw session-record result, not a pre-coalesced
+// driveId.
+type MockSessionRecordData = { session: { driveId: string | null } | null } | undefined;
+const mockUseSWR = vi.hoisted(() => vi.fn((..._args: unknown[]) => ({ data: undefined as MockSessionRecordData })));
 vi.mock('swr', () => ({
   default: (...args: unknown[]) => mockUseSWR(...args),
   mutate: (...args: unknown[]) => mockMutate(...args),
@@ -191,6 +192,11 @@ const resolveTo = (resolved: ResolvedConversation) => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // `vi.clearAllMocks()` clears call/result history but NOT a persistent
+  // `mockReturnValue` override — re-establish the documented default here so
+  // one test's override (the global-assistant-session test below) can never
+  // leak into whichever test happens to run next.
+  mockUseSWR.mockReturnValue({ data: undefined });
   resolvedConversation.current = { resolved: null, isLoading: true };
   authState.current = { user: { id: 'user-1', role: 'admin' } };
   conversationsState.current = {
@@ -246,7 +252,9 @@ describe('AgentPageView', () => {
     // most-recent conversation can be bound to a global session. AgentPanes
     // must scope to the session's OWN drive (null), never `page.driveId` —
     // otherwise `agentSessionsKey`/the picker look in the wrong workspace.
-    mockUseSWR.mockReturnValue({ data: null });
+    // The raw session-record shape `useSessionRecord` resolves to (not a
+    // pre-coalesced driveId) — a RESOLVED global session, session.driveId null.
+    mockUseSWR.mockReturnValue({ data: { session: { driveId: null } } });
     resolveTo({ conversationId: 'conv-1', sessionId: 'ses-global' });
     render(<AgentPageView page={pageFixture()} />);
 
