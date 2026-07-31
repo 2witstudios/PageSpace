@@ -501,4 +501,58 @@ describe('past conversations (default view, replacing the old static prompt)', (
     await waitFor(() => expect(screen.getByText('drive-reset-b page 1')).toBeDefined());
     expect(screen.queryByText(/page 2/)).toBeNull();
   });
+
+  it('a failed Next fetch does not strand the user — the last loaded page and Prev/Next stay usable', async () => {
+    let pageTwoShouldFail = false;
+
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.includes('/api/agent-sessions/conversations')) {
+        const parsed = new URL(url, 'http://localhost');
+        const cursor = parsed.searchParams.get('cursor');
+        if (cursor && pageTwoShouldFail) {
+          return { ok: false, status: 500, json: async () => ({ error: 'boom' }) };
+        }
+        return {
+          ok: true,
+          json: async () => ({
+            conversations: [
+              {
+                conversationId: cursor ? 'conv-page2' : 'conv-page1',
+                title: cursor ? 'Page 2 chat' : 'Page 1 chat',
+                type: 'global',
+                agentPageId: null,
+                pageTitle: null,
+                lastMessageAt: new Date().toISOString(),
+                createdAt: new Date().toISOString(),
+                sessionId: null,
+                sessionName: null,
+                sessionEndedAt: null,
+                driveId: null,
+              },
+            ],
+            pagination: { hasMore: !cursor, nextCursor: cursor ? null : 'conv-page1', limit: 20 },
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({ session: { driveId: null } }) };
+    });
+
+    const { getByText, findByText, queryByText } = render(<AgentsSurface driveId="drive-fail-recover" />);
+    await findByText('Page 1 chat');
+
+    pageTwoShouldFail = true;
+    act(() => getByText('Next').click());
+
+    // The failed page must not wipe the view: page 1's row is still there,
+    // an inline notice covers the failure, and Prev is still the way out.
+    await waitFor(() => expect(screen.getByText(/Couldn't load this page/)).toBeDefined());
+    expect(getByText('Page 1 chat')).toBeDefined();
+    expect(queryByText("Couldn't load past conversations")).toBeNull();
+    const prevButton = getByText('Prev').closest('button')!;
+    expect(prevButton).not.toBeDisabled();
+
+    act(() => prevButton.click());
+    await waitFor(() => expect(screen.queryByText(/Couldn't load this page/)).toBeNull());
+    expect(getByText('Page 1 chat')).toBeDefined();
+  });
 });

@@ -89,7 +89,16 @@ export default function AgentsPastConversationsList({ driveId }: { driveId?: str
   const { data, error, isLoading } = useSWR<ConversationsResponse>(
     buildKey(driveId, cursor),
     conversationsFetcher,
-    { revalidateOnFocus: false },
+    {
+      revalidateOnFocus: false,
+      // A failed Next/Prev fetch must not strand the user on a dead-end
+      // error screen with no way back: keeping the last successful page's
+      // data visible means the list and Prev/Next stay usable (Prev — the
+      // one real escape hatch, since it replays an already-cached page)
+      // while an inline notice covers the failed request, instead of the
+      // whole view flipping to a full-screen error with no controls at all.
+      keepPreviousData: true,
+    },
   );
 
   const driveNameById = useMemo(() => new Map(drives.map((d) => [d.id, d.name])), [drives]);
@@ -129,7 +138,12 @@ export default function AgentsPastConversationsList({ driveId }: { driveId?: str
     );
   }
 
-  if (error) {
+  // A full-screen error only when there is truly nothing to show (the very
+  // first fetch failed). A failed Next/Prev fetch, with `keepPreviousData`,
+  // still has the last successful page in `data` — that's handled below by
+  // an inline notice instead, so Prev/Next stay usable rather than stranding
+  // the user on a dead end.
+  if (error && !data) {
     return (
       <EmptyState
         title="Couldn't load past conversations"
@@ -141,7 +155,7 @@ export default function AgentsPastConversationsList({ driveId }: { driveId?: str
   const conversations = data?.conversations ?? [];
 
   // True zero-history: keep the original blank-slate copy rather than an empty list shell.
-  if (conversations.length === 0 && pageIndex === 0) {
+  if (conversations.length === 0 && pageIndex === 0 && !error) {
     return (
       <EmptyState
         title="Select a session"
@@ -152,6 +166,11 @@ export default function AgentsPastConversationsList({ driveId }: { driveId?: str
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
+      {error && (
+        <div className="border-b border-border bg-destructive/10 px-4 py-2 text-xs text-destructive">
+          {"Couldn't load this page — showing the last one loaded. Try Prev/Next again."}
+        </div>
+      )}
       <div className="flex-1 overflow-y-auto divide-y divide-border">
         {conversations.map((row) => (
           <button
