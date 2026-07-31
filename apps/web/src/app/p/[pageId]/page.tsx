@@ -23,7 +23,7 @@ export default async function PageRedirect({ params, searchParams }: PageProps) 
   // query params the destination page itself interprets.
   const query = new URLSearchParams(
     Object.entries(await searchParams).flatMap(([key, value]): [string, string][] =>
-      value === undefined ? [] : (Array.isArray(value) ? value : [value]).map((v) => [key, v]),
+      value === undefined ? [] : (typeof value === 'string' ? [value] : value).map((v): [string, string] => [key, v]),
     ),
   ).toString();
 

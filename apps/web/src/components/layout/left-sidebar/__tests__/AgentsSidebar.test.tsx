@@ -99,6 +99,9 @@ vi.mock('../PrimaryNavigation', () => ({ default: () => <div /> }));
 vi.mock('../DriveFooter', () => ({ default: () => <div /> }));
 vi.mock('../DashboardFooter', () => ({ default: () => <div /> }));
 
+const mockToastError = vi.hoisted(() => vi.fn());
+vi.mock('sonner', () => ({ toast: { error: (...args: unknown[]) => mockToastError(...args) } }));
+
 import { within } from '@testing-library/react';
 import { ApiRequestError } from '@/lib/auth/auth-fetch';
 import AgentsSidebar, { resolveListNotice } from '../AgentsSidebar';
@@ -732,7 +735,7 @@ describe('AgentsSidebar', () => {
       expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-1');
     });
 
-    test('a reopen failure shows an error toast and leaves selection untouched', async () => {
+    test('a non-404 reopen failure shows an error toast and leaves selection untouched', async () => {
       respondWithSessionsAndClosed([SESSION], [CLOSED_CONVERSATION]);
       mockPost.mockRejectedValue(new ApiRequestError('boom', 500));
       const user = userEvent.setup();
@@ -743,6 +746,31 @@ describe('AgentsSidebar', () => {
       await user.click(await screen.findByText('Researcher — Old chat'));
 
       await waitFor(() => expect(mockPost).toHaveBeenCalled());
+      expect(mockToastError).toHaveBeenCalledWith(
+        'Could not reopen this conversation',
+        expect.objectContaining({ description: 'boom' }),
+      );
+      expect(useAgentSurfaceStore.getState().selectedConversationId).not.toBe('conv-closed');
+    });
+
+    test('a 404 (someone else already history-deleted it) refetches the closed list silently, WITHOUT a toast', async () => {
+      // A stale row — the server is the authority on whether it's still
+      // there to reopen. No toast: this is routine staleness, not a failure
+      // the user did anything wrong to cause.
+      respondWithSessionsAndClosed([SESSION], [CLOSED_CONVERSATION]);
+      mockPost.mockRejectedValue(new ApiRequestError('not found', 404));
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      await user.click(await screen.findByText('History'));
+      const fetchesBeforeClick = mockFetchWithAuth.mock.calls.length;
+      await user.click(await screen.findByText('Researcher — Old chat'));
+
+      await waitFor(() => expect(mockPost).toHaveBeenCalled());
+      // `retryClosed()` re-fetches the closed list so the stale row can drop out.
+      await waitFor(() => expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(fetchesBeforeClick));
+      expect(mockToastError).not.toHaveBeenCalled();
       expect(useAgentSurfaceStore.getState().selectedConversationId).not.toBe('conv-closed');
     });
   });

@@ -299,6 +299,47 @@ export async function createConversationInSession(input: {
 }
 
 /**
+ * The read half of the close/reopen deps — `findConversation` and
+ * `countOpenConversations` are IDENTICAL between the two (both weigh the same
+ * "is this row open" fact), and the cap's symmetry between close and reopen
+ * depends on them staying that way: one copy drifting from the other would
+ * silently unbalance which listings count toward `MAX_SESSION_CONVERSATIONS`.
+ * One definition, shared, rather than two that must be kept in lockstep by
+ * hand (review finding — coderabbitai on PR #2296). Takes `tx` (or plain
+ * `db`) so both callers' advisory-lock transaction is what these queries run
+ * on.
+ */
+function sessionListingReadDeps(tx: typeof db) {
+  return {
+    findConversation: async (conversationId: string) => {
+      const [row] = await tx
+        .select({
+          sessionId: conversations.sessionId,
+          closedInSessionAt: conversations.closedInSessionAt,
+          isActive: conversations.isActive,
+        })
+        .from(conversations)
+        .where(eq(conversations.id, conversationId))
+        .limit(1);
+      return row ?? null;
+    },
+    countOpenConversations: async (sessionId: string) => {
+      const [row] = await tx
+        .select({ n: count() })
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.sessionId, sessionId),
+            eq(conversations.isActive, true),
+            isNull(conversations.closedInSessionAt),
+          ),
+        );
+      return row?.n ?? 0;
+    },
+  };
+}
+
+/**
  * Close a conversation OUT of its session's listing — the transactional
  * wiring for `close-conversation-in-session.ts`'s pure decision. A per-session
  * advisory lock (the `agent-sessions-store.ts` `createIfUnderLimit` pattern)
@@ -317,31 +358,7 @@ export async function closeConversationInSession(input: {
     );
     return closeConversationInSessionWith(
       {
-        findConversation: async (conversationId) => {
-          const [row] = await tx
-            .select({
-              sessionId: conversations.sessionId,
-              closedInSessionAt: conversations.closedInSessionAt,
-              isActive: conversations.isActive,
-            })
-            .from(conversations)
-            .where(eq(conversations.id, conversationId))
-            .limit(1);
-          return row ?? null;
-        },
-        countOpenConversations: async (sessionId) => {
-          const [row] = await tx
-            .select({ n: count() })
-            .from(conversations)
-            .where(
-              and(
-                eq(conversations.sessionId, sessionId),
-                eq(conversations.isActive, true),
-                isNull(conversations.closedInSessionAt),
-              ),
-            );
-          return row?.n ?? 0;
-        },
+        ...sessionListingReadDeps(tx),
         closeConversation: async (conversationId) => {
           const updated = await tx
             .update(conversations)
@@ -373,31 +390,7 @@ export async function reopenConversationInSession(input: {
     );
     return reopenConversationInSessionWith(
       {
-        findConversation: async (conversationId) => {
-          const [row] = await tx
-            .select({
-              sessionId: conversations.sessionId,
-              closedInSessionAt: conversations.closedInSessionAt,
-              isActive: conversations.isActive,
-            })
-            .from(conversations)
-            .where(eq(conversations.id, conversationId))
-            .limit(1);
-          return row ?? null;
-        },
-        countOpenConversations: async (sessionId) => {
-          const [row] = await tx
-            .select({ n: count() })
-            .from(conversations)
-            .where(
-              and(
-                eq(conversations.sessionId, sessionId),
-                eq(conversations.isActive, true),
-                isNull(conversations.closedInSessionAt),
-              ),
-            );
-          return row?.n ?? 0;
-        },
+        ...sessionListingReadDeps(tx),
         reopenConversation: async (conversationId) => {
           const updated = await tx
             .update(conversations)
