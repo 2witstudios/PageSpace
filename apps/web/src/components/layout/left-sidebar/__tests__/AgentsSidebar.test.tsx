@@ -236,7 +236,7 @@ describe('AgentsSidebar', () => {
     await user.click(await screen.findByLabelText(/expand api refactor/i));
 
     // Conversations, yes; anything pane-shaped, no.
-    expect(screen.getByText('First chat')).toBeDefined();
+    expect(screen.getByText('Researcher — First chat')).toBeDefined();
     expect(screen.queryByText(/pane/i)).toBeNull();
     expect(screen.queryByText(/split/i)).toBeNull();
   });
@@ -263,7 +263,7 @@ describe('AgentsSidebar', () => {
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      await user.click(await screen.findByText('Second chat'));
+      await user.click(await screen.findByText('Researcher — Second chat'));
 
       expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
       expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-2');
@@ -324,24 +324,83 @@ describe('AgentsSidebar', () => {
     });
   });
 
-  describe('new conversation in a session', () => {
-    test("posts into the session with the last conversation's agent and selects the new thread", async () => {
-      mockPost.mockResolvedValue({ conversationId: 'conv-new' });
+  describe('conversation sub-item labels', () => {
+    test('composes <Agent> — <title> once a title is populated', async () => {
       const user = userEvent.setup();
       renderSidebar();
 
-      await screen.findByText('api refactor');
-      await user.click(screen.getByLabelText('New conversation in this session'));
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
 
-      await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
-      expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-1/conversations', {
-        sessionId: 'ses-1',
-      });
-      await waitFor(() =>
-        expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-new'),
-      );
+      expect(screen.getByText('Researcher — First chat')).toBeDefined();
+      expect(screen.getByText('Researcher — Second chat')).toBeDefined();
+    });
+
+    test('shows just the agent name when no title has been set yet', async () => {
+      respondWithSessions([
+        {
+          ...SESSION,
+          conversations: [{ conversationId: 'conv-1', title: null, agentPageId: 'agent-1' }],
+        },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+
+      expect(screen.getByText('Researcher')).toBeDefined();
+      expect(screen.queryByText(/—/)).toBeNull();
+    });
+
+    test('falls back to "Assistant" for a null agentPageId, and "Agent" for an unknown one', async () => {
+      respondWithSessions([
+        {
+          ...SESSION,
+          conversations: [
+            { conversationId: 'conv-1', title: null, agentPageId: null },
+            { conversationId: 'conv-2', title: null, agentPageId: 'agent-deleted' },
+          ],
+        },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+
+      expect(screen.getByText('Assistant')).toBeDefined();
+      expect(screen.getByText('Agent')).toBeDefined();
+    });
+  });
+
+  describe('shells', () => {
+    test('renders each shell as its own row, not a count', async () => {
+      respondWithSessions([
+        { ...SESSION, shells: [{ shellId: 'shell-a', name: 'shell-1' }, { shellId: 'shell-b', name: 'shell-2' }] },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+
+      expect(screen.getByText('shell-1')).toBeDefined();
+      expect(screen.getByText('shell-2')).toBeDefined();
+      expect(screen.queryByText(/shells$/)).toBeNull();
+    });
+
+    test('clicking a shell selects its session and opens its terminal pane', async () => {
+      respondWithSessions([{ ...SESSION, shells: [{ shellId: 'shell-a', name: 'shell-1' }] }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      await user.click(await screen.findByText('shell-1'));
+
       expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
-      expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-1');
+      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']?.columns[0]?.panes[0]?.scope).toEqual({
+        kind: 'terminal',
+        name: 'shell-1',
+        targetId: 'shell-a',
+        agentPageId: null,
+      });
     });
   });
 
@@ -450,21 +509,6 @@ describe('AgentsSidebar', () => {
       expect(screen.getByLabelText('Session actions').className).toContain('opacity-0');
     });
 
-    test('right-click opens a context menu; "New conversation" drives the same handler as the inline icon', async () => {
-      mockPost.mockResolvedValue({ conversationId: 'conv-new' });
-      const user = userEvent.setup();
-      renderSidebar();
-
-      await screen.findByText('api refactor');
-      fireEvent.contextMenu(screen.getByText('api refactor'));
-      await user.click(await screen.findByText('New conversation'));
-
-      await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
-      expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-1/conversations', {
-        sessionId: 'ses-1',
-      });
-    });
-
     test('"End session" from the context menu opens the same confirm dialog as the inline X', async () => {
       const user = userEvent.setup();
       renderSidebar();
@@ -476,17 +520,25 @@ describe('AgentsSidebar', () => {
       expect(await screen.findByRole('alertdialog')).toBeDefined();
     });
 
-    test('the 3-dots dropdown opens the same two items, driving the same handlers', async () => {
+    test('the 3-dots dropdown opens the same single item, driving the same handler', async () => {
       const user = userEvent.setup();
       renderSidebar();
 
       await screen.findByText('api refactor');
       await user.click(screen.getByLabelText('Session actions'));
 
-      expect(await screen.findByText('New conversation')).toBeDefined();
-      await user.click(screen.getByText('End session'));
+      await user.click(await screen.findByText('End session'));
 
       expect(await screen.findByRole('alertdialog')).toBeDefined();
+    });
+
+    test('the inline "New conversation" affordance is gone — switching an agent in an open pane is the only way to mint one', async () => {
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      expect(screen.queryByLabelText('New conversation in this session')).toBeNull();
+      fireEvent.contextMenu(screen.getByText('api refactor'));
+      expect(screen.queryByText('New conversation')).toBeNull();
     });
   });
 
@@ -498,7 +550,7 @@ describe('AgentsSidebar', () => {
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
       const fetchesBefore = mockFetchWithAuth.mock.calls.length;
-      fireEvent.contextMenu(await screen.findByText('First chat'));
+      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
       await user.click(await screen.findByText('Close'));
 
       await waitFor(() =>
@@ -516,7 +568,7 @@ describe('AgentsSidebar', () => {
       await user.click(await screen.findByLabelText(/expand api refactor/i));
       // Two conversations render — each gets its own "Conversation actions"
       // trigger, so scope to "First chat"'s own row.
-      const firstChatRow = (await screen.findByText('First chat')).closest(
+      const firstChatRow = (await screen.findByText('Researcher — First chat')).closest(
         '[data-slot="context-menu-trigger"]',
       ) as HTMLElement;
       await user.click(within(firstChatRow).getByLabelText('Conversation actions'));
@@ -533,7 +585,7 @@ describe('AgentsSidebar', () => {
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      fireEvent.contextMenu(await screen.findByText('First chat'));
+      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
       await user.click(await screen.findByText('Close'));
 
       expect(await screen.findByRole('alertdialog')).toBeDefined();
@@ -545,7 +597,7 @@ describe('AgentsSidebar', () => {
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      fireEvent.contextMenu(await screen.findByText('First chat'));
+      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
       await user.click(await screen.findByText('Close'));
 
       await waitFor(() => expect(mockDel).toHaveBeenCalled());
@@ -722,34 +774,6 @@ describe('AgentsSidebar', () => {
       await screen.findByText('api refactor');
       const headers = screen.getAllByText(/^(Alpha|Assistant)$/);
       expect(headers.map((el) => el.textContent)).toEqual(['Assistant', 'Alpha']);
-    });
-
-    test('a new conversation in an assistant session goes through the session-centric creator', async () => {
-      // The assistant has no agent page, so the page-agents route has nothing
-      // to hang it on — the session route is the path.
-      mockPost.mockResolvedValue({ conversationId: 'conv-new' });
-      respondWithSessions([
-        {
-          ...SESSION,
-          sessionId: 'ses-g',
-          driveId: null,
-          name: 'assistant session',
-          conversations: [{ conversationId: 'conv-g', title: 'Thread', agentPageId: null }],
-        },
-      ]);
-      const user = userEvent.setup();
-      renderSidebar();
-
-      await screen.findByText('assistant session');
-      await user.click(screen.getByLabelText('New conversation in this session'));
-
-      await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions/ses-g/conversations', {}),
-      );
-      await waitFor(() =>
-        expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-new'),
-      );
-      expect(useAgentSurfaceStore.getState().selectedAgentId).toBeNull();
     });
   });
 });
