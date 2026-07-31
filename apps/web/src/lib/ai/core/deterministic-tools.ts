@@ -24,8 +24,6 @@ export const DETERMINISTIC_TOOL_ALLOWLIST = [
   'update_task',
 ] as const;
 
-export type DeterministicToolName = (typeof DETERMINISTIC_TOOL_ALLOWLIST)[number];
-
 type RegistryTool = {
   inputSchema?: unknown;
   execute?: (args: never, options: never) => unknown;
