@@ -15,6 +15,10 @@ import { useNonce } from '@/contexts/NonceContext';
 interface CanvasFrameProps {
   html: string;
   title?: string;
+  /** Mirrors the persisted `published_pages.themeBridgeEnabled` setting (see
+   *  the canvas Settings tab's Appearance category) so the editor's live
+   *  preview matches what publishing will produce. Defaults to `true`. */
+  themeBridgeEnabled?: boolean;
 }
 
 /**
@@ -69,7 +73,7 @@ function hasRecentUserActivation(): boolean {
  * The document string is the same one produced for published pages, so the
  * in-app view and the published artifact render identically.
  */
-export function CanvasFrame({ html, title }: CanvasFrameProps) {
+export function CanvasFrame({ html, title, themeBridgeEnabled = true }: CanvasFrameProps) {
   const nonce = useNonce();
   const router = useRouter();
   const [previewHtml, setPreviewHtml] = useState(html);
@@ -119,14 +123,16 @@ export function CanvasFrame({ html, title }: CanvasFrameProps) {
   // baseTarget '_blank': inside the sandboxed frame an ordinary <a href> (no
   // target) would navigate the frame itself — and many sites refuse framing —
   // so default links to a new tab (works with the iframe's allow-popups).
-  // injectThemeBridge: true injects a script that listens for theme messages
-  // so the canvas iframe's dark/light state matches the app's current theme.
+  // injectThemeBridge injects a script that listens for theme messages so the
+  // canvas iframe's dark/light state matches the app's current theme — unless
+  // the author disabled it (canvas Settings > Appearance) for a design that
+  // shouldn't be fought by an injected `dark` class.
   // navigationBridge: true injects a script that intercepts clicks on internal
   // dashboard page links and hands them to the message handler below, so they
   // route in-app instead of falling through to baseTarget's new-tab behavior.
   const srcDoc = useMemo(
-    () => renderCanvasDocument({ html: previewHtml, title, baseTarget: '_blank', injectThemeBridge: true, navigationBridge: true, nonce }),
-    [previewHtml, title, nonce],
+    () => renderCanvasDocument({ html: previewHtml, title, baseTarget: '_blank', injectThemeBridge: themeBridgeEnabled, navigationBridge: true, nonce }),
+    [previewHtml, title, nonce, themeBridgeEnabled],
   );
 
   // Send the current theme to the canvas iframe whenever it changes or the

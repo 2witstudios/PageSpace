@@ -1,0 +1,1 @@
+ALTER TABLE "published_pages" ADD COLUMN "theme_bridge_enabled" boolean DEFAULT true NOT NULL;

@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { detectFormTags, type DetectedFormTag, type FormFieldDef } from './parse-form-tags';
+import { detectFormTags, type DetectedFormTag, type FormFieldDef } from '../parse-form-tags';
 import { Input } from '@/components/ui/input';
 
 interface FormTarget {
@@ -25,7 +25,7 @@ interface FormTarget {
   notificationEmail: string | null;
 }
 
-interface CanvasFormsSettingsTabProps {
+interface CanvasFormsSettingsSectionProps {
   pageId: string;
   content: string;
   onContentChange: (value: string) => void;
@@ -202,7 +202,7 @@ function WiredFormCard({
   );
 }
 
-export default function CanvasFormsSettingsTab({ pageId, content, onContentChange }: CanvasFormsSettingsTabProps) {
+export default function CanvasFormsSettingsSection({ pageId, content, onContentChange }: CanvasFormsSettingsSectionProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [formTargets, setFormTargets] = useState<FormTarget[]>([]);
@@ -366,15 +366,15 @@ export default function CanvasFormsSettingsTab({ pageId, content, onContentChang
   );
 
   if (isLoading) {
-    return <div className="p-4 text-sm text-muted-foreground">Loading…</div>;
+    return <p className="text-sm text-muted-foreground">Loading…</p>;
   }
 
   return (
-    <div className="p-4 max-w-2xl space-y-4">
+    <div className="space-y-4">
       <p className="text-xs text-muted-foreground">
-        This tab detects every &lt;form&gt; tag already on this page — write one by hand or have an AI agent add
-        one, then wire it up to a Sheet here. Deleting a form removes its tag from the page; there&apos;s no way
-        to recover it, so start a fresh form (with a new Sheet or the same one) if you need it back.
+        This category detects every &lt;form&gt; tag already on this page — write one by hand or have an AI agent
+        add one, then wire it up to a Sheet here. Deleting a form removes its tag from the page; there&apos;s no
+        way to recover it, so start a fresh form (with a new Sheet or the same one) if you need it back.
       </p>
 
       {detected.length === 0 && orphaned.length === 0 && (
