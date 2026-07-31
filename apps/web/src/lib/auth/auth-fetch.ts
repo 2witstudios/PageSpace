@@ -1,7 +1,7 @@
 'use client';
 
 import { createClientLogger } from '@/lib/logging/client-logger';
-import { getPlatformStorage, type PlatformStorage } from './platform-storage';
+import { getPlatformStorage, type PlatformStorage, type StoredSession } from './platform-storage';
 import { isCapacitorApp, getPlatform } from '@/lib/capacitor-bridge';
 
 interface FetchOptions extends RequestInit {
@@ -561,13 +561,53 @@ class AuthFetch {
   }
 
   /**
+   * Reads the stored session with the same timeout `getSessionTokenWithTimeout` applies to
+   * bearer token retrieval — on iOS, Keychain access can hang during app launch, and
+   * `getStoredSession()` is the identical underlying bridge call. Without this, a hung read
+   * here would strand `refreshBearerSession()` (and anything awaiting it) indefinitely, on
+   * the same recovery path this timeout was added to protect elsewhere.
+   *
+   * Distinguishes a timeout from a resolved-null session: a timeout tells us nothing about
+   * whether a device token exists, so the caller must treat it as transient/retryable — never
+   * as proof the token is missing (that would force an incorrect logout of a session that may
+   * still be perfectly valid).
+   */
+  private async getStoredSessionWithTimeout(
+    storage: PlatformStorage,
+  ): Promise<{ session: StoredSession | null; timedOut: boolean }> {
+    let timeoutId: ReturnType<typeof setTimeout>;
+    const timeoutPromise = new Promise<{ session: null; timedOut: true }>((resolve) => {
+      timeoutId = setTimeout(() => {
+        this.logger.warn(`${storage.platform}: getStoredSession timed out after ${this.TOKEN_RETRIEVAL_TIMEOUT_MS}ms`);
+        resolve({ session: null, timedOut: true });
+      }, this.TOKEN_RETRIEVAL_TIMEOUT_MS);
+    });
+
+    try {
+      return await Promise.race([
+        storage.getStoredSession().then((session) => ({ session, timedOut: false as const })),
+        timeoutPromise,
+      ]);
+    } finally {
+      clearTimeout(timeoutId!);
+    }
+  }
+
+  /**
    * Refresh session for Bearer token platforms (iOS, Android)
    */
   private async refreshBearerSession(): Promise<SessionRefreshResult> {
     const storage = this.getStorage();
 
     try {
-      const session = await storage.getStoredSession();
+      const { session, timedOut } = await this.getStoredSessionWithTimeout(storage);
+
+      if (timedOut) {
+        // Transient Keychain hang, not proof the device token is missing — retryable, same
+        // as the 429/5xx branch below, so we don't force a logout on a merely-slow read.
+        return { success: false, shouldLogout: false };
+      }
+
       const info = await storage.getDeviceInfo();
 
       if (!session?.deviceToken || !info.deviceId) {
