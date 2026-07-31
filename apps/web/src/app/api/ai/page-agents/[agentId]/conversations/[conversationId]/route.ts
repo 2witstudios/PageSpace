@@ -3,6 +3,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrin
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { countOpenConversationsForSession } from '@/lib/agent-sessions/agent-sessions-runtime';
 import { broadcastAiConversationAdded, broadcastAiConversationRenamed, broadcastAiConversationDeleted } from '@/lib/websocket/socket-utils';
 import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
 import { maskIdentifier } from '@/lib/logging/mask';
@@ -216,6 +217,37 @@ export async function DELETE(
         { error: 'Insufficient permissions to delete this conversation' },
         { status: 403 }
       );
+    }
+
+    // History-deleting a session-bound conversation now also deactivates its
+    // CANONICAL row (`softDeleteConversation` below) — which, unlike the
+    // console's own "Close" action, does not go through
+    // `closeConversationInSessionWith`'s never-empty guard. Refusing here
+    // when this is the session's LAST open listing keeps that same
+    // invariant true regardless of which route emptied it (review finding —
+    // chatgpt-codex-connector on PR #2296): an active session left with a
+    // live sandbox and zero reachable conversations is worse than a plain
+    // 409 telling the user to close the pane (which offers to end the
+    // session) or delete history from a different conversation first.
+    if (conversationRow?.sessionId && conversationRow.closedInSessionAt === null) {
+      const openCount = await countOpenConversationsForSession(conversationRow.sessionId);
+      if (openCount <= 1) {
+        auditRequest(request, {
+          eventType: 'security.rate.limited',
+          userId: auth.userId,
+          resourceType: 'page_agent_conversation',
+          resourceId: conversationId,
+          details: { reason: 'last_session_conversation', agentId, sessionId: conversationRow.sessionId, method: 'DELETE' },
+          riskScore: 0,
+        });
+        return NextResponse.json(
+          {
+            error: 'This is the only open conversation in its session — close the pane (or end the session) instead of deleting it from History.',
+            reason: 'last_conversation',
+          },
+          { status: 409 },
+        );
+      }
     }
 
     // Get conversation metadata before deletion for audit log

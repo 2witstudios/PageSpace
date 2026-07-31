@@ -654,6 +654,53 @@ describe('AgentsSidebar', () => {
       await waitFor(() => expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(fetchesBefore));
     });
 
+    test("also refreshes an already-open History list — otherwise the just-closed conversation is absent until collapse/re-expand (review finding: chatgpt-codex-connector on PR #2296)", async () => {
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url.includes('/conversations/closed')) {
+          return { ok: true, json: async () => ({ conversations: [] }) };
+        }
+        return { ok: true, json: async () => ({ sessions: [SESSION] }) };
+      });
+      mockDel.mockResolvedValue(undefined);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      await user.click(await screen.findByText('History'));
+      await waitFor(() =>
+        expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/closed'),
+      );
+      const closedListFetchesBefore = mockFetchWithAuth.mock.calls.filter(
+        ([url]) => url === '/api/agent-sessions/ses-1/conversations/closed',
+      ).length;
+
+      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
+      await user.click(await screen.findByText('Close'));
+      await waitFor(() => expect(mockDel).toHaveBeenCalled());
+
+      await waitFor(() => {
+        const closedListFetchesAfter = mockFetchWithAuth.mock.calls.filter(
+          ([url]) => url === '/api/agent-sessions/ses-1/conversations/closed',
+        ).length;
+        expect(closedListFetchesAfter).toBeGreaterThan(closedListFetchesBefore);
+      });
+    });
+
+    test('does not error when History is closed (its SWR key is null) — the retryClosed() call is a safe no-op', async () => {
+      mockDel.mockResolvedValue(undefined);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
+      await user.click(await screen.findByText('Close'));
+
+      await waitFor(() => expect(mockDel).toHaveBeenCalled());
+      expect(
+        mockFetchWithAuth.mock.calls.some(([url]) => url === '/api/agent-sessions/ses-1/conversations/closed'),
+      ).toBe(false);
+    });
+
     test('the 3-dots dropdown "Close" drives the same DELETE', async () => {
       mockDel.mockResolvedValue(undefined);
       const user = userEvent.setup();

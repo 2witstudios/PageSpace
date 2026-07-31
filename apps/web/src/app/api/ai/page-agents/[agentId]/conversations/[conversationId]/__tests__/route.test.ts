@@ -67,12 +67,17 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
+vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
+  countOpenConversationsForSession: vi.fn(),
+}));
 
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastAiConversationAdded, broadcastAiConversationDeleted } from '@/lib/websocket/socket-utils';
+import { countOpenConversationsForSession } from '@/lib/agent-sessions/agent-sessions-runtime';
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -100,7 +105,9 @@ const mockAgent = () => ({
   driveId: mockDriveId,
 });
 
-const mockConversationRow = (overrides: Partial<{ userId: string; isShared: boolean }> = {}) => ({
+const mockConversationRow = (
+  overrides: Partial<{ userId: string; isShared: boolean; sessionId: string | null; closedInSessionAt: Date | null }> = {},
+) => ({
   id: mockConversationId,
   userId: mockUserId,
   type: 'page',
@@ -439,6 +446,11 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
 
     // Default: audit log succeeds
     vi.mocked(conversationRepository.logConversationDeletion).mockResolvedValue(undefined);
+
+    // Default: irrelevant unless the conversation row overrides sessionId —
+    // a plenty-large count so the never-empty guard never trips by accident
+    // in tests that don't care about it.
+    vi.mocked(countOpenConversationsForSession).mockResolvedValue(5);
   });
 
   describe('authentication', () => {
@@ -452,6 +464,70 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
       const response = await DELETE(request, context);
 
       expect(response.status).toBe(401);
+    });
+  });
+
+  describe("the session never-empty guard (review finding: chatgpt-codex-connector on PR #2296)", () => {
+    it("refuses to delete a session-bound conversation that is its session's LAST open listing", async () => {
+      vi.mocked(conversationRepository.getConversation).mockResolvedValue(
+        mockConversationRow({ sessionId: 'ses_1', closedInSessionAt: null }),
+      );
+      vi.mocked(countOpenConversationsForSession).mockResolvedValue(1);
+
+      const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
+      const context = createContext(mockAgentId, mockConversationId);
+      const response = await DELETE(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(409);
+      expect(body.reason).toBe('last_conversation');
+      expect(conversationRepository.softDeleteConversation).not.toHaveBeenCalled();
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ eventType: 'security.rate.limited' }),
+      );
+    });
+
+    it('allows deleting a session-bound conversation when another open listing remains in the same session', async () => {
+      vi.mocked(conversationRepository.getConversation).mockResolvedValue(
+        mockConversationRow({ sessionId: 'ses_1', closedInSessionAt: null }),
+      );
+      vi.mocked(countOpenConversationsForSession).mockResolvedValue(2);
+
+      const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
+      const context = createContext(mockAgentId, mockConversationId);
+      const response = await DELETE(request, context);
+
+      expect(response.status).toBe(200);
+      expect(conversationRepository.softDeleteConversation).toHaveBeenCalledWith(mockAgentId, mockConversationId);
+    });
+
+    it('does not weigh the guard at all for a conversation ALREADY closed out of its session — it holds no open slot to protect', async () => {
+      vi.mocked(conversationRepository.getConversation).mockResolvedValue(
+        mockConversationRow({ sessionId: 'ses_1', closedInSessionAt: new Date('2026-01-01') }),
+      );
+      vi.mocked(countOpenConversationsForSession).mockResolvedValue(0);
+
+      const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
+      const context = createContext(mockAgentId, mockConversationId);
+      const response = await DELETE(request, context);
+
+      expect(response.status).toBe(200);
+      expect(countOpenConversationsForSession).not.toHaveBeenCalled();
+      expect(conversationRepository.softDeleteConversation).toHaveBeenCalledWith(mockAgentId, mockConversationId);
+    });
+
+    it('does not weigh the guard for a plain (non-session-bound) conversation', async () => {
+      vi.mocked(conversationRepository.getConversation).mockResolvedValue(
+        mockConversationRow({ sessionId: null }),
+      );
+
+      const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
+      const context = createContext(mockAgentId, mockConversationId);
+      const response = await DELETE(request, context);
+
+      expect(response.status).toBe(200);
+      expect(countOpenConversationsForSession).not.toHaveBeenCalled();
     });
   });
 

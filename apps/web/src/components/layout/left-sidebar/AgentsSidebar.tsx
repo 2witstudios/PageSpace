@@ -584,7 +584,17 @@ function SessionRow({
   } = useSWR<{ conversations: SessionConversationEntry[] }>(
     showHistory ? `/api/agent-sessions/${encodeURIComponent(session.sessionId)}/conversations/closed` : null,
     closedConversationsFetcher,
-    { revalidateOnFocus: false },
+    {
+      revalidateOnFocus: false,
+      // Same modest poll as the main sessions list — a conversation closed
+      // from elsewhere (AgentPanes, another tab) while History is already
+      // open must eventually appear here too, not just on the next
+      // collapse/re-expand (review finding — chatgpt-codex-connector on PR
+      // #2296). The explicit `retryClosed()` call in `closeConversation`
+      // below covers the immediate case (closed from THIS row's own visible
+      // open list); this poll is the catch-all for every other source.
+      refreshInterval: 20_000,
+    },
   );
 
   const openConversation = useCallback(
@@ -654,6 +664,12 @@ function SessionRow({
           `/api/agent-sessions/${encodeURIComponent(session.sessionId)}/conversations/${encodeURIComponent(conversationId)}`,
         );
         onChanged();
+        // The just-closed conversation belongs in History now — a no-op if
+        // that section isn't open (its SWR key is `null` then), but if it
+        // IS open the user should see it appear immediately, not wait for
+        // the next poll (review finding — chatgpt-codex-connector on PR
+        // #2296).
+        void retryClosed();
       } catch (error) {
         if (error instanceof ApiRequestError && error.status === 409) {
           // The session's LAST open listing — the server is the authority on
@@ -669,7 +685,7 @@ function SessionRow({
         });
       }
     },
-    [onChanged, session.sessionId],
+    [onChanged, retryClosed, session.sessionId],
   );
 
   const reopenConversation = useCallback(
