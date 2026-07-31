@@ -821,4 +821,98 @@ describe('AgentsSidebar', () => {
       expect(headers.map((el) => el.textContent)).toEqual(['Global Assistant', 'Alpha']);
     });
   });
+
+  describe('session search', () => {
+    test('replaces the old static "Agent Sessions" label with a search box, and its "+" still opens the new-session flow', async () => {
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      expect(screen.queryByText('Agent Sessions')).toBeNull();
+
+      await user.click(screen.getByLabelText('New session'));
+      // Same agent palette the pre-existing "new session" tests assert on —
+      // confirms the "+" next to the search box still drives the real flow.
+      expect(await screen.findByText('Researcher')).toBeDefined();
+    });
+
+    test('typing filters the drive\'s sessions by name, and clearing the query restores the rest', async () => {
+      respondWithSessions([SESSION, { ...SESSION, sessionId: 'ses-2', name: 'design review' }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      expect(screen.getByText('design review')).toBeDefined();
+
+      const search = screen.getByPlaceholderText('Search sessions…');
+      await user.type(search, 'design');
+
+      expect(screen.queryByText('api refactor')).toBeNull();
+      expect(screen.getByText('design review')).toBeDefined();
+
+      await user.clear(search);
+      expect(await screen.findByText('api refactor')).toBeDefined();
+    });
+
+    test('a query with no matches shows a distinct notice, not the empty-drive one', async () => {
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      await user.type(screen.getByPlaceholderText('Search sessions…'), 'zzz-nope');
+
+      expect(await screen.findByText('No sessions match your search')).toBeDefined();
+      expect(screen.queryByText(/no sessions in this drive/i)).toBeNull();
+    });
+
+    test('a background refresh failure on cached sessions still shows the no-match notice, not "Failed to load sessions"', async () => {
+      // Regression pin for the isDataEmpty/isResultEmpty split: hasError can
+      // be true (a background 20s refresh failing) while sessions is still
+      // the last-known-good, non-empty cache. Filtering that cache down to
+      // zero results must never read as a load failure.
+      const user = userEvent.setup();
+      renderSidebar();
+      await screen.findByText('api refactor');
+
+      mockFetchWithAuth.mockResolvedValue({ ok: false, status: 500, json: async () => ({}) });
+      await user.type(screen.getByPlaceholderText('Search sessions…'), 'zzz-nope');
+
+      expect(await screen.findByText('No sessions match your search')).toBeDefined();
+      expect(screen.queryByText(/failed to load sessions/i)).toBeNull();
+    });
+
+    describe('global mode', () => {
+      beforeEach(() => {
+        mockUseParams.mockReturnValue({});
+        mockUsePathname.mockReturnValue('/dashboard/agents');
+        window.history.replaceState({}, '', '/dashboard/agents');
+        useAgentSurfaceStore.setState({ driveId: null });
+        useDriveStore.setState({ drives: [driveFixture('drive-1', 'Alpha')] });
+      });
+
+      test('a search+"+" row sits above the per-drive groups, and its "+" opens Create a new drive — not a session', async () => {
+        const user = userEvent.setup();
+        renderSidebar();
+
+        await screen.findByText('Alpha');
+        await user.click(screen.getByLabelText('New drive'));
+
+        expect(await screen.findByText('Create a new drive')).toBeDefined();
+        // Distinct from the roster groups' own per-drive spawn affordance.
+        expect(mockPost).not.toHaveBeenCalled();
+      });
+
+      test('searching hides every drive group with no matching sessions, across the whole roster', async () => {
+        const user = userEvent.setup();
+        renderSidebar();
+
+        await screen.findByText('Alpha');
+        await user.type(screen.getByPlaceholderText('Search sessions…'), 'zzz-nope');
+
+        expect(screen.queryByText('Alpha')).toBeNull();
+        expect(screen.queryByText('Global Assistant')).toBeNull();
+        expect(await screen.findByText('No sessions match your search')).toBeDefined();
+      });
+    });
+  });
 });
