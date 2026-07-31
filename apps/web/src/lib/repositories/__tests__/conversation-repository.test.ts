@@ -74,6 +74,11 @@ vi.mock('@pagespace/db/schema/monitoring', () => ({
   userActivities: { userId: 'userActivities.userId' },
 }));
 
+const mockInvalidateCompaction = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/ai/core/compaction/compaction-repository', () => ({
+  invalidate: (...args: unknown[]) => mockInvalidateCompaction(...args),
+}));
+
 import { conversationRepository } from '../conversation-repository';
 import { db } from '@pagespace/db/db';
 
@@ -412,5 +417,25 @@ describe('conversationRepository.setConversationShared', () => {
     expect(setMock).toHaveBeenCalledWith(
       expect.objectContaining({ isShared: false })
     );
+  });
+});
+
+describe('conversationRepository.softDeleteConversation', () => {
+  it("deactivates the canonical conversations row, not just its chat_messages — review finding (chatgpt-codex-connector on PR #2296): every reader gating on conversations.isActive (session listings/caps, the v1/MCP API, retention purge) previously kept treating a page conversation deleted from History as live forever", async () => {
+    const whereMock = vi.fn().mockResolvedValue(undefined);
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    mockDb.update = vi.fn().mockReturnValue({ set: setMock });
+
+    await conversationRepository.softDeleteConversation('agent_1', 'conv_deleted');
+
+    // Two separate UPDATEs: chat_messages (unchanged, pre-existing behavior)
+    // THEN conversations — same order the fix was added in, verified via the
+    // table argument each db.update() call received.
+    expect(mockDb.update).toHaveBeenCalledTimes(2);
+    expect(mockDb.update).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: 'chatMessages.id' }));
+    expect(mockDb.update).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: 'conversations.id' }));
+    expect(setMock).toHaveBeenNthCalledWith(1, { isActive: false });
+    expect(setMock).toHaveBeenNthCalledWith(2, { isActive: false });
+    expect(mockInvalidateCompaction).toHaveBeenCalledWith('conv_deleted', { source: 'page', pageId: 'agent_1' });
   });
 });

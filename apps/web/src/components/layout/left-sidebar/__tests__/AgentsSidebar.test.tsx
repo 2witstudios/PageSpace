@@ -735,6 +735,35 @@ describe('AgentsSidebar', () => {
       expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-1');
     });
 
+    test('reopening inserts into the open conversations list synchronously — before any sessions-list revalidation lands (review finding: chatgpt-codex-connector on PR #2296)', async () => {
+      // AgentPanes' close-pane decision reads this SAME sessions cache to
+      // decide whether closing a pane should issue the server-side DELETE.
+      // If the cache only updated via a network revalidation, a pane closed
+      // before that fetch resolves would read "no listing found" and skip
+      // the DELETE — this proves the insert happens locally, synchronously.
+      respondWithSessionsAndClosed([SESSION], [CLOSED_CONVERSATION]);
+      mockPost.mockResolvedValue(undefined);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      await user.click(await screen.findByText('History'));
+      const sessionsListCallsBefore = mockFetchWithAuth.mock.calls.filter(
+        ([url]) => url === '/api/agent-sessions?driveId=drive-1',
+      ).length;
+
+      await user.click(await screen.findByText('Researcher — Old chat'));
+      await waitFor(() => expect(mockPost).toHaveBeenCalled());
+
+      // Now showing in the (still-expanded) open conversations section too —
+      // present without any additional sessions-list fetch.
+      expect(screen.getAllByText('Researcher — Old chat').length).toBeGreaterThan(0);
+      const sessionsListCallsAfter = mockFetchWithAuth.mock.calls.filter(
+        ([url]) => url === '/api/agent-sessions?driveId=drive-1',
+      ).length;
+      expect(sessionsListCallsAfter).toBe(sessionsListCallsBefore);
+    });
+
     test('a non-404 reopen failure shows an error toast and leaves selection untouched', async () => {
       respondWithSessionsAndClosed([SESSION], [CLOSED_CONVERSATION]);
       mockPost.mockRejectedValue(new ApiRequestError('boom', 500));

@@ -122,7 +122,9 @@ export default function AgentsSidebar({ className }: SidebarProps) {
               hasError={!!sessionsError}
               onRetry={() => void retrySessions()}
               agentsByDrive={agentsByDrive}
-              onChanged={() => void retrySessions()}
+              onChanged={(updater) =>
+                void (updater ? retrySessions(updater, { revalidate: false }) : retrySessions())
+              }
             />
           </div>
         </div>
@@ -147,6 +149,23 @@ interface SessionListEntry {
   conversations: SessionConversationEntry[];
   shells: Array<{ shellId: string; name: string }>;
 }
+
+type SessionsCacheData = { sessions: SessionListEntry[] } | undefined;
+
+/**
+ * The sessions list changed — plain `onChanged()` just revalidates. Passing
+ * an `updater` instead applies it to the cache LOCALLY first (no
+ * `revalidate`), the same optimistic-write discipline `AgentPanes.tsx`'s
+ * `recordMintedConversation`/`recordClosedConversation` already use on this
+ * identical SWR key (`agentSessionsKey(driveId)` — same string as this
+ * sidebar's own `sessionsKey`, so it's the same cache entry): a reopen needs
+ * this cache to already contain the reopened conversation the instant
+ * `openConversation` focuses its pane, not after the next revalidation
+ * lands, or a pane closed before then reads `decideClosePane`'s
+ * "resolved-but-absent" fallback and never issues the close DELETE (review
+ * finding — chatgpt-codex-connector on PR #2296).
+ */
+type OnSessionsChanged = (updater?: (current: SessionsCacheData) => SessionsCacheData) => void;
 
 async function sessionsFetcher(url: string): Promise<{ sessions: SessionListEntry[] }> {
   const response = await fetchWithAuth(url);
@@ -231,7 +250,7 @@ function SessionList({
   hasError: boolean;
   onRetry: () => void;
   agentsByDrive: DriveWithAgents[];
-  onChanged: () => void;
+  onChanged: OnSessionsChanged;
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const trimmedQuery = searchQuery.trim();
@@ -532,7 +551,7 @@ function SessionRow({
   agentNamesById,
 }: {
   session: SessionListEntry;
-  onChanged: () => void;
+  onChanged: OnSessionsChanged;
   agentNamesById: Map<string, string>;
 }) {
   const selectedSessionId = useAgentSurfaceStore((state) => state.selectedSessionId);
@@ -654,11 +673,29 @@ function SessionRow({
         await post(
           `/api/agent-sessions/${encodeURIComponent(session.sessionId)}/conversations/${encodeURIComponent(conversation.conversationId)}/reopen`,
         );
-        // Drop it from the closed list and refresh the open list — it now
-        // belongs in both places (the second matters even before the poll
-        // catches up, or the row a user just reopened looks like a no-op).
+        // Drop it from the closed list and add it to the open list LOCALLY,
+        // synchronously — not just a revalidate. `openConversation` below
+        // focuses this conversation's pane immediately, and `AgentPanes`'
+        // close-pane decision reads this SAME cache (`agentSessionsKey`,
+        // this sidebar's `sessionsKey` is the identical string) to decide
+        // whether closing that pane should also issue the session-scoped
+        // DELETE. A plain revalidate is a network round trip behind that —
+        // closing the pane before it lands reads "no listing found" and
+        // silently skips the DELETE, leaving the reopened conversation
+        // consuming a cap slot forever (review finding —
+        // chatgpt-codex-connector on PR #2296). Mirrors `AgentPanes.tsx`'s
+        // own `recordMintedConversation`/`recordClosedConversation`.
         void retryClosed();
-        onChanged();
+        onChanged((current) => {
+          if (!current) return current;
+          return {
+            sessions: current.sessions.map((s) =>
+              s.sessionId === session.sessionId
+                ? { ...s, conversations: [conversation, ...s.conversations] }
+                : s,
+            ),
+          };
+        });
         setExpanded(true);
         openConversation(conversation);
       } catch (error) {
