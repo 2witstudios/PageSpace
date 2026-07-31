@@ -11,13 +11,41 @@ export type EventTrigger = {
   resourceType: string;
 };
 
+/**
+ * A deterministic step: direct invocation of an allowlisted pageSpaceTools
+ * entry with stored args — no LLM involved. Leaf values in `args` may be a
+ * `{ $payload: 'dot.path' }` reference resolved from the trigger payload at
+ * run time (value slots only; toolName and arg shape are fixed config).
+ */
+export type WorkflowToolStep = {
+  kind: 'tool';
+  toolName: string;
+  args: Record<string, unknown>;
+};
+
+/** An AI step — today's whole-workflow behavior, as one step in a chain. */
+export type WorkflowAiStep = {
+  kind: 'ai';
+  prompt: string;
+  agentPageId?: string;
+};
+
+export type WorkflowStep = WorkflowToolStep | WorkflowAiStep;
+
 export const workflows = pgTable('workflows', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   driveId: text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
   createdBy: text('createdBy').notNull().references(() => users.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
-  agentPageId: text('agentPageId').notNull().references(() => pages.id, { onDelete: 'cascade' }),
+  // Nullable since deterministic-only workflows have no agent. Legacy rows
+  // (steps null) always have it set; an ai step without its own agentPageId
+  // falls back to this column.
+  agentPageId: text('agentPageId').references(() => pages.id, { onDelete: 'cascade' }),
+  // '' sentinel for step-based workflows; the real prompt lives in ai steps.
   prompt: text('prompt').notNull(),
+  // Null = legacy single-AI-prompt workflow; the executor synthesizes
+  // [{ kind: 'ai', prompt, agentPageId }] via resolveSteps(). Never backfilled.
+  steps: jsonb('steps').$type<WorkflowStep[]>(),
   contextPageIds: jsonb('contextPageIds').$type<string[]>().default([]),
   cronExpression: text('cronExpression'),
   timezone: text('timezone').notNull().default('UTC'),
