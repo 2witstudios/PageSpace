@@ -28,6 +28,7 @@ export * from './schema/calendar';
 export * from './schema/calendar-triggers';
 export * from './schema/workflows';
 export * from './schema/workflow-runs';
+export * from './schema/workflow-run-steps';
 export * from './schema/task-triggers';
 export * from './schema/rate-limit-buckets';
 export * from './schema/revoked-service-tokens';
@@ -89,6 +90,7 @@ import * as calendar from './schema/calendar';
 import * as calendarTriggers from './schema/calendar-triggers';
 import * as workflows from './schema/workflows';
 import * as workflowRuns from './schema/workflow-runs';
+import * as workflowRunSteps from './schema/workflow-run-steps';
 import * as taskTriggers from './schema/task-triggers';
 import * as rateLimitBuckets from './schema/rate-limit-buckets';
 import * as revokedServiceTokens from './schema/revoked-service-tokens';
@@ -151,6 +153,7 @@ export const schema = {
   ...calendarTriggers,
   ...workflows,
   ...workflowRuns,
+  ...workflowRunSteps,
   ...taskTriggers,
   ...rateLimitBuckets,
   ...revokedServiceTokens,
