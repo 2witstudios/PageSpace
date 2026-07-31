@@ -7,23 +7,14 @@ import { Button } from '@/components/ui/button';
 import { post, patch } from '@/lib/auth/auth-fetch';
 import { useWorkflows } from '@/hooks/useWorkflows';
 import { WorkflowList } from './WorkflowList';
-import { WorkflowForm } from './WorkflowForm';
+import { WorkflowForm, type WorkflowFormData } from './WorkflowForm';
+import { synthesizeSteps } from './WorkflowStepsEditor';
 import { DeleteWorkflowDialog } from './DeleteWorkflowDialog';
 import type { Workflow } from './types';
 
 interface WorkflowsDashboardProps {
   driveId: string;
   driveName: string;
-}
-
-interface WorkflowFormData {
-  name: string;
-  agentPageId: string;
-  prompt: string;
-  contextPageIds: string[];
-  cronExpression: string;
-  timezone: string;
-  isEnabled: boolean;
 }
 
 export function WorkflowsDashboard({ driveId, driveName }: WorkflowsDashboardProps) {
@@ -133,8 +124,7 @@ export function WorkflowsDashboard({ driveId, driveName }: WorkflowsDashboardPro
         initialData={editingWorkflow ? {
           id: editingWorkflow.id,
           name: editingWorkflow.name,
-          agentPageId: editingWorkflow.agentPageId,
-          prompt: editingWorkflow.prompt,
+          steps: synthesizeSteps(editingWorkflow),
           contextPageIds: editingWorkflow.contextPageIds ?? [],
           cronExpression: editingWorkflow.cronExpression ?? '0 9 * * 1-5',
           timezone: editingWorkflow.timezone,

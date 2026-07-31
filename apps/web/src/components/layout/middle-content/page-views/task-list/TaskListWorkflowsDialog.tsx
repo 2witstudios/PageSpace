@@ -15,6 +15,7 @@ import { post, patch } from '@/lib/auth/auth-fetch';
 import { useWorkflows } from '@/hooks/useWorkflows';
 import { WorkflowList } from '@/components/workflows/WorkflowList';
 import { WorkflowForm, type WorkflowFormData } from '@/components/workflows/WorkflowForm';
+import { synthesizeSteps } from '@/components/workflows/WorkflowStepsEditor';
 import { DeleteWorkflowDialog } from '@/components/workflows/DeleteWorkflowDialog';
 import type { Workflow } from '@/components/workflows/types';
 
@@ -154,8 +155,7 @@ export function TaskListWorkflowsDialog({
           ? {
               id: editing.id,
               name: editing.name,
-              agentPageId: editing.agentPageId,
-              prompt: editing.prompt,
+              steps: synthesizeSteps(editing),
               contextPageIds: ensurePageAnchor(editing.contextPageIds),
               cronExpression: editing.cronExpression ?? '0 9 * * 1-5',
               timezone: editing.timezone,
