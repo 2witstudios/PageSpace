@@ -38,7 +38,7 @@ import {
   Webhook,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { mutate } from 'swr';
+import useSWR, { mutate } from 'swr';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
@@ -72,6 +72,14 @@ export interface AgentPageViewProps {
   page: TreePage;
 }
 
+/** The session's own `driveId` (null = global-assistant session) — never the hosted agent's. */
+async function sessionDriveIdFetcher(url: string): Promise<string | null> {
+  const response = await fetchWithAuth(url);
+  if (!response.ok) throw new Error(`Failed to load session (${response.status})`);
+  const data = (await response.json()) as { session: { driveId: string | null } | null };
+  return data.session?.driveId ?? null;
+}
+
 export default function AgentPageView({ page }: AgentPageViewProps) {
   const { user, isLoading: authLoading } = useAuth();
   // The same gate every session surface uses — the server still decides
@@ -90,6 +98,21 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   // The conversation on screen: the user's own switching (history select, new,
   // delete-replacement) wins over the initial resolution.
   const current = override ?? initialResolved;
+
+  // The SESSION's own driveId — usually `page.driveId`, but NOT when this
+  // conversation lives in a global-assistant session hosting a cross-drive
+  // agent (a global session may now host any accessible agent's conversation;
+  // see create-conversation-in-session.ts). `AgentPanes` needs the SESSION's
+  // real drive (null for global), never the agent page's fixed home drive, or
+  // its `agentSessionsKey`/picker scope to a workspace this session isn't in.
+  // Defaults to `page.driveId` while unresolved — correct for every
+  // pre-existing conversation, and self-corrects once the session record
+  // loads for the new cross-drive case.
+  const { data: resolvedSessionDriveId } = useSWR(
+    current?.sessionId ? `/api/agent-sessions/${encodeURIComponent(current.sessionId)}` : null,
+    sessionDriveIdFetcher,
+  );
+  const panesDriveId = resolvedSessionDriveId !== undefined ? resolvedSessionDriveId : page.driveId;
 
   const [activeTab, setActiveTab] = useState<string>('chat');
   const [webhooksOpen, setWebhooksOpen] = useState(false);
@@ -430,7 +453,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
             <AgentPanes
               key={current.sessionId}
               sessionId={current.sessionId}
-              driveId={page.driveId}
+              driveId={panesDriveId}
               initialConversation={{
                 conversationId: current.conversationId,
                 agentPageId: page.id,

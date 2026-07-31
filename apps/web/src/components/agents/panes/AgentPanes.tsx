@@ -150,7 +150,13 @@ export default function AgentPanes({
     () =>
       (allAgents ?? [])
         .filter((agent) => driveId === null || agent.driveId === driveId)
-        .map((agent) => ({ id: agent.id, title: agent.title ?? 'Agent' })),
+        .map((agent) => ({
+          id: agent.id,
+          title: agent.title ?? 'Agent',
+          // Only carried for a global session's cross-drive list — a single
+          // drive's own picker has no cross-drive ambiguity to disambiguate.
+          driveName: driveId === null ? agent.driveName : undefined,
+        })),
     [allAgents, driveId],
   );
 
@@ -740,9 +746,10 @@ export default function AgentPanes({
               existingShells={reattachableShells}
               // The assistant identity path is live (AssistantSessionChat), so
               // every session can host an assistant thread beside its agents.
-              // Hardcoded true rather than reading a prop — flagged in issue
-              // #2263 (finding 8) as a product decision to confirm; left
-              // unchanged here.
+              // Confirmed intent (was flagged in issue #2263, finding 8, as a
+              // product decision to confirm): every session offers the global
+              // assistant, symmetric with a global session now offering every
+              // accessible agent (see pickableAgents above).
               canPickAssistant
               autoFocus={workspace.pendingPickerPaneId === pane.id}
               onPickAgent={(agentPageId) => void handlePickAgent(pane.id, agentPageId)}
