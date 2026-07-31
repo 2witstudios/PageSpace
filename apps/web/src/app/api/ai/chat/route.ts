@@ -120,6 +120,7 @@ import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { deriveConversationTitle } from '@/lib/repositories/derive-conversation-title';
 
 
 // Allow streaming responses up to 5 minutes for complex AI agent interactions
@@ -698,7 +699,18 @@ export async function POST(request: Request) {
           toolResults: undefined,
           uiMessage: userMessage,
         });
-        
+
+        // Fire-and-forget: title derivation must never fail or delay the chat
+        // response, matching how createConversation above is treated as
+        // non-fatal. existingConversation is always populated for a session's
+        // conversation (its row is created before the first message ever
+        // reaches this route) — the null check guards the non-session path.
+        if (existingConversation) {
+          conversationRepository
+            .autoTitleConversation(existingConversation.id, deriveConversationTitle(messageContent))
+            .catch(() => {});
+        }
+
         loggers.ai.debug('AI Chat API: User message saved to database');
 
         auditRequest(request, { eventType: 'data.write', userId, resourceType: 'ai_chat', resourceId: chatId, details: {
