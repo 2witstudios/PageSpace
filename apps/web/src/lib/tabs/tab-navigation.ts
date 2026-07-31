@@ -120,6 +120,33 @@ export const goForward = (tab: Tab): Tab => {
   };
 };
 
+/**
+ * Jump directly to an arbitrary position in this tab's own history — what a
+ * real Back/Forward (of any distance, e.g. a long-press-selected entry
+ * several steps away) resolves to once the destination href is found in
+ * `history`. Unlike `goBack`/`goForward`, this isn't a ±1 step: it's how a
+ * URL change gets RECONCILED against history that already contains it,
+ * rather than re-pushed as a new entry (which would truncate everything
+ * after the current index and silently discard real forward history).
+ * A no-op for an out-of-range or already-current index.
+ */
+export const goToHistoryIndex = (tab: Tab, index: number): Tab => {
+  if (index < 0 || index >= tab.history.length || index === tab.historyIndex) {
+    return tab;
+  }
+
+  const { path, search } = fromHref(tab.history[index]);
+  return {
+    ...tab,
+    path,
+    search,
+    historyIndex: index,
+    // Clear cached metadata so useTabMeta fetches fresh data for navigated path
+    title: undefined,
+    pageType: undefined,
+  };
+};
+
 export const canGoBack = (tab: Tab): boolean => tab.historyIndex > 0;
 
 export const canGoForward = (tab: Tab): boolean => tab.historyIndex < tab.history.length - 1;

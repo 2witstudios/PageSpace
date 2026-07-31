@@ -9,6 +9,7 @@ import {
   navigateInTab as navigateInTabFn,
   goBack as goBackFn,
   goForward as goForwardFn,
+  goToHistoryIndex as goToHistoryIndexFn,
   updateTabMeta as updateTabMetaFn,
   canGoBack,
   canGoForward,
@@ -43,6 +44,7 @@ interface TabsState {
   navigateInActiveTab: (path: string, search?: string) => void;
   goBackInActiveTab: () => void;
   goForwardInActiveTab: () => void;
+  setActiveTabHistoryIndex: (index: number) => void;
   duplicateTab: (tabId: string) => void;
   updateActiveTabSearch: (search: string) => void;
   updateTabMeta: (tabId: string, meta: TabMetaUpdate) => void;
@@ -53,6 +55,28 @@ interface TabsState {
   selectCanGoBack: (state: TabsState) => boolean;
   selectCanGoForward: (state: TabsState) => boolean;
 }
+
+/** The shape `partialize` actually persists — not the full store. */
+type PersistedTabsState = { tabs: Tab[]; activeTabId: string | null };
+
+/**
+ * v1 added `Tab.search` (required). A tab persisted under v0 rehydrates
+ * without it (`undefined`, not `''`), which fails `navigateInTab`'s no-op
+ * check (`undefined !== ''`) on the very next same-path sync and pushes a
+ * spurious duplicate history entry — backfill it here instead. A standalone,
+ * exported function (rather than inline in the `persist()` config below) so
+ * it's directly unit-testable without needing to drive an actual rehydration.
+ */
+export const migrateTabsStorage = (persistedState: unknown, version: number): PersistedTabsState => {
+  const state = persistedState as { tabs?: Array<Partial<Tab> & Pick<Tab, 'id' | 'path' | 'history' | 'historyIndex' | 'isPinned'>>; activeTabId?: string | null };
+  if (version < 1) {
+    return {
+      activeTabId: state.activeTabId ?? null,
+      tabs: (state.tabs ?? []).map((tab) => ({ ...tab, search: tab.search ?? '' })),
+    };
+  }
+  return state as PersistedTabsState;
+};
 
 export const useTabsStore = create<TabsState>()(
   persist(
@@ -283,6 +307,19 @@ export const useTabsStore = create<TabsState>()(
         set({ tabs: newTabs });
       },
 
+      setActiveTabHistoryIndex: (index) => {
+        const { tabs, activeTabId } = get();
+        if (!activeTabId) return;
+
+        const tabIndex = tabs.findIndex(t => t.id === activeTabId);
+        if (tabIndex === -1) return;
+
+        const newTabs = [...tabs];
+        newTabs[tabIndex] = goToHistoryIndexFn(newTabs[tabIndex], index);
+
+        set({ tabs: newTabs });
+      },
+
       duplicateTab: (tabId) => {
         const { tabs } = get();
         const tab = tabs.find(t => t.id === tabId);
@@ -360,6 +397,8 @@ export const useTabsStore = create<TabsState>()(
     }),
     {
       name: 'tabs-storage',
+      version: 1,
+      migrate: migrateTabsStorage,
       partialize: (state) => ({
         tabs: state.tabs,
         activeTabId: state.activeTabId,

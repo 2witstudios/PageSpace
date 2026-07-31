@@ -250,7 +250,23 @@ describe('useTabSync', () => {
     });
   });
 
-  describe('history reconciliation (Back/Forward, caught in review: chatgpt-codex-connector P2)', () => {
+  describe('history reconciliation (Back/Forward, caught in review: chatgpt-codex-connector P2, refined after a follow-up review)', () => {
+    /**
+     * Simulates what a real browser does on Back/Forward: the address
+     * changes AND a `popstate` event fires. These tests mock `usePathname`/
+     * `useSearchParams` directly (no real navigation), so both steps have to
+     * be driven by hand — set the mocks to the restored address, THEN
+     * dispatch `popstate` so the hook's own listener sets its internal flag,
+     * THEN rerender so the effect observes the new pathname/search while that
+     * flag is still set.
+     */
+    const simulatePopStateTo = (rerender: () => void, path: string, search: string) => {
+      mockPathname.mockReturnValue(path);
+      mockSearchParams.mockReturnValue(new URLSearchParams(search));
+      act(() => window.dispatchEvent(new PopStateEvent('popstate')));
+      rerender();
+    };
+
     it('given a query-only Back after two selections, should move the index back instead of appending a new entry', async () => {
       const { createTab } = useTabsStore.getState();
       createTab({ path: '/dashboard/agents' });
@@ -278,8 +294,7 @@ describe('useTabSync', () => {
       // What a native Back does (or a popstate replaying a raw `history.pushState`
       // entry Next's router never pushed itself, e.g. the Agents surface's
       // selection store): the address returns to one this tab already recorded.
-      mockSearchParams.mockReturnValue(new URLSearchParams('session=a'));
-      rerender();
+      simulatePopStateTo(rerender, '/dashboard/agents', 'session=a');
 
       await waitFor(() => {
         const tab = useTabsStore.getState().tabs[0];
@@ -307,12 +322,10 @@ describe('useTabSync', () => {
       rerender();
       await waitFor(() => expect(useTabsStore.getState().tabs[0].search).toBe('session=b'));
 
-      mockSearchParams.mockReturnValue(new URLSearchParams('session=a'));
-      rerender();
+      simulatePopStateTo(rerender, '/dashboard/agents', 'session=a');
       await waitFor(() => expect(useTabsStore.getState().tabs[0].historyIndex).toBe(1));
 
-      mockSearchParams.mockReturnValue(new URLSearchParams('session=b'));
-      rerender();
+      simulatePopStateTo(rerender, '/dashboard/agents', 'session=b');
 
       await waitFor(() => {
         const tab = useTabsStore.getState().tabs[0];
@@ -323,6 +336,75 @@ describe('useTabSync', () => {
           '/dashboard/agents?session=a',
           '/dashboard/agents?session=b',
         ]);
+      });
+    });
+
+    it('given a multi-step Back (e.g. a long-press history menu jump), should move the index directly there without truncating forward history', async () => {
+      const { createTab } = useTabsStore.getState();
+      createTab({ path: '/dashboard/agents' });
+
+      // Three navigations from the bare tab give 4 entries at indices 0-3:
+      // bare, 'session=a', 'session=b', 'session=c' — current index ends at 3.
+      mockPathname.mockReturnValue('/dashboard/agents');
+      mockSearchParams.mockReturnValue(new URLSearchParams('session=a'));
+      const { rerender } = renderHook(() => useTabSync());
+      await waitFor(() => expect(useTabsStore.getState().tabs[0].search).toBe('session=a'));
+
+      mockSearchParams.mockReturnValue(new URLSearchParams('session=b'));
+      rerender();
+      await waitFor(() => expect(useTabsStore.getState().tabs[0].search).toBe('session=b'));
+
+      mockSearchParams.mockReturnValue(new URLSearchParams('session=c'));
+      rerender();
+      await waitFor(() => expect(useTabsStore.getState().tabs[0].historyIndex).toBe(3));
+
+      // Jump straight from 'c' (index 3) to the BARE tab (index 0) — three
+      // steps in one popstate, skipping 'a' and 'b' entirely, exactly what a
+      // multi-entry Back does. The old adjacency-only check (comparing only
+      // historyIndex ± 1) could never recognize this and would have fallen
+      // through to a fresh push, truncating history at index 3.
+      simulatePopStateTo(rerender, '/dashboard/agents', '');
+
+      await waitFor(() => {
+        const tab = useTabsStore.getState().tabs[0];
+        expect(tab.search).toBe('');
+        expect(tab.historyIndex).toBe(0);
+        expect(tab.history).toEqual([
+          '/dashboard/agents',
+          '/dashboard/agents?session=a',
+          '/dashboard/agents?session=b',
+          '/dashboard/agents?session=c',
+        ]);
+      });
+    });
+
+    it('given an ordinary navigation with NO popstate that happens to match an existing entry, should still append a new step (no false positive)', async () => {
+      // The old adjacency-only heuristic inferred "this is a Back" purely from
+      // string equality, so an ORDINARY new navigation (a Link click,
+      // router.push from elsewhere) that coincidentally matched an adjacent
+      // history entry got misclassified as Back — corrupting historyIndex
+      // instead of appending. Gating on a real popstate fixes this: with none
+      // fired, a matching href must still be treated as a new step.
+      const { createTab } = useTabsStore.getState();
+      createTab({ path: '/dashboard/agents' });
+
+      mockPathname.mockReturnValue('/dashboard/agents');
+      mockSearchParams.mockReturnValue(new URLSearchParams('session=a'));
+      const { rerender } = renderHook(() => useTabSync());
+      await waitFor(() => expect(useTabsStore.getState().tabs[0].search).toBe('session=a'));
+
+      // No popstate dispatched here — this is an ordinary Next-router-driven
+      // navigation that happens to coincidentally match the current entry's
+      // predecessor string ('/dashboard/agents', the bare tab root).
+      mockSearchParams.mockReturnValue(new URLSearchParams());
+      rerender();
+
+      await waitFor(() => {
+        const tab = useTabsStore.getState().tabs[0];
+        expect(tab.search).toBe('');
+        // Appended as a NEW entry, not a reconciled jump back to index 0.
+        expect(tab.history).toEqual(['/dashboard/agents', '/dashboard/agents?session=a', '/dashboard/agents']);
+        expect(tab.historyIndex).toBe(2);
       });
     });
   });

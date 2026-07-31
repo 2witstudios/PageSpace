@@ -9,6 +9,7 @@ import {
   navigateInTab,
   goBack,
   goForward,
+  goToHistoryIndex,
   canGoBack,
   canGoForward,
   toHref,
@@ -279,6 +280,90 @@ describe('tab-navigation', () => {
       });
 
       const updated = goForward(tab);
+
+      expect(updated.title).toBeUndefined();
+      expect(updated.pageType).toBeUndefined();
+    });
+  });
+
+  describe('goToHistoryIndex', () => {
+    it('given an index several steps back, should jump directly there', () => {
+      const tab = createTestTab({
+        path: '/page-3',
+        history: ['/dashboard', '/page-1', '/page-2', '/page-3'],
+        historyIndex: 3,
+      });
+
+      const updated = goToHistoryIndex(tab, 0);
+
+      expect(updated.path).toBe('/dashboard');
+      expect(updated.historyIndex).toBe(0);
+      // The array itself is untouched — only the index moved.
+      expect(updated.history).toEqual(['/dashboard', '/page-1', '/page-2', '/page-3']);
+    });
+
+    it('given an index several steps forward, should jump directly there', () => {
+      const tab = createTestTab({
+        path: '/dashboard',
+        history: ['/dashboard', '/page-1', '/page-2', '/page-3'],
+        historyIndex: 0,
+      });
+
+      const updated = goToHistoryIndex(tab, 3);
+
+      expect(updated.path).toBe('/page-3');
+      expect(updated.historyIndex).toBe(3);
+    });
+
+    it('given the current index, should return unchanged', () => {
+      const tab = createTestTab({
+        path: '/page-1',
+        history: ['/dashboard', '/page-1'],
+        historyIndex: 1,
+      });
+
+      expect(goToHistoryIndex(tab, 1)).toBe(tab);
+    });
+
+    it('given an out-of-range index, should return unchanged', () => {
+      const tab = createTestTab({
+        path: '/dashboard',
+        history: ['/dashboard', '/page-1'],
+        historyIndex: 0,
+      });
+
+      expect(goToHistoryIndex(tab, -1)).toBe(tab);
+      expect(goToHistoryIndex(tab, 2)).toBe(tab);
+    });
+
+    it('given a search-carrying entry, should restore both path and search', () => {
+      const tab = createTestTab({
+        path: '/dashboard/agents',
+        search: 'session=c',
+        history: [
+          '/dashboard/agents?session=a',
+          '/dashboard/agents?session=b',
+          '/dashboard/agents?session=c',
+        ],
+        historyIndex: 2,
+      });
+
+      const updated = goToHistoryIndex(tab, 0);
+
+      expect(updated.path).toBe('/dashboard/agents');
+      expect(updated.search).toBe('session=a');
+    });
+
+    it('given cached metadata, should clear it when jumping', () => {
+      const tab = createTestTab({
+        path: '/page-2',
+        history: ['/dashboard', '/page-1', '/page-2'],
+        historyIndex: 2,
+        title: 'Page 2',
+        pageType: PageType.DOCUMENT,
+      });
+
+      const updated = goToHistoryIndex(tab, 0);
 
       expect(updated.title).toBeUndefined();
       expect(updated.pageType).toBeUndefined();

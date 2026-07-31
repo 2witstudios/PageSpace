@@ -18,15 +18,35 @@ export function useTabSync() {
   const search = useSearchParams().toString();
   const router = useRouter();
   const lastSyncedHref = useRef<string | null>(null);
+  // Set by a REAL browser popstate — the one unambiguous signal that a URL
+  // change is Back/Forward rather than a new step, whether the destination
+  // was pushed by Next's router or by code that bypasses it entirely (e.g.
+  // the Agents surface's raw `history.pushState`). Consumed and cleared at
+  // the top of the sync effect below on the very next run, since popstate
+  // always fires and settles before Next re-renders with the new
+  // pathname/search (this is also why `AgentsSurface` re-reads the URL for
+  // its OWN store the same way, independently of this hook).
+  const isPopStateRef = useRef(false);
 
   const rehydrated = useTabsStore((state) => state.rehydrated);
   const setDesktopRestoreAttempted = useTabsStore((state) => state.setDesktopRestoreAttempted);
+
+  useEffect(() => {
+    const onPopState = () => { isPopStateRef.current = true; };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
 
   useEffect(() => {
     // Wait for store to rehydrate from localStorage
     if (!rehydrated) return;
 
     const href = toHref(pathname, search);
+    // Read-and-clear atomically so every branch below (bootstrap restore,
+    // early returns, new navigation) starts this run with a fresh flag
+    // regardless of which branch it takes.
+    const wasPopState = isPopStateRef.current;
+    isPopStateRef.current = false;
 
     const state = useTabsStore.getState();
     const hasTabs = state.tabs.length > 0;
@@ -81,22 +101,25 @@ export function useTabSync() {
       return;
     }
 
-    // A URL change isn't always a NEW step — a native Back/Forward (or one
-    // driven by code that bypasses Next's router, e.g. the Agents surface's
-    // raw `history.pushState`) can restore an address this tab already has in
-    // its own history, adjacent to its current position. Recognize that by
-    // adjacency instead of always pushing: otherwise Back re-adds the entry
-    // being returned TO as a new forward step, and this tab's own Back/Forward
-    // buttons end up one entry off from what the browser just did.
-    if (activeTab && activeTab.history[activeTab.historyIndex - 1] === href) {
-      currentState.goBackInActiveTab();
-      lastSyncedHref.current = href;
-      return;
-    }
-    if (activeTab && activeTab.history[activeTab.historyIndex + 1] === href) {
-      currentState.goForwardInActiveTab();
-      lastSyncedHref.current = href;
-      return;
+    // A URL change isn't always a NEW step — a real popstate (native
+    // Back/Forward, of any distance, e.g. a long-press-selected entry several
+    // steps away) restores an address that should already be SOMEWHERE in
+    // this tab's own history, whether it was pushed by Next's router or by
+    // code that bypasses it entirely (e.g. the Agents surface's raw
+    // `history.pushState`). Reconcile the index to match instead of pushing a
+    // new entry: pushing would truncate everything after the current index,
+    // silently discarding real forward history, and would leave this tab's
+    // own Back/Forward buttons one entry off from what the browser just did.
+    // Gated on an ACTUAL popstate (not just string adjacency) so an ordinary
+    // new navigation that happens to coincidentally match an existing entry
+    // still gets appended as a new step rather than misread as a jump back.
+    if (activeTab && wasPopState) {
+      const matchIndex = activeTab.history.indexOf(href);
+      if (matchIndex !== -1) {
+        currentState.setActiveTabHistoryIndex(matchIndex);
+        lastSyncedHref.current = href;
+        return;
+      }
     }
 
     // Navigate within the active tab
