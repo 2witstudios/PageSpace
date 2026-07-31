@@ -229,7 +229,8 @@ function SessionList({
   onChanged: () => void;
 }) {
   const [searchQuery, setSearchQuery] = useState('');
-  const hasSearch = searchQuery.trim().length > 0;
+  const trimmedQuery = searchQuery.trim();
+  const hasSearch = trimmedQuery.length > 0;
 
   const canSpawn = isAdmin && !authLoading;
 
@@ -270,9 +271,9 @@ function SessionList({
   // idiom as PageTree's filterTree.
   const filteredSessions = useMemo(() => {
     if (!hasSearch) return sessions;
-    const query = searchQuery.trim().toLowerCase();
+    const query = trimmedQuery.toLowerCase();
     return sessions.filter((session) => (session.name || 'Session').toLowerCase().includes(query));
-  }, [sessions, hasSearch, searchQuery]);
+  }, [sessions, hasSearch, trimmedQuery]);
 
   const notice = resolveListNotice({
     authLoading,
@@ -402,20 +403,12 @@ function SessionList({
 
   return (
     <div className="space-y-1">
-      {driveId && canSpawn && (
+      {canSpawn && (
         <SessionSearchHeader
           value={searchQuery}
           onChange={setSearchQuery}
-          onAction={() => handleNewSession(driveId, null)}
-          actionLabel="New session"
-        />
-      )}
-      {!driveId && canSpawn && (
-        <SessionSearchHeader
-          value={searchQuery}
-          onChange={setSearchQuery}
-          onAction={() => setCreateDriveOpen(true)}
-          actionLabel="New drive"
+          onAction={driveId ? () => handleNewSession(driveId, null) : () => setCreateDriveOpen(true)}
+          actionLabel={driveId ? 'New session' : 'New drive'}
         />
       )}
       {visibleGroups.map((group) => (
@@ -456,7 +449,7 @@ function SessionList({
         onPickTarget={setSpawnPick}
         onSubmitName={handleSubmitName}
       />
-      <CreateDriveDialog isOpen={createDriveOpen} setIsOpen={setCreateDriveOpen} />
+      {!driveId && <CreateDriveDialog isOpen={createDriveOpen} setIsOpen={setCreateDriveOpen} />}
     </div>
   );
 }
