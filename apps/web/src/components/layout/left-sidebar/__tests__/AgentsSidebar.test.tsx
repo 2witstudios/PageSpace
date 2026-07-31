@@ -346,7 +346,7 @@ describe('AgentsSidebar', () => {
   });
 
   describe('new session', () => {
-    test('the inline "+" opens a searchable agent palette; picking an agent is one act: session AND its first conversation, land inside it', async () => {
+    test('the inline "+" opens a searchable agent palette; picking an agent advances to a naming step, and submitting blank still spawns the session AND its first conversation, landing inside it', async () => {
       mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-new' });
       const user = userEvent.setup();
       renderSidebar();
@@ -355,10 +355,16 @@ describe('AgentsSidebar', () => {
       await user.click(screen.getByLabelText('New session'));
       await user.click(await screen.findByText('Researcher'));
 
+      // Naming step: input starts empty with the agent's title as placeholder.
+      const nameInput = await screen.findByPlaceholderText('Researcher');
+      expect(nameInput).toHaveValue('');
+      await user.type(nameInput, '{Enter}');
+
       await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
       expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
         driveId: 'drive-1',
         agentPageId: 'agent-1',
+        name: '',
       });
       await waitFor(() =>
         expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-new'),
@@ -368,7 +374,7 @@ describe('AgentsSidebar', () => {
       expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-1');
     });
 
-    test('a drive with no agents says so instead of offering an empty chooser', async () => {
+    test('a drive with no agents still offers Shell — no empty chooser', async () => {
       mockUsePageAgents.mockImplementation(() => ({
         agentsByDrive: [],
         isLoading: false,
@@ -381,7 +387,8 @@ describe('AgentsSidebar', () => {
       await screen.findByText('api refactor');
       await user.click(screen.getByLabelText('New session'));
 
-      expect(await screen.findByText(/no agents in this drive/i)).toBeDefined();
+      expect(await screen.findByText('Shell')).toBeDefined();
+      expect(screen.queryByText('Researcher')).toBeNull();
     });
   });
 
@@ -640,7 +647,7 @@ describe('AgentsSidebar', () => {
       expect(mockFetchWithAuth).not.toHaveBeenCalled();
     });
 
-    test('spawning from a roster drive with zero sessions posts its driveId + the chosen agent', async () => {
+    test('spawning from a roster drive with zero sessions posts its driveId + the chosen agent + the typed name', async () => {
       mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-new' });
       respondWithSessions([]);
       const user = userEvent.setup();
@@ -650,17 +657,24 @@ describe('AgentsSidebar', () => {
       await user.click(within(groupContainer('Alpha')).getByRole('button', { name: /^New session/i }));
       await user.click(await screen.findByText('Researcher'));
 
+      const nameInput = await screen.findByPlaceholderText('Researcher');
+      await user.type(nameInput, 'my session{Enter}');
+
       await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', { driveId: 'drive-1', agentPageId: 'agent-1' }),
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
+          driveId: 'drive-1',
+          agentPageId: 'agent-1',
+          name: 'my session',
+        }),
       );
       await waitFor(() => expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-new'));
       expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-new');
     });
 
-    test('the Assistant group exists with zero sessions, and spawning it is ONE click', async () => {
-      // The affordance to start an assistant session IS the group — and there
-      // is no agent to choose (the assistant is the counterpart), so the click
-      // spawns directly with the both-null shape.
+    test('the Assistant group exists with zero sessions, and its "+" opens the same naming step (not an instant spawn)', async () => {
+      // Sessions are always deliberately named now — the Assistant group's "+"
+      // goes through the naming step too, even though there's no agent to
+      // choose (the assistant is the counterpart).
       mockPost.mockResolvedValue({ session: { sessionId: 'ses-a' }, conversationId: 'conv-a' });
       respondWithSessions([]);
       const user = userEvent.setup();
@@ -671,7 +685,17 @@ describe('AgentsSidebar', () => {
       // now, so an unscoped query would be ambiguous.
       await user.click(within(groupContainer('Assistant')).getByRole('button', { name: /^New session/i }));
 
-      await waitFor(() => expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {}));
+      const nameInput = await screen.findByPlaceholderText('Assistant');
+      expect(nameInput).toHaveValue('');
+      await user.type(nameInput, '{Enter}');
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
+          driveId: null,
+          agentPageId: null,
+          name: '',
+        }),
+      );
       await waitFor(() => expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-a'));
       expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-a');
       expect(useAgentSurfaceStore.getState().selectedAgentId).toBeNull();
