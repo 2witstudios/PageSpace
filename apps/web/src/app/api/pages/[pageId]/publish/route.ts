@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage, canPrincipalViewPage } from '@/lib/auth';
 import { isPublishConfigured } from '@/lib/canvas/published-storage';
 import { publishCanvasPage, clearPublishedHomeRoot, regeneratePublishedSiteFiles, PublishError, PUBLISH_HOST } from '@/lib/canvas/publish-page';
 import { deletePageFromCustomHosts, getActiveDomainRecords } from '@/lib/canvas/custom-domain-mirror';
@@ -29,6 +29,9 @@ const publishSchema = z.object({
   // publishCanvasPage — never trusted as a URL directly.
   ogImageFileId: z.string().min(1).optional(),
   noindex: z.boolean().optional(),
+  // Canvas pages only: whether the published artifact follows PageSpace's
+  // light/dark theme. Ignored (has no effect) for other publishable page types.
+  themeBridgeEnabled: z.boolean().optional(),
 }).nullable();
 
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
@@ -41,8 +44,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   const scopeError = await checkMCPPageScope(auth, pageId);
   if (scopeError) return scopeError;
 
+  // A viewer who can't edit still needs this page's `themeBridgeEnabled` —
+  // it drives the canvas View tab's live preview for EVERY collaborator, not
+  // just editors, and it's not sensitive (it's baked into the publicly
+  // published HTML either way). Everything else this route returns (SEO
+  // overrides, publish URL, staleness) stays edit-gated below.
   const canEdit = await canPrincipalEditPage(auth, pageId);
-  if (!canEdit) {
+  const canView = canEdit || await canPrincipalViewPage(auth, pageId);
+  if (!canView) {
     return NextResponse.json({ error: 'You do not have permission to view this page' }, { status: 403 });
   }
 
@@ -61,6 +70,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
         publishDescription: true,
         publishOgImageUrl: true,
         noindex: true,
+        themeBridgeEnabled: true,
       },
     });
 
@@ -78,7 +88,21 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
           if (drv?.kind === 'HOME') available = false;
         }
       }
-      return NextResponse.json({ published: false, available });
+      // `canEdit` matters even for an unpublished page: a view-only caller
+      // reaching here (canView but !canEdit) must not have PublishControls
+      // read `available` alone and offer an enabled Publish button that
+      // only reveals the permission failure once its POST 403s.
+      return NextResponse.json({ published: false, available, canEdit });
+    }
+
+    // View-only: stop here with just the rendering-relevant field. Skip the
+    // drive/domain/staleness lookups below — nothing else in this response
+    // is meant for a non-editor (SEO overrides, the publish URL, staleness).
+    // `canEdit: false` tells consumers like the Settings tab's Publish/
+    // Appearance categories not to treat `published: true` as "safe to show
+    // editable, savable fields" — those two are otherwise-independent facts.
+    if (!canEdit) {
+      return NextResponse.json({ published: true, canEdit: false, themeBridgeEnabled: row.themeBridgeEnabled ?? true });
     }
 
     const [drive, livePage] = await Promise.all([
@@ -119,6 +143,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
     return NextResponse.json({
       published: true,
+      canEdit: true,
       available,
       isStale,
       url,
@@ -130,6 +155,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       description: row.publishDescription ?? null,
       ogImageUrl: row.publishOgImageUrl ?? null,
       noindex: row.noindex ?? false,
+      themeBridgeEnabled: row.themeBridgeEnabled ?? true,
     });
   } catch (error) {
     loggers.api.error('Error reading publish status:', error as Error);
@@ -208,6 +234,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       description: parsedBody?.description,
       ogImageUrl,
       noindex: parsedBody?.noindex,
+      themeBridgeEnabled: parsedBody?.themeBridgeEnabled,
     });
 
     auditRequest(req, {

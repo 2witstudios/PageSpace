@@ -195,8 +195,14 @@ The cron expression must not fire more often than every 5 minutes (the polling c
       if (isEnabled !== undefined) updates.isEnabled = isEnabled;
 
       if (agentTrigger) {
+        const mergedAgentPageId = agentTrigger.agentPageId ?? workflow.agentPageId;
+        if (!mergedAgentPageId) {
+          throw new Error(
+            'This workflow has no agent page (step-based workflow); set agentTrigger.agentPageId explicitly.'
+          );
+        }
         const merged = {
-          agentPageId: agentTrigger.agentPageId ?? workflow.agentPageId,
+          agentPageId: mergedAgentPageId,
           prompt: agentTrigger.prompt ?? workflow.prompt,
           instructionPageId:
             agentTrigger.instructionPageId !== undefined ? agentTrigger.instructionPageId : workflow.instructionPageId,

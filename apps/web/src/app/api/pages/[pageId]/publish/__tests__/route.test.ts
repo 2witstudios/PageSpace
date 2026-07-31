@@ -21,9 +21,11 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: (result: unknown) => typeof result === 'object' && result !== null && 'error' in result,
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
   canPrincipalEditPage: (auth: { userId: string }, pageId: string) => canUserEditPage(auth.userId, pageId),
+  canPrincipalViewPage: (auth: { userId: string }, pageId: string) => canUserViewPage(auth.userId, pageId),
 }));
 
 const canUserEditPage = vi.fn();
+const canUserViewPage = vi.fn();
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserEditPage: (...args: unknown[]) => canUserEditPage(...args),
 }));
@@ -130,6 +132,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   authenticateRequestWithOptions.mockResolvedValue({ userId: 'user-1' });
   canUserEditPage.mockResolvedValue(true);
+  canUserViewPage.mockResolvedValue(true);
   allocatePublishSubdomain.mockResolvedValue('acme');
   isPublishConfigured.mockReturnValue(true);
   getPublishAssetBaseUrl.mockReturnValue('https://test-publish.t3.tigrisfiles.io');
@@ -239,6 +242,7 @@ describe('POST /api/pages/[pageId]/publish', () => {
       description: null,
       ogImageUrl: null,
       noindex: false,
+      themeBridgeEnabled: true,
     });
   });
 
@@ -262,6 +266,7 @@ describe('POST /api/pages/[pageId]/publish', () => {
       description: null,
       ogImageUrl: null,
       noindex: false,
+      themeBridgeEnabled: true,
     });
   });
 
@@ -291,6 +296,7 @@ describe('POST /api/pages/[pageId]/publish', () => {
       description: null,
       ogImageUrl: null,
       noindex: false,
+      themeBridgeEnabled: true,
     });
   });
 
@@ -363,6 +369,18 @@ describe('POST /api/pages/[pageId]/publish', () => {
       description: 'Custom desc',
       robots: 'noindex',
     }));
+  });
+
+  it('accepts themeBridgeEnabled: false and threads it into the rendered page as injectThemeBridge: false', async () => {
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<p>hi</p>', driveId: 'drive-1' });
+    findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'STANDARD' });
+    findFirstPublished.mockResolvedValue(null);
+
+    const res = await POST(makeReq({ themeBridgeEnabled: false }), { params });
+    expect(res.status).toBe(200);
+    expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ injectThemeBridge: false }));
+    const json = await res.json();
+    expect(json.themeBridgeEnabled).toBe(false);
   });
 
   it('returns 400 when ogImageUrl is not a valid URL', async () => {
@@ -457,18 +475,52 @@ describe('POST /api/pages/[pageId]/publish', () => {
 });
 
 describe('GET /api/pages/[pageId]/publish', () => {
-  it('returns 403 when the user cannot edit the page', async () => {
+  it('returns 403 when the user can neither edit nor view the page', async () => {
     canUserEditPage.mockResolvedValue(false);
+    canUserViewPage.mockResolvedValue(false);
     const res = await GET(makeReq(), { params });
     expect(res.status).toBe(403);
   });
 
-  it('returns { published: false, available: true } when no row exists and publishing is configured', async () => {
+  it('given view-but-not-edit access to a published page, returns 200 with only the rendering-relevant field', async () => {
+    canUserEditPage.mockResolvedValue(false);
+    canUserViewPage.mockResolvedValue(true);
+    findFirstPublished.mockResolvedValue({
+      driveId: 'drive-1', path: 'welcome', publishedAt: new Date(), updatedAt: new Date(), themeBridgeEnabled: false,
+    });
+
+    const res = await GET(makeReq(), { params });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    // Exact-equal so a future change to the route can't silently start
+    // leaking edit-oriented fields (SEO overrides, url, isStale) to a
+    // view-only collaborator without this test catching it.
+    expect(json).toEqual({ published: true, canEdit: false, themeBridgeEnabled: false });
+    // The drive/domain lookups are skipped entirely for a view-only caller.
+    expect(findFirstDrive).not.toHaveBeenCalled();
+  });
+
+  it('returns { published: false, available: true, canEdit: true } when no row exists and publishing is configured', async () => {
     findFirstPublished.mockResolvedValue(undefined);
     const res = await GET(makeReq(), { params });
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json).toEqual({ published: false, available: true });
+    expect(json).toEqual({ published: false, available: true, canEdit: true });
+  });
+
+  it('given view-but-not-edit access to an unpublished page, returns canEdit: false (not just available)', async () => {
+    // Regression test: PublishControls decides whether to show an enabled
+    // Publish button from `available` alone on this branch — without
+    // `canEdit` here too, a view-only viewer would see an enabled button
+    // that only reveals the permission failure once its POST 403s.
+    canUserEditPage.mockResolvedValue(false);
+    canUserViewPage.mockResolvedValue(true);
+    findFirstPublished.mockResolvedValue(undefined);
+
+    const res = await GET(makeReq(), { params });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json).toEqual({ published: false, available: true, canEdit: false });
   });
 
   it('returns available: false when the page is in a Home drive (no published row)', async () => {
@@ -489,7 +541,7 @@ describe('GET /api/pages/[pageId]/publish', () => {
     const res = await GET(makeReq(), { params });
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json).toEqual({ published: false, available: false });
+    expect(json).toEqual({ published: false, available: false, canEdit: true });
   });
 
   it('reports available: false when the kill-switch is engaged even if the bucket is configured', async () => {
@@ -502,7 +554,7 @@ describe('GET /api/pages/[pageId]/publish', () => {
       expect(res.status).toBe(200);
       const json = await res.json();
       // POST would 503 ("temporarily disabled") here, so the UI must hide the control.
-      expect(json).toEqual({ published: false, available: false });
+      expect(json).toEqual({ published: false, available: false, canEdit: true });
     } finally {
       if (prev === undefined) delete process.env.CANVAS_PUBLISHING_DISABLED;
       else process.env.CANVAS_PUBLISHING_DISABLED = prev;
@@ -521,6 +573,7 @@ describe('GET /api/pages/[pageId]/publish', () => {
     const json = await res.json();
     expect(json).toEqual({
       published: true,
+      canEdit: true,
       available: true,
       isStale: false,
       url: 'https://acme.pagespace.site/welcome',
@@ -531,6 +584,7 @@ describe('GET /api/pages/[pageId]/publish', () => {
       description: null,
       ogImageUrl: null,
       noindex: false,
+      themeBridgeEnabled: true,
     });
   });
 

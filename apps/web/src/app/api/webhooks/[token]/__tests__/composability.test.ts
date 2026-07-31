@@ -75,6 +75,7 @@ let selectCallIndex = 0;
 vi.mock('@pagespace/db/operators', () => ({
   eq: (a: unknown, b: unknown) => ({ a, b }),
   and: (...conds: unknown[]) => ({ and: conds }),
+  inArray: (a: unknown, b: unknown) => ({ inArray: [a, b] }),
 }));
 vi.mock('@pagespace/db/schema/page-webhooks', () => ({
   pageWebhooks: { id: 'pageWebhooks.id', webhookToken: 'pageWebhooks.webhookToken', pageId: 'pageWebhooks.pageId' },
@@ -196,10 +197,12 @@ beforeEach(() => {
   mockReleaseHold.mockResolvedValue(undefined);
   mockExecuteWorkflow.mockResolvedValue({ success: true, durationMs: 5 });
 
-  // Fixed sequence executePageWebhookTrigger walks for a single trigger fire:
+  // Fixed sequence the fan-out + executePageWebhookTrigger walk for a single
+  // trigger fire: 0) fan-out's batch workflow lookup (budget branch),
   // 1) workflows row, 2) webhook -> pageId, 3) webhook page (drive/trashed),
   // 4) agent page (drive/trashed), 5) billing owner row.
   selectQueue = [
+    [WORKFLOW],
     [WORKFLOW],
     [{ pageId: WEBHOOK.pageId }],
     [{ driveId: WORKFLOW.driveId, isTrashed: false }],
@@ -258,6 +261,7 @@ describe('Incoming Webhooks: composability (real trigger fan-out reaches execute
 
   it('skips (and does not execute) a trigger whose webhook page has moved to a different drive than the workflow — the fire-time guard runs for real', async () => {
     selectQueue = [
+      [WORKFLOW], // fan-out batch workflow lookup (budget branch)
       [WORKFLOW],
       [{ pageId: WEBHOOK.pageId }],
       [{ driveId: 'some-other-drive', isTrashed: false }], // webhook page moved out of the workflow's drive

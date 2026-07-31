@@ -45,7 +45,14 @@ vi.mock('@paralleldrive/cuid2', () => ({
   createId: () => `new-id-${++cuidCounter}`,
 }));
 
-const mockUsePageAgents = vi.fn(() => ({
+interface MockPageAgent {
+  id: string;
+  title: string;
+  driveId: string;
+  /** Only set in the cross-drive (global-assistant) fixtures below. */
+  driveName?: string;
+}
+const mockUsePageAgents = vi.fn<() => { allAgents: MockPageAgent[]; isLoading: boolean }>(() => ({
   allAgents: [
     { id: 'agent-1', title: 'Researcher', driveId: 'drive-1' },
     { id: 'agent-2', title: 'Writer', driveId: 'drive-1' },
@@ -735,6 +742,67 @@ describe('AgentPanes', () => {
         .find((p) => p.id === mintingPaneId)!;
       expect(pane.scope).toMatchObject({ targetId: 'rebound-conv', agentPageId: 'agent-3' });
       consoleErrorSpy.mockRestore();
+    });
+  });
+
+  describe('a global-assistant session (driveId null)', () => {
+    beforeEach(() => {
+      // Genuinely cross-drive (unlike the shared drive-1-only default
+      // fixture): proves the picker aggregates across every accessible
+      // drive, not just whichever single drive the fixture happens to use
+      // (a narrower, buggy filter could pass against a single-drive fixture
+      // by coincidence).
+      mockUsePageAgents.mockReturnValue({
+        allAgents: [
+          { id: 'agent-1', title: 'Researcher', driveId: 'drive-1', driveName: 'Alpha' },
+          { id: 'agent-2', title: 'Writer', driveId: 'drive-2', driveName: 'Beta' },
+        ],
+        isLoading: false,
+      });
+    });
+
+    it('offers every accessible agent across drives, not an empty list', async () => {
+      renderPanes({
+        driveId: null,
+        initialConversation: { conversationId: 'conv-1', agentPageId: null, name: 'Conversation' },
+      });
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', paneId));
+
+      // Both cross-drive fixture agents show up — the picker used to be
+      // unconditionally empty for a null driveId (`enabled: driveId !== null`
+      // plus a `agent.driveId === driveId` filter that could never match).
+      expect(await screen.findByTestId('pick-agent-agent-1')).toBeInTheDocument();
+      expect(screen.getByTestId('pick-agent-agent-2')).toBeInTheDocument();
+      expect(screen.getByTestId('pick-global-assistant')).toBeInTheDocument();
+      // Cross-drive entries are labeled with their own drive — page titles
+      // aren't unique, so two drives can hold identically-titled agents that
+      // would otherwise be indistinguishable in the list.
+      expect(within(screen.getByTestId('pick-agent-agent-1')).getByText('Alpha')).toBeInTheDocument();
+      expect(within(screen.getByTestId('pick-agent-agent-2')).getByText('Beta')).toBeInTheDocument();
+    });
+
+    it('mints a picked cross-drive agent into the session, same as a drive session would', async () => {
+      mockPost.mockResolvedValue({});
+      renderPanes({
+        driveId: null,
+        initialConversation: { conversationId: 'conv-1', agentPageId: null, name: 'Conversation' },
+      });
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', paneId));
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByTestId('pick-agent-agent-2'));
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-2/conversations', {
+          conversationId: 'new-id-1',
+          sessionId: 'ses-1',
+        }),
+      );
+      await waitFor(() => expect(screen.getAllByTestId('pane-chat')).toHaveLength(2));
     });
   });
 

@@ -45,15 +45,21 @@ export interface RenderPublishedPageInput {
   robots?: string;
   /** Scopes form-action/connect-src to this origin — see RenderCanvasDocumentInput.formActionOrigin. */
   formActionOrigin?: string;
+  /**
+   * Whether the published artifact follows PageSpace's light/dark theme.
+   * Defaults to `true` (prior always-on behavior) — set to `false` for an
+   * author whose design shouldn't be fought by an injected `dark` class.
+   */
+  injectThemeBridge?: boolean;
 }
 
 /**
  * Render a complete, standalone HTML document for a published canvas page.
  */
 export function renderPublishedPage(input: RenderPublishedPageInput): string {
-  const { assetBaseUrl, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, ...rest } = input;
+  const { assetBaseUrl, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, injectThemeBridge = true, ...rest } = input;
   const allowedAssetHosts = assetBaseUrl ? [getPublicAssetHost(assetBaseUrl)] : [];
-  return renderCanvasDocument({ ...rest, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, injectThemeBridge: true });
+  return renderCanvasDocument({ ...rest, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, injectThemeBridge });
 }
 
 /**

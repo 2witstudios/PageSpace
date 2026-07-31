@@ -219,6 +219,10 @@
       "types": "./dist/schema/workflow-runs.d.ts",
       "default": "./dist/schema/workflow-runs.js"
     },
+    "./schema/workflow-run-steps": {
+      "types": "./dist/schema/workflow-run-steps.d.ts",
+      "default": "./dist/schema/workflow-run-steps.js"
+    },
     "./schema/zoom": {
       "types": "./dist/schema/zoom.d.ts",
       "default": "./dist/schema/zoom.js"

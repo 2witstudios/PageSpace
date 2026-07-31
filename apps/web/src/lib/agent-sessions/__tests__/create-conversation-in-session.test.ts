@@ -162,10 +162,12 @@ describe('the cross-drive gate (one binding path, review #43)', () => {
     expect(deps.createPageConversation).not.toHaveBeenCalled();
   });
 
-  it('a GLOBAL session (driveId null) hosts ONLY assistant threads — any agent page is a mismatch', async () => {
+  it('a GLOBAL session (driveId null) may host any accessible agent — no drive to mismatch against', async () => {
     deps.findSessionDriveId.mockResolvedValue({ driveId: null });
-    await expect(run()).rejects.toThrow(AgentNotInSessionDriveError);
-    expect(deps.createPageConversation).not.toHaveBeenCalled();
+    await run();
+    expect(deps.createPageConversation).toHaveBeenCalledWith(
+      expect.objectContaining({ agentPageId: 'agent-1', sessionId: 'ses-1' }),
+    );
   });
 
   it('the assistant is exempt — it has no drive to mismatch', async () => {

@@ -12,23 +12,17 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { fetchJSON } from '@/lib/auth/auth-fetch';
 import { getHumanReadableCron } from '@/lib/workflows/cron-utils';
+import { WorkflowStepsEditor, isStepsValid, type WorkflowStep } from './WorkflowStepsEditor';
+
+export type { WorkflowStep } from './WorkflowStepsEditor';
 
 export interface WorkflowFormData {
   name: string;
-  agentPageId: string;
-  prompt: string;
+  steps: WorkflowStep[];
   contextPageIds: string[];
   cronExpression: string;
   timezone: string;
@@ -90,8 +84,7 @@ export function WorkflowForm({
   anchorPageTitle,
 }: WorkflowFormProps) {
   const [name, setName] = useState(initialData?.name ?? '');
-  const [agentPageId, setAgentPageId] = useState(initialData?.agentPageId ?? '');
-  const [prompt, setPrompt] = useState(initialData?.prompt ?? '');
+  const [steps, setSteps] = useState<WorkflowStep[]>(initialData?.steps ?? []);
   const [cronExpression, setCronExpression] = useState(initialData?.cronExpression ?? '0 9 * * 1-5');
   const [timezone, setTimezone] = useState(initialData?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone);
   const [isEnabled, setIsEnabled] = useState(initialData?.isEnabled ?? true);
@@ -121,8 +114,7 @@ export function WorkflowForm({
   useEffect(() => {
     if (open) {
       setName(initialData?.name ?? '');
-      setAgentPageId(initialData?.agentPageId ?? '');
-      setPrompt(initialData?.prompt ?? '');
+      setSteps(initialData?.steps ?? []);
       setCronExpression(initialData?.cronExpression ?? '0 9 * * 1-5');
       setTimezone(initialData?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone);
       setIsEnabled(initialData?.isEnabled ?? true);
@@ -139,8 +131,7 @@ export function WorkflowForm({
     try {
       await onSubmit({
         name,
-        agentPageId,
-        prompt,
+        steps,
         contextPageIds,
         cronExpression,
         timezone,
@@ -163,7 +154,7 @@ export function WorkflowForm({
     }
   })();
 
-  const isValid = name && agentPageId && prompt && isTimezoneValid && !!cronExpression;
+  const isValid = name.trim().length > 0 && isStepsValid(steps) && isTimezoneValid && !!cronExpression;
 
   const extraContextPageIds = useMemo(
     () => (anchorPageId ? contextPageIds.filter((id) => id !== anchorPageId) : []),
@@ -196,37 +187,14 @@ export function WorkflowForm({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="wf-agent">AI Agent</Label>
-            {agents.length === 0 && pagesData ? (
-              <p className="text-sm text-muted-foreground py-2">
-                No AI agents in this drive. Create an AI Chat page first.
+            <Label>Steps</Label>
+            {agents.length === 0 && pagesData && (
+              <p className="text-xs text-muted-foreground">
+                No AI agents in this drive yet — create an AI Chat page first if you want AI
+                steps. Tool steps don&apos;t need one.
               </p>
-            ) : (
-              <Select value={agentPageId} onValueChange={setAgentPageId} required>
-                <SelectTrigger id="wf-agent">
-                  <SelectValue placeholder="Select an agent..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {agents.map(agent => (
-                    <SelectItem key={agent.id} value={agent.id}>
-                      {agent.title}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
             )}
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="wf-prompt">Prompt</Label>
-            <Textarea
-              id="wf-prompt"
-              value={prompt}
-              onChange={e => setPrompt(e.target.value)}
-              placeholder="Write a daily summary report referencing the meeting notes..."
-              rows={4}
-              required
-            />
+            <WorkflowStepsEditor steps={steps} onChange={setSteps} agents={agents} />
             {anchorPageId && extraContextPageIds.length > 0 && (
               <div className="space-y-1.5 pt-1">
                 <p className="text-xs text-muted-foreground">

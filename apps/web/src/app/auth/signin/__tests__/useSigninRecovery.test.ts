@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { StrictMode } from 'react';
-import { renderHook, waitFor } from '@testing-library/react';
-import { useSigninRecovery } from '../useSigninRecovery';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { useSigninRecovery, DEVICE_TOKEN_TIMEOUT_MS } from '../useSigninRecovery';
 
 // Shell-level coverage for the recovery effect. The DECISION branches live in
 // signin-recovery.test.ts; here we assert the effects are wired to the right actions AND to the
@@ -281,6 +281,29 @@ describe('useSigninRecovery', () => {
     await Promise.resolve();
 
     expect(fetchWithAuth).toHaveBeenCalledTimes(1);
+  });
+
+  it('never hangs forever if getStoredSession never resolves (iOS Keychain hang regression)', async () => {
+    // Reproduces the reported bug: a hung native Keychain read used to leave `recovering`
+    // stuck `true` forever, stranding the user on the "Welcome back / Loading..." screen.
+    vi.useFakeTimers();
+    try {
+      mockMe(false);
+      getStoredSession.mockReturnValue(new Promise(() => {})); // never resolves
+
+      const { result } = renderHook(() => useSigninRecovery('/dashboard', true));
+
+      expect(result.current.recovering).toBe(true);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(DEVICE_TOKEN_TIMEOUT_MS);
+      });
+
+      expect(result.current.recovering).toBe(false);
+      expect(replace).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('completes recovery under React StrictMode (does not get stuck on loading)', async () => {

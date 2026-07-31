@@ -1,28 +1,16 @@
 'use client';
 
 import { useCallback, useEffect } from 'react';
-import useSWR from 'swr';
+import { Loader2 } from 'lucide-react';
 
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { panesOf } from '@/stores/agent-workspace/pane-reducer';
-import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useLatestRef } from '@/hooks/useLatestRef';
+import { useSessionRecord } from './useSessionRecord';
 import AgentPanes from './panes/AgentPanes';
 import EmptyState from './EmptyState';
 import AgentsPastConversationsList from './AgentsPastConversationsList';
-
-/**
- * The selected session's own record — the authority on ITS drive. The surface
- * store only knows the drive the CONSOLE is mounted under, which is null on
- * `/dashboard/agents`; passing that to the grid left every drive session's
- * pane picker with no agents to offer in global mode (review M5).
- */
-async function sessionFetcher(url: string): Promise<{ session: { driveId: string | null } | null }> {
-  const response = await fetchWithAuth(url);
-  if (!response.ok) throw new Error(`Failed to load session (${response.status})`);
-  return response.json();
-}
 
 /**
  * The Agents console: mounted for the lifetime of the route, whatever is
@@ -52,14 +40,24 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
   const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
   const storeDriveId = useAgentSurfaceStore((state) => state.driveId);
 
-  const { data: sessionData } = useSWR(
-    selectedSessionId ? `/api/agent-sessions/${encodeURIComponent(selectedSessionId)}` : null,
-    sessionFetcher,
-    { revalidateOnFocus: false, dedupingInterval: 30_000 },
-  );
+  const { data: sessionData } = useSessionRecord(selectedSessionId);
+  // Resolved vs. not — NOT the same question as "which drive". On the global
+  // route (`storeDriveId` null), an unresolved DRIVE session must not render
+  // as global in the meantime: `AgentPanes` treats `driveId === null` as a
+  // CONFIRMED global session and offers every accessible agent, so a pick
+  // made during that window can hit the server's cross-drive gate and 400
+  // (caught in review — the picker's loading fallback was previously "no
+  // agents", harmless; once a null driveId means "show everyone", the same
+  // fallback became a live footgun). The grid only mounts once this is true.
+  const sessionDriveResolved = sessionData !== undefined;
   // The session's own drive wins; the surface's drive covers the in-flight
-  // window (they agree in drive mode, and global mode has nothing better).
-  const sessionDriveId = sessionData?.session?.driveId ?? storeDriveId;
+  // window (they agree in drive mode, and global mode has nothing better,
+  // but only reached this UNGATED by the `sessionDriveResolved` check above).
+  // Checked as `sessionData?.session ?  : ` rather than `??` — `driveId` on a
+  // RESOLVED session can itself legitimately be `null` (a global session),
+  // which `??` would wrongly treat as "unresolved" and fall through to
+  // `storeDriveId` (caught alongside the AgentPageView cross-drive fix).
+  const sessionDriveId = sessionData?.session ? sessionData.session.driveId : storeDriveId;
 
   // The server is the authority on whether the selected session still
   // exists. `session: null` means it doesn't (ended elsewhere, reaped,
@@ -139,18 +137,24 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
   return (
     <div className="flex h-full flex-col">
       {selectedSessionId && selectedConversationId ? (
-        <AgentPanes
-          key={selectedSessionId}
-          sessionId={selectedSessionId}
-          driveId={sessionDriveId}
-          initialConversation={{
-            conversationId: selectedConversationId,
-            agentPageId: selectedAgentId,
-            name: 'Conversation',
-          }}
-          onSessionEnded={() => selectSession(null)}
-          onConversationClosed={handleConversationClosed}
-        />
+        sessionDriveResolved ? (
+          <AgentPanes
+            key={selectedSessionId}
+            sessionId={selectedSessionId}
+            driveId={sessionDriveId}
+            initialConversation={{
+              conversationId: selectedConversationId,
+              agentPageId: selectedAgentId,
+              name: 'Conversation',
+            }}
+            onSessionEnded={() => selectSession(null)}
+            onConversationClosed={handleConversationClosed}
+          />
+        ) : (
+          <div className="flex h-full items-center justify-center">
+            <Loader2 className="size-4 animate-spin text-muted-foreground" aria-hidden="true" />
+          </div>
+        )
       ) : selectedSessionId ? (
         // A session is selected but its opening conversation has not resolved
         // from the URL (a hand-trimmed link). The sidebar's session rows always

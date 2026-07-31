@@ -48,6 +48,7 @@ export async function POST(
     createdBy: workflow.createdBy,
     agentPageId: workflow.agentPageId,
     prompt: workflow.prompt,
+    steps: workflow.steps,
     contextPageIds: (workflow.contextPageIds as string[] | null) ?? [],
     instructionPageId: workflow.instructionPageId,
     timezone: workflow.timezone,

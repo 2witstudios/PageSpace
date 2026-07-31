@@ -10,6 +10,7 @@ import { eq, and } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { workflows } from '@pagespace/db/schema/workflows';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
+import { workflowStepsSchema, validateStepsForApi } from '@/lib/workflows/steps-api-validation';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -19,6 +20,9 @@ const updateWorkflowSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   agentPageId: z.string().min(1).optional(),
   prompt: z.string().min(1).optional(),
+  // Replaces the whole chain when provided; steps cannot be nulled back to a
+  // legacy workflow (create a new one instead).
+  steps: workflowStepsSchema.optional(),
   instructionPageId: z.string().nullable().optional(),
   contextPageIds: z.array(z.string()).optional(),
   cronExpression: z.string().min(1).optional().nullable(),
@@ -114,6 +118,20 @@ export async function PATCH(
     }
   }
 
+  // Validate replacement steps: allowlist, $payload path syntax, ref-free
+  // schema parse, and drive-scoped AI_CHAT checks for effective agents.
+  let stepWarnings: string[] = [];
+  if (data.steps) {
+    const stepsResult = await validateStepsForApi(data.steps, {
+      driveId: workflow.driveId,
+      workflowAgentPageId: data.agentPageId ?? workflow.agentPageId,
+    });
+    if (!stepsResult.ok) {
+      return NextResponse.json({ error: stepsResult.error }, { status: 400 });
+    }
+    stepWarnings = stepsResult.warnings;
+  }
+
   // Validate timezone
   const effectiveTimezone = data.timezone ?? workflow.timezone;
   const tzValidation = validateTimezone(effectiveTimezone);
@@ -159,7 +177,9 @@ export async function PATCH(
     loggers.api.error('[WORKFLOWS_PATCH_BROADCAST]', broadcastError as Error);
   }
 
-  return NextResponse.json(updated);
+  return NextResponse.json(
+    stepWarnings.length > 0 ? { ...updated, warnings: stepWarnings } : updated
+  );
 }
 
 // DELETE /api/workflows/[workflowId]

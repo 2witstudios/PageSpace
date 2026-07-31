@@ -49,13 +49,19 @@ export class SessionFullError extends Error {
 }
 
 /**
- * The agent page belongs to a different drive than the session. A session is
- * a DRIVE-level workspace: its sandbox tenant, payer and access decision all
- * derive from ITS drive, so hosting another drive's agent would execute that
- * agent's turns — and bill their runtime — inside a workspace its drive never
- * admitted (three reviewers converged on this: codex p58/p59 + review M6).
- * The global assistant is exempt (no drive); a GLOBAL session (driveId null)
- * therefore hosts ONLY assistant threads.
+ * The agent page belongs to a different DRIVE than the session's own drive. A
+ * drive-scoped session's sandbox tenant, payer and access decision all derive
+ * from ITS drive, so hosting another drive's agent would execute that agent's
+ * turns — and bill their runtime — inside a workspace its drive never admitted
+ * (three reviewers converged on this: codex p58/p59 + review M6).
+ *
+ * A GLOBAL session (driveId null) is exempt from this gate: its tenant/payer
+ * already resolve to the session's own owner regardless of which agent's
+ * conversation runs inside it (`resolveSessionTenantId`/`resolveSessionPayerId`
+ * key off the SESSION's driveId/ownerId, never the hosted agent's), and each
+ * conversation-creation route independently checks the caller can view the
+ * target agent page before this gate ever runs. So a global session may host
+ * any accessible agent, not just assistant threads.
  */
 export class AgentNotInSessionDriveError extends Error {
   constructor() {
@@ -145,14 +151,18 @@ export async function createConversationInSessionWith(
   }
 
   // THE cross-drive gate, at the ONE binding path so no call site can forget
-  // it: the agent must belong to the session's drive. Checked before any row
-  // is written, and fail-closed on unresolved facts.
+  // it: a DRIVE session's agent must belong to that same drive. Checked before
+  // any row is written, and fail-closed on unresolved facts. A GLOBAL session
+  // (driveId null) has no drive to mismatch against, so it is exempt — see
+  // AgentNotInSessionDriveError's doc comment.
   const [agentDriveId, sessionRow] = await Promise.all([
     deps.findAgentDriveId(agentPageId),
     deps.findSessionDriveId(sessionId),
   ]);
   if (agentDriveId === null || sessionRow === null) throw new ConversationUnavailableError();
-  if (sessionRow.driveId !== agentDriveId) throw new AgentNotInSessionDriveError();
+  if (sessionRow.driveId !== null && sessionRow.driveId !== agentDriveId) {
+    throw new AgentNotInSessionDriveError();
+  }
 
   const outcome = await deps.createPageConversation({ conversationId, userId, agentPageId, sessionId, title });
   if (outcome === 'created') return;
