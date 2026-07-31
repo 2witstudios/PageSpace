@@ -252,9 +252,11 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
           >
             <Maximize2 className="h-4 w-4" />
           </button>
-          <ErrorBoundary>
-            <CanvasFrame html={content} themeBridgeEnabled={themeBridgeEnabled} />
-          </ErrorBoundary>
+          {!isPreviewOpen && (
+            <ErrorBoundary>
+              <CanvasFrame html={content} themeBridgeEnabled={themeBridgeEnabled} />
+            </ErrorBoundary>
+          )}
         </div>
       )}
       {activeTab === 'settings' && (
