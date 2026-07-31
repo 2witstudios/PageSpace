@@ -23,6 +23,7 @@ import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { MAX_WORKFLOW_STEPS } from './core/step-plan';
 import { resolveStepArgs } from './core/resolve-step-args';
+import { frameWebhookPayloadPrompt } from '@/lib/webhooks/webhook-payload-framing';
 import { DETERMINISTIC_TOOL_ALLOWLIST, getDeterministicTools } from '@/lib/ai/core/deterministic-tools';
 import type { z } from 'zod';
 
@@ -241,8 +242,15 @@ async function runStepChain(
       if (!effectiveAgentPageId) {
         stepError = 'ai step has no agentPageId (step or workflow)';
       } else {
+        // Webhook-triggered chains carry the raw payload; ai steps receive it
+        // F2-framed (prompt first, nonce-fenced envelope last, marked
+        // untrusted) — same containment as the legacy promptOverride path.
+        const payload = input.eventContext?.payload;
         const aiResult = await runExecution(input, stepStart, {
-          prompt: step.prompt,
+          prompt:
+            payload !== undefined
+              ? frameWebhookPayloadPrompt(step.prompt, payload)
+              : step.prompt,
           agentPageId: effectiveAgentPageId,
         });
         if (aiResult.success) {

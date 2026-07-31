@@ -709,6 +709,19 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 60 * 60 * 1000,
     progressiveDelay: false,
   },
+  // Per-WEBHOOK budget on DETERMINISTIC workflow runs (key:
+  // `page-webhook-deterministic-budget:{webhookId}`). All-tool-step chains
+  // never invoke a model, so the AI budget's 60/hr would be needlessly
+  // tight — but a leaked secret still forces page writes / channel posts /
+  // task mutations through the bound triggers, so aggregate runs stay
+  // bounded per webhook, just at a cheaper ceiling. Channel-posting steps
+  // additionally draw from the shared 30/min PAGE_WEBHOOK bucket.
+  PAGE_WEBHOOK_DETERMINISTIC_BUDGET: {
+    maxAttempts: 300,
+    windowMs: 60 * 60 * 1000,
+    blockDurationMs: 60 * 60 * 1000,
+    progressiveDelay: false,
+  },
 } as const;
 
 // =============================================================================

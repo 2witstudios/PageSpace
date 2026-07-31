@@ -1,10 +1,15 @@
 import type { WebhookTrigger } from '@pagespace/db/schema/webhook-triggers';
+import { db } from '@pagespace/db/db';
+import { inArray } from '@pagespace/db/operators';
+import { workflows } from '@pagespace/db/schema/workflows';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
   type RateLimitConfig,
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { resolveSteps } from '@/lib/workflows/core/step-plan';
+import { selectTriggerBudgets, type TriggerBudgetPlan } from '@/lib/workflows/core/trigger-budget';
 import { claimTriggerFired, setTriggerError } from './page-webhook-trigger-queries';
 import { executePageWebhookTrigger } from './page-webhook-trigger-executor';
 
@@ -48,25 +53,77 @@ export async function firePageWebhookTriggers(
 ): Promise<void> {
   if (triggers.length === 0) return;
 
+  // Batch-resolve each trigger's workflow step mix so the budget branch below
+  // draws from the right bucket: AI chains from the tight AI budget, all-tool
+  // chains from the cheaper deterministic budget. A missing workflow row
+  // falls back to the AI plan (tightest bucket) and fails naturally in the
+  // executor.
+  const workflowIds = [...new Set(triggers.map((t) => t.workflowId))];
+  const workflowRows = await db
+    .select({
+      id: workflows.id,
+      steps: workflows.steps,
+      prompt: workflows.prompt,
+      agentPageId: workflows.agentPageId,
+    })
+    .from(workflows)
+    .where(inArray(workflows.id, workflowIds));
+  const budgetByWorkflowId = new Map<string, TriggerBudgetPlan>(
+    workflowRows.map((row) => [row.id, selectTriggerBudgets(resolveSteps(row))])
+  );
+  const AI_PLAN: TriggerBudgetPlan = {
+    aiBudget: true,
+    creditHold: true,
+    deterministicBudget: false,
+    channelLimit: false,
+  };
+
   await Promise.allSettled(
     triggers.map(async (trigger) => {
       try {
-        // Per-WEBHOOK AI budget, drawn once per attempted run BEFORE the
+        const budgets = budgetByWorkflowId.get(trigger.workflowId) ?? AI_PLAN;
+
+        // Per-WEBHOOK budget, drawn once per attempted run BEFORE the
         // per-trigger bucket. The per-trigger limit alone does not bound
         // aggregate spend — one webhook can bind up to 100 triggers, each with
         // its own 5/min bucket — so every run attempt (allowed or not further
         // down) consumes from the shared budget keyed by the webhook id. A
         // leaked webhook secret is thereby a bounded incident: at most the
         // budget's ceiling of runs per window across ALL bound triggers.
+        // AI chains draw the tight AI budget; all-tool chains draw the
+        // cheaper deterministic budget (no model is invoked).
         if (trigger.pageWebhookId) {
-          const blocked = await denyIfRateLimited(
-            `page-webhook-ai-budget:${trigger.pageWebhookId}`,
-            DISTRIBUTED_RATE_LIMITS.PAGE_WEBHOOK_AI_BUDGET,
-            trigger.id,
-            'Page webhook trigger: webhook AI budget exhausted',
-            { pageWebhookId: trigger.pageWebhookId },
-          );
+          const blocked = budgets.aiBudget
+            ? await denyIfRateLimited(
+                `page-webhook-ai-budget:${trigger.pageWebhookId}`,
+                DISTRIBUTED_RATE_LIMITS.PAGE_WEBHOOK_AI_BUDGET,
+                trigger.id,
+                'Page webhook trigger: webhook AI budget exhausted',
+                { pageWebhookId: trigger.pageWebhookId },
+              )
+            : await denyIfRateLimited(
+                `page-webhook-deterministic-budget:${trigger.pageWebhookId}`,
+                DISTRIBUTED_RATE_LIMITS.PAGE_WEBHOOK_DETERMINISTIC_BUDGET,
+                trigger.id,
+                'Page webhook trigger: webhook deterministic budget exhausted',
+                { pageWebhookId: trigger.pageWebhookId },
+              );
           if (blocked) return;
+
+          // Chains that post channel messages also draw from the SAME shared
+          // 30/min per-webhook channel bucket the dispatch-map handler uses —
+          // one combined channel-post cap per webhook, however the post
+          // happens.
+          if (budgets.channelLimit) {
+            const channelBlocked = await denyIfRateLimited(
+              `page-webhook:${trigger.pageWebhookId}`,
+              DISTRIBUTED_RATE_LIMITS.PAGE_WEBHOOK,
+              trigger.id,
+              'Page webhook trigger: channel-post limit exhausted',
+              { pageWebhookId: trigger.pageWebhookId },
+            );
+            if (channelBlocked) return;
+          }
         }
 
         // Per-trigger rate limit, TIGHTER than the channel-post path (an AI run

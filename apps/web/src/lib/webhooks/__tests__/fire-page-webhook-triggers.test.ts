@@ -1,6 +1,23 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+const { mockWorkflowRows } = vi.hoisted(() => ({
+  // Rows returned by the fan-out's batch workflow lookup. Empty = unknown
+  // workflow → AI-plan fallback (the tightest budget), matching the legacy
+  // expectations below.
+  mockWorkflowRows: { rows: [] as unknown[] },
+}));
+
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    select: () => ({
+      from: () => ({
+        where: () => Promise.resolve(mockWorkflowRows.rows),
+      }),
+    }),
+  },
+}));
+
 vi.mock('../page-webhook-trigger-queries', () => ({
   claimTriggerFired: vi.fn(),
   setTriggerError: vi.fn(),
@@ -13,8 +30,10 @@ vi.mock('../page-webhook-trigger-executor', () => ({
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn(),
   DISTRIBUTED_RATE_LIMITS: {
+    PAGE_WEBHOOK: { maxAttempts: 30 },
     PAGE_WEBHOOK_TRIGGER: { maxAttempts: 5 },
     PAGE_WEBHOOK_AI_BUDGET: { maxAttempts: 60 },
+    PAGE_WEBHOOK_DETERMINISTIC_BUDGET: { maxAttempts: 300 },
   },
 }));
 
@@ -37,6 +56,7 @@ const aTrigger = (id: string) => ({ id, workflowId: `wf_${id}`, pageWebhookId: '
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockWorkflowRows.rows = [];
   mockClaim.mockResolvedValue({ success: true, data: undefined });
   mockSetError.mockResolvedValue({ success: true, data: undefined });
   mockRateLimit.mockResolvedValue({ allowed: true });
@@ -153,5 +173,82 @@ describe('firePageWebhookTriggers', () => {
     await expect(
       firePageWebhookTriggers([aTrigger('t1')], envelope),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe('firePageWebhookTriggers — deterministic budget branch', () => {
+  const toolStep = { kind: 'tool', toolName: 'insert_content', args: {} };
+  const channelStep = { kind: 'tool', toolName: 'send_channel_message', args: {} };
+
+  it('all-deterministic workflows draw the deterministic budget, never the AI budget', async () => {
+    mockWorkflowRows.rows = [
+      { id: 'wf_t1', steps: [toolStep], prompt: '', agentPageId: null },
+    ];
+    mockExecute.mockResolvedValue({ success: true, durationMs: 1 });
+
+    await firePageWebhookTriggers([aTrigger('t1')], envelope);
+
+    const keys = mockRateLimit.mock.calls.map(([key]) => key);
+    expect(keys).toContain('page-webhook-deterministic-budget:wh_1');
+    expect(keys).not.toContain('page-webhook-ai-budget:wh_1');
+    expect(mockClaim).toHaveBeenCalledWith('t1');
+  });
+
+  it('chains with a send_channel_message step also draw the shared 30/min channel bucket', async () => {
+    mockWorkflowRows.rows = [
+      { id: 'wf_t1', steps: [channelStep], prompt: '', agentPageId: null },
+    ];
+    mockExecute.mockResolvedValue({ success: true, durationMs: 1 });
+
+    await firePageWebhookTriggers([aTrigger('t1')], envelope);
+
+    expect(mockRateLimit).toHaveBeenCalledWith(
+      'page-webhook:wh_1',
+      expect.objectContaining({ maxAttempts: 30 }),
+    );
+  });
+
+  it('an exhausted channel bucket blocks the channel-posting chain without executing', async () => {
+    mockWorkflowRows.rows = [
+      { id: 'wf_t1', steps: [channelStep], prompt: '', agentPageId: null },
+    ];
+    mockRateLimit.mockImplementation((key: string) =>
+      Promise.resolve({ allowed: !key.startsWith('page-webhook:') }),
+    );
+
+    await firePageWebhookTriggers([aTrigger('t1')], envelope);
+
+    expect(mockExecute).not.toHaveBeenCalled();
+    expect(mockSetError).toHaveBeenCalledWith('t1', 'rate_limited');
+  });
+
+  it('mixed chains (ai + tool) stay on the AI budget', async () => {
+    mockWorkflowRows.rows = [
+      {
+        id: 'wf_t1',
+        steps: [toolStep, { kind: 'ai', prompt: 'p', agentPageId: 'agent_1' }],
+        prompt: '',
+        agentPageId: null,
+      },
+    ];
+    mockExecute.mockResolvedValue({ success: true, durationMs: 1 });
+
+    await firePageWebhookTriggers([aTrigger('t1')], envelope);
+
+    const keys = mockRateLimit.mock.calls.map(([key]) => key);
+    expect(keys).toContain('page-webhook-ai-budget:wh_1');
+    expect(keys).not.toContain('page-webhook-deterministic-budget:wh_1');
+  });
+
+  it('legacy workflows (steps null) stay on the AI budget', async () => {
+    mockWorkflowRows.rows = [
+      { id: 'wf_t1', steps: null, prompt: 'legacy prompt', agentPageId: 'agent_1' },
+    ];
+    mockExecute.mockResolvedValue({ success: true, durationMs: 1 });
+
+    await firePageWebhookTriggers([aTrigger('t1')], envelope);
+
+    const keys = mockRateLimit.mock.calls.map(([key]) => key);
+    expect(keys).toContain('page-webhook-ai-budget:wh_1');
   });
 });
