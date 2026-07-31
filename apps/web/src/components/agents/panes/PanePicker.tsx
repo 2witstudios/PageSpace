@@ -21,6 +21,13 @@ import { Button } from '@/components/ui/button';
 export interface PickableAgent {
   id: string;
   title: string;
+  /**
+   * Set only for a cross-drive list (a global-assistant session's picker
+   * spans every accessible drive) — page titles aren't unique, so two drives
+   * can hold identically-titled agents that would otherwise be
+   * indistinguishable in the list.
+   */
+  driveName?: string;
 }
 
 /** A shell already open in this session but not currently shown in any pane. */
@@ -106,7 +113,7 @@ export default function PanePicker({
             data-testid="pick-global-assistant"
           >
             <Bot className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-            Assistant
+            Global Assistant
           </Button>
         )}
       </div>
@@ -154,6 +161,9 @@ export default function PanePicker({
             >
               <Bot className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
               <span className="truncate">{agent.title}</span>
+              {agent.driveName && (
+                <span className="ml-auto shrink-0 truncate text-xs text-muted-foreground">{agent.driveName}</span>
+              )}
             </Button>
           ))}
         </div>

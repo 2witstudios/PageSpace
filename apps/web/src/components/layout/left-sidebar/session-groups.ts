@@ -66,7 +66,7 @@ export function buildSessionGroups<T extends { driveId: string | null }>(
       ? [
           {
             driveId: ASSISTANT_GROUP_KEY,
-            driveName: 'Assistant',
+            driveName: 'Global Assistant',
             sessions: sessionsByDrive.get(ASSISTANT_GROUP_KEY) ?? [],
           },
         ]

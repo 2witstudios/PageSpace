@@ -228,6 +228,32 @@ describe('the grid gets the SESSION\'s drive, not the surface\'s (review M5)', (
     );
     expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-sessions/ses-m5');
   });
+
+  it('does not mount the grid as global while the session record is still unresolved', async () => {
+    // On the global route, `storeDriveId` is null — the same value a
+    // CONFIRMED global session's driveId legitimately has. `AgentPanes`
+    // treats `driveId === null` as "show every accessible agent", so
+    // mounting it with that fallback DURING the loading window would offer
+    // a drive session's picker agents it doesn't actually have, and picking
+    // one would hit the server's cross-drive gate and 400 (caught in
+    // review — chatgpt-codex-connector, P2).
+    let resolveSession!: (value: { ok: true; json: () => Promise<{ session: { driveId: string } }> }) => void;
+    mockFetchWithAuth.mockReturnValue(new Promise((resolve) => (resolveSession = resolve)));
+    // A session id no earlier test fetched — SWR's cache is module-global.
+    window.history.replaceState({}, '', '/dashboard/agents?session=ses-unresolved&c=conv-1&agent=agent-1');
+    render(<AgentsSurface />);
+
+    // Still unresolved: the grid must not be mounted at all (neither as
+    // "global" nor with any other guessed driveId) — a loading state, not a
+    // wrong one.
+    expect(screen.queryByTestId('agent-panes')).toBeNull();
+
+    resolveSession({ ok: true, json: async () => ({ session: { driveId: 'drive-9' } }) });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('agent-panes')).toHaveAttribute('data-drive-id', 'drive-9'),
+    );
+  });
 });
 
 describe('onConversationClosed — following the grid\'s own close/rebind', () => {

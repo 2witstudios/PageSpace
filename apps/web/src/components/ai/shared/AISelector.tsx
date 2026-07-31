@@ -20,6 +20,13 @@ import { cn } from '@/lib/utils';
 export interface AISelectorAgentOption {
   id: string;
   title: string;
+  /**
+   * Set only for a cross-drive list (a global-assistant session's switcher
+   * spans every accessible drive) — page titles aren't unique, so two drives
+   * can hold identically-titled agents that would otherwise be
+   * indistinguishable in the dropdown.
+   */
+  driveName?: string;
 }
 
 interface AISelectorProps {
@@ -146,6 +153,9 @@ export function AISelector({
                       aria-current={isSelected ? 'true' : undefined}
                     >
                       <span className="truncate">{agent.title || 'Unnamed Agent'}</span>
+                      {agent.driveName && (
+                        <span className="shrink-0 truncate text-xs text-muted-foreground">{agent.driveName}</span>
+                      )}
                       {isSelected && (
                         <span className="ml-auto text-xs text-muted-foreground">Active</span>
                       )}
