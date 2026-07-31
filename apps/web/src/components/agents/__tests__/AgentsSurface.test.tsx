@@ -448,4 +448,57 @@ describe('past conversations (default view, replacing the old static prompt)', (
     expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-1');
     expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-1');
   });
+
+  it('resets the list to page one when driveId changes on an already-mounted surface (review: switching drives mid-session must not keep a stale cursor)', async () => {
+    const conversationsFor = (driveLabel: string, cursor: string | null) => ({
+      ok: true,
+      json: async () => ({
+        conversations: [
+          {
+            conversationId: cursor ? `conv-${driveLabel}-page2` : `conv-${driveLabel}-page1`,
+            title: cursor ? `${driveLabel} page 2` : `${driveLabel} page 1`,
+            type: 'global',
+            agentPageId: null,
+            pageTitle: null,
+            lastMessageAt: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
+            sessionId: null,
+            sessionName: null,
+            sessionEndedAt: null,
+            driveId: null,
+          },
+        ],
+        // Page 1 always advertises more, so the Next button is enabled —
+        // page 2 (any `cursor` present) is the end of the list.
+        pagination: { hasMore: !cursor, nextCursor: cursor ? null : `conv-${driveLabel}-page1`, limit: 20 },
+      }),
+    });
+
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.includes('/api/agent-sessions/conversations')) {
+        const parsed = new URL(url, 'http://localhost');
+        const driveLabel = parsed.searchParams.get('driveId') ?? 'none';
+        const cursor = parsed.searchParams.get('cursor');
+        return conversationsFor(driveLabel, cursor);
+      }
+      return { ok: true, json: async () => ({ session: { driveId: null } }) };
+    });
+
+    const { rerender, getByText, findByText } = render(<AgentsSurface driveId="drive-reset-a" />);
+
+    await findByText('drive-reset-a page 1');
+    act(() => getByText('Next').click());
+    await findByText('drive-reset-a page 2');
+
+    // Switch drives WITHOUT unmounting AgentsSurface itself — the exact
+    // scenario the `key` fix targets (a route-param change re-renders, it
+    // does not remount, the surface above this list).
+    rerender(<AgentsSurface driveId="drive-reset-b" />);
+
+    // Without the fix, the list would still be on page 2, replaying
+    // drive-reset-a's cursor against drive-reset-b's data. With it, a fresh
+    // instance mounts and asks for page one of the NEW drive.
+    await waitFor(() => expect(screen.getByText('drive-reset-b page 1')).toBeDefined());
+    expect(screen.queryByText(/page 2/)).toBeNull();
+  });
 });

@@ -165,7 +165,15 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
           description="This session's conversations are listed under it in the sidebar."
         />
       ) : (
-        <AgentsPastConversationsList driveId={driveId} />
+        // Keyed by drive: this surface's own `driveId` prop CAN change on an
+        // already-mounted instance (switching drives while staying on the
+        // agents tab re-renders with new `useParams()`, same as the
+        // `hydrateFromSearch({ driveId })` effect above already accounts
+        // for) — a bare prop change would leave the list's cursor/page state
+        // naming a position in the PREVIOUS drive's ordering. Remounting via
+        // `key` resets everything at once rather than chasing every piece of
+        // state that would otherwise need its own reset effect (review).
+        <AgentsPastConversationsList key={driveId ?? 'global'} driveId={driveId} />
       )}
     </div>
   );
