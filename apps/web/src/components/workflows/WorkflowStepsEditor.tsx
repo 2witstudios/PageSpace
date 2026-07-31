@@ -63,6 +63,7 @@ const TOOL_FIELD_SPECS: Record<string, { label: string; fields: ToolFieldSpec[] 
   insert_content: {
     label: 'Insert content into a page',
     fields: [
+      { key: 'title', label: 'Title (for display in logs)', type: 'text', required: true, allowRef: true, placeholder: 'e.g. Status Doc' },
       { key: 'pageId', label: 'Page ID', type: 'text', required: true, allowRef: true, placeholder: 'e.g. xk3n9p2q...' },
       { key: 'anchor', label: 'Anchor text', type: 'text', required: true, allowRef: true, placeholder: 'e.g. ## Log' },
       { key: 'position', label: 'Position', type: 'select', options: ['before', 'after'], required: true },
@@ -72,6 +73,7 @@ const TOOL_FIELD_SPECS: Record<string, { label: string; fields: ToolFieldSpec[] 
   replace_lines: {
     label: 'Replace lines in a page',
     fields: [
+      { key: 'title', label: 'Title (for display in logs)', type: 'text', required: true, allowRef: true },
       { key: 'pageId', label: 'Page ID', type: 'text', required: true, allowRef: true },
       { key: 'startLine', label: 'Start line', type: 'number', required: true },
       { key: 'endLine', label: 'End line (optional)', type: 'number' },

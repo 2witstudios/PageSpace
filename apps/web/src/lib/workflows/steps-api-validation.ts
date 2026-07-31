@@ -5,6 +5,7 @@ import { pages } from '@pagespace/db/schema/core';
 import type { WorkflowStep } from '@pagespace/db/schema/workflows';
 import { MAX_WORKFLOW_STEPS } from './core/step-plan';
 import { validateSteps, stepsRequirePayload } from './core/step-validation';
+import { applyImplicitStepArgs } from './core/implicit-step-args';
 
 /**
  * Request-shape schema for workflow steps (create + update routes). Structural
@@ -53,7 +54,15 @@ export async function validateStepsForApi(
   const { DETERMINISTIC_TOOL_ALLOWLIST, getDeterministicToolSchemas } = await import(
     '@/lib/ai/core/deterministic-tools'
   );
-  const coreResult = validateSteps(steps, {
+  // Validate with implicit args (e.g. create_page's driveId) applied — never
+  // persisted, recomputed at fire time from the workflow's current drive.
+  // `steps` (the caller's original, unmodified) is what actually gets saved.
+  const stepsForValidation = steps.map((step) =>
+    step.kind === 'tool'
+      ? { ...step, args: applyImplicitStepArgs(step.toolName, step.args, options.driveId) }
+      : step
+  );
+  const coreResult = validateSteps(stepsForValidation, {
     allowlist: DETERMINISTIC_TOOL_ALLOWLIST,
     schemas: getDeterministicToolSchemas(),
     workflowAgentPageId: options.workflowAgentPageId,

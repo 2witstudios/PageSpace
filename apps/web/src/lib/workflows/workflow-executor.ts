@@ -23,6 +23,7 @@ import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { MAX_WORKFLOW_STEPS } from './core/step-plan';
 import { resolveStepArgs } from './core/resolve-step-args';
+import { applyImplicitStepArgs } from './core/implicit-step-args';
 import { frameWebhookPayloadPrompt } from '@/lib/webhooks/webhook-payload-framing';
 import { DETERMINISTIC_TOOL_ALLOWLIST, getDeterministicTools } from '@/lib/ai/core/deterministic-tools';
 import type { z } from 'zod';
@@ -339,12 +340,13 @@ async function runToolStep(
 
   const resolved = resolveStepArgs(step.args, input.eventContext?.payload);
   if (!resolved.ok) return resolved;
+  const effectiveArgs = applyImplicitStepArgs(step.toolName, resolved.args, input.driveId);
 
   const schema = tool.inputSchema as z.ZodType | undefined;
   if (!schema || typeof schema.safeParse !== 'function') {
     return { ok: false, error: `tool "${step.toolName}" has no input schema` };
   }
-  const parsed = schema.safeParse(resolved.args);
+  const parsed = schema.safeParse(effectiveArgs);
   if (!parsed.success) {
     return {
       ok: false,
