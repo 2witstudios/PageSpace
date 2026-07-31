@@ -276,7 +276,9 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
           className="w-screen h-screen max-w-none max-h-none p-0 gap-0 rounded-none border-0 sm:max-w-none"
         >
           <DialogTitle className="sr-only">Canvas preview</DialogTitle>
-          <CanvasFrame html={content} title="Canvas preview" themeBridgeEnabled={themeBridgeEnabled} onEscape={closePreview} />
+          <ErrorBoundary>
+            <CanvasFrame html={content} title="Canvas preview" themeBridgeEnabled={themeBridgeEnabled} onEscape={closePreview} />
+          </ErrorBoundary>
         </DialogContent>
       </Dialog>
 
