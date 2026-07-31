@@ -101,7 +101,7 @@ vi.mock('../DashboardFooter', () => ({ default: () => <div /> }));
 
 import { within } from '@testing-library/react';
 import { ApiRequestError } from '@/lib/auth/auth-fetch';
-import AgentsSidebar from '../AgentsSidebar';
+import AgentsSidebar, { resolveListNotice } from '../AgentsSidebar';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { useLayoutStore } from '@/stores/useLayoutStore';
@@ -865,20 +865,59 @@ describe('AgentsSidebar', () => {
       expect(screen.queryByText(/no sessions in this drive/i)).toBeNull();
     });
 
-    test('a background refresh failure on cached sessions still shows the no-match notice, not "Failed to load sessions"', async () => {
-      // Regression pin for the isDataEmpty/isResultEmpty split: hasError can
-      // be true (a background 20s refresh failing) while sessions is still
-      // the last-known-good, non-empty cache. Filtering that cache down to
-      // zero results must never read as a load failure.
-      const user = userEvent.setup();
-      renderSidebar();
-      await screen.findByText('api refactor');
+    describe('resolveListNotice', () => {
+      // Unit-level, not through the full SWR + component stack: getting a real
+      // `hasError` while `sessions` is still non-empty means forcing an SWR
+      // background revalidation to actually fail (the 20s refreshInterval, or
+      // a mutate()), which an integration test can't trigger deterministically
+      // without fake timers fighting userEvent's own. Calling the (exported)
+      // helper directly pins the exact branch logic instead.
+      const baseArgs = {
+        authLoading: false,
+        isAdmin: true,
+        hasError: false,
+        isLoading: false,
+        isDataEmpty: false,
+        isResultEmpty: false,
+        emptyTitle: 'No sessions yet',
+        onRetry: vi.fn(),
+      };
 
-      mockFetchWithAuth.mockResolvedValue({ ok: false, status: 500, json: async () => ({}) });
-      await user.type(screen.getByPlaceholderText('Search sessions…'), 'zzz-nope');
+      test('a background refresh failure on cached sessions shows the no-match notice, not "Failed to load sessions"', () => {
+        // Regression pin for the isDataEmpty/isResultEmpty split: hasError can
+        // be true (a background refresh failing) while sessions is still the
+        // last-known-good, non-empty cache (isDataEmpty stays false) — the
+        // error branch must be skipped in favor of the search-driven notice.
+        render(
+          <>
+            {resolveListNotice({
+              ...baseArgs,
+              hasError: true,
+              isDataEmpty: false,
+              isResultEmpty: true,
+              emptyTitle: 'No sessions match your search',
+            })}
+          </>,
+        );
 
-      expect(await screen.findByText('No sessions match your search')).toBeDefined();
-      expect(screen.queryByText(/failed to load sessions/i)).toBeNull();
+        expect(screen.getByText('No sessions match your search')).toBeDefined();
+        expect(screen.queryByText(/failed to load sessions/i)).toBeNull();
+      });
+
+      test('a failed load with nothing cached still shows "Failed to load sessions"', () => {
+        render(
+          <>
+            {resolveListNotice({
+              ...baseArgs,
+              hasError: true,
+              isDataEmpty: true,
+              isResultEmpty: true,
+            })}
+          </>,
+        );
+
+        expect(screen.getByText(/failed to load sessions/i)).toBeDefined();
+      });
     });
 
     describe('global mode', () => {

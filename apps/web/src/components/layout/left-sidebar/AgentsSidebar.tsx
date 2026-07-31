@@ -168,7 +168,7 @@ async function sessionsFetcher(url: string): Promise<{ sessions: SessionListEntr
  * load" just because the current search happens to match nothing — that case
  * belongs to the plain empty-result branch (`isResultEmpty`) instead.
  */
-function resolveListNotice({
+export function resolveListNotice({
   authLoading,
   isAdmin,
   hasError,
@@ -472,6 +472,7 @@ function SessionSearchHeader({
         <Search className="absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
         <Input
           placeholder="Search sessions…"
+          aria-label="Search sessions"
           className="h-7 pl-6 text-xs"
           value={value}
           onChange={(event) => onChange(event.target.value)}
