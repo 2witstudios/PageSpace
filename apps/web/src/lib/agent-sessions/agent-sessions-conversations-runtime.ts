@@ -41,8 +41,8 @@ export interface PastConversationRow {
 
 export interface ListAllConversationsPaginatedInput {
   limit?: number;
+  /** Always "older than this conversation" — see `listAllConversationsPaginated`'s doc comment for why there is no `after` direction. */
   cursor?: string;
-  direction?: 'before' | 'after';
 }
 
 export interface PaginatedPastConversationsResult {
@@ -50,7 +50,6 @@ export interface PaginatedPastConversationsResult {
   pagination: {
     hasMore: boolean;
     nextCursor: string | null;
-    prevCursor: string | null;
     limit: number;
   };
 }
@@ -74,11 +73,26 @@ const sortKeyExpr = sql`COALESCE(${conversations.lastMessageAt}, ${conversations
 /** `pages.driveId` for a page conversation, `agentSessions.driveId` for a session-bound one, the conversation's own contextId for a `type: 'drive'` one — else null (a driveless global-assistant conversation). */
 const resolvedDriveIdExpr = sql<string | null>`COALESCE(${pages.driveId}, ${agentSessions.driveId}, CASE WHEN ${conversations.type} = 'drive' THEN ${conversations.contextId} ELSE NULL END)`;
 
+/**
+ * Cursor pagination is unidirectional ("older than `cursor`") on purpose —
+ * not a `direction: 'before' | 'after'` toggle like
+ * `globalConversationRepository.listConversationsPaginated`'s. This listing's
+ * only consumer (`AgentsPastConversationsList`) never asks to go "forward":
+ * its Prev button replays an already-fetched, SWR-cached earlier page rather
+ * than re-querying the server. An `after` branch would need the ORDER BY
+ * direction inverted (ascending toward the cursor, then reversed back to
+ * descending for display) to return the page truly adjacent to the cursor —
+ * a real algorithm this listing has no caller to exercise or verify, so it
+ * doesn't exist here rather than existing unverified and wrong (caught in
+ * review: an earlier version reused the `>` comparator under an unchanged
+ * `ORDER BY ... DESC`, which returns the globally newest matches instead of
+ * the page adjacent to the cursor).
+ */
 export async function listAllConversationsPaginated(
   filter: { ownerId: string; driveId?: string },
   options: ListAllConversationsPaginatedInput = {},
 ): Promise<PaginatedPastConversationsResult> {
-  const { limit = 20, cursor, direction = 'before' } = options;
+  const { limit = 20, cursor } = options;
   const maxLimit = Math.min(Math.max(limit, 1), 100);
 
   const conditions = [
@@ -111,9 +125,8 @@ export async function listAllConversationsPaginated(
       .limit(1);
 
     if (cursorRow) {
-      const comparator = direction === 'before' ? sql`<` : sql`>`;
       conditions.push(
-        sql`(${sortKeyExpr} ${comparator} ${cursorRow.sortKey} OR (${sortKeyExpr} = ${cursorRow.sortKey} AND ${conversations.id} ${comparator} ${cursorRow.id}))`,
+        sql`(${sortKeyExpr} < ${cursorRow.sortKey} OR (${sortKeyExpr} = ${cursorRow.sortKey} AND ${conversations.id} < ${cursorRow.id}))`,
       );
     }
   }
@@ -159,7 +172,6 @@ export async function listAllConversationsPaginated(
     pagination: {
       hasMore,
       nextCursor: hasMore && page.length > 0 ? page[page.length - 1].conversationId : null,
-      prevCursor: page.length > 0 && cursor ? page[0].conversationId : null,
       limit: maxLimit,
     },
   };

@@ -32,7 +32,7 @@ interface ConversationRowDTO {
 
 interface ConversationsResponse {
   conversations: ConversationRowDTO[];
-  pagination: { hasMore: boolean; nextCursor: string | null; prevCursor: string | null; limit: number };
+  pagination: { hasMore: boolean; nextCursor: string | null; limit: number };
 }
 
 async function conversationsFetcher(url: string): Promise<ConversationsResponse> {

@@ -85,7 +85,7 @@ import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 
 /** Empty by default — the "no history yet" case is the common one across these tests; individual tests override with `mockFetchWithAuth.mockImplementation`. */
-const EMPTY_CONVERSATIONS = { conversations: [], pagination: { hasMore: false, nextCursor: null, prevCursor: null, limit: 20 } };
+const EMPTY_CONVERSATIONS = { conversations: [], pagination: { hasMore: false, nextCursor: null, limit: 20 } };
 
 beforeEach(() => {
   // Two different endpoints share this mock — route by URL rather than one
@@ -397,7 +397,7 @@ describe('past conversations (default view, replacing the old static prompt)', (
                 driveId: null,
               },
             ],
-            pagination: { hasMore: false, nextCursor: null, prevCursor: null, limit: 20 },
+            pagination: { hasMore: false, nextCursor: null, limit: 20 },
           }),
         };
       }
@@ -432,7 +432,7 @@ describe('past conversations (default view, replacing the old static prompt)', (
                 driveId: 'drive-1',
               },
             ],
-            pagination: { hasMore: false, nextCursor: null, prevCursor: null, limit: 20 },
+            pagination: { hasMore: false, nextCursor: null, limit: 20 },
           }),
         };
       }
