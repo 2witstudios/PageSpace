@@ -29,6 +29,7 @@ import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-sessions/plan-sp
 import {
   createConversationInSession,
   reopenConversationInSession,
+  listClosedSessionConversations,
 } from '../agent-sessions-runtime';
 import { SessionFullError } from '../create-conversation-in-session';
 
@@ -132,4 +133,54 @@ describe('create/reopen — the open-listing cap serializes across BOTH operatio
     // is exactly at the cap — never over it.
     expect(await openCountFor(session.id)).toBe(MAX_SESSION_CONVERSATIONS);
   }, 20_000);
+});
+
+describe('listClosedSessionConversations — NULLS LAST (review finding: coderabbitai on PR #2296)', () => {
+  beforeAll(async () => {
+    try {
+      await db.select().from(pages).limit(1);
+      dbAvailable = true;
+    } catch {
+      dbAvailable = false;
+    }
+  });
+
+  it('sorts a closed conversation that never received a message LAST, not first — Postgres DESC sorts NULLs first by default', async () => {
+    if (!dbAvailable) return;
+
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const agentPage = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Sort Agent' });
+    const [session] = await db.insert(agentSessions).values({ id: createId(), driveId: drive.id, ownerId: owner.id }).returning();
+
+    // Closed, never messaged — `lastMessageAt` stays NULL.
+    const neverMessaged = createId();
+    await db.insert(conversations).values({
+      id: neverMessaged, userId: owner.id, type: 'page', contextId: agentPage.id, sessionId: session.id,
+      isActive: true, closedInSessionAt: new Date(),
+    });
+
+    // Closed, with real (older) activity.
+    const older = createId();
+    await db.insert(conversations).values({
+      id: older, userId: owner.id, type: 'page', contextId: agentPage.id, sessionId: session.id,
+      isActive: true, closedInSessionAt: new Date(), lastMessageAt: new Date('2020-01-01'),
+    });
+
+    // Closed, with real (newer) activity.
+    const newer = createId();
+    await db.insert(conversations).values({
+      id: newer, userId: owner.id, type: 'page', contextId: agentPage.id, sessionId: session.id,
+      isActive: true, closedInSessionAt: new Date(), lastMessageAt: new Date('2026-01-01'),
+    });
+
+    const result = await listClosedSessionConversations(session.id);
+    const order = result.map((c) => c.conversationId);
+
+    // Newest-activity-first among the real rows, and the never-messaged row
+    // LAST — not first, which is what a plain `DESC` (no `NULLS LAST`) would
+    // have produced, silently pushing it ahead of `older` and `newer` and
+    // able to crowd them out of the MAX_SESSION_CONVERSATIONS cap.
+    expect(order).toEqual([newer, older, neverMessaged]);
+  });
 });

@@ -786,6 +786,36 @@ describe('AgentPageView', () => {
       expect(new URL(window.location.href).searchParams.has('tab')).toBe(false);
     });
 
+    it('re-applies a repeat ?tab=settings navigation even after the user has since clicked away — coderabbitai raised this as a distinct case from a differing tab value', async () => {
+      // CodeRabbit's scenario: the URL goes from `tab=settings` to `tab=settings`
+      // AGAIN while mounted (not `history` → `settings`, a genuinely repeated
+      // value) — e.g. the user clicks the pane's Settings link, manually
+      // switches to Chat, then clicks that SAME Settings link a second time.
+      // The fix doesn't track "did the value change from its last observed
+      // value" — it applies whatever valid `tab` is present on every
+      // `searchParams` identity change (which Next produces on every real
+      // navigation, including a repeat), so this needs no special-casing.
+      resolveTo({ conversationId: 'conv-1', sessionId: null });
+      vi.mocked(useSearchParams).mockReturnValue(new URLSearchParams('tab=settings') as ReturnType<typeof useSearchParams>);
+      window.history.replaceState({}, '', '/dashboard/drive-1/page-1?tab=settings');
+
+      const { rerender } = render(<AgentPageView page={pageFixture()} />);
+      expect(screen.getByRole('tab', { name: /settings/i })).toHaveAttribute('data-state', 'active');
+
+      // The user navigates away locally (a plain tab click, not a URL change).
+      await userEvent.click(screen.getByRole('tab', { name: /^chat/i }));
+      expect(screen.getByRole('tab', { name: /^chat/i })).toHaveAttribute('data-state', 'active');
+
+      // A second, independent navigation arrives carrying the SAME `tab=settings`
+      // value (a fresh `URLSearchParams` instance, exactly as a real Next
+      // navigation produces even for a repeated value).
+      vi.mocked(useSearchParams).mockReturnValue(new URLSearchParams('tab=settings') as ReturnType<typeof useSearchParams>);
+      window.history.replaceState({}, '', '/dashboard/drive-1/page-1?tab=settings');
+      rerender(<AgentPageView page={pageFixture()} />);
+
+      expect(screen.getByRole('tab', { name: /settings/i })).toHaveAttribute('data-state', 'active');
+    });
+
     it('ignores an unrecognized ?tab= value rather than crashing or clearing the current tab', () => {
       resolveTo({ conversationId: 'conv-1', sessionId: null });
       vi.mocked(useSearchParams).mockReturnValue(new URLSearchParams('tab=nonsense') as ReturnType<typeof useSearchParams>);

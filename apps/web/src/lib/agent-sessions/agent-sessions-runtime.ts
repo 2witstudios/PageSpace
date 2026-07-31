@@ -18,7 +18,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, count, eq, inArray, isNull, isNotNull, sql, desc } from '@pagespace/db/operators';
+import { and, count, eq, inArray, isNull, isNotNull, sql } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
 import { checkAgentSessionConcurrency } from '@pagespace/lib/services/sandbox/quota';
@@ -438,7 +438,12 @@ export async function listClosedSessionConversations(sessionId: string): Promise
         isNotNull(conversations.closedInSessionAt),
       ),
     )
-    .orderBy(desc(conversations.lastMessageAt))
+    // `lastMessageAt` is nullable, and Postgres sorts NULLs FIRST for a plain
+    // DESC order — without NULLS LAST, a closed conversation that never got a
+    // message would rank ABOVE genuinely recent ones and could crowd them out
+    // of the LIMIT below, contradicting "newest activity first" (review
+    // finding — coderabbitai on PR #2296).
+    .orderBy(sql`${conversations.lastMessageAt} DESC NULLS LAST`)
     .limit(MAX_SESSION_CONVERSATIONS);
 
   return rows.map((row) => ({
