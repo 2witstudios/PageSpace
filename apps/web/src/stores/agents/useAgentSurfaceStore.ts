@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import { buildAgentSelectionUrl, parseAgentSelection } from '@/lib/agents/agent-selection';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useTabsStore } from '@/stores/useTabsStore';
+import { fromHref } from '@/lib/tabs/tab-navigation';
 
 /**
  * What is selected on the Agents surface — and nothing else.
@@ -135,7 +136,7 @@ export const useAgentSurfaceStore = create<AgentSurfaceState>()((set, get) => {
     // async (wrapped in a `startTransition`). Set it directly here as well so
     // the tab bar's record of this tab's address is correct the instant this
     // selection commits, not just eventually.
-    useTabsStore.getState().updateActiveTabSearch(url.split('?')[1] ?? '');
+    useTabsStore.getState().updateActiveTabSearch(fromHref(url).search);
   };
 
   return {

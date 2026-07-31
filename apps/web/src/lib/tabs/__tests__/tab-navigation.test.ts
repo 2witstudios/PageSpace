@@ -152,6 +152,25 @@ describe('tab-navigation', () => {
       expect(updated.historyIndex).toBe(1);
     });
 
+    it('given a search-only change (same path), should preserve cached metadata (caught in review: coderabbitai)', () => {
+      // title/pageType are keyed by page identity (the path), not the query
+      // string. Clearing them on every Agents selection commit (a
+      // search-only change on the SAME path) would force a redundant
+      // useTabMeta refetch and a "Loading..." flicker for no reason.
+      const tab = createTestTab({
+        path: '/dashboard/drive-1/page-1',
+        search: 'foo=a',
+        title: 'Page Title',
+        pageType: PageType.DOCUMENT,
+      });
+
+      const updated = navigateInTab(tab, '/dashboard/drive-1/page-1', 'foo=b');
+
+      expect(updated.search).toBe('foo=b');
+      expect(updated.title).toBe('Page Title');
+      expect(updated.pageType).toBe('DOCUMENT');
+    });
+
     it('given same path and same search, should not modify history', () => {
       const tab = createTestTab({
         path: '/dashboard/agents',
@@ -367,6 +386,21 @@ describe('tab-navigation', () => {
 
       expect(updated.title).toBeUndefined();
       expect(updated.pageType).toBeUndefined();
+    });
+
+    it('given a jump to an entry with the SAME path (search-only), should preserve cached metadata', () => {
+      const tab = createTestTab({
+        path: '/dashboard/agents',
+        search: 'session=b',
+        history: ['/dashboard/agents?session=a', '/dashboard/agents?session=b'],
+        historyIndex: 1,
+        title: 'Agents',
+      });
+
+      const updated = goToHistoryIndex(tab, 0);
+
+      expect(updated.search).toBe('session=a');
+      expect(updated.title).toBe('Agents');
     });
   });
 

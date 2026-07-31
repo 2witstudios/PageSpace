@@ -612,7 +612,7 @@ describe('isDriveScopedPath', () => {
   // resolves to routeType 'page', which already carries the drive).
   it('does not claim page routes, global routes, or the drive list', () => {
     for (const path of ['/dashboard/drives', '/dashboard/tasks', '/dashboard/calendar',
-      '/dashboard/channels/c1', '/settings/account', '/dashboard']) {
+      '/dashboard/agents', '/dashboard/channels/c1', '/settings/account', '/dashboard']) {
       const parsed = parseTabPath(path);
       expect({ path, scoped: isDriveScopedPath(parsed) }).toEqual({ path, scoped: false });
     }

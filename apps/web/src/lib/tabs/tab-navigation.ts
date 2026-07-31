@@ -71,6 +71,13 @@ export const navigateInTab = (tab: Tab, newPath: string, newSearch: string = '')
 
   // Truncate forward history when navigating from middle of history
   const truncatedHistory = tab.history.slice(0, tab.historyIndex + 1);
+  // title/pageType are keyed by page identity (the path), not the query
+  // string — a search-only change (e.g. the Agents surface's selection
+  // commits, mirrored here via updateActiveTabSearch) has nothing to
+  // invalidate. Clearing it anyway would force a redundant `useTabMeta`
+  // refetch and a brief "Loading..." flicker in the tab title for no reason
+  // (caught in review: coderabbitai).
+  const pathChanged = newPath !== tab.path;
 
   return {
     ...tab,
@@ -78,9 +85,8 @@ export const navigateInTab = (tab: Tab, newPath: string, newSearch: string = '')
     search: newSearch,
     history: [...truncatedHistory, toHref(newPath, newSearch)],
     historyIndex: truncatedHistory.length,
-    // Clear cached metadata so useTabMeta fetches fresh data for new path
-    title: undefined,
-    pageType: undefined,
+    title: pathChanged ? undefined : tab.title,
+    pageType: pathChanged ? undefined : tab.pageType,
   };
 };
 
@@ -100,14 +106,16 @@ export const goToHistoryIndex = (tab: Tab, index: number): Tab => {
   }
 
   const { path, search } = fromHref(tab.history[index]);
+  const pathChanged = path !== tab.path;
   return {
     ...tab,
     path,
     search,
     historyIndex: index,
-    // Clear cached metadata so useTabMeta fetches fresh data for navigated path
-    title: undefined,
-    pageType: undefined,
+    // Same reasoning as navigateInTab: only a path change invalidates the
+    // cached title/pageType.
+    title: pathChanged ? undefined : tab.title,
+    pageType: pathChanged ? undefined : tab.pageType,
   };
 };
 
