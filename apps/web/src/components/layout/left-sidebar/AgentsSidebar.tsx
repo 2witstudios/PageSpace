@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { Bot, ChevronDown, ChevronRight, Plus, SquareTerminal, X } from 'lucide-react';
+import { Bot, ChevronDown, ChevronRight, Folder, Plus, SquareTerminal, X } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR from 'swr';
 
@@ -421,7 +421,10 @@ function SessionGroupHeader({
 }) {
   return (
     <div className="flex items-center justify-between gap-1 px-2 pb-0.5 pt-1.5">
-      <span className="truncate text-[11px] font-semibold tracking-wide text-muted-foreground">{label}</span>
+      <span className="flex min-w-0 items-center gap-1.5 truncate text-sm font-semibold text-foreground">
+        <Folder className="size-4 shrink-0" aria-hidden="true" />
+        <span className="truncate">{label}</span>
+      </span>
       {onNewSession && (
         <button
           type="button"
@@ -552,7 +555,7 @@ function SessionRow({
       <RowMenu
         items={menuItems}
         menuLabel="Session actions"
-        className={cn('gap-1 rounded-md px-1.5 py-1 text-[13px] hover:bg-accent', isSelected && 'bg-accent')}
+        className={cn('gap-1 rounded-md px-1.5 py-1 text-xs hover:bg-accent', isSelected && 'bg-accent')}
       >
         <button
           type="button"
@@ -574,7 +577,7 @@ function SessionRow({
               className="size-1.5 shrink-0 rounded-full bg-emerald-500"
             />
           )}
-          <span className="truncate">{session.name || 'Session'}</span>
+          <span className="truncate text-muted-foreground">{session.name || 'Session'}</span>
         </button>
         <button
           type="button"
