@@ -19,6 +19,7 @@ const {
   mockHasConflictingMessageOwner,
   mockTakeOverConversationStreams,
   mockCreateConversation,
+  mockAutoTitleConversation,
 } = vi.hoisted(() => ({
   mockCreateStreamLifecycle: vi.fn(),
   mockLifecyclePushPart: vi.fn(),
@@ -29,6 +30,7 @@ const {
   mockHasConflictingMessageOwner: vi.fn().mockResolvedValue(false),
   mockTakeOverConversationStreams: vi.fn().mockResolvedValue({ aborted: [], reconciled: [] }),
   mockCreateConversation: vi.fn().mockResolvedValue(undefined),
+  mockAutoTitleConversation: vi.fn().mockResolvedValue(undefined),
 }));
 
 interface MockUIStreamOptions {
@@ -231,6 +233,7 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
     getConversation: mockGetConversation,
     hasConflictingMessageOwner: mockHasConflictingMessageOwner,
     createConversation: mockCreateConversation,
+    autoTitleConversation: mockAutoTitleConversation,
   },
 }));
 
