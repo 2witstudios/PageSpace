@@ -11,6 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useSearchParams } from 'next/navigation';
 import type { TreePage } from '@/hooks/usePageTree';
 import type { ResolvedConversation } from '../useResolvedConversation';
 
@@ -707,6 +708,43 @@ describe('AgentPageView', () => {
       // The user's newer pick (conv-2) survives — not clobbered by conv-3,
       // the replacement for a conversation the user already moved on from.
       expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2');
+    });
+  });
+
+  describe('the past-conversations deep link (?conversationId=&sessionId=) is consumed exactly once', () => {
+    // Left in the URL, a later refresh (after the user switches to a
+    // different conversation via the History tab) would remount this
+    // component, re-read the same stale params, and silently reopen the
+    // original deep-linked thread instead of wherever the user actually
+    // navigated to (review finding — a real bug on refresh, not cosmetic).
+    it('strips conversationId/sessionId from the URL right after capturing them', () => {
+      vi.mocked(useSearchParams).mockReturnValue(
+        new URLSearchParams('conversationId=conv-deep-link&sessionId=ses-deep-link') as ReturnType<typeof useSearchParams>,
+      );
+      window.history.replaceState({}, '', '/dashboard/drive-1/page-1?conversationId=conv-deep-link&sessionId=ses-deep-link');
+      const replaceStateSpy = vi.spyOn(window.history, 'replaceState');
+
+      render(<AgentPageView page={pageFixture()} />);
+
+      expect(replaceStateSpy).toHaveBeenCalled();
+      // At least one replaceState call must have stripped both params — not
+      // necessarily the first call, if anything else in the render path also
+      // touches history.
+      const strippedBoth = replaceStateSpy.mock.calls.some(([, , newUrl]) => {
+        const params = new URL(newUrl as string, 'http://localhost').searchParams;
+        return !params.has('conversationId') && !params.has('sessionId');
+      });
+      expect(strippedBoth).toBe(true);
+    });
+
+    it('does nothing when there was no deep-link conversationId to begin with', () => {
+      vi.mocked(useSearchParams).mockReturnValue(new URLSearchParams() as ReturnType<typeof useSearchParams>);
+      window.history.replaceState({}, '', '/dashboard/drive-1/page-1');
+      const replaceStateSpy = vi.spyOn(window.history, 'replaceState');
+
+      render(<AgentPageView page={pageFixture()} />);
+
+      expect(replaceStateSpy).not.toHaveBeenCalled();
     });
   });
 });

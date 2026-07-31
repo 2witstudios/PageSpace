@@ -89,6 +89,25 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   const initialConversationIdRef = useRef(searchParams.get('conversationId') ?? undefined);
   const initialSessionIdRef = useRef(searchParams.get('sessionId'));
 
+  // Consume-once, for real: strip the params from the URL immediately after
+  // capturing them. Left in place, a refresh after the user later switches
+  // to a DIFFERENT conversation (History tab, "new") would remount this
+  // component, re-read the same stale `conversationId` from the URL, and
+  // silently reopen the original deep-linked thread instead of respecting
+  // where the user actually navigated to (review finding — this was
+  // previously dismissed as "cosmetic", but it's a real functional bug on
+  // refresh, not just an untidy address bar).
+  useEffect(() => {
+    if (initialConversationIdRef.current === undefined) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete('conversationId');
+    url.searchParams.delete('sessionId');
+    window.history.replaceState({}, '', url.toString());
+    // Deliberately empty deps: this runs once, immediately after the refs
+    // above captured their values on this same mount — never re-runs for
+    // this component instance.
+  }, []);
+
   const { resolved: initialResolved } = useResolvedConversation(page.id, {
     driveId: page.driveId,
     canUseSessions,

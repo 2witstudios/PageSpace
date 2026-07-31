@@ -12,9 +12,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@pagespace/db/db', () => {
   // A single chainable stub: every non-terminal call returns itself, and
-  // `.limit()` is the ONE terminal method for both queries this module runs
-  // (the cursor lookup ends `.where().limit(1)`; the main query ends
-  // `.where().orderBy().limit(n)`) — a round-robin queue of canned responses,
+  // `.limit()` is the terminal method for the one query this module runs per
+  // call (the cursor is decoded synchronously, not looked up in the DB — see
+  // encodeCursor/decodeCursor) — a round-robin queue of canned responses,
   // consumed in call order, needs no per-query-shape branching.
   const responses: unknown[][] = [];
   const chain = {
@@ -54,7 +54,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 
 import * as dbModule from '@pagespace/db/db';
-import { listAllConversationsPaginated } from '../agent-sessions-conversations-runtime';
+import { listAllConversationsPaginated, encodeCursor, decodeCursor } from '../agent-sessions-conversations-runtime';
 
 // The real `@pagespace/db/db` module only exports `db`, typed as
 // `NodePgDatabase<...>` (no `.limit()` of its own — only through a real query
@@ -66,12 +66,12 @@ const queueResponse = (rows: unknown[]) => mockDb.__queueResponse(rows);
 
 const GLOBAL_ROW = {
   conversationId: 'conv-1', title: 'Chat', type: 'global', contextId: null,
-  lastMessageAt: new Date('2026-07-28'), createdAt: new Date('2026-07-27'),
+  lastMessageAt: new Date('2026-07-28'), sortKeyValue: new Date('2026-07-28'), createdAt: new Date('2026-07-27'),
   sessionId: null, sessionName: null, sessionEndedAt: null, pageTitle: null, driveId: null,
 };
 const PAGE_ROW = {
   conversationId: 'conv-2', title: null, type: 'page', contextId: 'agent-1',
-  lastMessageAt: new Date('2026-07-26'), createdAt: new Date('2026-07-25'),
+  lastMessageAt: new Date('2026-07-26'), sortKeyValue: new Date('2026-07-26'), createdAt: new Date('2026-07-25'),
   sessionId: null, sessionName: null, sessionEndedAt: null, pageTitle: 'My Agent', driveId: 'drive-1',
 };
 
@@ -131,7 +131,7 @@ describe('listAllConversationsPaginated', () => {
       expect(result.pagination.nextCursor).toBeNull();
     });
 
-    it('maxLimit + 1 rows returned: hasMore is true, the extra row is dropped, nextCursor is the LAST kept row', async () => {
+    it('maxLimit + 1 rows returned: hasMore is true, the extra row is dropped, nextCursor encodes the LAST kept row', async () => {
       const rows = Array.from({ length: 21 }, (_, i) => ({ ...GLOBAL_ROW, conversationId: `conv-${i}` }));
       queueResponse(rows);
 
@@ -139,27 +139,32 @@ describe('listAllConversationsPaginated', () => {
 
       expect(result.conversations).toHaveLength(20);
       expect(result.pagination.hasMore).toBe(true);
-      expect(result.pagination.nextCursor).toBe('conv-19');
+      expect(result.pagination.nextCursor).not.toBeNull();
+      expect(decodeCursor(result.pagination.nextCursor!)).toEqual({ sortKey: GLOBAL_ROW.sortKeyValue, id: 'conv-19' });
     });
 
-    it('with a cursor: looks it up first (one extra round trip), then runs the main query', async () => {
-      queueResponse([{ sortKey: new Date('2026-07-27'), id: 'conv-cursor' }]); // cursor lookup
-      queueResponse([GLOBAL_ROW]); // main query
+    it('with a cursor: decodes it synchronously (no extra DB round trip) and runs one query', async () => {
+      const cursor = encodeCursor(new Date('2026-07-27'), 'conv-cursor');
+      queueResponse([GLOBAL_ROW]); // the one and only query
 
-      const result = await listAllConversationsPaginated({ ownerId: 'user-1' }, { cursor: 'conv-cursor', limit: 20 });
+      const result = await listAllConversationsPaginated({ ownerId: 'user-1' }, { cursor, limit: 20 });
 
-      expect(mockDb.db.limit).toHaveBeenCalledTimes(2);
-      expect(mockDb.db.limit).toHaveBeenNthCalledWith(1, 1); // cursor lookup: limit(1)
-      expect(mockDb.db.limit).toHaveBeenNthCalledWith(2, 21); // main query: limit(maxLimit + 1)
+      // Exactly one query ran — no separate cursor-lookup round trip against
+      // LIVE data (review finding: re-deriving the boundary from mutable
+      // chat_messages let a concurrent message shift it forward, re-admitting
+      // already-shown rows, or — if the cursor row vanished — apply no
+      // boundary at all).
+      expect(mockDb.db.limit).toHaveBeenCalledTimes(1);
+      expect(mockDb.db.limit).toHaveBeenCalledWith(21);
       expect(result.conversations).toEqual([expect.objectContaining({ conversationId: 'conv-1' })]);
     });
 
-    it('a cursor that resolves to nothing (deleted/foreign id) is silently ignored — not an error', async () => {
-      queueResponse([]); // cursor lookup finds no row
-      queueResponse([GLOBAL_ROW]); // main query still runs, unfiltered by cursor
+    it('a malformed/tampered cursor is silently ignored — not an error', async () => {
+      queueResponse([GLOBAL_ROW]); // the query still runs, unfiltered by cursor
 
-      const result = await listAllConversationsPaginated({ ownerId: 'user-1' }, { cursor: 'conv-gone' });
+      const result = await listAllConversationsPaginated({ ownerId: 'user-1' }, { cursor: 'not-valid-base64url-json' });
 
+      expect(mockDb.db.limit).toHaveBeenCalledTimes(1);
       expect(result.conversations).toHaveLength(1);
     });
 

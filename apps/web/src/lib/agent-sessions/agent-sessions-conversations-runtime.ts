@@ -124,10 +124,55 @@ const recencyExpr = sql<Date | null>`COALESCE(
  * conversation can have zero messages yet — recency null — and still needs a
  * sensible position (its own creation time).
  */
-const sortKeyExpr = sql`COALESCE(${recencyExpr}, ${conversations.createdAt})`;
+const sortKeyExpr = sql<Date>`COALESCE(${recencyExpr}, ${conversations.createdAt})`;
 
 /** `pages.driveId` for a page conversation, `agentSessions.driveId` for a session-bound one, the conversation's own contextId for a `type: 'client'` one (that column holds an optional driveId for API-managed conversations — see `buildCreateConversationPayload`) — else null (a driveless global-assistant conversation). */
 const resolvedDriveIdExpr = sql<string | null>`COALESCE(${pages.driveId}, ${agentSessions.driveId}, CASE WHEN ${conversations.type} = 'client' THEN ${conversations.contextId} ELSE NULL END)`;
+
+/**
+ * The cursor is an OPAQUE token encoding the sort key the caller last saw —
+ * NOT just a bare conversationId re-resolved against LIVE data. `sortKeyExpr`
+ * is derived from `chat_messages`, which can change between one page fetch
+ * and the next: if the cursor conversation receives a new message in that
+ * window, re-deriving its sortKey fresh would shift the boundary FORWARD,
+ * re-admitting rows already shown on the previous page. Worse, if the cursor
+ * row disappeared entirely (deleted), a live re-lookup finds nothing and
+ * silently applies no boundary at all, returning page one again instead of
+ * the requested next page (review finding). Freezing the observed sort key
+ * into the cursor itself removes the live dependency — and the extra DB
+ * round-trip a live lookup needed — entirely.
+ */
+export function encodeCursor(sortKey: Date | string, id: string): string {
+  // The driver doesn't hydrate a raw computed SQL expression into a real
+  // `Date` the way it does a schema-known timestamp COLUMN (confirmed
+  // against real Postgres: `sortKeyExpr`'s runtime value is a string despite
+  // its `sql<Date>` type) — normalize defensively rather than trust the type.
+  const date = sortKey instanceof Date ? sortKey : new Date(sortKey);
+  return Buffer.from(JSON.stringify({ sortKey: date.toISOString(), id })).toString('base64url');
+}
+
+export function decodeCursor(cursor: string): { sortKey: Date; id: string } | null {
+  try {
+    const parsed: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+    if (
+      typeof parsed !== 'object' ||
+      parsed === null ||
+      typeof (parsed as { sortKey?: unknown }).sortKey !== 'string' ||
+      typeof (parsed as { id?: unknown }).id !== 'string'
+    ) {
+      return null;
+    }
+    const sortKey = new Date((parsed as { sortKey: string }).sortKey);
+    if (Number.isNaN(sortKey.getTime())) return null;
+    return { sortKey, id: (parsed as { id: string }).id };
+  } catch {
+    // Malformed/tampered cursor — same treatment as a cursor whose id no
+    // longer resolves to anything: ignored, not an error (fails open to
+    // page one, consistent with how this listing already treats an unknown
+    // cursor id).
+    return null;
+  }
+}
 
 /**
  * Cursor pagination is unidirectional ("older than `cursor`") on purpose —
@@ -174,15 +219,10 @@ export async function listAllConversationsPaginated(
   }
 
   if (cursor) {
-    const [cursorRow] = await db
-      .select({ sortKey: sortKeyExpr, id: conversations.id })
-      .from(conversations)
-      .where(eq(conversations.id, cursor))
-      .limit(1);
-
-    if (cursorRow) {
+    const decoded = decodeCursor(cursor);
+    if (decoded) {
       conditions.push(
-        sql`(${sortKeyExpr} < ${cursorRow.sortKey} OR (${sortKeyExpr} = ${cursorRow.sortKey} AND ${conversations.id} < ${cursorRow.id}))`,
+        sql`(${sortKeyExpr} < ${decoded.sortKey} OR (${sortKeyExpr} = ${decoded.sortKey} AND ${conversations.id} < ${decoded.id}))`,
       );
     }
   }
@@ -194,6 +234,7 @@ export async function listAllConversationsPaginated(
       type: conversations.type,
       contextId: conversations.contextId,
       lastMessageAt: recencyExpr,
+      sortKeyValue: sortKeyExpr,
       createdAt: conversations.createdAt,
       sessionId: conversations.sessionId,
       sessionName: agentSessions.name,
@@ -210,6 +251,7 @@ export async function listAllConversationsPaginated(
 
   const hasMore = rows.length > maxLimit;
   const page = hasMore ? rows.slice(0, maxLimit) : rows;
+  const lastRow = page.length > 0 ? page[page.length - 1] : null;
 
   return {
     conversations: page.map((row) => ({
@@ -227,7 +269,7 @@ export async function listAllConversationsPaginated(
     })),
     pagination: {
       hasMore,
-      nextCursor: hasMore && page.length > 0 ? page[page.length - 1].conversationId : null,
+      nextCursor: hasMore && lastRow ? encodeCursor(lastRow.sortKeyValue, lastRow.conversationId) : null,
       limit: maxLimit,
     },
   };

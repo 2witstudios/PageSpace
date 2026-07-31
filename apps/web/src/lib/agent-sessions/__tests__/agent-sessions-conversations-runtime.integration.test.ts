@@ -19,10 +19,11 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
 import { pages, chatMessages } from '@pagespace/db/schema/core';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { factories } from '@pagespace/db/test/factories';
-import { listAllConversationsPaginated } from '../agent-sessions-conversations-runtime';
+import { listAllConversationsPaginated, decodeCursor } from '../agent-sessions-conversations-runtime';
 
 let dbAvailable = false;
 
@@ -205,5 +206,113 @@ describe('listAllConversationsPaginated — hasActiveMessage against real chat_m
     expect(row?.driveId).toBe(drive.id);
     expect(row?.agentPageId).toBeNull();
     expect(row?.pageTitle).toBeNull();
+  });
+});
+
+describe('listAllConversationsPaginated — cursor pagination is immune to concurrent mutation (P2 review finding)', () => {
+  beforeAll(async () => {
+    try {
+      await db.select().from(pages).limit(1);
+      dbAvailable = true;
+    } catch {
+      dbAvailable = false;
+    }
+  });
+
+  it('a message arriving in the cursor conversation between page fetches does not cause a duplicate or a skipped row', async () => {
+    if (!dbAvailable) return;
+
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const agent1 = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Agent 1' });
+    const agent2 = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Agent 2' });
+    const agent3 = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Agent 3' });
+
+    // Three conversations, oldest to newest by their real last-activity time.
+    const makeConversation = async (agentId: string, activityAt: Date) => {
+      const conversationId = createId();
+      await db.insert(conversations).values({
+        id: conversationId, userId: owner.id, type: 'page', contextId: agentId, title: null, isActive: true,
+      });
+      await db.insert(chatMessages).values({
+        id: createId(), pageId: agentId, conversationId, role: 'user', content: 'hi', isActive: true, createdAt: activityAt,
+      });
+      return conversationId;
+    };
+
+    const oldest = await makeConversation(agent1.id, new Date('2020-01-01'));
+    const middle = await makeConversation(agent2.id, new Date('2020-01-02'));
+    const newest = await makeConversation(agent3.id, new Date('2020-01-03'));
+
+    // Page 1: newest first, limit 2 → [newest, middle]. nextCursor freezes
+    // `middle`'s sort key as it was AT THIS MOMENT.
+    const page1 = await listAllConversationsPaginated({ ownerId: owner.id }, { limit: 2 });
+    expect(page1.conversations.map((c) => c.conversationId)).toEqual([newest, middle]);
+    expect(page1.pagination.hasMore).toBe(true);
+    const cursor = page1.pagination.nextCursor!;
+    // Sanity: the cursor really did freeze `middle`'s ORIGINAL sort key, not
+    // some later value — this is the whole point of the fix.
+    expect(decodeCursor(cursor)?.id).toBe(middle);
+
+    // Concurrent activity: `middle` receives a brand-new message NOW —
+    // this is what the review flagged as the race. With the old
+    // live-re-lookup design, decoding the cursor's id and re-querying its
+    // CURRENT sort key would see this new, much-more-recent timestamp
+    // instead of the frozen one.
+    await db.insert(chatMessages).values({
+      id: createId(), pageId: agent2.id, conversationId: middle, role: 'user', content: 'still here', isActive: true, createdAt: new Date(),
+    });
+
+    // Page 2, using the cursor obtained BEFORE that mutation.
+    const page2 = await listAllConversationsPaginated({ ownerId: owner.id }, { limit: 2, cursor });
+
+    // Correct: exactly the one conversation strictly older than the FROZEN
+    // boundary — `middle` must not reappear (duplicate), and this must not
+    // silently return page one again either.
+    expect(page2.conversations.map((c) => c.conversationId)).toEqual([oldest]);
+  });
+
+  it('a cursor whose conversation was deleted in between still returns the correct next page, not page one again', async () => {
+    if (!dbAvailable) return;
+
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const agent1 = await factories.createPage(drive.id, { type: 'AI_CHAT' });
+    const agent2 = await factories.createPage(drive.id, { type: 'AI_CHAT' });
+    const agent3 = await factories.createPage(drive.id, { type: 'AI_CHAT' });
+
+    const makeConversation = async (agentId: string, activityAt: Date) => {
+      const conversationId = createId();
+      await db.insert(conversations).values({
+        id: conversationId, userId: owner.id, type: 'page', contextId: agentId, title: null, isActive: true,
+      });
+      await db.insert(chatMessages).values({
+        id: createId(), pageId: agentId, conversationId, role: 'user', content: 'hi', isActive: true, createdAt: activityAt,
+      });
+      return conversationId;
+    };
+
+    // A THIRD, older conversation matters here: if the cursor's own row
+    // disappearing were allowed to silently drop the boundary entirely (the
+    // bug), the query would still exclude the now-inactive cursor row on its
+    // own merits — a weaker test with only two conversations would pass
+    // either way. With three, a dropped boundary wrongly re-admits `newest`
+    // (already shown on page 1) alongside `oldest`.
+    const oldest = await makeConversation(agent1.id, new Date('2020-02-01'));
+    const middle = await makeConversation(agent2.id, new Date('2020-02-02'));
+    const newest = await makeConversation(agent3.id, new Date('2020-02-03'));
+
+    const page1 = await listAllConversationsPaginated({ ownerId: owner.id }, { limit: 2 });
+    expect(page1.conversations.map((c) => c.conversationId)).toEqual([newest, middle]);
+    const cursor = page1.pagination.nextCursor!;
+
+    // The cursor conversation (`middle`) is soft-deleted — a LIVE lookup by
+    // id would find nothing (or, if hard-deleted, literally nothing at all);
+    // the frozen cursor needs no lookup at all, so this can't degrade
+    // pagination into silently re-admitting `newest`.
+    await db.update(conversations).set({ isActive: false }).where(eq(conversations.id, middle));
+
+    const page2 = await listAllConversationsPaginated({ ownerId: owner.id }, { limit: 2, cursor });
+    expect(page2.conversations.map((c) => c.conversationId)).toEqual([oldest]);
   });
 });
