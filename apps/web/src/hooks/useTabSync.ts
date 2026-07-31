@@ -19,13 +19,19 @@ export function useTabSync() {
   const router = useRouter();
   const lastSyncedHref = useRef<string | null>(null);
   // Set by a REAL browser popstate — the one unambiguous signal that a URL
-  // change is Back/Forward rather than a new step, whether the destination
-  // was pushed by Next's router or by code that bypasses it entirely (e.g.
-  // the Agents surface's raw `history.pushState`). Consumed and cleared at
-  // the top of the sync effect below on the very next run, since popstate
-  // always fires and settles before Next re-renders with the new
-  // pathname/search (this is also why `AgentsSurface` re-reads the URL for
-  // its OWN store the same way, independently of this hook).
+  // change is Back/Forward rather than a new step, regardless of whether the
+  // destination was pushed by Next's own router or by application code (e.g.
+  // the Agents surface's `history.pushState`; Next patches `pushState`
+  // globally to copy its internal history markers onto ANY push, so even
+  // those entries get the ordinary soft `usePathname`/`useSearchParams`
+  // update on Back — verified against next@15.5.18's app-router.js).
+  // Consumed and cleared at the top of the sync effect below on its very next
+  // run. Not given an expiry: the only way it could go unconsumed is a
+  // popstate landing on a href IDENTICAL to what's already showing (nothing
+  // for `pathname`/`search` to change, so the effect wouldn't re-run at all)
+  // — and every write path here (`commit()`'s own same-URL guard,
+  // `navigateInTab`'s no-op check) already prevents two ADJACENT history
+  // entries from ever being identical, so that state isn't reachable.
   const isPopStateRef = useRef(false);
 
   const rehydrated = useTabsStore((state) => state.rehydrated);
@@ -104,10 +110,10 @@ export function useTabSync() {
     // A URL change isn't always a NEW step — a real popstate (native
     // Back/Forward, of any distance, e.g. a long-press-selected entry several
     // steps away) restores an address that should already be SOMEWHERE in
-    // this tab's own history, whether it was pushed by Next's router or by
-    // code that bypasses it entirely (e.g. the Agents surface's raw
-    // `history.pushState`). Reconcile the index to match instead of pushing a
-    // new entry: pushing would truncate everything after the current index,
+    // this tab's own history, whether that entry was pushed by Next's router
+    // or by application code (e.g. the Agents surface's `history.pushState`).
+    // Reconcile the index to match instead of pushing a new entry: pushing
+    // would truncate everything after the current index,
     // silently discarding real forward history, and would leave this tab's
     // own Back/Forward buttons one entry off from what the browser just did.
     // Gated on an ACTUAL popstate (not just string adjacency) so an ordinary

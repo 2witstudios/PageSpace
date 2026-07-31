@@ -66,16 +66,33 @@ type PersistedTabsState = { tabs: Tab[]; activeTabId: string | null };
  * spurious duplicate history entry — backfill it here instead. A standalone,
  * exported function (rather than inline in the `persist()` config below) so
  * it's directly unit-testable without needing to drive an actual rehydration.
+ *
+ * Defensive about the WHOLE persisted shape, not just the field being
+ * migrated: `localStorage` is outside this app's control (hand-edited,
+ * partially written, corrupted by an extension), and zustand's `persist`
+ * middleware has no fallback for a `migrate` that throws — the rehydration
+ * promise rejects, `onRehydrateStorage`'s callback below receives `undefined`
+ * instead of the store, `state?.setRehydrated()` silently no-ops via optional
+ * chaining, and `rehydrated` stays `false` forever — freezing the entire tab
+ * bar with no visible error (`useTabSync` no-ops on every render while
+ * `!rehydrated`). Always returning a well-formed `PersistedTabsState`, even
+ * from garbage input, is what prevents that class of failure.
  */
 export const migrateTabsStorage = (persistedState: unknown, version: number): PersistedTabsState => {
-  const state = persistedState as { tabs?: Array<Partial<Tab> & Pick<Tab, 'id' | 'path' | 'history' | 'historyIndex' | 'isPinned'>>; activeTabId?: string | null };
+  const state = (persistedState && typeof persistedState === 'object' ? persistedState : {}) as {
+    tabs?: unknown;
+    activeTabId?: unknown;
+  };
+  const rawTabs = Array.isArray(state.tabs) ? state.tabs : [];
+  const activeTabId = typeof state.activeTabId === 'string' ? state.activeTabId : null;
+
   if (version < 1) {
     return {
-      activeTabId: state.activeTabId ?? null,
-      tabs: (state.tabs ?? []).map((tab) => ({ ...tab, search: tab.search ?? '' })),
+      activeTabId,
+      tabs: rawTabs.map((tab) => ({ ...tab, search: tab?.search ?? '' })),
     };
   }
-  return state as PersistedTabsState;
+  return { activeTabId, tabs: rawTabs as Tab[] };
 };
 
 export const useTabsStore = create<TabsState>()(

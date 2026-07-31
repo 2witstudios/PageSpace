@@ -86,12 +86,14 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
     hydrateFromSearch({ driveId, search });
   }, [hydrateFromSearch, driveId, search]);
 
-  // The one address change `useSearchParams()` can't see: a raw
-  // `history.pushState` (this surface's own writes — see `useAgentSurfaceStore`)
-  // bypasses Next's router entirely, so a `popstate` restoring one of those
-  // entries needs its own listener re-reading `window.location` directly,
-  // because the browser has already restored the address by the time the
-  // event fires.
+  // A second, independent path to the same read: this surface's own raw
+  // `history.pushState` writes (see `useAgentSurfaceStore`) do eventually
+  // reach `useSearchParams()` too (Next patches `pushState` globally and
+  // folds external calls into its router state), but that path is async
+  // (wrapped in a `startTransition`). A `popstate` listener reading
+  // `window.location` directly needs no such wait — the browser has already
+  // restored the address by the time the event fires — so Back feels instant
+  // rather than trailing a render behind.
   useEffect(() => {
     const onPopState = () => hydrateFromSearch();
     window.addEventListener('popstate', onPopState);

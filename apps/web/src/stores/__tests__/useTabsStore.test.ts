@@ -193,6 +193,32 @@ describe('useTabsStore', () => {
     it('given no persisted tabs at all, should not throw', () => {
       expect(migrateTabsStorage({ activeTabId: null }, 0)).toEqual({ activeTabId: null, tabs: [] });
     });
+
+    // A hand-edited or partially-written `localStorage` blob is outside this
+    // app's control. A `migrate` that throws leaves zustand's persist
+    // rehydration promise rejected, `state?.setRehydrated()` never runs, and
+    // `rehydrated` stays false forever — freezing the whole tab bar with no
+    // visible error. These prove malformed shapes degrade to an empty tab
+    // list instead.
+    it('given a completely malformed persisted value (null), should fall back to an empty tab list', () => {
+      expect(migrateTabsStorage(null, 0)).toEqual({ activeTabId: null, tabs: [] });
+    });
+
+    it('given a persisted value that is a primitive, not an object, should fall back to an empty tab list', () => {
+      expect(migrateTabsStorage('corrupted', 0)).toEqual({ activeTabId: null, tabs: [] });
+      expect(migrateTabsStorage(42, 1)).toEqual({ activeTabId: null, tabs: [] });
+    });
+
+    it('given tabs present but not an array, should fall back to an empty tab list rather than throw', () => {
+      expect(migrateTabsStorage({ activeTabId: 'tab-1', tabs: 'not-an-array' }, 0)).toEqual({
+        activeTabId: 'tab-1',
+        tabs: [],
+      });
+    });
+
+    it('given a non-string activeTabId, should fall back to null', () => {
+      expect(migrateTabsStorage({ activeTabId: 12345, tabs: [] }, 1)).toEqual({ activeTabId: null, tabs: [] });
+    });
   });
 
   describe('duplicateTab', () => {

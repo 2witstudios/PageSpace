@@ -128,10 +128,13 @@ export const useAgentSurfaceStore = create<AgentSurfaceState>()((set, get) => {
     });
     if (url === currentUrl()) return;
     window.history.pushState({}, '', url);
-    // `pushState` here bypasses Next's router, so `useTabSync` (which only ever
-    // sees Next-driven navigations) never observes this address change. Tell the
-    // browser-style tab bar directly so switching away and back restores this
-    // selection instead of landing on the bare route.
+    // Next's own `pushState` patch does eventually fold this into its router
+    // state too (it copies its internal history markers onto any external
+    // push and dispatches a restore, which is what makes `useSearchParams()`
+    // in `AgentsSurface`/`useTabSync` react to this at all) — but that path is
+    // async (wrapped in a `startTransition`). Set it directly here as well so
+    // the tab bar's record of this tab's address is correct the instant this
+    // selection commits, not just eventually.
     useTabsStore.getState().updateActiveTabSearch(url.split('?')[1] ?? '');
   };
 
