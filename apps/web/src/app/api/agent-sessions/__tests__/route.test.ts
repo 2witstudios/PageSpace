@@ -203,12 +203,12 @@ describe('POST /api/agent-sessions — spawn', () => {
     // the absence is structural.
   });
 
-  it('spawns a GLOBAL-ASSISTANT session from the both-null shape, auto-naming it "Assistant"', async () => {
+  it('spawns a GLOBAL-ASSISTANT session from the both-null shape, auto-naming it "Global Assistant"', async () => {
     const response = await spawn({});
     expect(response.status).toBe(201);
     const body = await response.json();
     expect(typeof body.conversationId).toBe('string');
-    expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: null, name: 'Assistant' });
+    expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: null, name: 'Global Assistant' });
     // The first conversation is an assistant thread: no agent page.
     expect(mockCreateConversationInSession).toHaveBeenCalledWith(
       expect.objectContaining({ agentPageId: null, sessionId: 'ses-new' }),
@@ -220,11 +220,25 @@ describe('POST /api/agent-sessions — spawn', () => {
     );
   });
 
-  it('refuses the half-specified shapes — an agent needs its drive, a drive needs an agent', async () => {
-    for (const body of [{ driveId: 'drive-1' }, { agentPageId: 'agent-1' }]) {
-      const response = await spawn(body);
-      expect(response.status).toBe(400);
-    }
+  it('spawns a DRIVE session from the drive-only shape, first conversation is the assistant', async () => {
+    const response = await spawn({ driveId: 'drive-1' });
+    expect(response.status).toBe(201);
+    const body = await response.json();
+    expect(typeof body.conversationId).toBe('string');
+    expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: 'drive-1', name: 'Global Assistant' });
+    expect(mockCreateConversationInSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agentPageId: null, sessionId: 'ses-new' }),
+    );
+    // The access decision saw the DRIVE subject, not the global one.
+    expect(mockCheckAccessForSubject).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ driveId: 'drive-1' }),
+    );
+  });
+
+  it('refuses the one unresolvable shape — an agent without its drive', async () => {
+    const response = await spawn({ agentPageId: 'agent-1' });
+    expect(response.status).toBe(400);
     expect(mockSpawnSession).not.toHaveBeenCalled();
   });
 
@@ -469,11 +483,11 @@ describe('POST /api/agent-sessions — blank name auto-generates a unique one', 
     );
   });
 
-  it('given a blank name for the global-assistant shape, should derive the base label "Assistant"', async () => {
+  it('given a blank name for the global-assistant shape, should derive the base label "Global Assistant"', async () => {
     const response = await spawn({});
     expect(response.status).toBe(201);
     expect(mockSpawnSession).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'Assistant' }),
+      expect.objectContaining({ name: 'Global Assistant' }),
     );
   });
 

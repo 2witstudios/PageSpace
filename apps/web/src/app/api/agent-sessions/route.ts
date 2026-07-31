@@ -118,10 +118,17 @@ export async function GET(request: Request) {
  *
  * One act, per the lifecycle invariant: a session is born with its first
  * thing, so this creates the workspace row AND that first thing already bound
- * to it. Two shapes, matching the two session kinds:
+ * to it. Three shapes:
  *
  * - `{ driveId, agentPageId }` — a DRIVE session, first conversation with that
  *   drive agent.
+ * - `{ driveId }` (`agentPageId` null/omitted) — a DRIVE session whose first
+ *   conversation is the assistant instead of a specific agent. The
+ *   conversation and access layers don't care whether a null-agent
+ *   conversation's session has a drive (`createConversationInSession`'s
+ *   `agentPageId: null` branch and `decideAgentSessionAccess` both key only
+ *   on `driveId`) — a drive session can already host such a conversation via
+ *   the split-pane picker, this just allows it as the FIRST thing too.
  * - `{}` (both null/omitted) — a GLOBAL-ASSISTANT session: no drive, first
  *   conversation is a `type: 'global'` assistant thread. Owner-only by the
  *   access decision (there is no drive whose membership could admit anyone
@@ -133,13 +140,13 @@ export async function GET(request: Request) {
  * (`provisionSessionSandbox` + `spawnShell`) rather than reimplementing it.
  * Omitted/anything else behaves exactly as before — the conversation path.
  *
- * Half-specified shapes are refused: an agent without its drive is
- * unresolvable, and a drive without an agent would mint an empty session —
- * UNLESS `firstThing: 'shell'`, whose first thing needs no agent.
+ * Only one shape is refused: an `agentPageId` without a `driveId` is
+ * unresolvable (which drive's agent?) — UNLESS `firstThing: 'shell'`, whose
+ * first thing needs no agent at all.
  *
  * A blank/omitted `name` is not left null: it is auto-derived from the spawn
- * target (the agent's title, "Shell", or "Assistant") and made unique among
- * the owner's own existing session names before the row is inserted.
+ * target (the agent's title, "Shell", or "Global Assistant") and made unique
+ * among the owner's own existing session names before the row is inserted.
  *
  * Spawn itself is instant and free: NO sandbox is provisioned for the
  * conversation path. `firstThing: 'shell'` is the exception — opening a shell
@@ -166,13 +173,14 @@ export async function POST(request: Request) {
   const rawName = typeof body.name === 'string' ? body.name.trim() : '';
   const wantsShellFirst = body.firstThing === 'shell';
 
-  if (!wantsShellFirst && (driveId === null) !== (agentPageId === null)) {
-    // Half-specified: an agent without its drive is unresolvable, and a drive
-    // without an agent would mint an empty session. Both-null is the
-    // global-assistant spawn; both-present is the drive spawn. A shell-first
-    // spawn needs no agent, so it is exempt from this shape check.
+  if (!wantsShellFirst && driveId === null && agentPageId !== null) {
+    // The only truly unresolvable shape: an agent without its drive. Every
+    // other combination is valid — both-present (drive session with that
+    // agent), drive-only (drive session, assistant-first), and both-null
+    // (global-assistant session). A shell-first spawn needs no agent, so it
+    // is exempt from this check entirely.
     return NextResponse.json(
-      { error: 'A session needs a drive and an agent to start with, or neither for the assistant' },
+      { error: 'An agent needs its drive to start a session' },
       { status: 400 },
     );
   }
@@ -259,7 +267,7 @@ export async function POST(request: Request) {
   if (rawName.length > 0) {
     name = rawName.slice(0, MAX_SESSION_NAME_LENGTH);
   } else {
-    const baseLabel = wantsShellFirst ? 'Shell' : agentPageId !== null ? (agentTitle ?? 'Agent') : 'Assistant';
+    const baseLabel = wantsShellFirst ? 'Shell' : agentPageId !== null ? (agentTitle ?? 'Agent') : 'Global Assistant';
     const existingSessions = await listSessions({ ownerId: auth.userId });
     const existingNames = existingSessions.map((session) => session.name);
     name = nextUniqueSessionName(baseLabel, existingNames).slice(0, MAX_SESSION_NAME_LENGTH);

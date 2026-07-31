@@ -7,7 +7,6 @@ import { toast } from 'sonner';
 import useSWR from 'swr';
 
 import EndSessionDialog from '@/components/agents/EndSessionDialog';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Input } from '@/components/ui/input';
 import {
   CommandDialog,
@@ -111,7 +110,7 @@ export default function AgentsSidebar({ className }: SidebarProps) {
 
         <PrimaryNavigation driveId={driveId} />
 
-        <ScrollArea className="flex-1 min-h-0">
+        <div className="flex-1 min-h-0 overflow-y-auto scrollbar-none">
           <div className="space-y-0.5">
             <SessionList
               authLoading={authLoading}
@@ -126,7 +125,7 @@ export default function AgentsSidebar({ className }: SidebarProps) {
               onChanged={() => void retrySessions()}
             />
           </div>
-        </ScrollArea>
+        </div>
 
         {driveId ? <DriveFooter canManage={canManage} /> : <DashboardFooter />}
       </div>
@@ -381,7 +380,7 @@ function SessionList({
   const handleNewSession = useCallback((groupDriveId: string, groupDriveName: string | null) => {
     if (groupDriveId === ASSISTANT_GROUP_KEY) {
       setSpawnTarget({ driveId: null, driveName: null });
-      setSpawnPick({ kind: 'assistant', agentPageId: null, label: 'Assistant' });
+      setSpawnPick({ kind: 'assistant', agentPageId: null, label: 'Global Assistant' });
       return;
     }
     setSpawnTarget({ driveId: groupDriveId, driveName: groupDriveName });
@@ -690,7 +689,7 @@ function SessionRow({
           {session.conversations.map((conversation) => {
             const agentName =
               conversation.agentPageId === null
-                ? 'Assistant'
+                ? 'Global Assistant'
                 : (agentNamesById.get(conversation.agentPageId) ?? 'Agent');
             const label = conversation.title ? `${agentName} — ${conversation.title}` : agentName;
             return (
@@ -746,7 +745,7 @@ type SpawnKind = 'agent' | 'shell' | 'assistant';
 interface SpawnPick {
   kind: SpawnKind;
   agentPageId: string | null;
-  /** The sensible default: the agent's title, "Shell", or "Assistant". */
+  /** The sensible default: the agent's title, "Shell", or "Global Assistant". */
   label: string;
 }
 
@@ -755,8 +754,8 @@ interface SpawnPick {
  * a target and hit Enter — the same keyboard-first pattern `QuickCreatePalette`
  * established for page creation, reused here so a future mouseless-navigation
  * pass has one command-palette idiom to build on, not two. Two steps: pick a
- * target (an agent, Shell, or — for the ASSISTANT group, which skips straight
- * here since it has nothing else to choose — Assistant), then name the
+ * target (an agent, Shell, or Global Assistant — the ASSISTANT group's own
+ * "+" skips straight here since it has nothing else to choose), then name the
  * session. Naming is always the last step, even for a one-click assistant
  * spawn, so every session gets a deliberate name.
  */
@@ -829,6 +828,14 @@ function SpawnSessionPalette({
           <CommandInput placeholder="Search agents…" autoFocus />
           <CommandList>
             <CommandGroup>
+              <CommandItem
+                value="assistant-Global Assistant"
+                disabled={spawning}
+                onSelect={() => onPickTarget({ kind: 'assistant', agentPageId: null, label: 'Global Assistant' })}
+              >
+                <Bot className="size-3.5" aria-hidden="true" />
+                <span className="truncate">Global Assistant</span>
+              </CommandItem>
               {agents.map((agent) => (
                 <CommandItem
                   key={agent.id}
