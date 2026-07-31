@@ -7,8 +7,8 @@
  *
  * GET ?driveId=<id> | (none = mine)
  *   → { sessions: [{ …AgentSessionDTO, shells: ShellDTO[], conversations }] }
- * POST { driveId, agentPageId, name? }
- *   → 201 { session, conversationId } — spawn (see below)
+ * POST { driveId, agentPageId, name?, firstThing? }
+ *   → 201 { session, conversationId } | { session, shellId } — spawn (see below)
  *
  * Every listing is scoped to the REQUESTER's own sessions (`ownerId` rides
  * every filter): `driveId` narrows *where*, never *whose*. Admin gate first,
@@ -30,15 +30,31 @@ import {
   listSessions,
   listSessionConversationsBulk,
   MAX_ACTIVE_SESSIONS_PER_OWNER,
+  provisionSessionSandbox,
   spawnSession,
   toAgentSessionDTO,
   type AgentSessionListFilter,
 } from '@/lib/agent-sessions/agent-sessions-runtime';
-import { listShellsBulk } from '@/lib/agent-sessions/session-shells-runtime';
+import { listShellsBulk, spawnShell } from '@/lib/agent-sessions/session-shells-runtime';
 import { sessionQuotaExceeded } from '@/lib/agent-sessions/quota-response';
 
 /** Bound on the stored display label — rendered everywhere the session appears. */
 const MAX_SESSION_NAME_LENGTH = 120;
+
+/**
+ * A blank-name spawn's auto-label: the first collision-free of `base`,
+ * `base 2`, `base 3`, … — mirroring `nextShellLabel`'s "count existing,
+ * append a number, scan past collisions" pattern
+ * (`plan-spawn-session.ts:61-68`), but starting at the bare label rather than
+ * always suffixing a number: no session is ever born "Shell 1".
+ */
+function nextUniqueSessionName(base: string, existingNames: readonly string[]): string {
+  const taken = new Set(existingNames);
+  if (!taken.has(base)) return base;
+  let index = 2;
+  while (taken.has(`${base} ${index}`)) index += 1;
+  return `${base} ${index}`;
+}
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -97,11 +113,11 @@ export async function GET(request: Request) {
 }
 
 /**
- * POST → 201 { session, conversationId } — SPAWN a session.
+ * POST → 201 { session, conversationId } | { session, shellId } — SPAWN a session.
  *
  * One act, per the lifecycle invariant: a session is born with its first
- * conversation, so this creates the workspace row AND a conversation already
- * bound to it. Two shapes, matching the two session kinds:
+ * thing, so this creates the workspace row AND that first thing already bound
+ * to it. Two shapes, matching the two session kinds:
  *
  * - `{ driveId, agentPageId }` — a DRIVE session, first conversation with that
  *   drive agent.
@@ -110,11 +126,24 @@ export async function GET(request: Request) {
  *   access decision (there is no drive whose membership could admit anyone
  *   else).
  *
- * Half-specified shapes are refused: an agent without its drive is
- * unresolvable, and a drive without an agent would mint an empty session.
+ * `firstThing: 'shell'` swaps the first-conversation act for a first-shell
+ * one: the session's first thing is a shell instead, reusing the exact
+ * sandbox-provisioning + shell-spawn logic the shells route uses
+ * (`provisionSessionSandbox` + `spawnShell`) rather than reimplementing it.
+ * Omitted/anything else behaves exactly as before — the conversation path.
  *
- * Spawn is instant and free: NO sandbox is provisioned here. The first tool
- * call or shell open provisions lazily through the one shared path.
+ * Half-specified shapes are refused: an agent without its drive is
+ * unresolvable, and a drive without an agent would mint an empty session —
+ * UNLESS `firstThing: 'shell'`, whose first thing needs no agent.
+ *
+ * A blank/omitted `name` is not left null: it is auto-derived from the spawn
+ * target (the agent's title, "Shell", or "Assistant") and made unique among
+ * the owner's own existing session names before the row is inserted.
+ *
+ * Spawn itself is instant and free: NO sandbox is provisioned for the
+ * conversation path. `firstThing: 'shell'` is the exception — opening a shell
+ * always needs a live sandbox, so this branch provisions eagerly instead of
+ * waiting for the first tool call.
  *
  * Access: the same pure decision every session surface uses, applied to the
  * row-to-be — drive membership + code-execution for a drive session, owner +
@@ -124,7 +153,7 @@ export async function POST(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
 
-  let body: { driveId?: unknown; agentPageId?: unknown; name?: unknown } = {};
+  let body: { driveId?: unknown; agentPageId?: unknown; name?: unknown; firstThing?: unknown } = {};
   try {
     body = await request.json();
   } catch {
@@ -134,19 +163,23 @@ export async function POST(request: Request) {
   const agentPageId =
     typeof body.agentPageId === 'string' && body.agentPageId.length > 0 ? body.agentPageId : null;
   const rawName = typeof body.name === 'string' ? body.name.trim() : '';
-  // A label, never an address — but still bounded: it is stored, listed and
-  // rendered everywhere the session appears.
-  const name = rawName.length > 0 ? rawName.slice(0, MAX_SESSION_NAME_LENGTH) : null;
+  const wantsShellFirst = body.firstThing === 'shell';
 
-  if ((driveId === null) !== (agentPageId === null)) {
+  if (!wantsShellFirst && (driveId === null) !== (agentPageId === null)) {
     // Half-specified: an agent without its drive is unresolvable, and a drive
     // without an agent would mint an empty session. Both-null is the
-    // global-assistant spawn; both-present is the drive spawn.
+    // global-assistant spawn; both-present is the drive spawn. A shell-first
+    // spawn needs no agent, so it is exempt from this shape check.
     return NextResponse.json(
       { error: 'A session needs a drive and an agent to start with, or neither for the assistant' },
       { status: 400 },
     );
   }
+
+  // The agent's title, when one is being spawned into — the base label a
+  // blank `name` derives from (see below). Captured here rather than
+  // re-fetched, since the lookup already happened for validation.
+  let agentTitle: string | null = null;
 
   if (agentPageId !== null && driveId !== null) {
     // The same checks the conversation routes make, BEFORE any row is minted
@@ -179,6 +212,7 @@ export async function POST(request: Request) {
         { status: 403 },
       );
     }
+    agentTitle = agent.title;
   }
 
   // Advisory fast-path only (review #2261/2): count-then-branch here is
@@ -215,6 +249,21 @@ export async function POST(request: Request) {
     );
   }
 
+  // A label, never an address — but still bounded: it is stored, listed and
+  // rendered everywhere the session appears. Blank/omitted does not stay
+  // null: it is derived from the spawn target and made unique among the
+  // owner's own existing session names, so the sidebar never renders the
+  // literal fallback "Session" for a spawn that went through this route.
+  let name: string;
+  if (rawName.length > 0) {
+    name = rawName.slice(0, MAX_SESSION_NAME_LENGTH);
+  } else {
+    const baseLabel = wantsShellFirst ? 'Shell' : agentPageId !== null ? (agentTitle ?? 'Agent') : 'Assistant';
+    const existingSessions = await listSessions({ ownerId: auth.userId });
+    const existingNames = existingSessions.map((session) => session.name);
+    name = nextUniqueSessionName(baseLabel, existingNames).slice(0, MAX_SESSION_NAME_LENGTH);
+  }
+
   const spawned = await spawnSession({ userId: auth.userId, driveId, name });
   if (!spawned.ok) {
     if (spawned.reason === 'session_limit_reached') {
@@ -226,6 +275,49 @@ export async function POST(request: Request) {
     }
     loggers.api.error('Agent session spawn failed', undefined, { driveId, detail: spawned.detail });
     return NextResponse.json({ error: 'Could not start a session', reason: spawned.reason }, { status: 502 });
+  }
+
+  if (wantsShellFirst) {
+    // The first shell — same provisioning + spawn pair the shells route uses
+    // (`[sessionId]/shells/route.ts` POST, lines 88-167): a shell always
+    // needs a live sandbox, so unlike the conversation path this provisions
+    // eagerly rather than waiting for the first tool call.
+    const provisioned = await provisionSessionSandbox(spawned.session, auth.userId);
+    if (!provisioned.ok) {
+      await endSession(spawned.session.id).catch(() => {});
+      loggers.api.error(
+        'Agent session spawn: first shell sandbox provision failed',
+        undefined,
+        { sessionId: spawned.session.id, reason: provisioned.reason },
+      );
+      return NextResponse.json({ error: 'Could not start a session' }, { status: 502 });
+    }
+
+    const shellSpawned = await spawnShell({ sessionId: spawned.session.id, ownerId: auth.userId });
+    if (!shellSpawned.ok) {
+      // The session row exists but its first shell failed: end it rather than
+      // leave an empty workspace the model says cannot exist.
+      await endSession(spawned.session.id).catch(() => {});
+      loggers.api.error(
+        'Agent session spawn: first shell failed',
+        undefined,
+        { sessionId: spawned.session.id, reason: shellSpawned.reason },
+      );
+      return NextResponse.json({ error: 'Could not start a session' }, { status: 502 });
+    }
+
+    auditRequest(request, {
+      eventType: 'data.write',
+      userId: auth.userId,
+      resourceType: 'agent_session',
+      resourceId: spawned.session.id,
+      details: { op: 'spawn_session', driveId, agentPageId: null, shellId: shellSpawned.shell.shellId },
+    });
+
+    return NextResponse.json(
+      { session: toAgentSessionDTO(spawned.session), shellId: shellSpawned.shell.shellId },
+      { status: 201 },
+    );
   }
 
   // The first conversation — the session is never empty. Created through the
