@@ -9,19 +9,39 @@ import { decideSigninRecovery, type SigninRecoveryInput } from './signin-recover
 
 const DEFAULT_NEXT = '/dashboard';
 
+// Matches AuthFetch's TOKEN_RETRIEVAL_TIMEOUT_MS (auth-fetch.ts) — same underlying Keychain
+// round-trip, same "can hang during app launch on iOS" hazard. Exported so the regression test
+// can assert against it directly instead of a hardcoded duplicate that could silently drift.
+export const DEVICE_TOKEN_TIMEOUT_MS = 3000;
+
 /**
  * Whether a device token exists to recover an expired session from — read from PLATFORM storage
  * (D1): desktop reads safeStorage over IPC (window.electron.auth) via DesktopStorage, web reads
  * localStorage via WebStorage. The old localStorage-only check saw nothing on desktop, which is
  * why native shells could never self-recover. Async because the desktop read is an IPC round-trip.
+ *
+ * Raced against a timeout because the underlying native call can hang indefinitely (iOS
+ * Keychain access during app launch) — same hazard `getSessionTokenWithTimeout` guards
+ * against in auth-fetch.ts. Without this, a hung call leaves `recovering` stuck `true`
+ * forever, stranding the user on the loading screen.
  */
 async function hasDeviceToken(): Promise<boolean> {
+  let timeoutId: ReturnType<typeof setTimeout>;
+  const timeoutPromise = new Promise<null>((resolve) => {
+    timeoutId = setTimeout(() => resolve(null), DEVICE_TOKEN_TIMEOUT_MS);
+  });
+
   try {
-    const session = await getPlatformStorage().getStoredSession();
+    const session = await Promise.race([
+      getPlatformStorage().getStoredSession(),
+      timeoutPromise,
+    ]);
     return !!session?.deviceToken;
   } catch {
     // Storage unavailable (IPC failure / SSR) — treat as no token and fall through to the form.
     return false;
+  } finally {
+    clearTimeout(timeoutId!);
   }
 }
 
