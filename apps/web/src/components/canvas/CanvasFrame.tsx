@@ -19,6 +19,15 @@ interface CanvasFrameProps {
    *  the canvas Settings tab's Appearance category) so the editor's live
    *  preview matches what publishing will produce. Defaults to `true`. */
   themeBridgeEnabled?: boolean;
+  /**
+   * Called when the user presses Escape inside the iframe. The sandboxed
+   * iframe is a separate browsing context, so a parent-level `keydown`
+   * listener (e.g. a Radix Dialog wrapping this frame) never sees the key
+   * press once focus moves inside — this bridges it via `postMessage`
+   * (`escapeBridge` on `renderCanvasDocument`). Omit when this CanvasFrame
+   * isn't inside anything Escape should close (e.g. the plain View tab).
+   */
+  onEscape?: () => void;
 }
 
 /**
@@ -73,7 +82,7 @@ function hasRecentUserActivation(): boolean {
  * The document string is the same one produced for published pages, so the
  * in-app view and the published artifact render identically.
  */
-export function CanvasFrame({ html, title, themeBridgeEnabled = true }: CanvasFrameProps) {
+export function CanvasFrame({ html, title, themeBridgeEnabled = true, onEscape }: CanvasFrameProps) {
   const nonce = useNonce();
   const router = useRouter();
   const [previewHtml, setPreviewHtml] = useState(html);
@@ -130,9 +139,16 @@ export function CanvasFrame({ html, title, themeBridgeEnabled = true }: CanvasFr
   // navigationBridge: true injects a script that intercepts clicks on internal
   // dashboard page links and hands them to the message handler below, so they
   // route in-app instead of falling through to baseTarget's new-tab behavior.
+  // escapeBridge is only injected when a caller actually wants Escape
+  // forwarded (see onEscape doc) — no point wiring it up with nothing to
+  // notify. Keyed on the BOOLEAN presence, not the callback identity itself:
+  // an inline arrow prop (e.g. `onEscape={() => setOpen(false)}`) is a new
+  // function every render, and including it directly here would recompute
+  // srcDoc — and so reload the iframe — on every unrelated parent re-render.
+  const hasEscapeHandler = Boolean(onEscape);
   const srcDoc = useMemo(
-    () => renderCanvasDocument({ html: previewHtml, title, baseTarget: '_blank', injectThemeBridge: themeBridgeEnabled, navigationBridge: true, nonce }),
-    [previewHtml, title, nonce, themeBridgeEnabled],
+    () => renderCanvasDocument({ html: previewHtml, title, baseTarget: '_blank', injectThemeBridge: themeBridgeEnabled, navigationBridge: true, escapeBridge: hasEscapeHandler, nonce }),
+    [previewHtml, title, nonce, themeBridgeEnabled, hasEscapeHandler],
   );
 
   // Send the current theme to the canvas iframe whenever it changes or the
@@ -151,7 +167,8 @@ export function CanvasFrame({ html, title, themeBridgeEnabled = true }: CanvasFr
   }, [resolvedTheme, srcDoc]);
 
   // Respond to the iframe's initial theme request (fires on load before the
-  // resolvedTheme effect above catches it) and handle in-app navigation
+  // resolvedTheme effect above catches it), forward Escape from the injected
+  // escape-bridge script (escapeBridge), and handle in-app navigation
   // requests from the injected click-interceptor script (navigationBridge).
   useEffect(() => {
     function handleMessage(e: MessageEvent) {
@@ -162,6 +179,11 @@ export function CanvasFrame({ html, title, themeBridgeEnabled = true }: CanvasFr
           { type: 'pagespace-theme', isDark: resolvedTheme === 'dark' },
           '*',
         );
+        return;
+      }
+
+      if (e.data?.type === 'pagespace-escape') {
+        onEscape?.();
         return;
       }
 
@@ -186,7 +208,7 @@ export function CanvasFrame({ html, title, themeBridgeEnabled = true }: CanvasFr
     }
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [resolvedTheme, router]);
+  }, [resolvedTheme, router, onEscape]);
 
   return (
     <iframe

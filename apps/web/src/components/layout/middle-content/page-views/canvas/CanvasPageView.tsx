@@ -1,11 +1,13 @@
 "use client";
 
-import React, { useEffect, useCallback, useRef } from 'react';
+import React, { useEffect, useCallback, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { Maximize2 } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import dynamic from 'next/dynamic';
 import { CanvasFrame } from '@/components/canvas/CanvasFrame';
 import { ErrorBoundary } from '@/components/ai/shared';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { useDocument } from '@/hooks/useDocument';
 import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
 import { useEditingStore } from '@/stores/useEditingStore';
@@ -49,6 +51,8 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   }, [searchParams, pathname, router]);
 
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const closePreview = useCallback(() => setIsPreviewOpen(false), []);
   const containerRef = useRef<HTMLDivElement>(null);
   const hasInitializedRef = useRef(false);
   const isDirtyRef = useRef(false);
@@ -239,10 +243,21 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
         </div>
       )}
       {activeTab === 'view' && (
-        <div className="flex-1 w-full bg-background text-foreground">
-          <ErrorBoundary>
-            <CanvasFrame html={content} themeBridgeEnabled={themeBridgeEnabled} />
-          </ErrorBoundary>
+        <div className="relative flex-1 w-full bg-background text-foreground">
+          <button
+            type="button"
+            title="Fullscreen preview"
+            aria-label="Fullscreen preview"
+            onClick={() => setIsPreviewOpen(true)}
+            className="absolute top-2 right-2 z-10 rounded-md bg-background/70 p-1.5 text-muted-foreground backdrop-blur-sm hover:bg-background hover:text-foreground"
+          >
+            <Maximize2 className="h-4 w-4" />
+          </button>
+          {!isPreviewOpen && (
+            <ErrorBoundary>
+              <CanvasFrame html={content} themeBridgeEnabled={themeBridgeEnabled} />
+            </ErrorBoundary>
+          )}
         </div>
       )}
       {activeTab === 'settings' && (
@@ -254,6 +269,18 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
           />
         </div>
       )}
+
+      <Dialog open={isPreviewOpen} onOpenChange={setIsPreviewOpen}>
+        <DialogContent
+          showCloseButton
+          className="w-screen h-screen max-w-none max-h-none p-0 gap-0 rounded-none border-0 sm:max-w-none"
+        >
+          <DialogTitle className="sr-only">Canvas preview</DialogTitle>
+          <ErrorBoundary>
+            <CanvasFrame html={content} title="Canvas preview" themeBridgeEnabled={themeBridgeEnabled} onEscape={closePreview} />
+          </ErrorBoundary>
+        </DialogContent>
+      </Dialog>
 
       {isLoading && (
         <div className="absolute inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center">
