@@ -21,7 +21,8 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { SWRConfig } from 'swr';
+import useSWR, { SWRConfig } from 'swr';
+import { agentSessionsKey } from '@/components/agents/panes/session-conversations';
 
 const mockPush = vi.fn();
 const mockUseAuth = vi.fn();
@@ -158,6 +159,25 @@ const renderSidebar = () =>
       <AgentsSidebar />
     </SWRConfig>,
   );
+
+/**
+ * Reads the exact cache key `AgentPanes` reads (`agentSessionsKey(driveId)`)
+ * — mounted alongside `AgentsSidebar` in the SAME `SWRConfig` to prove a
+ * reopen's optimistic write lands in the key the pane grid actually
+ * consumes, not just the sidebar's own (which differs from it in the
+ * global console when the session belongs to a real drive).
+ */
+function DriveCacheProbe({ driveId }: { driveId: string }) {
+  const { data } = useSWR<{ sessions: SessionFixture[] }>(agentSessionsKey(driveId), async (url: string) => {
+    const res = await mockFetchWithAuth(url);
+    return res.json();
+  });
+  const conversationIds = (data?.sessions ?? [])
+    .flatMap((s) => s.conversations)
+    .map((c) => c.conversationId)
+    .join(',');
+  return <div data-testid="drive-cache-probe">{conversationIds}</div>;
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -762,6 +782,35 @@ describe('AgentsSidebar', () => {
         ([url]) => url === '/api/agent-sessions?driveId=drive-1',
       ).length;
       expect(sessionsListCallsAfter).toBe(sessionsListCallsBefore);
+    });
+
+    test('in the GLOBAL console, also updates the drive-scoped cache AgentPanes actually reads — not just this sidebar\'s own global key (review finding: chatgpt-codex-connector on PR #2296)', async () => {
+      // Global console: this sidebar's own key is '/api/agent-sessions' (no
+      // driveId), but SESSION belongs to a real drive ('drive-1') —
+      // AgentPanes reads `agentSessionsKey('drive-1')` specifically, a
+      // DIFFERENT cache entry than this sidebar's own in this mode.
+      mockUseParams.mockReturnValue({});
+      window.history.replaceState({}, '', '/dashboard/agents');
+      useAgentSurfaceStore.setState({ driveId: null });
+      respondWithSessionsAndClosed([SESSION], [CLOSED_CONVERSATION]);
+      mockPost.mockResolvedValue(undefined);
+      const user = userEvent.setup();
+
+      render(
+        <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+          <AgentsSidebar />
+          <DriveCacheProbe driveId="drive-1" />
+        </SWRConfig>,
+      );
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      await user.click(await screen.findByText('History'));
+      await user.click(await screen.findByText('Researcher — Old chat'));
+      await waitFor(() => expect(mockPost).toHaveBeenCalled());
+
+      await waitFor(() =>
+        expect(screen.getByTestId('drive-cache-probe').textContent).toContain('conv-closed'),
+      );
     });
 
     test('a non-404 reopen failure shows an error toast and leaves selection untouched', async () => {

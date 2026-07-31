@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { Bot, ChevronDown, ChevronRight, Folder, History, Loader2, Plus, Search, SquareTerminal, X } from 'lucide-react';
 import { toast } from 'sonner';
-import useSWR from 'swr';
+import useSWR, { useSWRConfig } from 'swr';
 
 import EndSessionDialog from '@/components/agents/EndSessionDialog';
 import { Input } from '@/components/ui/input';
@@ -33,6 +33,7 @@ import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspa
 import { fetchWithAuth, post, del, ApiRequestError } from '@/lib/auth/auth-fetch';
 import { buildSessionGroups, ASSISTANT_GROUP_KEY } from './session-groups';
 import { RowMenu, type RowMenuItem } from './RowMenu';
+import { agentSessionsKey } from '@/components/agents/panes/session-conversations';
 
 /**
  * The Agents console's left sidebar: **Drive → Session → conversations.**
@@ -559,6 +560,11 @@ function SessionRow({
   const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
   const selectSession = useAgentSurfaceStore((state) => state.selectSession);
   const forgetWorkspace = useAgentWorkspaceStore((state) => state.forgetWorkspace);
+  // Scoped to whatever cache provider this tree renders under (matching
+  // whichever cache `useSWR` calls nearby actually read) — the bare `mutate`
+  // import from `'swr'` only ever targets the true default cache, silently
+  // missing a scoped one if this ever renders under a custom `SWRConfig`.
+  const { mutate: scopedMutate } = useSWRConfig();
   const [expanded, setExpanded] = useState(false);
   const [confirmingEnd, setConfirmingEnd] = useState(false);
   const [ending, setEnding] = useState(false);
@@ -676,26 +682,48 @@ function SessionRow({
         // Drop it from the closed list and add it to the open list LOCALLY,
         // synchronously — not just a revalidate. `openConversation` below
         // focuses this conversation's pane immediately, and `AgentPanes`'
-        // close-pane decision reads this SAME cache (`agentSessionsKey`,
-        // this sidebar's `sessionsKey` is the identical string) to decide
-        // whether closing that pane should also issue the session-scoped
-        // DELETE. A plain revalidate is a network round trip behind that —
-        // closing the pane before it lands reads "no listing found" and
-        // silently skips the DELETE, leaving the reopened conversation
-        // consuming a cap slot forever (review finding —
+        // close-pane decision reads `agentSessionsKey(session.driveId)` to
+        // decide whether closing that pane should also issue the
+        // session-scoped DELETE. A plain revalidate is a network round trip
+        // behind that — closing the pane before it lands reads "no listing
+        // found" and silently skips the DELETE, leaving the reopened
+        // conversation consuming a cap slot forever (review finding —
         // chatgpt-codex-connector on PR #2296). Mirrors `AgentPanes.tsx`'s
         // own `recordMintedConversation`/`recordClosedConversation`.
         void retryClosed();
-        onChanged((current) => {
+        // Idempotent — de-dupes by conversationId before prepending, not a
+        // plain prepend. `onChanged` and the `scopedMutate` call below can
+        // both land on the SAME cache entry (whenever this sidebar's own
+        // key already equals `agentSessionsKey(session.driveId)`, the
+        // common drive-scoped-view case) — a plain prepend applied twice to
+        // the same underlying data would insert the conversation twice.
+        const insertReopened = (current: SessionsCacheData): SessionsCacheData => {
           if (!current) return current;
           return {
             sessions: current.sessions.map((s) =>
               s.sessionId === session.sessionId
-                ? { ...s, conversations: [conversation, ...s.conversations] }
+                ? {
+                    ...s,
+                    conversations: [
+                      conversation,
+                      ...s.conversations.filter((c) => c.conversationId !== conversation.conversationId),
+                    ],
+                  }
                 : s,
             ),
           };
-        });
+        };
+        onChanged(insertReopened);
+        // `agentSessionsKey(session.driveId)` is the SAME string as this
+        // sidebar's own `sessionsKey` only when the sidebar is itself
+        // drive-scoped to that same drive. In the GLOBAL console
+        // (`/dashboard/agents`, no driveId in the route) a drive-bound
+        // session's own key differs from this sidebar's `/api/agent-sessions`
+        // — `onChanged` above never reaches it, so `AgentPanes` (which reads
+        // exactly this key) would still miss the reopened conversation. Safe
+        // to call unconditionally: when the two keys coincide (drive-scoped
+        // view), this is a harmless duplicate of the same insert.
+        void scopedMutate(agentSessionsKey(session.driveId), insertReopened, { revalidate: false });
         setExpanded(true);
         openConversation(conversation);
       } catch (error) {
@@ -713,7 +741,7 @@ function SessionRow({
         setReopeningId(null);
       }
     },
-    [onChanged, openConversation, retryClosed, session.sessionId],
+    [onChanged, openConversation, retryClosed, scopedMutate, session.sessionId, session.driveId],
   );
 
   const conversationLabel = useCallback(

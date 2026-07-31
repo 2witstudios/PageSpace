@@ -23,8 +23,12 @@ const mockUpdateChain = vi.hoisted(() => ({
 
 const mockExecute = vi.hoisted(() => vi.fn());
 
-vi.mock('@pagespace/db/db', () => ({
-  db: {
+// `tx` supports the identical `.select`/`.update`/etc. surface `db` does —
+// the transaction mock invokes its callback with `db` itself, so a test's
+// `mockDb.update = vi.fn()...` override applies transparently whether the
+// real code runs its writes directly or inside `db.transaction(async (tx) => ...)`.
+vi.mock('@pagespace/db/db', () => {
+  const db = {
     select: vi.fn(() => mockSelectChain),
     insert: vi.fn(() => mockInsertChain),
     update: vi.fn(() => mockUpdateChain),
@@ -32,8 +36,10 @@ vi.mock('@pagespace/db/db', () => ({
     query: {
       pages: { findFirst: vi.fn() },
     },
-  },
-}));
+    transaction: vi.fn((callback: (tx: unknown) => unknown) => callback(db)),
+  };
+  return { db };
+});
 
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ kind: 'eq', field, value })),
@@ -428,6 +434,11 @@ describe('conversationRepository.softDeleteConversation', () => {
 
     await conversationRepository.softDeleteConversation('agent_1', 'conv_deleted');
 
+    // Both UPDATEs run inside ONE transaction — a partial failure between
+    // them must never leave messages inactive but the row still active, or
+    // vice versa (a second review finding on the same fix: chatgpt-codex-
+    // connector on PR #2296).
+    expect(mockDb.transaction).toHaveBeenCalledTimes(1);
     // Two separate UPDATEs: chat_messages (unchanged, pre-existing behavior)
     // THEN conversations — same order the fix was added in, verified via the
     // table argument each db.update() call received.
@@ -437,5 +448,21 @@ describe('conversationRepository.softDeleteConversation', () => {
     expect(setMock).toHaveBeenNthCalledWith(1, { isActive: false });
     expect(setMock).toHaveBeenNthCalledWith(2, { isActive: false });
     expect(mockInvalidateCompaction).toHaveBeenCalledWith('conv_deleted', { source: 'page', pageId: 'agent_1' });
+  });
+
+  it('does not touch conversations.isActive at all if the chat_messages update throws — the transaction rolls back atomically', async () => {
+    const failingWhere = vi.fn().mockRejectedValue(new Error('db exploded'));
+    const setMock = vi.fn().mockReturnValue({ where: failingWhere });
+    mockDb.update = vi.fn().mockReturnValue({ set: setMock });
+
+    await expect(conversationRepository.softDeleteConversation('agent_1', 'conv_deleted')).rejects.toThrow(
+      'db exploded',
+    );
+
+    // Only the FIRST update (chat_messages) was even attempted — the second
+    // (conversations) never ran, matching real transaction semantics where
+    // a throw inside the callback aborts before any later statement.
+    expect(mockDb.update).toHaveBeenCalledTimes(1);
+    expect(mockInvalidateCompaction).not.toHaveBeenCalled();
   });
 });
