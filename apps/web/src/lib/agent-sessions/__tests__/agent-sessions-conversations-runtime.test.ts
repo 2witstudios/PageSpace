@@ -30,6 +30,7 @@ vi.mock('@pagespace/db/db', () => {
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((col, val) => ({ op: 'eq', col, val })),
   and: vi.fn((...args) => ({ op: 'and', args })),
+  or: vi.fn((...args) => ({ op: 'or', args })),
   desc: vi.fn((field) => ({ op: 'desc', field })),
   sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ op: 'sql', strings, values })),
   exists: vi.fn((sub) => ({ op: 'exists', sub })),
@@ -49,6 +50,7 @@ vi.mock('@pagespace/db/schema/agent-sessions', () => ({
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id', title: 'pages.title', driveId: 'pages.driveId' },
+  chatMessages: { pageId: 'chatMessages.pageId', conversationId: 'chatMessages.conversationId', isActive: 'chatMessages.isActive' },
 }));
 
 import * as dbModule from '@pagespace/db/db';

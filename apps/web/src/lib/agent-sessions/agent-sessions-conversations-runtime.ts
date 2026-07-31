@@ -16,10 +16,10 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, desc, eq, exists, isNotNull, sql } from '@pagespace/db/operators';
+import { and, desc, eq, exists, isNotNull, or, sql } from '@pagespace/db/operators';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { agentSessions } from '@pagespace/db/schema/agent-sessions';
-import { pages } from '@pagespace/db/schema/core';
+import { pages, chatMessages } from '@pagespace/db/schema/core';
 
 export interface PastConversationRow {
   conversationId: string;
@@ -54,13 +54,41 @@ export interface PaginatedPastConversationsResult {
   };
 }
 
-/** Keeps conversations that never got a first message out of "history" — same rule `globalConversationRepository` applies. */
-const hasActiveMessage = exists(
-  db
-    .select({ one: sql`1` })
-    .from(messages)
-    .where(and(eq(messages.conversationId, conversations.id), eq(messages.isActive, true))),
-);
+/**
+ * Keeps conversations that never got a first message out of "history" — same
+ * rule `globalConversationRepository` applies. NOT a single table: despite
+ * `messages`' own doc comment claiming to be "unified... for all conversation
+ * types", only `type: 'global'` (and, so far as this codebase shows, `type:
+ * 'drive'`) content actually lands there — `type: 'page'` conversations
+ * (including session-bound agent chats, which share the same page-agent send
+ * path) write to the older `chat_messages` table instead, keyed by `pageId` +
+ * a local `conversationId` grouping column (never an FK to `conversations.id`,
+ * but the same value `conversations.id` holds for that row — see
+ * `conversationRepository.conversationExists`, which queries it the same way).
+ * Checking only `messages` here silently excluded every page-agent
+ * conversation with real content from this listing (review finding).
+ */
+const hasActiveMessage = or(
+  exists(
+    db
+      .select({ one: sql`1` })
+      .from(messages)
+      .where(and(eq(messages.conversationId, conversations.id), eq(messages.isActive, true))),
+  ),
+  exists(
+    db
+      .select({ one: sql`1` })
+      .from(chatMessages)
+      .where(
+        and(
+          eq(conversations.type, 'page'),
+          eq(chatMessages.conversationId, conversations.id),
+          eq(chatMessages.pageId, conversations.contextId),
+          eq(chatMessages.isActive, true),
+        ),
+      ),
+  ),
+)!;
 
 /**
  * The sort/cursor key. NOT just `lastMessageAt`: unlike the global-chat
