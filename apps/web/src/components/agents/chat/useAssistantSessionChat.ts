@@ -41,7 +41,7 @@ import {
   buildChatConfig,
   buildGlobalChatRequestBody,
 } from '@/lib/ai/shared';
-import { buildContextRef } from '@/lib/ai/shared/buildContextRef';
+import { buildContextRef, type ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimisticSendOnFailure';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
@@ -65,9 +65,20 @@ import type { UseAgentSessionChatReturn } from './useAgentSessionChat';
 
 export function useAssistantSessionChat({
   conversationId,
+  driveId,
 }: {
   /** The assistant conversation this pane is mounted for — fixed for the hook's life. */
   conversationId: string;
+  /**
+   * The session's own drive, when it has one — `null` for a driveless
+   * global-assistant session. Takes priority over the pathname-derived
+   * context below: the Agents console never navigates as panes/sessions are
+   * clicked (`AgentsSidebar`'s whole design), and `agents` isn't even a
+   * route `buildContextRef` recognizes as drive-scoped (see `tab-title.ts`),
+   * so pathname parsing can never see this session's drive — the session
+   * itself is the only reliable source.
+   */
+  driveId: string | null;
 }): UseAgentSessionChatReturn {
   const pathname = usePathname();
   const { user } = useAuth();
@@ -159,7 +170,7 @@ export function useAssistantSessionChat({
       const trimmed = text.trim();
       if (!trimmed || !conversationId) return false;
 
-      const contextRef = buildContextRef(pathname, drives);
+      const contextRef: ContextRef = driveId ? { routeType: 'drive', driveId } : buildContextRef(pathname, drives);
       if (!(await prepareSend(conversationId))) {
         toast.error(HANDOFF_REFUSED_MESSAGE);
         return false;
@@ -191,6 +202,7 @@ export function useAssistantSessionChat({
     },
     [
       conversationId,
+      driveId,
       pathname,
       drives,
       prepareSend,

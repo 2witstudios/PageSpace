@@ -91,7 +91,17 @@ export default function PanePicker({
     >
       <p className="shrink-0 text-xs font-medium text-muted-foreground">Open in this pane</p>
 
-      <div className="flex min-h-0 flex-col gap-1">
+      {/* `shrink-0`, not `min-h-0`: none of this picker's sub-lists scroll on
+          their own (the root `overflow-auto` above is the only scroll
+          region), so a sub-list must never be allowed to shrink below its
+          buttons' height — `min-h-0` on a non-scrolling flex item just lets
+          the outer column crush it under space pressure while its buttons
+          (already `shrink-0` via the Button component) refuse to shrink,
+          which pushes their overflow into the next section instead of
+          scrolling — exactly what made a short split pane's "Global
+          Assistant" button visually collide with "Agents" and eat its
+          clicks. */}
+      <div className="flex shrink-0 flex-col gap-1">
         <Button
           ref={firstRef}
           variant="ghost"
@@ -122,7 +132,7 @@ export default function PanePicker({
           the drive's agents since reattaching an existing thing outranks
           spawning a new one. */}
       {existingShells.length > 0 && (
-        <div className="flex min-h-0 flex-col gap-1">
+        <div className="flex shrink-0 flex-col gap-1">
           <p className="shrink-0 pt-1 text-xs font-medium text-muted-foreground">Reattach a shell</p>
           {existingShells.map((shell) => (
             <Button
@@ -148,7 +158,7 @@ export default function PanePicker({
           Loading agents…
         </p>
       ) : agents.length > 0 ? (
-        <div className="flex min-h-0 flex-col gap-1">
+        <div className="flex shrink-0 flex-col gap-1">
           <p className="shrink-0 pt-1 text-xs font-medium text-muted-foreground">Agents</p>
           {agents.map((agent) => (
             <Button

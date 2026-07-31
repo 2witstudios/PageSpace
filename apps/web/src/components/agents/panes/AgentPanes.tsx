@@ -764,6 +764,7 @@ export default function AgentPanes({
             <PaneChat
               conversationId={surface.conversationId}
               agentPageId={surface.agentPageId}
+              driveId={driveId}
               context={chatContext}
               isReadOnly={isReadOnly}
             />

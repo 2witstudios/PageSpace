@@ -21,11 +21,14 @@ import { useResolvedAgent } from '../useResolvedAgent';
 export default function PaneChat({
   conversationId,
   agentPageId,
+  driveId,
   context = 'console',
   isReadOnly = false,
 }: {
   conversationId: string;
   agentPageId: string | null;
+  /** This pane's session's own drive — `null` for a global-assistant session. Only the assistant branch needs it (an agent already carries its own `driveId`). */
+  driveId: string | null;
   /** Which message renderer to use — the page grid hosts the full one. */
   context?: 'page' | 'console';
   isReadOnly?: boolean;
@@ -35,7 +38,14 @@ export default function PaneChat({
   const { agent, isLoading } = useResolvedAgent(agentPageId);
 
   if (agentPageId === null) {
-    return <AssistantSessionChat conversationId={conversationId} context={context} isReadOnly={isReadOnly} />;
+    return (
+      <AssistantSessionChat
+        conversationId={conversationId}
+        driveId={driveId}
+        context={context}
+        isReadOnly={isReadOnly}
+      />
+    );
   }
 
   if (isLoading || !agent) {

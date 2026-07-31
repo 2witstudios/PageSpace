@@ -7,6 +7,19 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Global Assistant is no longer unclickable right after splitting a pane in the Agents console** —
+  a short pane's empty-pane picker could crush its "Shell"/"Global Assistant" choices under the
+  "Agents" list below them, so the Global Assistant button visually collided with — and lost clicks
+  to — the section beneath it. The picker's sections no longer shrink below their own content.
+- **The Agents console's session list no longer shows a distracting scrollbar** — the sidebar's
+  left-hand session list now scrolls without ever painting a scrollbar, matching the rest of the
+  console's chrome-free feel.
+- **A Global Assistant conversation started from the global Agents dashboard now keeps the right
+  drive's context** — picking Global Assistant for a specific drive from `/dashboard/agents` (rather
+  than that drive's own Agents page) minted a session correctly scoped to that drive, but the
+  assistant itself had no way to know which drive it was in — it derived that from the current page,
+  and the Agents console never navigates as you click between sessions. It now reads the drive
+  straight from its own session instead.
 - **A database outage no longer takes the whole platform down with it** — when Postgres
   became unreachable (as in the recent OOM stalls), the rate limiter denied every request
   platform-wide, turning a database incident into a total outage. Production now degrades to
@@ -53,6 +66,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Start a session with Global Assistant directly from a drive** — clicking "+" on a drive in the
+  Agents console now offers Global Assistant alongside that drive's own agents and Shell, first in
+  the list. The new session is filed under that drive, same as any agent session, rather than only
+  being reachable as a driveless global session. Its default name now also reads "Global Assistant"
+  (was "Assistant") everywhere a session or conversation goes unnamed.
 - **Rotate a webhook secret in place** — the Incoming Webhooks dialog (and
   `POST /api/pages/[pageId]/webhooks/[id]/rotate`) now mints a fresh signing secret for the **same
   webhook URL**, so replacing a lost or leaked secret no longer means deleting the webhook and
