@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { Bot, ChevronDown, ChevronRight, MessageSquarePlus, Plus, SquareTerminal, X } from 'lucide-react';
+import { Bot, ChevronDown, ChevronRight, Folder, Plus, SquareTerminal, X } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR from 'swr';
 
@@ -10,7 +10,6 @@ import EndSessionDialog from '@/components/agents/EndSessionDialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   CommandDialog,
-  CommandEmpty,
   CommandGroup,
   CommandInput,
   CommandItem,
@@ -251,6 +250,19 @@ function SessionList({
   // session, but must not offer to spawn a NEW one into a trashed drive.
   const trashedDriveIds = useMemo(() => new Set(drives.filter((d) => d.isTrashed).map((d) => d.id)), [drives]);
 
+  // Flattened once here (not per-SessionRow) so every session's conversation
+  // labels share one lookup instead of re-deriving it from `agentsByDrive` N
+  // times.
+  const agentNamesById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const drive of agentsByDrive) {
+      for (const agent of drive.agents) {
+        map.set(agent.id, agent.title ?? 'Agent');
+      }
+    }
+    return map;
+  }, [agentsByDrive]);
+
   // Group by drive in global mode (roster ∪ session-implied drives, Assistant
   // first — see session-groups.ts for the ordering rule); a single implicit
   // group in drive mode, always present (even with zero sessions) so its
@@ -261,27 +273,56 @@ function SessionList({
   }, [driveId, sessions, canSpawn, roster]);
 
   const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
-  const [spawnTarget, setSpawnTarget] = useState<{ driveId: string; driveName: string | null } | null>(null);
+  const selectSession = useAgentSurfaceStore((state) => state.selectSession);
+  const [spawnTarget, setSpawnTarget] = useState<{ driveId: string | null; driveName: string | null } | null>(null);
+  // Set once a target (agent/shell/assistant) is picked in the palette's first
+  // step — its presence is what swaps the dialog to the naming step. Null
+  // driveId + kind 'assistant' is the only shape the Assistant group's "+"
+  // ever produces (it skips the picker entirely, see handleNewSession).
+  const [spawnPick, setSpawnPick] = useState<SpawnPick | null>(null);
   const [spawning, setSpawning] = useState(false);
 
   const spawn = useCallback(
-    async (targetDriveId: string | null, agentPageId: string | null) => {
+    async (input: { driveId: string | null; agentPageId: string | null; kind: SpawnKind; name: string }) => {
       if (spawning) return;
       setSpawning(true);
       try {
+        if (input.kind === 'shell') {
+          const created = await post<{ session: { sessionId: string }; shellId: string; shellName: string }>(
+            '/api/agent-sessions',
+            { driveId: input.driveId, firstThing: 'shell', name: input.name },
+          );
+          setSpawnTarget(null);
+          setSpawnPick(null);
+          onChanged();
+          // useAgentSurfaceStore has no shell concept — land by selecting the
+          // session there, then placing the pane directly on the workspace
+          // store, mirroring AgentPanes.tsx's handleReattachShell. The shell
+          // is named independently server-side (spawnShell, no name passed) —
+          // use its own name, not the session label, so the pane title
+          // matches the shell row shown in the sidebar.
+          selectSession(created.session.sessionId);
+          useAgentWorkspaceStore.getState().openConversation(created.session.sessionId, {
+            kind: 'terminal',
+            name: created.shellName,
+            targetId: created.shellId,
+            agentPageId: null,
+          });
+          return;
+        }
         const created = await post<{ session: { sessionId: string }; conversationId: string }>(
           '/api/agent-sessions',
-          // Both-null is the global-assistant spawn shape.
-          agentPageId === null ? {} : { driveId: targetDriveId, agentPageId },
+          { driveId: input.driveId, agentPageId: input.agentPageId, name: input.name },
         );
         setSpawnTarget(null);
+        setSpawnPick(null);
         onChanged();
         // Land the user IN the new session's first conversation — no empty
         // state is ever visible.
         selectConversation({
           sessionId: created.session.sessionId,
           conversationId: created.conversationId,
-          agentId: agentPageId,
+          agentId: input.agentPageId,
         });
       } catch (error) {
         console.error('Failed to start a session:', error);
@@ -292,21 +333,30 @@ function SessionList({
         setSpawning(false);
       }
     },
-    [spawning, onChanged, selectConversation],
+    [spawning, onChanged, selectConversation, selectSession],
   );
 
-  // The ASSISTANT group has nothing to choose — the assistant IS the
-  // counterpart — so its "+" spawns directly, one click. A DRIVE group's "+"
-  // opens the palette to pick which agent the new session pairs with.
-  const handleNewSession = useCallback(
-    (groupDriveId: string, groupDriveName: string | null) => {
-      if (groupDriveId === ASSISTANT_GROUP_KEY) {
-        void spawn(null, null);
-        return;
-      }
-      setSpawnTarget({ driveId: groupDriveId, driveName: groupDriveName });
+  // Sessions are always deliberately named now — both groups open the same
+  // naming step. The ASSISTANT group has nothing to pick (the assistant IS
+  // the counterpart), so it skips straight to naming; a DRIVE group's "+"
+  // opens the picker first so the naming step's placeholder can reflect
+  // whichever agent/shell was chosen.
+  const handleNewSession = useCallback((groupDriveId: string, groupDriveName: string | null) => {
+    if (groupDriveId === ASSISTANT_GROUP_KEY) {
+      setSpawnTarget({ driveId: null, driveName: null });
+      setSpawnPick({ kind: 'assistant', agentPageId: null, label: 'Assistant' });
+      return;
+    }
+    setSpawnTarget({ driveId: groupDriveId, driveName: groupDriveName });
+    setSpawnPick(null);
+  }, []);
+
+  const handleSubmitName = useCallback(
+    (name: string) => {
+      if (!spawnTarget || !spawnPick) return;
+      void spawn({ driveId: spawnTarget.driveId, agentPageId: spawnPick.agentPageId, kind: spawnPick.kind, name });
     },
-    [spawn],
+    [spawn, spawnTarget, spawnPick],
   );
 
   const paletteAgents = useMemo(
@@ -333,7 +383,12 @@ function SessionList({
             />
           )}
           {group.sessions.map((session) => (
-            <SessionRow key={session.sessionId} session={session} onChanged={onChanged} />
+            <SessionRow
+              key={session.sessionId}
+              session={session}
+              onChanged={onChanged}
+              agentNamesById={agentNamesById}
+            />
           ))}
         </div>
       ))}
@@ -342,9 +397,15 @@ function SessionList({
         open={spawnTarget !== null}
         driveName={spawnTarget?.driveName ?? null}
         agents={paletteAgents}
+        pick={spawnPick}
         spawning={spawning}
-        onOpenChange={(open) => !open && setSpawnTarget(null)}
-        onSelectAgent={(agentId) => spawnTarget && void spawn(spawnTarget.driveId, agentId)}
+        onOpenChange={(open) => {
+          if (open) return;
+          setSpawnTarget(null);
+          setSpawnPick(null);
+        }}
+        onPickTarget={setSpawnPick}
+        onSubmitName={handleSubmitName}
       />
     </div>
   );
@@ -362,7 +423,10 @@ function SessionGroupHeader({
 }) {
   return (
     <div className="flex items-center justify-between gap-1 px-2 pb-0.5 pt-1.5">
-      <span className="truncate text-[11px] font-semibold tracking-wide text-muted-foreground">{label}</span>
+      <span className="flex min-w-0 items-center gap-1.5 truncate text-sm font-semibold text-foreground">
+        <Folder className="size-4 shrink-0" aria-hidden="true" />
+        <span className="truncate">{label}</span>
+      </span>
       {onNewSession && (
         <button
           type="button"
@@ -378,7 +442,15 @@ function SessionGroupHeader({
 }
 
 /** One session: name + running dot, expanding to its conversations (never its panes). */
-function SessionRow({ session, onChanged }: { session: SessionListEntry; onChanged: () => void }) {
+function SessionRow({
+  session,
+  onChanged,
+  agentNamesById,
+}: {
+  session: SessionListEntry;
+  onChanged: () => void;
+  agentNamesById: Map<string, string>;
+}) {
   const selectedSessionId = useAgentSurfaceStore((state) => state.selectedSessionId);
   const selectedConversationId = useAgentSurfaceStore((state) => state.selectedConversationId);
   const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
@@ -401,45 +473,33 @@ function SessionRow({ session, onChanged }: { session: SessionListEntry; onChang
     [selectConversation, session.sessionId],
   );
 
+  const openShell = useCallback(
+    (shell: { shellId: string; name: string }) => {
+      selectSession(session.sessionId);
+      useAgentWorkspaceStore.getState().openConversation(session.sessionId, {
+        kind: 'terminal',
+        name: shell.name,
+        targetId: shell.shellId,
+        agentPageId: null,
+      });
+    },
+    [selectSession, session.sessionId],
+  );
+
   const openSession = useCallback(() => {
     // Selecting a SESSION opens its most recent conversation — the row is a
-    // workspace, and a workspace opens on its work, not on a placeholder.
+    // workspace, and a workspace opens on its work, not on a placeholder. A
+    // shell-first session has no conversations at all, so fall back to its
+    // first shell rather than leave the click a no-op.
     setExpanded(true);
     const first = session.conversations[0];
-    if (first) openConversation(first);
-  }, [openConversation, session.conversations]);
-
-  const newConversation = useCallback(async () => {
-    // A new thread defaults to the session's most recent conversation's
-    // counterpart — the full drive picker lives in the pane grid. A null
-    // agent (a global session, or a drive session whose latest thread is an
-    // assistant thread) means the ASSISTANT, created through the
-    // session-centric route since it has no agent page.
-    const agentPageId = session.conversations[0]?.agentPageId ?? null;
-    try {
-      const created =
-        agentPageId === null
-          ? await post<{ conversationId: string }>(
-              `/api/agent-sessions/${encodeURIComponent(session.sessionId)}/conversations`,
-              {},
-            )
-          : await post<{ conversationId: string }>(
-              `/api/ai/page-agents/${encodeURIComponent(agentPageId)}/conversations`,
-              { sessionId: session.sessionId },
-            );
-      onChanged();
-      selectConversation({
-        sessionId: session.sessionId,
-        conversationId: created.conversationId,
-        agentId: agentPageId,
-      });
-    } catch (error) {
-      console.error('Failed to start a conversation:', error);
-      toast.error('Could not start a conversation', {
-        description: error instanceof Error ? error.message : 'Please try again.',
-      });
+    if (first) {
+      openConversation(first);
+      return;
     }
-  }, [onChanged, selectConversation, session.conversations, session.sessionId]);
+    const firstShell = session.shells[0];
+    if (firstShell) openShell(firstShell);
+  }, [openConversation, openShell, session.conversations, session.shells]);
 
   const endSession = useCallback(async () => {
     setEnding(true);
@@ -489,16 +549,14 @@ function SessionRow({ session, onChanged }: { session: SessionListEntry; onChang
 
   const menuItems: RowMenuItem[] = useMemo(
     () => [
-      { label: 'New conversation', icon: MessageSquarePlus, onSelect: () => void newConversation() },
       {
         label: 'End session',
         icon: X,
         onSelect: () => setConfirmingEnd(true),
         destructive: true,
-        separatorBefore: true,
       },
     ],
-    [newConversation],
+    [],
   );
 
   return (
@@ -506,7 +564,7 @@ function SessionRow({ session, onChanged }: { session: SessionListEntry; onChang
       <RowMenu
         items={menuItems}
         menuLabel="Session actions"
-        className={cn('gap-1 rounded-md px-1.5 py-1 text-[13px] hover:bg-accent', isSelected && 'bg-accent')}
+        className={cn('gap-1 rounded-md px-1.5 py-1 text-xs hover:bg-accent', isSelected && 'bg-accent')}
       >
         <button
           type="button"
@@ -528,15 +586,7 @@ function SessionRow({ session, onChanged }: { session: SessionListEntry; onChang
               className="size-1.5 shrink-0 rounded-full bg-emerald-500"
             />
           )}
-          <span className="truncate">{session.name || 'Session'}</span>
-        </button>
-        <button
-          type="button"
-          aria-label="New conversation in this session"
-          className="shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus:opacity-100 group-hover:opacity-100"
-          onClick={() => void newConversation()}
-        >
-          <MessageSquarePlus className="size-3.5" />
+          <span className="truncate text-muted-foreground">{session.name || 'Session'}</span>
         </button>
         <button
           type="button"
@@ -558,38 +608,50 @@ function SessionRow({ session, onChanged }: { session: SessionListEntry; onChang
 
       {expanded && (
         <div className="ml-4 space-y-0.5 border-l border-border pl-1.5">
-          {session.conversations.map((conversation) => (
-            <RowMenu
-              key={conversation.conversationId}
-              items={[
-                {
-                  label: 'Close',
-                  icon: X,
-                  onSelect: () => void closeConversation(conversation.conversationId),
-                  destructive: true,
-                },
-              ]}
-              menuLabel="Conversation actions"
-              className={cn(
-                'gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground',
-                selectedConversationId === conversation.conversationId && 'bg-accent text-foreground',
-              )}
-            >
-              <button
-                type="button"
-                className="flex min-w-0 flex-1 items-center text-left"
-                onClick={() => openConversation(conversation)}
+          {session.conversations.map((conversation) => {
+            const agentName =
+              conversation.agentPageId === null
+                ? 'Assistant'
+                : (agentNamesById.get(conversation.agentPageId) ?? 'Agent');
+            const label = conversation.title ? `${agentName} — ${conversation.title}` : agentName;
+            return (
+              <RowMenu
+                key={conversation.conversationId}
+                items={[
+                  {
+                    label: 'Close',
+                    icon: X,
+                    onSelect: () => void closeConversation(conversation.conversationId),
+                    destructive: true,
+                  },
+                ]}
+                menuLabel="Conversation actions"
+                className={cn(
+                  'gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground',
+                  selectedConversationId === conversation.conversationId && 'bg-accent text-foreground',
+                )}
               >
-                <span className="truncate">{conversation.title || 'New conversation'}</span>
-              </button>
-            </RowMenu>
+                <button
+                  type="button"
+                  className="flex min-w-0 flex-1 items-center text-left"
+                  onClick={() => openConversation(conversation)}
+                >
+                  <span className="truncate">{label}</span>
+                </button>
+              </RowMenu>
+            );
+          })}
+          {session.shells.map((shell) => (
+            <button
+              key={shell.shellId}
+              type="button"
+              className="flex min-w-0 w-full items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+              onClick={() => openShell(shell)}
+            >
+              <SquareTerminal className="size-3 shrink-0" aria-hidden="true" />
+              <span className="truncate">{shell.name}</span>
+            </button>
           ))}
-          {session.shells.length > 0 && (
-            <div className="flex items-center gap-1.5 px-1.5 py-0.5 text-[11px] text-muted-foreground">
-              <SquareTerminal className="size-3" aria-hidden="true" />
-              {session.shells.length === 1 ? '1 shell' : `${session.shells.length} shells`}
-            </div>
-          )}
           {session.conversations.length === 0 && (
             <div className="px-2 py-1 text-xs text-muted-foreground">No conversations</div>
           )}
@@ -599,57 +661,118 @@ function SessionRow({ session, onChanged }: { session: SessionListEntry; onChang
   );
 }
 
+type SpawnKind = 'agent' | 'shell' | 'assistant';
+
+/** What the palette's first step picked — drives the naming step's placeholder and spawn() call. */
+interface SpawnPick {
+  kind: SpawnKind;
+  agentPageId: string | null;
+  /** The sensible default: the agent's title, "Shell", or "Assistant". */
+  label: string;
+}
+
 /**
- * The agent picker for spawning a new DRIVE session, Raycast-style: search or
- * arrow-key to an agent and hit Enter — the same keyboard-first pattern
- * `QuickCreatePalette` established for page creation, reused here so a future
- * mouseless-navigation pass has one command-palette idiom to build on, not two.
- * Only ever opened for a drive group (the ASSISTANT group spawns directly —
- * it has nothing to choose, since the assistant IS the counterpart).
+ * The spawn palette for a new session, Raycast-style: search or arrow-key to
+ * a target and hit Enter — the same keyboard-first pattern `QuickCreatePalette`
+ * established for page creation, reused here so a future mouseless-navigation
+ * pass has one command-palette idiom to build on, not two. Two steps: pick a
+ * target (an agent, Shell, or — for the ASSISTANT group, which skips straight
+ * here since it has nothing else to choose — Assistant), then name the
+ * session. Naming is always the last step, even for a one-click assistant
+ * spawn, so every session gets a deliberate name.
  */
 function SpawnSessionPalette({
   open,
   driveName,
   agents,
+  pick,
   spawning,
   onOpenChange,
-  onSelectAgent,
+  onPickTarget,
+  onSubmitName,
 }: {
   open: boolean;
   driveName: string | null;
   agents: DriveWithAgents['agents'];
+  pick: SpawnPick | null;
   spawning: boolean;
   onOpenChange: (open: boolean) => void;
-  onSelectAgent: (agentId: string) => void;
+  onPickTarget: (pick: SpawnPick) => void;
+  onSubmitName: (name: string) => void;
 }) {
+  const [name, setName] = useState('');
+
+  // Blank by default every time a new naming step starts — a stale typed
+  // value from resolving one spawn must never prefill the next.
+  useEffect(() => {
+    if (open) setName('');
+  }, [open, pick]);
+
   return (
     <CommandDialog
       open={open}
       onOpenChange={onOpenChange}
-      title="New session"
+      title={pick ? 'Name your session' : 'New session'}
       description={
-        driveName ? `Choose an agent to start a session with in ${driveName}` : 'Choose an agent to start a session with'
+        pick
+          ? `Leave blank to use "${pick.label}"`
+          : driveName
+            ? `Choose an agent to start a session with in ${driveName}`
+            : 'Choose an agent to start a session with'
       }
       showCloseButton={false}
       className="max-w-[420px]"
     >
-      <CommandInput placeholder="Search agents…" autoFocus />
-      <CommandList>
-        <CommandEmpty>No agents in this drive yet.</CommandEmpty>
-        <CommandGroup>
-          {agents.map((agent) => (
-            <CommandItem
-              key={agent.id}
-              value={`${agent.id}-${agent.title ?? 'Agent'}`}
-              disabled={spawning}
-              onSelect={() => onSelectAgent(agent.id)}
-            >
-              <Bot className="size-3.5" aria-hidden="true" />
-              <span className="truncate">{agent.title ?? 'Agent'}</span>
-            </CommandItem>
-          ))}
-        </CommandGroup>
-      </CommandList>
+      {pick ? (
+        <form
+          className="p-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSubmitName(name);
+          }}
+        >
+          <input
+            autoFocus
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter') return;
+              event.preventDefault();
+              onSubmitName(name);
+            }}
+            placeholder={pick.label}
+            disabled={spawning}
+            className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-hidden placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          />
+        </form>
+      ) : (
+        <>
+          <CommandInput placeholder="Search agents…" autoFocus />
+          <CommandList>
+            <CommandGroup>
+              {agents.map((agent) => (
+                <CommandItem
+                  key={agent.id}
+                  value={`${agent.id}-${agent.title ?? 'Agent'}`}
+                  disabled={spawning}
+                  onSelect={() => onPickTarget({ kind: 'agent', agentPageId: agent.id, label: agent.title ?? 'Agent' })}
+                >
+                  <Bot className="size-3.5" aria-hidden="true" />
+                  <span className="truncate">{agent.title ?? 'Agent'}</span>
+                </CommandItem>
+              ))}
+              <CommandItem
+                value="shell-Shell"
+                disabled={spawning}
+                onSelect={() => onPickTarget({ kind: 'shell', agentPageId: null, label: 'Shell' })}
+              >
+                <SquareTerminal className="size-3.5" aria-hidden="true" />
+                <span className="truncate">Shell</span>
+              </CommandItem>
+            </CommandGroup>
+          </CommandList>
+        </>
+      )}
     </CommandDialog>
   );
 }

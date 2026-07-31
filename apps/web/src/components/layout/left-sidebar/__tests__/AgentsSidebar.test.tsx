@@ -173,6 +173,10 @@ beforeEach(() => {
   // test so one test's fixture never leaks into the next via the persisted
   // store.
   useDriveStore.setState({ drives: [] });
+  // Same leak risk for panes: two tests opening the same session id (every
+  // fixture here is 'ses-1' or 'ses-new') would otherwise see each other's
+  // panes[0], since nothing else clears this store between tests.
+  useAgentWorkspaceStore.setState({ workspaces: {} });
   mockUseAuth.mockReturnValue({ user: { role: 'admin' }, isLoading: false });
   mockUseParams.mockReturnValue({ driveId: 'drive-1' });
   mockUsePathname.mockReturnValue('/dashboard/drive-1/agents');
@@ -236,7 +240,7 @@ describe('AgentsSidebar', () => {
     await user.click(await screen.findByLabelText(/expand api refactor/i));
 
     // Conversations, yes; anything pane-shaped, no.
-    expect(screen.getByText('First chat')).toBeDefined();
+    expect(screen.getByText('Researcher — First chat')).toBeDefined();
     expect(screen.queryByText(/pane/i)).toBeNull();
     expect(screen.queryByText(/split/i)).toBeNull();
   });
@@ -258,12 +262,30 @@ describe('AgentsSidebar', () => {
       expect(mockPush).not.toHaveBeenCalled();
     });
 
+    test('clicking a shell-only session (no conversations) falls back to opening its first shell', async () => {
+      respondWithSessions([
+        { ...SESSION, conversations: [], shells: [{ shellId: 'shell-fallback-1', name: 'Shell' }] },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByText('api refactor'));
+
+      expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
+      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']?.columns[0]?.panes[0]?.scope).toEqual({
+        kind: 'terminal',
+        name: 'Shell',
+        targetId: 'shell-fallback-1',
+        agentPageId: null,
+      });
+    });
+
     test('clicking a conversation selects it under its session, still without navigating', async () => {
       const user = userEvent.setup();
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      await user.click(await screen.findByText('Second chat'));
+      await user.click(await screen.findByText('Researcher — Second chat'));
 
       expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
       expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-2');
@@ -324,29 +346,88 @@ describe('AgentsSidebar', () => {
     });
   });
 
-  describe('new conversation in a session', () => {
-    test("posts into the session with the last conversation's agent and selects the new thread", async () => {
-      mockPost.mockResolvedValue({ conversationId: 'conv-new' });
+  describe('conversation sub-item labels', () => {
+    test('composes <Agent> — <title> once a title is populated', async () => {
       const user = userEvent.setup();
       renderSidebar();
 
-      await screen.findByText('api refactor');
-      await user.click(screen.getByLabelText('New conversation in this session'));
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
 
-      await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
-      expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-1/conversations', {
-        sessionId: 'ses-1',
-      });
-      await waitFor(() =>
-        expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-new'),
-      );
+      expect(screen.getByText('Researcher — First chat')).toBeDefined();
+      expect(screen.getByText('Researcher — Second chat')).toBeDefined();
+    });
+
+    test('shows just the agent name when no title has been set yet', async () => {
+      respondWithSessions([
+        {
+          ...SESSION,
+          conversations: [{ conversationId: 'conv-1', title: null, agentPageId: 'agent-1' }],
+        },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+
+      expect(screen.getByText('Researcher')).toBeDefined();
+      expect(screen.queryByText(/—/)).toBeNull();
+    });
+
+    test('falls back to "Assistant" for a null agentPageId, and "Agent" for an unknown one', async () => {
+      respondWithSessions([
+        {
+          ...SESSION,
+          conversations: [
+            { conversationId: 'conv-1', title: null, agentPageId: null },
+            { conversationId: 'conv-2', title: null, agentPageId: 'agent-deleted' },
+          ],
+        },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+
+      expect(screen.getByText('Assistant')).toBeDefined();
+      expect(screen.getByText('Agent')).toBeDefined();
+    });
+  });
+
+  describe('shells', () => {
+    test('renders each shell as its own row, not a count', async () => {
+      respondWithSessions([
+        { ...SESSION, shells: [{ shellId: 'shell-a', name: 'shell-1' }, { shellId: 'shell-b', name: 'shell-2' }] },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+
+      expect(screen.getByText('shell-1')).toBeDefined();
+      expect(screen.getByText('shell-2')).toBeDefined();
+      expect(screen.queryByText(/shells$/)).toBeNull();
+    });
+
+    test('clicking a shell selects its session and opens its terminal pane', async () => {
+      respondWithSessions([{ ...SESSION, shells: [{ shellId: 'shell-a', name: 'shell-1' }] }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      await user.click(await screen.findByText('shell-1'));
+
       expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
-      expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-1');
+      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']?.columns[0]?.panes[0]?.scope).toEqual({
+        kind: 'terminal',
+        name: 'shell-1',
+        targetId: 'shell-a',
+        agentPageId: null,
+      });
     });
   });
 
   describe('new session', () => {
-    test('the inline "+" opens a searchable agent palette; picking an agent is one act: session AND its first conversation, land inside it', async () => {
+    test('the inline "+" opens a searchable agent palette; picking an agent advances to a naming step, and submitting blank still spawns the session AND its first conversation, landing inside it', async () => {
       mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-new' });
       const user = userEvent.setup();
       renderSidebar();
@@ -355,10 +436,16 @@ describe('AgentsSidebar', () => {
       await user.click(screen.getByLabelText('New session'));
       await user.click(await screen.findByText('Researcher'));
 
+      // Naming step: input starts empty with the agent's title as placeholder.
+      const nameInput = await screen.findByPlaceholderText('Researcher');
+      expect(nameInput).toHaveValue('');
+      await user.type(nameInput, '{Enter}');
+
       await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
       expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
         driveId: 'drive-1',
         agentPageId: 'agent-1',
+        name: '',
       });
       await waitFor(() =>
         expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-new'),
@@ -368,7 +455,30 @@ describe('AgentsSidebar', () => {
       expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-1');
     });
 
-    test('a drive with no agents says so instead of offering an empty chooser', async () => {
+    test('spawning a shell-first session names its terminal pane from the SHELL\'s own auto-assigned name, not the session label', async () => {
+      mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, shellId: 'shell-new', shellName: 'Shell 2' });
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      await user.click(screen.getByLabelText('New session'));
+      await user.click(await screen.findByText('Shell'));
+
+      const nameInput = await screen.findByPlaceholderText('Shell');
+      await user.type(nameInput, 'My Custom Session{Enter}');
+
+      await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
+      await waitFor(() =>
+        expect(useAgentWorkspaceStore.getState().workspaces['ses-new']?.columns[0]?.panes[0]?.scope).toEqual({
+          kind: 'terminal',
+          name: 'Shell 2',
+          targetId: 'shell-new',
+          agentPageId: null,
+        }),
+      );
+    });
+
+    test('a drive with no agents still offers Shell — no empty chooser', async () => {
       mockUsePageAgents.mockImplementation(() => ({
         agentsByDrive: [],
         isLoading: false,
@@ -381,7 +491,8 @@ describe('AgentsSidebar', () => {
       await screen.findByText('api refactor');
       await user.click(screen.getByLabelText('New session'));
 
-      expect(await screen.findByText(/no agents in this drive/i)).toBeDefined();
+      expect(await screen.findByText('Shell')).toBeDefined();
+      expect(screen.queryByText('Researcher')).toBeNull();
     });
   });
 
@@ -443,21 +554,6 @@ describe('AgentsSidebar', () => {
       expect(screen.getByLabelText('Session actions').className).toContain('opacity-0');
     });
 
-    test('right-click opens a context menu; "New conversation" drives the same handler as the inline icon', async () => {
-      mockPost.mockResolvedValue({ conversationId: 'conv-new' });
-      const user = userEvent.setup();
-      renderSidebar();
-
-      await screen.findByText('api refactor');
-      fireEvent.contextMenu(screen.getByText('api refactor'));
-      await user.click(await screen.findByText('New conversation'));
-
-      await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
-      expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-1/conversations', {
-        sessionId: 'ses-1',
-      });
-    });
-
     test('"End session" from the context menu opens the same confirm dialog as the inline X', async () => {
       const user = userEvent.setup();
       renderSidebar();
@@ -469,17 +565,25 @@ describe('AgentsSidebar', () => {
       expect(await screen.findByRole('alertdialog')).toBeDefined();
     });
 
-    test('the 3-dots dropdown opens the same two items, driving the same handlers', async () => {
+    test('the 3-dots dropdown opens the same single item, driving the same handler', async () => {
       const user = userEvent.setup();
       renderSidebar();
 
       await screen.findByText('api refactor');
       await user.click(screen.getByLabelText('Session actions'));
 
-      expect(await screen.findByText('New conversation')).toBeDefined();
-      await user.click(screen.getByText('End session'));
+      await user.click(await screen.findByText('End session'));
 
       expect(await screen.findByRole('alertdialog')).toBeDefined();
+    });
+
+    test('the inline "New conversation" affordance is gone — switching an agent in an open pane is the only way to mint one', async () => {
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      expect(screen.queryByLabelText('New conversation in this session')).toBeNull();
+      fireEvent.contextMenu(screen.getByText('api refactor'));
+      expect(screen.queryByText('New conversation')).toBeNull();
     });
   });
 
@@ -491,7 +595,7 @@ describe('AgentsSidebar', () => {
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
       const fetchesBefore = mockFetchWithAuth.mock.calls.length;
-      fireEvent.contextMenu(await screen.findByText('First chat'));
+      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
       await user.click(await screen.findByText('Close'));
 
       await waitFor(() =>
@@ -509,7 +613,7 @@ describe('AgentsSidebar', () => {
       await user.click(await screen.findByLabelText(/expand api refactor/i));
       // Two conversations render — each gets its own "Conversation actions"
       // trigger, so scope to "First chat"'s own row.
-      const firstChatRow = (await screen.findByText('First chat')).closest(
+      const firstChatRow = (await screen.findByText('Researcher — First chat')).closest(
         '[data-slot="context-menu-trigger"]',
       ) as HTMLElement;
       await user.click(within(firstChatRow).getByLabelText('Conversation actions'));
@@ -526,7 +630,7 @@ describe('AgentsSidebar', () => {
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      fireEvent.contextMenu(await screen.findByText('First chat'));
+      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
       await user.click(await screen.findByText('Close'));
 
       expect(await screen.findByRole('alertdialog')).toBeDefined();
@@ -538,7 +642,7 @@ describe('AgentsSidebar', () => {
       renderSidebar();
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
-      fireEvent.contextMenu(await screen.findByText('First chat'));
+      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
       await user.click(await screen.findByText('Close'));
 
       await waitFor(() => expect(mockDel).toHaveBeenCalled());
@@ -640,7 +744,7 @@ describe('AgentsSidebar', () => {
       expect(mockFetchWithAuth).not.toHaveBeenCalled();
     });
 
-    test('spawning from a roster drive with zero sessions posts its driveId + the chosen agent', async () => {
+    test('spawning from a roster drive with zero sessions posts its driveId + the chosen agent + the typed name', async () => {
       mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-new' });
       respondWithSessions([]);
       const user = userEvent.setup();
@@ -650,17 +754,24 @@ describe('AgentsSidebar', () => {
       await user.click(within(groupContainer('Alpha')).getByRole('button', { name: /^New session/i }));
       await user.click(await screen.findByText('Researcher'));
 
+      const nameInput = await screen.findByPlaceholderText('Researcher');
+      await user.type(nameInput, 'my session{Enter}');
+
       await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', { driveId: 'drive-1', agentPageId: 'agent-1' }),
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
+          driveId: 'drive-1',
+          agentPageId: 'agent-1',
+          name: 'my session',
+        }),
       );
       await waitFor(() => expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-new'));
       expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-new');
     });
 
-    test('the Assistant group exists with zero sessions, and spawning it is ONE click', async () => {
-      // The affordance to start an assistant session IS the group — and there
-      // is no agent to choose (the assistant is the counterpart), so the click
-      // spawns directly with the both-null shape.
+    test('the Assistant group exists with zero sessions, and its "+" opens the same naming step (not an instant spawn)', async () => {
+      // Sessions are always deliberately named now — the Assistant group's "+"
+      // goes through the naming step too, even though there's no agent to
+      // choose (the assistant is the counterpart).
       mockPost.mockResolvedValue({ session: { sessionId: 'ses-a' }, conversationId: 'conv-a' });
       respondWithSessions([]);
       const user = userEvent.setup();
@@ -671,7 +782,17 @@ describe('AgentsSidebar', () => {
       // now, so an unscoped query would be ambiguous.
       await user.click(within(groupContainer('Assistant')).getByRole('button', { name: /^New session/i }));
 
-      await waitFor(() => expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {}));
+      const nameInput = await screen.findByPlaceholderText('Assistant');
+      expect(nameInput).toHaveValue('');
+      await user.type(nameInput, '{Enter}');
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
+          driveId: null,
+          agentPageId: null,
+          name: '',
+        }),
+      );
       await waitFor(() => expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-a'));
       expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-a');
       expect(useAgentSurfaceStore.getState().selectedAgentId).toBeNull();
@@ -698,34 +819,6 @@ describe('AgentsSidebar', () => {
       await screen.findByText('api refactor');
       const headers = screen.getAllByText(/^(Alpha|Assistant)$/);
       expect(headers.map((el) => el.textContent)).toEqual(['Assistant', 'Alpha']);
-    });
-
-    test('a new conversation in an assistant session goes through the session-centric creator', async () => {
-      // The assistant has no agent page, so the page-agents route has nothing
-      // to hang it on — the session route is the path.
-      mockPost.mockResolvedValue({ conversationId: 'conv-new' });
-      respondWithSessions([
-        {
-          ...SESSION,
-          sessionId: 'ses-g',
-          driveId: null,
-          name: 'assistant session',
-          conversations: [{ conversationId: 'conv-g', title: 'Thread', agentPageId: null }],
-        },
-      ]);
-      const user = userEvent.setup();
-      renderSidebar();
-
-      await screen.findByText('assistant session');
-      await user.click(screen.getByLabelText('New conversation in this session'));
-
-      await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions/ses-g/conversations', {}),
-      );
-      await waitFor(() =>
-        expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-new'),
-      );
-      expect(useAgentSurfaceStore.getState().selectedAgentId).toBeNull();
     });
   });
 });

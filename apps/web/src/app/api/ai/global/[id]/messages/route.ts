@@ -94,6 +94,7 @@ import {
 } from '@/lib/ai/core/prompt-assembly';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
 import { resolveOrCreateConversation, ConversationOwnershipError } from './resolve-or-create-conversation';
+import { deriveConversationTitle } from '@/lib/repositories/derive-conversation-title';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
@@ -536,7 +537,7 @@ export async function POST(
 
         if (!conversation.title) {
           // Auto-generate title from first user message
-          const title = messageContent.slice(0, 50) + (messageContent.length > 50 ? '...' : '');
+          const title = deriveConversationTitle(messageContent);
           updateData.title = title;
           resolvedConversationTitle = title;
         }
