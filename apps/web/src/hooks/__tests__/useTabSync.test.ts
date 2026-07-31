@@ -11,9 +11,11 @@ import type { ElectronAPI } from '@/types/electron';
 
 // Mock next/navigation
 const mockPathname = vi.fn(() => '/dashboard');
+const mockSearchParams = vi.fn(() => new URLSearchParams());
 const mockRouterReplace = vi.fn();
 vi.mock('next/navigation', () => ({
   usePathname: () => mockPathname(),
+  useSearchParams: () => mockSearchParams(),
   useRouter: () => ({
     replace: mockRouterReplace,
   }),
@@ -43,6 +45,7 @@ describe('useTabSync', () => {
     });
     mockLocalStorage.clear();
     mockPathname.mockReturnValue('/dashboard');
+    mockSearchParams.mockReturnValue(new URLSearchParams());
     window.electron = undefined;
     vi.clearAllMocks();
   });
@@ -91,6 +94,24 @@ describe('useTabSync', () => {
         expect(state.tabs).toHaveLength(1); // No new tab created
         expect(state.tabs[0].path).toBe('/dashboard/drive-1/page-1');
         expect(state.activeTabId).toBe(tabId); // Same tab
+      });
+    });
+
+    it('given a Next navigation to a path with a query string, should store it on the active tab', async () => {
+      const { createTab } = useTabsStore.getState();
+      createTab({ path: '/dashboard/agents' });
+      const tabId = useTabsStore.getState().activeTabId;
+
+      mockPathname.mockReturnValue('/dashboard/agents');
+      mockSearchParams.mockReturnValue(new URLSearchParams('session=abc&c=def'));
+
+      renderHook(() => useTabSync());
+
+      await waitFor(() => {
+        const state = useTabsStore.getState();
+        expect(state.tabs[0].path).toBe('/dashboard/agents');
+        expect(state.tabs[0].search).toBe('session=abc&c=def');
+        expect(state.activeTabId).toBe(tabId);
       });
     });
 

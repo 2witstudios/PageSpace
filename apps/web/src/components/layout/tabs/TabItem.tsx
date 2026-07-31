@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useCallback, useMemo, type CSSProperties } from 'react';
-import { X, Pin, File, FileText, LayoutDashboard, CheckSquare, Activity, Users, Settings, Trash2, MessageSquare, Layout, Folder, Table, Inbox, Calendar, HardDrive, Link, UserPlus, User, Bell, Shield, LifeBuoy, PenSquare, Hash, MessageCircle, Workflow } from 'lucide-react';
+import { X, Pin, File, FileText, LayoutDashboard, CheckSquare, Activity, Users, Settings, Trash2, MessageSquare, Layout, Folder, Table, Inbox, Calendar, HardDrive, Link, UserPlus, User, Bell, Shield, LifeBuoy, PenSquare, Hash, MessageCircle, Workflow, Bot } from 'lucide-react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { cn } from '@/lib/utils';
@@ -58,6 +58,7 @@ const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   PenSquare,
   Hash,
   Workflow,
+  Bot,
 };
 
 export const TabItem = memo(function TabItem({

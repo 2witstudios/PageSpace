@@ -11,6 +11,8 @@ import {
   goForward,
   canGoBack,
   canGoForward,
+  toHref,
+  fromHref,
   type Tab,
 } from '../tab-navigation';
 import { PageType } from '@pagespace/lib/utils/enums';
@@ -19,6 +21,7 @@ import { PageType } from '@pagespace/lib/utils/enums';
 const createTestTab = (overrides: Partial<Tab> = {}): Tab => ({
   id: overrides.id ?? 'tab-1',
   path: overrides.path ?? '/dashboard',
+  search: overrides.search ?? '',
   history: overrides.history ?? ['/dashboard'],
   historyIndex: overrides.historyIndex ?? 0,
   isPinned: overrides.isPinned ?? false,
@@ -131,9 +134,71 @@ describe('tab-navigation', () => {
       expect(updated.title).toBe('Page Title');
       expect(updated.pageType).toBe('DOCUMENT');
     });
+
+    it('given same path but different search, should update search and push a new history entry', () => {
+      const tab = createTestTab({
+        path: '/dashboard/agents',
+        search: 'session=a',
+        history: ['/dashboard/agents?session=a'],
+        historyIndex: 0,
+      });
+
+      const updated = navigateInTab(tab, '/dashboard/agents', 'session=b');
+
+      expect(updated.path).toBe('/dashboard/agents');
+      expect(updated.search).toBe('session=b');
+      expect(updated.history).toEqual(['/dashboard/agents?session=a', '/dashboard/agents?session=b']);
+      expect(updated.historyIndex).toBe(1);
+    });
+
+    it('given same path and same search, should not modify history', () => {
+      const tab = createTestTab({
+        path: '/dashboard/agents',
+        search: 'session=a',
+        history: ['/dashboard/agents?session=a'],
+        historyIndex: 0,
+      });
+
+      const updated = navigateInTab(tab, '/dashboard/agents', 'session=a');
+
+      expect(updated).toBe(tab);
+    });
+  });
+
+  describe('toHref / fromHref', () => {
+    it('given a search string, should join it onto the path with a ?', () => {
+      expect(toHref('/dashboard/agents', 'session=a')).toBe('/dashboard/agents?session=a');
+    });
+
+    it('given no search string, should return the bare path', () => {
+      expect(toHref('/dashboard/agents', '')).toBe('/dashboard/agents');
+    });
+
+    it('should round-trip through fromHref', () => {
+      expect(fromHref('/dashboard/agents?session=a&c=b')).toEqual({
+        path: '/dashboard/agents',
+        search: 'session=a&c=b',
+      });
+      expect(fromHref('/dashboard/agents')).toEqual({ path: '/dashboard/agents', search: '' });
+    });
   });
 
   describe('goBack', () => {
+    it('given tab with a search-carrying history entry, should restore both path and search', () => {
+      const tab = createTestTab({
+        path: '/dashboard/agents',
+        search: 'session=b',
+        history: ['/dashboard/agents?session=a', '/dashboard/agents?session=b'],
+        historyIndex: 1,
+      });
+
+      const updated = goBack(tab);
+
+      expect(updated.path).toBe('/dashboard/agents');
+      expect(updated.search).toBe('session=a');
+      expect(updated.historyIndex).toBe(0);
+    });
+
     it('given tab with history, should navigate to previous entry', () => {
       const tab = createTestTab({
         path: '/page-2',

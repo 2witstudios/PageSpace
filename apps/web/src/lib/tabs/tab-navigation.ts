@@ -8,6 +8,9 @@ import type { PageType } from '@pagespace/lib/utils/enums';
 export interface Tab {
   id: string;
   path: string;
+  /** Raw query string, no leading `?`. `''` means none. */
+  search: string;
+  /** Full hrefs (`toHref` output), one per navigation step in this tab. */
   history: string[];
   historyIndex: number;
   isPinned: boolean;
@@ -19,10 +22,22 @@ export interface Tab {
 export interface CreateTabOptions {
   id?: string;
   path?: string;
+  search?: string;
   isPinned?: boolean;
   title?: string;
   pageType?: PageType;
 }
+
+/** Combine a pathname and a raw query string (no leading `?`) into an href. */
+export const toHref = (path: string, search: string): string => (search ? `${path}?${search}` : path);
+
+/** Split an href produced by `toHref` back into its pathname and raw query string. */
+export const fromHref = (href: string): { path: string; search: string } => {
+  const qIndex = href.indexOf('?');
+  return qIndex === -1
+    ? { path: href, search: '' }
+    : { path: href.slice(0, qIndex), search: href.slice(qIndex + 1) };
+};
 
 export interface TabMetaUpdate {
   title?: string;
@@ -34,21 +49,23 @@ const generateId = () => `tab-${Date.now()}-${Math.random().toString(36).slice(2
 export const createTab = ({
   id = generateId(),
   path = '/dashboard',
+  search = '',
   isPinned = false,
   title,
   pageType,
 }: CreateTabOptions = {}): Tab => ({
   id,
   path,
-  history: [path],
+  search,
+  history: [toHref(path, search)],
   historyIndex: 0,
   isPinned,
   title,
   pageType,
 });
 
-export const navigateInTab = (tab: Tab, newPath: string): Tab => {
-  if (newPath === tab.path) {
+export const navigateInTab = (tab: Tab, newPath: string, newSearch: string = ''): Tab => {
+  if (newPath === tab.path && newSearch === tab.search) {
     return tab;
   }
 
@@ -58,7 +75,8 @@ export const navigateInTab = (tab: Tab, newPath: string): Tab => {
   return {
     ...tab,
     path: newPath,
-    history: [...truncatedHistory, newPath],
+    search: newSearch,
+    history: [...truncatedHistory, toHref(newPath, newSearch)],
     historyIndex: truncatedHistory.length,
     // Clear cached metadata so useTabMeta fetches fresh data for new path
     title: undefined,
@@ -72,9 +90,11 @@ export const goBack = (tab: Tab): Tab => {
   }
 
   const newIndex = tab.historyIndex - 1;
+  const { path, search } = fromHref(tab.history[newIndex]);
   return {
     ...tab,
-    path: tab.history[newIndex],
+    path,
+    search,
     historyIndex: newIndex,
     // Clear cached metadata so useTabMeta fetches fresh data for navigated path
     title: undefined,
@@ -88,9 +108,11 @@ export const goForward = (tab: Tab): Tab => {
   }
 
   const newIndex = tab.historyIndex + 1;
+  const { path, search } = fromHref(tab.history[newIndex]);
   return {
     ...tab,
-    path: tab.history[newIndex],
+    path,
+    search,
     historyIndex: newIndex,
     // Clear cached metadata so useTabMeta fetches fresh data for navigated path
     title: undefined,

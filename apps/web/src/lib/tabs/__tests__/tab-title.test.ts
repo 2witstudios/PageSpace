@@ -87,6 +87,21 @@ describe('tab-title', () => {
       expect(result.pageId).toBeUndefined();
     });
 
+    it('given drive agents path, should return drive-agents type', () => {
+      const result = parseTabPath('/dashboard/drive-123/agents');
+
+      expect(result.type).toBe('drive-agents');
+      expect(result.driveId).toBe('drive-123');
+      expect(result.pageId).toBeUndefined();
+    });
+
+    it('given global agents path, should return dashboard-agents type', () => {
+      const result = parseTabPath('/dashboard/agents');
+
+      expect(result.type).toBe('dashboard-agents');
+      expect(result.driveId).toBeUndefined();
+    });
+
     it('given dms root, should return dms type', () => {
       const result = parseTabPath('/dashboard/dms');
 
@@ -465,6 +480,20 @@ describe('tab-title', () => {
       expect(meta!.iconName).toBe('Workflow');
     });
 
+    it('given drive-agents type, should return Agents title', () => {
+      const meta = getStaticTabMeta({ type: 'drive-agents', driveId: 'drive-123' });
+
+      expect(meta!.title).toBe('Agents');
+      expect(meta!.iconName).toBe('Bot');
+    });
+
+    it('given dashboard-agents type, should return Agents title', () => {
+      const meta = getStaticTabMeta({ type: 'dashboard-agents' });
+
+      expect(meta!.title).toBe('Agents');
+      expect(meta!.iconName).toBe('Bot');
+    });
+
     // Members sub-routes
     it('given drive-members-invite type, should return Invite Members title', () => {
       const meta = getStaticTabMeta({ type: 'drive-members-invite', driveId: 'drive-123' });
@@ -567,7 +596,7 @@ describe('tab-title', () => {
 describe('isDriveScopedPath', () => {
   const DRIVE_SECTIONS = [
     'tasks', 'activity', 'members', 'settings',
-    'trash', 'calendar', 'channels', 'files', 'workflows',
+    'trash', 'calendar', 'channels', 'files', 'workflows', 'agents',
   ];
 
   it('holds for the bare drive route and every drive section', () => {

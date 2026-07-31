@@ -20,6 +20,7 @@ export type PathType =
   | 'drive-channels'
   | 'drive-files'
   | 'drive-workflows'
+  | 'drive-agents'
   // Global dashboard routes
   | 'dashboard-tasks'
   | 'dashboard-activity'
@@ -28,6 +29,7 @@ export type PathType =
   | 'dashboard-connections'
   | 'dashboard-calendar'
   | 'dashboard-drives'
+  | 'dashboard-agents'
   // Direct Messages + Channels routes
   | 'dms'
   | 'dm'
@@ -67,10 +69,10 @@ export interface TabMeta {
 }
 
 // Global dashboard routes (not drive-specific)
-const GLOBAL_DASHBOARD_ROUTES = ['tasks', 'activity', 'storage', 'trash', 'connections', 'calendar', 'dms', 'channels', 'drives'] as const;
+const GLOBAL_DASHBOARD_ROUTES = ['tasks', 'activity', 'storage', 'trash', 'connections', 'calendar', 'dms', 'channels', 'drives', 'agents'] as const;
 
 // Drive-specific special routes
-const DRIVE_SPECIAL_ROUTES = ['tasks', 'activity', 'members', 'settings', 'trash', 'calendar', 'channels', 'files', 'workflows'] as const;
+const DRIVE_SPECIAL_ROUTES = ['tasks', 'activity', 'members', 'settings', 'trash', 'calendar', 'channels', 'files', 'workflows', 'agents'] as const;
 
 /**
  * Whether a parsed route is scoped to ONE drive at the drive level — the bare
@@ -190,6 +192,7 @@ export const parseTabPath = (path: string): ParsedPath => {
       connections: 'dashboard-connections',
       calendar: 'dashboard-calendar',
       drives: 'dashboard-drives',
+      agents: 'dashboard-agents',
     };
     return { type: globalTypeMap[secondSegment] };
   }
@@ -239,6 +242,7 @@ export const parseTabPath = (path: string): ParsedPath => {
       channels: 'drive-channels',
       files: 'drive-files',
       workflows: 'drive-workflows',
+      agents: 'drive-agents',
     };
     return {
       type: typeMap[thirdSegment],
@@ -301,6 +305,9 @@ export const getStaticTabMeta = (parsed: ParsedPath): TabMeta | null => {
     case 'dashboard-drives':
       return { title: 'Drives', iconName: 'Folder' };
 
+    case 'dashboard-agents':
+      return { title: 'Agents', iconName: 'Bot' };
+
     // Drive-specific routes
     case 'drive-tasks':
       return { title: 'Tasks', iconName: 'CheckSquare' };
@@ -335,6 +342,9 @@ export const getStaticTabMeta = (parsed: ParsedPath): TabMeta | null => {
 
     case 'drive-workflows':
       return { title: 'Workflows', iconName: 'Workflow' };
+
+    case 'drive-agents':
+      return { title: 'Agents', iconName: 'Bot' };
 
     // Direct Messages + Channels routes
     case 'dms':

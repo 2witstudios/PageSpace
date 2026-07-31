@@ -2,6 +2,7 @@ import { create } from 'zustand';
 
 import { buildAgentSelectionUrl, parseAgentSelection } from '@/lib/agents/agent-selection';
 import { useLayoutStore } from '@/stores/useLayoutStore';
+import { useTabsStore } from '@/stores/useTabsStore';
 
 /**
  * What is selected on the Agents surface — and nothing else.
@@ -127,6 +128,11 @@ export const useAgentSurfaceStore = create<AgentSurfaceState>()((set, get) => {
     });
     if (url === currentUrl()) return;
     window.history.pushState({}, '', url);
+    // `pushState` here bypasses Next's router, so `useTabSync` (which only ever
+    // sees Next-driven navigations) never observes this address change. Tell the
+    // browser-style tab bar directly so switching away and back restores this
+    // selection instead of landing on the bare route.
+    useTabsStore.getState().updateActiveTabSearch(url.split('?')[1] ?? '');
   };
 
   return {

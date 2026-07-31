@@ -39,11 +39,12 @@ interface TabsState {
   reorderTab: (fromIndex: number, toIndex: number) => void;
   pinTab: (tabId: string) => void;
   unpinTab: (tabId: string) => void;
-  navigateInTab: (tabId: string, path: string) => void;
-  navigateInActiveTab: (path: string) => void;
+  navigateInTab: (tabId: string, path: string, search?: string) => void;
+  navigateInActiveTab: (path: string, search?: string) => void;
   goBackInActiveTab: () => void;
   goForwardInActiveTab: () => void;
   duplicateTab: (tabId: string) => void;
+  updateActiveTabSearch: (search: string) => void;
   updateTabMeta: (tabId: string, meta: TabMetaUpdate) => void;
   updateTabMetaByPageId: (pageId: string, meta: TabMetaUpdate) => void;
 
@@ -239,21 +240,21 @@ export const useTabsStore = create<TabsState>()(
         set({ tabs: newTabs });
       },
 
-      navigateInTab: (tabId, path) => {
+      navigateInTab: (tabId, path, search = '') => {
         const { tabs } = get();
         const tabIndex = tabs.findIndex(t => t.id === tabId);
         if (tabIndex === -1) return;
 
         const newTabs = [...tabs];
-        newTabs[tabIndex] = navigateInTabFn(newTabs[tabIndex], path);
+        newTabs[tabIndex] = navigateInTabFn(newTabs[tabIndex], path, search);
 
         set({ tabs: newTabs });
       },
 
-      navigateInActiveTab: (path) => {
+      navigateInActiveTab: (path, search = '') => {
         const { activeTabId, navigateInTab } = get();
         if (!activeTabId) return;
-        navigateInTab(activeTabId, path);
+        navigateInTab(activeTabId, path, search);
       },
 
       goBackInActiveTab: () => {
@@ -287,7 +288,7 @@ export const useTabsStore = create<TabsState>()(
         const tab = tabs.find(t => t.id === tabId);
         if (!tab) return;
 
-        const newTab = createTabFn({ path: tab.path, title: tab.title, pageType: tab.pageType });
+        const newTab = createTabFn({ path: tab.path, search: tab.search, title: tab.title, pageType: tab.pageType });
         const tabIndex = tabs.findIndex(t => t.id === tabId);
 
         const newTabs = [...tabs];
@@ -297,6 +298,22 @@ export const useTabsStore = create<TabsState>()(
           tabs: newTabs,
           activeTabId: newTab.id,
         });
+      },
+
+      updateActiveTabSearch: (search) => {
+        const { activeTabId, tabs } = get();
+        if (!activeTabId) return;
+
+        const tabIndex = tabs.findIndex(t => t.id === activeTabId);
+        if (tabIndex === -1) return;
+
+        const tab = tabs[tabIndex];
+        if (tab.search === search) return;
+
+        const newTabs = [...tabs];
+        newTabs[tabIndex] = navigateInTabFn(tab, tab.path, search);
+
+        set({ tabs: newTabs });
       },
 
       updateTabMeta: (tabId, meta) => {
