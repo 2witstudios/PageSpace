@@ -75,14 +75,33 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args),
 }));
 
+const mockLoadConversation = vi.hoisted(() => vi.fn());
+vi.mock('@/contexts/GlobalChatContext', () => ({
+  useGlobalChatConversation: () => ({ loadConversation: mockLoadConversation }),
+}));
+
+const mockToastInfo = vi.hoisted(() => vi.fn());
+vi.mock('sonner', () => ({ toast: { info: mockToastInfo, error: vi.fn() } }));
+
 import AgentsSurface from '../AgentsSurface';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 
+/** Empty by default — the "no history yet" case is the common one across these tests; individual tests override with `mockFetchWithAuth.mockImplementation`. */
+const EMPTY_CONVERSATIONS = { conversations: [], pagination: { hasMore: false, nextCursor: null, limit: 20 } };
+
 beforeEach(() => {
-  // A selected session exists by default — the tests that care about a GONE
-  // session (finding 6's GC) set their own `{ session: null }` response.
-  mockFetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({ session: { driveId: null } }) });
+  // Two different endpoints share this mock — route by URL rather than one
+  // blanket response, since a session-fetch shape and a conversations-list
+  // shape are never interchangeable.
+  mockFetchWithAuth.mockImplementation(async (url: string) => {
+    if (url.includes('/api/agent-sessions/conversations')) {
+      return { ok: true, json: async () => EMPTY_CONVERSATIONS };
+    }
+    // A selected session exists by default — the tests that care about a GONE
+    // session (finding 6's GC) set their own `{ session: null }` response.
+    return { ok: true, json: async () => ({ session: { driveId: null } }) };
+  });
   window.history.replaceState({}, '', '/dashboard/agents');
   useAgentSurfaceStore.setState({
     driveId: null,
@@ -354,5 +373,288 @@ describe('onConversationClosed — following the grid\'s own close/rebind', () =
     // overwrite the user's newer pick with the stale rebind target.
     expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-switched');
     expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-switched');
+  });
+});
+
+describe('past conversations (default view, replacing the old static prompt)', () => {
+  it('renders the paginated list instead of the empty-state prompt when history exists', async () => {
+    // A drive scope no earlier test fetched — SWR's cache is module-global and
+    // an earlier test's empty answer for the SAME key would otherwise win here.
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.includes('/api/agent-sessions/conversations')) {
+        return {
+          ok: true,
+          json: async () => ({
+            conversations: [
+              {
+                conversationId: 'conv-hist-1',
+                title: 'A past chat',
+                type: 'global',
+                agentPageId: null,
+                pageTitle: null,
+                lastMessageAt: new Date().toISOString(),
+                createdAt: new Date().toISOString(),
+                sessionId: null,
+                sessionName: null,
+                sessionEndedAt: null,
+                driveId: null,
+              },
+            ],
+            pagination: { hasMore: false, nextCursor: null, limit: 20 },
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({ session: { driveId: null } }) };
+    });
+
+    render(<AgentsSurface driveId="drive-past-convos-render" />);
+
+    await waitFor(() => expect(screen.getByText('A past chat')).toBeDefined());
+    expect(screen.queryByText('Select a session')).toBeNull();
+  });
+
+  it('clicking a session-bound row opens it in the pane grid, same as picking it from the sidebar', async () => {
+    // A drive scope no earlier test fetched — see the cache note above.
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.includes('/api/agent-sessions/conversations')) {
+        return {
+          ok: true,
+          json: async () => ({
+            conversations: [
+              {
+                conversationId: 'conv-1',
+                title: 'Session chat',
+                type: 'page',
+                agentPageId: 'agent-1',
+                pageTitle: 'My Agent',
+                lastMessageAt: new Date().toISOString(),
+                createdAt: new Date().toISOString(),
+                sessionId: 'ses-1',
+                sessionName: 'My Session',
+                sessionEndedAt: null,
+                driveId: 'drive-1',
+              },
+            ],
+            pagination: { hasMore: false, nextCursor: null, limit: 20 },
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({ session: { driveId: null } }) };
+    });
+
+    render(<AgentsSurface driveId="drive-past-convos-click" />);
+
+    const label = await screen.findByText('Session chat');
+    act(() => label.closest('button')!.click());
+
+    expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
+    expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-1');
+    expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-1');
+  });
+
+  it('resets the list to page one when driveId changes on an already-mounted surface (review: switching drives mid-session must not keep a stale cursor)', async () => {
+    const conversationsFor = (driveLabel: string, cursor: string | null) => ({
+      ok: true,
+      json: async () => ({
+        conversations: [
+          {
+            conversationId: cursor ? `conv-${driveLabel}-page2` : `conv-${driveLabel}-page1`,
+            title: cursor ? `${driveLabel} page 2` : `${driveLabel} page 1`,
+            type: 'global',
+            agentPageId: null,
+            pageTitle: null,
+            lastMessageAt: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
+            sessionId: null,
+            sessionName: null,
+            sessionEndedAt: null,
+            driveId: null,
+          },
+        ],
+        // Page 1 always advertises more, so the Next button is enabled —
+        // page 2 (any `cursor` present) is the end of the list.
+        pagination: { hasMore: !cursor, nextCursor: cursor ? null : `conv-${driveLabel}-page1`, limit: 20 },
+      }),
+    });
+
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.includes('/api/agent-sessions/conversations')) {
+        const parsed = new URL(url, 'http://localhost');
+        const driveLabel = parsed.searchParams.get('driveId') ?? 'none';
+        const cursor = parsed.searchParams.get('cursor');
+        return conversationsFor(driveLabel, cursor);
+      }
+      return { ok: true, json: async () => ({ session: { driveId: null } }) };
+    });
+
+    const { rerender, getByText, findByText } = render(<AgentsSurface driveId="drive-reset-a" />);
+
+    await findByText('drive-reset-a page 1');
+    act(() => getByText('Next').click());
+    await findByText('drive-reset-a page 2');
+
+    // Switch drives WITHOUT unmounting AgentsSurface itself — the exact
+    // scenario the `key` fix targets (a route-param change re-renders, it
+    // does not remount, the surface above this list).
+    rerender(<AgentsSurface driveId="drive-reset-b" />);
+
+    // Without the fix, the list would still be on page 2, replaying
+    // drive-reset-a's cursor against drive-reset-b's data. With it, a fresh
+    // instance mounts and asks for page one of the NEW drive.
+    await waitFor(() => expect(screen.getByText('drive-reset-b page 1')).toBeDefined());
+    expect(screen.queryByText(/page 2/)).toBeNull();
+  });
+
+  it('a failed Next fetch does not strand the user — the last loaded page and Prev/Next stay usable', async () => {
+    let pageTwoShouldFail = false;
+
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.includes('/api/agent-sessions/conversations')) {
+        const parsed = new URL(url, 'http://localhost');
+        const cursor = parsed.searchParams.get('cursor');
+        if (cursor && pageTwoShouldFail) {
+          return { ok: false, status: 500, json: async () => ({ error: 'boom' }) };
+        }
+        return {
+          ok: true,
+          json: async () => ({
+            conversations: [
+              {
+                conversationId: cursor ? 'conv-page2' : 'conv-page1',
+                title: cursor ? 'Page 2 chat' : 'Page 1 chat',
+                type: 'global',
+                agentPageId: null,
+                pageTitle: null,
+                lastMessageAt: new Date().toISOString(),
+                createdAt: new Date().toISOString(),
+                sessionId: null,
+                sessionName: null,
+                sessionEndedAt: null,
+                driveId: null,
+              },
+            ],
+            pagination: { hasMore: !cursor, nextCursor: cursor ? null : 'conv-page1', limit: 20 },
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({ session: { driveId: null } }) };
+    });
+
+    const { getByText, findByText, queryByText } = render(<AgentsSurface driveId="drive-fail-recover" />);
+    await findByText('Page 1 chat');
+
+    pageTwoShouldFail = true;
+    act(() => getByText('Next').click());
+
+    // The failed page must not wipe the view: page 1's row is still there,
+    // an inline notice covers the failure, and Prev is still the way out.
+    await waitFor(() => expect(screen.getByText(/Couldn't load this page/)).toBeDefined());
+    expect(getByText('Page 1 chat')).toBeDefined();
+    expect(queryByText("Couldn't load past conversations")).toBeNull();
+    const prevButton = getByText('Prev').closest('button')!;
+    expect(prevButton).not.toBeDisabled();
+
+    act(() => prevButton.click());
+    await waitFor(() => expect(screen.queryByText(/Couldn't load this page/)).toBeNull());
+    expect(getByText('Page 1 chat')).toBeDefined();
+  });
+
+  it('the Next button is disabled while a page fetch is in flight — a fast double-click cannot skip a page', async () => {
+    // Without gating on `isValidating`, a second click before the first
+    // click's fetch resolves would read the same (still page-1) `nextCursor`
+    // twice, pushing it onto `cursorStack` for two different page indices
+    // and silently skipping whatever page actually follows page 2.
+    let resolvePageTwoFetch!: (value: { ok: true; json: () => Promise<unknown> }) => void;
+    const pageTwoFetch = new Promise<{ ok: true; json: () => Promise<unknown> }>((resolve) => {
+      resolvePageTwoFetch = resolve;
+    });
+
+    const pageResponse = (label: string, nextCursor: string | null) => ({
+      ok: true as const,
+      json: async () => ({
+        conversations: [
+          {
+            conversationId: `conv-${label}`,
+            title: label,
+            type: 'global',
+            agentPageId: null,
+            pageTitle: null,
+            lastMessageAt: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
+            sessionId: null,
+            sessionName: null,
+            sessionEndedAt: null,
+            driveId: null,
+          },
+        ],
+        pagination: { hasMore: nextCursor !== null, nextCursor, limit: 20 },
+      }),
+    });
+
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.includes('/api/agent-sessions/conversations')) {
+        const cursor = new URL(url, 'http://localhost').searchParams.get('cursor');
+        if (!cursor) return pageResponse('page-1', 'conv-page-1');
+        return pageTwoFetch;
+      }
+      return { ok: true, json: async () => ({ session: { driveId: null } }) };
+    });
+
+    const { getByText, findByText } = render(<AgentsSurface driveId="drive-race" />);
+    await findByText('page-1');
+
+    const nextButton = getByText('Next').closest('button')!;
+    act(() => nextButton.click());
+
+    // The fetch for page 2 is now in flight (not yet resolved) — the button
+    // must already be disabled, so a second click here is a no-op rather
+    // than queuing a second page-advance against the same stale cursor.
+    expect(nextButton).toBeDisabled();
+    act(() => nextButton.click());
+
+    resolvePageTwoFetch(pageResponse('page-2', null));
+    await findByText('page-2');
+
+    // Exactly one page-advance happened: still on page-2's content, not
+    // having silently skipped to a (nonexistent) page-3.
+    expect(screen.queryByText('page-1')).toBeNull();
+  });
+
+  it('clicking a client (API-managed) conversation shows a toast instead of navigating — no in-app surface can open it', async () => {
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.includes('/api/agent-sessions/conversations')) {
+        return {
+          ok: true,
+          json: async () => ({
+            conversations: [
+              {
+                conversationId: 'conv-client-1',
+                title: 'My API thread',
+                type: 'client',
+                agentPageId: null,
+                pageTitle: null,
+                lastMessageAt: new Date().toISOString(),
+                createdAt: new Date().toISOString(),
+                sessionId: null,
+                sessionName: null,
+                sessionEndedAt: null,
+                driveId: 'drive-1',
+              },
+            ],
+            pagination: { hasMore: false, nextCursor: null, limit: 20 },
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({ session: { driveId: null } }) };
+    });
+
+    render(<AgentsSurface driveId="drive-past-convos-client" />);
+
+    const label = await screen.findByText('My API thread');
+    act(() => label.closest('button')!.click());
+
+    expect(mockToastInfo).toHaveBeenCalledTimes(1);
+    expect(mockLoadConversation).not.toHaveBeenCalled();
+    expect(useAgentSurfaceStore.getState().selectedSessionId).toBeNull();
   });
 });

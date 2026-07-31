@@ -27,6 +27,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import {
   AlertCircle,
   ExternalLink,
@@ -79,6 +80,34 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   // (drive membership + code-execution) on every spawn.
   const canUseSessions = user?.role === 'admin';
 
+  // A deep link from the Agents surface's past-conversations list
+  // (`?conversationId=&sessionId=`) — one-time intent, not durable state like
+  // the Agents surface's own `?session=`/`?c=`/`?agent=`, so it's captured
+  // once at mount and never re-read afterward (a later History-tab pick or
+  // "new conversation" is not fighting a stale URL param).
+  const searchParams = useSearchParams();
+  const initialConversationIdRef = useRef(searchParams.get('conversationId') ?? undefined);
+  const initialSessionIdRef = useRef(searchParams.get('sessionId'));
+
+  // Consume-once, for real: strip the params from the URL immediately after
+  // capturing them. Left in place, a refresh after the user later switches
+  // to a DIFFERENT conversation (History tab, "new") would remount this
+  // component, re-read the same stale `conversationId` from the URL, and
+  // silently reopen the original deep-linked thread instead of respecting
+  // where the user actually navigated to (review finding — this was
+  // previously dismissed as "cosmetic", but it's a real functional bug on
+  // refresh, not just an untidy address bar).
+  useEffect(() => {
+    if (initialConversationIdRef.current === undefined) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete('conversationId');
+    url.searchParams.delete('sessionId');
+    window.history.replaceState({}, '', url.toString());
+    // Deliberately empty deps: this runs once, immediately after the refs
+    // above captured their values on this same mount — never re-runs for
+    // this component instance.
+  }, []);
+
   const { resolved: initialResolved } = useResolvedConversation(page.id, {
     driveId: page.driveId,
     canUseSessions,
@@ -86,6 +115,8 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
     // before the role loads — resolving then would mint the agent's first
     // conversation as permanently session-less. Wait it out.
     authLoading,
+    initialConversationId: initialConversationIdRef.current,
+    initialSessionId: initialSessionIdRef.current,
   });
   const [override, setOverride] = useState<ResolvedConversation | null>(null);
   // The conversation on screen: the user's own switching (history select, new,
