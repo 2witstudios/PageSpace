@@ -433,6 +433,29 @@ describe('AgentsSidebar', () => {
       expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-1');
     });
 
+    test('spawning a shell-first session names its terminal pane from the SHELL\'s own auto-assigned name, not the session label', async () => {
+      mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, shellId: 'shell-new', shellName: 'Shell 2' });
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      await user.click(screen.getByLabelText('New session'));
+      await user.click(await screen.findByText('Shell'));
+
+      const nameInput = await screen.findByPlaceholderText('Shell');
+      await user.type(nameInput, 'My Custom Session{Enter}');
+
+      await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
+      await waitFor(() =>
+        expect(useAgentWorkspaceStore.getState().workspaces['ses-new']?.columns[0]?.panes[0]?.scope).toEqual({
+          kind: 'terminal',
+          name: 'Shell 2',
+          targetId: 'shell-new',
+          agentPageId: null,
+        }),
+      );
+    });
+
     test('a drive with no agents still offers Shell — no empty chooser', async () => {
       mockUsePageAgents.mockImplementation(() => ({
         agentsByDrive: [],

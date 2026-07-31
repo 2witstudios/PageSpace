@@ -266,7 +266,7 @@ describe("POST /api/agent-sessions — firstThing: 'shell'", () => {
     mockCreateConversationInSession.mockResolvedValue(undefined);
   });
 
-  it("given firstThing: 'shell', should provision the sandbox then spawn a shell — NOT a conversation — and respond { session, shellId }", async () => {
+  it("given firstThing: 'shell', should provision the sandbox then spawn a shell — NOT a conversation — and respond { session, shellId, shellName }", async () => {
     const order: string[] = [];
     mockProvisionSessionSandbox.mockImplementation(async () => {
       order.push('provision');
@@ -283,11 +283,22 @@ describe("POST /api/agent-sessions — firstThing: 'shell'", () => {
     const response = await spawn({ driveId: 'drive-1', firstThing: 'shell' });
     expect(response.status).toBe(201);
     const body = await response.json();
-    expect(body).toEqual({ session: { sessionId: 'ses-new', dto: true }, shellId: 'shell-new' });
+    expect(body).toEqual({ session: { sessionId: 'ses-new', dto: true }, shellId: 'shell-new', shellName: 'Shell' });
     expect(order).toEqual(['provision', 'spawn']);
     expect(mockProvisionSessionSandbox).toHaveBeenCalledWith({ id: 'ses-new' }, 'user-1');
     expect(mockSpawnShell).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'ses-new', ownerId: 'user-1' }));
     expect(mockCreateConversationInSession).not.toHaveBeenCalled();
+  });
+
+  it("given the shell auto-labels itself differently from the session's own name, responds with the SHELL's actual name (not the session label)", async () => {
+    mockSpawnShell.mockResolvedValue({
+      ok: true,
+      shell: { shellId: 'shell-new', sessionId: 'ses-new', ownerId: 'user-1', name: 'Shell 2', agentType: 'shell', command: null, createdAt: '2026-07-28T00:00:00.000Z' },
+    });
+
+    const response = await spawn({ driveId: 'drive-1', firstThing: 'shell', name: 'My Custom Session' });
+    const body = await response.json();
+    expect(body.shellName).toBe('Shell 2');
   });
 
   it("given firstThing omitted, should behave exactly as today — first conversation, no shell", async () => {

@@ -301,6 +301,7 @@ vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
 }));
 
 import { POST } from '../route';
+import { extractMessageContent } from '@/lib/ai/core/message-utils';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import type { SessionAuthResult } from '@/lib/auth';
 import { MAX_BROWSER_SESSION_ID_LENGTH } from '@/lib/ai/core/browser-session-id-validation';
@@ -684,6 +685,31 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       const saveCalls = mockSaveMessageToDatabase.mock.calls;
       const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
       expect(assistantSave?.[0]?.mentionNotify).toBeDefined();
+    });
+  });
+
+  describe('conversation auto-titling on first message', () => {
+    it('given a session conversation and non-empty extracted content, calls autoTitleConversation with the derived title', async () => {
+      mockGetConversation.mockResolvedValueOnce({ id: CONV_ID, userId: 'user-1', isShared: false });
+
+      await POST(makeRequest({ conversationId: CONV_ID }));
+
+      // extractMessageContent is fixture-mocked (always 'test content' by default —
+      // see the module mock above); deriveConversationTitle is the real function.
+      expect(mockAutoTitleConversation).toHaveBeenCalledWith(CONV_ID, 'test content');
+    });
+
+    // Codex review finding on PR #2284: a file/image-only first message extracts as ''
+    // (extractMessageContent has no text part to read). autoTitleConversation only fills
+    // rows where title IS NULL, so persisting '' would permanently block a later textual
+    // message from ever titling the conversation — the route must skip the write instead.
+    it('given a session conversation and empty extracted content (e.g. a file-only message), does NOT call autoTitleConversation', async () => {
+      mockGetConversation.mockResolvedValueOnce({ id: CONV_ID, userId: 'user-1', isShared: false });
+      vi.mocked(extractMessageContent).mockReturnValueOnce('');
+
+      await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(mockAutoTitleConversation).not.toHaveBeenCalled();
     });
   });
 

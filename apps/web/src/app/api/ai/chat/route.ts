@@ -705,10 +705,16 @@ export async function POST(request: Request) {
         // non-fatal. existingConversation is always populated for a session's
         // conversation (its row is created before the first message ever
         // reaches this route) — the null check guards the non-session path.
+        // A file/image-only first message derives an empty title; skip the
+        // write so a later textual message still finds title IS NULL and can
+        // title the conversation (autoTitleConversation only fills nulls).
         if (existingConversation) {
-          conversationRepository
-            .autoTitleConversation(existingConversation.id, deriveConversationTitle(messageContent))
-            .catch(() => {});
+          const derivedTitle = deriveConversationTitle(messageContent);
+          if (derivedTitle.length > 0) {
+            conversationRepository
+              .autoTitleConversation(existingConversation.id, derivedTitle)
+              .catch(() => {});
+          }
         }
 
         loggers.ai.debug('AI Chat API: User message saved to database');

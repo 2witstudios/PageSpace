@@ -8,7 +8,7 @@
  * GET ?driveId=<id> | (none = mine)
  *   → { sessions: [{ …AgentSessionDTO, shells: ShellDTO[], conversations }] }
  * POST { driveId, agentPageId, name?, firstThing? }
- *   → 201 { session, conversationId } | { session, shellId } — spawn (see below)
+ *   → 201 { session, conversationId } | { session, shellId, shellName } — spawn (see below)
  *
  * Every listing is scoped to the REQUESTER's own sessions (`ownerId` rides
  * every filter): `driveId` narrows *where*, never *whose*. Admin gate first,
@@ -315,7 +315,11 @@ export async function POST(request: Request) {
     });
 
     return NextResponse.json(
-      { session: toAgentSessionDTO(spawned.session), shellId: shellSpawned.shell.shellId },
+      {
+        session: toAgentSessionDTO(spawned.session),
+        shellId: shellSpawned.shell.shellId,
+        shellName: shellSpawned.shell.name,
+      },
       { status: 201 },
     );
   }

@@ -288,21 +288,23 @@ function SessionList({
       setSpawning(true);
       try {
         if (input.kind === 'shell') {
-          const created = await post<{ session: { sessionId: string }; shellId: string }>('/api/agent-sessions', {
-            driveId: input.driveId,
-            firstThing: 'shell',
-            name: input.name,
-          });
+          const created = await post<{ session: { sessionId: string }; shellId: string; shellName: string }>(
+            '/api/agent-sessions',
+            { driveId: input.driveId, firstThing: 'shell', name: input.name },
+          );
           setSpawnTarget(null);
           setSpawnPick(null);
           onChanged();
           // useAgentSurfaceStore has no shell concept — land by selecting the
           // session there, then placing the pane directly on the workspace
-          // store, mirroring AgentPanes.tsx's handleReattachShell.
+          // store, mirroring AgentPanes.tsx's handleReattachShell. The shell
+          // is named independently server-side (spawnShell, no name passed) —
+          // use its own name, not the session label, so the pane title
+          // matches the shell row shown in the sidebar.
           selectSession(created.session.sessionId);
           useAgentWorkspaceStore.getState().openConversation(created.session.sessionId, {
             kind: 'terminal',
-            name: input.name,
+            name: created.shellName,
             targetId: created.shellId,
             agentPageId: null,
           });
