@@ -242,6 +242,95 @@ const eslintConfig = [
       "react-hooks/exhaustive-deps": "error",
     },
   },
+  {
+    // Functional-core purity boundary: src/lib/workflows/core/ holds the pure
+    // decision logic for workflow steps (arg templating, step planning,
+    // validation, budget selection). Purity is a hard contract, not a
+    // convention — these modules take everything they need (schema maps,
+    // payloads, timestamps) as arguments and perform no I/O, so their tests
+    // need no mocks and their behavior is fully specified by inputs. Runtime
+    // imports of the db, services, AI tool modules, or Node builtins would
+    // silently break that contract; `import type` is fine (erased at compile
+    // time). Sibling core modules and zod are the only runtime dependencies.
+    files: ["src/lib/workflows/core/**/*.ts"],
+    rules: {
+      "no-restricted-imports": "off",
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["@pagespace/db", "@pagespace/db/*"],
+              allowTypeImports: true,
+              message:
+                "Pure core: no database access. Take data as function arguments; the shell (workflow-executor.ts, API routes) owns I/O.",
+            },
+            {
+              group: ["@pagespace/lib", "@pagespace/lib/*"],
+              allowTypeImports: true,
+              message:
+                "Pure core: @pagespace/lib leaves may perform I/O (db, logger, env). Inject what you need as arguments.",
+            },
+            {
+              group: ["ai", "next", "next/*"],
+              allowTypeImports: true,
+              message: "Pure core: no AI SDK or framework dependencies.",
+            },
+            {
+              group: ["node:*"],
+              allowTypeImports: true,
+              message:
+                "Pure core: no Node builtins (fs, http, crypto). Randomness/time/IDs are injected by the shell.",
+            },
+            {
+              group: ["../*"],
+              allowTypeImports: true,
+              message:
+                "Pure core: runtime imports may only come from sibling core modules (./x) or zod. Anything outside core/ is shell territory — inject it as an argument.",
+            },
+          ],
+        },
+      ],
+      "no-restricted-globals": [
+        "error",
+        {
+          name: "fetch",
+          message: "Pure core: no network I/O. The shell owns all fetches.",
+        },
+        {
+          name: "process",
+          message:
+            "Pure core: no environment access. Pass configuration in as arguments.",
+        },
+      ],
+      "no-restricted-properties": [
+        "error",
+        {
+          object: "Date",
+          property: "now",
+          message:
+            "Pure core: no ambient clock. Take the timestamp as an argument.",
+        },
+        {
+          object: "Math",
+          property: "random",
+          message:
+            "Pure core: no ambient randomness. Take random values/IDs as arguments.",
+        },
+      ],
+    },
+  },
+  {
+    // Core tests live beside the modules they specify and may use anything
+    // (test harness, fixtures, node builtins) — the purity contract applies
+    // to the modules under test, not the tests.
+    files: ["src/lib/workflows/core/**/*.test.ts"],
+    rules: {
+      "@typescript-eslint/no-restricted-imports": "off",
+      "no-restricted-globals": "off",
+      "no-restricted-properties": "off",
+    },
+  },
 ];
 
 export default eslintConfig;
