@@ -488,7 +488,7 @@ function Layout({ children }: LayoutProps) {
           >
             <SheetContent side="right" className="w-full max-w-[22rem] border-l p-0 sm:max-w-sm">
               <SheetHeader className="sr-only">
-                <SheetTitle>Assistant panel</SheetTitle>
+                <SheetTitle>Global Assistant panel</SheetTitle>
                 <SheetDescription>Chat with the global assistant</SheetDescription>
               </SheetHeader>
               <RightPanel variant="overlay" className="h-full w-full" />

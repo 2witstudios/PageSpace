@@ -635,7 +635,7 @@ describe('AgentsSidebar', () => {
 
       expect(screen.getByText(/administrator privileges/i)).toBeDefined();
       expect(screen.queryByText('Alpha')).toBeNull();
-      expect(screen.queryByText('Assistant')).toBeNull();
+      expect(screen.queryByText('Global Assistant')).toBeNull();
       expect(screen.queryByRole('button', { name: /^New session/i })).toBeNull();
       expect(mockFetchWithAuth).not.toHaveBeenCalled();
     });
@@ -666,10 +666,10 @@ describe('AgentsSidebar', () => {
       const user = userEvent.setup();
       renderSidebar();
 
-      expect(await screen.findByText('Assistant')).toBeDefined();
+      expect(await screen.findByText('Global Assistant')).toBeDefined();
       // Scoped: the roster's own drive group also renders its own inline "+"
       // now, so an unscoped query would be ambiguous.
-      await user.click(within(groupContainer('Assistant')).getByRole('button', { name: /^New session/i }));
+      await user.click(within(groupContainer('Global Assistant')).getByRole('button', { name: /^New session/i }));
 
       await waitFor(() => expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {}));
       await waitFor(() => expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-a'));
@@ -696,8 +696,8 @@ describe('AgentsSidebar', () => {
       renderSidebar();
 
       await screen.findByText('api refactor');
-      const headers = screen.getAllByText(/^(Alpha|Assistant)$/);
-      expect(headers.map((el) => el.textContent)).toEqual(['Assistant', 'Alpha']);
+      const headers = screen.getAllByText(/^(Alpha|Global Assistant)$/);
+      expect(headers.map((el) => el.textContent)).toEqual(['Global Assistant', 'Alpha']);
     });
 
     test('a new conversation in an assistant session goes through the session-centric creator', async () => {

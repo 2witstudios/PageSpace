@@ -738,6 +738,47 @@ describe('AgentPanes', () => {
     });
   });
 
+  describe('a global-assistant session (driveId null)', () => {
+    it('offers every accessible agent across drives, not an empty list', async () => {
+      renderPanes({
+        driveId: null,
+        initialConversation: { conversationId: 'conv-1', agentPageId: null, name: 'Conversation' },
+      });
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', paneId));
+
+      // Both cross-drive fixture agents show up — the picker used to be
+      // unconditionally empty for a null driveId (`enabled: driveId !== null`
+      // plus a `agent.driveId === driveId` filter that could never match).
+      expect(await screen.findByTestId('pick-agent-agent-1')).toBeInTheDocument();
+      expect(screen.getByTestId('pick-agent-agent-2')).toBeInTheDocument();
+      expect(screen.getByTestId('pick-global-assistant')).toBeInTheDocument();
+    });
+
+    it('mints a picked cross-drive agent into the session, same as a drive session would', async () => {
+      mockPost.mockResolvedValue({});
+      renderPanes({
+        driveId: null,
+        initialConversation: { conversationId: 'conv-1', agentPageId: null, name: 'Conversation' },
+      });
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', paneId));
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByTestId('pick-agent-agent-2'));
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-2/conversations', {
+          conversationId: 'new-id-1',
+          sessionId: 'ses-1',
+        }),
+      );
+      await waitFor(() => expect(screen.getAllByTestId('pane-chat')).toHaveLength(2));
+    });
+  });
+
   describe('picking a shell', () => {
     it('opens a shell in the session and binds the pane to it', async () => {
       mockPost.mockResolvedValue({ shell: { shellId: 'shell-9', name: 'shell-1' } });

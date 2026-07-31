@@ -106,7 +106,7 @@ export default function PanePicker({
             data-testid="pick-global-assistant"
           >
             <Bot className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-            Assistant
+            Global Assistant
           </Button>
         )}
       </div>

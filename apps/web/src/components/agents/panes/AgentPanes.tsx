@@ -140,15 +140,16 @@ export default function AgentPanes({
   const replaceConversation = useAgentWorkspaceStore((state) => state.replaceConversation);
   const forgetWorkspace = useAgentWorkspaceStore((state) => state.forgetWorkspace);
 
-  // The picker's agent list — the session's drive only. A global-assistant
-  // session offers no drive agents (there is no drive to list).
-  const { allAgents, isLoading: agentsLoading } = usePageAgents(driveId ?? undefined, {
-    enabled: driveId !== null,
-  });
+  // The picker's agent list. A drive session offers only that drive's agents;
+  // a global-assistant session (driveId null) has no home drive to filter by,
+  // so it offers every agent the caller can access, across all their drives —
+  // billing/tenant still resolve to the session's own owner regardless of
+  // which agent's conversation runs inside it (see AgentNotInSessionDriveError).
+  const { allAgents, isLoading: agentsLoading } = usePageAgents(driveId ?? undefined);
   const pickableAgents: PickableAgent[] = useMemo(
     () =>
       (allAgents ?? [])
-        .filter((agent) => agent.driveId === driveId)
+        .filter((agent) => driveId === null || agent.driveId === driveId)
         .map((agent) => ({ id: agent.id, title: agent.title ?? 'Agent' })),
     [allAgents, driveId],
   );
@@ -708,7 +709,7 @@ export default function AgentPanes({
                 scope={pane.scope}
                 surface={surface}
                 pickableAgents={pickableAgents}
-                agentsLoading={driveId !== null && agentsLoading}
+                agentsLoading={agentsLoading}
                 conversationsReady={sessionKnownToConversationsCache}
                 driveId={driveId}
                 onSelectAgent={(nextAgentPageId) =>
@@ -735,7 +736,7 @@ export default function AgentPanes({
           {showPicker ? (
             <PanePicker
               agents={pickableAgents}
-              isLoading={driveId !== null && agentsLoading}
+              isLoading={agentsLoading}
               existingShells={reattachableShells}
               // The assistant identity path is live (AssistantSessionChat), so
               // every session can host an assistant thread beside its agents.

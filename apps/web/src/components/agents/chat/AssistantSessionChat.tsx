@@ -31,7 +31,7 @@ export default function AssistantSessionChat({
   return (
     <SessionChatView
       chat={chat}
-      name="Assistant"
+      name="Global Assistant"
       visionModel={currentModel || ''}
       context={context}
       isReadOnly={isReadOnly}
