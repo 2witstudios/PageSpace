@@ -5,7 +5,7 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and, sql, inArray } from '@pagespace/db/operators'
+import { eq, and, sql, inArray, isNull } from '@pagespace/db/operators'
 import { chatMessages, pages } from '@pagespace/db/schema/core'
 import { userActivities } from '@pagespace/db/schema/monitoring'
 import { conversations } from '@pagespace/db/schema/conversations';
@@ -433,6 +433,22 @@ export const conversationRepository = {
       .returning({ id: conversations.id, title: conversations.title });
 
     return result;
+  },
+
+  /**
+   * Auto-title a conversation from its first message, without ever
+   * overwriting a title that's already set (including a user's manual
+   * rename via upsertConversationTitle). The IS-NULL guard lives in the SQL
+   * WHERE clause rather than an in-memory check, so it's safe to call on
+   * every message — no separate "is this the first message" lookup needed
+   * — and race-safe: two concurrent calls both issue this same guarded
+   * UPDATE, and only the one that lands first actually sets a row.
+   */
+  async autoTitleConversation(conversationId: string, title: string): Promise<void> {
+    await db
+      .update(conversations)
+      .set({ title, updatedAt: new Date() })
+      .where(and(eq(conversations.id, conversationId), isNull(conversations.title)));
   },
 
   /**
