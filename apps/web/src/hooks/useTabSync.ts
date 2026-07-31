@@ -112,10 +112,10 @@ export function useTabSync() {
     // steps away) restores an address that should already be SOMEWHERE in
     // this tab's own history, whether that entry was pushed by Next's router
     // or by application code (e.g. the Agents surface's `history.pushState`).
-    // Reconcile the index to match instead of pushing a new entry: pushing
-    // would truncate everything after the current index,
-    // silently discarding real forward history, and would leave this tab's
-    // own Back/Forward buttons one entry off from what the browser just did.
+    // Reconcile the index to match rather than pushing a new entry, which
+    // would truncate everything after the current index — silently
+    // discarding real forward history — and leave this tab's own
+    // Back/Forward buttons one entry off from what the browser just did.
     // Gated on an ACTUAL popstate (not just string adjacency) so an ordinary
     // new navigation that happens to coincidentally match an existing entry
     // still gets appended as a new step rather than misread as a jump back.
