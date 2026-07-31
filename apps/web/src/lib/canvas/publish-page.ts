@@ -715,6 +715,15 @@ async function renderNotFoundPageHtml(params: {
     const favicon = resolveFaviconTags(meta.faviconHref, publishFaviconUrl, FAVICON_BASE_URL);
     const formActionOrigin = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL;
 
+    // A canvas page assigned as the 404 page keeps its own published
+    // theme-bridge preference here too — otherwise unknown URLs would force
+    // the theme override even though the author explicitly turned it off
+    // for this page's normal published artifact.
+    const publishedRow = await db.query.publishedPages.findFirst({
+      where: eq(publishedPages.pageId, pageId),
+      columns: { themeBridgeEnabled: true },
+    });
+
     return prepared.render({
       // Same precedence as a normal publish (resolvePublishedMeta): the
       // page's own code-authored meta wins over its internal page title.
@@ -726,6 +735,7 @@ async function renderNotFoundPageHtml(params: {
       description: meta.ogDescription || meta.description,
       robots: 'noindex',
       formActionOrigin,
+      injectThemeBridge: publishedRow?.themeBridgeEnabled ?? true,
     });
   } catch (err) {
     loggers.api.warn('Failed to render custom 404 page; falling back to generic 404', {

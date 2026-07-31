@@ -1020,6 +1020,28 @@ describe('regeneratePublishedSiteFiles', () => {
       expect(renderInput?.title).toBe('Oops');
     });
 
+    it('applies the 404 page\'s own themeBridgeEnabled setting, not the hardcoded default', async () => {
+      // Regression test for a Codex-flagged bug: a canvas page's normal
+      // published artifact honors its own themeBridgeEnabled setting, but
+      // this 404-rendering path never looked it up, so a page with the
+      // theme bridge turned off would still get it forced on when served
+      // as the drive's 404 page.
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+        name: 'Acme', publishSubdomain: 'acme', homePageId: null, notFoundPageId: 'nf-page', ownerId: 'owner-1', publishFaviconUrl: null,
+      }));
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+        type: 'CANVAS', title: 'Oops', content: '<p>theme-off 404</p>', contentMode: 'html',
+      }));
+      vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(
+        publishedPageRow({ themeBridgeEnabled: false })
+      );
+
+      await regeneratePublishedSiteFiles('drive-1');
+
+      const renderInput = vi.mocked(renderPublishedPage).mock.calls.find((c) => c[0].html === '<p>theme-off 404</p>')?.[0];
+      expect(renderInput?.injectThemeBridge).toBe(false);
+    });
+
     it('prefers the 404 page\'s own og:title over its internal page title, matching normal publish precedence', async () => {
       vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
         name: 'Acme', publishSubdomain: 'acme', homePageId: null, notFoundPageId: 'nf-page', ownerId: 'owner-1', publishFaviconUrl: null,

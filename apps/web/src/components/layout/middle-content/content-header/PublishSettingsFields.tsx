@@ -110,6 +110,7 @@ export function PublishSettingsFields({
               pageType={PageType.FILE}
               imageOnly
               placeholder="Browse uploaded images…"
+              disabled={disabled}
             />
           </div>
         )
