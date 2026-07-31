@@ -221,6 +221,45 @@ describe('useResolvedConversation', () => {
     await waitFor(() => expect(result.current.resolved).not.toBeNull());
     expect(result.current.resolved?.sessionId).toBeNull();
   });
+
+  describe('initialConversationId (deep link from the past-conversations list)', () => {
+    it('resolves directly to it, skipping the most-recent lookup entirely', async () => {
+      const { result } = renderHook(() =>
+        useResolvedConversation('agent-1', {
+          ...OPTS,
+          initialConversationId: 'conv-deep-link',
+          initialSessionId: 'ses-deep-link',
+        }),
+      );
+
+      await waitFor(() => expect(result.current.resolved?.conversationId).toBe('conv-deep-link'));
+      expect(result.current.resolved?.sessionId).toBe('ses-deep-link');
+      expect(agentConversations.fetchMostRecentAgentConversation).not.toHaveBeenCalled();
+      expect(agentConversations.createAgentConversation).not.toHaveBeenCalled();
+    });
+
+    it('defaults sessionId to null when none is given', async () => {
+      const { result } = renderHook(() =>
+        useResolvedConversation('agent-1', { ...OPTS, initialConversationId: 'conv-deep-link' }),
+      );
+
+      await waitFor(() => expect(result.current.resolved?.conversationId).toBe('conv-deep-link'));
+      expect(result.current.resolved?.sessionId).toBeNull();
+    });
+
+    it('still waits for auth to settle before resolving, same as the ordinary path', async () => {
+      const { result, rerender } = renderHook(
+        ({ authLoading }: { authLoading: boolean }) =>
+          useResolvedConversation('agent-1', { ...OPTS, authLoading, initialConversationId: 'conv-deep-link' }),
+        { initialProps: { authLoading: true } },
+      );
+
+      expect(result.current.isLoading).toBe(true);
+      rerender({ authLoading: false });
+
+      await waitFor(() => expect(result.current.resolved?.conversationId).toBe('conv-deep-link'));
+    });
+  });
 });
 
 describe('createPageConversation', () => {

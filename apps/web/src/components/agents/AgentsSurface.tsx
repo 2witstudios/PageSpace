@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Bot, Loader2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
@@ -10,6 +10,8 @@ import { panesOf } from '@/stores/agent-workspace/pane-reducer';
 import { useLatestRef } from '@/hooks/useLatestRef';
 import { useSessionRecord } from './useSessionRecord';
 import AgentPanes from './panes/AgentPanes';
+import EmptyState from './EmptyState';
+import AgentsPastConversationsList from './AgentsPastConversationsList';
 
 /**
  * The Agents console: mounted for the lifetime of the route, whatever is
@@ -179,23 +181,16 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
           description="This session's conversations are listed under it in the sidebar."
         />
       ) : (
-        <EmptyState
-          title="Select a session"
-          description="Pick a session from the sidebar, or start a new one."
-        />
+        // Keyed by drive: this surface's own `driveId` prop CAN change on an
+        // already-mounted instance (switching drives while staying on the
+        // agents tab re-renders with new `useParams()`, same as the
+        // `hydrateFromSearch({ driveId })` effect above already accounts
+        // for) — a bare prop change would leave the list's cursor/page state
+        // naming a position in the PREVIOUS drive's ordering. Remounting via
+        // `key` resets everything at once rather than chasing every piece of
+        // state that would otherwise need its own reset effect (review).
+        <AgentsPastConversationsList key={driveId ?? 'global'} driveId={driveId} />
       )}
-    </div>
-  );
-}
-
-function EmptyState({ title, description }: { title: string; description: string }) {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
-      <Bot className="size-10 text-muted-foreground" aria-hidden="true" />
-      <div>
-        <h2 className="text-lg font-semibold">{title}</h2>
-        <p className="text-sm text-muted-foreground">{description}</p>
-      </div>
     </div>
   );
 }

@@ -11,6 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useSearchParams } from 'next/navigation';
 import type { TreePage } from '@/hooks/usePageTree';
 import type { ResolvedConversation } from '../useResolvedConversation';
 
@@ -707,6 +708,40 @@ describe('AgentPageView', () => {
       // The user's newer pick (conv-2) survives — not clobbered by conv-3,
       // the replacement for a conversation the user already moved on from.
       expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2');
+    });
+  });
+
+  describe('the past-conversations deep link (?conversationId=&sessionId=) is consumed exactly once', () => {
+    // Left in the URL, a later refresh (after the user switches to a
+    // different conversation via the History tab) would remount this
+    // component, re-read the same stale params, and silently reopen the
+    // original deep-linked thread instead of wherever the user actually
+    // navigated to (review finding — a real bug on refresh, not cosmetic).
+    it('strips conversationId/sessionId from the URL right after capturing them', () => {
+      vi.mocked(useSearchParams).mockReturnValue(
+        new URLSearchParams('conversationId=conv-deep-link&sessionId=ses-deep-link') as ReturnType<typeof useSearchParams>,
+      );
+      window.history.replaceState({}, '', '/dashboard/drive-1/page-1?conversationId=conv-deep-link&sessionId=ses-deep-link');
+
+      render(<AgentPageView page={pageFixture()} />);
+
+      // Assert the user-visible CONTRACT (the final URL) rather than spying
+      // on replaceState call details — a call-history assertion would pass
+      // even if a LATER call re-added the params, and fail for an unrelated
+      // history write elsewhere in the render path (review finding).
+      const currentParams = new URL(window.location.href).searchParams;
+      expect(currentParams.has('conversationId')).toBe(false);
+      expect(currentParams.has('sessionId')).toBe(false);
+    });
+
+    it('does nothing when there was no deep-link conversationId to begin with', () => {
+      vi.mocked(useSearchParams).mockReturnValue(new URLSearchParams() as ReturnType<typeof useSearchParams>);
+      window.history.replaceState({}, '', '/dashboard/drive-1/page-1');
+
+      render(<AgentPageView page={pageFixture()} />);
+
+      expect(window.location.pathname).toBe('/dashboard/drive-1/page-1');
+      expect(window.location.search).toBe('');
     });
   });
 });

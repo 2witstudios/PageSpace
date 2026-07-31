@@ -112,7 +112,27 @@ export async function createPageConversation({
 
 export function useResolvedConversation(
   agentId: string,
-  { driveId, canUseSessions, authLoading }: { driveId: string; canUseSessions: boolean; authLoading: boolean },
+  {
+    driveId,
+    canUseSessions,
+    authLoading,
+    initialConversationId,
+    initialSessionId,
+  }: {
+    driveId: string;
+    canUseSessions: boolean;
+    authLoading: boolean;
+    /**
+     * A deep-linked conversation to open instead of the agent's most-recent
+     * one — e.g. a row clicked in the Agents surface's past-conversations
+     * list. Trusted as-is (same trust level `useAgentSurfaceStore` already
+     * extends to the session/conversation ids it passes through): read once,
+     * synchronously, before the async most-recent-fetch path even starts, so
+     * the two can never race each other.
+     */
+    initialConversationId?: string;
+    initialSessionId?: string | null;
+  },
 ): UseResolvedConversationResult {
   const [resolved, setResolved] = useState<ResolvedConversation | null>(null);
   const resolvingAgentIdRef = useRef<string | null>(null);
@@ -145,6 +165,14 @@ export function useResolvedConversation(
     setResolved(null);
 
     const resolve = async () => {
+      // Synchronous, before any await: a deep-linked id is used directly —
+      // this can never race the async most-recent-fetch path below, since
+      // exactly one of the two branches runs, chosen at the top.
+      if (initialConversationId) {
+        setResolved({ conversationId: initialConversationId, sessionId: initialSessionId ?? null });
+        return;
+      }
+
       try {
         const mostRecent = await fetchMostRecentAgentConversation(agentId);
         if (resolvingAgentIdRef.current !== agentId) return;
@@ -182,7 +210,12 @@ export function useResolvedConversation(
       }
     };
     void resolve();
-  }, [agentId, authLoading]);
+    // `initialConversationId`/`initialSessionId` are read once, at the top of
+    // `resolve()`, for whichever agentId resolution is starting — safe to
+    // list here because `startedForAgentIdRef` already blocks a second run
+    // for an agentId that has already started, so a later change to either
+    // (while a DIFFERENT agentId hasn't resolved yet) can't retrigger.
+  }, [agentId, authLoading, initialConversationId, initialSessionId]);
 
   return { resolved, isLoading: resolved === null };
 }
