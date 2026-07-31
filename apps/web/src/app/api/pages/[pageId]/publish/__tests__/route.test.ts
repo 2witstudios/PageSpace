@@ -21,9 +21,11 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: (result: unknown) => typeof result === 'object' && result !== null && 'error' in result,
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
   canPrincipalEditPage: (auth: { userId: string }, pageId: string) => canUserEditPage(auth.userId, pageId),
+  canPrincipalViewPage: (auth: { userId: string }, pageId: string) => canUserViewPage(auth.userId, pageId),
 }));
 
 const canUserEditPage = vi.fn();
+const canUserViewPage = vi.fn();
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserEditPage: (...args: unknown[]) => canUserEditPage(...args),
 }));
@@ -130,6 +132,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   authenticateRequestWithOptions.mockResolvedValue({ userId: 'user-1' });
   canUserEditPage.mockResolvedValue(true);
+  canUserViewPage.mockResolvedValue(true);
   allocatePublishSubdomain.mockResolvedValue('acme');
   isPublishConfigured.mockReturnValue(true);
   getPublishAssetBaseUrl.mockReturnValue('https://test-publish.t3.tigrisfiles.io');
@@ -472,10 +475,29 @@ describe('POST /api/pages/[pageId]/publish', () => {
 });
 
 describe('GET /api/pages/[pageId]/publish', () => {
-  it('returns 403 when the user cannot edit the page', async () => {
+  it('returns 403 when the user can neither edit nor view the page', async () => {
     canUserEditPage.mockResolvedValue(false);
+    canUserViewPage.mockResolvedValue(false);
     const res = await GET(makeReq(), { params });
     expect(res.status).toBe(403);
+  });
+
+  it('given view-but-not-edit access to a published page, returns 200 with only the rendering-relevant field', async () => {
+    canUserEditPage.mockResolvedValue(false);
+    canUserViewPage.mockResolvedValue(true);
+    findFirstPublished.mockResolvedValue({
+      driveId: 'drive-1', path: 'welcome', publishedAt: new Date(), updatedAt: new Date(), themeBridgeEnabled: false,
+    });
+
+    const res = await GET(makeReq(), { params });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    // Exact-equal so a future change to the route can't silently start
+    // leaking edit-oriented fields (SEO overrides, url, isStale) to a
+    // view-only collaborator without this test catching it.
+    expect(json).toEqual({ published: true, canEdit: false, themeBridgeEnabled: false });
+    // The drive/domain lookups are skipped entirely for a view-only caller.
+    expect(findFirstDrive).not.toHaveBeenCalled();
   });
 
   it('returns { published: false, available: true } when no row exists and publishing is configured', async () => {
@@ -536,6 +558,7 @@ describe('GET /api/pages/[pageId]/publish', () => {
     const json = await res.json();
     expect(json).toEqual({
       published: true,
+      canEdit: true,
       available: true,
       isStale: false,
       url: 'https://acme.pagespace.site/welcome',

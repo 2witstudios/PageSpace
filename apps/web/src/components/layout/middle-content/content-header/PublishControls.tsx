@@ -125,6 +125,9 @@ const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishCo
       const prev = usePublishStatusStore.getState().statuses.get(pageId);
       setStatus(pageId, {
         published: true,
+        // Reaching this line required a successful POST, which is itself
+        // edit-gated server-side — this viewer can edit.
+        canEdit: true,
         url: data.url,
         available: true,
         isStale: false,

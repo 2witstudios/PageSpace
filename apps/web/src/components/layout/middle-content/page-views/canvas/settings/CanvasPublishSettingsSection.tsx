@@ -154,11 +154,23 @@ export function CanvasPublishSettingsSection({ pageId }: CanvasPublishSettingsSe
     return <p className="text-sm text-muted-foreground">Loading…</p>;
   }
 
+  // `published` and `canEdit` are independent: a view-only collaborator can
+  // see `published: true` (the GET route serves that much to any viewer —
+  // see its permission comment) but must never get an enabled Save button
+  // for fields it has no persisted values for anyway (view-only responses
+  // omit the SEO overrides).
+  const canEditFields = status.published && status.canEdit;
+
   return (
     <div className="space-y-4">
       {!status.published && (
         <p className="text-sm text-muted-foreground">
           Publish this page from the header first — these settings apply once it&apos;s live.
+        </p>
+      )}
+      {status.published && !status.canEdit && (
+        <p className="text-sm text-muted-foreground">
+          You don&apos;t have permission to edit this page&apos;s publish settings.
         </p>
       )}
       <PublishSettingsFields
@@ -167,10 +179,10 @@ export function CanvasPublishSettingsSection({ pageId }: CanvasPublishSettingsSe
         pickedImageId={pickedImageId}
         onPickedImageIdChange={(id) => { setPickedImageId(id); setIsDirty(true); }}
         driveId={driveId}
-        disabled={!status.published}
+        disabled={!canEditFields}
         idPrefix="canvas-publish"
       />
-      <Button onClick={handleSave} disabled={!status.published || isSaving}>
+      <Button onClick={handleSave} disabled={!canEditFields || isSaving}>
         {isSaving ? 'Saving…' : 'Save'}
       </Button>
     </div>

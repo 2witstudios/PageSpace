@@ -42,7 +42,7 @@ describe('CanvasPublishSettingsSection — pristine reseed', () => {
     mockFetchWithAuth.mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => ({ published: true, title: 'Original Title' }),
+      json: async () => ({ published: true, canEdit: true, title: 'Original Title' }),
     } as Response);
 
     render(<CanvasPublishSettingsSection pageId="page_1" />);
@@ -55,6 +55,7 @@ describe('CanvasPublishSettingsSection — pristine reseed', () => {
       usePublishStatusStore.getState().setStatus('page_1', {
         ...EMPTY_PUBLISH_STATUS,
         published: true,
+        canEdit: true,
         available: true,
         settings: { title: 'Updated From Header', description: '', ogImageUrl: '', noindex: false, themeBridgeEnabled: true },
       });
@@ -74,7 +75,7 @@ describe('CanvasPublishSettingsSection — pristine reseed', () => {
     mockFetchWithAuth.mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => ({ published: true, title: 'Original Title' }),
+      json: async () => ({ published: true, canEdit: true, title: 'Original Title' }),
     } as Response);
 
     render(<CanvasPublishSettingsSection pageId="page_1" />);
@@ -89,6 +90,7 @@ describe('CanvasPublishSettingsSection — pristine reseed', () => {
       usePublishStatusStore.getState().setStatus('page_1', {
         ...EMPTY_PUBLISH_STATUS,
         published: true,
+        canEdit: true,
         available: true,
         isStale: true,
         settings: { title: 'Original Title', description: '', ogImageUrl: '', noindex: false, themeBridgeEnabled: true },
@@ -100,6 +102,35 @@ describe('CanvasPublishSettingsSection — pristine reseed', () => {
       should: "keep showing the user's edited title, not the reseeded one",
       actual: titleInput.getAttribute('value'),
       expected: 'My In-Progress Edit',
+    });
+  });
+});
+
+// ============================================================================
+// Regression test for a second Codex-flagged bug: the GET route now serves
+// `published: true` + `themeBridgeEnabled` to any viewer (not just editors —
+// see the route's view-permission fix), so a view-only collaborator can see
+// this category as "published". Without a separate `canEdit` check, that
+// alone made the fields (which the view-only response doesn't even populate)
+// look editable and the Save button clickable.
+// ============================================================================
+describe('CanvasPublishSettingsSection — view-only access', () => {
+  it('given published: true but canEdit: false, should keep fields and Save disabled', async () => {
+    mockFetchWithAuth.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ published: true, canEdit: false, themeBridgeEnabled: true }),
+    } as Response);
+
+    render(<CanvasPublishSettingsSection pageId="page_1" />);
+
+    const saveButton = await screen.findByRole('button', { name: 'Save' });
+    const permissionNote = await screen.findByText("You don't have permission to edit this page's publish settings.");
+    assert({
+      given: 'a view-only collaborator on an already-published page',
+      should: 'disable the Save button and show a permission note, not enabled/editable fields',
+      actual: [saveButton.hasAttribute('disabled'), permissionNote !== null],
+      expected: [true, true],
     });
   });
 });

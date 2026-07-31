@@ -13,6 +13,13 @@ export interface PublishSettingsSnapshot {
 
 export interface PublishStatus {
   published: boolean;
+  // Whether the current viewer can edit this page (vs. view-only access).
+  // A view-only viewer can still get `published: true` and a real
+  // `settings.themeBridgeEnabled` (the GET route serves that much to any
+  // viewer — see the route's view-permission comment), but every editing
+  // surface (Save buttons, toggles) must also check this: `published` alone
+  // does NOT mean "safe to show editable, savable fields".
+  canEdit: boolean;
   url: string | null;
   // Whether the server can publish at all (dedicated public bucket configured).
   available: boolean;
@@ -35,6 +42,7 @@ export const EMPTY_PUBLISH_SETTINGS: PublishSettingsSnapshot = {
 
 export const EMPTY_PUBLISH_STATUS: PublishStatus = {
   published: false,
+  canEdit: false,
   url: null,
   available: false,
   isStale: false,
@@ -44,6 +52,7 @@ export const EMPTY_PUBLISH_STATUS: PublishStatus = {
 
 interface PublishStatusResponse {
   published: boolean;
+  canEdit?: boolean;
   url?: string;
   available?: boolean;
   isStale?: boolean;
@@ -56,6 +65,9 @@ interface PublishStatusResponse {
 
 export const publishStatusFromResponse = (data: PublishStatusResponse): PublishStatus => ({
   published: data.published,
+  // Fails closed: an absent `canEdit` (an older/unexpected response shape)
+  // is treated as view-only rather than assumed editable.
+  canEdit: data.canEdit ?? false,
   url: data.published ? data.url ?? null : null,
   available: data.available ?? false,
   isStale: data.isStale ?? false,
@@ -98,15 +110,31 @@ export const usePublishStatusStore = create<PublishStatusStoreState>((set, get) 
     const existing = get().inFlight.get(pageId);
     if (existing) return existing;
 
+    // On a transient failure (network error, 5xx), keep whatever was last
+    // known good rather than wiping it to EMPTY_PUBLISH_STATUS — every
+    // shared consumer (the header, both Settings categories) reads the same
+    // entry, so re-entering a category and hitting a blip would otherwise
+    // make the header's controls disappear and re-disable already-published
+    // settings until something else happens to trigger a successful refetch.
+    // A 403 is different: it's a definitive "no permission" signal, not a
+    // failure, so it's safe (and correct) to reset to the empty state.
+    const keepLastGoodOnFailure = (): PublishStatus => {
+      const prev = get().statuses.get(pageId);
+      return prev ? { ...prev, hasLoadError: true } : { ...EMPTY_PUBLISH_STATUS, hasLoadError: true };
+    };
+
     const promise = (async () => {
       try {
         const res = await fetchWithAuth(`/api/pages/${pageId}/publish`);
-        const status = res.ok
-          ? publishStatusFromResponse((await res.json()) as PublishStatusResponse)
-          : { ...EMPTY_PUBLISH_STATUS, hasLoadError: res.status !== 403 };
-        get().setStatus(pageId, status);
+        if (res.ok) {
+          get().setStatus(pageId, publishStatusFromResponse((await res.json()) as PublishStatusResponse));
+        } else if (res.status === 403) {
+          get().setStatus(pageId, { ...EMPTY_PUBLISH_STATUS, hasLoadError: false });
+        } else {
+          get().setStatus(pageId, keepLastGoodOnFailure());
+        }
       } catch {
-        get().setStatus(pageId, { ...EMPTY_PUBLISH_STATUS, hasLoadError: true });
+        get().setStatus(pageId, keepLastGoodOnFailure());
       } finally {
         const nextInFlight = new Map(get().inFlight);
         nextInFlight.delete(pageId);

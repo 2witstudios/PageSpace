@@ -79,6 +79,41 @@ describe('usePublishStatusStore', () => {
     });
   });
 
+  it('given an already-cached good status, a subsequent 500 should preserve it (not wipe it to empty)', async () => {
+    mockFetchWithAuth.mockResolvedValueOnce(makeResponse({
+      body: { published: true, canEdit: true, url: 'https://acme.pagespace.site/welcome', available: true },
+    }));
+    await usePublishStatusStore.getState().fetchStatus('page-1');
+
+    // A later refetch (e.g. re-entering the Settings tab's Publish category)
+    // hits a transient failure — every OTHER shared consumer (the header)
+    // must not see this page suddenly become unpublished/unavailable.
+    mockFetchWithAuth.mockResolvedValueOnce(makeResponse({ status: 500 }));
+    await usePublishStatusStore.getState().fetchStatus('page-1');
+
+    expect(usePublishStatusStore.getState().statuses.get('page-1')).toMatchObject({
+      published: true,
+      available: true,
+      url: 'https://acme.pagespace.site/welcome',
+      hasLoadError: true,
+    });
+  });
+
+  it('given an already-cached good status, a subsequent 403 should reset it (a definitive signal, not a failure)', async () => {
+    mockFetchWithAuth.mockResolvedValueOnce(makeResponse({
+      body: { published: true, canEdit: true, url: 'https://acme.pagespace.site/welcome', available: true },
+    }));
+    await usePublishStatusStore.getState().fetchStatus('page-1');
+
+    mockFetchWithAuth.mockResolvedValueOnce(makeResponse({ status: 403 }));
+    await usePublishStatusStore.getState().fetchStatus('page-1');
+
+    expect(usePublishStatusStore.getState().statuses.get('page-1')).toMatchObject({
+      available: false,
+      hasLoadError: false,
+    });
+  });
+
   it('given a network error, fetchStatus should report a load error', async () => {
     mockFetchWithAuth.mockRejectedValue(new Error('network down'));
 

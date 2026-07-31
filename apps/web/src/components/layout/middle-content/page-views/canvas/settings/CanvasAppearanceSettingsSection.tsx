@@ -77,11 +77,23 @@ export function CanvasAppearanceSettingsSection({ pageId }: CanvasAppearanceSett
     return <p className="text-sm text-muted-foreground">Loading…</p>;
   }
 
+  // `published` and `canEdit` are independent — a view-only collaborator can
+  // see `published: true` and the real `themeBridgeEnabled` value (the GET
+  // route serves that much to any viewer so the View tab preview matches
+  // reality — see the route's permission comment), but must not get a
+  // savable toggle.
+  const canEditToggle = status.published && status.canEdit;
+
   return (
     <div className="space-y-4">
       {!status.published && (
         <p className="text-sm text-muted-foreground">
           Publish this page from the header first — this setting applies once it&apos;s live.
+        </p>
+      )}
+      {status.published && !status.canEdit && (
+        <p className="text-sm text-muted-foreground">
+          You don&apos;t have permission to edit this page&apos;s appearance settings.
         </p>
       )}
       <div className="flex items-center justify-between gap-4">
@@ -96,7 +108,7 @@ export function CanvasAppearanceSettingsSection({ pageId }: CanvasAppearanceSett
           id="canvas-theme-bridge"
           checked={status.settings.themeBridgeEnabled}
           onCheckedChange={handleToggle}
-          disabled={!status.published || isSaving}
+          disabled={!canEditToggle || isSaving}
         />
       </div>
     </div>
