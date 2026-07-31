@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useCallback, useRef } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import dynamic from 'next/dynamic';
@@ -12,6 +12,7 @@ import { useEditingStore } from '@/stores/useEditingStore';
 import { useSocket } from '@/hooks/useSocket';
 import { PageEventPayload } from '@/lib/websocket';
 import { useFindStore } from '@/stores/useFindStore';
+import { usePublishStatusStore } from '@/stores/usePublishStatusStore';
 import { CanvasSettingsPanel } from './settings/CanvasSettingsPanel';
 
 interface CanvasPageViewProps {
@@ -20,17 +21,21 @@ interface CanvasPageViewProps {
 
 type CanvasTab = 'view' | 'code' | 'settings';
 
-interface PublishStatusResponse {
-  themeBridgeEnabled?: boolean;
-}
-
 const MonacoEditor = dynamic(() => import('@/components/editors/MonacoEditor'), { ssr: false });
+
+const CANVAS_TABS: CanvasTab[] = ['view', 'code', 'settings'];
+const isCanvasTab = (value: string | null): value is CanvasTab =>
+  value !== null && (CANVAS_TABS as string[]).includes(value);
 
 const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const activeTab = (searchParams.get('tab') as CanvasTab | null) ?? 'view';
+  const rawTab = searchParams.get('tab');
+  // A stale/foreign ?tab= value (an old bookmark from before the Forms tab was
+  // removed, a manually edited URL, …) must fall back to 'view' rather than
+  // rendering none of the tab panels below.
+  const activeTab = isCanvasTab(rawTab) ? rawTab : 'view';
   const setActiveTab = useCallback((tab: CanvasTab) => {
     const params = new URLSearchParams(searchParams.toString());
     if (tab === 'view') {
@@ -50,24 +55,17 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
   const socket = useSocket();
 
   // Mirrors published_pages.themeBridgeEnabled so the View tab's live preview
-  // matches what publishing produces. Fetched once here (not inside
-  // PublishControls, a separate component instance in the header) and updated
-  // immediately on save by the Settings tab's Appearance category.
-  const [themeBridgeEnabled, setThemeBridgeEnabled] = useState(true);
+  // matches what publishing produces. Shared with the header's
+  // PublishControls and the Settings tab's Appearance category via
+  // usePublishStatusStore — a save from either surface updates this
+  // immediately, no callback prop needed.
+  const fetchPublishStatus = usePublishStatusStore((s) => s.fetchStatus);
+  const themeBridgeEnabled = usePublishStatusStore(
+    (s) => s.statuses.get(pageId)?.settings.themeBridgeEnabled ?? true
+  );
   useEffect(() => {
-    let cancelled = false;
-    fetchWithAuth(`/api/pages/${pageId}/publish`)
-      .then((res) => (res.ok ? (res.json() as Promise<PublishStatusResponse>) : null))
-      .then((data) => {
-        if (!cancelled) setThemeBridgeEnabled(data?.themeBridgeEnabled ?? true);
-      })
-      .catch(() => {
-        if (!cancelled) setThemeBridgeEnabled(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [pageId]);
+    fetchPublishStatus(pageId);
+  }, [pageId, fetchPublishStatus]);
 
   const {
     document: documentState,
@@ -253,7 +251,6 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
             pageId={pageId}
             content={content}
             onContentChange={handleFormsTabContentChange}
-            onThemeBridgeEnabledChange={setThemeBridgeEnabled}
           />
         </div>
       )}

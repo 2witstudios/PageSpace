@@ -1,6 +1,7 @@
-import { describe, it, vi } from 'vitest';
+import { describe, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { assert } from '@/stores/__tests__/riteway';
+import { usePublishStatusStore } from '@/stores/usePublishStatusStore';
 
 // ============================================================================
 // Smoke tests for PublishControls' unavailable-state branching.
@@ -37,6 +38,14 @@ const mockFetchWithAuth = vi.mocked(fetchWithAuth);
 
 const makeStatusResponse = ({ status = 200, body = {} }: { status?: number; body?: unknown } = {}) =>
   ({ ok: status < 400, status, json: async () => body }) as Response;
+
+// The status store is shared across every consumer (PublishControls, the
+// canvas Settings tab's Publish/Appearance categories) by design — reset it
+// between tests so one test's cached status for "page_1" can't leak into the
+// next's initial render.
+beforeEach(() => {
+  usePublishStatusStore.setState({ statuses: new Map(), inFlight: new Map() });
+});
 
 describe('PublishControls — unavailable-state branching', () => {
   it('given a read-only viewer (403), panel variant should show the durable unavailable message', async () => {

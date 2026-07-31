@@ -23,7 +23,6 @@ interface CanvasSettingsPanelProps {
   pageId: string;
   content: string;
   onContentChange: (value: string) => void;
-  onThemeBridgeEnabledChange: (enabled: boolean) => void;
 }
 
 /**
@@ -33,7 +32,7 @@ interface CanvasSettingsPanelProps {
  * navigation-model note on why this is a query param rather than a real
  * nested route.
  */
-export function CanvasSettingsPanel({ pageId, content, onContentChange, onThemeBridgeEnabledChange }: CanvasSettingsPanelProps) {
+export function CanvasSettingsPanel({ pageId, content, onContentChange }: CanvasSettingsPanelProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -66,9 +65,7 @@ export function CanvasSettingsPanel({ pageId, content, onContentChange, onThemeB
       </Button>
       <h2 className="text-lg font-medium">{CATEGORY_TITLES[category]}</h2>
       {category === 'publish' && <CanvasPublishSettingsSection pageId={pageId} />}
-      {category === 'appearance' && (
-        <CanvasAppearanceSettingsSection pageId={pageId} onThemeBridgeEnabledChange={onThemeBridgeEnabledChange} />
-      )}
+      {category === 'appearance' && <CanvasAppearanceSettingsSection pageId={pageId} />}
       {category === 'home' && <CanvasHomePageSettingsSection pageId={pageId} />}
       {category === 'forms' && (
         <CanvasFormsSettingsSection pageId={pageId} content={content} onContentChange={onContentChange} />

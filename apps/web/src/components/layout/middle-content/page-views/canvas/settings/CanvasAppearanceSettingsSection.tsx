@@ -5,15 +5,13 @@ import { toast } from 'sonner';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import { usePublishStatusStore } from '@/stores/usePublishStatusStore';
 
 interface CanvasAppearanceSettingsSectionProps {
   pageId: string;
-  /** Lets the View tab's live preview reflect a save immediately, without a refetch. */
-  onThemeBridgeEnabledChange: (enabled: boolean) => void;
 }
 
 interface PublishStatusResponse {
-  published: boolean;
   themeBridgeEnabled?: boolean;
 }
 
@@ -31,32 +29,20 @@ const readError = async (res: Response): Promise<string> => {
  * Publish category rather than inside `PublishSettingsFields` (which
  * document/sheet/code pages also use, and whose renderers hardcode
  * `injectThemeBridge: false` — the toggle would have zero effect there).
+ *
+ * Reads/writes through `usePublishStatusStore`, shared with the header's
+ * PublishControls and the View tab's live preview (`CanvasPageView`) — saving
+ * here updates every subscriber immediately, no prop callback needed.
  */
-export function CanvasAppearanceSettingsSection({ pageId, onThemeBridgeEnabledChange }: CanvasAppearanceSettingsSectionProps) {
-  const [isLoading, setIsLoading] = useState(true);
-  const [published, setPublished] = useState(false);
-  const [themeBridgeEnabled, setThemeBridgeEnabled] = useState(true);
+export function CanvasAppearanceSettingsSection({ pageId }: CanvasAppearanceSettingsSectionProps) {
+  const status = usePublishStatusStore((s) => s.statuses.get(pageId));
+  const fetchStatus = usePublishStatusStore((s) => s.fetchStatus);
+  const setStatus = usePublishStatusStore((s) => s.setStatus);
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetchWithAuth(`/api/pages/${pageId}/publish`);
-        const data = res.ok ? ((await res.json()) as PublishStatusResponse) : { published: false };
-        if (cancelled) return;
-        setPublished(data.published);
-        setThemeBridgeEnabled(data.themeBridgeEnabled ?? true);
-      } catch {
-        if (!cancelled) setPublished(false);
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [pageId]);
+    fetchStatus(pageId);
+  }, [pageId, fetchStatus]);
 
   const handleToggle = useCallback(async (checked: boolean) => {
     setIsSaving(true);
@@ -70,23 +56,30 @@ export function CanvasAppearanceSettingsSection({ pageId, onThemeBridgeEnabledCh
         toast.error(await readError(res));
         return;
       }
-      setThemeBridgeEnabled(checked);
-      onThemeBridgeEnabledChange(checked);
+      const data = (await res.json()) as PublishStatusResponse;
+      const current = usePublishStatusStore.getState().statuses.get(pageId);
+      if (current) {
+        setStatus(pageId, {
+          ...current,
+          isStale: false,
+          settings: { ...current.settings, themeBridgeEnabled: data.themeBridgeEnabled ?? checked },
+        });
+      }
       toast.success('Appearance settings saved');
     } catch {
       toast.error('Failed to save appearance settings');
     } finally {
       setIsSaving(false);
     }
-  }, [pageId, onThemeBridgeEnabledChange]);
+  }, [pageId, setStatus]);
 
-  if (isLoading) {
+  if (!status) {
     return <p className="text-sm text-muted-foreground">Loading…</p>;
   }
 
   return (
     <div className="space-y-4">
-      {!published && (
+      {!status.published && (
         <p className="text-sm text-muted-foreground">
           Publish this page from the header first — this setting applies once it&apos;s live.
         </p>
@@ -101,9 +94,9 @@ export function CanvasAppearanceSettingsSection({ pageId, onThemeBridgeEnabledCh
         </div>
         <Switch
           id="canvas-theme-bridge"
-          checked={themeBridgeEnabled}
+          checked={status.settings.themeBridgeEnabled}
           onCheckedChange={handleToggle}
-          disabled={!published || isSaving}
+          disabled={!status.published || isSaving}
         />
       </div>
     </div>

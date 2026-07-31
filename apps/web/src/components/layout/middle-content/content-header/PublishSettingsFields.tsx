@@ -23,12 +23,6 @@ export const EMPTY_SETTINGS: PublishSettings = {
   noindex: false,
 };
 
-/** PublishSettings plus a transient "picked an uploaded file" alternative to
- *  pasting a URL — resolved server-side, never persisted as its own field. */
-export interface PublishOverrides extends PublishSettings {
-  ogImageFileId?: string;
-}
-
 interface PublishSettingsFieldsProps {
   value: PublishSettings;
   onChange: (next: PublishSettings) => void;
