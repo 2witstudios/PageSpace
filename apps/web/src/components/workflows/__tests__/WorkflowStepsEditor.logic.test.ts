@@ -24,7 +24,7 @@ describe('isToolStepComplete', () => {
   const insert: WorkflowToolStep = {
     kind: 'tool',
     toolName: 'insert_content',
-    args: { pageId: 'p1', anchor: '## Log', position: 'after', content: 'hi' },
+    args: { title: 'Doc', pageId: 'p1', anchor: '## Log', position: 'after', content: 'hi' },
   };
 
   it('is true when every required field has a literal value', () => {
@@ -54,7 +54,7 @@ describe('isToolStepComplete', () => {
     const step: WorkflowToolStep = {
       kind: 'tool',
       toolName: 'replace_lines',
-      args: { pageId: 'p1', startLine: 1, content: 'x' }, // endLine omitted, optional
+      args: { title: 'Doc', pageId: 'p1', startLine: 1, content: 'x' }, // endLine omitted, optional
     };
     expect(isToolStepComplete(step)).toBe(true);
   });
