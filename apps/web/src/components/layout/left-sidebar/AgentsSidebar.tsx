@@ -473,14 +473,6 @@ function SessionRow({
     [selectConversation, session.sessionId],
   );
 
-  const openSession = useCallback(() => {
-    // Selecting a SESSION opens its most recent conversation — the row is a
-    // workspace, and a workspace opens on its work, not on a placeholder.
-    setExpanded(true);
-    const first = session.conversations[0];
-    if (first) openConversation(first);
-  }, [openConversation, session.conversations]);
-
   const openShell = useCallback(
     (shell: { shellId: string; name: string }) => {
       selectSession(session.sessionId);
@@ -493,6 +485,21 @@ function SessionRow({
     },
     [selectSession, session.sessionId],
   );
+
+  const openSession = useCallback(() => {
+    // Selecting a SESSION opens its most recent conversation — the row is a
+    // workspace, and a workspace opens on its work, not on a placeholder. A
+    // shell-first session has no conversations at all, so fall back to its
+    // first shell rather than leave the click a no-op.
+    setExpanded(true);
+    const first = session.conversations[0];
+    if (first) {
+      openConversation(first);
+      return;
+    }
+    const firstShell = session.shells[0];
+    if (firstShell) openShell(firstShell);
+  }, [openConversation, openShell, session.conversations, session.shells]);
 
   const endSession = useCallback(async () => {
     setEnding(true);

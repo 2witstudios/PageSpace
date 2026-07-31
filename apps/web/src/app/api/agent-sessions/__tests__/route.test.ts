@@ -16,6 +16,7 @@ const {
   mockCanPrincipalViewPage,
   mockProvisionSessionSandbox,
   mockSpawnShell,
+  mockFindSessionRecord,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
   mockAuditRequest: vi.fn(),
@@ -31,6 +32,7 @@ const {
   mockCanPrincipalViewPage: vi.fn(),
   mockProvisionSessionSandbox: vi.fn(),
   mockSpawnShell: vi.fn(),
+  mockFindSessionRecord: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -58,6 +60,7 @@ vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
   spawnSession: (...args: unknown[]) => mockSpawnSession(...args),
   toAgentSessionDTO: (row: { id: string }) => ({ sessionId: row.id, dto: true }),
   provisionSessionSandbox: (...args: unknown[]) => mockProvisionSessionSandbox(...args),
+  findSessionRecord: (...args: unknown[]) => mockFindSessionRecord(...args),
 }));
 vi.mock('@/lib/agent-sessions/session-shells-runtime', () => ({
   listShellsBulk: (...args: unknown[]) => mockListShellsBulk(...args),
@@ -333,6 +336,32 @@ describe("POST /api/agent-sessions — firstThing: 'shell'", () => {
     const response = await spawn({ driveId: 'drive-1', firstThing: 'shell' });
     expect(response.status).toBe(502);
     expect(mockEndSession).toHaveBeenCalledWith('ses-new');
+  });
+
+  // Codex review finding on PR #2284: a live-sandbox quota denial during shell-first
+  // provisioning was reported as a generic 502 instead of the actionable 429 the
+  // [sessionId]/shells/route.ts POST already gives the same denial.
+  it('given sandbox provisioning is denied for hitting the live-sandbox quota, ENDS the session and responds 429 (not 502)', async () => {
+    mockProvisionSessionSandbox.mockResolvedValue({
+      ok: false,
+      reason: 'denied',
+      denial: 'session_limit_reached',
+      detail: 'concurrency_limit',
+    });
+    const response = await spawn({ driveId: 'drive-1', firstThing: 'shell' });
+    expect(response.status).toBe(429);
+    expect(mockEndSession).toHaveBeenCalledWith('ses-new');
+    expect(mockSpawnShell).not.toHaveBeenCalled();
+  });
+
+  // Codex review finding on PR #2284: spawned.session is the PRE-provision row, so
+  // responding with it directly reports a stale sandboxStatus even though provisioning
+  // just succeeded. The route must refetch before building the response DTO.
+  it('given the shell spawns successfully, refetches the session row after provisioning rather than reporting the stale pre-provision one', async () => {
+    mockFindSessionRecord.mockResolvedValue({ id: 'ses-new', sandboxStatus: 'running' });
+    const response = await spawn({ driveId: 'drive-1', firstThing: 'shell' });
+    expect(response.status).toBe(201);
+    expect(mockFindSessionRecord).toHaveBeenCalledWith('ses-new');
   });
 });
 

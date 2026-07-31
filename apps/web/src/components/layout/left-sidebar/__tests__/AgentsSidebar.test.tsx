@@ -173,6 +173,10 @@ beforeEach(() => {
   // test so one test's fixture never leaks into the next via the persisted
   // store.
   useDriveStore.setState({ drives: [] });
+  // Same leak risk for panes: two tests opening the same session id (every
+  // fixture here is 'ses-1' or 'ses-new') would otherwise see each other's
+  // panes[0], since nothing else clears this store between tests.
+  useAgentWorkspaceStore.setState({ workspaces: {} });
   mockUseAuth.mockReturnValue({ user: { role: 'admin' }, isLoading: false });
   mockUseParams.mockReturnValue({ driveId: 'drive-1' });
   mockUsePathname.mockReturnValue('/dashboard/drive-1/agents');
@@ -256,6 +260,24 @@ describe('AgentsSidebar', () => {
       expect(window.location.search).toBe('?session=ses-1&c=conv-1&agent=agent-1');
       // The whole point: no route change, so nothing remounts.
       expect(mockPush).not.toHaveBeenCalled();
+    });
+
+    test('clicking a shell-only session (no conversations) falls back to opening its first shell', async () => {
+      respondWithSessions([
+        { ...SESSION, conversations: [], shells: [{ shellId: 'shell-fallback-1', name: 'Shell' }] },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByText('api refactor'));
+
+      expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
+      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']?.columns[0]?.panes[0]?.scope).toEqual({
+        kind: 'terminal',
+        name: 'Shell',
+        targetId: 'shell-fallback-1',
+        agentPageId: null,
+      });
     });
 
     test('clicking a conversation selects it under its session, still without navigating', async () => {

@@ -27,6 +27,7 @@ import {
   countActiveSessionsForOwner,
   createConversationInSession,
   endSession,
+  findSessionRecord,
   listSessions,
   listSessionConversationsBulk,
   MAX_ACTIVE_SESSIONS_PER_OWNER,
@@ -285,6 +286,14 @@ export async function POST(request: Request) {
     const provisioned = await provisionSessionSandbox(spawned.session, auth.userId);
     if (!provisioned.ok) {
       await endSession(spawned.session.id).catch(() => {});
+      // A plan-limit refusal is not an infrastructure failure — same split the
+      // shells route draws (`[sessionId]/shells/route.ts` POST): a live-sandbox
+      // quota denial gets the actionable 429, not a generic 502.
+      if (provisioned.reason === 'denied' && provisioned.denial === 'session_limit_reached') {
+        return sessionQuotaExceeded(request, auth.userId, spawned.session.id, 'agent-sessions', {
+          reasonCode: provisioned.detail,
+        });
+      }
       loggers.api.error(
         'Agent session spawn: first shell sandbox provision failed',
         undefined,
@@ -314,9 +323,14 @@ export async function POST(request: Request) {
       details: { op: 'spawn_session', driveId, agentPageId: null, shellId: shellSpawned.shell.shellId },
     });
 
+    // spawned.session is the PRE-provision row — provisioning just flipped its
+    // sandbox state, so refetch rather than report the stale 'none' status a
+    // caller would otherwise read off the DTO it just successfully spawned.
+    const provisionedSession = (await findSessionRecord(spawned.session.id)) ?? spawned.session;
+
     return NextResponse.json(
       {
-        session: toAgentSessionDTO(spawned.session),
+        session: toAgentSessionDTO(provisionedSession),
         shellId: shellSpawned.shell.shellId,
         shellName: shellSpawned.shell.name,
       },
