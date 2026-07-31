@@ -422,7 +422,7 @@ function SessionGroupHeader({
   onNewSession?: () => void;
 }) {
   return (
-    <div className="flex items-center justify-between gap-1 px-2 pb-0.5 pt-1.5">
+    <div className="flex items-center justify-between gap-1 pl-2 pr-4 pb-0.5 pt-1.5">
       <span className="flex min-w-0 items-center gap-1.5 truncate text-sm font-semibold text-foreground">
         <Folder className="size-4 shrink-0" aria-hidden="true" />
         <span className="truncate">{label}</span>
