@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useId } from 'react';
 import dynamic from 'next/dynamic';
 import { useDocument } from '@/hooks/useDocument';
 import { motion, AnimatePresence } from 'motion/react';
@@ -71,6 +71,10 @@ const CodePageView = ({ pageId }: CodePageViewProps) => {
   const params = useParams();
   const driveId = params.driveId as string;
   const { tree } = usePageTree(driveId);
+  // Distinguishes this mount from any other simultaneous mount of the SAME
+  // page (main center panel vs. an agent-session pane) — see DocumentView's
+  // identical fix for why the key must not be pageId alone.
+  const instanceId = useId();
 
   const {
     document: documentState,
@@ -112,7 +116,7 @@ const CodePageView = ({ pageId }: CodePageViewProps) => {
 
   // Register editing state when document is dirty
   useEffect(() => {
-    const componentId = `code-${pageId}`;
+    const componentId = `code-${pageId}-${instanceId}`;
 
     if (documentState?.isDirty && !isReadOnly) {
       useEditingStore.getState().startEditing(componentId, 'document', {
@@ -126,7 +130,7 @@ const CodePageView = ({ pageId }: CodePageViewProps) => {
     return () => {
       useEditingStore.getState().endEditing(componentId);
     };
-  }, [documentState?.isDirty, pageId, isReadOnly]);
+  }, [documentState?.isDirty, pageId, isReadOnly, instanceId]);
 
   // Check user permissions
   useEffect(() => {

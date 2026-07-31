@@ -292,6 +292,17 @@ export function isCodePage(type: PageType): boolean {
   return type === PageType.CODE;
 }
 
+/**
+ * Can this page type be opened as an agent-session PANE (as opposed to only
+ * the main content area)? Excludes `FOLDER` (a tree browser, not content to
+ * edit) and `AI_CHAT` (would nest a chat conversation inside a chat pane) —
+ * every other type has a real standalone editor/viewer that makes sense
+ * beside a conversation.
+ */
+export function isPaneablePageType(type: PageType): boolean {
+  return type !== PageType.FOLDER && type !== PageType.AI_CHAT;
+}
+
 export function getCreatablePageTypes(): PageType[] {
   return Object.values(PAGE_TYPE_CONFIGS).filter(c => !c.experimental).map(c => c.type);
 }

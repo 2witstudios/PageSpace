@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useCallback, useRef, useState } from 'react';
+import React, { useEffect, useCallback, useRef, useState, useId } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Maximize2 } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -57,6 +57,10 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
   const hasInitializedRef = useRef(false);
   const isDirtyRef = useRef(false);
   const socket = useSocket();
+  // Distinguishes this mount from any other simultaneous mount of the SAME
+  // page (main center panel vs. an agent-session pane) — see DocumentView's
+  // identical fix for why the key must not be pageId alone.
+  const instanceId = useId();
 
   // Mirrors published_pages.themeBridgeEnabled so the View tab's live preview
   // matches what publishing produces. Shared with the header's
@@ -127,7 +131,7 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
 
   // Register editing state to prevent SWR revalidation during edits
   useEffect(() => {
-    const componentId = `canvas-${pageId}`;
+    const componentId = `canvas-${pageId}-${instanceId}`;
 
     if (documentState?.isDirty) {
       useEditingStore.getState().startEditing(componentId, 'document', {
@@ -141,7 +145,7 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
     return () => {
       useEditingStore.getState().endEditing(componentId);
     };
-  }, [documentState?.isDirty, pageId]);
+  }, [documentState?.isDirty, pageId, instanceId]);
 
   // Track isDirty in ref
   useEffect(() => {

@@ -75,9 +75,14 @@ export type ShellAgentType = z.infer<typeof shellAgentTypeSchema>;
  * a pane is the one place that has to talk about both.
  *
  * `'chat'` addresses a conversation (one thread among the session's many —
- * invariant 1); `'terminal'` addresses a `shellId`.
+ * invariant 1); `'terminal'` addresses a `shellId`; `'page'` addresses a
+ * PageSpace pageId — any non-container, non-chat page type (a document, task
+ * list, sheet, canvas, code file, ...), rendered read/write via the same
+ * page-type dispatch the main content area uses. Unlike `'chat'`/`'terminal'`,
+ * a `'page'` binding mints no row anywhere: the target already exists as a
+ * page, so binding it is a pure client-side assignment.
  */
-export const PANE_KINDS = ['chat', 'terminal'] as const;
+export const PANE_KINDS = ['chat', 'terminal', 'page'] as const;
 
 export const paneKindSchema = z.enum(PANE_KINDS);
 export type PaneKind = z.infer<typeof paneKindSchema>;
@@ -91,7 +96,7 @@ export const paneScopeSchema = z.object({
   kind: paneKindSchema,
   /** Display label — the conversation title or the shell name. Never an address. */
   name: z.string(),
-  /** The conversationId (chat) or shellId (terminal) this pane is bound to. */
+  /** The conversationId (chat), shellId (terminal), or pageId (page) this pane is bound to. */
   targetId: z.string().min(1).nullable(),
   /**
    * Which agent the conversation belongs to, for a `'chat'` pane. Null for a

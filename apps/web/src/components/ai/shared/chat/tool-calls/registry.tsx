@@ -22,6 +22,7 @@ import { CalendarEventListRenderer } from './calendar/CalendarEventListRenderer'
 import { CalendarAvailabilityRenderer, type FreeSlot } from './calendar/CalendarAvailabilityRenderer';
 import { WorkflowListRenderer } from './workflow/WorkflowListRenderer';
 import { WorkflowCard, type WorkflowData } from './workflow/WorkflowCard';
+import { OpenPagePaneRenderer } from './OpenPagePaneRenderer';
 
 /**
  * Tool-call renderer registry.
@@ -430,6 +431,13 @@ export const toolRenderers: Record<string, ToolRenderer> = {
       pageType={parsedOutput.type as string | undefined}
       message={parsedOutput.message as string | undefined}
       errorMessage={parsedOutput.error as string | undefined}
+    />
+  ),
+
+  open_page_pane: ({ parsedOutput }) => (
+    <OpenPagePaneRenderer
+      pageId={parsedOutput.pageId as string | undefined}
+      title={parsedOutput.title as string | undefined}
     />
   ),
 

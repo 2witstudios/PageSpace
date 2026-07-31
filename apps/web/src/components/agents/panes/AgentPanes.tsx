@@ -9,10 +9,13 @@
  * ```
  * SessionPanes (layout only, surfaces injected)
  *  └─ pane: PaneBar (identity + split/close) over
- *      picker   → PanePicker      (unbound — choose an agent, a shell, or
- *                                  reattach one already running)
+ *      picker   → PanePicker      (unbound — choose an agent, a shell, a
+ *                                  page, or reattach a shell already running)
  *      chat     → PaneChat        (a conversation IN this session)
  *      terminal → Shell           (a PTY on this session's sandbox)
+ *      page     → PagePaneView    (a PageSpace page — document, task list,
+ *                                  sheet, canvas, code, ... — rendered with
+ *                                  the same view the main content area uses)
  *      loading  → spinner         (bound, row not minted yet — never a
  *                                  speculative terminal)
  * ```
@@ -65,6 +68,7 @@ import {
   type SessionListEntry,
 } from './session-conversations';
 import PaneChat from './PaneChat';
+import PagePaneView from './PagePaneView';
 import Shell from '../shell/Shell';
 
 export interface AgentPanesProps {
@@ -684,6 +688,16 @@ export default function AgentPanes({
     [assignPane, sessionId],
   );
 
+  // A page binding addresses an existing page directly — unlike a
+  // conversation or a shell, there is nothing to mint server-side, so this is
+  // a single synchronous assignment (no loading state, no rollback path).
+  const handlePickPage = useCallback(
+    (paneId: string, pageId: string, title: string) => {
+      assignPane(sessionId, paneId, { kind: 'page', name: title, targetId: pageId, agentPageId: null });
+    },
+    [assignPane, sessionId],
+  );
+
   if (!workspace) {
     // The openConversation effect seeds the grid on the next tick.
     return (
@@ -743,6 +757,7 @@ export default function AgentPanes({
           {showPicker ? (
             <PanePicker
               agents={pickableAgents}
+              driveId={driveId}
               isLoading={agentsLoading}
               existingShells={reattachableShells}
               // The assistant identity path is live (AssistantSessionChat), so
@@ -756,6 +771,7 @@ export default function AgentPanes({
               onPickAgent={(agentPageId) => void handlePickAgent(pane.id, agentPageId)}
               onPickShell={() => void handlePickShell(pane.id)}
               onReattachShell={(shellId, name) => handleReattachShell(pane.id, shellId, name)}
+              onPickPage={(pageId, title) => handlePickPage(pane.id, pageId, title)}
             />
           ) : surface.surface === 'loading' ? (
             <div className="flex h-full items-center justify-center">
@@ -763,12 +779,15 @@ export default function AgentPanes({
             </div>
           ) : surface.surface === 'chat' ? (
             <PaneChat
+              sessionId={sessionId}
               conversationId={surface.conversationId}
               agentPageId={surface.agentPageId}
               driveId={driveId}
               context={chatContext}
               isReadOnly={isReadOnly}
             />
+          ) : surface.surface === 'page' ? (
+            <PagePaneView pageId={surface.pageId} driveId={driveId} />
           ) : (
             <Shell shellId={surface.shellId} name={pane.scope?.name} />
           )}

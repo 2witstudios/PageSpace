@@ -552,6 +552,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
             </div>
           ) : (
             <SessionChat
+              sessionId={null}
               agent={agent}
               conversationId={current.conversationId}
               context="page"

@@ -19,12 +19,15 @@ import SessionChat from '../chat/SessionChat';
 import { useResolvedAgent } from '../useResolvedAgent';
 
 export default function PaneChat({
+  sessionId,
   conversationId,
   agentPageId,
   driveId,
   context = 'console',
   isReadOnly = false,
 }: {
+  /** This pane's session — threaded through so the chat surface can react to `open_page_pane` tool calls by opening a pane in THIS session's grid. */
+  sessionId: string;
   conversationId: string;
   agentPageId: string | null;
   /** This pane's session's own drive — `null` for a global-assistant session. Only the assistant branch needs it (an agent already carries its own `driveId`). */
@@ -40,6 +43,7 @@ export default function PaneChat({
   if (agentPageId === null) {
     return (
       <AssistantSessionChat
+        sessionId={sessionId}
         conversationId={conversationId}
         driveId={driveId}
         context={context}
@@ -56,5 +60,13 @@ export default function PaneChat({
     );
   }
 
-  return <SessionChat agent={agent} conversationId={conversationId} context={context} isReadOnly={isReadOnly} />;
+  return (
+    <SessionChat
+      sessionId={sessionId}
+      agent={agent}
+      conversationId={conversationId}
+      context={context}
+      isReadOnly={isReadOnly}
+    />
+  );
 }

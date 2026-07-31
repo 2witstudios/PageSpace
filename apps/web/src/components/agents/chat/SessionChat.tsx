@@ -29,10 +29,13 @@ import { ChatMessagesArea } from '@/components/ai/shared/chat/ChatMessagesArea';
 import { Conversation, ConversationScrollButton } from '@/components/ai/ui/conversation';
 import { SidebarMessagesContent } from '@/components/layout/right-sidebar/ai-assistant/SidebarChatTab';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
+import { useOpenPagePane } from '@/lib/ai/shared/hooks/useOpenPagePane';
 import type { AgentInfo } from '@/types/agent';
 import { useAgentSessionChat, type UseAgentSessionChatReturn } from './useAgentSessionChat';
 
 export interface SessionChatProps {
+  /** This conversation's pane-hosting session — null (the default) for a plain, session-less conversation. See `SessionChatViewProps.sessionId`. */
+  sessionId?: string | null;
   /** The fixed agent this conversation belongs to. */
   agent: AgentInfo;
   /** The thread — its session (and sandbox) resolves server-side from the row's binding. */
@@ -44,6 +47,7 @@ export interface SessionChatProps {
 }
 
 export default function SessionChat({
+  sessionId = null,
   agent,
   conversationId,
   context,
@@ -52,6 +56,7 @@ export default function SessionChat({
   const chat = useAgentSessionChat({ agent, conversationId });
   return (
     <SessionChatView
+      sessionId={sessionId}
       chat={chat}
       name={agent.title}
       visionModel={agent.aiModel || ''}
@@ -62,6 +67,14 @@ export default function SessionChat({
 }
 
 export interface SessionChatViewProps {
+  /**
+   * This conversation's pane-hosting session, or null for a plain
+   * session-less conversation — used only to react to `open_page_pane` tool
+   * calls by opening a pane in THIS session's grid (`useOpenPagePane`, itself
+   * a no-op when null). Not part of `chat`'s own state since it's a fact
+   * about where this surface is mounted, not about the conversation itself.
+   */
+  sessionId: string | null;
   /** The chat's whole state — from either pipeline's hook. */
   chat: UseAgentSessionChatReturn;
   /** The counterpart's display name (composer placeholder, compact-renderer label). */
@@ -73,6 +86,7 @@ export interface SessionChatViewProps {
 }
 
 export function SessionChatView({
+  sessionId,
   chat,
   name,
   visionModel,
@@ -82,6 +96,8 @@ export function SessionChatView({
   const [input, setInput] = useState('');
   const [showError, setShowError] = useState(true);
   const [undoMessageId, setUndoMessageId] = useState<string | null>(null);
+
+  useOpenPagePane({ sessionId, messages: chat.messages });
 
   const handleSendClick = useCallback(async () => {
     const text = input;

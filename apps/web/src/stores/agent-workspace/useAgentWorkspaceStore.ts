@@ -59,6 +59,13 @@ interface AgentWorkspaceState {
    * the active pane right.
    */
   openConversation(sessionId: string, scope: PaneScope): void;
+  /**
+   * Make a PAGE visible in the session's grid — the page-pane sibling of
+   * `openConversation`, sharing its exact focus-or-replace-or-split policy.
+   * Used both by the picker's "Pages" section and by the agent-driven
+   * `open_page_pane` tool's client-side resolution.
+   */
+  openPage(sessionId: string, scope: PaneScope): void;
   splitRight(sessionId: string, fromPaneId: string): void;
   splitDown(sessionId: string, fromPaneId: string): void;
   /**
@@ -115,6 +122,56 @@ function updateWorkspace(
   return { workspaces: { ...state.workspaces, [sessionId]: next } };
 }
 
+/**
+ * Shared by `openConversation` and `openPage`: make `scope`'s target VISIBLE
+ * in the session's grid. Focus the pane already showing it; otherwise replace
+ * a replaceable pane (unbound, or bound to a resolved non-terminal row —
+ * never a running terminal, which has no reattach UI); otherwise split the
+ * active pane right. Scope-kind-agnostic: a chat scope and a page scope
+ * follow the identical policy, which is why one function serves both.
+ */
+function focusOrAssignScope(
+  set: (fn: (state: AgentWorkspaceState) => Partial<AgentWorkspaceState>) => void,
+  sessionId: string,
+  scope: PaneScope,
+) {
+  const state = useAgentWorkspaceStore.getState();
+  const workspace = state.workspaces[sessionId];
+  if (!workspace) {
+    state.ensureWorkspace(sessionId, scope);
+    return;
+  }
+  if (scope.targetId !== null) {
+    const showing = paneShowing(workspace, scope.targetId);
+    if (showing) {
+      state.selectPane(sessionId, showing.id);
+      return;
+    }
+  }
+  const panes = panesOf(workspace);
+  const active = panes.find((pane) => pane.id === workspace.activePaneId);
+  // Replaceable = unbound (picker), or bound to a resolved, non-terminal
+  // row. A pane whose mint is still in flight (`targetId === null`) is
+  // EXCLUDED even though its kind isn't terminal: landing a different
+  // selection there now means the mint's own success callback later
+  // overwrites it with the stale pick (review low-batch #1).
+  const isReplaceable = (pane: PaneState) =>
+    pane.scope === null || (pane.scope.kind !== 'terminal' && pane.scope.targetId !== null);
+  const replaceable = active && isReplaceable(active) ? active : panes.find(isReplaceable);
+  if (replaceable) {
+    state.assignPane(sessionId, replaceable.id, scope);
+    return;
+  }
+  // Every pane is a running terminal — open beside them.
+  set(
+    (current) =>
+      updateWorkspace(current, sessionId, (w) => {
+        const split = splitRightIn(w, w.activePaneId, mintId('col'), mintId('pane'));
+        return assignPaneIn(split, split.activePaneId, scope);
+      }) ?? {},
+  );
+}
+
 export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
   persist(
     (set) => ({
@@ -136,43 +193,9 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
           };
         }),
 
-      openConversation: (sessionId, scope) => {
-        const state = useAgentWorkspaceStore.getState();
-        const workspace = state.workspaces[sessionId];
-        if (!workspace) {
-          state.ensureWorkspace(sessionId, scope);
-          return;
-        }
-        if (scope.targetId !== null) {
-          const showing = paneShowing(workspace, scope.targetId);
-          if (showing) {
-            state.selectPane(sessionId, showing.id);
-            return;
-          }
-        }
-        const panes = panesOf(workspace);
-        const active = panes.find((pane) => pane.id === workspace.activePaneId);
-        // Replaceable = unbound (picker), or bound to a resolved, non-terminal
-        // row. A pane whose mint is still in flight (`targetId === null`) is
-        // EXCLUDED even though its kind isn't terminal: landing a different
-        // selection there now means the mint's own success callback later
-        // overwrites it with the stale pick (review low-batch #1).
-        const isReplaceable = (pane: PaneState) =>
-          pane.scope === null || (pane.scope.kind !== 'terminal' && pane.scope.targetId !== null);
-        const replaceable = active && isReplaceable(active) ? active : panes.find(isReplaceable);
-        if (replaceable) {
-          state.assignPane(sessionId, replaceable.id, scope);
-          return;
-        }
-        // Every pane is a running terminal — open beside them.
-        set(
-          (current) =>
-            updateWorkspace(current, sessionId, (w) => {
-              const split = splitRightIn(w, w.activePaneId, mintId('col'), mintId('pane'));
-              return assignPaneIn(split, split.activePaneId, scope);
-            }) ?? {},
-        );
-      },
+      openConversation: (sessionId, scope) => focusOrAssignScope(set, sessionId, scope),
+
+      openPage: (sessionId, scope) => focusOrAssignScope(set, sessionId, scope),
 
       splitRight: (sessionId, fromPaneId) =>
         set(
