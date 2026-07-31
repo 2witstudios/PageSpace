@@ -101,7 +101,7 @@ vi.mock('../DashboardFooter', () => ({ default: () => <div /> }));
 
 import { within } from '@testing-library/react';
 import { ApiRequestError } from '@/lib/auth/auth-fetch';
-import AgentsSidebar from '../AgentsSidebar';
+import AgentsSidebar, { resolveListNotice } from '../AgentsSidebar';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { useLayoutStore } from '@/stores/useLayoutStore';
@@ -819,6 +819,139 @@ describe('AgentsSidebar', () => {
       await screen.findByText('api refactor');
       const headers = screen.getAllByText(/^(Alpha|Global Assistant)$/);
       expect(headers.map((el) => el.textContent)).toEqual(['Global Assistant', 'Alpha']);
+    });
+  });
+
+  describe('session search', () => {
+    test('replaces the old static "Agent Sessions" label with a search box, and its "+" still opens the new-session flow', async () => {
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      expect(screen.queryByText('Agent Sessions')).toBeNull();
+
+      await user.click(screen.getByLabelText('New session'));
+      // Same agent palette the pre-existing "new session" tests assert on —
+      // confirms the "+" next to the search box still drives the real flow.
+      expect(await screen.findByText('Researcher')).toBeDefined();
+    });
+
+    test('typing filters the drive\'s sessions by name, and clearing the query restores the rest', async () => {
+      respondWithSessions([SESSION, { ...SESSION, sessionId: 'ses-2', name: 'design review' }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      expect(screen.getByText('design review')).toBeDefined();
+
+      const search = screen.getByPlaceholderText('Search sessions…');
+      await user.type(search, 'design');
+
+      expect(screen.queryByText('api refactor')).toBeNull();
+      expect(screen.getByText('design review')).toBeDefined();
+
+      await user.clear(search);
+      expect(await screen.findByText('api refactor')).toBeDefined();
+    });
+
+    test('a query with no matches shows a distinct notice, not the empty-drive one', async () => {
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      await user.type(screen.getByPlaceholderText('Search sessions…'), 'zzz-nope');
+
+      expect(await screen.findByText('No sessions match your search')).toBeDefined();
+      expect(screen.queryByText(/no sessions in this drive/i)).toBeNull();
+    });
+
+    describe('resolveListNotice', () => {
+      // Unit-level, not through the full SWR + component stack: getting a real
+      // `hasError` while `sessions` is still non-empty means forcing an SWR
+      // background revalidation to actually fail (the 20s refreshInterval, or
+      // a mutate()), which an integration test can't trigger deterministically
+      // without fake timers fighting userEvent's own. Calling the (exported)
+      // helper directly pins the exact branch logic instead.
+      const baseArgs = {
+        authLoading: false,
+        isAdmin: true,
+        hasError: false,
+        isLoading: false,
+        isDataEmpty: false,
+        isResultEmpty: false,
+        emptyTitle: 'No sessions yet',
+        onRetry: vi.fn(),
+      };
+
+      test('a background refresh failure on cached sessions shows the no-match notice, not "Failed to load sessions"', () => {
+        // Regression pin for the isDataEmpty/isResultEmpty split: hasError can
+        // be true (a background refresh failing) while sessions is still the
+        // last-known-good, non-empty cache (isDataEmpty stays false) — the
+        // error branch must be skipped in favor of the search-driven notice.
+        render(
+          <>
+            {resolveListNotice({
+              ...baseArgs,
+              hasError: true,
+              isDataEmpty: false,
+              isResultEmpty: true,
+              emptyTitle: 'No sessions match your search',
+            })}
+          </>,
+        );
+
+        expect(screen.getByText('No sessions match your search')).toBeDefined();
+        expect(screen.queryByText(/failed to load sessions/i)).toBeNull();
+      });
+
+      test('a failed load with nothing cached still shows "Failed to load sessions"', () => {
+        render(
+          <>
+            {resolveListNotice({
+              ...baseArgs,
+              hasError: true,
+              isDataEmpty: true,
+              isResultEmpty: true,
+            })}
+          </>,
+        );
+
+        expect(screen.getByText(/failed to load sessions/i)).toBeDefined();
+      });
+    });
+
+    describe('global mode', () => {
+      beforeEach(() => {
+        mockUseParams.mockReturnValue({});
+        mockUsePathname.mockReturnValue('/dashboard/agents');
+        window.history.replaceState({}, '', '/dashboard/agents');
+        useAgentSurfaceStore.setState({ driveId: null });
+        useDriveStore.setState({ drives: [driveFixture('drive-1', 'Alpha')] });
+      });
+
+      test('a search+"+" row sits above the per-drive groups, and its "+" opens Create a new drive — not a session', async () => {
+        const user = userEvent.setup();
+        renderSidebar();
+
+        await screen.findByText('Alpha');
+        await user.click(screen.getByLabelText('New drive'));
+
+        expect(await screen.findByText('Create a new drive')).toBeDefined();
+        // Distinct from the roster groups' own per-drive spawn affordance.
+        expect(mockPost).not.toHaveBeenCalled();
+      });
+
+      test('searching hides every drive group with no matching sessions, across the whole roster', async () => {
+        const user = userEvent.setup();
+        renderSidebar();
+
+        await screen.findByText('Alpha');
+        await user.type(screen.getByPlaceholderText('Search sessions…'), 'zzz-nope');
+
+        expect(screen.queryByText('Alpha')).toBeNull();
+        expect(screen.queryByText('Global Assistant')).toBeNull();
+        expect(await screen.findByText('No sessions match your search')).toBeDefined();
+      });
     });
   });
 });

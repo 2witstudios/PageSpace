@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { Bot, ChevronDown, ChevronRight, Folder, Plus, SquareTerminal, X } from 'lucide-react';
+import { Bot, ChevronDown, ChevronRight, Folder, Plus, Search, SquareTerminal, X } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR from 'swr';
 
 import EndSessionDialog from '@/components/agents/EndSessionDialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Input } from '@/components/ui/input';
 import {
   CommandDialog,
   CommandGroup,
@@ -18,6 +19,7 @@ import {
 import { cn, isElectron } from '@/lib/utils';
 import type { SidebarProps } from './index';
 import DriveSwitcher from '@/components/layout/navbar/DriveSwitcher';
+import CreateDriveDialog from './CreateDriveDialog';
 import DashboardFooter from './DashboardFooter';
 import DriveFooter from './DriveFooter';
 import PrimaryNavigation from './PrimaryNavigation';
@@ -159,13 +161,20 @@ async function sessionsFetcher(url: string): Promise<{ sessions: SessionListEntr
  * a rerun of the failure text), error ahead of empty (SWR's error path is
  * indistinguishable from empty unless checked first), and a background poll's
  * error never tears down a list the caller already has.
+ *
+ * `isDataEmpty` and `isResultEmpty` are deliberately separate: the error
+ * branch must key off the raw fetch result (`isDataEmpty`) so a background
+ * refresh failure on a drive with cached sessions never reads as "failed to
+ * load" just because the current search happens to match nothing — that case
+ * belongs to the plain empty-result branch (`isResultEmpty`) instead.
  */
-function resolveListNotice({
+export function resolveListNotice({
   authLoading,
   isAdmin,
   hasError,
   isLoading,
-  isEmpty,
+  isDataEmpty,
+  isResultEmpty,
   emptyTitle,
   onRetry,
 }: {
@@ -173,14 +182,15 @@ function resolveListNotice({
   isAdmin: boolean;
   hasError: boolean;
   isLoading: boolean;
-  isEmpty: boolean;
+  isDataEmpty: boolean;
+  isResultEmpty: boolean;
   emptyTitle: string;
   onRetry: () => void;
 }): React.ReactNode {
   if (authLoading) return <SidebarLoading message="Loading…" />;
   if (!isAdmin) return <SidebarNotice title="Agent sandboxes require administrator privileges" />;
   if (isLoading) return <SidebarLoading message="Loading sessions…" />;
-  if (hasError && isEmpty) {
+  if (hasError && isDataEmpty) {
     return (
       <SidebarNotice
         title="Failed to load sessions"
@@ -191,7 +201,7 @@ function resolveListNotice({
       />
     );
   }
-  if (isEmpty) return <SidebarNotice title={emptyTitle} />;
+  if (isResultEmpty) return <SidebarNotice title={emptyTitle} />;
   return null;
 }
 
@@ -218,15 +228,9 @@ function SessionList({
   agentsByDrive: DriveWithAgents[];
   onChanged: () => void;
 }) {
-  const notice = resolveListNotice({
-    authLoading,
-    isAdmin,
-    hasError,
-    isLoading,
-    isEmpty: sessions.length === 0,
-    emptyTitle: driveId ? 'No sessions in this drive yet' : 'No sessions yet',
-    onRetry,
-  });
+  const [searchQuery, setSearchQuery] = useState('');
+  const trimmedQuery = searchQuery.trim();
+  const hasSearch = trimmedQuery.length > 0;
 
   const canSpawn = isAdmin && !authLoading;
 
@@ -263,14 +267,46 @@ function SessionList({
     return map;
   }, [agentsByDrive]);
 
+  // Search filters by session name only, client-side, no debounce — same
+  // idiom as PageTree's filterTree.
+  const filteredSessions = useMemo(() => {
+    if (!hasSearch) return sessions;
+    const query = trimmedQuery.toLowerCase();
+    return sessions.filter((session) => (session.name || 'Session').toLowerCase().includes(query));
+  }, [sessions, hasSearch, trimmedQuery]);
+
+  const notice = resolveListNotice({
+    authLoading,
+    isAdmin,
+    hasError,
+    isLoading,
+    isDataEmpty: sessions.length === 0,
+    isResultEmpty: filteredSessions.length === 0,
+    emptyTitle: hasSearch
+      ? 'No sessions match your search'
+      : driveId
+        ? 'No sessions in this drive yet'
+        : 'No sessions yet',
+    onRetry,
+  });
+
   // Group by drive in global mode (roster ∪ session-implied drives, Assistant
   // first — see session-groups.ts for the ordering rule); a single implicit
   // group in drive mode, always present (even with zero sessions) so its
   // header — and the header's spawn affordance — never disappears mid-load.
   const groups = useMemo(() => {
-    if (driveId) return [{ driveId, driveName: null, sessions }];
-    return buildSessionGroups(sessions, { assistant: canSpawn, drives: roster });
-  }, [driveId, sessions, canSpawn, roster]);
+    if (driveId) return [{ driveId, driveName: null, sessions: filteredSessions }];
+    return buildSessionGroups(filteredSessions, { assistant: canSpawn, drives: roster });
+  }, [driveId, filteredSessions, canSpawn, roster]);
+
+  // While actively searching, a group with no matches is noise — hide it
+  // rather than showing an empty group with a spawn "+". Outside search the
+  // roster still forces every group to render (even with zero sessions) so
+  // its spawn affordance never disappears mid-load.
+  const visibleGroups = useMemo(
+    () => (hasSearch ? groups.filter((group) => group.sessions.length > 0) : groups),
+    [groups, hasSearch],
+  );
 
   const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
   const selectSession = useAgentSurfaceStore((state) => state.selectSession);
@@ -281,6 +317,7 @@ function SessionList({
   // ever produces (it skips the picker entirely, see handleNewSession).
   const [spawnPick, setSpawnPick] = useState<SpawnPick | null>(null);
   const [spawning, setSpawning] = useState(false);
+  const [createDriveOpen, setCreateDriveOpen] = useState(false);
 
   const spawn = useCallback(
     async (input: { driveId: string | null; agentPageId: string | null; kind: SpawnKind; name: string }) => {
@@ -366,10 +403,15 @@ function SessionList({
 
   return (
     <div className="space-y-1">
-      {driveId && canSpawn && (
-        <SessionGroupHeader label="Agent Sessions" onNewSession={() => handleNewSession(driveId, null)} />
+      {canSpawn && (
+        <SessionSearchHeader
+          value={searchQuery}
+          onChange={setSearchQuery}
+          onAction={driveId ? () => handleNewSession(driveId, null) : () => setCreateDriveOpen(true)}
+          actionLabel={driveId ? 'New session' : 'New drive'}
+        />
       )}
-      {groups.map((group) => (
+      {visibleGroups.map((group) => (
         <div key={group.driveId}>
           {!driveId && (
             <SessionGroupHeader
@@ -407,11 +449,48 @@ function SessionList({
         onPickTarget={setSpawnPick}
         onSubmitName={handleSubmitName}
       />
+      {!driveId && <CreateDriveDialog isOpen={createDriveOpen} setIsOpen={setCreateDriveOpen} />}
     </div>
   );
 }
 
-/** A group's header row: name (or "Agent Sessions" in drive-scoped mode) plus an inline "+" spawn affordance — condensed in place of a separate full-width row. */
+/** The search+"+" row atop the list: search filters sessions by name; "+" spawns a new session (drive-scoped) or creates a new drive (global). Replaces the old static "Agent Sessions" label. */
+function SessionSearchHeader({
+  value,
+  onChange,
+  onAction,
+  actionLabel,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  onAction: () => void;
+  actionLabel: string;
+}) {
+  return (
+    <div className="flex items-center gap-1 pl-2 pr-4 pb-1 pt-1.5">
+      <div className="relative flex-1">
+        <Search className="absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          placeholder="Search sessions…"
+          aria-label="Search sessions"
+          className="h-7 pl-6 text-xs"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      </div>
+      <button
+        type="button"
+        aria-label={actionLabel}
+        className="shrink-0 text-muted-foreground hover:text-foreground"
+        onClick={onAction}
+      >
+        <Plus className="size-3.5" />
+      </button>
+    </div>
+  );
+}
+
+/** A group's header row: drive name plus an inline "+" spawn affordance — condensed in place of a separate full-width row. */
 function SessionGroupHeader({
   label,
   newSessionLabel,
