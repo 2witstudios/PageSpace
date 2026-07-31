@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { StrictMode } from 'react';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { useSigninRecovery } from '../useSigninRecovery';
+import { useSigninRecovery, DEVICE_TOKEN_TIMEOUT_MS } from '../useSigninRecovery';
 
 // Shell-level coverage for the recovery effect. The DECISION branches live in
 // signin-recovery.test.ts; here we assert the effects are wired to the right actions AND to the
@@ -296,7 +296,7 @@ describe('useSigninRecovery', () => {
       expect(result.current.recovering).toBe(true);
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(3000);
+        await vi.advanceTimersByTimeAsync(DEVICE_TOKEN_TIMEOUT_MS);
       });
 
       expect(result.current.recovering).toBe(false);

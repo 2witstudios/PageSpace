@@ -10,8 +10,9 @@ import { decideSigninRecovery, type SigninRecoveryInput } from './signin-recover
 const DEFAULT_NEXT = '/dashboard';
 
 // Matches AuthFetch's TOKEN_RETRIEVAL_TIMEOUT_MS (auth-fetch.ts) — same underlying Keychain
-// round-trip, same "can hang during app launch on iOS" hazard.
-const DEVICE_TOKEN_TIMEOUT_MS = 3000;
+// round-trip, same "can hang during app launch on iOS" hazard. Exported so the regression test
+// can assert against it directly instead of a hardcoded duplicate that could silently drift.
+export const DEVICE_TOKEN_TIMEOUT_MS = 3000;
 
 /**
  * Whether a device token exists to recover an expired session from — read from PLATFORM storage
