@@ -3,16 +3,30 @@
  *
  * Two structural properties and one rendering contract:
  *
- * - It hydrates its selection from the URL on mount (deep link, refresh) and
- *   re-hydrates on `popstate` (Back/Forward). Together those are what let
- *   selection live in the query string instead of the route, which is what
- *   lets this component stay mounted through every click.
+ * - It hydrates its selection from the URL on mount (deep link, refresh),
+ *   reactively on any Next-router-driven change to the query string on this
+ *   SAME route (`useSearchParams()` — e.g. reactivating a different tab that
+ *   also points here), and on `popstate` (Back/Forward, including one
+ *   restoring a raw `history.pushState` entry Next's router never saw).
+ *   Together those are what let selection live in the query string instead of
+ *   the route, which is what lets this component stay mounted through every
+ *   click.
  * - The centre is the SESSION's pane grid, keyed by the session id — switching
  *   sessions swaps the grid; nothing else about the shell changes.
  */
 import { useRef } from 'react';
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, waitFor } from '@testing-library/react';
+
+// The global setup mock's `useSearchParams` is a static empty stub — fine for
+// most tests, but this surface now reads it reactively (see AgentsSurface.tsx),
+// and these tests drive scenarios entirely through `window.history.replaceState`.
+// Override it here to read the CURRENT location, same shape as the real hook.
+vi.mock('next/navigation', () => ({
+  useRouter: vi.fn(() => ({ push: vi.fn(), replace: vi.fn() })),
+  usePathname: vi.fn(() => window.location.pathname),
+  useSearchParams: vi.fn(() => new URLSearchParams(window.location.search)),
+}));
 
 vi.mock('../panes/AgentPanes', () => ({
   default: function MockAgentPanes({
@@ -147,6 +161,25 @@ describe('AgentsSurface', () => {
 
     expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-2');
     expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-2');
+  });
+
+  test('re-hydrates on a same-route query change with no popstate and no remount (caught in review, P2)', () => {
+    // What reactivating a DIFFERENT tab that also points at this pathname does:
+    // `router.push` changes only the query string, so nothing here remounts and
+    // no popstate fires — only `useSearchParams()` changing. Before this fix the
+    // panes kept showing whichever tab's selection was hydrated last.
+    window.history.replaceState({}, '', '/dashboard/agents?session=ses-1&c=conv-1&agent=agent-1');
+    const { rerender } = render(<AgentsSurface />);
+    expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
+
+    act(() => {
+      window.history.replaceState({}, '', '/dashboard/agents?session=ses-2&c=conv-2&agent=agent-2');
+    });
+    rerender(<AgentsSurface />);
+
+    expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-2');
+    expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-2');
+    expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-2');
   });
 
   test('stops listening for popstate once unmounted', () => {
