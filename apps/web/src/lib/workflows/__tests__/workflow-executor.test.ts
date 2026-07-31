@@ -16,6 +16,7 @@ const {
   mockUpdate,
   mockUpdateSet,
   mockUpdateWhere,
+  mockToolExecute,
 } = vi.hoisted(() => ({
   mockSelectWhere: vi.fn(),
   mockSelectFrom: vi.fn(),
@@ -28,6 +29,7 @@ const {
   mockUpdate: vi.fn(),
   mockUpdateSet: vi.fn(),
   mockUpdateWhere: vi.fn(),
+  mockToolExecute: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -41,6 +43,26 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/schema/workflow-runs', () => ({
   workflowRuns: { id: 'id', workflowId: 'workflowId', status: 'status' },
 }));
+vi.mock('@pagespace/db/schema/workflow-run-steps', () => ({
+  workflowRunSteps: { id: 'id', runId: 'runId', position: 'position', status: 'status' },
+}));
+vi.mock('@/lib/ai/core/deterministic-tools', async () => {
+  const { z } = await import('zod');
+  return {
+    DETERMINISTIC_TOOL_ALLOWLIST: ['insert_content', 'send_channel_message'] as const,
+    getDeterministicTools: () => ({
+      insert_content: {
+        inputSchema: z.object({
+          pageId: z.string(),
+          anchor: z.string(),
+          content: z.string(),
+          position: z.enum(['before', 'after']),
+        }),
+        execute: mockToolExecute,
+      },
+    }),
+  };
+});
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
@@ -484,5 +506,184 @@ describe('executeWorkflow', () => {
     // see finalizeError.
     expect(result.success).toBe(true);
     expect(result.finalizeError).toBe('connection terminated');
+  });
+});
+
+describe('executeWorkflow — explicit step chains', () => {
+  /**
+   * The insert mock must serve three shapes in step-chain runs:
+   *   claim:        .values(...).onConflictDoNothing().returning()
+   *   step row:     .values(...).returning()
+   *   skipped batch: await .values(...)
+   */
+  function setupStepInserts() {
+    let stepRowId = 0;
+    mockInsert.mockReturnValue({ values: mockInsertValues });
+    mockInsertValues.mockImplementation(() => ({
+      onConflictDoNothing: mockOnConflictDoNothing,
+      returning: vi.fn().mockResolvedValue([{ id: `step_${++stepRowId}` }]),
+      then: (resolve: (v: unknown) => unknown) => Promise.resolve(undefined).then(resolve),
+    }));
+    mockOnConflictDoNothing.mockReturnValue({ returning: mockInsertReturning });
+    mockInsertReturning.mockResolvedValue([{ id: 'run_1' }]);
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(isProviderError).mockReturnValue(false);
+    vi.mocked(createAIProvider).mockResolvedValue(mockProviderResult as never);
+    mockResolvePageAgentIntegrationTools.mockResolvedValue({});
+    vi.mocked(generateText).mockResolvedValue({
+      text: 'AI step done',
+      steps: [{ text: 'AI step done', toolCalls: [] }],
+      usage: { inputTokens: 10, outputTokens: 5 },
+    } as never);
+    setupStepInserts();
+    mockUpdate.mockReturnValue({ set: mockUpdateSet });
+    mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
+    mockUpdateWhere.mockResolvedValue(undefined);
+    mockToolExecute.mockResolvedValue({ success: true });
+  });
+
+  const toolStep = {
+    kind: 'tool' as const,
+    toolName: 'insert_content',
+    args: { pageId: 'page_1', anchor: '## Log', content: 'hello', position: 'after' as const },
+  };
+
+  test('deterministic-only chain: tool runs, no AI provider, no generateText, no chat messages', async () => {
+    const result = await executeWorkflow(
+      createInputFixture({ agentPageId: null, prompt: '', steps: [toolStep] })
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.toolCallCount).toBe(1);
+    expect(result.conversationId).toBeUndefined();
+    expect(generateText).not.toHaveBeenCalled();
+    expect(createAIProvider).not.toHaveBeenCalled();
+    expect(saveMessageToDatabase).not.toHaveBeenCalled();
+
+    expect(mockToolExecute).toHaveBeenCalledTimes(1);
+    const [args, options] = mockToolExecute.mock.calls[0];
+    expect(args).toEqual(toolStep.args);
+    expect(
+      (options as { experimental_context: { userId: string } }).experimental_context.userId
+    ).toBe('user_123');
+  });
+
+  test('$payload refs resolve from eventContext.payload before execution', async () => {
+    const step = {
+      ...toolStep,
+      args: { ...toolStep.args, content: { $payload: 'issue.title' } },
+    };
+    const result = await executeWorkflow(
+      createInputFixture({
+        agentPageId: null,
+        prompt: '',
+        steps: [step],
+        eventContext: { payload: { issue: { title: 'from-payload' } } },
+      })
+    );
+
+    expect(result.success).toBe(true);
+    expect(mockToolExecute.mock.calls[0][0]).toEqual({ ...toolStep.args, content: 'from-payload' });
+  });
+
+  test('$payload refs strict-fail without a payload (cron/manual) and the tool never runs', async () => {
+    const step = { ...toolStep, args: { ...toolStep.args, content: { $payload: 'issue.title' } } };
+    const result = await executeWorkflow(
+      createInputFixture({ agentPageId: null, prompt: '', steps: [step] })
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/no trigger payload/i);
+    expect(mockToolExecute).not.toHaveBeenCalled();
+  });
+
+  test('fail-fast: failing step 1 skips step 2 and fails the run', async () => {
+    mockToolExecute.mockResolvedValueOnce({ success: false, error: 'no edit permission' });
+
+    const result = await executeWorkflow(
+      createInputFixture({ agentPageId: null, prompt: '', steps: [toolStep, toolStep] })
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('step 1');
+    expect(result.error).toContain('no edit permission');
+    expect(mockToolExecute).toHaveBeenCalledTimes(1);
+
+    // The skipped batch insert recorded step 2 as skipped.
+    const skippedBatches = mockInsertValues.mock.calls
+      .map(([v]) => v)
+      .filter((v): v is Array<Record<string, unknown>> => Array.isArray(v));
+    expect(skippedBatches).toHaveLength(1);
+    expect(skippedBatches[0]).toEqual([
+      expect.objectContaining({ position: 1, status: 'skipped', toolName: 'insert_content' }),
+    ]);
+  });
+
+  test('mixed chain: tool step then ai step — one generateText, aggregated counts', async () => {
+    setupSelectChain([mockAgent], [mockDrive]);
+
+    const result = await executeWorkflow(
+      createInputFixture({
+        agentPageId: null,
+        prompt: '',
+        steps: [toolStep, { kind: 'ai' as const, prompt: 'summarize', agentPageId: 'agent_1' }],
+      })
+    );
+
+    expect(result.success).toBe(true);
+    expect(generateText).toHaveBeenCalledTimes(1);
+    expect(mockToolExecute).toHaveBeenCalledTimes(1);
+    expect(result.usage).toEqual({ inputTokens: 10, outputTokens: 5 });
+  });
+
+  test('ai step without any agent fails cleanly', async () => {
+    const result = await executeWorkflow(
+      createInputFixture({
+        agentPageId: null,
+        prompt: '',
+        steps: [{ kind: 'ai' as const, prompt: 'p' }],
+      })
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('no agentPageId');
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  test('tools outside the allowlist are rejected at run time', async () => {
+    const result = await executeWorkflow(
+      createInputFixture({
+        agentPageId: null,
+        prompt: '',
+        steps: [{ kind: 'tool' as const, toolName: 'trash_drive', args: {} }],
+      })
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('not deterministically invocable');
+    expect(mockToolExecute).not.toHaveBeenCalled();
+  });
+
+  test('legacy runs (steps null) never write step rows', async () => {
+    setupSelectChain([mockAgent], [mockDrive]);
+
+    const result = await executeWorkflow(createInputFixture());
+
+    expect(result.success).toBe(true);
+    // Only the claim insert — values called exactly once.
+    expect(mockInsertValues).toHaveBeenCalledTimes(1);
+  });
+
+  test('no steps and no agentPageId fails without claiming AI resources', async () => {
+    const result = await executeWorkflow(
+      createInputFixture({ agentPageId: null, prompt: '', steps: null })
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('no steps and no agentPageId');
+    expect(generateText).not.toHaveBeenCalled();
   });
 });

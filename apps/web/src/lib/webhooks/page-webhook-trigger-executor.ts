@@ -121,6 +121,15 @@ export async function executePageWebhookTrigger(
     //    prompt + AI response into it. The owner staying a member of
     //    workflow.driveId says nothing about a drive the agent was moved into,
     //    so a moved agent must be rejected, not written to across drives.
+    //    Deterministic-only workflows (nullable agentPageId) are wired up in
+    //    the deterministic-branching task; until then they cannot fire here.
+    if (!workflow.agentPageId) {
+      return {
+        success: false,
+        durationMs: Date.now() - startTime,
+        error: 'Workflow has no agent page (deterministic webhook dispatch not yet enabled)',
+      };
+    }
     const [agentPage] = await db
       .select({ id: pages.id, isTrashed: pages.isTrashed, driveId: pages.driveId })
       .from(pages)

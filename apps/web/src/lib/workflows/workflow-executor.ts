@@ -17,8 +17,14 @@ import { decryptField } from '@pagespace/lib/encryption/field-crypto'
 import { pages, drives } from '@pagespace/db/schema/core'
 import { taskItems, taskLists, taskAssignees, taskStatusConfigs } from '@pagespace/db/schema/tasks'
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs'
+import { workflowRunSteps } from '@pagespace/db/schema/workflow-run-steps'
+import type { WorkflowStep, WorkflowToolStep } from '@pagespace/db/schema/workflows'
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { MAX_WORKFLOW_STEPS } from './core/step-plan';
+import { resolveStepArgs } from './core/resolve-step-args';
+import { DETERMINISTIC_TOOL_ALLOWLIST, getDeterministicTools } from '@/lib/ai/core/deterministic-tools';
+import type { z } from 'zod';
 
 export type WorkflowRunSource =
   | { table: 'cron'; id: null; triggerAt: Date | null }
@@ -64,15 +70,27 @@ export interface WorkflowExecutionInput {
   workflowName: string;
   driveId: string;
   createdBy: string;
-  agentPageId: string;
+  /** Null only for step-based workflows whose ai steps carry their own agent. */
+  agentPageId: string | null;
   prompt: string;
+  /**
+   * Explicit step chain. Null/absent = legacy single-AI-prompt workflow —
+   * executed exactly as before, with no workflow_run_steps rows.
+   */
+  steps?: WorkflowStep[] | null;
   contextPageIds: string[];
   instructionPageId: string | null;
   timezone: string;
   /** Identifies the originating trigger so workflow_runs can be joined back to it. */
   source: WorkflowRunSource;
   taskContext?: { taskItemId: string; triggerType: 'due_date' | 'completion' };
-  eventContext?: { promptOverride: string };
+  /**
+   * promptOverride replaces the prompt of legacy runs / ai steps (the webhook
+   * path builds it with the F2 nonce-fenced payload framing). `payload` is
+   * the raw parsed trigger payload consumed by deterministic steps' $payload
+   * references; absent for cron/manual runs (refs then strict-fail).
+   */
+  eventContext?: { promptOverride?: string; payload?: unknown };
 }
 
 export async function executeWorkflow(input: WorkflowExecutionInput): Promise<WorkflowExecutionResult> {
@@ -107,7 +125,22 @@ export async function executeWorkflow(input: WorkflowExecutionInput): Promise<Wo
   let result: WorkflowExecutionResult;
 
   try {
-    result = await runExecution(input, startTime);
+    const explicitSteps = input.steps && input.steps.length > 0 ? input.steps : null;
+    if (explicitSteps) {
+      result = await runStepChain(input, explicitSteps, runId, startTime);
+    } else if (input.agentPageId) {
+      // Legacy single-AI-prompt path, byte-for-byte pre-steps behavior.
+      result = await runExecution(input, startTime, {
+        prompt: input.eventContext?.promptOverride ?? input.prompt,
+        agentPageId: input.agentPageId,
+      });
+    } else {
+      result = {
+        success: false,
+        durationMs: Date.now() - startTime,
+        error: 'workflow has no steps and no agentPageId',
+      };
+    }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     result = {
@@ -154,13 +187,207 @@ async function finalizeRun(runId: string, result: WorkflowExecutionResult): Prom
   }
 }
 
-async function runExecution(input: WorkflowExecutionInput, startTime: number): Promise<WorkflowExecutionResult> {
+/**
+ * Execute an explicit step chain: sequential, fail-fast, per-step
+ * workflow_run_steps audit rows. Deterministic (tool) steps invoke the
+ * allowlisted registry tool directly — no LLM, no AI billing. AI steps reuse
+ * the legacy execution body with the step's own prompt/agent.
+ */
+async function runStepChain(
+  input: WorkflowExecutionInput,
+  steps: WorkflowStep[],
+  runId: string,
+  startTime: number
+): Promise<WorkflowExecutionResult> {
+  if (steps.length > MAX_WORKFLOW_STEPS) {
+    return {
+      success: false,
+      durationMs: Date.now() - startTime,
+      error: `workflow has ${steps.length} steps (max ${MAX_WORKFLOW_STEPS})`,
+    };
+  }
+
+  const summaries: string[] = [];
+  let toolCallCount = 0;
+  let usage: { inputTokens?: number; outputTokens?: number } | undefined;
+  let conversationId: string | undefined;
+
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    const stepStart = Date.now();
+    const [stepRow] = await db
+      .insert(workflowRunSteps)
+      .values({
+        runId,
+        position: i,
+        kind: step.kind,
+        toolName: step.kind === 'tool' ? step.toolName : null,
+        status: 'running',
+      })
+      .returning({ id: workflowRunSteps.id });
+
+    let stepError: string | null = null;
+
+    if (step.kind === 'tool') {
+      const result = await runToolStep(step, i, input);
+      if (result.ok) {
+        toolCallCount += 1;
+        summaries.push(`[step ${i + 1}: ${step.toolName}] ok`);
+      } else {
+        stepError = result.error;
+      }
+    } else {
+      const effectiveAgentPageId = step.agentPageId ?? input.agentPageId;
+      if (!effectiveAgentPageId) {
+        stepError = 'ai step has no agentPageId (step or workflow)';
+      } else {
+        const aiResult = await runExecution(input, stepStart, {
+          prompt: step.prompt,
+          agentPageId: effectiveAgentPageId,
+        });
+        if (aiResult.success) {
+          if (aiResult.responseText) summaries.push(aiResult.responseText);
+          toolCallCount += aiResult.toolCallCount ?? 0;
+          conversationId = conversationId ?? aiResult.conversationId;
+          if (aiResult.usage) {
+            usage = {
+              inputTokens: (usage?.inputTokens ?? 0) + (aiResult.usage.inputTokens ?? 0),
+              outputTokens: (usage?.outputTokens ?? 0) + (aiResult.usage.outputTokens ?? 0),
+            };
+          }
+        } else {
+          stepError = aiResult.error ?? 'ai step failed';
+        }
+      }
+    }
+
+    await db
+      .update(workflowRunSteps)
+      .set({
+        status: stepError === null ? 'success' : 'error',
+        error: stepError,
+        durationMs: Date.now() - stepStart,
+        endedAt: new Date(),
+      })
+      .where(eq(workflowRunSteps.id, stepRow.id));
+
+    if (stepError !== null) {
+      // Fail-fast: record the remaining steps as skipped, fail the run.
+      if (i + 1 < steps.length) {
+        await db.insert(workflowRunSteps).values(
+          steps.slice(i + 1).map((rest, offset) => ({
+            runId,
+            position: i + 1 + offset,
+            kind: rest.kind,
+            toolName: rest.kind === 'tool' ? rest.toolName : null,
+            status: 'skipped' as const,
+            endedAt: new Date(),
+          }))
+        );
+      }
+      return {
+        success: false,
+        durationMs: Date.now() - startTime,
+        error: `step ${i + 1} (${step.kind === 'tool' ? step.toolName : 'ai'}): ${stepError}`,
+        toolCallCount,
+        usage,
+        conversationId,
+      };
+    }
+  }
+
+  return {
+    success: true,
+    responseText: summaries.join('\n'),
+    toolCallCount,
+    durationMs: Date.now() - startTime,
+    usage,
+    conversationId,
+  };
+}
+
+type ToolStepResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Direct tool invocation (execute-tool.ts pattern): allowlist re-check →
+ * $payload resolution → zod safeParse → execute as workflow.createdBy. The
+ * tool's own internal permission checks (canActorEditPage etc.) are the
+ * authorization backstop. No locationContext is provided, so tools requiring
+ * a pageId must receive it explicitly in args — default-page resolution is
+ * deliberately unavailable to deterministic steps.
+ */
+async function runToolStep(
+  step: WorkflowToolStep,
+  index: number,
+  input: WorkflowExecutionInput
+): Promise<ToolStepResult> {
+  if (!(DETERMINISTIC_TOOL_ALLOWLIST as readonly string[]).includes(step.toolName)) {
+    return { ok: false, error: `tool "${step.toolName}" is not deterministically invocable` };
+  }
+  const tool = getDeterministicTools()[step.toolName];
+  if (!tool || typeof tool.execute !== 'function') {
+    return { ok: false, error: `tool "${step.toolName}" is unavailable in the registry` };
+  }
+
+  const resolved = resolveStepArgs(step.args, input.eventContext?.payload);
+  if (!resolved.ok) return resolved;
+
+  const schema = tool.inputSchema as z.ZodType | undefined;
+  if (!schema || typeof schema.safeParse !== 'function') {
+    return { ok: false, error: `tool "${step.toolName}" has no input schema` };
+  }
+  const parsed = schema.safeParse(resolved.args);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: `resolved args do not match the "${step.toolName}" input schema`,
+    };
+  }
+
+  const executionContext: ToolExecutionContext = {
+    userId: input.createdBy,
+    timezone: input.timezone,
+  };
+
+  try {
+    const execute = tool.execute as (
+      args: unknown,
+      options: { toolCallId: string; messages: never[]; experimental_context: ToolExecutionContext }
+    ) => Promise<unknown>;
+    const result = await execute(parsed.data, {
+      toolCallId: `wf-step-${index}`,
+      messages: [],
+      experimental_context: executionContext,
+    });
+    const failed =
+      typeof result === 'object' &&
+      result !== null &&
+      'success' in result &&
+      (result as { success: unknown }).success === false;
+    if (failed) {
+      const message =
+        'error' in (result as Record<string, unknown>)
+          ? String((result as Record<string, unknown>).error)
+          : 'tool reported failure';
+      return { ok: false, error: message };
+    }
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function runExecution(
+  input: WorkflowExecutionInput,
+  startTime: number,
+  exec: { prompt: string; agentPageId: string }
+): Promise<WorkflowExecutionResult> {
   try {
     // 1. Load agent page
     const [agent] = await db
       .select()
       .from(pages)
-      .where(eq(pages.id, input.agentPageId));
+      .where(eq(pages.id, exec.agentPageId));
 
     if (!agent) {
       return { success: false, durationMs: Date.now() - startTime, error: 'Agent page not found' };
@@ -198,8 +425,8 @@ async function runExecution(input: WorkflowExecutionInput, startTime: number): P
     enhancedSystemPrompt += `\nYou are operating within this drive. Use this drive ID (${drive.id}) as the default when using tools like list_pages, create_page, etc. unless explicitly told otherwise.`;
     enhancedSystemPrompt += `\n\nThis is an automated workflow execution. Execute the requested task thoroughly and completely.`;
 
-    // 4. Build user message — start from event override (if any) or workflow prompt
-    let userMessage = input.eventContext?.promptOverride ?? input.prompt;
+    // 4. Build user message — the caller resolved override/step prompt already
+    let userMessage = exec.prompt;
 
     const contextPageIds = input.contextPageIds ?? [];
     if (contextPageIds.length > 0) {
