@@ -7,6 +7,7 @@ import { Home, FileQuestion } from 'lucide-react';
 import { patch } from '@/lib/auth/auth-fetch';
 import { Button } from '@/components/ui/button';
 import { useDriveStore } from '@/hooks/useDrive';
+import { usePublishStatusStore } from '@/stores/usePublishStatusStore';
 
 interface CanvasHomePageSettingsSectionProps {
   pageId: string;
@@ -43,6 +44,12 @@ export function CanvasHomePageSettingsSection({ pageId }: CanvasHomePageSettings
     try {
       await patch(`/api/drives/${driveId}`, { homePageId: next });
       updateDriveInStore(driveId, { homePageId: next });
+      // The page's published URL depends on whether it's the drive's home
+      // page (served at the root vs its slug — see the publish GET route),
+      // so the header's cached PublishControls status is now stale: refetch
+      // rather than leaving it showing (and letting Copy link copy) a URL
+      // that no longer matches what's actually being served.
+      usePublishStatusStore.getState().fetchStatus(pageId);
       toast.success(next ? 'Home page set.' : 'Home page removed.', { id: toastId });
     } catch {
       toast.error('Error updating home page.', { id: toastId });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { toast } from 'sonner';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -55,18 +55,21 @@ export function CanvasPublishSettingsSection({ pageId }: CanvasPublishSettingsSe
   const [form, setForm] = useState<PublishSettings>(EMPTY_SETTINGS);
   const [pickedImageId, setPickedImageId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  // Seed the draft form once, the first time status becomes available — not
-  // on every store update, so an in-progress edit here survives an unrelated
-  // status change (e.g. the header marking the page stale after a content save).
-  const hasSeededRef = useRef(false);
+  // Whether the user has touched the form since it was last seeded from
+  // `status.settings`. Reseeding must skip a dirty form (so an in-progress
+  // edit here survives an unrelated status change, e.g. the header marking
+  // the page stale after a content save) but NOT skip a pristine one — a
+  // one-shot "seeded once ever" guard would let this category keep showing
+  // stale values (and silently roll them back on Save) after the header's
+  // own Publish settings dialog saves different ones while this stays open.
+  const [isDirty, setIsDirty] = useState(false);
 
   useEffect(() => {
     fetchStatus(pageId);
   }, [pageId, fetchStatus]);
 
   useEffect(() => {
-    if (status && !hasSeededRef.current) {
-      hasSeededRef.current = true;
+    if (status && !isDirty) {
       setForm({
         title: status.settings.title,
         description: status.settings.description,
@@ -74,7 +77,12 @@ export function CanvasPublishSettingsSection({ pageId }: CanvasPublishSettingsSe
         noindex: status.settings.noindex,
       });
     }
-  }, [status]);
+  }, [status, isDirty]);
+
+  const handleFormChange = useCallback((next: PublishSettings) => {
+    setForm(next);
+    setIsDirty(true);
+  }, []);
 
   const handleSave = useCallback(async () => {
     if (!pickedImageId) {
@@ -130,6 +138,10 @@ export function CanvasPublishSettingsSection({ pageId }: CanvasPublishSettingsSe
         noindex: nextSettings.noindex,
       });
       setPickedImageId(null);
+      // The form now matches the just-saved (and just-committed-to-the-store)
+      // values, so it's pristine again — a later external status change is
+      // safe to reseed from without clobbering an edit that no longer exists.
+      setIsDirty(false);
       toast.success('Publish settings saved');
     } catch {
       toast.error('Failed to save publish settings');
@@ -151,9 +163,9 @@ export function CanvasPublishSettingsSection({ pageId }: CanvasPublishSettingsSe
       )}
       <PublishSettingsFields
         value={form}
-        onChange={setForm}
+        onChange={handleFormChange}
         pickedImageId={pickedImageId}
-        onPickedImageIdChange={setPickedImageId}
+        onPickedImageIdChange={(id) => { setPickedImageId(id); setIsDirty(true); }}
         driveId={driveId}
         disabled={!status.published}
         idPrefix="canvas-publish"
