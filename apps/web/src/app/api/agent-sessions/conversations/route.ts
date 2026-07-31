@@ -51,9 +51,11 @@ export async function GET(request: Request) {
   });
   const cursor = url.searchParams.get('cursor') || undefined;
 
+  const scopedDriveId = driveId && driveId.length > 0 ? driveId : undefined;
+
   try {
     const result = await listAllConversationsPaginated(
-      { ownerId: auth.userId, driveId: driveId && driveId.length > 0 ? driveId : undefined },
+      { ownerId: auth.userId, driveId: scopedDriveId },
       { limit, cursor },
     );
 
@@ -61,11 +63,7 @@ export async function GET(request: Request) {
     // page's CURRENT title/drive — they may have authored this conversation
     // back when they were a member of that page's drive, and lost that
     // membership since (review finding: the join surfaced the page's live
-    // metadata keyed only on conversation ownership). Batch-check once, then
-    // MASK the two page-derived fields rather than dropping the row — the
-    // conversation itself is still the requester's own history, exactly the
-    // `pagePermissions`/`canShowPage` pattern `storage/info/route.ts` already
-    // uses for the same class of leak.
+    // metadata keyed only on conversation ownership). Batch-check once.
     const pageIds = Array.from(
       new Set(
         result.conversations
@@ -75,10 +73,22 @@ export async function GET(request: Request) {
       ),
     );
     const pagePermissions = pageIds.length > 0 ? await getBatchPagePermissions(auth.userId, pageIds) : null;
-    const conversations = result.conversations.map((c) => {
-      if (c.type !== 'page' || c.agentPageId === null) return c;
-      const canView = pagePermissions?.get(c.agentPageId)?.canView ?? false;
-      return canView ? c : { ...c, pageTitle: null, driveId: null };
+    const canViewPage = (agentPageId: string) => pagePermissions?.get(agentPageId)?.canView ?? false;
+
+    const conversations = result.conversations.flatMap((c) => {
+      if (c.type !== 'page' || c.agentPageId === null || canViewPage(c.agentPageId)) return [c];
+      // Drive-scoped requests must DROP the row entirely, not just mask its
+      // fields: the drive filter itself runs against the page's CURRENT
+      // `driveId` before any permission check, so a masked-but-present row in
+      // a `?driveId=X` result already confirms "this inaccessible page
+      // currently belongs to drive X" — an oracle a caller could probe across
+      // candidate drive ids (review finding). Un-scoped (global) requests
+      // don't have this problem — presence there isn't tied to any specific
+      // drive being asked about — so masking (keep the row, as the
+      // requester's own history, but hide the page-derived fields) is still
+      // correct there, matching the `storage/info/route.ts` pattern.
+      if (scopedDriveId) return [];
+      return [{ ...c, pageTitle: null, driveId: null }];
     });
 
     return NextResponse.json({ ...result, conversations });

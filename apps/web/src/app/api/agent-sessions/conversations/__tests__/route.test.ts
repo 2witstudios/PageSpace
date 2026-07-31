@@ -171,4 +171,46 @@ describe('GET /api/agent-sessions/conversations', () => {
       expect(mockGetBatchPagePermissions).toHaveBeenCalledWith('user-1', ['agent-1']);
     });
   });
+
+  describe('drive-scoped requests DROP (not mask) an inaccessible page row', () => {
+    // The ?driveId= filter runs against the page's CURRENT driveId before any
+    // permission check — so a masked-but-present row in a driveId-scoped
+    // result would itself confirm "this inaccessible page currently belongs
+    // to this drive", an oracle a caller could probe across candidate drive
+    // ids (review finding). Masking alone (keep the row, null the fields) is
+    // only safe when NOT scoped to a specific drive.
+    beforeEach(() => {
+      mockListAllConversationsPaginated.mockResolvedValue({
+        conversations: [PAGE_ROW, GLOBAL_ROW],
+        pagination: { hasMore: false, nextCursor: null, limit: 20 },
+      });
+    });
+
+    it('drops the row entirely when driveId is scoped and the page is inaccessible', async () => {
+      mockGetBatchPagePermissions.mockResolvedValue(new Map([['agent-1', { canView: false }]]));
+
+      const response = await GET(new Request('http://localhost/api/agent-sessions/conversations?driveId=drive-1'));
+      const body = await response.json();
+
+      expect(body.conversations).toEqual([GLOBAL_ROW]);
+    });
+
+    it('still masks (keeps the row) rather than dropping when driveId is NOT scoped', async () => {
+      mockGetBatchPagePermissions.mockResolvedValue(new Map([['agent-1', { canView: false }]]));
+
+      const response = await GET(new Request('http://localhost/api/agent-sessions/conversations'));
+      const body = await response.json();
+
+      expect(body.conversations).toEqual([{ ...PAGE_ROW, pageTitle: null, driveId: null }, GLOBAL_ROW]);
+    });
+
+    it('keeps the row in full when driveId is scoped and the page IS accessible', async () => {
+      mockGetBatchPagePermissions.mockResolvedValue(new Map([['agent-1', { canView: true }]]));
+
+      const response = await GET(new Request('http://localhost/api/agent-sessions/conversations?driveId=drive-1'));
+      const body = await response.json();
+
+      expect(body.conversations).toEqual([PAGE_ROW, GLOBAL_ROW]);
+    });
+  });
 });
