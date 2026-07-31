@@ -12,6 +12,10 @@ interface CanvasAppearanceSettingsSectionProps {
 }
 
 interface PublishStatusResponse {
+  title?: string | null;
+  description?: string | null;
+  ogImageUrl?: string | null;
+  noindex?: boolean;
   themeBridgeEnabled?: boolean;
 }
 
@@ -59,10 +63,22 @@ export function CanvasAppearanceSettingsSection({ pageId }: CanvasAppearanceSett
       const data = (await res.json()) as PublishStatusResponse;
       const current = usePublishStatusStore.getState().statuses.get(pageId);
       if (current) {
+        // Read every field back from the response rather than spreading
+        // `current.settings` for the ones this toggle didn't touch — same
+        // reasoning as PublishControls' handlePublish: the server always
+        // returns the full effective settings, and trusting a locally
+        // cached copy for "untouched" fields is exactly the assumption that
+        // broke across an unpublish/republish there.
         setStatus(pageId, {
           ...current,
           isStale: false,
-          settings: { ...current.settings, themeBridgeEnabled: data.themeBridgeEnabled ?? checked },
+          settings: {
+            title: data.title ?? '',
+            description: data.description ?? '',
+            ogImageUrl: data.ogImageUrl ?? '',
+            noindex: data.noindex ?? false,
+            themeBridgeEnabled: data.themeBridgeEnabled ?? checked,
+          },
         });
       }
       toast.success('Appearance settings saved');
