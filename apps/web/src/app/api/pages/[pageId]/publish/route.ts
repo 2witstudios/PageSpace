@@ -29,6 +29,9 @@ const publishSchema = z.object({
   // publishCanvasPage — never trusted as a URL directly.
   ogImageFileId: z.string().min(1).optional(),
   noindex: z.boolean().optional(),
+  // Canvas pages only: whether the published artifact follows PageSpace's
+  // light/dark theme. Ignored (has no effect) for other publishable page types.
+  themeBridgeEnabled: z.boolean().optional(),
 }).nullable();
 
 export async function GET(req: Request, { params }: { params: Promise<{ pageId: string }> }) {
@@ -61,6 +64,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
         publishDescription: true,
         publishOgImageUrl: true,
         noindex: true,
+        themeBridgeEnabled: true,
       },
     });
 
@@ -130,6 +134,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       description: row.publishDescription ?? null,
       ogImageUrl: row.publishOgImageUrl ?? null,
       noindex: row.noindex ?? false,
+      themeBridgeEnabled: row.themeBridgeEnabled ?? true,
     });
   } catch (error) {
     loggers.api.error('Error reading publish status:', error as Error);
@@ -208,6 +213,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       description: parsedBody?.description,
       ogImageUrl,
       noindex: parsedBody?.noindex,
+      themeBridgeEnabled: parsedBody?.themeBridgeEnabled,
     });
 
     auditRequest(req, {

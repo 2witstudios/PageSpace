@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import dynamic from 'next/dynamic';
 import { CanvasFrame } from '@/components/canvas/CanvasFrame';
@@ -11,21 +12,62 @@ import { useEditingStore } from '@/stores/useEditingStore';
 import { useSocket } from '@/hooks/useSocket';
 import { PageEventPayload } from '@/lib/websocket';
 import { useFindStore } from '@/stores/useFindStore';
-import CanvasFormsSettingsTab from './CanvasFormsSettingsTab';
-import PublishControls from '../../content-header/PublishControls';
+import { CanvasSettingsPanel } from './settings/CanvasSettingsPanel';
 
 interface CanvasPageViewProps {
   pageId: string;
 }
 
+type CanvasTab = 'view' | 'code' | 'settings';
+
+interface PublishStatusResponse {
+  themeBridgeEnabled?: boolean;
+}
+
 const MonacoEditor = dynamic(() => import('@/components/editors/MonacoEditor'), { ssr: false });
 
 const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
-  const [activeTab, setActiveTab] = useState('view');
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const activeTab = (searchParams.get('tab') as CanvasTab | null) ?? 'view';
+  const setActiveTab = useCallback((tab: CanvasTab) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (tab === 'view') {
+      params.delete('tab');
+    } else {
+      params.set('tab', tab);
+    }
+    // Switching top-level tab always leaves any settings category behind.
+    params.delete('category');
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }, [searchParams, pathname, router]);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const hasInitializedRef = useRef(false);
   const isDirtyRef = useRef(false);
   const socket = useSocket();
+
+  // Mirrors published_pages.themeBridgeEnabled so the View tab's live preview
+  // matches what publishing produces. Fetched once here (not inside
+  // PublishControls, a separate component instance in the header) and updated
+  // immediately on save by the Settings tab's Appearance category.
+  const [themeBridgeEnabled, setThemeBridgeEnabled] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    fetchWithAuth(`/api/pages/${pageId}/publish`)
+      .then((res) => (res.ok ? (res.json() as Promise<PublishStatusResponse>) : null))
+      .then((data) => {
+        if (!cancelled) setThemeBridgeEnabled(data?.themeBridgeEnabled ?? true);
+      })
+      .catch(() => {
+        if (!cancelled) setThemeBridgeEnabled(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pageId]);
 
   const {
     document: documentState,
@@ -148,10 +190,11 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
     saveWithDebounce(value);
   }, [updateContent, saveWithDebounce]);
 
-  // Generic content read/write for the Forms tab, which owns all the <form>
-  // tag detection/wiring/deletion logic itself (parse-form-tags.ts,
-  // @pagespace/lib/forms/form-html + embed-html) — CanvasPageView just needs
-  // to persist whatever the tab decides the new content should be.
+  // Generic content read/write for the Forms settings category, which owns
+  // all the <form> tag detection/wiring/deletion logic itself
+  // (parse-form-tags.ts, @pagespace/lib/forms/form-html + embed-html) —
+  // CanvasPageView just needs to persist whatever it decides the new content
+  // should be.
   const handleFormsTabContentChange = useCallback((value: string) => {
     updateContent(value);
     saveWithDebounce(value);
@@ -182,12 +225,6 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
           Code
         </button>
         <button
-          className={`px-4 py-2 ${activeTab === 'forms' ? 'border-b-2 border-blue-500' : ''}`}
-          onClick={() => setActiveTab('forms')}
-        >
-          Forms
-        </button>
-        <button
           className={`px-4 py-2 ${activeTab === 'settings' ? 'border-b-2 border-blue-500' : ''}`}
           onClick={() => setActiveTab('settings')}
         >
@@ -206,18 +243,18 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
       {activeTab === 'view' && (
         <div className="flex-1 w-full bg-background text-foreground">
           <ErrorBoundary>
-            <CanvasFrame html={content} />
+            <CanvasFrame html={content} themeBridgeEnabled={themeBridgeEnabled} />
           </ErrorBoundary>
         </div>
       )}
-      {activeTab === 'forms' && (
-        <div className="flex-1 min-h-0 overflow-y-auto">
-          <CanvasFormsSettingsTab pageId={pageId} content={content} onContentChange={handleFormsTabContentChange} />
-        </div>
-      )}
       {activeTab === 'settings' && (
-        <div className="flex-1 min-h-0 overflow-y-auto p-4">
-          <PublishControls pageId={pageId} contentDirty={documentState?.isDirty || false} variant="panel" />
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <CanvasSettingsPanel
+            pageId={pageId}
+            content={content}
+            onContentChange={handleFormsTabContentChange}
+            onThemeBridgeEnabledChange={setThemeBridgeEnabled}
+          />
         </div>
       )}
 

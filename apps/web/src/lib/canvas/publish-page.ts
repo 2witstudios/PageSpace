@@ -101,6 +101,14 @@ export interface PublishCanvasPageInput {
    * `undefined` leaves the persisted value intact (defaults to indexable).
    */
   noindex?: boolean;
+  /**
+   * Canvas pages only: when false, the published artifact skips PageSpace's
+   * forced light/dark theme override so an author's intentionally
+   * single-theme design isn't fought by an injected `dark` class. Ignored for
+   * other publishable page types. `undefined` leaves the persisted value
+   * intact (defaults to `true`, matching prior always-on behavior).
+   */
+  themeBridgeEnabled?: boolean;
 }
 
 export interface PublishCanvasPageResult {
@@ -122,6 +130,7 @@ export interface PublishCanvasPageResult {
   description: string | null;
   ogImageUrl: string | null;
   noindex: boolean;
+  themeBridgeEnabled: boolean;
 }
 
 /** Final SEO/head fields threaded into whichever type-specific renderer `preparePublishContent` selects. */
@@ -136,6 +145,9 @@ interface PublishRenderArgs {
   description?: string;
   robots?: string;
   formActionOrigin?: string;
+  /** CANVAS only — see `PublishCanvasPageInput.themeBridgeEnabled`. Silently
+   *  unused by the other page types' renderers, same as `formActionOrigin`. */
+  injectThemeBridge?: boolean;
 }
 
 interface PreparedPublishContent {
@@ -317,6 +329,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
       publishDescription: true,
       publishOgImageUrl: true,
       noindex: true,
+      themeBridgeEnabled: true,
     },
   });
 
@@ -327,6 +340,8 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   const effectiveDescription = mergeOverride(input.description, existing?.publishDescription ?? null);
   const effectiveOgImageUrl = mergeOverride(input.ogImageUrl, existing?.publishOgImageUrl ?? null);
   const effectiveNoindex = input.noindex === undefined ? existing?.noindex ?? false : input.noindex;
+  const effectiveThemeBridgeEnabled =
+    input.themeBridgeEnabled === undefined ? existing?.themeBridgeEnabled ?? true : input.themeBridgeEnabled;
 
   // Resolve the drive's primary published host. When an active custom domain
   // exists it is the primary; otherwise we fall back to the subdomain. All
@@ -381,6 +396,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
     description: resolvedMeta.description,
     robots: resolvedMeta.robots,
     formActionOrigin,
+    injectThemeBridge: effectiveThemeBridgeEnabled,
   });
   const key = buildPublishedKey(subdomain, path);
 
@@ -449,6 +465,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
       publishDescription: effectiveDescription,
       publishOgImageUrl: effectiveOgImageUrl,
       noindex: effectiveNoindex,
+      themeBridgeEnabled: effectiveThemeBridgeEnabled,
       updatedAt: new Date(),
     })
     .where(eq(publishedPages.pageId, pageId));
@@ -494,6 +511,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
     description: effectiveDescription,
     ogImageUrl: effectiveOgImageUrl,
     noindex: effectiveNoindex,
+    themeBridgeEnabled: effectiveThemeBridgeEnabled,
   };
 }
 

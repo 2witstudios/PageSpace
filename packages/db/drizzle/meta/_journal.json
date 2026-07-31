@@ -1702,6 +1702,13 @@
       "when": 1785436996403,
       "tag": "0242_uneven_sphinx",
       "breakpoints": true
+    },
+    {
+      "idx": 243,
+      "version": "7",
+      "when": 1785465346522,
+      "tag": "0243_early_corsair",
+      "breakpoints": true
     }
   ]
 }

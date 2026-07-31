@@ -13,7 +13,7 @@ import { useParams } from 'next/navigation';
 import { usePageStore } from '@/hooks/usePage';
 import { Button } from '@/components/ui/button';
 import { Download } from 'lucide-react';
-import { isDocumentPage, isFilePage, isSheetPage, isCodePage, isCanvasPage, isPublishablePageType } from '@pagespace/lib/content/page-types.config';
+import { isDocumentPage, isFilePage, isSheetPage, isCodePage, isPublishablePageType } from '@pagespace/lib/content/page-types.config';
 import { ExportDropdown } from './ExportDropdown';
 import PublishControls from './PublishControls';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -90,7 +90,6 @@ export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps 
   const pageIsSheet = page ? isSheetPage(page.type) : false;
   const pageIsFile = page ? isFilePage(page.type) : false;
   const pageIsCode = page ? isCodePage(page.type) : false;
-  const pageIsCanvas = page ? isCanvasPage(page.type) : false;
   const showSaveStatus = (pageIsDocument || pageIsSheet || pageIsCode) && !isMobile;
 
   // Track and display presence (who else is viewing this page)
@@ -159,7 +158,7 @@ export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps 
               {!isMobile && (isDownloading ? 'Downloading...' : 'Download')}
             </Button>
           )}
-          {page && isPublishablePageType(page.type) && !pageIsCanvas && (
+          {page && isPublishablePageType(page.type) && (
             // Keyed on pageId so navigating to a different page remounts the
             // control instead of reusing local UI state (e.g. an open Publish
             // Settings dialog) across pages.

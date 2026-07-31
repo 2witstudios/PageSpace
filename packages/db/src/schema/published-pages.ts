@@ -16,6 +16,11 @@ export const publishedPages = pgTable('published_pages', {
   publishOgImageUrl: text('publish_og_image_url'),
   // When true, the page emits robots=noindex and is excluded from the sitemap.
   noindex: boolean('noindex').default(false).notNull(),
+  // Canvas pages only: when false, the published artifact skips PageSpace's
+  // forced light/dark theme override (renderCanvasDocument's injectThemeBridge)
+  // so an author's intentionally single-theme design isn't fought by an
+  // injected `dark` class. Defaults true (current behavior) for every page type.
+  themeBridgeEnabled: boolean('theme_bridge_enabled').default(true).notNull(),
   publishedBy: text('published_by').references(() => users.id, { onDelete: 'set null' }),
   publishedAt: timestamp('published_at', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { mode: 'date' }).notNull().$onUpdate(() => new Date()),

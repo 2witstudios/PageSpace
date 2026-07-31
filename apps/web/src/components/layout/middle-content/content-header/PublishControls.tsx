@@ -14,12 +14,12 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
-import { Switch } from '@/components/ui/switch';
-import { PagePickerPopover } from '@/components/common/PagePickerPopover';
-import { PageType } from '@pagespace/lib/utils/enums';
+import {
+  PublishSettingsFields,
+  EMPTY_SETTINGS,
+  type PublishSettings,
+  type PublishOverrides,
+} from './PublishSettingsFields';
 
 interface PublishControlsProps {
   pageId: string;
@@ -32,14 +32,6 @@ interface PublishControlsProps {
    *  content of a dedicated tab/panel, where silence would leave a blank tab —
    *  render an explanatory message instead. */
   variant?: 'header' | 'panel';
-}
-
-/** Author-supplied SEO overrides for a published page. */
-interface PublishSettings {
-  title: string;
-  description: string;
-  ogImageUrl: string;
-  noindex: boolean;
 }
 
 interface PublishState {
@@ -61,8 +53,6 @@ interface PublishState {
   hasLoadError: boolean;
 }
 
-const EMPTY_SETTINGS: PublishSettings = { title: '', description: '', ogImageUrl: '', noindex: false };
-
 const EMPTY_STATE: PublishState = {
   published: false,
   url: null,
@@ -71,12 +61,6 @@ const EMPTY_STATE: PublishState = {
   settings: EMPTY_SETTINGS,
   hasLoadError: false,
 };
-
-/** PublishSettings plus a transient "picked an uploaded file" alternative to
- *  pasting a URL — resolved server-side, never persisted as its own field. */
-interface PublishOverrides extends PublishSettings {
-  ogImageFileId?: string;
-}
 
 interface PublishStatusResponse {
   published: boolean;
@@ -258,13 +242,14 @@ const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishCo
 
   if (!state.published || !state.url) {
     return (
-      <button
-        className="px-4 py-2 text-sm disabled:opacity-50"
+      <Button
+        variant="ghost"
+        size="sm"
         onClick={() => handlePublish()}
         disabled={isBusy}
       >
         {isBusy ? 'Publishing…' : 'Publish'}
-      </button>
+      </Button>
     );
   }
 
@@ -285,33 +270,37 @@ const PublishControls = ({ pageId, contentDirty, variant = 'header' }: PublishCo
             <span className="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400 whitespace-nowrap">
               Stale
             </span>
-            <button
-              className="px-2 py-2 text-sm whitespace-nowrap disabled:opacity-50"
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => handlePublish(true)}
               disabled={isBusy}
             >
               {isBusy ? 'Updating…' : 'Update'}
-            </button>
+            </Button>
           </>
         )}
-        <button
-          className="flex items-center gap-1 px-2 py-2 text-sm whitespace-nowrap"
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => setSettingsOpen(true)}
           aria-label="Publish settings"
         >
           <Settings2 className="h-4 w-4" />
           Settings
-        </button>
-        <button className="px-2 py-2 text-sm whitespace-nowrap" onClick={handleCopy}>
+        </Button>
+        <Button variant="ghost" size="sm" onClick={handleCopy}>
           Copy link
-        </button>
-        <button
-          className="px-2 py-2 text-sm whitespace-nowrap text-red-500 disabled:opacity-50"
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-red-500 hover:text-red-500"
           onClick={handleUnpublish}
           disabled={isBusy}
         >
           {isBusy ? 'Unpublishing…' : 'Unpublish'}
-        </button>
+        </Button>
       </div>
 
       <PublishSettingsDialog
@@ -384,72 +373,14 @@ function PublishSettingsDialog({ open, onOpenChange, initial, driveId, isBusy, o
             Control how this page appears in search results and link previews. Leave a field blank to use the page&apos;s own content.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4 py-2">
-          <div className="space-y-1.5">
-            <Label htmlFor="publish-title">Title</Label>
-            <Input
-              id="publish-title"
-              value={form.title}
-              onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
-              placeholder="Defaults to the page title"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="publish-description">Description</Label>
-            <Textarea
-              id="publish-description"
-              value={form.description}
-              onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-              placeholder="Shown in search results and link unfurls"
-              rows={3}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="publish-og-image">Share image URL</Label>
-            <Input
-              id="publish-og-image"
-              type="url"
-              value={form.ogImageUrl}
-              onChange={(e) => setForm((f) => ({ ...f, ogImageUrl: e.target.value }))}
-              placeholder="https://… (1200×630 recommended)"
-              disabled={!!pickedImageId}
-            />
-          </div>
-          {driveId && (
-            pickedImageId ? (
-              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span>Using an uploaded image for this page&apos;s share image</span>
-                <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setPickedImageId(null)}>
-                  Remove
-                </Button>
-              </div>
-            ) : (
-              <div className="space-y-1.5">
-                <Label>Or pick an uploaded image</Label>
-                <PagePickerPopover
-                  driveId={driveId}
-                  value={null}
-                  onChange={setPickedImageId}
-                  pageType={PageType.FILE}
-                  imageOnly
-                  placeholder="Browse uploaded images…"
-                />
-              </div>
-            )
-          )}
-          <div className="flex items-center justify-between gap-4">
-            <div className="space-y-0.5">
-              <Label htmlFor="publish-noindex">Hide from search engines</Label>
-              <p className="text-xs text-muted-foreground">
-                Adds a noindex tag and keeps the page out of the sitemap.
-              </p>
-            </div>
-            <Switch
-              id="publish-noindex"
-              checked={form.noindex}
-              onCheckedChange={(checked) => setForm((f) => ({ ...f, noindex: checked }))}
-            />
-          </div>
+        <div className="py-2">
+          <PublishSettingsFields
+            value={form}
+            onChange={setForm}
+            pickedImageId={pickedImageId}
+            onPickedImageIdChange={setPickedImageId}
+            driveId={driveId}
+          />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isBusy}>
