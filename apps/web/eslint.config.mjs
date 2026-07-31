@@ -288,6 +288,19 @@ const eslintConfig = [
               message:
                 "Pure core: runtime imports may only come from sibling core modules (./x) or zod. Anything outside core/ is shell territory — inject it as an argument.",
             },
+            {
+              // The `@/*` workspace alias resolves anywhere under apps/web/src
+              // — API routes, the tool registry, the executor itself — all of
+              // which do real I/O. The bare `../*` ban above only stops
+              // relative parent-traversal; without this, `@/lib/workflows/
+              // workflow-executor` (db, generateText, fetch) or any other
+              // absolute-aliased shell module imports into core/ completely
+              // silently, no matter how deep or unrelated to workflows it is.
+              group: ["@/*"],
+              allowTypeImports: true,
+              message:
+                "Pure core: the @/ alias reaches shell code anywhere in apps/web/src. Runtime imports may only come from sibling core modules (./x) or zod — inject anything else as an argument.",
+            },
           ],
         },
       ],
