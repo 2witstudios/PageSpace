@@ -18,14 +18,17 @@ import { useAssistantSessionChat } from './useAssistantSessionChat';
 
 export default function AssistantSessionChat({
   conversationId,
+  driveId,
   context,
   isReadOnly = false,
 }: {
   conversationId: string;
+  /** The session's own drive, when it has one — see `useAssistantSessionChat`'s doc. */
+  driveId: string | null;
   context: 'page' | 'console';
   isReadOnly?: boolean;
 }) {
-  const chat = useAssistantSessionChat({ conversationId });
+  const chat = useAssistantSessionChat({ conversationId, driveId });
   const currentModel = useAssistantSettingsStore((state) => state.currentModel);
 
   return (
