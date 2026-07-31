@@ -29,6 +29,19 @@ describe('resolveNavigationTarget', () => {
     expect(target).toEqual({ kind: 'pane', sessionId: 'ses-1', conversationId: 'conv-1', agentId: 'agent-1' });
   });
 
+  it('a session-bound page conversation whose page is currently inaccessible is unavailable, not a pane', () => {
+    // The API masks `driveId` to null (never a real value for a live page)
+    // specifically when it already checked and the requester can no longer
+    // view that page. Opening the pane anyway would hit a 403 on the message
+    // fetch and silently show nothing (review finding) — this must be caught
+    // before the unconditional sessionId branch below, not after it.
+    const target = resolveNavigationTarget(
+      row({ type: 'page', sessionId: 'ses-1', agentPageId: 'agent-1', driveId: null }),
+      undefined,
+    );
+    expect(target).toEqual({ kind: 'unavailable' });
+  });
+
   it('a plain page conversation navigates to its agent page, in its own drive', () => {
     const target = resolveNavigationTarget(
       row({ type: 'page', agentPageId: 'agent-1', driveId: 'drive-1' }),

@@ -45,11 +45,24 @@ export type NavigationTarget =
 /**
  * A session-bound conversation always wins, whatever its `type` — it opens in
  * the pane grid in-place, the one case that never leaves the Agents surface.
+ *
+ * EXCEPT a `type: 'page'` row whose `driveId` came back null: the API masks
+ * `driveId` to null (route.ts) ONLY when it already checked and the
+ * requester can no longer view that page — a real, live page always belongs
+ * to a drive, so this can never be a legitimate "no drive" value. Checking
+ * it before the `sessionId` branch matters because a session-bound page
+ * conversation would otherwise open `AgentPanes` unconditionally; the pane's
+ * message fetch enforces the same permission server-side and 403s, so the
+ * click would silently fail to show anything (review finding).
  */
 export function resolveNavigationTarget(
   row: PastConversationRow,
   currentDriveId: string | undefined,
 ): NavigationTarget {
+  if (row.type === 'page' && !row.driveId) {
+    return { kind: 'unavailable' };
+  }
+
   if (row.sessionId) {
     return { kind: 'pane', sessionId: row.sessionId, conversationId: row.conversationId, agentId: row.agentPageId };
   }

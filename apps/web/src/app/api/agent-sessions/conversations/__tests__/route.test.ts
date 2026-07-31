@@ -28,6 +28,8 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 }));
 vi.mock('@/lib/agent-sessions/agent-sessions-conversations-runtime', () => ({
   listAllConversationsPaginated: (...args: unknown[]) => mockListAllConversationsPaginated(...args),
+  encodeCursor: (sortKey: Date | string, id: string) =>
+    Buffer.from(JSON.stringify({ sortKey: new Date(sortKey).toISOString(), id })).toString('base64url'),
 }));
 
 import { GET } from '../route';
@@ -211,6 +213,61 @@ describe('GET /api/agent-sessions/conversations', () => {
       const body = await response.json();
 
       expect(body.conversations).toEqual([PAGE_ROW, GLOBAL_ROW]);
+    });
+  });
+
+  describe('dropping inaccessible rows keeps fetching rather than returning a stuck-empty page', () => {
+    // Dropping (not masking) can turn a full DB-level page into fewer, or
+    // zero, visible rows while `hasMore`/`nextCursor` still describe the
+    // unfiltered page underneath. Returning that directly breaks the
+    // frontend: an empty first page renders the terminal empty state and
+    // hides Prev/Next, permanently hiding a later, actually-visible row
+    // (review finding).
+    it('the first DB page is entirely dropped rows: transparently fetches the next page and returns its visible row', async () => {
+      mockListAllConversationsPaginated
+        .mockResolvedValueOnce({
+          conversations: [PAGE_ROW],
+          pagination: { hasMore: true, nextCursor: 'cursor-1', limit: 20 },
+        })
+        .mockResolvedValueOnce({
+          conversations: [{ ...GLOBAL_ROW, conversationId: 'conv-global-2' }],
+          pagination: { hasMore: false, nextCursor: null, limit: 20 },
+        });
+      mockGetBatchPagePermissions.mockResolvedValue(new Map([['agent-1', { canView: false }]]));
+
+      const response = await GET(new Request('http://localhost/api/agent-sessions/conversations?driveId=drive-1'));
+      const body = await response.json();
+
+      expect(mockListAllConversationsPaginated).toHaveBeenCalledTimes(2);
+      expect(mockListAllConversationsPaginated).toHaveBeenNthCalledWith(
+        2,
+        { ownerId: 'user-1', driveId: 'drive-1' },
+        { limit: 20, cursor: 'cursor-1' },
+      );
+      expect(body.conversations).toEqual([{ ...GLOBAL_ROW, conversationId: 'conv-global-2' }]);
+      expect(body.pagination).toEqual({ hasMore: false, nextCursor: null, limit: 20 });
+    });
+
+    it('an unbroken run of dropped rows stops at the internal fetch cap and still returns a real, continuable answer', async () => {
+      for (let i = 1; i <= 5; i++) {
+        mockListAllConversationsPaginated.mockResolvedValueOnce({
+          conversations: [PAGE_ROW],
+          pagination: { hasMore: true, nextCursor: `cursor-${i}`, limit: 20 },
+        });
+      }
+      mockGetBatchPagePermissions.mockResolvedValue(new Map([['agent-1', { canView: false }]]));
+
+      const response = await GET(new Request('http://localhost/api/agent-sessions/conversations?driveId=drive-1'));
+      const body = await response.json();
+
+      // Capped, not unbounded: exactly 5 internal fetches, not one per
+      // remaining page of a user's entire (hypothetically huge) history.
+      expect(mockListAllConversationsPaginated).toHaveBeenCalledTimes(5);
+      expect(body.conversations).toEqual([]);
+      // hasMore stays true and nextCursor carries the last cursor actually
+      // reached — the caller can page again rather than being told (falsely)
+      // that history has ended.
+      expect(body.pagination).toEqual({ hasMore: true, nextCursor: 'cursor-5', limit: 20 });
     });
   });
 });

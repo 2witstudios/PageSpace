@@ -158,8 +158,15 @@ export default function AgentsPastConversationsList({ driveId }: { driveId?: str
 
   const conversations = data?.conversations ?? [];
 
-  // True zero-history: keep the original blank-slate copy rather than an empty list shell.
-  if (conversations.length === 0 && pageIndex === 0 && !error) {
+  // True zero-history: keep the original blank-slate copy rather than an
+  // empty list shell. Requires `!hasMore` too — the backend drops
+  // now-inaccessible page rows from a drive-scoped listing, so a single
+  // response CAN come back empty while more (visible) history still exists
+  // a page or two further back; treating that as terminal would strand the
+  // user with no way to reach it (review finding). `hasMore` defaults true
+  // while `data` is still undefined, so this can't fire ahead of a real
+  // answer from the server.
+  if (conversations.length === 0 && pageIndex === 0 && !error && !(data?.pagination.hasMore ?? true)) {
     return (
       <EmptyState
         title="Select a session"
