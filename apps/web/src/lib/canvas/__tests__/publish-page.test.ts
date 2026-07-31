@@ -572,6 +572,48 @@ describe('publishCanvasPage — SEO overrides', () => {
     expect(renderInput?.robots).toBe('noindex');
   });
 
+  it('threads themeBridgeEnabled: false into the rendered page as injectThemeBridge: false', async () => {
+    setupPage();
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+
+    await publishCanvasPage({
+      pageId: 'page-1', driveId: 'drive-1', userId: 'user-1', themeBridgeEnabled: false,
+    });
+
+    expect(seoUpdate()).toMatchObject({ themeBridgeEnabled: false });
+    const renderInput = vi.mocked(renderPublishedPage).mock.lastCall?.[0];
+    expect(renderInput?.injectThemeBridge).toBe(false);
+  });
+
+  it('defaults themeBridgeEnabled to true on first publish when omitted', async () => {
+    setupPage();
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+
+    expect(seoUpdate()).toMatchObject({ themeBridgeEnabled: true });
+    const renderInput = vi.mocked(renderPublishedPage).mock.lastCall?.[0];
+    expect(renderInput?.injectThemeBridge).toBe(true);
+  });
+
+  it('preserves a persisted themeBridgeEnabled: false on republish when the field is omitted', async () => {
+    setupPage();
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(publishedPageRow({
+      artifactKey: 'published/acme/page/index.html',
+      publishTitle: null,
+      publishDescription: null,
+      publishOgImageUrl: null,
+      noindex: false,
+      themeBridgeEnabled: false,
+    }));
+
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+
+    expect(seoUpdate()).toMatchObject({ themeBridgeEnabled: false });
+    const renderInput = vi.mocked(renderPublishedPage).mock.lastCall?.[0];
+    expect(renderInput?.injectThemeBridge).toBe(false);
+  });
+
   it('uses the canvas-authored og:title when no title override is set', async () => {
     setupPage();
     vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);

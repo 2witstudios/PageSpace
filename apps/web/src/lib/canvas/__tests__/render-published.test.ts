@@ -10,6 +10,16 @@ describe('renderPublishedPage', () => {
     expect(out).toContain('<body>');
   });
 
+  it('given no injectThemeBridge, should inject the theme bridge by default', () => {
+    const out = renderPublishedPage({ html: '<p>x</p>' });
+    expect(out).toContain('pagespace-theme');
+  });
+
+  it('given injectThemeBridge: false, should NOT inject the theme bridge', () => {
+    const out = renderPublishedPage({ html: '<p>x</p>', injectThemeBridge: false });
+    expect(out).not.toContain('pagespace-theme');
+  });
+
   it('given an author <script>, should PRESERVE it (published policy)', () => {
     const out = renderPublishedPage({
       html: '<div id="app"></div><script>document.getElementById("app").textContent = "hi";</script>',

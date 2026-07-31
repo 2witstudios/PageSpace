@@ -239,6 +239,7 @@ describe('POST /api/pages/[pageId]/publish', () => {
       description: null,
       ogImageUrl: null,
       noindex: false,
+      themeBridgeEnabled: true,
     });
   });
 
@@ -262,6 +263,7 @@ describe('POST /api/pages/[pageId]/publish', () => {
       description: null,
       ogImageUrl: null,
       noindex: false,
+      themeBridgeEnabled: true,
     });
   });
 
@@ -291,6 +293,7 @@ describe('POST /api/pages/[pageId]/publish', () => {
       description: null,
       ogImageUrl: null,
       noindex: false,
+      themeBridgeEnabled: true,
     });
   });
 
@@ -363,6 +366,18 @@ describe('POST /api/pages/[pageId]/publish', () => {
       description: 'Custom desc',
       robots: 'noindex',
     }));
+  });
+
+  it('accepts themeBridgeEnabled: false and threads it into the rendered page as injectThemeBridge: false', async () => {
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<p>hi</p>', driveId: 'drive-1' });
+    findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'acme', publishSubdomain: 'acme', kind: 'STANDARD' });
+    findFirstPublished.mockResolvedValue(null);
+
+    const res = await POST(makeReq({ themeBridgeEnabled: false }), { params });
+    expect(res.status).toBe(200);
+    expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ injectThemeBridge: false }));
+    const json = await res.json();
+    expect(json.themeBridgeEnabled).toBe(false);
   });
 
   it('returns 400 when ogImageUrl is not a valid URL', async () => {
@@ -531,6 +546,7 @@ describe('GET /api/pages/[pageId]/publish', () => {
       description: null,
       ogImageUrl: null,
       noindex: false,
+      themeBridgeEnabled: true,
     });
   });
 

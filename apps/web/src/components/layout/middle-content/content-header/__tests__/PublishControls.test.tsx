@@ -127,3 +127,42 @@ describe('PublishControls — unavailable-state branching', () => {
     }));
   });
 });
+
+// ============================================================================
+// Smoke tests for the header variant's available-state buttons — these
+// render via the shared `Button` component (not raw `<button>`s), so a role
+// query catches a regression that broke the accessible name or the click
+// handler wiring during that refactor.
+// ============================================================================
+describe('PublishControls — available state (header variant)', () => {
+  it('given an unpublished, available page, should render a clickable Publish button', async () => {
+    mockFetchWithAuth.mockResolvedValue(makeStatusResponse({ body: { published: false, available: true } }));
+
+    render(<PublishControls pageId="page_1" />);
+
+    const button = await screen.findByRole('button', { name: 'Publish' });
+    assert({
+      given: 'an unpublished but available page',
+      should: 'render a Publish button',
+      actual: button.tagName,
+      expected: 'BUTTON',
+    });
+  });
+
+  it('given a published page, should render Copy link and Unpublish buttons', async () => {
+    mockFetchWithAuth.mockResolvedValue(makeStatusResponse({
+      body: { published: true, available: true, url: 'https://acme.pagespace.site/welcome', isStale: false },
+    }));
+
+    render(<PublishControls pageId="page_1" />);
+
+    const copyLink = await screen.findByRole('button', { name: 'Copy link' });
+    const unpublish = await screen.findByRole('button', { name: 'Unpublish' });
+    assert({
+      given: 'a published, available page',
+      should: 'render both the Copy link and Unpublish buttons',
+      actual: [copyLink.tagName, unpublish.tagName],
+      expected: ['BUTTON', 'BUTTON'],
+    });
+  });
+});
