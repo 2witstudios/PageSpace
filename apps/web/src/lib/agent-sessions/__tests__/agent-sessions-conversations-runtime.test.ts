@@ -140,7 +140,14 @@ describe('listAllConversationsPaginated', () => {
       expect(result.conversations).toHaveLength(20);
       expect(result.pagination.hasMore).toBe(true);
       expect(result.pagination.nextCursor).not.toBeNull();
-      expect(decodeCursor(result.pagination.nextCursor!)).toEqual({ sortKey: GLOBAL_ROW.sortKeyValue, id: 'conv-19' });
+      // A string, not the `Date` instance the fixture holds: `decodeCursor`
+      // returns the sort key exactly as encoded, so a caller re-deriving a
+      // `Date` from it (as this fixture's own `sortKeyValue` is) would
+      // silently truncate any sub-millisecond precision right back out.
+      expect(decodeCursor(result.pagination.nextCursor!)).toEqual({
+        sortKey: GLOBAL_ROW.sortKeyValue.toISOString(),
+        id: 'conv-19',
+      });
     });
 
     it('with a cursor: decodes it synchronously (no extra DB round trip) and runs one query', async () => {

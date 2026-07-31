@@ -145,13 +145,22 @@ const resolvedDriveIdExpr = sql<string | null>`COALESCE(${pages.driveId}, ${agen
 export function encodeCursor(sortKey: Date | string, id: string): string {
   // The driver doesn't hydrate a raw computed SQL expression into a real
   // `Date` the way it does a schema-known timestamp COLUMN (confirmed
-  // against real Postgres: `sortKeyExpr`'s runtime value is a string despite
-  // its `sql<Date>` type) — normalize defensively rather than trust the type.
-  const date = sortKey instanceof Date ? sortKey : new Date(sortKey);
-  return Buffer.from(JSON.stringify({ sortKey: date.toISOString(), id })).toString('base64url');
+  // against real Postgres via drizzle's own query builder: `sortKeyExpr`'s
+  // runtime value is a STRING, e.g. `"2026-07-28 12:00:00.123456"`, with full
+  // microsecond precision — Postgres timestamps carry six fractional digits,
+  // a plain JS `Date` only three). Round-tripping that string through
+  // `new Date(...).toISOString()` truncates it to milliseconds — verified
+  // against the real test DB that this silently collapses two distinct
+  // sub-millisecond sort keys onto the same encoded value, making the next
+  // page's boundary re-admit a row it should have excluded (review finding).
+  // Preserve a string AS GIVEN; only a genuine `Date` (e.g. a plain
+  // `createdAt` fallback, which is already millisecond-limited at the
+  // column level) goes through `toISOString()`.
+  const encoded = typeof sortKey === 'string' ? sortKey : sortKey.toISOString();
+  return Buffer.from(JSON.stringify({ sortKey: encoded, id })).toString('base64url');
 }
 
-export function decodeCursor(cursor: string): { sortKey: Date; id: string } | null {
+export function decodeCursor(cursor: string): { sortKey: string; id: string } | null {
   try {
     const parsed: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
     if (
@@ -162,8 +171,11 @@ export function decodeCursor(cursor: string): { sortKey: Date; id: string } | nu
     ) {
       return null;
     }
-    const sortKey = new Date((parsed as { sortKey: string }).sortKey);
-    if (Number.isNaN(sortKey.getTime())) return null;
+    const sortKey = (parsed as { sortKey: string }).sortKey;
+    // Validate it's a real, parseable timestamp — but return the ORIGINAL
+    // string, not a `new Date(sortKey)` reconstruction, which would
+    // re-truncate any sub-millisecond precision right back out again.
+    if (Number.isNaN(new Date(sortKey).getTime())) return null;
     return { sortKey, id: (parsed as { id: string }).id };
   } catch {
     // Malformed/tampered cursor — same treatment as a cursor whose id no

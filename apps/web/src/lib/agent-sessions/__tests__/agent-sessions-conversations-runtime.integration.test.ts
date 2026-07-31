@@ -19,7 +19,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
+import { eq, sql } from '@pagespace/db/operators';
 import { pages, chatMessages } from '@pagespace/db/schema/core';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { factories } from '@pagespace/db/test/factories';
@@ -314,5 +314,56 @@ describe('listAllConversationsPaginated — cursor pagination is immune to concu
 
     const page2 = await listAllConversationsPaginated({ ownerId: owner.id }, { limit: 2, cursor });
     expect(page2.conversations.map((c) => c.conversationId)).toEqual([oldest]);
+  });
+
+  // Confirmed empirically against this real test DB before writing this test:
+  // drizzle's own query builder returns `sortKeyExpr` (a raw computed
+  // COALESCE/subquery expression, not a schema-mapped column) as a STRING
+  // with full microsecond precision, e.g. "2020-03-01 00:00:00.123456" —
+  // Postgres timestamps carry six fractional digits, a plain JS `Date` only
+  // three. `encodeCursor` previously round-tripped every sort key through
+  // `new Date(...).toISOString()` regardless, silently truncating two
+  // distinct sub-millisecond sort keys onto the identical encoded value
+  // (review finding).
+  it('two rows whose sort keys differ only below the millisecond are still paginated correctly, not collapsed onto one cursor', async () => {
+    if (!dbAvailable) return;
+
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const agentNewer = await factories.createPage(drive.id, { type: 'AI_CHAT' });
+    const agentOlder = await factories.createPage(drive.id, { type: 'AI_CHAT' });
+
+    const makeConversation = async (agentId: string) => {
+      const conversationId = createId();
+      await db.insert(conversations).values({
+        id: conversationId, userId: owner.id, type: 'page', contextId: agentId, title: null, isActive: true,
+      });
+      const messageId = createId();
+      await db.insert(chatMessages).values({
+        id: messageId, pageId: agentId, conversationId, role: 'user', content: 'hi', isActive: true,
+      });
+      return { conversationId, messageId };
+    };
+
+    // A plain JS `Date` (and drizzle's own `.values({ createdAt })` insert
+    // path) cannot express microseconds at all — raw SQL is the only way to
+    // actually seed the sub-millisecond difference this test needs.
+    const newer = await makeConversation(agentNewer.id);
+    const older = await makeConversation(agentOlder.id);
+    await db.execute(sql`UPDATE chat_messages SET "createdAt" = '2020-03-01 00:00:00.123456' WHERE id = ${newer.messageId}`);
+    await db.execute(sql`UPDATE chat_messages SET "createdAt" = '2020-03-01 00:00:00.123400' WHERE id = ${older.messageId}`);
+
+    const page1 = await listAllConversationsPaginated({ ownerId: owner.id }, { limit: 1 });
+    expect(page1.conversations.map((c) => c.conversationId)).toEqual([newer.conversationId]);
+    expect(page1.pagination.hasMore).toBe(true);
+    const cursor = page1.pagination.nextCursor!;
+
+    // With the pre-fix truncating cursor, both rows' sort keys collapse onto
+    // the exact same encoded millisecond, and the boundary comparison either
+    // re-admits `newer` (a duplicate) or drops `older` entirely, depending on
+    // how the id tie-breaker happens to land — never the single correct
+    // `[older]` this asserts.
+    const page2 = await listAllConversationsPaginated({ ownerId: owner.id }, { limit: 1, cursor });
+    expect(page2.conversations.map((c) => c.conversationId)).toEqual([older.conversationId]);
   });
 });
