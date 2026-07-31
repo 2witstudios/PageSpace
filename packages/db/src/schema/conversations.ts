@@ -1,6 +1,7 @@
 import { pgTable, text, timestamp, jsonb, boolean, index } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
+import { agentSessions } from './agent-sessions';
 import { createId } from '@paralleldrive/cuid2';
 
 /**
@@ -13,6 +14,23 @@ export const conversations = pgTable('conversations', {
   title: text('title'), // Auto-generated from first message or user-defined
   type: text('type').notNull(), // 'global' | 'page' | 'drive'
   contextId: text('contextId'), // null for global, pageId for page chats, driveId for drive chats
+  /**
+   * The agent session (working context / sandbox) this thread lives in, or
+   * NULL for a plain chat with no session. Set at creation and PERMANENT —
+   * a thread's history and its filesystem always agree; moving a thread to
+   * another session is a fork, never a rebind. ON DELETE SET NULL: deleting a
+   * session keeps its threads as plain history.
+   */
+  sessionId: text('sessionId').references(() => agentSessions.id, { onDelete: 'set null' }),
+  /**
+   * Stamped when this thread is closed OUT OF its session's listing — a fact
+   * separate from `isActive` (history soft-delete) on purpose: closing from
+   * the session must never touch history. NULL = open in the session's
+   * working set; set = closed from the listing (and, symmetrically, no
+   * longer counted against the session's conversation cap). Reopening is
+   * just clearing the stamp.
+   */
+  closedInSessionAt: timestamp('closedInSessionAt', { mode: 'date' }),
   lastMessageAt: timestamp('lastMessageAt', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
@@ -23,6 +41,7 @@ export const conversations = pgTable('conversations', {
   userTypeIdx: index('conversations_user_id_type_idx').on(table.userId, table.type),
   userLastMessageIdx: index('conversations_user_id_last_message_at_idx').on(table.userId, table.lastMessageAt),
   contextIdx: index('conversations_context_id_idx').on(table.contextId),
+  sessionIdx: index('conversations_session_id_idx').on(table.sessionId),
 }));
 
 /**
@@ -54,6 +73,10 @@ export const conversationsRelations = relations(conversations, ({ one, many }) =
   user: one(users, {
     fields: [conversations.userId],
     references: [users.id],
+  }),
+  session: one(agentSessions, {
+    fields: [conversations.sessionId],
+    references: [agentSessions.id],
   }),
   messages: many(messages),
 }));

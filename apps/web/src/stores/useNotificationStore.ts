@@ -198,7 +198,18 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
   cleanupSocketListeners: () => {
     const socket = useSocketStore.getState().getSocket();
     if (!socket) return;
-    
+
     socket.off('notification:new');
   },
 }));
+
+/**
+ * Refetches notifications when a "mark as read" API response (channel read,
+ * DM GET/PATCH) reports it actually cleared some — keeps the bell/dropdown in
+ * sync without every read-path re-deriving this same threshold check.
+ */
+export function refetchNotificationsIfMarkedRead(notificationsMarkedRead: number | undefined): void {
+  if (notificationsMarkedRead && notificationsMarkedRead > 0) {
+    void useNotificationStore.getState().fetchNotifications();
+  }
+}

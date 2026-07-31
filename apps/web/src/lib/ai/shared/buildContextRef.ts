@@ -1,4 +1,4 @@
-import { parseTabPath } from '@/lib/tabs/tab-title';
+import { parseTabPath, isDriveScopedPath } from '@/lib/tabs/tab-title';
 import type { DriveEntry } from './resolveLocationContext';
 
 export type ContextRefRouteType = 'page' | 'channel' | 'drive' | 'dm' | 'other';
@@ -35,11 +35,17 @@ export const buildContextRef = (pathname: string, drives: DriveEntry[]): Context
       return { routeType: 'page', pageId: parsed.pageId, driveId: knownDriveId(parsed.driveId) };
     case 'channel':
       return { routeType: 'channel', pageId: parsed.pageId };
-    case 'drive':
-      return { routeType: 'drive', driveId: knownDriveId(parsed.driveId) };
     case 'dm':
       return { routeType: 'dm', dmConversationId: parsed.conversationId };
     default:
+      // Every drive-LEVEL route resolves as 'drive' — the bare
+      // /dashboard/[driveId] and its sub-routes (tasks, members, settings, …)
+      // alike. Previously only the bare route did and the rest fell through to
+      // 'other', so the assistant lost the workspace the user was plainly
+      // standing in and "put this here" landed in their Home drive instead.
+      if (isDriveScopedPath(parsed)) {
+        return { routeType: 'drive', driveId: knownDriveId(parsed.driveId) };
+      }
       return { routeType: 'other' };
   }
 };

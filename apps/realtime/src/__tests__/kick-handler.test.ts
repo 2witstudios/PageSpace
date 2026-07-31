@@ -1,6 +1,5 @@
 /**
- * Kick Handler Tests - executeKick, handleKickRequest, roomMatchesPattern,
- * getRoomsForDriveKick, getRoomsForPageKick
+ * Kick Handler Tests - executeKick, handleKickRequest, roomMatchesPattern
  *
  * Tests the core execution logic of the kick handler including Socket.IO
  * room removal and request processing.
@@ -38,8 +37,6 @@ import {
   executeKick,
   handleKickRequest,
   roomMatchesPattern,
-  getRoomsForDriveKick,
-  getRoomsForPageKick,
   type KickPayload,
 } from '../kick-handler';
 import { socketRegistry } from '../socket-registry';
@@ -71,69 +68,12 @@ describe('roomMatchesPattern', () => {
     expect(roomMatchesPattern('drive:abc123', 'drive:xyz456')).toBe(false);
   });
 
-  it('given wildcard pattern drive:*, should match any drive room', () => {
-    expect(roomMatchesPattern('drive:abc123', 'drive:*')).toBe(true);
-    expect(roomMatchesPattern('drive:xyz456', 'drive:*')).toBe(true);
-  });
-
-  it('given wildcard pattern drive:*, should not match non-drive rooms', () => {
-    expect(roomMatchesPattern('page:abc123', 'drive:*')).toBe(false);
-    expect(roomMatchesPattern('activity:drive:abc123', 'drive:*')).toBe(false);
-  });
-
-  it('given wildcard pattern activity:drive:*, should match activity drive rooms', () => {
-    expect(roomMatchesPattern('activity:drive:abc123', 'activity:drive:*')).toBe(true);
-  });
-
-  it('given wildcard pattern, prefix before * must match start of room', () => {
-    // 'drive:abc'.startsWith('dri') is true, so this correctly matches
-    expect(roomMatchesPattern('drive:abc', 'dri*')).toBe(true);
-    // 'driveabc' does not start with 'drive:' (no colon)
-    expect(roomMatchesPattern('driveabc', 'drive:*')).toBe(false);
-  });
-
   it('given empty string pattern, should not match non-empty room', () => {
     expect(roomMatchesPattern('drive:abc', '')).toBe(false);
   });
 
   it('given identical strings, should match', () => {
     expect(roomMatchesPattern('notifications:user-1', 'notifications:user-1')).toBe(true);
-  });
-});
-
-describe('getRoomsForDriveKick', () => {
-  it('given a driveId, should return all three drive-related rooms', () => {
-    const rooms = getRoomsForDriveKick('drive-abc');
-    expect(rooms).toEqual([
-      'drive:drive-abc',
-      'drive:drive-abc:calendar',
-      'activity:drive:drive-abc',
-    ]);
-  });
-
-  it('given different driveId, should use it consistently', () => {
-    const rooms = getRoomsForDriveKick('xyz789');
-    expect(rooms).toContain('drive:xyz789');
-    expect(rooms).toContain('drive:xyz789:calendar');
-    expect(rooms).toContain('activity:drive:xyz789');
-    expect(rooms).toHaveLength(3);
-  });
-});
-
-describe('getRoomsForPageKick', () => {
-  it('given a pageId, should return the page room and activity page room', () => {
-    const rooms = getRoomsForPageKick('page-abc');
-    expect(rooms).toEqual([
-      'page-abc',
-      'activity:page:page-abc',
-    ]);
-  });
-
-  it('given different pageId, should use it consistently', () => {
-    const rooms = getRoomsForPageKick('xyz789');
-    expect(rooms).toContain('xyz789');
-    expect(rooms).toContain('activity:page:xyz789');
-    expect(rooms).toHaveLength(2);
   });
 });
 
@@ -189,7 +129,7 @@ describe('executeKick', () => {
     expect(mockedRegistry.trackRoomLeave).toHaveBeenCalledWith('socket-1', 'drive:drive-abc');
   });
 
-  it('given wildcard pattern, should kick from all matching rooms', () => {
+  it('given socket in several rooms, should only kick the one matching exactly', () => {
     const mockSocket = createMockSocket();
     const socketMap = new Map([['socket-1', mockSocket]]);
     mockedRegistry.getSocketsForUser.mockReturnValue(['socket-1']);
@@ -202,7 +142,7 @@ describe('executeKick', () => {
 
     const payload: KickPayload = {
       userId: 'user-1',
-      roomPattern: 'drive:*',
+      roomPattern: 'drive:drive-abc',
       reason: 'role_changed',
     };
 
@@ -210,11 +150,8 @@ describe('executeKick', () => {
     const result = executeKick(io, payload);
 
     expect(result.success).toBe(true);
-    expect(result.kickedCount).toBe(2);
-    expect(result.rooms).toContain('drive:drive-abc');
-    expect(result.rooms).toContain('drive:drive-abc:calendar');
-    expect(result.rooms).not.toContain('notifications:user-1');
-    expect(result.rooms).not.toContain('activity:drive:drive-abc');
+    expect(result.kickedCount).toBe(1);
+    expect(result.rooms).toEqual(['drive:drive-abc']);
   });
 
   it('given socket not found in Socket.IO (stale), should skip it', () => {
@@ -225,7 +162,7 @@ describe('executeKick', () => {
 
     const payload: KickPayload = {
       userId: 'user-1',
-      roomPattern: 'drive:*',
+      roomPattern: 'drive:abc',
       reason: 'permission_revoked',
     };
 
@@ -236,7 +173,7 @@ describe('executeKick', () => {
     expect(result.kickedCount).toBe(0);
   });
 
-  it('given user with multiple sockets, should kick from rooms across all sockets', () => {
+  it('given user with multiple sockets in the same room, should kick from rooms across all sockets', () => {
     const mockSocket1 = createMockSocket();
     const mockSocket2 = createMockSocket();
     const socketMap = new Map([
@@ -251,7 +188,7 @@ describe('executeKick', () => {
 
     const payload: KickPayload = {
       userId: 'user-multi',
-      roomPattern: 'drive:*',
+      roomPattern: 'drive:drive-xyz',
       reason: 'session_revoked',
     };
 
@@ -259,12 +196,12 @@ describe('executeKick', () => {
     const result = executeKick(io, payload);
 
     expect(result.success).toBe(true);
-    // socket-1 leaves drive:drive-xyz (1 kick)
-    // socket-2 leaves drive:drive-xyz and drive:drive-xyz:calendar (2 kicks)
-    expect(result.kickedCount).toBe(3);
-    // unique rooms
-    expect(result.rooms).toContain('drive:drive-xyz');
-    expect(result.rooms).toContain('drive:drive-xyz:calendar');
+    // socket-1 leaves drive:drive-xyz (1 kick); socket-2 leaves drive:drive-xyz
+    // (1 kick) but keeps drive:drive-xyz:calendar (doesn't match exactly).
+    expect(result.kickedCount).toBe(2);
+    expect(result.rooms).toEqual(['drive:drive-xyz']);
+    expect(mockSocket2.leave).toHaveBeenCalledWith('drive:drive-xyz');
+    expect(mockSocket2.leave).not.toHaveBeenCalledWith('drive:drive-xyz:calendar');
   });
 
   it('given no rooms match pattern, should return 0 kicks', () => {

@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createSandboxGitTools, SANDBOX_GIT_TOOL_NAMES } from '../sandbox-git-tools';
 import type { GitSandboxToolsDeps } from '../sandbox-git-tools';
-import type { MachineNodeHandle, MachineNodeHandleSet } from '@pagespace/lib/services/machines/machine-pane-binding';
 
 const mockRun = vi.fn();
 
@@ -10,7 +9,7 @@ function makeDeps(token: string | null = 'ghp_test'): GitSandboxToolsDeps {
   return {
     gitRunDeps: {
       isEnabled: () => true,
-      acquireSandbox: vi.fn().mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+      acquireSandbox: vi.fn().mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' }),
       reconnect: vi.fn().mockResolvedValue({
         sandboxId: 'sbx-1',
         spriteInstanceId: null,
@@ -36,11 +35,6 @@ function makeDeps(token: string | null = 'ghp_test'): GitSandboxToolsDeps {
       actorEmail: 'u@test.com', tier: 'pro',
     }),
     gate: vi.fn().mockResolvedValue({ ok: true }),
-    machines: {
-      listMachines: vi.fn().mockResolvedValue([{ kind: 'own' }]),
-      describeMachine: vi.fn().mockResolvedValue({ name: 'My Machine' }),
-      isMachineAccessible: vi.fn().mockResolvedValue({ allowed: true }),
-    },
     _runCommandCalls: runCommandCalls,
   } as unknown as GitSandboxToolsDeps & { _runCommandCalls: typeof runCommandCalls };
 }
@@ -1467,51 +1461,72 @@ describe('cwd threading', () => {
   });
 });
 
-// ── active machine access ───────────────────────────────────────────────────
+// ── context resolution & gate (session-anchored open) ──────────────────────
 
-describe('active machine access', () => {
-  it('git_status: given the resolved active machine is no longer accessible, should deny without acquiring a sandbox', async () => {
+describe('context resolution and gate', () => {
+  it('returns the context-resolution error without invoking the runner', async () => {
     const deps = makeDeps();
-    deps.machines.listMachines = vi.fn().mockResolvedValue([{ kind: 'existing', machineId: 't1' }]);
-    deps.machines.isMachineAccessible = vi.fn().mockResolvedValue({ allowed: false });
+    vi.mocked(deps.resolveContext).mockResolvedValue({ error: 'No sandbox context available.' });
     const { git_status } = createSandboxGitTools(deps);
     const result = await git_status.execute!({}, {} as never);
-    expect(result).toMatchObject({ success: false });
+    expect(result).toEqual({ success: false, error: 'No sandbox context available.' });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+    expect(mockRun).not.toHaveBeenCalled();
+  });
+
+  it('gate denial short-circuits a local tool without invoking the runner', async () => {
+    const deps = makeDeps();
+    vi.mocked(deps.gate).mockResolvedValue({
+      ok: false,
+      reason: 'no_drive_access',
+      error: 'Code execution is not permitted here.',
+    });
+    const { git_status } = createSandboxGitTools(deps);
+    const result = await git_status.execute!({}, {} as never);
+    expect(result).toEqual({ success: false, error: 'Code execution is not permitted here.' });
+    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
+    expect(mockRun).not.toHaveBeenCalled();
+  });
+
+  it('gate denial short-circuits a remote tool before the token lookup', async () => {
+    const deps = makeDeps();
+    vi.mocked(deps.gate).mockResolvedValue({ ok: false, reason: 'no_drive_access', error: 'denied' });
+    const { git_push } = createSandboxGitTools(deps);
+    const result = await git_push.execute!({}, {} as never);
+    expect(result).toEqual({ success: false, error: 'denied' });
+    expect(deps.gitRunDeps.resolveGitHubToken).not.toHaveBeenCalled();
     expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
   });
 
-  it('git_status: given no configured machines (machineAccess off), should deny instead of falling back to the own machine', async () => {
-    const deps = makeDeps();
-    // createMachineDirectory.listMachines returns [] exactly when machineAccess
-    // is off — this must deny the call, not silently resolve to { kind: 'own' }
-    // (which used to key an implicit persistent machine off the agent's own
-    // page, bypassing the machineAccess gate entirely).
-    deps.machines.listMachines = vi.fn().mockResolvedValue([]);
-    const { git_status } = createSandboxGitTools(deps);
-    const result = await git_status.execute!({}, {} as never);
-    expect(result).toMatchObject({ success: false });
-    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
-  });
-
-  it('git_status: given machines has no resolveDriveId/resolveTenantId, should use the ambient ctx.driveId/tenantId unchanged', async () => {
+  it('threads the resolved actor context into acquireSandbox unchanged', async () => {
     const deps = makeDeps();
     const { git_status } = createSandboxGitTools(deps);
     await git_status.execute!({}, {} as never);
     expect(deps.gitRunDeps.acquireSandbox).toHaveBeenCalledWith(
-      expect.objectContaining({ driveId: 'd1', tenantId: 't1' }),
+      expect.objectContaining({ driveId: 'd1', tenantId: 't1', conversationId: 'c1' }),
     );
   });
+});
 
-  it('git_status: given machines provides resolveDriveId/resolveTenantId (existing machine in another drive), should override both — mirroring sandbox-tools.ts so git tools attach to the same session as bash/file tools', async () => {
-    const deps = makeDeps();
-    deps.machines.listMachines = vi.fn().mockResolvedValue([{ kind: 'existing', machineId: 't1' }]);
-    deps.machines.resolveDriveId = vi.fn().mockResolvedValue('home-drive-1');
-    deps.machines.resolveTenantId = vi.fn().mockResolvedValue('real-drive-owner');
+// ── seam selection & token pre-resolution ───────────────────────────────────
+
+describe('seam selection and token pre-resolution', () => {
+  it('a local tool still runs when no GitHub token exists (local seam, no pre-check)', async () => {
+    const deps = makeDeps(null);
     const { git_status } = createSandboxGitTools(deps);
-    await git_status.execute!({}, {} as never);
-    expect(deps.gitRunDeps.acquireSandbox).toHaveBeenCalledWith(
-      expect.objectContaining({ driveId: 'home-drive-1', tenantId: 'real-drive-owner' }),
-    );
+    const result = await git_status.execute!({}, {} as never);
+    expect(result).toMatchObject({ success: true });
+    expect(getRunCalls(deps)[0].cmd).toBe('git');
+  });
+
+  it('a remote tool resolves the token exactly once and passes it pre-resolved to the runner', async () => {
+    const deps = makeDeps('ghp_test');
+    const { git_push } = createSandboxGitTools(deps);
+    await git_push.execute!({}, {} as never);
+    expect(deps.gitRunDeps.resolveGitHubToken).toHaveBeenCalledTimes(1);
+    const calls = getRunCalls(deps);
+    expect(calls[0].env.GH_TOKEN).toBe('ghp_test');
+    expect(calls[0].env.GITHUB_TOKEN).toBe('ghp_test');
   });
 });
 
@@ -1574,114 +1589,6 @@ describe('createSandboxGitTools', () => {
     for (const call of calls) {
       expect(call.cmd).not.toBe('sh');
       expect(call.args[0]).not.toBe('-c');
-    }
-  });
-});
-
-// ── machine-pane binding: node scope + target addressing ───────────────────
-//
-// git ran at the machine root for EVERY bound conversation, branch or not: the
-// git open() never threaded the binding's cwd or its branchSandbox onto the
-// actor ctx, so a branch-bound pane's `git status` silently reported the
-// machine checkout. These pin both halves plus target addressing, which the
-// generator wires into all 56 tools at once.
-
-describe('machine-pane binding (git)', () => {
-  const MACHINE: MachineNodeHandle = { kind: 'machine', machineId: 'm1', cwd: '/workspace' };
-  const PROJECT: MachineNodeHandle = {
-    kind: 'project',
-    machineId: 'm1',
-    project: 'repo',
-    cwd: '/workspace/projects/repo',
-  };
-  const BRANCH: MachineNodeHandle = {
-    kind: 'branch',
-    machineId: 'm1',
-    project: 'repo',
-    branch: 'feature',
-    cwd: '/workspace/repo',
-    branchSandbox: { machineBranchId: 'branch-1', sandboxId: 'sbx-1' },
-  };
-  const machineRootBinding: MachineNodeHandleSet = { self: MACHINE, handles: [MACHINE, PROJECT, BRANCH] };
-  const branchBinding: MachineNodeHandleSet = { self: BRANCH, handles: [BRANCH] };
-
-  function ctxOf(machineBinding: MachineNodeHandleSet) {
-    return { experimental_context: { userId: 'u1', machineBinding } } as never;
-  }
-
-  it('given a branch-bound conversation, should acquire the BRANCH Sprite — not the machine root', async () => {
-    const deps = makeDeps();
-    const { git_status } = createSandboxGitTools(deps);
-    await git_status.execute!({}, ctxOf(branchBinding));
-    expect(deps.gitRunDeps.acquireSandbox).toHaveBeenCalledWith(
-      expect.objectContaining({ branchSandbox: { machineId: 'm1', machineBranchId: 'branch-1' } }),
-    );
-  });
-
-  it('given a branch-bound conversation and no explicit cwd, should run in the branch checkout', async () => {
-    const deps = makeDeps();
-    const { git_status } = createSandboxGitTools(deps);
-    await git_status.execute!({}, ctxOf(branchBinding));
-    expect(getRunCalls(deps)[0]).toMatchObject({ cwd: '/workspace/repo' });
-  });
-
-  it('given an unbound conversation, should carry no branchSandbox (unchanged behaviour)', async () => {
-    const deps = makeDeps();
-    const { git_status } = createSandboxGitTools(deps);
-    await git_status.execute!({}, {} as never);
-    expect(deps.gitRunDeps.acquireSandbox).toHaveBeenCalledWith(
-      expect.objectContaining({ branchSandbox: undefined }),
-    );
-  });
-
-  it('given target { project }, should run at the project checkout on the machine Sprite', async () => {
-    const deps = makeDeps();
-    const { git_status } = createSandboxGitTools(deps);
-    await git_status.execute!({ target: { project: 'repo' } }, ctxOf(machineRootBinding));
-    expect(getRunCalls(deps)[0]).toMatchObject({ cwd: '/workspace/projects/repo' });
-    expect(deps.gitRunDeps.acquireSandbox).toHaveBeenCalledWith(
-      expect.objectContaining({ branchSandbox: undefined }),
-    );
-  });
-
-  it('given target { branch }, should route to the branch Sprite (token path too)', async () => {
-    const deps = makeDeps();
-    const { gh_pr_list } = createSandboxGitTools(deps);
-    await gh_pr_list.execute!({ target: { project: 'repo', branch: 'feature' } }, ctxOf(machineRootBinding));
-    expect(deps.gitRunDeps.acquireSandbox).toHaveBeenCalledWith(
-      expect.objectContaining({ branchSandbox: { machineId: 'm1', machineBranchId: 'branch-1' } }),
-    );
-  });
-
-  it('given an explicit cwd alongside a target, the explicit cwd should still win', async () => {
-    const deps = makeDeps();
-    const { git_status } = createSandboxGitTools(deps);
-    await git_status.execute!({ cwd: 'sub', target: { project: 'repo' } }, ctxOf(machineRootBinding));
-    expect(getRunCalls(deps)[0]).toMatchObject({ cwd: '/workspace/sub' });
-  });
-
-  it('given a target outside the derived set, should deny without acquiring a sandbox', async () => {
-    const deps = makeDeps();
-    const { git_status } = createSandboxGitTools(deps);
-    const result = await git_status.execute!({ target: { project: 'sibling' } }, ctxOf(branchBinding));
-    expect(result).toMatchObject({ success: false });
-    expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
-  });
-
-  // Every row's schema is strict, so an unknown key is reported as
-  // `unrecognized_keys`. `target` must never be reported that way — for any of
-  // the 56 tools, whatever else their own required fields say.
-  it('every git tool should recognize an optional target (one generator change, all 56)', () => {
-    const tools = createSandboxGitTools(makeDeps());
-    for (const [name, t] of Object.entries(tools)) {
-      const schema = t.inputSchema as unknown as {
-        safeParse: (v: unknown) => { success: boolean; error?: { issues: Array<{ code: string; keys?: string[] }> } };
-      };
-      const parsed = schema.safeParse({ target: { project: 'repo' } });
-      const rejectedTarget = (parsed.error?.issues ?? []).some(
-        (issue) => issue.code === 'unrecognized_keys' && (issue.keys ?? []).includes('target'),
-      );
-      expect(rejectedTarget, `${name} should recognize target`).toBe(false);
     }
   });
 });

@@ -561,7 +561,7 @@ describe('GET /api/drives/[driveId]/agents', () => {
       expect(body.nextSteps).toEqual([
         'No agents found - consider creating one',
         'Use update_agent_config to modify agent settings',
-        'Use ask_agent to consult with specific agents',
+        'Use spawn_session (with the agent id as `agent`) to delegate to specific agents',
         'Drive: Drive (drive_abc)',
       ]);
     });

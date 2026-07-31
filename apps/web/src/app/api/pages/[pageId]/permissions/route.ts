@@ -14,7 +14,7 @@ import { permissionManagementService, rolePermissionService } from '@/services/a
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
-import { kickUserFromPage, kickUserFromPageActivity, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -204,11 +204,9 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
 
       auditRequest(req, { eventType: 'authz.permission.revoked', userId: ctx.userId, resourceType: 'page', resourceId: pageId, details: { targetUserId } });
 
-      // CRITICAL: Kick user from real-time rooms immediately (zero-trust revocation)
-      await Promise.all([
-        kickUserFromPage(pageId, targetUserId, 'permission_revoked'),
-        kickUserFromPageActivity(pageId, targetUserId, 'permission_revoked'),
-      ]);
+      // Kick from real-time rooms: revokePagePermission (#2158) already
+      // triggers this itself via kickForPagePermissionRevocation, centralized
+      // at the permission-mutation layer so no caller has to remember it.
     }
 
     return NextResponse.json({ success: true });

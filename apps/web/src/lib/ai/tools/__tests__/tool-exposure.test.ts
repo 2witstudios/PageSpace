@@ -1,7 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import type { Tool, ToolSet } from 'ai';
-import { applyToolExposureMode } from '../tool-exposure';
+import {
+  applyToolExposureMode,
+  splitToolsForExposure,
+  excludeAlwaysUpfront,
+  ALWAYS_UPFRONT_TOOLS,
+} from '../tool-exposure';
+import { CORE_TOOL_NAMES } from '../../core/stub-tools';
 
 // A minimal but real tool definition (matches the AI SDK Tool shape closely enough
 // for the catalog/dispatch logic under test).
@@ -22,6 +28,161 @@ function sampleTools(): ToolSet {
     create_calendar_event: makeTool('Create a calendar event'), // non-core
   } as ToolSet;
 }
+
+describe('ALWAYS_UPFRONT_TOOLS', () => {
+  it('covers exactly the tools that bypass the agent allowlist on the way in', () => {
+    // One shared set, imported by api/ai/chat and api/ai/global/[id]/messages, so a new
+    // allowlist-bypassing override cannot be wired into one route and forgotten in the
+    // other. Membership is NOT "shares a composer toggle" — it is "re-added after
+    // filterToolsForAgentAllowlist", which is what makes execute_tool's re-check reject
+    // it if deferred. web_fetch shares the web-search toggle but has no such bypass, so
+    // it is correctly absent. See the constant's doc comment.
+    expect([...ALWAYS_UPFRONT_TOOLS].sort()).toEqual(['generate_image', 'web_search']);
+    expect(ALWAYS_UPFRONT_TOOLS.has('web_fetch')).toBe(false);
+  });
+
+  it('promotes its members past the core-only split', () => {
+    const tools: ToolSet = {
+      read_page: makeTool('Read a page'),
+      generate_image: makeTool('Generate an image'),
+      web_search: makeTool('Search the web'),
+      list_agents: makeTool('List agents'),
+    } as ToolSet;
+
+    const { coreTools, nonCoreTools } = splitToolsForExposure(tools, ALWAYS_UPFRONT_TOOLS);
+
+    for (const name of ALWAYS_UPFRONT_TOOLS) {
+      expect(coreTools[name], `${name} must be directly callable`).toBeDefined();
+      expect(nonCoreTools[name]).toBeUndefined();
+    }
+  });
+});
+
+describe('splitToolsForExposure', () => {
+  it('keeps always-upfront tools alongside core tools, deferring only the rest', () => {
+    // The Global Assistant bug: generate_image/web_search were advertised by name in
+    // the system prompt but only ever reachable via execute_tool, so a direct call
+    // was rejected as an unknown tool. They must land in coreTools.
+    const tools: ToolSet = {
+      generate_image: makeTool('Generate an image'),
+      web_search: makeTool('Search the web'),
+      read_page: makeTool('Read a page'), // core
+      list_agents: makeTool('List agents'), // non-core
+    } as ToolSet;
+
+    const { coreTools, nonCoreTools } = splitToolsForExposure(
+      tools,
+      new Set(['web_search', 'generate_image'])
+    );
+
+    expect(Object.keys(coreTools).sort()).toEqual(['generate_image', 'read_page', 'web_search']);
+    expect(Object.keys(nonCoreTools)).toEqual(['list_agents']);
+    // The tool values are passed through untouched.
+    expect(coreTools.generate_image).toBe(tools.generate_image);
+    expect(nonCoreTools.list_agents).toBe(tools.list_agents);
+  });
+
+  it('falls back to CORE_TOOL_NAMES-only behaviour for an empty or omitted alwaysUpfront', () => {
+    const tools = sampleTools();
+    const expectedCore = Object.keys(tools).filter((n) => CORE_TOOL_NAMES.has(n));
+    const expectedNonCore = Object.keys(tools).filter((n) => !CORE_TOOL_NAMES.has(n));
+
+    const withEmptySet = splitToolsForExposure(tools, new Set());
+    const withDefault = splitToolsForExposure(tools);
+
+    for (const result of [withEmptySet, withDefault]) {
+      expect(Object.keys(result.coreTools)).toEqual(expectedCore);
+      expect(Object.keys(result.nonCoreTools)).toEqual(expectedNonCore);
+    }
+  });
+
+  it('returns two empty objects for an empty tool set', () => {
+    const { coreTools, nonCoreTools } = splitToolsForExposure({} as ToolSet, new Set(['web_search']));
+
+    expect(coreTools).toEqual({});
+    expect(nonCoreTools).toEqual({});
+  });
+
+  it('does not duplicate or drop a tool that is both core and always-upfront', () => {
+    const tools: ToolSet = {
+      read_page: makeTool('Read a page'), // core AND named in alwaysUpfront
+      list_agents: makeTool('List agents'), // non-core
+    } as ToolSet;
+
+    const { coreTools, nonCoreTools } = splitToolsForExposure(tools, new Set(['read_page']));
+
+    expect(Object.keys(coreTools)).toEqual(['read_page']);
+    expect(Object.keys(nonCoreTools)).toEqual(['list_agents']);
+  });
+
+  it('never places the same tool in both halves', () => {
+    const tools: ToolSet = {
+      read_page: makeTool('Read a page'),
+      web_search: makeTool('Search the web'),
+      list_agents: makeTool('List agents'),
+    } as ToolSet;
+
+    const { coreTools, nonCoreTools } = splitToolsForExposure(tools, new Set(['web_search']));
+
+    const coreNames = Object.keys(coreTools);
+    const nonCoreNames = Object.keys(nonCoreTools);
+    expect(coreNames.filter((n) => nonCoreNames.includes(n))).toEqual([]);
+    expect([...coreNames, ...nonCoreNames].sort()).toEqual(Object.keys(tools).sort());
+  });
+});
+
+describe('excludeAlwaysUpfront', () => {
+  it('omits always-upfront tools so they are never discovered as execute_tool targets', () => {
+    // TOOL_DISCOVERY_PROMPT tells the model to run anything it discovers via
+    // execute_tool. An always-upfront tool is NOT in execute_tool's dispatch map,
+    // so leaving it in the searchable catalog invites a dead-end call — the same
+    // "advertised but not callable" failure this module exists to prevent.
+    const tools: ToolSet = {
+      read_page: makeTool('Read a page'), // core
+      generate_image: makeTool('Generate an image'), // always-upfront
+      web_search: makeTool('Search the web'), // always-upfront
+      list_agents: makeTool('List agents'), // non-core
+    } as ToolSet;
+
+    const catalog = excludeAlwaysUpfront(tools, new Set(['web_search', 'generate_image']));
+
+    expect(Object.keys(catalog).sort()).toEqual(['list_agents', 'read_page']);
+  });
+
+  it('returns the full set for an empty or omitted alwaysUpfront', () => {
+    const tools = sampleTools();
+
+    expect(Object.keys(excludeAlwaysUpfront(tools, new Set()))).toEqual(Object.keys(tools));
+    expect(Object.keys(excludeAlwaysUpfront(tools))).toEqual(Object.keys(tools));
+  });
+
+  it('returns an empty catalog for an empty tool set', () => {
+    expect(excludeAlwaysUpfront({} as ToolSet, new Set(['web_search']))).toEqual({});
+  });
+
+  it('never surfaces a tool that is absent from the execute_tool dispatch map', () => {
+    // Ties the two halves together: everything left in the catalog must be either a
+    // core tool (callable directly) or present in nonCoreTools (callable via
+    // execute_tool). Nothing may be discoverable yet unreachable.
+    const tools: ToolSet = {
+      read_page: makeTool('Read a page'),
+      generate_image: makeTool('Generate an image'),
+      list_agents: makeTool('List agents'),
+    } as ToolSet;
+    const alwaysUpfront = new Set(['generate_image']);
+
+    const { coreTools, nonCoreTools } = splitToolsForExposure(tools, alwaysUpfront);
+    const catalog = excludeAlwaysUpfront(tools, alwaysUpfront);
+
+    for (const name of Object.keys(catalog)) {
+      const reachable = CORE_TOOL_NAMES.has(name) || name in nonCoreTools;
+      expect(reachable, `${name} is searchable but unreachable`).toBe(true);
+    }
+    // generate_image stays reachable — directly, as a top-level tool.
+    expect(coreTools.generate_image).toBeDefined();
+    expect(catalog.generate_image).toBeUndefined();
+  });
+});
 
 describe('applyToolExposureMode', () => {
   describe('upfront mode', () => {
@@ -211,6 +372,23 @@ describe('applyToolExposureMode', () => {
       expect(result.tools).toBe(tools);
       expect(result.toolDiscoveryPrompt).toBe('');
       expect(result.tools.tool_search).toBeUndefined();
+    });
+
+    it('threads the skill corpus into tool_search (search mode)', async () => {
+      const tools: ToolSet = {
+        read_page: makeTool('Read a page'),
+        send_channel_message: makeTool('Send a channel message'),
+      } as ToolSet;
+
+      const result = applyToolExposureMode(tools, 'search', new Set(), [
+        { name: 'canvas-websites', description: 'Builds websites on CANVAS pages.' },
+      ]);
+
+      const searchResult = (await result.tools.tool_search!.execute!(
+        { query: 'websites' },
+        {} as never
+      )) as { skills?: Array<{ name: string }> };
+      expect(searchResult.skills?.map((s) => s.name)).toEqual(['canvas-websites']);
     });
   });
 });

@@ -3,7 +3,6 @@ import {
   TASK_LIST_TYPE,
   shouldHaveTaskItem,
   resolveTaskItemSyncAction,
-  nextTaskItemPosition,
   buildTaskItemInsert,
   selectMissingTaskItemPageIds,
 } from '../task-membership';
@@ -49,9 +48,22 @@ describe('resolveTaskItemSyncAction', () => {
     ).toEqual({ shouldRemove: false, shouldAdd: false });
   });
 
-  it('removes and adds when moving between two TASK_LIST parents', () => {
-    expect(resolveTaskItemSyncAction(base)).toEqual({ shouldRemove: true, shouldAdd: true });
+  // Previously asserted { shouldRemove: true, shouldAdd: true }. That expectation
+  // encoded silent data loss: the remove cascades task_assignees away and the
+  // re-add inserts bare defaults, so dragging a task between two lists wiped its
+  // status, priority, due date, metadata and assignees. The row is keyed by pageId
+  // and carries no list pointer, so it was valid under the new parent all along.
+  it('preserves the existing row when moving between two TASK_LIST parents', () => {
+    expect(resolveTaskItemSyncAction(base)).toEqual({ shouldRemove: false, shouldAdd: true });
   });
+
+  // shouldAdd stays true on that path so the destination still gets its task_lists
+  // row and default status configs seeded; addTaskItemUnderParent returns early when
+  // a row already exists, so nothing is overwritten.
+  it('still signals add on a list-to-list move, so the destination list is seeded', () => {
+    expect(resolveTaskItemSyncAction(base).shouldAdd).toBe(true);
+  });
+
 
   it('only adds when moving from a non-TASK_LIST parent into a TASK_LIST parent', () => {
     expect(
@@ -78,34 +90,20 @@ describe('resolveTaskItemSyncAction', () => {
   });
 });
 
-describe('nextTaskItemPosition', () => {
-  it('places a new item after the last child', () => {
-    expect(nextTaskItemPosition(4)).toBe(5);
-  });
-
-  it('defaults to slot 1 when there is no last child', () => {
-    expect(nextTaskItemPosition(null)).toBe(1);
-    expect(nextTaskItemPosition(undefined)).toBe(1);
-  });
-});
-
 describe('buildTaskItemInsert', () => {
-  it('builds a pending/medium row positioned after the last child', () => {
+  it('builds a pending/medium row', () => {
     expect(
-      buildTaskItemInsert({ pageId: 'p1', userId: 'u1', lastChildPosition: 2 }),
+      buildTaskItemInsert({ pageId: 'p1', userId: 'u1' }),
     ).toEqual({
       userId: 'u1',
       pageId: 'p1',
       status: 'pending',
       priority: 'medium',
-      position: 3,
     });
   });
 
-  it('positions at slot 1 for an empty parent', () => {
-    expect(
-      buildTaskItemInsert({ pageId: 'p1', userId: 'u1', lastChildPosition: null }),
-    ).toMatchObject({ position: 1 });
+  it('carries no position — ordering lives on the linked page (#2143)', () => {
+    expect(buildTaskItemInsert({ pageId: 'p1', userId: 'u1' })).not.toHaveProperty('position');
   });
 });
 

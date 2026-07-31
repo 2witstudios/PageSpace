@@ -22,7 +22,7 @@ import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factor
 import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
 import { sanitizeMessagesForModel, saveMessageToDatabase, extractMessageContent, convertDbMessageToUIMessage, extractToolResults } from '@/lib/ai/core/message-utils';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import { filterToolsForReadOnly, filterToolsForMcpScope, filterToolsForImageGen } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForReadOnly, filterToolsForMcpScope, filterToolsForImageGen, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
 import { getModelCapabilities, hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { hasFileParts, validateUserMessageFileParts } from '@/lib/ai/core/validate-image-parts';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
@@ -289,6 +289,8 @@ export async function POST(request: Request): Promise<Response> {
               Object.entries(baseTools).filter(([name]) => agentEnabledTools.includes(name)),
             ) as ToolSet)
           : (baseTools as ToolSet);
+      // The per-agent sandbox switch — same gate the chat route applies.
+      filteredTools = filterToolsForSandboxEnablement(filteredTools, Boolean(page.sandboxEnabled)) as ToolSet;
       const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
       filteredTools = exposure.tools;
       toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
@@ -310,6 +312,8 @@ export async function POST(request: Request): Promise<Response> {
               Object.entries(baseTools).filter(([name]) => agentEnabledTools.includes(name)),
             ) as ToolSet)
           : (baseTools as ToolSet);
+      // The per-agent sandbox switch — same gate the chat route applies.
+      filteredTools = filterToolsForSandboxEnablement(filteredTools, Boolean(page.sandboxEnabled)) as ToolSet;
       const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
       filteredTools = exposure.tools;
       toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;

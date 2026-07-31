@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation';
 import Sidebar, { type SidebarProps } from './index';
 import DMSidebar from './DMSidebar';
 import ChannelsSidebar from './ChannelsSidebar';
-import DevelopmentSidebar from './DevelopmentSidebar';
+import AgentsSidebar from './AgentsSidebar';
 import { resolveSidebarVariant } from './sidebar-routes';
 
 /**
@@ -24,8 +24,8 @@ const MemoizedSidebar = memo((props: SidebarProps) => {
       return <DMSidebar {...props} />;
     case 'channels':
       return <ChannelsSidebar {...props} />;
-    case 'development':
-      return <DevelopmentSidebar {...props} />;
+    case 'agents':
+      return <AgentsSidebar {...props} />;
     case 'default':
       return <Sidebar {...props} />;
   }

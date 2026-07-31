@@ -11,6 +11,7 @@ import {
   getAgentAccessLevel,
   getAgentAccessiblePagesInDrive,
   hasAgentDriveMembership,
+  hasAgentDriveAdminRole,
 } from '@pagespace/lib/permissions/agent-permissions';
 import {
   getAppAccessLevel,
@@ -71,14 +72,14 @@ async function fetchActingPageRow(agentPageId: string) {
  * chatter's reach, never its owner's.
  *
  * "Not a page-agent" is a claim about the PAGE, not just about whether a
- * chatSource carries an id: a machine-pane conversation carries the MACHINE
- * page as agentPageId (api/ai/chat/route.ts sets it for every page chat), and a
+ * chatSource carries an id: a chat on any non-AI_CHAT page carries THAT page
+ * as agentPageId (api/ai/chat/route.ts sets it for every page chat), and a
  * non-agent page must not be treated as an acting agent — no driveAgentMembers
  * row can ever exist for it, so every getAgentAccessLevel lookup returned null
- * and denied. Falling through to the authenticated user is the honest actor and
- * matches the PTY path; the chat route already authorized that user against the
- * machine page. A missing page row is a non-agent for the same reason (and the
- * user's own ACL still denies a page that does not exist).
+ * and denied. Falling through to the authenticated user is the honest actor —
+ * the chat route already authorized that user against the page. A missing
+ * page row is a non-agent for the same reason (and the user's own ACL still
+ * denies a page that does not exist).
  *
  * Nested (ask_agent) runs inherit the PARENT's actor identity by design —
  * agent-communication-tools.ts spreads the caller's context, and
@@ -286,12 +287,47 @@ export async function canActorManageDrive(
   context: ToolExecutionContext,
   driveId: string,
 ): Promise<boolean> {
+  return driveGateWithAgentCheck(context, driveId, hasAgentDriveMembership);
+}
+
+/**
+ * Shared body of the two drive-level gates. The MCP scope ceiling, the
+ * app-token ceiling and the user owner/admin fallback are identical for both
+ * and MUST stay that way — if one of those ever tightens and only one gate
+ * picks it up, the looser gate becomes the way in. Only the agent question
+ * differs, so that is the one thing injected.
+ */
+async function driveGateWithAgentCheck(
+  context: ToolExecutionContext,
+  driveId: string,
+  agentCheck: (agentPageId: string, driveId: string) => Promise<boolean>,
+): Promise<boolean> {
   if (driveOutsideMcpScope(context, driveId)) return false;
   if (await driveDeniedByAppToken(context, driveId, 'manage')) return false;
   const agentPageId = await resolveActingAgentId(context);
-  if (agentPageId) return hasAgentDriveMembership(agentPageId, driveId);
+  if (agentPageId) return agentCheck(agentPageId, driveId);
   const access = await checkDriveAccess(driveId, context.userId);
   return access.isOwner || access.isAdmin;
+}
+
+/**
+ * Whether the actor may ADMINISTER a drive — the owner/admin bar, enforced
+ * uniformly for user and agent actors alike.
+ *
+ * Deliberately separate from `canActorManageDrive`. That helper resolves an
+ * agent actor to `hasAgentDriveMembership`, a bare row-existence check that
+ * ignores `role`, which is the right model for tools whose reach is already
+ * bounded by the agent's enabledTools allowlist. It is the WRONG model for
+ * accepting content into a drive from outside it: a plain MEMBER agent would
+ * clear a bar that /api/pages/bulk-move denies to a human without OWNER/ADMIN,
+ * and the moved subtree would land in a drive on weaker authority than the REST
+ * path requires. Used by the cross-drive move's destination check.
+ */
+export async function canActorAdministerDrive(
+  context: ToolExecutionContext,
+  driveId: string,
+): Promise<boolean> {
+  return driveGateWithAgentCheck(context, driveId, hasAgentDriveAdminRole);
 }
 
 export async function getActorAccessiblePagesInDrive(

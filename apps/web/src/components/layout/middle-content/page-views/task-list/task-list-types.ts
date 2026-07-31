@@ -40,6 +40,7 @@ export interface TaskItem {
   title: string;
   status: string;
   priority: 'low' | 'medium' | 'high';
+  /** Mirror of the linked page's `pages.position` — the single ordering rail (#2143). */
   position: number;
   dueDate: string | null;
   metadata?: Record<string, unknown> | null;

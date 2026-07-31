@@ -7,6 +7,27 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **A database outage no longer takes the whole platform down with it** — when Postgres
+  became unreachable (as in the recent OOM stalls), the rate limiter denied every request
+  platform-wide, turning a database incident into a total outage. Production now degrades to
+  a conservative per-instance in-memory limit at half the configured threshold: legitimate
+  users keep working, attackers face a *stricter* limit than usual, and nothing ever fails
+  open. A 30-second circuit breaker stops requests from waiting on the stalled database
+  (a single probe rechecks it each cooldown), the fallback's memory is hard-capped so an
+  identifier flood can't exhaust the process, and distributed enforcement resumes
+  automatically the moment Postgres recovers.
+
+- **A machine-bound agent addressing its own project's default checkout as `branch: "main"`/`"master"` is no longer silently denied** —
+  a bound conversation's `target` only ever resolved against explicitly created branch worktrees, so a model reasoning in ordinary
+  git terms (where "main" means "my own checkout") got refused with a generic scope error even when addressing itself. The system
+  prompt now explains that "branch" here names a separately created worktree, not "whatever branch a project happens to be on," and
+  the denial message points at `list_sessions` to check real state instead of prescribing a specific retry.
+- **Permanently deleting a Terminal machine, its drive, or letting it age out of Trash no longer
+  leaves "Unknown machine" behind** — an agent or the global assistant's machine list kept a
+  reference to a Terminal after the machine page was gone for good, so it showed as "Unknown
+  machine" and any subsequent save of that config failed. Permanent delete, permanent drive
+  delete, and the daily trash-purge now clean up the stale reference; a machine that's merely in
+  Trash (not yet purged) is left alone since it can still be restored.
 - **Toast notifications now actually appear** — member management, role editing, drive AI
   settings, drive deletion, invites, and version-history/activity rollback actions had been
   silently logging success and error feedback to the browser console instead of showing a
@@ -126,6 +147,20 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **Every Terminal agent session now runs in its own isolated sandbox** — previously only a
+  *branch* session got a separate Sprite, while machine- and project-scoped sessions shared the
+  owning Machine's single Sprite, so two agents spawned at the same location collapsed onto one
+  filesystem. Now each spawned session (machine, project, or branch scope) provisions and runs in
+  its **own** Sprite: two agents at the same location are two independent, isolated machines that
+  can never see or clobber each other's files, and each one's Claude Code login is copied in from
+  the Machine's own Sprite (where you run `claude login`). **Billing implication:** a Machine can
+  now hold several concurrent Sprites instead of one, so active runtime cost scales with how many
+  sessions you actually run at once; each session's persistent disk is metered per session and
+  billed to the owning Machine (a paused/hibernating session bills only for the bytes it has
+  stored, not RAM). Closing a session, deleting its project, or deleting the Machine tears down and
+  reclaims that session's Sprite, so nothing keeps billing once you're done with it. Sessions
+  spawned under a Machine that has already been moved to Trash are refused rather than silently
+  creating a hidden, unreclaimable sandbox.
 - **`pagespace login` is for you, personally; `pagespace keys create` (or the guided `pagespace
   keys`) is for an agent** — the README, `docs/agent-access.md`, and the Settings > MCP page now
   say this explicitly and point agent/MCP setups at `pagespace keys create --drive <id>
@@ -148,6 +183,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Security
 
+- **`drizzle-orm` bumped past a SQL-identifier-escaping vulnerability (CVE-2026-39356 /
+  GHSA-gpj5-g38j-94v9, CVSS 7.5)** — versions through 0.45.1 quoted SQL identifiers produced by
+  `sql.identifier()`/`.as()` without doubling embedded double-quotes, so a hostile identifier
+  reaching one of those call sites could break out of the quoted identifier and inject SQL. An
+  audit of every `sql.identifier()` call site in the codebase found none reachable with
+  attacker-controlled input today, but `drizzle-orm` is now pinned to `^0.45.2` (and
+  `drizzle-kit` to `^0.31.10`) everywhere it's declared, with a regression test guarding both the
+  escaping behavior and the version floor against a future re-pin.
 - **Settings > Account now lists and revokes connected apps** — every OAuth-authorized client
   currently holding a grant on your account (including the `pagespace` CLI), with its scope in
   plain language and when it was connected, is now visible from a "Connected Apps" section.

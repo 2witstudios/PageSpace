@@ -29,7 +29,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
   drives: { id: 'id' },
 }));
 
-import { calculateNextPosition, isMachineRef, isMachineRefArray, pageAgentRepository } from '../page-agent-repository';
+import { calculateNextPosition, pageAgentRepository } from '../page-agent-repository';
 
 describe('calculateNextPosition', () => {
   it('should return 1 when there are no siblings', () => {
@@ -76,60 +76,6 @@ describe('calculateNextPosition', () => {
   });
 });
 
-describe('isMachineRef', () => {
-  it('accepts { kind: "own" }', () => {
-    expect(isMachineRef({ kind: 'own' })).toBe(true);
-  });
-
-  it('accepts { kind: "existing", machineId }', () => {
-    expect(isMachineRef({ kind: 'existing', machineId: 'term_1' })).toBe(true);
-  });
-
-  it('rejects "existing" without a machineId', () => {
-    expect(isMachineRef({ kind: 'existing' })).toBe(false);
-  });
-
-  it('rejects "existing" with an empty machineId', () => {
-    expect(isMachineRef({ kind: 'existing', machineId: '' })).toBe(false);
-  });
-
-  it('rejects "existing" with a non-string machineId', () => {
-    expect(isMachineRef({ kind: 'existing', machineId: 123 })).toBe(false);
-  });
-
-  it('rejects an unknown kind', () => {
-    expect(isMachineRef({ kind: 'other' })).toBe(false);
-  });
-
-  it('rejects non-object values', () => {
-    expect(isMachineRef('own')).toBe(false);
-    expect(isMachineRef(null)).toBe(false);
-    expect(isMachineRef(undefined)).toBe(false);
-  });
-});
-
-describe('isMachineRefArray', () => {
-  it('accepts an empty array', () => {
-    expect(isMachineRefArray([])).toBe(true);
-  });
-
-  it('accepts an array of valid MachineRefs', () => {
-    expect(
-      isMachineRefArray([{ kind: 'own' }, { kind: 'existing', machineId: 'term_1' }])
-    ).toBe(true);
-  });
-
-  it('rejects an array containing an invalid entry', () => {
-    expect(isMachineRefArray([{ kind: 'own' }, { kind: 'existing' }])).toBe(false);
-  });
-
-  it('rejects non-array values', () => {
-    expect(isMachineRefArray({ kind: 'own' })).toBe(false);
-    expect(isMachineRefArray(null)).toBe(false);
-    expect(isMachineRefArray(undefined)).toBe(false);
-  });
-});
-
 describe('getAgentById', () => {
   const basePageRow = {
     id: 'agent_1',
@@ -153,40 +99,12 @@ describe('getAgentById', () => {
     }));
   }
 
-  it('coerces a NULL machines column to an empty array and machineAccess to false', async () => {
-    mockSelectResult({ ...basePageRow, machineAccess: null, machines: null });
-
-    const agent = await pageAgentRepository.getAgentById('agent_1');
-
-    expect(agent?.machineAccess).toBe(false);
-    expect(agent?.machines).toEqual([]);
-  });
-
-  it('coerces missing machineAccess/machines fields (pre-existing row) to defaults', async () => {
+  it('returns the agent row mapped to AgentDetails', async () => {
     mockSelectResult({ ...basePageRow });
 
     const agent = await pageAgentRepository.getAgentById('agent_1');
 
-    expect(agent?.machineAccess).toBe(false);
-    expect(agent?.machines).toEqual([]);
-  });
-
-  it('passes through a populated machines column and machineAccess: true', async () => {
-    const machines = [{ kind: 'own' }, { kind: 'existing', machineId: 'term_1' }];
-    mockSelectResult({ ...basePageRow, machineAccess: true, machines });
-
-    const agent = await pageAgentRepository.getAgentById('agent_1');
-
-    expect(agent?.machineAccess).toBe(true);
-    expect(agent?.machines).toEqual(machines);
-  });
-
-  it('discards a malformed machines column rather than surfacing bad data', async () => {
-    mockSelectResult({ ...basePageRow, machineAccess: false, machines: [{ kind: 'bogus' }] });
-
-    const agent = await pageAgentRepository.getAgentById('agent_1');
-
-    expect(agent?.machines).toEqual([]);
+    expect(agent).toMatchObject({ id: 'agent_1', title: 'Test Agent', type: 'AI_CHAT' });
   });
 
   it('returns null when the agent does not exist', async () => {

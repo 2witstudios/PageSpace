@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ExternalLink, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { PlanDefinition, SubscriptionTier } from '@/lib/subscription/plans';
+import { PLAN_ORDER, type PlanDefinition, type SubscriptionTier } from '@/lib/subscription/plans';
 
 interface PlanCardProps {
   plan: PlanDefinition;
@@ -107,9 +107,8 @@ export function PlanCard({
     }
 
     // Determine if this is an upgrade or downgrade
-    const planOrder = ['free', 'pro', 'founder', 'business'];
-    const currentIndex = planOrder.indexOf(currentTier);
-    const targetIndex = planOrder.indexOf(plan.id);
+    const currentIndex = PLAN_ORDER.indexOf(currentTier);
+    const targetIndex = PLAN_ORDER.indexOf(plan.id);
     const isUpgrade = targetIndex > currentIndex;
     const isDowngrade = targetIndex < currentIndex;
 

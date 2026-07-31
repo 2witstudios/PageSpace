@@ -43,13 +43,13 @@ export default function DMSidebar({ className }: SidebarProps) {
   const isSheetBreakpoint = useBreakpoint('(max-width: 1023px)');
   const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
 
-  const { hasLoadedRef } = useInboxSocket({});
+  const { hasLoadedRef } = useInboxSocket({ cacheKey: API_URL, scope: 'dm' });
 
   const { data, error } = useSWR<InboxResponse>(API_URL, fetcher, {
     refreshInterval: 0,
     isPaused: () => hasLoadedRef.current && useEditingStore.getState().isAnyEditing(),
     onSuccess: () => { hasLoadedRef.current = true; },
-    revalidateOnFocus: false,
+    revalidateOnFocus: true,
   });
 
   useEffect(() => {

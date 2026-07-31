@@ -5,7 +5,8 @@ import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { askUserTools, ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
 import { resolveMessageId } from '@/lib/ai/streams/resolveMessageId';
 import { canUseAskUser } from '@/lib/ai/core/ask-user-gating';
-import { ASK_USER_SECTION } from '@/lib/ai/core/inline-instructions';
+import { readAgentDispatchDepth } from '@/lib/ai/core/agent-dispatch-depth';
+import { ASK_USER_SECTION, buildGlobalAssistantInstructions } from '@/lib/ai/core/inline-instructions';
 import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
 import {
   extractClientAskUserResults,
@@ -53,7 +54,7 @@ import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree
 import { getModelCapabilities, DEFAULT_IMAGE_MODEL } from '@/lib/ai/core/model-capabilities';
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName, sanitizeToolNamesForProvider } from '@/lib/ai/core/mcp-tool-converter';
 import { getUserPersonalization, getUserTimezone } from '@/lib/ai/core/personalization-utils';
-import { CORE_TOOL_NAMES } from '@/lib/ai/core/stub-tools';
+import { splitToolsForExposure, excludeAlwaysUpfront, ALWAYS_UPFRONT_TOOLS } from '@/lib/ai/tools/tool-exposure';
 import { createExecuteTool } from '@/lib/ai/tools/execute-tool';
 import { db } from '@pagespace/db/db'
 import { eq, and, desc, gt, lt, ne } from '@pagespace/db/operators'
@@ -84,6 +85,8 @@ import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/valida
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
 import { createToolSearchTool } from '@/lib/ai/tools/tool-search-tool';
+import { buildBuiltinSkillCatalog, listEligibleSkills } from '@/lib/ai/core/skill-catalog';
+import { loadUserCommandCatalog } from '@/lib/commands/command-catalog-loader';
 import {
   buildVolatileTurnContext,
   appendTurnContextToLastUserMessage,
@@ -285,6 +288,12 @@ export async function POST(
 
     const { id: urlConversationId } = await context.params;
     loggers.api.debug('Global Assistant Chat API: Authentication successful', { userId });
+
+    // Agent-dispatch depth (spawn_session/send_session): a worker's turn rides
+    // this same route; the header carries the chain depth across the HTTP hop
+    // so the depth cap still terminates A→B→C. Safe untrusted — forging it low
+    // is the default, forging it high only restricts the forger.
+    const agentDispatchDepth = readAgentDispatchDepth(request.headers);
 
     // Body size guard — reject payloads over 25MB before parsing
     const contentLength = parseInt(request.headers.get('content-length') || '0', 10);
@@ -758,23 +767,15 @@ export async function POST(
     // appended to the last user message at assembly time so the system prefix stays
     // byte-identical across turns and provider prefix caches are not invalidated —
     // including turns where only the user's current page/drive changed.
+    // Workspace knowledge (page types, tasks, agents, automation, search,
+    // mentions) comes from the SHARED inline-instructions sections appended
+    // at finalSystemPrompt assembly below — this route previously carried a
+    // bespoke copy that drifted (it claimed tasks create linked DOCUMENT
+    // pages; they create TASK_LIST children). Only genuinely
+    // global-assistant-specific guidance remains inline here.
     const systemPrompt = baseSystemPrompt + '\n\n' + TOOL_DISCOVERY_PROMPT + `
 
 You are the Global Assistant for PageSpace - accessible from both the dashboard and sidebar.
-
-TASK MANAGEMENT:
-• Use create_page with type TASK_LIST to create task lists for tracking work
-• Use create_task with a TASK_LIST pageId to add tasks - each task creates a linked DOCUMENT page
-• Use read_page on TASK_LIST pages to view tasks and progress
-• Update task status as you progress - users see real-time updates
-
-CRITICAL NESTING PRINCIPLE:
-• NO RESTRICTIONS on what can contain what - organize based on logical user needs
-• Documents can contain AI chats, channels, folders, and canvas pages
-• AI chats can contain documents, other AI chats, folders, and any page type
-• Channels can contain any page type for organized discussion threads
-• Canvas pages can contain any page type for custom navigation structures
-• Think creatively about nesting - optimize for user workflow, not type conventions
 
 SMART EXPLORATION RULES:
 1. When in a drive context (see your current LOCATION context for the driveId) - ALWAYS explore it first:
@@ -789,9 +790,9 @@ SMART EXPLORATION RULES:
    - Default scope: current drive/location (see LOCATION context) is your primary workspace
    - Only explore OTHER drives when explicitly mentioned
    - When user says "here" or "this", they mean current context
-   - If LOCATION context shows no drive, you're in the dashboard — use list_drives when you need to work across multiple workspaces; always check existing drives before suggesting new drive creation
+   - If LOCATION context shows no drive, you're in the dashboard — use list_drives when you need to work across multiple workspaces; always check existing drives before suggesting new drive creation — never fall back to the Home drive as a guess
 3. Efficient exploration pattern:
-   - FIRST: list_pages with driveId on current drive (if in a drive)
+   - FIRST: list_pages on the current drive — omit driveId and it uses the drive in your LOCATION context
    - THEN: read specific pages as needed
    - ONLY IF NEEDED: explore other drives/workspaces
 4. Proactive assistance:
@@ -799,18 +800,21 @@ SMART EXPLORATION RULES:
    - Suggest creating AI_CHAT and CHANNEL pages for organization
    - Be autonomous within current context
 
-CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? ` (Context: ${conversation.contextId})` : ''}
-
-MENTION PROCESSING:
-• When users @mention documents using @[Label](id:type) format, you MUST read those documents first
-• Use the read_page tool for each mentioned document before providing your main response
-• Let mentioned document content inform and enrich your response
-• Don't explicitly mention that you're reading @mentioned docs unless relevant to the conversation` +
+CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? ` (Context: ${conversation.contextId})` : ''}` +
       (canUseAskUser({ role: auth.role }) ? `\n\n${ASK_USER_SECTION}` : '') +
       drivePromptSection;
 
     // Build agent awareness prompt - lists visible AI agents for consultation
-    const agentAwarenessPrompt = await buildAgentAwarenessPrompt(userId);
+    // `canDelegate` mirrors the session-tool gate below: spawn_session only
+    // exists when code execution is enabled, and a prompt that names a tool the
+    // model does not have makes it attempt delegation that silently fails.
+    const agentAwarenessPrompt = await buildAgentAwarenessPrompt(userId, {
+      // BOTH gates, because the tool set applies both: registration is gated on
+      // CODE_EXECUTION_ENABLED, and `filterToolsForReadOnly` then strips
+      // spawn_session again as a write tool. Checking only the first told a
+      // read-only agent to delegate with a tool it does not have.
+      canDelegate: isCodeExecutionEnabled() && !readOnlyMode,
+    });
 
     // Build page tree context if enabled
     let pageTreePrompt = '';
@@ -854,25 +858,37 @@ MENTION PROCESSING:
       })
     ) as ToolSet;
 
-    // Core tools go to the model with full schemas
-    const coreTools = Object.fromEntries(
-      Object.entries(filteredAllTools).filter(([name]) => CORE_TOOL_NAMES.has(name))
-    ) as ToolSet;
+    // Core tools (plus the always-upfront runtime toggles) go to the model with full
+    // schemas; everything else is hidden from the model and reachable only via
+    // execute_tool.
+    const { coreTools, nonCoreTools } = splitToolsForExposure(filteredAllTools, ALWAYS_UPFRONT_TOOLS);
 
-    // Non-core tools hidden from model; accessible only via execute_tool
-    const nonCoreTools = Object.fromEntries(
-      Object.entries(filteredAllTools).filter(([name]) => !CORE_TOOL_NAMES.has(name))
-    ) as ToolSet;
+    // Capability catalog: built-in skills join the stable prompt; the
+    // per-viewer command list rides the volatile turn context below. Both
+    // feed tool_search's corpus so discovery has one search surface.
+    const availableToolNames = Object.keys(filteredAllTools);
+    const eligibleSkills = listEligibleSkills(availableToolNames);
+    const userCommandCatalog = await loadUserCommandCatalog(
+      userId,
+      locationContext?.currentDrive?.id ?? null,
+      availableToolNames
+    );
+    const skillCatalogPrompt = buildBuiltinSkillCatalog(availableToolNames);
 
     const nonCoreToolNamesPrompt = buildNonCoreToolNamesPrompt(Object.keys(nonCoreTools));
     const finalSystemPrompt = systemPrompt
+      + '\n' + buildGlobalAssistantInstructions(availableToolNames)
       + (agentAwarenessPrompt ? '\n\n' + agentAwarenessPrompt : '')
       + pageTreePrompt
-      + (nonCoreToolNamesPrompt ? '\n\n' + nonCoreToolNamesPrompt : '');
+      + (nonCoreToolNamesPrompt ? '\n\n' + nonCoreToolNamesPrompt : '')
+      + skillCatalogPrompt;
 
     let finalTools: ToolSet = {
       ...coreTools,
-      tool_search: createToolSearchTool(filteredAllTools),
+      tool_search: createToolSearchTool(
+        excludeAlwaysUpfront(filteredAllTools, ALWAYS_UPFRONT_TOOLS),
+        [...eligibleSkills, ...userCommandCatalog.searchEntries]
+      ),
       execute_tool: createExecuteTool(nonCoreTools),
     };
 
@@ -1258,6 +1274,7 @@ MENTION PROCESSING:
               timestampPrompt: timestampSystemPrompt,
               locationPrompt,
               mentionPrompt: mentionSystemPrompt,
+              commandCatalogPrompt: userCommandCatalog.catalogPrompt,
               commandPrompt: commandSystemPrompt,
             });
             const messagesWithContext = appendTurnContextToLastUserMessage(messages, turnContext);
@@ -1296,6 +1313,11 @@ MENTION PROCESSING:
               subscriptionTier: userSubscriptionTier,
               imageGenerationModel: userImageGenerationModel ?? DEFAULT_IMAGE_MODEL,
               chatSource: { type: 'global' as const },
+              // Worker-dispatch chain depth (spawn_session/send_session) — the
+              // X-Agent-Dispatch-Depth header is how depth survives the HTTP
+              // hop; forging it low is the default, forging it high only
+              // restricts the forger. 0 for a direct user request.
+              agentCallDepth: agentDispatchDepth,
             },
             maxRetries: 20,
             onChunk: ({ chunk }) => {

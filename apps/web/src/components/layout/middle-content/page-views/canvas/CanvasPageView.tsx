@@ -12,6 +12,7 @@ import { useSocket } from '@/hooks/useSocket';
 import { PageEventPayload } from '@/lib/websocket';
 import { useFindStore } from '@/stores/useFindStore';
 import CanvasFormsSettingsTab from './CanvasFormsSettingsTab';
+import PublishControls from '../../content-header/PublishControls';
 
 interface CanvasPageViewProps {
   pageId: string;
@@ -169,22 +170,28 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
     <div ref={containerRef} className="h-full flex flex-col relative">
       <div className="relative flex flex-wrap items-center border-b">
         <button
-          className={`px-4 py-2 ${activeTab === 'code' ? 'border-b-2 border-blue-500' : ''}`}
-          onClick={() => setActiveTab('code')}
-        >
-          Code
-        </button>
-        <button
           className={`px-4 py-2 ${activeTab === 'view' ? 'border-b-2 border-blue-500' : ''}`}
           onClick={() => setActiveTab('view')}
         >
           View
         </button>
         <button
+          className={`px-4 py-2 ${activeTab === 'code' ? 'border-b-2 border-blue-500' : ''}`}
+          onClick={() => setActiveTab('code')}
+        >
+          Code
+        </button>
+        <button
           className={`px-4 py-2 ${activeTab === 'forms' ? 'border-b-2 border-blue-500' : ''}`}
           onClick={() => setActiveTab('forms')}
         >
           Forms
+        </button>
+        <button
+          className={`px-4 py-2 ${activeTab === 'settings' ? 'border-b-2 border-blue-500' : ''}`}
+          onClick={() => setActiveTab('settings')}
+        >
+          Settings
         </button>
       </div>
       {activeTab === 'code' && (
@@ -206,6 +213,11 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
       {activeTab === 'forms' && (
         <div className="flex-1 min-h-0 overflow-y-auto">
           <CanvasFormsSettingsTab pageId={pageId} content={content} onContentChange={handleFormsTabContentChange} />
+        </div>
+      )}
+      {activeTab === 'settings' && (
+        <div className="flex-1 min-h-0 overflow-y-auto p-4">
+          <PublishControls pageId={pageId} contentDirty={documentState?.isDirty || false} variant="panel" />
         </div>
       )}
 

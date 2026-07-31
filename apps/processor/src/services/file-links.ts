@@ -17,44 +17,6 @@ export interface ConversationFileLink {
   participant2Id: string;
 }
 
-export async function ensureFileLinked(options: {
-  fileId: string;
-  pageId: string;
-  driveId: string;
-  linkedBy?: string;
-  sizeBytes?: number;
-  mimeType?: string | null;
-}): Promise<void> {
-  const { fileId, pageId, driveId, linkedBy, sizeBytes, mimeType } = options;
-
-  await db.transaction(async tx => {
-    await tx
-      .insert(files)
-      .values({
-        id: fileId,
-        driveId,
-        sizeBytes: sizeBytes ?? 0,
-        mimeType: mimeType ?? null,
-      })
-      .onConflictDoNothing();
-
-    await tx
-      .insert(filePages)
-      .values({
-        fileId,
-        pageId,
-        linkedBy,
-      })
-      .onConflictDoUpdate({
-        target: [filePages.fileId, filePages.pageId],
-        set: {
-          linkedBy,
-          linkedAt: new Date(),
-        },
-      });
-  });
-}
-
 export async function getLinksForFile(fileId: string): Promise<FileLink[]> {
   const results = await db
     .select({

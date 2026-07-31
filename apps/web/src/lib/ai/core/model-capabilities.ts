@@ -97,7 +97,7 @@ async function fetchOpenRouterToolCapabilities(): Promise<Map<string, boolean>> 
  * Default image-generation model — an image-output model present in the curated
  * catalog (see AI_PROVIDERS). Used when a user hasn't chosen one.
  */
-export const DEFAULT_IMAGE_MODEL = 'google/gemini-3.1-flash-image-preview';
+export const DEFAULT_IMAGE_MODEL = 'google/gemini-3.1-flash-image';
 
 /**
  * Pure: does this OpenRouter model emit images? True when its

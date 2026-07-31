@@ -2,6 +2,8 @@ import { SANDBOX_TIMEOUT_MS, SANDBOX_MAX_OUTPUT_BYTES } from './execution-policy
 import { truncateToBytes } from './output-limit';
 import { SANDBOX_ROOT, resolveSandboxPath } from './sandbox-paths';
 import type { SandboxActorContext, SandboxRunDeps, BashToolResult } from './tool-runners';
+import type { ExecutableSandbox } from './sandbox-client/types';
+import { DENIAL_MESSAGES, reasonFromAcquire, safeLogWarn } from './tool-runners';
 
 export interface GitSandboxRunDeps extends SandboxRunDeps {
   /** Fetches the user's GitHub OAuth access token from their integration connection. */
@@ -137,6 +139,10 @@ export async function runGitInSandbox({
     };
   }
 
+  // Held across the try/finally so the post-op storage measurement can reach the
+  // sandbox handle; null whenever the run never got one.
+  let measurable: ExecutableSandbox | null = null;
+  let measurableSessionId: string | null = null;
   // Slot held — every exit path below must release it.
   try {
     const acquired = await deps.acquireSandbox({
@@ -145,23 +151,26 @@ export async function runGitInSandbox({
       userId: ctx.userId,
       requestOrigin: ctx.requestOrigin,
       agentPageId: ctx.agentPageId,
-      activeMachine: ctx.activeMachine,
-      // Mirrors `acquireRequest` on the bash/file path (tool-runners.ts): a
-      // branch-scoped run must attach to the BRANCH's Sprite. Omitting it here
-      // silently ran every bound conversation's git against the machine root.
-      branchSandbox: ctx.branchSandbox,
-      // Same for a PROMOTED project (issue #2204 phase 7): its repo lives on
-      // its own Sprite, so git must attach there, not to the machine root.
-      projectSandbox: ctx.projectSandbox,
+      // The session address (the caller's session, resolved from its conversation) — what the session-anchored
+      // acquire implementation folds the Sprite key off.
+      conversationId: ctx.conversationId,
     });
     if (!acquired.ok) {
-      return { success: false, error: 'Could not provision a sandbox.', reason: 'provision_failed' };
+      // Same narrowing the bash path does: a plan-ceiling refusal must not
+      // reach a git tool as a generic provisioning fault, or the agent retries
+      // a limit that only ending a session clears.
+      const reason = reasonFromAcquire(acquired);
+      return { success: false, error: DENIAL_MESSAGES[reason], reason };
     }
 
     const sandbox = await deps.reconnect(acquired.sandboxId);
     if (!sandbox) {
       return { success: false, error: 'Could not provision a sandbox.', reason: 'provision_failed' };
     }
+    // Held for the `finally`'s post-op measurement, which cannot see this
+    // block's scope.
+    measurable = sandbox;
+    measurableSessionId = acquired.sessionId;
 
     const startedAt = deps.now();
 
@@ -205,6 +214,31 @@ export async function runGitInSandbox({
     };
   } finally {
     deps.quota.releaseSlot({ userId: ctx.userId });
+    // Same opportunistic measurement the bash path does, in the same `finally`
+    // and for the same reason: the bytes worth billing are the ones the command
+    // just wrote. It matters MORE here — `git_clone` is the largest writer in
+    // the system, and a session that only ever runs git tools would otherwise
+    // never be measured at all, billing its empty-disk baseline while the
+    // reconcile advanced its watermark over gigabytes of checkout.
+    //
+    // Throttled per session inside the supplier, never awaited, and its own
+    // failures are swallowed — a billing observation must not affect the tool
+    // result that already succeeded.
+    if (measurable && measurableSessionId !== null && deps.measureStorage) {
+      const sessionId = measurableSessionId;
+      void deps.measureStorage({ sandbox: measurable, sessionId }).catch((error) => {
+        // Logged, not swallowed. Best-effort must not mean invisible: if the
+        // measurement throws on EVERY git call — a bad exec adapter, a missing
+        // `du` — the largest writer in the system silently stops being measured,
+        // which is the bug this seam was just wired to fix, reappearing with no
+        // symptom at all. Same wrapper and same message as the bash path, which
+        // logs the identical failure.
+        safeLogWarn(deps.logger, 'Opportunistic storage measurement failed', {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
   }
 }
 

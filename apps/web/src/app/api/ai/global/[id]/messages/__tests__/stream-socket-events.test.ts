@@ -223,6 +223,7 @@ vi.mock('@/lib/ai/core/agent-awareness', () => ({
   buildAgentAwarenessPrompt: vi.fn().mockResolvedValue(''),
 }));
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
+  filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
   filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),
   filterToolsForWebSearch: vi.fn().mockReturnValue({}),
@@ -328,7 +329,7 @@ vi.mock('@/lib/ai/core/validate-image-parts', () => ({
 vi.mock('@/lib/ai/core/model-capabilities', () => ({
   getModelCapabilities: vi.fn().mockResolvedValue({}),
   hasVisionCapability: vi.fn().mockReturnValue(true),
-  DEFAULT_IMAGE_MODEL: 'google/gemini-3.1-flash-image-preview',
+  DEFAULT_IMAGE_MODEL: 'google/gemini-3.1-flash-image',
 }));
 
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
@@ -574,6 +575,7 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
   const newConv = {
     id: 'conv-1', userId: 'user-1', title: null, type: 'global',
     contextId: null, isActive: true, isShared: false,
+  sessionId: null, closedInSessionAt: null,
     createdAt: new Date('2024-01-01'), updatedAt: new Date('2024-01-01'), lastMessageAt: null,
   };
 

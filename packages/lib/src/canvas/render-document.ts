@@ -116,6 +116,23 @@ export interface RenderCanvasDocumentInput {
    */
   injectThemeBridge?: boolean;
   /**
+   * When true, injects a lightweight <script> into <head> that intercepts
+   * clicks on internal dashboard page links (`/dashboard/{driveId}/{pageId}`)
+   * and posts `{ type: 'pagespace-navigate', href }` to the parent instead of
+   * letting the click fall through to `<base target="_blank">` (a new tab).
+   * The script only decides WHETHER to ask; the parent (CanvasFrame) is the
+   * ONLY thing that actually navigates — this script never touches
+   * `history`/`location` itself, and calls `preventDefault()` only for links
+   * it recognizes and only after `postMessage` succeeds.
+   *
+   * Pass ONLY from the in-app dashboard renderer (CanvasFrame.tsx). The
+   * publish pipeline (`render-published.ts`) must NOT set this: published
+   * pages are top-level documents with no listening parent, so the script
+   * would either be dead weight or (worse) swallow clicks with no follow-up.
+   * Omitting it there keeps published HTML byte-for-byte unchanged.
+   */
+  navigationBridge?: boolean;
+  /**
    * When set, used VERBATIM as the emitted CSP `<meta>` content instead of
    * `buildBaselineCsp(formActionOrigin)`. Lets other renderers (e.g. the
    * published-document pipeline, which needs `script-src 'none'`) reuse this
@@ -191,6 +208,63 @@ export const THEME_BRIDGE_SCRIPT =
   "document.documentElement.classList.toggle('dark',e.data.isDark);}});" +
   // Request current theme from parent on load (in-app only; harmless on published)
   "try{window.parent.postMessage({type:'pagespace-theme-request'},'*');}catch(e){}" +
+  "})();</script>";
+
+/**
+ * Inline script injected when `navigationBridge` is true. Runs ONLY inside
+ * the in-app canvas iframe (see `navigationBridge` doc above).
+ *
+ * Intercepts clicks on `<a>` elements whose raw `href` attribute matches an
+ * internal dashboard PAGE link (`/dashboard/{driveId}/{pageId}`, optionally
+ * with a trailing slash / query / hash) and posts
+ * `{ type: 'pagespace-navigate', href }` to the parent so CanvasFrame can
+ * route it through the app's SPA router instead of `<base target="_blank">`
+ * opening a new tab.
+ *
+ * Deliberately narrow:
+ *  - Matches the RAW `getAttribute('href')` string, not the resolved
+ *    `a.pathname` — a `href="#section"` same-page anchor resolves its
+ *    `.pathname` to the CURRENT page's own `/dashboard/{driveId}/{pageId}`
+ *    (srcdoc iframes resolve relative URLs against the parent document),
+ *    which would false-positive match if we read `.pathname` instead.
+ *  - Requires the string to literally start with `/dashboard/` — an
+ *    author-authored absolute same-origin URL is not intercepted (falls
+ *    through to existing target="_blank" behavior).
+ *  - Explicitly excludes the `/view` (file-embed) suffix: those links are
+ *    handled by the separate file-view-token rewriting and keep their
+ *    existing behavior.
+ *  - Skips clicks with modifier keys / non-primary button, and clicks
+ *    already `defaultPrevented` by other author scripts, so ctrl/cmd/
+ *    middle-click "open in new tab" keeps working as expected. The listener
+ *    is registered for the BUBBLE phase (no `useCapture`), not capture —
+ *    capture would run before the clicked element's own `onclick` (and any
+ *    bubbling ancestor handler), so an author's own `preventDefault()` call
+ *    (e.g. a canvas-internal JS router that wants to handle the click
+ *    itself) would never have a chance to run first and be observed here.
+ *  - Only calls `preventDefault()` AFTER `postMessage` succeeds, so a link
+ *    we can't hand off is never silently swallowed.
+ *
+ * `CanvasFrame.tsx` independently re-validates `href` against the same
+ * pattern (`isDashboardPageLink` in `file-view-links.ts`) before acting on
+ * the message, AND gates on a genuine recent user gesture — this script's
+ * own checks are a UX nicety, not a trust boundary, since sandboxed author
+ * JS could forge the postMessage directly (see the gating doc comment on
+ * CanvasFrame.tsx's message handler).
+ */
+export const NAVIGATION_BRIDGE_SCRIPT =
+  "<script>(function(){" +
+  "var RE=/^\\/dashboard\\/([A-Za-z0-9_-]+)\\/([A-Za-z0-9_-]+)\\/?(?:[?#].*)?$/;" +
+  "document.addEventListener('click',function(e){" +
+  "if(e.defaultPrevented||e.button!==0||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;" +
+  "var a=e.target&&e.target.closest?e.target.closest('a[href]'):null;" +
+  "if(!a)return;" +
+  "var href=a.getAttribute('href');" +
+  "if(!href||!RE.test(href))return;" +
+  "try{" +
+  "window.parent.postMessage({type:'pagespace-navigate',href:href},'*');" +
+  "e.preventDefault();" +
+  "}catch(err){}" +
+  "});" +
   "})();</script>";
 
 // Re-exported for existing consumers — the implementation lives in a
@@ -322,7 +396,7 @@ function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[], no
  * Render a complete, standalone HTML document for a canvas page.
  */
 export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
-  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, formActionOrigin, injectThemeBridge, nonce, cspOverride } = input;
+  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, formActionOrigin, injectThemeBridge, navigationBridge, nonce, cspOverride } = input;
   const csp = cspOverride ?? buildBaselineCsp(formActionOrigin);
 
   const { css, body } = extractAndSanitizeStyles(unwrapFullDocument(html ?? ''), allowedAssetHosts, nonce);
@@ -366,6 +440,7 @@ export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
     `<meta http-equiv="Content-Security-Policy" content="${csp}">` +
     `<style>${BASELINE_RESET}${css}</style>` +
     (injectThemeBridge ? (nonce ? stampScriptNonce(THEME_BRIDGE_SCRIPT, nonce) : THEME_BRIDGE_SCRIPT) : '') +
+    (navigationBridge ? (nonce ? stampScriptNonce(NAVIGATION_BRIDGE_SCRIPT, nonce) : NAVIGATION_BRIDGE_SCRIPT) : '') +
     '</head><body>' +
     body +
     '</body></html>'

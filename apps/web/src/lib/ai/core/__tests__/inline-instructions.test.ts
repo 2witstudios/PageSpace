@@ -14,7 +14,10 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { buildInlineInstructions } from '../inline-instructions';
+import {
+  buildGlobalAssistantInstructions,
+  buildInlineInstructions,
+} from '../inline-instructions';
 
 describe('buildInlineInstructions — always-on sections', () => {
   it('includes WORKSPACE RULES regardless of tool list', () => {
@@ -74,8 +77,8 @@ describe('buildInlineInstructions — TASK_MANAGEMENT gating', () => {
 });
 
 describe('buildInlineInstructions — AGENTS gating', () => {
-  it('includes AGENTS when ask_agent is available', () => {
-    const result = buildInlineInstructions(['ask_agent']);
+  it('includes AGENTS when spawn_session is available', () => {
+    const result = buildInlineInstructions(['spawn_session']);
     expect(result).toContain('AGENTS');
   });
 
@@ -156,7 +159,7 @@ describe('buildInlineInstructions — availableTools=undefined sentinel', () => 
 describe('buildInlineInstructions — full tool set', () => {
   it('includes all gated sections when all relevant tools are provided', () => {
     const result = buildInlineInstructions([
-      'create_task', 'ask_agent', 'set_task_trigger', 'glob_search',
+      'create_task', 'spawn_session', 'set_task_trigger', 'glob_search',
     ]);
     expect(result).toContain('TASK MANAGEMENT');
     expect(result).toContain('AGENTS');
@@ -167,5 +170,62 @@ describe('buildInlineInstructions — full tool set', () => {
   it('returns a non-empty string', () => {
     const result = buildInlineInstructions([]);
     expect(result.length).toBeGreaterThan(0);
+  });
+});
+
+describe('buildInlineInstructions — skill-aware slimming', () => {
+  const ALL_SKILL_TOOLS = [
+    'load_skill',
+    'create_page',
+    'replace_lines',
+    'insert_content',
+    'edit_sheet_cells',
+    'create_task',
+    'update_task',
+  ];
+
+  it('slims PAGE TYPES to skill pointers when load_skill and the skills are eligible', () => {
+    const result = buildInlineInstructions(ALL_SKILL_TOOLS);
+    expect(result).toContain('Load the canvas-websites skill');
+    expect(result).toContain('Load the writing-documents skill');
+    expect(result).toContain('load the spreadsheets skill');
+    // The deep canvas conventions moved into the skill body
+    expect(result).not.toContain('provision_form_target');
+  });
+
+  it('slims per bullet: an ineligible skill keeps its FULL bullet', () => {
+    // Sheets eligible; canvas/writing not (no create_page/replace_lines).
+    const result = buildInlineInstructions(['load_skill', 'edit_sheet_cells', 'read_page']);
+    expect(result).toContain('load the spreadsheets skill');
+    // Canvas bullet stays full — pointer would target a skill the catalog omits
+    expect(result).toContain('provision_form_target');
+    expect(result).not.toContain('Load the canvas-websites skill');
+  });
+
+  it('keeps the full PAGE TYPES fallback when load_skill is absent', () => {
+    const result = buildInlineInstructions(['create_task']);
+    expect(result).toContain('provision_form_target');
+    expect(result).not.toContain('Load the canvas-websites skill');
+  });
+
+  it('keeps the full text for the undefined sentinel (admin complete preview)', () => {
+    const result = buildInlineInstructions();
+    expect(result).toContain('provision_form_target');
+    expect(result).not.toContain('Load the canvas-websites skill');
+  });
+
+  it('slims TASK MANAGEMENT but keeps the predictably-wrong bullets', () => {
+    const result = buildInlineInstructions(ALL_SKILL_TOOLS);
+    expect(result).toContain('Read the task list with read_page before any mutations');
+    expect(result).toContain("a parent can't complete while direct subtasks remain open");
+    expect(result).toContain('Load the task-management skill');
+    expect(result).not.toContain('only call create_task_status when no existing status fits');
+  });
+
+  it('buildGlobalAssistantInstructions slims with eligible tools and stays full without', () => {
+    expect(buildGlobalAssistantInstructions(['load_skill', 'create_task'])).toContain(
+      'Load the task-management skill'
+    );
+    expect(buildGlobalAssistantInstructions()).toContain('provision_form_target');
   });
 });

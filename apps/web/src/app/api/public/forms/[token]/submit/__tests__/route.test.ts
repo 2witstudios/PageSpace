@@ -13,17 +13,27 @@ const mockCheckDistributedRateLimit = vi.hoisted(() => vi.fn());
 const mockLookupActiveFormTarget = vi.hoisted(() => vi.fn());
 const mockAppendFormSubmission = vi.hoisted(() => vi.fn());
 const mockGetClientIP = vi.hoisted(() => vi.fn());
+const mockSendFormSubmissionNotification = vi.hoisted(() => vi.fn());
 
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: mockCheckDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS: {
     FORM_SUBMISSION: { maxAttempts: 10, windowMs: 60000 },
+    FORM_SUBMISSION_NOTIFICATION: { maxAttempts: 20, windowMs: 3600000 },
   },
 }));
 
 vi.mock('@/services/api/form-target-service', () => ({
   lookupActiveFormTarget: mockLookupActiveFormTarget,
   appendFormSubmission: mockAppendFormSubmission,
+}));
+
+vi.mock('@/lib/forms/send-form-notification', () => ({
+  sendFormSubmissionNotification: mockSendFormSubmissionNotification,
+}));
+
+vi.mock('next/server', () => ({
+  after: vi.fn((fn: () => unknown) => { void fn(); }),
 }));
 
 vi.mock('@/lib/auth/auth-helpers', () => ({
@@ -68,6 +78,7 @@ describe('POST /api/public/forms/[token]/submit', () => {
     mockCheckDistributedRateLimit.mockResolvedValue({ allowed: true });
     mockLookupActiveFormTarget.mockResolvedValue(activeFormTarget);
     mockAppendFormSubmission.mockResolvedValue(undefined);
+    mockSendFormSubmissionNotification.mockResolvedValue(undefined);
   });
 
   describe('successful submission', () => {
@@ -201,6 +212,91 @@ describe('POST /api/public/forms/[token]/submit', () => {
 
       expect(response.status).toBe(500);
       expect(body.error).not.toContain('DB connection');
+    });
+  });
+
+  describe('notification email', () => {
+    it('sends a notification email when notificationEmail is configured', async () => {
+      mockLookupActiveFormTarget.mockResolvedValue({
+        ...activeFormTarget,
+        notificationEmail: 'owner@example.com',
+        fields,
+        driveId: 'drive-1',
+        pageId: 'sheet-1',
+      });
+
+      const request = createRequest({ name: 'Ada Lovelace', email: 'ada@example.com' });
+      await POST(request, params());
+
+      expect(mockSendFormSubmissionNotification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          values: { name: 'Ada Lovelace', email: 'ada@example.com' },
+        })
+      );
+    });
+
+    it('does not send a notification email when notificationEmail is null', async () => {
+      mockLookupActiveFormTarget.mockResolvedValue({
+        ...activeFormTarget,
+        notificationEmail: null,
+      });
+
+      const request = createRequest({ name: 'Ada Lovelace', email: 'ada@example.com' });
+      await POST(request, params());
+
+      expect(mockSendFormSubmissionNotification).not.toHaveBeenCalled();
+    });
+
+    it('returns 200 even when the notification send rejects (best-effort)', async () => {
+      mockLookupActiveFormTarget.mockResolvedValue({
+        ...activeFormTarget,
+        notificationEmail: 'owner@example.com',
+        fields,
+        driveId: 'drive-1',
+        pageId: 'sheet-1',
+      });
+      mockSendFormSubmissionNotification.mockRejectedValue(new Error('Resend timeout'));
+
+      const request = createRequest({ name: 'Ada Lovelace', email: 'ada@example.com' });
+      const response = await POST(request, params());
+
+      expect(response.status).toBe(200);
+    });
+
+    it('skips the notification (but still appends the row) once the per-target notification limit is hit', async () => {
+      mockLookupActiveFormTarget.mockResolvedValue({
+        ...activeFormTarget,
+        notificationEmail: 'owner@example.com',
+        fields,
+        driveId: 'drive-1',
+        pageId: 'sheet-1',
+      });
+      mockCheckDistributedRateLimit.mockImplementation((key: string) =>
+        Promise.resolve({ allowed: !key.startsWith('form:notify:') })
+      );
+
+      const request = createRequest({ name: 'Ada Lovelace', email: 'ada@example.com' });
+      const response = await POST(request, params());
+
+      expect(response.status).toBe(200);
+      expect(mockAppendFormSubmission).toHaveBeenCalled();
+      expect(mockSendFormSubmissionNotification).not.toHaveBeenCalled();
+    });
+
+    it('keys the notification rate limit by form target id', async () => {
+      mockLookupActiveFormTarget.mockResolvedValue({
+        ...activeFormTarget,
+        notificationEmail: 'owner@example.com',
+        fields,
+        driveId: 'drive-1',
+        pageId: 'sheet-1',
+      });
+
+      const request = createRequest({ name: 'Ada Lovelace', email: 'ada@example.com' });
+      await POST(request, params());
+
+      const keys = mockCheckDistributedRateLimit.mock.calls.map((call) => call[0] as string);
+      expect(keys).toContain(`form:notify:${activeFormTarget.id}`);
     });
   });
 

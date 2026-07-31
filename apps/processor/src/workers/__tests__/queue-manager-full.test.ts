@@ -123,7 +123,7 @@ describe('QueueManager', () => {
       await qm.initialize();
 
       expect(mockBossStart).toHaveBeenCalledTimes(1);
-      expect(mockBossWork).toHaveBeenCalledTimes(10);
+      expect(mockBossWork).toHaveBeenCalledTimes(11);
       expect(mockBossWork.mock.calls[0][0]).toBe('ingest-file');
       expect(mockBossWork.mock.calls[1][0]).toBe('image-optimize');
       expect(mockBossWork.mock.calls[2][0]).toBe('text-extract');
@@ -134,7 +134,8 @@ describe('QueueManager', () => {
       expect(mockBossWork.mock.calls[7][0]).toBe('account-erasure');
       expect(mockBossWork.mock.calls[8][0]).toBe('audit-chainer');
       expect(mockBossWork.mock.calls[9][0]).toBe('email-broadcast');
-      expect(mockBossCreateQueue).toHaveBeenCalledTimes(10);
+      expect(mockBossWork.mock.calls[10][0]).toBe('stuck-page-reconciler');
+      expect(mockBossCreateQueue).toHaveBeenCalledTimes(11);
       expect(mockBossCreateQueue).toHaveBeenCalledWith('ingest-file');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('pull-verify');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('image-optimize');
@@ -145,11 +146,15 @@ describe('QueueManager', () => {
       expect(mockBossCreateQueue).toHaveBeenCalledWith('account-erasure');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('audit-chainer');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('email-broadcast');
+      expect(mockBossCreateQueue).toHaveBeenCalledWith('stuck-page-reconciler');
       expect(mockBossSchedule).toHaveBeenCalledWith('siem-delivery', '*/30 * * * * *', {}, { retryLimit: 0 });
       // Same cadence + no-stack pattern as siem-delivery: retryLimit 0 so
       // overlapping scheduled runs never pile up; the advisory lock inside
       // the worker serializes any overlap that still happens.
       expect(mockBossSchedule).toHaveBeenCalledWith('audit-chainer', '*/30 * * * * *', {}, { retryLimit: 0 });
+      // Same no-stack pattern for the stuck-page reconciler (#2159); its own
+      // advisory lock serializes any overlap that still happens.
+      expect(mockBossSchedule).toHaveBeenCalledWith('stuck-page-reconciler', '*/5 * * * *', {}, { retryLimit: 0 });
     }, 30000);
 
     it('handles queue creation errors gracefully', async () => {

@@ -108,3 +108,23 @@ export function rewriteInterPageLinks(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Dashboard page link validation (in-app navigation bridge)
+// ---------------------------------------------------------------------------
+//
+// Validates a single href STRING (not a raw-HTML search, unlike
+// INTER_PAGE_LINK_RE above) as an internal dashboard PAGE link. Used by
+// CanvasFrame.tsx to independently re-validate `href` from a
+// `pagespace-navigate` postMessage before calling router.push — the
+// injected click-interceptor script in render-document.ts is a UX nicety,
+// not a trust boundary (author JS in the sandboxed-but-scripted canvas
+// iframe can forge this message directly), so the receiving side must
+// validate on its own. Deliberately excludes the `/view` (file-embed) form,
+// which is a separate embed mechanism handled by extractDashboardFileViewRefs
+// above, not a navigation link.
+const DASHBOARD_PAGE_LINK_RE = /^\/dashboard\/([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_-]+)\/?(?:[?#].*)?$/;
+
+export function isDashboardPageLink(href: string): boolean {
+  return DASHBOARD_PAGE_LINK_RE.test(href);
+}
+

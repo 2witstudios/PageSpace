@@ -103,6 +103,25 @@ export interface FinishRequestResult {
   stableBoundaryIndex: number;
 }
 
+/**
+ * Distinct skill names passed to load_skill across a message array (SDK
+ * UIMessage dialect: tool parts are `type: 'tool-load_skill'` with the
+ * input under `input`). Used to detect skills whose loads were compacted
+ * away entirely.
+ */
+function collectSkillNames(messages: readonly UIMessage[]): string[] {
+  const names = new Set<string>();
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue;
+    for (const part of message.parts ?? []) {
+      if (part.type !== 'tool-load_skill') continue;
+      const input = (part as { input?: { name?: unknown } }).input;
+      if (typeof input?.name === 'string') names.add(input.name);
+    }
+  }
+  return [...names];
+}
+
 // ─── Seam ──────────────────────────────────────────────────────────────────────
 
 /**
@@ -142,10 +161,29 @@ export async function prepareHistoryForModel(
   // (no DB id + <conversation_summary> prefix) lives in isSyntheticSummaryMessage
   // so this seam and the v1 route cannot drift apart.
   const hasSummary = compacted.length > 0 && isSyntheticSummaryMessage(compacted[0]);
-  const summaryText = hasSummary
+  let summaryText = hasSummary
     ? (compacted[0].parts?.find((p) => p.type === 'text')?.text ?? '')
     : '';
   const tailUIMessages = (hasSummary ? compacted.slice(1) : compacted) as UIMessage[];
+
+  // Compaction can cut a conversation's most recent load_skill turn: the
+  // MRU elision protection below only sees the surviving tail, and the
+  // summarizer truncates tool results far below skill-body size, so active
+  // skill instructions would silently vanish mid-work. Skill bodies are
+  // deterministic re-fetchable reads — so rather than re-attaching tens of
+  // kilobytes into the summary, append a deterministic re-load pointer for
+  // every skill loaded in the compacted head that no longer appears in the
+  // tail. The model re-loads on its next step in that domain.
+  if (hasSummary) {
+    const tailSkillNames = new Set(collectSkillNames(tailUIMessages));
+    const lostSkills = collectSkillNames(sanitized).filter((name) => !tailSkillNames.has(name));
+    if (lostSkills.length > 0) {
+      summaryText +=
+        `\n\n[Skill instructions previously loaded in this conversation are no longer in context: ` +
+        lostSkills.map((name) => `"${name}"`).join(', ') +
+        `. Call load_skill again for any of them before continuing work in that area.]`;
+    }
+  }
 
   // Step 3: elide stale tool outputs from the tail
   //
@@ -169,6 +207,9 @@ export async function prepareHistoryForModel(
           minOutputChars: ELISION_MIN_OUTPUT_CHARS,
           elidableTools: new Set(DEFAULT_ELIDABLE_TOOLS),
           writeTools: WRITE_TOOLS,
+          // The newest load of each skill is the agent's active instructions —
+          // protected from elision (superseded loads of the same skill decay).
+          protectMostRecentByArgs: new Set(['load_skill']),
         }) as UIMessage[])
       : tailUIMessages;
 

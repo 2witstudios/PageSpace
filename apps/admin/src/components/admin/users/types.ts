@@ -1,4 +1,6 @@
-export type SubscriptionTier = 'free' | 'pro' | 'founder' | 'business';
+import type { SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+
+export type { SubscriptionTier };
 
 export interface UserStats {
   drives: number;

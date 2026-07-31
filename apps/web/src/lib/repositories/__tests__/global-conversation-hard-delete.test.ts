@@ -11,12 +11,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockReturning = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 const mockWhere = vi.hoisted(() => vi.fn().mockReturnValue({ returning: mockReturning }));
+// recomputeLastMessageAt (#2153) locks the conversation row and runs inside
+// its own transaction before reading the surviving messages — purge/delete
+// paths that touch a real conversationId now go through this.
+const mockTransaction = vi.hoisted(() => vi.fn());
 
-vi.mock('@pagespace/db/db', () => ({
-  db: {
+vi.mock('@pagespace/db/db', () => {
+  const dbShape = {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockReturnValue({
+          for: vi.fn().mockResolvedValue([]),
           orderBy: vi.fn().mockReturnValue({
             limit: vi.fn().mockResolvedValue([]),
           }),
@@ -32,8 +37,11 @@ vi.mock('@pagespace/db/db', () => ({
       }),
     }),
     delete: vi.fn().mockReturnValue({ where: mockWhere }),
-  },
-}));
+    transaction: mockTransaction,
+  };
+  mockTransaction.mockImplementation((cb: (tx: typeof dbShape) => unknown) => cb(dbShape));
+  return { db: dbShape };
+});
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ type: 'eq', field, value })),
   and: vi.fn((...conditions) => ({ type: 'and', conditions })),
@@ -114,13 +122,28 @@ describe('globalConversationRepository hard-delete', () => {
 
   describe('purgeInactiveMessages', () => {
     it('should delete inactive messages older than cutoff and return count', async () => {
-      mockReturning.mockResolvedValue([{ id: 'msg-1' }, { id: 'msg-2' }, { id: 'msg-3' }]);
+      mockReturning.mockResolvedValue([
+        { id: 'msg-1', conversationId: 'conv-1' },
+        { id: 'msg-2', conversationId: 'conv-1' },
+        { id: 'msg-3', conversationId: 'conv-2' },
+      ]);
 
       const cutoff = new Date('2024-06-01');
       const count = await globalConversationRepository.purgeInactiveMessages(cutoff);
 
       expect(db.delete).toHaveBeenCalled();
       expect(count).toBe(3);
+    });
+
+    it('recomputes lastMessageAt under a row lock for each affected conversation (#2153)', async () => {
+      mockReturning.mockResolvedValue([
+        { id: 'msg-1', conversationId: 'conv-1' },
+        { id: 'msg-2', conversationId: 'conv-2' },
+      ]);
+
+      await globalConversationRepository.purgeInactiveMessages(new Date('2024-06-01'));
+
+      expect(mockTransaction).toHaveBeenCalledTimes(2);
     });
 
     it('should return 0 when no inactive messages match', async () => {

@@ -187,6 +187,70 @@ export async function markAllNotificationsAsRead(userId: string) {
   void sendSilentBadgeUpdate(userId);
 }
 
+/**
+ * Marks a user's unread MENTION notifications for a specific page as read
+ * (rows left behind after `channel_read_status` is upserted — Hole C). Scoped
+ * to `userId` so one user can never mark another user's notifications read.
+ *
+ * Filtered to `type: 'MENTION'`, not just `pageId` — a page can also carry
+ * PERMISSION_UPDATED/PAGE_SHARED/TASK_ASSIGNED notifications with the same
+ * `pageId` (see createPermissionNotification/createTaskAssignedNotification
+ * below), and reading a channel must not silently dismiss those.
+ */
+export async function markPageNotificationsRead(userId: string, pageId: string): Promise<number> {
+  const updated = await db
+    .update(notifications)
+    .set({
+      isRead: true,
+      readAt: new Date(),
+    })
+    .where(
+      and(
+        eq(notifications.userId, userId),
+        eq(notifications.pageId, pageId),
+        eq(notifications.type, 'MENTION'),
+        eq(notifications.isRead, false)
+      )
+    )
+    .returning({ id: notifications.id });
+
+  void sendSilentBadgeUpdate(userId);
+
+  return updated.length;
+}
+
+/**
+ * Marks a user's unread NEW_DIRECT_MESSAGE notifications for a specific DM
+ * conversation as read (rows left behind after reading the conversation —
+ * Hole E). The `conversationId` predicate mirrors
+ * `createOrUpdateMessageNotification`'s lookup exactly so the write and read
+ * sides cannot drift apart. Scoped to `userId` so one user can never mark
+ * another user's notifications read, and to `type: 'NEW_DIRECT_MESSAGE'` so a
+ * future notification type that happens to store the same `conversationId`
+ * in its metadata is never swept up by this call.
+ */
+export async function markDmConversationNotificationsRead(userId: string, conversationId: string): Promise<number> {
+  const updated = await db
+    .update(notifications)
+    .set({
+      isRead: true,
+      readAt: new Date(),
+    })
+    .where(
+      and(
+        eq(notifications.userId, userId),
+        eq(notifications.type, 'NEW_DIRECT_MESSAGE'),
+        eq(notifications.isRead, false),
+        sql`${notifications.metadata}->>'conversationId' = ${conversationId}`
+      )
+    )
+    .returning({ id: notifications.id });
+
+  void sendSilentBadgeUpdate(userId);
+
+  return updated.length;
+}
+
 export async function markConnectionRequestActioned(
   connectionId: string,
   userId: string,

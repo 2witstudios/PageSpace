@@ -100,7 +100,8 @@ describe('buildDiffArgs', () => {
 });
 describe('buildAddArgs', () => {
   test('all', () => assert({ given: 'all: true', should: 'emit -A', actual: buildAddArgs({ all: true }), expected: ['add', '-A'] }));
-  test('paths', () => assert({ given: 'paths', should: 'list the paths', actual: buildAddArgs({ paths: ['a', 'b'] }), expected: ['add', 'a', 'b'] }));
+  test('paths', () => assert({ given: 'paths', should: 'separate them with -- so a dash-prefixed path is never read as a flag', actual: buildAddArgs({ paths: ['a', 'b'] }), expected: ['add', '--', 'a', 'b'] }));
+  test('flag-shaped path', () => assert({ given: 'a path that looks like a flag', should: 'still pass it as a PATH, not interactive mode', actual: buildAddArgs({ paths: ['-p'] }), expected: ['add', '--', '-p'] }));
   test('neither (defensive)', () => assert({ given: 'no all and no paths', should: 'emit just add', actual: buildAddArgs({}), expected: ['add'] }));
 });
 describe('buildResetArgs', () => {

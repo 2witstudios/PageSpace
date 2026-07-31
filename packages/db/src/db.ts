@@ -46,7 +46,17 @@ pool.on('error', (_err, _client) => {});
 registerPool(pool);
 
 export { getPoolStats };
-export const db = drizzle(pool, { schema });
+/**
+ * Explicitly annotated as `NodePgDatabase<typeof schema>` (matching
+ * `getMigrationDb()` below) rather than inferred: drizzle-orm 0.45's
+ * `drizzle()` returns `NodePgDatabase<TSchema> & { $client: Pool }`, and that
+ * `$client` intersection is not carried by a `PgTransaction`. Without this
+ * annotation every helper that types its handle as `typeof db` — the repo-wide
+ * convention for "singleton or transaction" — would reject the `tx` passed
+ * down from `db.transaction()`. Nothing in the monorepo uses `db.$client`;
+ * callers needing the raw pool import `pool` directly from this module.
+ */
+export const db: NodePgDatabase<typeof schema> = drizzle(pool, { schema });
 
 /**
  * Dedicated pool for out-of-band Postgres advisory locks (e.g. the

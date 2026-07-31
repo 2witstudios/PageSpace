@@ -3,6 +3,12 @@ import { sql } from 'drizzle-orm';
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
 import { createId } from '@paralleldrive/cuid2';
+// 'MACHINE' is a DEAD value, kept only because Postgres cannot DROP VALUE from
+// an enum type — the Machines/Development surface that used it was torn down
+// (phase 8 of the agent-sessions rebuild) with no data migration. Nothing may
+// ever write it again: it is removed from the application-level PageType enum
+// (packages/lib/src/utils/enums.ts) and every validator/config that governs
+// what a page's `type` can be set to.
 export const pageType = pgEnum('PageType', ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'FILE', 'SHEET', 'TASK_LIST', 'CODE', 'MACHINE']);
 export type PageTypeEnum = (typeof pageType.enumValues)[number];
 export const driveKind = pgEnum('DriveKind', ['STANDARD', 'HOME']);
@@ -53,20 +59,14 @@ export const pages = pgTable('pages', {
   includePageTree: boolean('includePageTree').default(false).notNull(), // Whether to include page tree in AI context
   pageTreeScope: text('pageTreeScope', { enum: ['children', 'drive'] }).default('children'), // Scope of page tree to include
   toolExposureMode: text('toolExposureMode', { enum: ['upfront', 'search'] }).default('upfront').notNull(), // How tools are exposed to AI_CHAT agents: all schemas upfront, or core tools + tool_search/execute_tool
+  sandboxEnabled: boolean('sandboxEnabled').default(false).notNull(), // AI_CHAT agents: whether the sandbox tool families (bash/files, git+gh, sessions/shells) are offered to this agent. Provisioning stays lazy and automatic on first use — this is the settings switch, not a provision button. Successor to the old pages.terminalAccess (dropped in 0234, phase 8's teardown of the Machines model — never pages.machineAccess, which never existed in this package).
   userScopedAccess: boolean('userScopedAccess').default(false).notNull(), // AI_CHAT agents only, owner-toggled: when true, actor-permission helpers fall back to the invoking user's own access instead of this agent's drive memberships
-  // Physical column stays "terminalAccess" ON PURPOSE. This table is read AND
-  // written by a live, non-flag-gated endpoint (api/pages/[pageId]/agent-config),
-  // and deploys run migrations BEFORE the new app image takes traffic
-  // (.github/workflows/docker-images.yml: "Run migrations" precedes "Deploy web"),
-  // so renaming the column would 500 every agent-config request served by the
-  // still-running old image. Drizzle decouples the field name from the column
-  // name, so the code reads `machineAccess` everywhere; renaming the column
-  // itself needs an expand/contract across two releases.
-  machineAccess: boolean('terminalAccess').default(false).notNull(), // AI_CHAT agents only: whether this agent may use Machine tools
-  machines: jsonb('machines'), // MachineRef[]; configured machines for this agent, machines[0] is the default active machine
-  description: text('description'), // Machine (MACHINE) pages only: freeform description surfaced on the Machine page's Settings tab
-  allowPageAgents: boolean('allowPageAgents').default(true).notNull(), // Machine (MACHINE) pages only: whether page-scoped agents may run their terminal tools on this machine
-  // File-specific fields
+  description: text('description'), // Freeform description surfaced on a page's Settings tab
+  // File-specific fields.
+  // fileSize/mimeType/contentHash are DERIVED DISPLAY METADATA copied from the
+  // content-addressed `files` row at upload time (#2155). The authoritative
+  // storage-accounting value is files.sizeBytes (reached via file_pages); these
+  // per-page copies are never re-synced and must not feed quota/usage math.
   fileSize: real('fileSize'),
   mimeType: text('mimeType'),
   originalFileName: text('originalFileName'),

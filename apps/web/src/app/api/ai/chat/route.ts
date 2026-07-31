@@ -10,6 +10,7 @@ import {
   type ToolSet,
 } from 'ai';
 import { ONPREM_ALLOWED_PROVIDERS, DEFAULT_PROVIDER, DEFAULT_MODEL, resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
+import { readAgentDispatchDepth } from '@/lib/ai/core/agent-dispatch-depth';
 import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
 import { ALL_PROVIDER_NAMES } from '@/lib/ai/core/ai-utils';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
@@ -68,12 +69,9 @@ import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
 import {
   filterToolsForReadOnly,
   filterToolsForMcpScope,
-  filterToolsForMachineBinding,
   filterToolsForAgentAllowlist,
-  withSessionFamilyTools,
+  filterToolsForSandboxEnablement,
 } from '@/lib/ai/core/tool-filtering';
-import { deriveMachinePaneBinding } from '@pagespace/lib/services/machines/machine-pane-binding';
-import { buildMachinePaneBindingDeps } from '@/lib/ai/machine-pane/machine-pane-binding-runtime';
 import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
 import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/core/model-capabilities';
 import { getPageTreeContext } from '@/lib/ai/core/page-tree-context';
@@ -81,7 +79,9 @@ import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
 import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName, sanitizeToolNamesForProvider } from '@/lib/ai/core/mcp-tool-converter';
 import { getUserPersonalization } from '@/lib/ai/core/personalization-utils';
-import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
+import { applyToolExposureMode, ALWAYS_UPFRONT_TOOLS } from '@/lib/ai/tools/tool-exposure';
+import { buildBuiltinSkillCatalog, listEligibleSkills } from '@/lib/ai/core/skill-catalog';
+import { loadUserCommandCatalog } from '@/lib/commands/command-catalog-loader';
 import {
   buildVolatileTurnContext,
   appendTurnContextToLastUserMessage,
@@ -90,11 +90,6 @@ import {
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
 import { getAgentMemoryContext, buildAgentMemorySection } from '@/lib/ai/core/agent-memory';
 
-// Runtime-toggled tools that must stay directly callable even in search mode.
-// Runtime-override tools: added independently of the agent's saved allowlist, so they
-// must stay directly callable in 'search' exposure mode — routing them through
-// execute_tool would hit that tool's allowlist check and be rejected.
-const ALWAYS_UPFRONT_TOOLS = new Set(['web_search', 'generate_image']);
 import { db } from '@pagespace/db/db'
 import { eq, and, ne } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
@@ -119,12 +114,12 @@ import {
 } from '@/lib/ai/core/stream-abort-registry';
 import { runAgentWithRetry, AGENT_MAX_STEPS, isRunAborted, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
 import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
-import { locationContextToPageContext } from '@/lib/ai/shared/buildPageContext';
+import { locationContextToPageContext, pageContextToLocationContext } from '@/lib/ai/shared/buildPageContext';
+import type { LocationContext } from '@/lib/ai/shared/chat-types';
 import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import { buildMachineBindingPrompt } from '@/lib/ai/machines/machine-binding-prompt';
 
 
 // Allow streaming responses up to 5 minutes for complex AI agent interactions
@@ -316,8 +311,8 @@ export async function POST(request: Request) {
     // the legacy client-computed pageContext only for old clients that never sent a
     // contextRef at all. Deferred until after the required-field checks above so an
     // invalid request (no messages/chatId) fails fast without an extra DB round-trip.
-    const pageContext = contextRef
-      ? locationContextToPageContext(await resolveRequestContext(authResult, contextRef, (denied) => {
+    const resolvedLocation = contextRef
+      ? await resolveRequestContext(authResult, contextRef, (denied) => {
           auditRequest(request, {
             eventType: 'authz.access.denied',
             userId,
@@ -326,8 +321,20 @@ export async function POST(request: Request) {
             details: { reason: 'context_ref_denied', method: 'POST', chatId },
             riskScore: 0.3,
           });
-        }))
+        })
+      : null;
+    const pageContext = contextRef
+      ? locationContextToPageContext(resolvedLocation)
       : legacyPageContext;
+
+    // ONE normalized location for this turn, feeding both the model prompt and
+    // the tool context. PageContext can't represent a drive-level location (it
+    // requires a page), so deriving the prompt from it alone left the model told
+    // "operating from the dashboard" on /dashboard/<drive>/<section> while tools
+    // defaulted `driveId` to that very drive.
+    const turnLocation: LocationContext | null = contextRef
+      ? resolvedLocation
+      : pageContextToLocationContext(legacyPageContext);
 
     const mcpScopeError = await checkMCPPageScope(authResult, chatId);
     if (mcpScopeError) {
@@ -566,32 +573,12 @@ export async function POST(request: Request) {
       isNewConversation: !requestConversationId
     });
 
-    // Machine Pane binding (Phase 5's deriveMachinePaneBinding pure core): a
-    // conversation whose id is a machine_agent_terminals row bound to THIS
-    // page is pinned to that machine for the rest of the request — tools,
-    // system prompt, and default active machine all follow from it below.
-    // No additional access check is needed here: canPrincipalViewPage /
-    // canPrincipalEditPage against chatId (above) already authorizes the
-    // acting user for this page, which is the precondition the pure core's
-    // own docstring requires of its caller. A non-bound conversation (a
-    // brand-new cuid, or any conversation not backed by a machine_agent_terminals
-    // row) derives to null and leaves everything below byte-identical to today.
-    const machinePaneBindingResult = await deriveMachinePaneBinding(
-      { chatId: chatId!, conversationId: conversationId! },
-      buildMachinePaneBindingDeps()
-    );
-    if (machinePaneBindingResult && !machinePaneBindingResult.ok) {
-      loggers.ai.warn('AI Chat API: machine-pane binding rejected', {
-        chatId: maskedChatId,
-        conversationId,
-        reason: machinePaneBindingResult.reason,
-      });
-      return NextResponse.json({ error: 'This conversation is not bound to this machine' }, { status: 400 });
-    }
-    // The derived handle set IS the binding: every handle already carries the
-    // owning machine page id (checked against `chatId` inside the pure core),
-    // so nothing is re-stamped here.
-    const machineBinding = machinePaneBindingResult?.ok ? machinePaneBindingResult.binding : undefined;
+    // Agent-dispatch depth (spawn_session/send_session): a worker's turn rides
+    // this same route, and the header is how the chain depth survives the HTTP
+    // hop so the depth cap (MAX_AGENT_DEPTH) still terminates A→B→C. Untrusted
+    // by design and safe untrusted: forging it LOW yields the default any
+    // client already has, forging it HIGH only restricts the forger.
+    const agentDispatchDepth = readAgentDispatchDepth(request.headers);
 
     // Process @mentions in the user's message
     let mentionSystemPrompt = '';
@@ -899,36 +886,14 @@ export async function POST(request: Request) {
     const webSearchMode = webSearchEnabled === true;
     loggers.ai.debug('AI Page Chat API: Tool modes', { isReadOnly: readOnlyMode, webSearchEnabled: webSearchMode });
 
-    // Step 1: Apply isReadOnly filter, hide account-level-only tools
-    // (e.g. create_drive) from drive-scoped MCP tokens' tool list, then drop
-    // switch_machine/list_machines when this conversation is bound to one
-    // machine (see machinePaneBindingResult above) and register the SESSION
-    // FAMILY in their place.
-    //
-    // The family is added HERE, not in `pageSpaceTools`, on purpose: this is
-    // the one composition site that knows about the binding, and every other
-    // consumer of that registry (the global assistant, /v1 completions,
-    // consult, workflows, the agent-config listings) must keep its tool set
-    // byte-unchanged. The runtime module is loaded DYNAMICALLY, and only on
-    // this branch: it reaches the agent-terminal and workspace stores (and,
-    // through them, the Sprites driver seam), none of which an unbound
-    // request has any business pulling into its module graph.
-    //
-    // The read-only filter is applied LAST, to the COMPOSED set (issue #2204
-    // follow-up, F3). The session family is registered by ADDITION, so a filter
-    // applied to the baseline alone never saw it — and add/move/kill/send all
-    // mutate state, with send_session running a full agent loop in the target.
-    // Filtering the final set is the only placement a later addition cannot
-    // slip past.
+    // Step 1: Apply isReadOnly filter, and hide account-level-only tools
+    // (e.g. create_drive) from drive-scoped MCP tokens' tool list. The session
+    // + shell families ride `pageSpaceTools` itself (registered behind the
+    // CODE_EXECUTION kill-switch alongside bash/git — see buildPageSpaceTools),
+    // so no per-request registration happens here anymore: a conversation IS a
+    // session, there is no binding to compose by.
     const baseTools = filterToolsForReadOnly(
-      withSessionFamilyTools(
-        filterToolsForMachineBinding(
-          filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(authResult)),
-          machineBinding != null
-        ),
-        machineBinding != null ? (await import('@/lib/ai/tools/session-tools-runtime')).buildSessionTools() : {},
-        machineBinding != null
-      ),
+      filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(authResult)),
       readOnlyMode
     );
 
@@ -948,6 +913,16 @@ export async function POST(request: Request) {
     let filteredTools = filterToolsForAgentAllowlist(
       baseToolsWithoutOverrides,
       agentEnabledTools
+    ) as ToolSet;
+
+    // Step 3b: the per-agent sandbox switch. An agent with sandboxEnabled off
+    // never sees the sandbox families (bash/files, git+gh, sessions/shells) —
+    // independent of the allowlist, which cannot re-grant them. The env
+    // kill-switch and per-call canRunCode remain the security boundaries
+    // underneath; this is agent configuration.
+    filteredTools = filterToolsForSandboxEnablement(
+      filteredTools,
+      Boolean(page.sandboxEnabled)
     ) as ToolSet;
 
     // Step 4: webSearchEnabled is a runtime input toggle that overrides the allowlist.
@@ -987,7 +962,19 @@ export async function POST(request: Request) {
     // hiding their names from a top-level key scan. Integration-tool suppression
     // needs the pre-exposure set to correctly detect an active sandbox toolkit.
     const preExposureTools = filteredTools;
-    const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
+    // Capability catalog: built-in skills (stable, appended to the system prompt
+    // below) + the per-viewer user/drive command list (volatile, appended to the
+    // last user message). Both gated on the agent actually having load_skill —
+    // without the loader, advertising loadable capabilities is noise.
+    const eligibleSkills = listEligibleSkills(allowedToolNames);
+    const userCommandCatalog =
+      eligibleSkills.length > 0 || allowedToolNames.includes('load_skill')
+        ? await loadUserCommandCatalog(userId!, page.driveId ?? null, allowedToolNames)
+        : { catalogPrompt: '', searchEntries: [] };
+    const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS, [
+      ...eligibleSkills,
+      ...userCommandCatalog.searchEntries,
+    ]);
     filteredTools = exposure.tools;
     const toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
 
@@ -1199,18 +1186,10 @@ export async function POST(request: Request) {
       systemPrompt += buildInlineInstructions(allowedToolNames);
     }
 
-    const locationPrompt = buildLocationTurnPrompt(pageContext ? {
-      currentPage: {
-        title: pageContext.pageTitle,
-        type: pageContext.pageType,
-        path: pageContext.pagePath,
-      },
-      currentDrive: pageContext.driveId ? {
-        id: pageContext.driveId,
-        name: pageContext.driveName,
-        slug: pageContext.driveSlug,
-      } : undefined,
-      breadcrumbs: pageContext.breadcrumbs,
+    const locationPrompt = buildLocationTurnPrompt(turnLocation ? {
+      currentPage: turnLocation.currentPage,
+      currentDrive: turnLocation.currentDrive,
+      breadcrumbs: turnLocation.breadcrumbs,
     } : undefined);
 
     // Cross-drive membership context applies uniformly regardless of whether
@@ -1218,13 +1197,15 @@ export async function POST(request: Request) {
     // only prepended in the customSystemPrompt branch).
     systemPrompt = memberDriveContextPrefix + systemPrompt;
 
-    // Machine binding section — applies uniformly (custom or default system
-    // prompt) for the same reason as memberDriveContextPrefix above. Fixed
-    // for the conversation's lifetime, so it belongs in the STABLE section,
-    // not the per-turn locationPrompt below.
-    if (machineBinding) {
-      systemPrompt += buildMachineBindingPrompt(machineBinding);
-    }
+    // Skill catalog applies uniformly too — including custom-systemPrompt
+    // agents, which opt out of buildInlineInstructions and would otherwise
+    // carry load_skill with no idea what is loadable. It is capability
+    // metadata (like toolDiscoveryPrompt), not behavioral instruction, and
+    // varies only with the agent's tool configuration — stable per
+    // conversation, so it belongs in this cache-stable prompt, never the
+    // volatile block.
+    systemPrompt += buildBuiltinSkillCatalog(allowedToolNames);
+
 
     // Build timestamp system prompt for temporal awareness
     const userTimezone = user?.timezone ?? undefined;
@@ -1512,6 +1493,7 @@ export async function POST(request: Request) {
                 timestampPrompt: timestampSystemPrompt,
                 locationPrompt,
                 mentionPrompt: mentionSystemPrompt,
+                commandCatalogPrompt: userCommandCatalog.catalogPrompt,
                 commandPrompt: commandSystemPrompt,
               });
               const messagesWithContext = appendTurnContextToLastUserMessage(messages, turnContext);
@@ -1545,28 +1527,23 @@ export async function POST(request: Request) {
                 aiProvider: currentProvider,
                 aiModel: currentModel,
                 conversationId,
-                locationContext: pageContext ? {
-                  currentPage: {
-                    id: pageContext.pageId,
-                    title: pageContext.pageTitle,
-                    type: pageContext.pageType,
-                    path: pageContext.pagePath,
-                  },
-                  currentDrive: pageContext.driveId ? {
-                    id: pageContext.driveId,
-                    name: pageContext.driveName,
-                    slug: pageContext.driveSlug,
-                  } : undefined,
-                  breadcrumbs: pageContext.breadcrumbs,
+                // Same normalized location the model prompt was built from, so
+                // the two can never disagree about which workspace is in view.
+                locationContext: turnLocation ? {
+                  currentPage: turnLocation.currentPage ?? undefined,
+                  currentDrive: turnLocation.currentDrive ?? undefined,
+                  breadcrumbs: turnLocation.breadcrumbs,
                 } : undefined,
                 // Turn-start snapshot of the agent's working page — tools that
                 // shift focus (e.g. create_page) mutate this in place so later
                 // tool calls in the same turn track the agent's own actions
-                // rather than staying pinned to the turn-start snapshot.
-                currentWorkingPage: pageContext ? {
-                  id: pageContext.pageId,
-                  title: pageContext.pageTitle,
-                  type: pageContext.pageType,
+                // rather than staying pinned to the turn-start snapshot. Derived
+                // from the same turnLocation as everything else above, so there
+                // is exactly one answer to "where is the user" in this route.
+                currentWorkingPage: turnLocation?.currentPage ? {
+                  id: turnLocation.currentPage.id,
+                  title: turnLocation.currentPage.title,
+                  type: turnLocation.currentPage.type,
                 } : undefined,
                 modelCapabilities: modelCapabilitiesForTools,
                 isAdmin: isAdminUser,
@@ -1583,15 +1560,11 @@ export async function POST(request: Request) {
                 // exceed its own membership role — via the agent's broader ACL.
                 mcpAllowedDriveIds: getAllowedDriveIds(authResult),
                 mcpTokenId: isMCPAuthResult(authResult) ? authResult.tokenId : undefined,
-                // Computed once above from deriveMachinePaneBinding — undefined
-                // for every conversation that isn't a machine-bound pagespace
-                // pane. activeMachine seeds the default-mode sandbox tools'
-                // active machine so they operate on the bound machine from the
-                // first tool call, without waiting for a switch_machine call.
-                machineBinding,
-                activeMachine: machineBinding
-                  ? { kind: 'existing' as const, machineId: machineBinding.self.machineId }
-                  : undefined,
+                // How deep in an agent-dispatch chain this turn already runs —
+                // 0 for a direct user request, N for a worker turn dispatched
+                // by spawn_session/send_session (the X-Agent-Dispatch-Depth
+                // header parsed above). The session tools' depth cap reads it.
+                agentCallDepth: agentDispatchDepth,
               }, // Pass userId, timezone, AI context, location context, model capabilities, and chat source to tools
               maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
               onChunk: ({ chunk }) => {
@@ -1804,9 +1777,12 @@ export async function POST(request: Request) {
               conversationId, // Use actual conversation ID instead of pageId
               messageId,
               pageId: chatId,
-              // Empty string (no drive in view) must read as "no drive", not a
-              // literal '' driveId — matches the truthy-guards used elsewhere
-              // in this file for the same pageContext.driveId field.
+              // Deliberately still pageContext, NOT turnLocation: usage is
+              // attributed to the drive of the PAGE in view, and turnLocation
+              // also carries a drive on drive-level routes where no page is
+              // open. Switching would start attributing spend to a drive this
+              // metric never counted. The `|| undefined` keeps an empty-string
+              // driveId reading as "no drive".
               driveId: pageContext?.driveId || undefined,
               // 'exhausted' = retry shell gave up (failure); clean/terminal = a real
               // completion. Cost still settles regardless (the provider charged us).

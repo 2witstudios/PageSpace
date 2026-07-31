@@ -32,6 +32,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 
 import { resolveRequestContext } from '../resolve-request-context';
+import { buildContextRef } from '@/lib/ai/shared/buildContextRef';
 import { canPrincipalViewPage, isPrincipalDriveMember } from '@/lib/auth/principal-permissions';
 import { getPageBreadcrumbTrail } from '@/lib/pages/get-page-breadcrumb-trail';
 
@@ -175,6 +176,37 @@ describe('resolveRequestContext', () => {
       currentPage: null,
       currentDrive: { id: 'drive-1', name: 'Engineering', slug: 'engineering' },
       breadcrumbs: ['Engineering'],
+    });
+  });
+
+  // Composition with buildContextRef: drive SUB-routes (tasks, members, settings…)
+  // now resolve as routeType 'drive' rather than falling through to 'other'. They
+  // must inherit the same membership gate the bare drive route already passes
+  // through — widening the location must not widen access.
+  describe('drive sub-routes (composed with buildContextRef)', () => {
+    const DRIVES = [{ id: 'drive-1', slug: 'engineering', name: 'Engineering' }];
+
+    it('given a member on /dashboard/drive-1/files, should resolve currentDrive', async () => {
+      vi.mocked(isPrincipalDriveMember).mockResolvedValue(true);
+      dbLimitMock.mockResolvedValue([{ id: 'drive-1', name: 'Engineering', slug: 'engineering' }]);
+
+      const ref = buildContextRef('/dashboard/drive-1/files', DRIVES);
+
+      expect(await resolveRequestContext(AUTH, ref)).toEqual({
+        currentPage: null,
+        currentDrive: { id: 'drive-1', name: 'Engineering', slug: 'engineering' },
+        breadcrumbs: ['Engineering'],
+      });
+    });
+
+    it('given a NON-member on /dashboard/drive-1/files, should DENY and return null', async () => {
+      vi.mocked(isPrincipalDriveMember).mockResolvedValue(false);
+      const onAccessDenied = vi.fn();
+
+      const ref = buildContextRef('/dashboard/drive-1/files', DRIVES);
+
+      expect(await resolveRequestContext(AUTH, ref, onAccessDenied)).toBeNull();
+      expect(onAccessDenied).toHaveBeenCalledWith({ routeType: 'drive', driveId: 'drive-1' });
     });
   });
 

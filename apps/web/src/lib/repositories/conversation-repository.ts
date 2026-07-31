@@ -31,6 +31,8 @@ export interface ConversationStats {
   lastMessageContent: string | null;
   conversationUserId: string | null;
   isShared: boolean | null;
+  /** The session (workspace) this thread was born into — null for a plain page chat. */
+  sessionId: string | null;
   [key: string]: unknown; // Index signature for Drizzle execute compatibility
 }
 
@@ -150,20 +152,32 @@ export const conversationRepository = {
    * ownership-gated actions elsewhere (e.g. conversation deletion) trust
    * conversations.userId. Centralized here (rather than at each call site)
    * so every caller — including pre-existing ones — gets this guarantee.
+   *
+   * Returns WHAT HAPPENED rather than void, because the difference is
+   * load-bearing for session binding: `sessionId` is written ONLY on the
+   * INSERT (a thread is BORN into its session — contract invariant 1), so a
+   * caller that needed the binding must know the insert did not happen.
+   * Callers that only need idempotent ensure-exists semantics can ignore the
+   * result exactly as before.
    */
 
-  async createConversation(conversationId: string, userId: string, pageId: string, opts?: { isShared?: boolean }): Promise<void> {
+  async createConversation(
+    conversationId: string,
+    userId: string,
+    pageId: string,
+    opts?: { isShared?: boolean; sessionId?: string; title?: string }
+  ): Promise<'created' | 'exists' | 'message_owner_conflict'> {
     const [existing] = await db
       .select({ id: conversations.id })
       .from(conversations)
       .where(eq(conversations.id, conversationId))
       .limit(1);
-    if (existing) return;
+    if (existing) return 'exists';
 
     const hasConflictingOwner = await hasConflictingMessageOwner(conversationId, userId);
-    if (hasConflictingOwner) return;
+    if (hasConflictingOwner) return 'message_owner_conflict';
 
-    await db
+    const inserted = await db
       .insert(conversations)
       .values({
         id: conversationId,
@@ -171,24 +185,27 @@ export const conversationRepository = {
         type: 'page',
         contextId: pageId,
         isShared: opts?.isShared ?? false,
+        sessionId: opts?.sessionId ?? null,
+        title: opts?.title ?? null,
         updatedAt: new Date(),
       })
-      .onConflictDoNothing();
+      .onConflictDoNothing()
+      .returning({ id: conversations.id });
+    // A concurrent first-write winning the race is 'exists' too — the caller's
+    // insert (and therefore the caller's binding) did not happen.
+    return inserted.length > 0 ? 'created' : 'exists';
   },
 
   /**
    * Get an AI_CHAT agent by ID
    */
   async getAiAgent(agentId: string): Promise<AiAgent | null> {
-    // Conversation-hosting pages: AI_CHAT agents, and MACHINE pages — machine
-    // panes anchor their terminal conversations to the machine page (Phase 4
-    // pre-creates them, Phase 11's pane lists/loads them, #2166). Agent-only
-    // routes (config, drives, consult) do their own AI_CHAT checks and are
-    // unaffected by this widening.
+    // Conversation-hosting pages: AI_CHAT agents only — agent sessions anchor
+    // to the conversation itself, and the Machine page type is gone entirely.
     const agent = await db.query.pages.findFirst({
       where: and(
         eq(pages.id, agentId),
-        inArray(pages.type, ['AI_CHAT', 'MACHINE']),
+        inArray(pages.type, ['AI_CHAT']),
         eq(pages.isTrashed, false)
       ),
       columns: {
@@ -269,7 +286,8 @@ export const conversationRepository = {
         lm.last_message_role as "lastMessageRole",
         lm.last_message_content as "lastMessageContent",
         conv."userId" as "conversationUserId",
-        conv."isShared" as "isShared"
+        conv."isShared" as "isShared",
+        conv."sessionId" as "sessionId"
       FROM conversation_stats cs
       LEFT JOIN first_user_messages fum ON cs."conversationId" = fum."conversationId"
       LEFT JOIN last_messages lm ON cs."conversationId" = lm."conversationId"

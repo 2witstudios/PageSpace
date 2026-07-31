@@ -1,9 +1,15 @@
 import { Crown, Zap, Shield, Star } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import {
+  TIERS as CANONICAL_PLAN_ORDER,
+  TIER_PLAN_LIMITS,
+  formatTierBytes,
+  type SubscriptionTier,
+} from '@pagespace/lib/billing/subscription-tiers';
 import { stripeConfig } from '../stripe-config';
 import { MONTHLY_CREDIT_CENTS, monthlyCreditsPhrase } from './credits';
 
-export type SubscriptionTier = 'free' | 'pro' | 'founder' | 'business';
+export type { SubscriptionTier };
 
 export interface PlanFeature {
   name: string;
@@ -71,44 +77,49 @@ const STRIPE_PRICE_ID_PRO = stripeConfig.priceIds.pro;
 const STRIPE_PRICE_ID_FOUNDER = stripeConfig.priceIds.founder;
 const STRIPE_PRICE_ID_BUSINESS = stripeConfig.priceIds.business;
 
-// NOTE: storage + maxFileSize numbers below are marketing copy that MUST mirror
-// the canonical enforcement table STORAGE_TIERS in
-// packages/lib/src/services/subscription-utils.ts. Kept as literals here so this
-// client-imported module stays free of server-only (@pagespace/lib DB) imports.
+// Storage/file-size/price/domain numbers derive from the canonical
+// TIER_PLAN_LIMITS table in @pagespace/lib/billing/subscription-tiers (a pure,
+// client-safe module) — the same table the server enforces, so plan copy can
+// never drift from enforcement.
+function planPrice(tier: SubscriptionTier): PlanDefinition['price'] {
+  const usd = TIER_PLAN_LIMITS[tier].priceMonthlyUsd;
+  return { monthly: usd, currency: 'USD', formatted: usd === 0 ? 'Free' : `$${usd}` };
+}
+
+function planLimits(tier: SubscriptionTier): PlanDefinition['limits'] {
+  const limits = TIER_PLAN_LIMITS[tier];
+  return {
+    monthlyCreditsCents: MONTHLY_CREDIT_CENTS[tier],
+    proModels: limits.proModels,
+    storage: { bytes: limits.quotaBytes, formatted: formatTierBytes(limits.quotaBytes) },
+    maxFileSize: { bytes: limits.maxFileSize, formatted: formatTierBytes(limits.maxFileSize) },
+    maxCustomDomains: limits.maxCustomDomains,
+    canChooseSubdomain: limits.canChooseSubdomain,
+  };
+}
+
+const storagePhrase = (tier: SubscriptionTier) =>
+  `${formatTierBytes(TIER_PLAN_LIMITS[tier].quotaBytes)} storage`;
+const maxFilePhrase = (tier: SubscriptionTier) =>
+  `${formatTierBytes(TIER_PLAN_LIMITS[tier].maxFileSize)} max file size`;
+
 export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
   free: {
     id: 'free',
     name: 'Free',
     displayName: 'Free Plan',
-    price: {
-      monthly: 0,
-      currency: 'USD',
-      formatted: 'Free',
-    },
+    price: planPrice('free'),
     icon: Zap,
     iconColor: 'text-blue-500',
     accentColor: 'border-zinc-200 bg-zinc-50/50 dark:border-zinc-800 dark:bg-zinc-900/50',
     description: 'Perfect for getting started with PageSpace',
-    limits: {
-      monthlyCreditsCents: MONTHLY_CREDIT_CENTS.free,
-      proModels: false,
-      storage: {
-        bytes: 500 * 1024 * 1024, // 500MB
-        formatted: '500MB',
-      },
-      maxFileSize: {
-        bytes: 50 * 1024 * 1024, // 50MB
-        formatted: '50MB',
-      },
-      maxCustomDomains: 0,
-      canChooseSubdomain: false,
-    },
+    limits: planLimits('free'),
     features: [
       { name: monthlyCreditsPhrase('free'), included: true },
       { name: 'Buy more credits anytime', included: true },
       { name: 'Standard AI models', included: true },
-      { name: '500MB storage', included: true },
-      { name: '50MB max file size', included: true },
+      { name: storagePhrase('free'), included: true },
+      { name: maxFilePhrase('free'), included: true },
       { name: 'Basic processing', included: true },
       { name: 'Community support', included: true },
       { name: 'Pro AI models', included: false },
@@ -121,11 +132,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     id: 'pro',
     name: 'Pro',
     displayName: 'Pro Plan',
-    price: {
-      monthly: 15,
-      currency: 'USD',
-      formatted: '$15',
-    },
+    price: planPrice('pro'),
     badge: {
       text: 'Most Popular',
       variant: 'default',
@@ -137,26 +144,13 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     description: 'Best for professionals and growing teams',
     highlighted: true,
     stripePriceId: STRIPE_PRICE_ID_PRO,
-    limits: {
-      monthlyCreditsCents: MONTHLY_CREDIT_CENTS.pro,
-      proModels: true,
-      storage: {
-        bytes: 2 * 1024 * 1024 * 1024, // 2GB
-        formatted: '2GB',
-      },
-      maxFileSize: {
-        bytes: 250 * 1024 * 1024, // 250MB
-        formatted: '250MB',
-      },
-      maxCustomDomains: 1,
-      canChooseSubdomain: true,
-    },
+    limits: planLimits('pro'),
     features: [
       { name: monthlyCreditsPhrase('pro'), included: true, description: '3x more than Free' },
       { name: 'Buy more credits anytime', included: true },
       { name: 'Standard + Pro AI models', included: true, description: 'Advanced AI reasoning' },
-      { name: '2GB storage', included: true, description: '4x more than Free' },
-      { name: '250MB max file size', included: true, description: '5x larger files' },
+      { name: storagePhrase('pro'), included: true, description: '4x more than Free' },
+      { name: maxFilePhrase('pro'), included: true, description: '5x larger files' },
       { name: 'Priority processing', included: true },
       { name: 'Priority support', included: true },
       { name: 'Community support', included: true },
@@ -167,11 +161,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     id: 'founder',
     name: 'Founder',
     displayName: 'Founder Plan',
-    price: {
-      monthly: 50,
-      currency: 'USD',
-      formatted: '$50',
-    },
+    price: planPrice('founder'),
     badge: {
       text: 'Best Value',
       variant: 'outline',
@@ -182,26 +172,13 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     accentColor: 'border-zinc-200 bg-zinc-50/50 dark:border-zinc-800 dark:bg-zinc-900/50',
     description: 'For power users who want maximum value',
     stripePriceId: STRIPE_PRICE_ID_FOUNDER,
-    limits: {
-      monthlyCreditsCents: MONTHLY_CREDIT_CENTS.founder,
-      proModels: true,
-      storage: {
-        bytes: 10 * 1024 * 1024 * 1024, // 10GB
-        formatted: '10GB',
-      },
-      maxFileSize: {
-        bytes: 500 * 1024 * 1024, // 500MB
-        formatted: '500MB',
-      },
-      maxCustomDomains: 3,
-      canChooseSubdomain: true,
-    },
+    limits: planLimits('founder'),
     features: [
       { name: monthlyCreditsPhrase('founder'), included: true, description: '10x more than Free' },
       { name: 'Buy more credits anytime', included: true },
       { name: 'Standard + Pro AI models', included: true, description: 'Advanced AI reasoning' },
-      { name: '10GB storage', included: true, description: '20x more than Free' },
-      { name: '500MB max file size', included: true, description: '10x larger files' },
+      { name: storagePhrase('founder'), included: true, description: '20x more than Free' },
+      { name: maxFilePhrase('founder'), included: true, description: '10x larger files' },
       { name: 'Priority processing', included: true },
       { name: 'Priority support', included: true },
       { name: 'Community support', included: true },
@@ -212,36 +189,19 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     id: 'business',
     name: 'Business',
     displayName: 'Business Plan',
-    price: {
-      monthly: 100,
-      currency: 'USD',
-      formatted: '$100',
-    },
+    price: planPrice('business'),
     icon: Shield,
     iconColor: 'text-violet-500',
     accentColor: 'border-zinc-200 bg-zinc-50/50 dark:border-zinc-800 dark:bg-zinc-900/50',
     description: 'Enterprise-grade features for large teams',
     stripePriceId: STRIPE_PRICE_ID_BUSINESS,
-    limits: {
-      monthlyCreditsCents: MONTHLY_CREDIT_CENTS.business,
-      proModels: true,
-      storage: {
-        bytes: 50 * 1024 * 1024 * 1024, // 50GB
-        formatted: '50GB',
-      },
-      maxFileSize: {
-        bytes: 1024 * 1024 * 1024, // 1GB
-        formatted: '1GB',
-      },
-      maxCustomDomains: 10,
-      canChooseSubdomain: true,
-    },
+    limits: planLimits('business'),
     features: [
       { name: monthlyCreditsPhrase('business'), included: true, description: '20x more than Free' },
       { name: 'Buy more credits anytime', included: true },
       { name: 'Standard + Pro AI models', included: true, description: 'Maximum AI reasoning' },
-      { name: '50GB storage', included: true, description: '100x more than Free' },
-      { name: '1GB max file size', included: true, description: '20x larger files' },
+      { name: storagePhrase('business'), included: true, description: '100x more than Free' },
+      { name: maxFilePhrase('business'), included: true, description: '20x larger files' },
       { name: 'Enterprise processing', included: true },
       { name: 'Priority support', included: true },
       { name: 'Enterprise features', included: true },
@@ -250,7 +210,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
   },
 };
 
-export const PLAN_ORDER: SubscriptionTier[] = ['free', 'pro', 'founder', 'business'];
+export const PLAN_ORDER: readonly SubscriptionTier[] = CANONICAL_PLAN_ORDER;
 
 export function getPlan(tier: SubscriptionTier): PlanDefinition {
   return PLANS[tier] || PLANS['free'];

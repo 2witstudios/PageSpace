@@ -13,11 +13,11 @@ import {
   createDriveEventPayload,
   broadcastDriveMemberEvent,
   createDriveMemberEventPayload,
-  kickUserFromDrive,
-  kickUserFromDriveActivity,
-  kickUserFromPage,
-  kickUserFromPageActivity,
 } from '@/lib/websocket';
+import {
+  kickForDriveMembershipRevocation,
+  kickForPagePermissionRevocation,
+} from '@pagespace/lib/permissions/revocation-kick';
 import { db } from '@pagespace/db/db';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
@@ -178,12 +178,15 @@ export async function POST(
           })
         );
 
-        // CRITICAL: If member was removed via rollback, kick from real-time rooms
+        // If member was removed via rollback, kick from real-time rooms
+        // through the centralized hook (#2158) — best-effort, never throws.
         if (memberOperation === 'member_removed') {
-          await Promise.all([
-            kickUserFromDrive(activity.driveId, targetUserId, 'member_removed', activity.resourceTitle ?? undefined),
-            kickUserFromDriveActivity(activity.driveId, targetUserId, 'member_removed'),
-          ]);
+          await kickForDriveMembershipRevocation({
+            userId: targetUserId,
+            driveId: activity.driveId,
+            driveName: activity.resourceTitle ?? undefined,
+            reason: 'member_removed',
+          });
         }
       }
     } else if (activity.resourceType === 'permission' && activity.pageId) {
@@ -191,10 +194,11 @@ export async function POST(
       const targetUserId = (activity.metadata as Record<string, unknown>)?.targetUserId as string | undefined;
       if (targetUserId && activity.operation === 'permission_grant') {
         // Rolling back a permission grant = revoking access
-        await Promise.all([
-          kickUserFromPage(activity.pageId, targetUserId, 'permission_revoked'),
-          kickUserFromPageActivity(activity.pageId, targetUserId, 'permission_revoked'),
-        ]);
+        await kickForPagePermissionRevocation({
+          userId: targetUserId,
+          pageId: activity.pageId,
+          reason: 'permission_revoked',
+        });
       }
     } else if (activity.resourceType === 'role' && activity.driveId) {
       // Fix 16: Role changes affect all drive members - broadcast drive update

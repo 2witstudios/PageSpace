@@ -49,7 +49,7 @@ function makeDeps(over: Partial<GitSandboxRunDeps> = {}, token: string | null = 
   const { sandbox, runCommandCalls } = makeSandbox(over.reconnect ? undefined : undefined);
   const deps: GitSandboxRunDeps = {
     isEnabled: () => true,
-    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' }),
     reconnect: async () => sandbox,
     quota: {
       acquireSlot: () => { slots.acquired += 1; return true; },
@@ -81,7 +81,7 @@ function makeDepsWithSpy(token: string | null = 'ghp_test_token') {
   const slots = { acquired: 0, released: 0 };
   const deps: GitSandboxRunDeps = {
     isEnabled: () => true,
-    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+    acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' }),
     reconnect: async () => sandbox,
     quota: {
       acquireSlot: () => { slots.acquired += 1; return true; },
@@ -104,22 +104,22 @@ describe('runGitInSandbox', () => {
     expect(runCommandCalls[0].args).toEqual(['status']);
   });
 
-  it('given a ctx with an activeMachine set, should thread it onto the acquireSandbox request', async () => {
+  it('given a ctx, should thread agentPageId/conversationId onto the acquireSandbox request', async () => {
     const seen: unknown[] = [];
     const { deps } = makeDeps({
       acquireSandbox: async (input) => {
         seen.push(input);
-        return { ok: true, sandboxId: 'sbx-1', resumed: false };
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' };
       },
     });
     await runGitInSandbox({
       cmd: 'git',
       args: ['status'],
-      ctx: makeCtx({ activeMachine: { kind: 'existing', machineId: 't1' } }),
+      ctx: makeCtx({ agentPageId: 'agent-1', conversationId: 'c1' }),
       deps,
     });
     expect(seen).toEqual([
-      expect.objectContaining({ activeMachine: { kind: 'existing', machineId: 't1' } }),
+      expect.objectContaining({ agentPageId: 'agent-1', conversationId: 'c1' }),
     ]);
   });
 
@@ -362,5 +362,92 @@ describe('buildGitToolEnv (pure)', () => {
       },
       expected: { NODE_ENV: 'test', GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1' },
     });
+  });
+});
+
+describe('opportunistic storage measurement', () => {
+  it('should measure the session AFTER the git command — clone is the biggest writer here', async () => {
+    // A session that only ever ran git tools was never measured at all: the bash
+    // path fires this seam from its `release`, and the git path has its own
+    // acquire/release which did not. So an agent that cloned a large repo and
+    // did nothing else billed its empty-disk baseline while the reconcile
+    // advanced the watermark over gigabytes of checkout.
+    //
+    // Ordering asserted, not just the call: measuring before the command records
+    // the pre-write footprint and then lets the per-session throttle suppress
+    // the real one.
+    const order: string[] = [];
+    const { deps } = makeDeps({
+      reconnect: async () => ({
+        sandboxId: 'sbx-1',
+        spriteInstanceId: null,
+        runCommand: async (): Promise<SandboxRunResult> => {
+          order.push('command');
+          return { exitCode: 0, stdout: 'ok', stderr: '' };
+        },
+        writeFiles: async () => {},
+        readFileToBuffer: async () => Buffer.from(''),
+        createCheckpoint: async () => {},
+      }),
+      measureStorage: async ({ sessionId }) => {
+        order.push(`measure:${sessionId}`);
+      },
+    });
+
+    await runGitInSandbox({ cmd: 'git', args: ['status'], ctx: makeCtx({ conversationId: 'c1' }), deps });
+    await Promise.resolve();
+
+    expect(order).toEqual(['command', 'measure:ws-1']);
+  });
+
+  it('given a THROWING measurement, should log it rather than swallow it silently', async () => {
+    // "Best-effort" must not mean invisible. If this throws on every git call —
+    // a bad exec adapter, a missing `du` — the largest writer in the system
+    // stops being measured with no symptom whatsoever, which is exactly the bug
+    // the seam was wired to fix, back again and now undetectable.
+    const warnings: Array<{ message: string; meta?: Record<string, unknown> }> = [];
+    const { deps } = makeDeps({
+      measureStorage: async () => {
+        throw new Error('du: command not found');
+      },
+      logger: {
+        warn: (message: string, meta?: Record<string, unknown>) => {
+          warnings.push({ message, meta });
+        },
+        error: () => {},
+      },
+    });
+
+    const result = await runGitInSandbox({
+      cmd: 'git',
+      args: ['status'],
+      ctx: makeCtx({ conversationId: 'c1' }),
+      deps,
+    });
+
+    // The tool result is untouched — a billing observation never fails the op.
+    expect(result).toMatchObject({ success: true });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].meta).toMatchObject({ sessionId: 'ws-1' });
+  });
+
+  it('measures even with NO conversation id — the key is the acquired SESSION, not the conversation', async () => {
+    // The old gate keyed on the conversation and silently skipped measurement
+    // whenever the two ids diverged (codex review, P1: underbilling). The
+    // session id comes from the acquire itself, so it is always present on a
+    // successful run.
+    const measured: Array<{ sessionId: string }> = [];
+    const { deps } = makeDeps({
+      measureStorage: async (input) => {
+        measured.push(input as { sessionId: string });
+      },
+    });
+
+    await runGitInSandbox({ cmd: 'git', args: ['status'], ctx: makeCtx({ conversationId: undefined }), deps });
+    await Promise.resolve();
+
+    expect(measured).toMatchObject([{ sessionId: 'ws-1' }]);
   });
 });

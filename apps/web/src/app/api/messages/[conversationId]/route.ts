@@ -2,10 +2,11 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { createOrUpdateMessageNotification } from '@pagespace/lib/notifications/notifications'
+import { createOrUpdateMessageNotification, markDmConversationNotificationsRead } from '@pagespace/lib/notifications/notifications'
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { dmMessageRepository } from '@pagespace/lib/services/dm-message-repository';
+import { buildLastMessagePreview } from '@pagespace/lib/services/message-derived-state';
 import { attachQuotedMessages } from '@pagespace/lib/services/quote-enrichment';
 import { broadcastInboxEvent, broadcastThreadReplyCountUpdated } from '@/lib/websocket/socket-utils';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
@@ -44,6 +45,38 @@ function attachmentValidationErrorResponse(
     { error: isOwnerMismatch ? 'You do not own this file' : 'File is not linked to this conversation' },
     { status: 403 }
   );
+}
+
+/**
+ * Shared by the GET side-effect and the explicit PATCH.
+ *
+ * The notification clear runs on every call, independent of `markedCount` — a
+ * NEW_DIRECT_MESSAGE notification can be unread even when its underlying
+ * message row was already marked read (e.g. by a build predating this fix),
+ * so gating the clear on `markedCount` would leave it orphaned forever.
+ *
+ * The inbox broadcast stays gated on `markedCount > 0` — a no-op poll must
+ * not emit socket traffic (GET-path noise) — and runs AFTER the notification
+ * write resolves, so a listener like `useSidebarBadges` that revalidates on
+ * this event observes the post-write state rather than racing it.
+ */
+async function markDmConversationReadAndNotify(
+  userId: string,
+  conversationId: string,
+  markedCount: number
+): Promise<number> {
+  const notificationsMarkedRead = await markDmConversationNotificationsRead(userId, conversationId);
+
+  if (markedCount > 0) {
+    await broadcastInboxEvent(userId, {
+      operation: 'read_status_changed',
+      type: 'dm',
+      id: conversationId,
+      unreadCount: 0,
+    });
+  }
+
+  return notificationsMarkedRead;
 }
 
 // GET /api/messages/[conversationId] - Get messages in a conversation
@@ -168,7 +201,7 @@ export async function GET(
       : conversation.participant1Id;
 
     const readAt = new Date();
-    await Promise.all([
+    const [markedCount] = await Promise.all([
       dmMessageRepository.markActiveMessagesRead({
         conversationId,
         otherUserId,
@@ -181,6 +214,8 @@ export async function GET(
       }),
     ]);
 
+    const notificationsMarkedRead = await markDmConversationReadAndNotify(userId, conversationId, markedCount);
+
     // Show oldest first in the response payload.
     messages.reverse();
 
@@ -190,7 +225,7 @@ export async function GET(
 
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'message', resourceId: conversationId });
 
-    return NextResponse.json({ messages: enriched });
+    return NextResponse.json({ messages: enriched, notificationsMarkedRead });
   } catch (error) {
     loggers.api.error('Error fetching messages:', error as Error);
     return NextResponse.json(
@@ -209,23 +244,6 @@ function isValidAttachmentMeta(value: unknown): value is AttachmentMeta {
     typeof m.mimeType === 'string' &&
     typeof m.contentHash === 'string'
   );
-}
-
-function buildLastMessagePreview(
-  content: string,
-  attachmentMeta: AttachmentMeta | null
-): string {
-  const trimmed = content.trim();
-  if (trimmed.length > 0) {
-    return trimmed.length > 100 ? trimmed.substring(0, 100) + '...' : trimmed;
-  }
-  if (attachmentMeta) {
-    const isImage = attachmentMeta.mimeType.startsWith('image/');
-    return isImage
-      ? `[image: ${attachmentMeta.originalName}]`
-      : `[file: ${attachmentMeta.originalName}]`;
-  }
-  return '';
 }
 
 // POST /api/messages/[conversationId] - Send a message
@@ -375,17 +393,15 @@ export async function POST(
         resourceId: result.reply.id,
       });
 
-      // Mirror row, when present, behaves as a top-level message — it should
-      // bump the conversation preview/inbox just like a regular send. The
-      // thread-only reply does NOT touch the inbox preview here; PR 5 wires
-      // the inbox bump for thread followers separately.
+      // Mirror row, when present, behaves as a top-level message — it bumps
+      // the conversation preview/inbox just like a regular send.
+      // insertDmThreadReply already recomputed the stored preview from the
+      // mirror row (#2153); this local copy is only for the
+      // notification/broadcast payloads below. The thread-only reply does
+      // NOT touch the inbox preview here; PR 5 wires the inbox bump for
+      // thread followers separately.
       if (result.mirror) {
         const previewSource = buildLastMessagePreview(content, attachmentMeta);
-        await dmMessageRepository.updateConversationLastMessage({
-          conversationId,
-          lastMessageAt: result.mirror.createdAt,
-          lastMessagePreview: previewSource,
-        });
 
         const recipientId = conversation.participant1Id === userId
           ? conversation.participant2Id
@@ -555,13 +571,10 @@ export async function POST(
       resourceId: newMessage.id,
     });
 
+    // insertDmMessageWithAttachment already recomputed the stored preview
+    // (#2153); this local copy is only for the notification/broadcast
+    // payloads below.
     const messagePreview = buildLastMessagePreview(content, attachmentMeta);
-
-    await dmMessageRepository.updateConversationLastMessage({
-      conversationId,
-      lastMessageAt: newMessage.createdAt,
-      lastMessagePreview: messagePreview,
-    });
 
     const recipientId = conversation.participant1Id === userId
       ? conversation.participant2Id
@@ -650,7 +663,7 @@ export async function PATCH(
       : conversation.participant1Id;
 
     const readAt = new Date();
-    await Promise.all([
+    const [markedCount] = await Promise.all([
       dmMessageRepository.markActiveMessagesRead({
         conversationId,
         otherUserId,
@@ -663,9 +676,11 @@ export async function PATCH(
       }),
     ]);
 
+    const notificationsMarkedRead = await markDmConversationReadAndNotify(userId, conversationId, markedCount);
+
     auditRequest(request, { eventType: 'data.write', userId, resourceType: 'message', resourceId: conversationId, details: { operation: 'mark_read' } });
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, notificationsMarkedRead });
   } catch (error) {
     loggers.api.error('Error marking messages as read:', error as Error);
     return NextResponse.json(

@@ -894,22 +894,21 @@ function TaskListView({ page }: TaskListViewProps) {
       return;
     }
 
-    // Calculate new position (between neighbors)
+    // Calculate new position (between neighbors) on pages.position — the single
+    // ordering rail (#2143)
     let newPosition: number;
     if (newIndex === 0) {
       // Moving to first position
-      const firstTask = tasks[0];
-      newPosition = (firstTask.page?.position ?? firstTask.position) - 1;
+      newPosition = (tasks[0].page?.position ?? 0) - 1;
     } else if (newIndex === tasks.length - 1) {
       // Moving to last position
-      const lastTask = tasks[tasks.length - 1];
-      newPosition = (lastTask.page?.position ?? lastTask.position) + 1;
+      newPosition = (tasks[tasks.length - 1].page?.position ?? 0) + 1;
     } else {
       // Moving between two tasks
       const beforeTask = newIndex > oldIndex ? tasks[newIndex] : tasks[newIndex - 1];
       const afterTask = newIndex > oldIndex ? tasks[newIndex + 1] : tasks[newIndex];
-      const beforePos = beforeTask.page?.position ?? beforeTask.position;
-      const afterPos = afterTask.page?.position ?? afterTask.position;
+      const beforePos = beforeTask.page?.position ?? 0;
+      const afterPos = afterTask.page?.position ?? 0;
       newPosition = (beforePos + afterPos) / 2;
     }
 

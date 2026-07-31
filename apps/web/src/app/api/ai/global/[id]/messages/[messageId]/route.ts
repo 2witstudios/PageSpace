@@ -115,7 +115,10 @@ export async function PATCH(
       const actorInfo = await getActorInfo(userId);
       logMessageActivity(userId, 'message_update', {
         id: messageId,
-        pageId: conversationId, // Global conversations use conversationId as identifier
+        // Global conversations aren't page-backed - conversationId belongs to the
+        // `conversations` table, so writing it to activity_logs.pageId violates the
+        // pages FK. Linkage is carried by aiConversationId + metadata.conversationType.
+        pageId: null,
         driveId: null, // Global conversations are user-level, not drive-level
         conversationType: 'global',
       }, actorInfo, {
@@ -242,7 +245,10 @@ export async function DELETE(
       const actorInfo = await getActorInfo(userId);
       logMessageActivity(userId, 'message_delete', {
         id: messageId,
-        pageId: conversationId, // Global conversations use conversationId as identifier
+        // Global conversations aren't page-backed - conversationId belongs to the
+        // `conversations` table, so writing it to activity_logs.pageId violates the
+        // pages FK. Linkage is carried by aiConversationId + metadata.conversationType.
+        pageId: null,
         driveId: null, // Global conversations are user-level, not drive-level
         conversationType: 'global',
       }, actorInfo, {

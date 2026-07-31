@@ -18,10 +18,12 @@ import { workflowTools } from '../tools/workflow-tools';
 import { triggerTools } from '../tools/trigger-tools';
 import { modelTools } from '../tools/model-tools';
 import { commandTools } from '../tools/command-tools';
+import { skillTools } from '../tools/skill-tools';
 import { formTools } from '../tools/form-tools';
 import { imageGenerationTools } from '../tools/image-generation-tools';
 import { buildSandboxTools } from '../tools/sandbox-tools-runtime';
 import { buildGitSandboxTools } from '../tools/sandbox-git-tools-runtime';
+import { buildSessionTools } from '../tools/session-tools-runtime';
 import { CORE_TOOL_NAMES } from './stub-tools';
 
 /**
@@ -54,6 +56,7 @@ const TOOL_MODULES = {
   triggers: triggerTools,
   models: modelTools,
   commands: commandTools,
+  skills: skillTools,
   forms: formTools,
   imageGeneration: imageGenerationTools,
 } as const;
@@ -109,13 +112,18 @@ export function buildPageSpaceTools({
   codeExecutionEnabled = isCodeExecutionEnabled(),
   sandboxToolsFactory = buildSandboxTools,
   sandboxGitToolsFactory = buildGitSandboxTools,
+  sessionToolsFactory = buildSessionTools,
 }: {
   codeExecutionEnabled?: boolean;
   sandboxToolsFactory?: () => Record<string, Tool>;
   sandboxGitToolsFactory?: () => Record<string, Tool>;
+  sessionToolsFactory?: () => Record<string, Tool>;
 } = {}) {
   if (!codeExecutionEnabled) return { ...baseTools };
-  return { ...baseTools, ...sandboxToolsFactory(), ...sandboxGitToolsFactory() };
+  // The session + shell families ride the same kill-switch as bash/git: they
+  // are the agent-session orchestration surface, and a session's whole point
+  // is the sandbox it lazily owns.
+  return { ...baseTools, ...sandboxToolsFactory(), ...sandboxGitToolsFactory(), ...sessionToolsFactory() };
 }
 
 export const pageSpaceTools = buildPageSpaceTools();

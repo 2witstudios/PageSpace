@@ -7,8 +7,16 @@ import type { ReorderPlan } from './compute-reorder-plan';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-export interface LockedBatchReorderOptions<T extends PgTable> {
-  table: T;
+export interface LockedBatchReorderOptions {
+  /**
+   * Deliberately typed as the non-generic `PgTable` rather than a `<T extends
+   * PgTable>` parameter: drizzle's `.from()` overload resolves a conditional
+   * type (`TableLikeHasEmptySelection`) against its argument, which an
+   * unresolved generic can't satisfy. Nothing here depends on the concrete
+   * table type — the projection is `{ id: idColumn }` and the write goes
+   * through raw SQL — so the generic bought no type safety anyway.
+   */
+  table: PgTable;
   idColumn: AnyPgColumn;
   positionColumn: AnyPgColumn;
   scopeWhere: SQL;
@@ -34,6 +42,16 @@ export interface LockedBatchReorderOptions<T extends PgTable> {
    * this codebase already has.
    */
   touchColumns?: AnyPgColumn[];
+  /**
+   * SQL type the submitted positions are cast to inside the batched
+   * `UPDATE ... FROM (VALUES ...)`. Defaults to `'int'` for the integer position
+   * columns (`drive_roles`, `favorites`) this primitive was written for.
+   *
+   * Pass `'real'` for float position columns — notably `pages.position`, where task
+   * and page reorders write fractional midpoints between neighbours. An `::int` cast
+   * there truncates every midpoint, collapsing distinct slots onto one position.
+   */
+  positionType?: 'int' | 'real';
 }
 
 /**
@@ -56,11 +74,11 @@ export interface LockedBatchReorderOptions<T extends PgTable> {
  * window between those N updates that let concurrent reorders interleave in
  * the first place.
  */
-export async function lockedBatchReorder<T extends PgTable>(
+export async function lockedBatchReorder(
   tx: Tx,
-  opts: LockedBatchReorderOptions<T>
+  opts: LockedBatchReorderOptions
 ): Promise<string[]> {
-  const { table, idColumn, positionColumn, scopeWhere, plan, touchColumns = [] } = opts;
+  const { table, idColumn, positionColumn, scopeWhere, plan, touchColumns = [], positionType = 'int' } = opts;
 
   if (plan.orderedIds.length === 0) {
     return [];
@@ -76,7 +94,9 @@ export async function lockedBatchReorder<T extends PgTable>(
 
   const values = sql.join(
     plan.orderedIds.map(
-      (id) => sql`(${id}::text, ${plan.positionById.get(id)}::int)`
+      (id) => positionType === 'real'
+        ? sql`(${id}::text, ${plan.positionById.get(id)}::real)`
+        : sql`(${id}::text, ${plan.positionById.get(id)}::int)`
     ),
     sql`, `
   );

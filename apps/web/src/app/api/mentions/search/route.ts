@@ -324,6 +324,15 @@ export async function GET(request: Request) {
 
       // Filter by permissions and requested types
       for (const page of pageResults) {
+        // The dead 'MACHINE' pg-enum value (kept because Postgres cannot DROP
+        // VALUE — see packages/db/src/schema/core.ts) can never be written by
+        // the app anymore and every MACHINE page was hard-deleted in the
+        // Phase 8 teardown, so this row can never actually occur — narrows
+        // `page.type` back to `PageMentionData['pageType']` for the type
+        // checker rather than widening that type to admit a value nothing
+        // can produce.
+        if (page.type === 'MACHINE') continue;
+
         const accessLevel = await getUserAccessLevel(userId, page.id);
         if (!accessLevel) continue;
 
@@ -331,7 +340,7 @@ export async function GET(request: Request) {
         if (!requestedTypes.includes('page')) {
           continue; // Skip if page type not requested
         }
-        
+
         const mentionType: MentionType = 'page';
 
         // Include drive context for cross-drive searches and short ID for differentiation

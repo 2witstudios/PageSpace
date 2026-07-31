@@ -193,6 +193,10 @@ describe('Schema definitions', () => {
       expect(conversations.conversationsRelations).toBeDefined();
       expect(conversations.messagesRelations).toBeDefined();
     });
+
+    it('pins closedInSessionAt — listing membership, kept separate from isActive (history soft-delete)', () => {
+      expect(conversations.conversations.closedInSessionAt).toBeDefined();
+    });
   });
 
   describe('notifications schema', () => {

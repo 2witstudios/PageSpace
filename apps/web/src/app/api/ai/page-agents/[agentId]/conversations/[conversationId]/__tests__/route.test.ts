@@ -108,6 +108,8 @@ const mockConversationRow = (overrides: Partial<{ userId: string; isShared: bool
   title: null,
   isActive: true,
   isShared: false,
+  sessionId: null,
+  closedInSessionAt: null,
   lastMessageAt: null,
   createdAt: new Date('2025-01-01'),
   updatedAt: new Date('2025-01-02'),

@@ -2,38 +2,21 @@ import { and, eq, inArray } from '@pagespace/db/operators'
 import type { db } from '@pagespace/db/db'
 import { pages } from '@pagespace/db/schema/core'
 import { taskItems } from '@pagespace/db/schema/tasks';
-import { lockedBatchReorder, type ReorderPlan } from '@pagespace/lib/services/reorder';
+import { computeReorderPlan, type ReorderPlan } from '@pagespace/lib/services/reorder';
+import { reorderTaskListChildPages, taskListChildPagesWhere } from '@/services/api/task-reorder-service';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-function taskListChildPagesWhere(pageId: string) {
-  return and(
-    eq(pages.parentId, pageId),
-    eq(pages.type, 'TASK_LIST'),
-    eq(pages.isTrashed, false),
-  );
-}
-
 /**
- * Applies a reorder plan to task_items scoped to pageId's TASK_LIST
- * children, inside the caller's transaction. No-ops (no lock, no query)
- * for an empty plan — mirrors lockedBatchReorder's own empty-plan guard,
- * so this stays safe to call even if a future caller stops pre-filtering.
+ * Applies a reorder plan — keyed by `task_items.id`, the ids this endpoint's
+ * callers submit — to `pages.position`, the single task-ordering rail (#2143).
+ * Returns the submitted task ids that were found in scope and written, so the
+ * caller can reject unknown ids.
  *
- * task_items has no direct FK to its task list — membership is derived via
- * pages that are direct TASK_LIST children of this list's page, the same
- * derivation GET/fetchEnrichedTasks use. That predicate is passed to
- * lockedBatchReorder as a subquery (not a materialized id array) so a large
- * task list doesn't rebind every child id into the write.
- *
- * lockedBatchReorder issues two statements against tx — a locking SELECT,
- * then a batched UPDATE — and under READ COMMITTED each independently
- * re-evaluates that subquery. Locking the scoped pages FOR SHARE first
- * closes the gap: it blocks a concurrent trashPage/move from committing a
- * scope change between the two statements, so both see the same membership.
- * (A page inserted into scope between the two statements — a phantom read,
- * not a modification of an already-scoped row — isn't covered by this lock;
- * closing that needs SERIALIZABLE isolation and is out of scope here.)
+ * Resolution runs before `reorderTaskListChildPages` takes its FOR SHARE scope
+ * lock, so a task whose page is trashed in that window resolves here but falls
+ * out of scope in the write and is reported as missing — the route then 400s
+ * rather than reporting a success it didn't perform.
  */
 export async function reorderTaskListChildren(
   tx: Tx,
@@ -44,14 +27,26 @@ export async function reorderTaskListChildren(
     return [];
   }
 
-  await tx.select({ id: pages.id }).from(pages).where(taskListChildPagesWhere(pageId)).for('share');
+  // Only the submitted ids are materialized here (the route caps them at
+  // MAX_REORDER_BATCH), never the whole task list.
+  const linkedPages = await tx
+    .select({ taskId: taskItems.id, pageId: taskItems.pageId })
+    .from(taskItems)
+    .innerJoin(pages, eq(pages.id, taskItems.pageId))
+    .where(and(taskListChildPagesWhere(pageId), inArray(taskItems.id, plan.orderedIds)));
 
-  return lockedBatchReorder(tx, {
-    table: taskItems,
-    idColumn: taskItems.id,
-    positionColumn: taskItems.position,
-    scopeWhere: inArray(taskItems.pageId, tx.select({ id: pages.id }).from(pages).where(taskListChildPagesWhere(pageId))),
-    plan,
-    touchColumns: [taskItems.updatedAt],
-  });
+  if (linkedPages.length === 0) {
+    return [];
+  }
+
+  const taskIdByPageId = new Map(linkedPages.map((row) => [row.pageId, row.taskId]));
+  const pagePlan = computeReorderPlan(
+    linkedPages.map((row) => ({ id: row.pageId, position: plan.positionById.get(row.taskId) ?? 0 })),
+  );
+
+  const lockedPageIds = await reorderTaskListChildPages(tx, pageId, pagePlan);
+
+  return lockedPageIds
+    .map((lockedPageId) => taskIdByPageId.get(lockedPageId))
+    .filter((taskId): taskId is string => taskId !== undefined);
 }

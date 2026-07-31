@@ -176,12 +176,11 @@ vi.mock('@/lib/ai/core/system-prompt', () => ({
   buildPersonalizationPrompt: vi.fn().mockReturnValue(''),
 }));
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
+  filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
   filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),
   filterToolsForWebSearch: vi.fn().mockReturnValue({}),
   filterToolsForMcpScope: vi.fn().mockReturnValue({}),
-  filterToolsForMachineBinding: vi.fn().mockReturnValue({}),
-  withSessionFamilyTools: vi.fn((tools: unknown) => tools),
   buildPageAITools: vi.fn().mockReturnValue({}),
 }));
 vi.mock('@/lib/ai/core/page-tree-context', () => ({
@@ -195,17 +194,6 @@ vi.mock('@/lib/ai/core/mcp-tool-converter', () => ({
 vi.mock('@/lib/ai/core/personalization-utils', () => ({
   getUserPersonalization: vi.fn().mockResolvedValue(null),
 }));
-// Phase 6 (#2166): the route now derives a Machine Pane binding for every
-// request. None of these requests carry a machine-bound conversationId, so
-// this resolves to null (not a machine-bound pane) — the real DB-backed
-// deps builder is stubbed out since the pure core itself is fully mocked.
-vi.mock('@pagespace/lib/services/machines/machine-pane-binding', () => ({
-  deriveMachinePaneBinding: vi.fn().mockResolvedValue(null),
-}));
-vi.mock('@/lib/ai/machine-pane/machine-pane-binding-runtime', () => ({
-  buildMachinePaneBindingDeps: vi.fn(() => ({})),
-}));
-
 vi.mock('ai', () => ({
   streamText: vi.fn().mockImplementation((options: MockStreamTextOptions) => {
     captured.streamTextOptions = options;
@@ -276,7 +264,7 @@ vi.mock('@/lib/ai/core/validate-image-parts', () => ({
 vi.mock('@/lib/ai/core/model-capabilities', () => ({
   getModelCapabilities: vi.fn().mockResolvedValue({}),
   hasVisionCapability: vi.fn().mockReturnValue(true),
-  DEFAULT_IMAGE_MODEL: 'google/gemini-3.1-flash-image-preview',
+  DEFAULT_IMAGE_MODEL: 'google/gemini-3.1-flash-image',
 }));
 
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({

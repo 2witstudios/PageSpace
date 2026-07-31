@@ -117,6 +117,7 @@ vi.mock('@/lib/ai/core/ai-tools', async () => {
   };
 });
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
+  filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
   filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn((tools: unknown) => tools),
   filterToolsForMcpScope: vi.fn((tools: unknown) => tools),
@@ -834,6 +835,8 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
+  sessionId: null,
+  closedInSessionAt: null,
       type: 'client',
       lastMessageAt: null,
     });
@@ -870,6 +873,8 @@ describe('POST /api/v1/chat/completions', () => {
         createdAt: new Date(),
         updatedAt: new Date(),
         isShared: false,
+  sessionId: null,
+  closedInSessionAt: null,
         type: 'page',
         lastMessageAt: null,
       });
@@ -916,6 +921,8 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
+  sessionId: null,
+  closedInSessionAt: null,
       type: 'page',
       lastMessageAt: null,
     });
@@ -954,6 +961,8 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
+  sessionId: null,
+  closedInSessionAt: null,
       type: 'page',
       lastMessageAt: null,
     });
@@ -980,6 +989,8 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
+  sessionId: null,
+  closedInSessionAt: null,
       type: 'page',
       lastMessageAt: null,
     });
@@ -1010,6 +1021,8 @@ describe('POST /api/v1/chat/completions', () => {
         createdAt: new Date(),
         updatedAt: new Date(),
         isShared: false,
+  sessionId: null,
+  closedInSessionAt: null,
         type: 'page',
         lastMessageAt: null,
       });
@@ -1337,6 +1350,8 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
+  sessionId: null,
+  closedInSessionAt: null,
       type: 'page',
       lastMessageAt: null,
     });
@@ -1363,6 +1378,8 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: true,
+  sessionId: null,
+  closedInSessionAt: null,
       type: 'page',
       lastMessageAt: null,
     });

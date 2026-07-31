@@ -8,6 +8,7 @@
 import { z } from 'zod';
 import { defineRow, type GitToolRow } from './types';
 import { cwdField } from './fields';
+import { validateFlagSafe } from '../core/validators';
 import {
   buildStatusArgs,
   buildDiffArgs,
@@ -74,6 +75,9 @@ export const WORKTREE_TOOL_ROWS: GitToolRow[] = [
     schema: z
       .object({ mode: z.enum(['soft', 'mixed', 'hard']), ref: z.string().optional(), cwd: cwdField })
       .strict(),
+    // Same guard the structurally identical `git_show.ref` / `git_branch.name`
+    // fields already apply — a dash-prefixed ref would be read as an option.
+    validate: ({ ref }) => (ref === undefined ? { ok: true } : validateFlagSafe(ref, 'ref')),
     buildArgs: ({ mode, ref }) => ({ args: buildResetArgs({ mode, ref }) }),
   }),
   defineRow({

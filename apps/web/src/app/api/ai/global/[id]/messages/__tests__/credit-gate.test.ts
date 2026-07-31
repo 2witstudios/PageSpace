@@ -195,6 +195,7 @@ vi.mock('@/lib/ai/core/agent-awareness', () => ({
   buildAgentAwarenessPrompt: vi.fn().mockResolvedValue(''),
 }));
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
+  filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
   filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),
   filterToolsForWebSearch: vi.fn().mockReturnValue({}),
@@ -277,7 +278,7 @@ vi.mock('@/lib/ai/core/validate-image-parts', () => ({
 vi.mock('@/lib/ai/core/model-capabilities', () => ({
   getModelCapabilities: vi.fn().mockResolvedValue({}),
   hasVisionCapability: vi.fn().mockReturnValue(true),
-  DEFAULT_IMAGE_MODEL: 'google/gemini-3.1-flash-image-preview',
+  DEFAULT_IMAGE_MODEL: 'google/gemini-3.1-flash-image',
 }));
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   isModelAllowedForTier: vi.fn().mockReturnValue(true),

@@ -7,22 +7,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Loader2, Bot, FolderTree, Shield, Copy, Check, Code2, Wrench, TerminalSquare, ArrowUp, ArrowDown, X } from 'lucide-react';
+import { Loader2, Bot, FolderTree, Shield, Copy, Check, Code2, Wrench, TerminalSquare } from 'lucide-react';
 import { toast } from 'sonner';
-import { useForm, useFieldArray, useFormState, Controller } from 'react-hook-form';
+import { useForm, useFormState, Controller } from 'react-hook-form';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import Link from 'next/link';
 import { AI_PROVIDERS, getVisibleProviders } from '@/lib/ai/core/ai-providers-config';
 import { getRoleColorClasses } from '@/lib/utils';
 import { AgentDrivesCard } from './AgentDrivesCard';
+import { SANDBOX_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
 import { useEditingStore } from '@/stores/useEditingStore';
-import type { MachineRef } from '@/lib/repositories/page-agent-repository';
-
-// The Machine tool group: gated behind the Machine Access toggle below and
-// hidden from the Default Tools list when access is off. switch_machine/
-// list_machines are named ahead of their registration landing in ai-tools.ts
-// so this list needs no changes once they ship.
-const MACHINE_TOOL_NAMES = new Set(['bash', 'writeFile', 'readFile', 'editFile', 'switch_machine', 'list_machines']);
 
 interface AgentConfig {
   systemPrompt: string;
@@ -37,9 +31,7 @@ interface AgentConfig {
   includePageTree?: boolean;
   pageTreeScope?: 'children' | 'drive';
   toolExposureMode?: 'upfront' | 'search';
-  machineAccess?: boolean;
-  machines?: MachineRef[];
-  availableMachines?: Array<{ id: string; title: string }>;
+  sandboxEnabled?: boolean;
 }
 
 interface AgentMembership {
@@ -118,8 +110,7 @@ interface FormData {
   includePageTree: boolean;
   pageTreeScope: 'children' | 'drive';
   toolExposureMode: 'upfront' | 'search';
-  machineAccess: boolean;
-  machines: MachineRef[];
+  sandboxEnabled: boolean;
 }
 
 const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettingsTabProps>(({
@@ -139,7 +130,6 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   const [membershipUserRole, setMembershipUserRole] = useState<'OWNER' | 'ADMIN' | 'MEMBER'>('MEMBER');
   const [driveRoles, setDriveRoles] = useState<DriveRole[]>([]);
   const [membershipSaving, setMembershipSaving] = useState(false);
-  const [selectedMachineId, setSelectedMachineId] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -215,14 +205,8 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       includePageTree: config?.includePageTree ?? false,
       pageTreeScope: config?.pageTreeScope ?? 'children',
       toolExposureMode: config?.toolExposureMode ?? 'upfront',
-      machineAccess: config?.machineAccess ?? false,
-      machines: config?.machines ?? [],
+      sandboxEnabled: config?.sandboxEnabled ?? false,
     }
-  });
-
-  const { fields: machineFields, append: appendMachine, remove: removeMachine, move: moveMachine } = useFieldArray({
-    control,
-    name: 'machines',
   });
 
   // Reset form when config changes
@@ -239,8 +223,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
         includePageTree: config.includePageTree ?? false,
         pageTreeScope: config.pageTreeScope ?? 'children',
         toolExposureMode: config.toolExposureMode ?? 'upfront',
-        machineAccess: config.machineAccess ?? false,
-        machines: config.machines ?? [],
+        sandboxEnabled: config.sandboxEnabled ?? false,
       });
     }
   }, [config, reset, selectedProvider, selectedModel]);
@@ -324,8 +307,6 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
         visibleToGlobalAssistant: data.visibleToGlobalAssistant,
         includePageTree: data.includePageTree,
         pageTreeScope: data.pageTreeScope,
-        machineAccess: data.machineAccess,
-        machines: data.machines,
       };
 
       await patch(`/api/pages/${pageId}/agent-config`, requestData);
@@ -340,8 +321,6 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
         visibleToGlobalAssistant: data.visibleToGlobalAssistant,
         includePageTree: data.includePageTree,
         pageTreeScope: data.pageTreeScope,
-        machineAccess: data.machineAccess,
-        machines: data.machines,
       } as AgentConfig;
       onConfigUpdate(updatedConfig);
       toast.success('Agent configuration saved successfully');
@@ -379,13 +358,19 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
 
   // Watch enabledTools for the count display
   const enabledTools = watch('enabledTools', []);
-  const machineAccess = watch('machineAccess', false);
+
+  // The sandbox switch gates the sandbox tool families out of the Default
+  // Tools list (the old machineAccess/MACHINE_TOOL_NAMES behaviour). The
+  // request-time filter in tool-filtering.ts is the real gate; this keeps the
+  // picker from offering tools the agent will never receive.
+  const sandboxEnabled = watch('sandboxEnabled', false);
 
   const visibleTools = useMemo(
-    () => (config?.availableTools || []).filter(
-      (tool) => machineAccess || !MACHINE_TOOL_NAMES.has(tool.name)
-    ),
-    [config, machineAccess]
+    () =>
+      (config?.availableTools || []).filter(
+        (tool) => sandboxEnabled || !SANDBOX_TOOL_NAMES.has(tool.name)
+      ),
+    [config, sandboxEnabled]
   );
 
   const handleSelectAllTools = () => {
@@ -395,17 +380,6 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   const handleDeselectAllTools = () => {
     setValue('enabledTools', []);
   };
-
-  const availableMachinesById = useMemo(
-    () => new Map((config?.availableMachines || []).map((t) => [t.id, t])),
-    [config]
-  );
-  const usedMachineIds = useMemo(
-    () => new Set(machineFields.filter((m) => m.kind === 'existing').map((m) => m.machineId)),
-    [machineFields]
-  );
-  const hasOwnMachine = machineFields.some((m) => m.kind === 'own');
-  const machineOptions = (config?.availableMachines || []).filter((t) => !usedMachineIds.has(t.id));
 
   // Register with useEditingStore while dirty so SWR doesn't revalidate this
   // page mid-edit and clobber unsaved changes.
@@ -653,134 +627,6 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
           )}
         </Card>
 
-        {/* Machine Access */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <TerminalSquare className="h-5 w-5" />
-                <div>
-                  <CardTitle className="text-lg">Machine Access</CardTitle>
-                  <CardDescription>
-                    Let this agent run commands on a persistent Machine and move between Machines.
-                  </CardDescription>
-                </div>
-              </div>
-              <Controller
-                name="machineAccess"
-                control={control}
-                render={({ field }) => (
-                  <Switch
-                    checked={field.value}
-                    onCheckedChange={(checked) => {
-                      field.onChange(checked);
-                      if (!checked) return;
-                      if (machineFields.length === 0) appendMachine({ kind: 'own' });
-                    }}
-                  />
-                )}
-              />
-            </div>
-          </CardHeader>
-          {machineAccess && (
-            <CardContent className="space-y-4">
-              <div>
-                <label className="text-sm font-medium mb-2 block">Machines</label>
-                <p className="text-xs text-muted-foreground mb-3">
-                  The agent moves between these with switch_machine. The first Machine is the default active one.
-                </p>
-                {machineFields.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No machines configured yet.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {machineFields.map((field, index) => {
-                      const label = field.kind === 'own'
-                        ? 'Own machine'
-                        : availableMachinesById.get(field.machineId)?.title ?? 'Unknown machine';
-                      return (
-                        <div
-                          key={field.id}
-                          className="flex items-center justify-between rounded-lg border px-3 py-2"
-                        >
-                          <div className="flex items-center gap-2">
-                            {index === 0 && <Badge variant="outline">Default</Badge>}
-                            <span className="text-sm font-medium">{label}</span>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              disabled={index === 0}
-                              onClick={() => moveMachine(index, index - 1)}
-                              aria-label="Move machine up"
-                            >
-                              <ArrowUp className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              disabled={index === machineFields.length - 1}
-                              onClick={() => moveMachine(index, index + 1)}
-                              aria-label="Move machine down"
-                            >
-                              <ArrowDown className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => removeMachine(index)}
-                              aria-label="Remove machine"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={hasOwnMachine}
-                  onClick={() => appendMachine({ kind: 'own' })}
-                >
-                  Add own machine
-                </Button>
-                <Select value={selectedMachineId} onValueChange={setSelectedMachineId} disabled={machineOptions.length === 0}>
-                  <SelectTrigger className="h-8 w-56 text-sm">
-                    <SelectValue placeholder={machineOptions.length === 0 ? 'No more machines to add' : 'Use existing machine…'} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {machineOptions.map((machine) => (
-                      <SelectItem key={machine.id} value={machine.id}>
-                        {machine.title}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={!selectedMachineId}
-                  onClick={() => {
-                    appendMachine({ kind: 'existing', machineId: selectedMachineId });
-                    setSelectedMachineId('');
-                  }}
-                >
-                  Add
-                </Button>
-              </div>
-            </CardContent>
-          )}
-        </Card>
-
         {/* Drive Membership */}
         <Card>
           <CardHeader>
@@ -860,6 +706,39 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
         {/* Drives this agent can access */}
         <AgentDrivesCard agentPageId={pageId} />
 
+        {/* Sandbox — successor to the old Machine Access card, minus the
+            machine topology: there is nothing to pick, because the sandbox
+            belongs to the conversation's SESSION and is provisioned
+            automatically the first time the agent needs it. */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <TerminalSquare className="h-5 w-5" />
+                <div>
+                  <CardTitle className="text-lg">Sandbox</CardTitle>
+                  <CardDescription>
+                    Let this agent run commands, edit files and use git in an isolated
+                    sandbox. It&apos;s provisioned automatically the first time the agent
+                    needs it — there is nothing to start or manage.
+                  </CardDescription>
+                </div>
+              </div>
+              <Controller
+                name="sandboxEnabled"
+                control={control}
+                render={({ field }) => (
+                  <Switch
+                    aria-label="Sandbox access"
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                  />
+                )}
+              />
+            </div>
+          </CardHeader>
+        </Card>
+
         {/* Tool Permissions */}
         <Card>
           <CardHeader>
@@ -920,17 +799,9 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
                       </div>
                     </div>
                   );
-                  const machineTools = visibleTools.filter((tool) => MACHINE_TOOL_NAMES.has(tool.name));
-                  const otherTools = visibleTools.filter((tool) => !MACHINE_TOOL_NAMES.has(tool.name));
                   return (
                     <div className="space-y-3">
-                      {machineTools.length > 0 && (
-                        <>
-                          <p className="text-xs font-semibold uppercase text-muted-foreground tracking-wide">Machine</p>
-                          {machineTools.map(toolRow)}
-                        </>
-                      )}
-                      {otherTools.map(toolRow)}
+                      {visibleTools.map(toolRow)}
                     </div>
                   );
                 }}

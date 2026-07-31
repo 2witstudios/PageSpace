@@ -18,6 +18,7 @@ import { toModelOutputForReadPage, buildVisualContentMetadata } from './read-pag
 import { ensureTaskListForPage, seedDefaultTaskStatusConfigs } from '@/services/api/task-sync-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { resolveOrThrowPageId } from './page-context-defaults';
+import { resolveDriveScope } from './drive-context-defaults';
 
 const pageReadLogger = loggers.ai.child({ module: 'page-read-tools' });
 
@@ -44,20 +45,25 @@ export const pageReadTools = {
     description: 'List pages at a location in a workspace. Defaults to direct children of the drive root (ls-style). Pass parentId to navigate into a folder. Set recursive: true to return the full subtree. Each result includes hasChildren so you know whether to drill in further. Pass include: "content" to batch each page\'s content into the response instead of calling read_page per page — capped at ' + MAX_CONTENT_INCLUDE_PAGES + ' pages per call.',
     inputSchema: z.object({
       driveSlug: z.string().optional().describe('The human-readable slug of the drive (for semantic understanding)'),
-      driveId: z.string().describe('The unique ID of the drive (used for operations)'),
+      driveId: z.string().optional().describe('The unique ID of the drive (used for operations). Omit to list the workspace currently in view (see LOCATION context).'),
       parentId: z.string().optional().describe('Page ID to list children of. Omit for drive root.'),
       recursive: z.boolean().optional().describe('Set true to return the full subtree instead of direct children only. Default: false.'),
       include: z.enum(['content']).optional().describe(`Set to "content" to batch each page's content into the response instead of calling read_page per page. Content over ${MAX_CONTENT_CHARS_PER_PAGE} characters is clipped (contentClipped: true) — resume with read_page's lineStart at contentClippedAfterLine + 1. CHANNEL/TASK_LIST/FILE pages get a short summary instead of content.`),
     }),
-    execute: async ({ driveSlug, driveId, parentId, recursive = false, include }, { experimental_context: context }) => {
+    execute: async ({ driveSlug, driveId: driveIdArg, parentId, recursive = false, include }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
       }
 
+      const { driveId, scopeSource } = resolveDriveScope(driveIdArg, context as ToolExecutionContext);
+
+      const normalizedParentId = parentId ? parentId : undefined;
+
       try {
         if (!await canActorAccessDrive(context as ToolExecutionContext, driveId)) {
-          return { success: false, error: `You don't have access to the "${driveSlug}" workspace` };
+          // driveSlug is absent whenever driveId was defaulted from location.
+          return { success: false, error: `You don't have access to the "${driveSlug ?? driveId}" workspace` };
         }
         const visiblePages = await getActorAccessiblePagesInDrive(context as ToolExecutionContext, driveId);
 
@@ -66,8 +72,8 @@ export const pageReadTools = {
 
         const pageMap = new Map(visiblePages.map(p => [p.id, p]));
 
-        if (parentId && !pageMap.has(parentId)) {
-          return { success: false, error: `Page "${parentId}" not found or not accessible in this workspace` };
+        if (normalizedParentId && !pageMap.has(normalizedParentId)) {
+          return { success: false, error: `Page "${normalizedParentId}" not found or not accessible in this workspace` };
         }
 
         // Get task-linked page IDs to mark them
@@ -113,7 +119,7 @@ export const pageReadTools = {
         let resultPages: PageEntry[];
 
         if (!recursive) {
-          const target = parentId ?? null;
+          const target = normalizedParentId ?? null;
           const children = visiblePages.filter(p => p.parentId === target);
           resultPages = children.map(p => ({
             id: p.id,
@@ -142,7 +148,7 @@ export const pageReadTools = {
             }
             return result;
           };
-          resultPages = collectSubtree(parentId ?? null);
+          resultPages = collectSubtree(normalizedParentId ?? null);
         }
 
         // Batch content onto the result set in one additional query, rather than
@@ -195,13 +201,15 @@ export const pageReadTools = {
         }
 
         const driveLabel = driveSlug || driveId;
-        const breadcrumb = buildBreadcrumb(parentId);
-        const location = parentId ? buildPath(parentId) : `/${driveLabel}`;
+        const breadcrumb = buildBreadcrumb(normalizedParentId);
+        const location = normalizedParentId ? buildPath(normalizedParentId) : `/${driveLabel}`;
         const locationLabel = breadcrumb.length > 0 ? breadcrumb.map(c => c.title).join(' / ') : driveLabel;
 
         return {
           success: true,
           driveSlug: driveLabel,
+          driveId,
+          scopeSource,
           location,
           breadcrumb,
           pages: resultPages,
@@ -386,14 +394,15 @@ export const pageReadTools = {
             },
           });
 
-          // Get all non-trashed tasks ordered by position. Title lives on the linked page.
+          // Get all non-trashed tasks ordered by pages.position — the single ordering
+          // rail users reorder against (#2143). Title lives on the linked page too.
           const tasks = await db
             .select({
               id: taskItems.id,
               title: pages.title,
               status: taskItems.status,
               priority: taskItems.priority,
-              position: taskItems.position,
+              position: pages.position,
               assigneeId: taskItems.assigneeId,
               dueDate: taskItems.dueDate,
               completedAt: taskItems.completedAt,
@@ -405,7 +414,7 @@ export const pageReadTools = {
               eq(pages.parentId, taskList.pageId!),
               eq(pages.isTrashed, false),
             ))
-            .orderBy(asc(taskItems.position));
+            .orderBy(asc(pages.position), asc(taskItems.id));
 
           // Resolve available statuses for this task list. Falls back to
           // documented defaults when no custom configs are present so the

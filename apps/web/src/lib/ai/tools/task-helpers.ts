@@ -1,3 +1,4 @@
+import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db'
 import { eq, and, desc, asc, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
@@ -10,6 +11,9 @@ import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity
 import { createTaskTriggerWorkflow, disableTaskTriggers } from '@/lib/workflows/task-trigger-helpers';
 import type { AgentTriggerInput } from '@/lib/workflows/task-trigger-helpers';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import { reorderTaskListChildPages } from '@/services/api/task-reorder-service';
+import { compareByPagePosition, computeTaskMovePosition } from '@/services/api/task-ordering';
+import { computeReorderPlan } from '@pagespace/lib/services/reorder';
 import { decryptTaskUserRelations } from '@/lib/tasks/decrypt-task-relations';
 
 /**
@@ -81,12 +85,12 @@ async function fetchTaskForUpdate(taskId: string) {
   return db.query.taskItems.findFirst({
     where: eq(taskItems.id, taskId),
     with: {
-      page: { columns: { title: true, parentId: true } },
+      page: { columns: { title: true, parentId: true, position: true } },
     },
   });
 }
 
-/** A task row joined with its linked page's title/parentId. */
+/** A task row joined with its linked page's title/parentId/position. */
 export type TaskForUpdate = NonNullable<Awaited<ReturnType<typeof fetchTaskForUpdate>>>;
 
 /**
@@ -180,11 +184,10 @@ export async function fetchEnrichedTasks(parentPageId: string) {
       eq(pages.type, 'TASK_LIST'),
       eq(pages.isTrashed, false),
     ))),
-    orderBy: [asc(taskItems.position)],
     with: {
       assignee: { columns: { id: true, name: true, image: true } },
       assigneeAgent: { columns: { id: true, title: true, type: true } },
-      page: { columns: { title: true, content: true } },
+      page: { columns: { title: true, content: true, position: true } },
       assignees: {
         with: {
           user: { columns: { id: true, name: true } },
@@ -193,7 +196,11 @@ export async function fetchEnrichedTasks(parentPageId: string) {
       },
     },
   });
-  return decryptTaskUserRelations(tasks);
+  // Ordered in JS, not SQL: the ordering rail is pages.position on the joined page,
+  // and a relational findMany cannot order by a joined table's column. Same order the
+  // GET tasks route serves, so AI tools and the UI never disagree (#2143).
+  const decrypted = await decryptTaskUserRelations(tasks);
+  return decrypted.sort((a, b) => compareByPagePosition(a, b));
 }
 
 type EnrichedTaskItem = Awaited<ReturnType<typeof fetchEnrichedTasks>>[number];
@@ -208,7 +215,8 @@ export function serializeTaskItem(t: EnrichedTaskItem) {
     assigneeId: t.assigneeId,
     assigneeAgentId: t.assigneeAgentId,
     dueDate: t.dueDate,
-    position: t.position,
+    // Sourced from the linked page — the single ordering rail (#2143).
+    position: t.page?.position ?? 0,
     completedAt: t.completedAt,
     pageId: t.pageId,
     assignee: t.assignee ? {
@@ -268,8 +276,11 @@ export function serializeTaskList(
 
 type TaskResponseTask = Pick<
   typeof taskItems.$inferSelect,
-  'id' | 'status' | 'priority' | 'assigneeId' | 'assigneeAgentId' | 'dueDate' | 'position' | 'completedAt' | 'pageId'
->;
+  'id' | 'status' | 'priority' | 'assigneeId' | 'assigneeAgentId' | 'dueDate' | 'completedAt' | 'pageId'
+> & {
+  /** The linked page's position — task rows carry no position of their own (#2143). */
+  position: number;
+};
 
 /**
  * Build the shared create/update/reorder response: the acted-on task, the
@@ -397,26 +408,33 @@ export async function createTask(
     taskList = newTaskList;
   }
 
-  // Determine position for new task
-  const existingTasks = await db
-    .select({ position: taskItems.position })
-    .from(taskItems)
-    .innerJoin(pages, eq(pages.id, taskItems.pageId))
-    .where(and(
-      eq(pages.parentId, pageId),
-      eq(pages.type, 'TASK_LIST'),
-      eq(pages.isTrashed, false),
-    ))
-    .orderBy(desc(taskItems.position));
-
-  const nextTaskPosition = position ?? (existingTasks.length > 0 ? (existingTasks[0]?.position || 0) + 1 : 0);
-
-  // Get next page position for the child document
+  // Get next page position for the child document — the single ordering rail (#2143).
   const lastChildPage = await db.query.pages.findFirst({
     where: and(eq(pages.parentId, pageId), eq(pages.isTrashed, false)),
     orderBy: [desc(pages.position)],
   });
   const nextPagePosition = (lastChildPage?.position ?? 0) + 1;
+
+  // A caller-supplied `position` is resolved against the current siblings up front
+  // and applied to the insert directly, in the same transaction — not as a second
+  // move afterward. A split commit (insert, then a separate move transaction) would
+  // let a mid-flight failure leave a task the client sees as failed but that a retry
+  // would then duplicate.
+  const newTaskPageId = createId();
+  let initialPagePosition = nextPagePosition;
+  let densifyPlan: Extract<ReturnType<typeof computeTaskMovePosition>, { kind: 'densify' }> | undefined;
+  if (typeof position === 'number') {
+    const taskListPeers = await db
+      .select({ id: pages.id, position: pages.position })
+      .from(pages)
+      .where(and(eq(pages.parentId, pageId), eq(pages.type, 'TASK_LIST'), eq(pages.isTrashed, false)));
+    const plan = computeTaskMovePosition({ peers: taskListPeers, movedId: newTaskPageId, targetIndex: position });
+    if (plan.kind === 'single') {
+      initialPagePosition = plan.position;
+    } else {
+      densifyPlan = plan;
+    }
+  }
 
   // Validate assigneeAgentId if provided
   if (assigneeAgentId) {
@@ -456,12 +474,13 @@ export async function createTask(
   const result = await db.transaction(async (tx) => {
     // Create task list page (description + sub-tasks live here)
     const [taskPage] = await tx.insert(pages).values({
+      id: newTaskPageId,
       title: trimmedTitle,
       type: 'TASK_LIST',
       parentId: pageId,
       driveId: taskListPage.driveId,
       content: '',
-      position: nextPagePosition,
+      position: initialPagePosition,
       updatedAt: new Date(),
     }).returning();
 
@@ -477,7 +496,6 @@ export async function createTask(
       assigneeId: primaryUserId,
       assigneeAgentId: primaryAgentId,
       dueDate: dueDate ? new Date(dueDate) : null,
-      position: nextTaskPosition,
       metadata: {
         createdAt: new Date().toISOString(),
         note,
@@ -516,12 +534,26 @@ export async function createTask(
       });
     }
 
+    // A densify plan (the float4 gap between the target slot's neighbours could no
+    // longer be split) re-derives every sibling's position in the same transaction
+    // as the insert, so the whole placement — new row included — commits atomically.
+    if (densifyPlan) {
+      await reorderTaskListChildPages(tx, pageId, computeReorderPlan([...densifyPlan.positions]));
+    }
+
     return { task: newTask, page: taskPage };
   });
 
-  const resultTask = result.task;
   const createdPage = result.page;
   const resultTitle = createdPage.title;
+
+  // Densify overwrote the insert's position for every sibling including the new
+  // page; everything else already landed on `initialPagePosition` at insert time.
+  const resultPosition = densifyPlan
+    ? densifyPlan.positions.find(p => p.id === newTaskPageId)?.position ?? createdPage.position
+    : createdPage.position;
+
+  const resultTask = { ...result.task, position: resultPosition };
 
   // Broadcast creation events
   await Promise.all([
@@ -695,41 +727,99 @@ export async function deleteTask(
   };
 }
 
+/** Actor attribution for a task move, forwarded to applyPageMutation. */
+export interface TaskReorderActor {
+  userId: string;
+  isAiGenerated?: boolean;
+  aiProvider?: string;
+  aiModel?: string;
+  aiConversationId?: string;
+}
+
 /**
- * Move a task to `position` within its list and re-densify peer positions to
- * 0..n-1. Returns the clamped index actually assigned. Backs the reorder_task tool.
+ * Move a task to slot `position` within its list. Returns the clamped index
+ * actually assigned. Backs the reorder_task tool and the REST
+ * `PATCH /tasks/[taskId] {position}` field.
+ *
+ * The write lands on `pages.position` of the task's linked page — the single
+ * ordering rail. This used to re-densify a separate `task_items.position` that
+ * nothing user-facing read, so the tool reported success while the list the user
+ * saw never changed (#2143).
+ *
+ * The common case writes one page through applyPageMutation, exactly like a user
+ * drag (`PATCH /api/pages/reorder`), so the move gets the same revision bump,
+ * activity log and deferred workflow trigger. When the float4 gap between the
+ * target's neighbours can no longer be split, the plan escalates to re-densifying
+ * the whole list in one batched write instead.
+ *
+ * Returns both the clamped slot (what the caller asked for, in index terms) and
+ * the `pages.position` actually written — they differ whenever positions are
+ * fractional, and responses need the latter to stay consistent with the task list
+ * they are served alongside.
  */
 export async function reorderTaskPeers(
   taskListPageId: string,
   taskId: string,
   position: number,
-): Promise<number> {
+  actor: TaskReorderActor,
+): Promise<{ index: number; position: number }> {
+  const task = await db.query.taskItems.findFirst({
+    where: eq(taskItems.id, taskId),
+    columns: { pageId: true },
+  });
+
+  if (!task?.pageId) {
+    throw new Error('Task not found');
+  }
+
   const peers = await db
-    .select({ id: taskItems.id, position: taskItems.position })
-    .from(taskItems)
-    .innerJoin(pages, eq(pages.id, taskItems.pageId))
+    .select({ id: pages.id, position: pages.position, revision: pages.revision })
+    .from(pages)
     .where(and(
       eq(pages.parentId, taskListPageId),
       eq(pages.type, 'TASK_LIST'),
       eq(pages.isTrashed, false),
     ))
-    .orderBy(asc(taskItems.position));
+    .orderBy(asc(pages.position), asc(pages.id));
 
-  const filtered = peers.filter(p => p.id !== taskId);
-  const clamped = Math.max(0, Math.min(Math.trunc(position), filtered.length));
-  const reordered = [
-    ...filtered.slice(0, clamped).map(p => p.id),
-    taskId,
-    ...filtered.slice(clamped).map(p => p.id),
-  ];
-
-  await db.transaction(async (tx) => {
-    for (let i = 0; i < reordered.length; i++) {
-      await tx.update(taskItems)
-        .set({ position: i })
-        .where(eq(taskItems.id, reordered[i]));
-    }
+  const plan = computeTaskMovePosition({
+    peers: peers.map(p => ({ id: p.id, position: p.position })),
+    movedId: task.pageId,
+    targetIndex: position,
   });
 
-  return clamped;
+  if (plan.kind === 'densify') {
+    await db.transaction(async (tx) => {
+      await reorderTaskListChildPages(tx, taskListPageId, computeReorderPlan([...plan.positions]));
+    });
+    // Densified positions are 0..n-1, so the slot and the stored position coincide.
+    return { index: plan.index, position: plan.index };
+  }
+
+  const actorInfo = await getActorInfo(actor.userId);
+  let deferredTrigger: DeferredWorkflowTrigger | undefined;
+  await db.transaction(async (tx) => {
+    const mutationResult = await applyPageMutation({
+      pageId: task.pageId,
+      operation: 'move',
+      updates: { position: plan.position },
+      updatedFields: ['position'],
+      expectedRevision: peers.find(p => p.id === task.pageId)?.revision,
+      context: {
+        userId: actor.userId,
+        actorEmail: actorInfo.actorEmail,
+        actorDisplayName: actorInfo.actorDisplayName ?? undefined,
+        isAiGenerated: actor.isAiGenerated,
+        aiProvider: actor.aiProvider,
+        aiModel: actor.aiModel,
+        aiConversationId: actor.aiConversationId,
+        metadata: { taskId, taskListPageId },
+      },
+      tx,
+    });
+    deferredTrigger = mutationResult.deferredTrigger;
+  });
+  deferredTrigger?.();
+
+  return { index: plan.index, position: plan.position };
 }

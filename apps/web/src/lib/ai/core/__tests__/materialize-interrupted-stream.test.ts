@@ -12,6 +12,7 @@ const {
   mockGetConversation,
   mockBroadcastAiStreamComplete,
   mockNotifyMentionedUsers,
+  mockRecomputeLastMessageAt,
   mockLoggerWarn,
 } = vi.hoisted(() => ({
   mockInsert: vi.fn(),
@@ -24,6 +25,7 @@ const {
   mockGetConversation: vi.fn(),
   mockBroadcastAiStreamComplete: vi.fn(),
   mockNotifyMentionedUsers: vi.fn(),
+  mockRecomputeLastMessageAt: vi.fn(),
   mockLoggerWarn: vi.fn(),
 }));
 
@@ -82,6 +84,9 @@ vi.mock('@pagespace/lib/repositories/page-repository', () => ({
 vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: { getConversation: mockGetConversation },
 }));
+vi.mock('@/lib/repositories/global-conversation-repository', () => ({
+  globalConversationRepository: { recomputeLastMessageAt: mockRecomputeLastMessageAt },
+}));
 
 import { materializeInterruptedStream, type MaterializableStreamRow } from '../materialize-interrupted-stream';
 import type { UIMessagePart } from '../stream-multicast-registry';
@@ -133,6 +138,7 @@ beforeEach(() => {
   mockFindPageById.mockResolvedValue(null);
   mockGetConversation.mockResolvedValue(null);
   mockNotifyMentionedUsers.mockResolvedValue(undefined);
+  mockRecomputeLastMessageAt.mockResolvedValue(undefined);
   mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
   // Defaults to "one row actually settled" (rowCount: 1) — the common case. Tests exercising the
   // zero-row race (a concurrent reap already settled this row) override this per-case.
@@ -609,5 +615,45 @@ describe('materializeInterruptedStream — mention notifications (best-effort, m
       expect.stringContaining('mention notification failed'),
       expect.objectContaining({ error: 'notify boom' }),
     );
+  });
+});
+
+// Issue #2153 site 4: the AI chat routes bump conversations.lastMessageAt after every
+// persist, but the materializer's recovered assistant message previously skipped it —
+// leaving the recovered conversation sorted stale in the history list.
+describe('materializeInterruptedStream — conversations.lastMessageAt recompute (#2153)', () => {
+  it('given a global-assistant row, recomputes the conversation lastMessageAt after the message upsert', async () => {
+    await materializeInterruptedStream(globalRow({ conversationId: 'conv-2' }));
+
+    assert({
+      given: 'a materialized global-assistant reply',
+      should: 'invoke the shared lastMessageAt recompute for its conversation, same as the live persist paths',
+      actual: mockRecomputeLastMessageAt.mock.calls,
+      expected: [['conv-2']],
+    });
+  });
+
+  it('given a page-chat row, does not touch the global conversations table', async () => {
+    await materializeInterruptedStream(pageRow());
+
+    assert({
+      given: 'a materialized page-chat reply',
+      should: 'never invoke the global-conversation recompute (chat pages have no conversations.lastMessageAt)',
+      actual: mockRecomputeLastMessageAt.mock.calls.length,
+      expected: 0,
+    });
+  });
+
+  it('a recompute failure degrades like a failed message write — row left retryable, session not settled', async () => {
+    mockRecomputeLastMessageAt.mockRejectedValueOnce(new Error('recompute down'));
+
+    const settled = await materializeInterruptedStream(globalRow());
+
+    assert({
+      given: 'a lastMessageAt recompute that throws mid-materialization',
+      should: 'return false and leave the session row unsettled so the next sweep retries',
+      actual: { settled, sessionSettleAttempts: mockUpdateSet.mock.calls.length },
+      expected: { settled: false, sessionSettleAttempts: 0 },
+    });
   });
 });

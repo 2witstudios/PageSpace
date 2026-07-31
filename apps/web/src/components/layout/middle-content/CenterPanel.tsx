@@ -8,14 +8,13 @@ import { findNodeAndParent } from '@/lib/tree/tree-utils';
 import { AlertCircle, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import FolderView from './page-views/folder/FolderView';
-import AiChatView from './page-views/ai-page/AiChatView';
+import AgentPageView from '@/components/agents/AgentPageView';
 import ChannelView from './page-views/channel/ChannelView';
 import DocumentView from './page-views/document/DocumentView';
 import FileViewer from './page-views/file/FileViewer';
 import SheetView from './page-views/sheet/SheetView';
 import TaskListView from './page-views/task-list/TaskListView';
 import CodePageView from './page-views/code/CodePageView';
-import MachineKeepAliveHost from './MachineKeepAliveHost';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { getPageTypeComponent } from '@pagespace/lib/content/page-types.config';
@@ -161,7 +160,7 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   // Dynamic component selection using centralized config
   const componentMap = {
     FolderView,
-    AiChatView,
+    AgentPageView,
     ChannelView,
     DocumentView,
     CanvasPageView,
@@ -177,13 +176,7 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   // DocumentView uses pageId-only pattern for stability
   // Other components still use full page object (to be migrated)
   let pageComponent: React.ReactNode;
-  if (componentName === 'MachineView') {
-    // Terminals are rendered by MachineKeepAliveHost (kept mounted across
-    // navigation, CSS-hidden when inactive), NOT inline here — rendering one
-    // here too would mount a second, competing terminal subtree. Render
-    // nothing; the host draws over this content region for the active page.
-    pageComponent = null;
-  } else if (!ViewComponent) {
+  if (!ViewComponent) {
     pageComponent = (
       <div className="p-4 text-center text-muted-foreground">
         This page type is not supported.
@@ -201,10 +194,10 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   } else if (componentName === 'SheetView') {
     // SheetView should remount per page to isolate undo/redo history
     pageComponent = <SheetView key={`sheet-${page.id}`} page={page} />;
-  } else if (componentName === 'AiChatView') {
-    // AiChatView should remount per page: conversation identity, drafts, and
-    // attachments are all scoped to a single page and must reset on switch.
-    pageComponent = <AiChatView key={`ai-chat-${page.id}`} page={page} />;
+  } else if (componentName === 'AgentPageView') {
+    // AgentPageView should remount per page: conversation identity is scoped
+    // to a single agent page and must reset on switch.
+    pageComponent = <AgentPageView key={`ai-chat-${page.id}`} page={page} />;
   } else {
     // Other components still accept full page object
     // Type assertion: we've excluded DocumentView above, so ViewComponent here
@@ -374,10 +367,6 @@ export default function CenterPanel() {
               <PageContent pageId={activePageId} />
             </CustomScrollArea>
           </PullToRefresh>
-          {/* Terminals live here, not inside PageContent: kept mounted across
-              navigation (bounded LRU) and CSS-hidden when inactive, so tab-back
-              is instant with the xterm buffer and socket listeners intact. */}
-          <MachineKeepAliveHost driveId={activeDriveId} activePageId={activePageId} />
         </div>
       </div>
     </div>

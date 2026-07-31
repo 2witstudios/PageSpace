@@ -13,6 +13,13 @@ import { reapOrphanedFiles } from '@/lib/storage/reap-orphaned-files';
  * then permanently removed after the 30-day retention window.
  *
  * Authentication: HMAC-signed request with X-Cron-Timestamp, X-Cron-Nonce, X-Cron-Signature headers.
+ *
+ * The Phase 8 teardown removed the denormalized MachineRef sweep this route
+ * used to also run (issue #2156): `pages.machines`/`global_assistant_config.machines`
+ * are dropped columns now, and every live Sprite pointer this purge's cascade
+ * orphans is rescued into the FK-less reclaim outbox by the AFTER-DELETE
+ * trigger (see `reconcile-orphaned-sprites`), so there is no dangling
+ * reference left for a sweep to reconcile.
  */
 export async function GET(request: Request) {
   const authError = validateSignedCronRequest(request);

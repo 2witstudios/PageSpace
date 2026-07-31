@@ -5,6 +5,12 @@ import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata, APP_URL } from "@/lib/metadata";
 import { MONTHLY_CREDITS } from "@/lib/credits";
+import {
+  TIERS as PLAN_ORDER,
+  TIER_PLAN_LIMITS,
+  formatTierBytes,
+  type SubscriptionTier,
+} from "@pagespace/lib/billing/subscription-tiers";
 
 export const metadata = pageMetadata.pricing;
 
@@ -27,76 +33,65 @@ interface Plan {
   };
 }
 
-const plans: Plan[] = [
-  {
-    name: "Free",
-    price: "$0",
+// Storage/credit numbers derive from the canonical TIER_PLAN_LIMITS table (the
+// same table apps/web and enforcement use) so pricing copy can never drift.
+const PLAN_COPY: Record<
+  SubscriptionTier,
+  Pick<Plan, "description" | "cta" | "ctaVariant" | "highlight"> & { models: string; prioritySupport: boolean }
+> = {
+  free: {
     description: "Perfect for getting started with AI-powered productivity",
     cta: "Get Started",
     ctaVariant: "outline",
-    features: {
-      storage: "500 MB",
-      monthlyCredits: `${MONTHLY_CREDITS.free}/mo`,
-      models: "Standard",
-      buyMore: true,
-      realtime: true,
-      hierarchicalAgents: true,
-      prioritySupport: false,
-    },
+    models: "Standard",
+    prioritySupport: false,
   },
-  {
-    name: "Pro",
-    price: "$15",
-    period: "/month",
+  pro: {
     description: "For individuals who want more AI power and storage",
     cta: "Upgrade to Pro",
     ctaVariant: "default",
     highlight: true,
-    features: {
-      storage: "2 GB",
-      monthlyCredits: `${MONTHLY_CREDITS.pro}/mo`,
-      models: "Standard + Pro",
-      buyMore: true,
-      realtime: true,
-      hierarchicalAgents: true,
-      prioritySupport: true,
-    },
+    models: "Standard + Pro",
+    prioritySupport: true,
   },
-  {
-    name: "Founder",
-    price: "$50",
-    period: "/month",
+  founder: {
     description: "For power users and small teams who need serious AI capability",
     cta: "Upgrade to Founder",
     ctaVariant: "outline",
-    features: {
-      storage: "10 GB",
-      monthlyCredits: `${MONTHLY_CREDITS.founder}/mo`,
-      models: "Standard + Pro",
-      buyMore: true,
-      realtime: true,
-      hierarchicalAgents: true,
-      prioritySupport: true,
-    },
+    models: "Standard + Pro",
+    prioritySupport: true,
   },
-  {
-    name: "Business",
-    price: "$100",
-    period: "/month",
+  business: {
     description: "For teams that need maximum capacity and priority support",
     cta: "Upgrade to Business",
     ctaVariant: "outline",
+    models: "Standard + Pro",
+    prioritySupport: true,
+  },
+};
+
+const plans: Plan[] = PLAN_ORDER.map((tier) => {
+  const limits = TIER_PLAN_LIMITS[tier];
+  const copy = PLAN_COPY[tier];
+  return {
+    name: limits.name,
+    price: limits.priceMonthlyUsd === 0 ? "$0" : `$${limits.priceMonthlyUsd}`,
+    period: limits.priceMonthlyUsd === 0 ? undefined : "/month",
+    description: copy.description,
+    cta: copy.cta,
+    ctaVariant: copy.ctaVariant,
+    highlight: copy.highlight,
     features: {
-      storage: "50 GB",
-      monthlyCredits: `${MONTHLY_CREDITS.business}/mo`,
-      models: "Standard + Pro",
+      storage: formatTierBytes(limits.quotaBytes, " "),
+      monthlyCredits: `${MONTHLY_CREDITS[tier]}/mo`,
+      models: copy.models,
       buyMore: true,
       realtime: true,
       hierarchicalAgents: true,
-      prioritySupport: true,
+      prioritySupport: copy.prioritySupport,
     },
-  },
-];
+  };
+});
 
 export default function PricingPage() {
   return (

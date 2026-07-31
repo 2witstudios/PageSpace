@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { resolveSandboxPath, SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
 import { defineRow, type GitToolRow } from './types';
 import { cwdField } from './fields';
-import { assertHttps } from '../core/validators';
+import { assertHttps, validateFlagSafe } from '../core/validators';
 import {
   buildCloneArgs,
   buildInitArgs,
@@ -90,7 +90,14 @@ export const REPO_TOOL_ROWS: GitToolRow[] = [
         cwd: cwdField,
       })
       .strict(),
-    validate: ({ url }) => assertHttps(url, 'git remote add'),
+    // Both operands guarded: HTTPS-only on the url (as before), plus the same
+    // flag guard `git_branch.name` applies — a dash-prefixed remote name would
+    // otherwise be read as an option to `git remote add`.
+    validate: ({ url, name }) => {
+      const nameCheck = validateFlagSafe(name, 'name');
+      if (!nameCheck.ok) return nameCheck;
+      return assertHttps(url, 'git remote add');
+    },
     buildArgs: ({ name, url }) => ({ args: buildRemoteAddArgs({ name, url }) }),
   }),
 ];

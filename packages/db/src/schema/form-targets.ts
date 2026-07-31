@@ -51,6 +51,10 @@ export const formTargets = pgTable('form_targets', {
   headerRow: integer('header_row').notNull().default(1),
   nextRow: integer('next_row').notNull(),
 
+  // Optional email address that receives a notification whenever a visitor
+  // submits this form. Nullable — blank means no notification (opt-in).
+  notificationEmail: text('notification_email'),
+
   status: text('status', { enum: ['active', 'paused', 'archived'] }).notNull().default('active'),
   statusReason: text('status_reason'),
 

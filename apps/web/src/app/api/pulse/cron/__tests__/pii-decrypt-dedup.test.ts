@@ -38,6 +38,7 @@ vi.mock('@/lib/ai/core/timestamp-utils', () => ({
 }));
 
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
+  BACKGROUND_LIGHT_PROVIDER: 'anthropic',
   BACKGROUND_LIGHT_MODEL: 'anthropic/claude-test',
 }));
 

@@ -356,10 +356,10 @@ export async function PATCH(
     throw error;
   }
 
-  // Clamp + re-densify positions (0..n-1), matching the reorder_task tool — replaces
-  // the previous raw, unclamped position write that could leave duplicate/gapped positions.
+  // Clamp to a slot in the list and move the task's page, matching the reorder_task
+  // tool. The write lands on pages.position — the single ordering rail (#2143).
   if (position !== undefined) {
-    await reorderTaskPeers(pageId, taskId, position);
+    await reorderTaskPeers(pageId, taskId, position, { userId });
   }
 
   // Create the agent trigger workflow after the transaction commits, mirroring update_task.
@@ -403,7 +403,7 @@ export async function PATCH(
         columns: { id: true, name: true, image: true },
       },
       page: {
-        columns: { id: true, title: true },
+        columns: { id: true, title: true, position: true },
       },
       assignees: {
         with: {
@@ -459,6 +459,8 @@ export async function PATCH(
   const responseBody = {
     ...taskWithRelations,
     title: responseTitle,
+    // Sourced from the linked page — the single ordering rail (#2143).
+    position: taskWithRelations.page?.position ?? 0,
     ...(agentTriggerResult ? { agentTrigger: agentTriggerResult } : {}),
   };
 

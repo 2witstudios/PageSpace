@@ -8,7 +8,7 @@ export interface AskUserAnswerContextValue {
 }
 
 /**
- * Carries answer plumbing from a chat surface (AiChatView, GlobalAssistantView,
+ * Carries answer plumbing from a chat surface (AgentPageView, GlobalAssistantView,
  * SidebarChatTab) down to AskUserQuestionCard without prop-drilling through
  * ToolCallRenderer/CompactToolCallRenderer, which receive only the part.
  *

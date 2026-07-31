@@ -5,6 +5,7 @@
  * toggles that filter out specific tools based on user settings.
  */
 
+import { SANDBOX_CORE_TOOL_NAMES } from '../tools/sandbox-tools';
 import { SANDBOX_GIT_TOOL_NAMES } from '../tools/sandbox-git-tools';
 import { parseIntegrationToolName } from '@pagespace/lib/integrations/converter/ai-sdk';
 
@@ -113,48 +114,81 @@ export const WRITE_TOOLS = new Set([
   'gh_issue_reopen',
   'gh_repo_fork',
   'gh_repo_create',
-  // Session-family MUTATIONS (issue #2204 follow-up, F3). list_sessions and
-  // read_session are reads and stay available; these four create, move, kill
-  // and drive sessions — and send_session runs a full agent loop in the target,
-  // which can execute arbitrary shell commands. A read-only conversation that
-  // could still call them would be read-only in name only.
-  'add_session',
-  'move_session',
-  'kill_session',
+  // Session/shell-family MUTATIONS. list_sessions, read_session and read_shell
+  // are reads and stay available; the rest spawn, drive and kill sessions and
+  // shells — and spawn_session/send_session run a full agent loop in the
+  // target, which can execute arbitrary shell commands. A read-only
+  // conversation that could still call them would be read-only in name only.
+  'spawn_session',
   'send_session',
+  'kill_session',
+  'spawn_shell',
+  'send_shell',
+  'kill_shell',
 ]);
 
 // Web search tools (excluded when web search is disabled)
 const WEB_SEARCH_TOOLS = new Set(['web_search', 'web_fetch']);
 
-// Tools that let the agent discover or switch to a different machine —
-// dropped when the conversation is bound to one specific machine via a
-// Machine Pane binding (deriveMachinePaneBinding). The bound machine is the
-// only one this conversation may ever act on, so offering a way to leave it
-// is moot.
-const MACHINE_BINDING_LOCKED_TOOLS = new Set(['switch_machine', 'list_machines']);
-
 /**
- * The SESSION FAMILY — the orchestration surface of a machine-BOUND
- * conversation, and only of a machine-bound one.
+ * The SESSION + SHELL families — the agent-session orchestration surface
+ * (spawn/send/read/kill workers; spawn/send/read/kill PTY shells in the
+ * caller's own session's sandbox). Registered alongside bash/git behind the
+ * CODE_EXECUTION kill-switch in `buildPageSpaceTools`; the tools resolve the
+ * caller's SESSION from its conversation at call time, so there is no
+ * binding to gate registration on.
  *
- * Registered by ADDITION rather than by filtering (see
- * `withSessionFamilyTools`): these tools are meaningless without a derived
- * handle set to resolve their targets against, and a drive agent's tool set
- * must stay byte-identical to what it is today. Adding them to the baseline
- * registry and filtering them back out for everyone else would leak them into
- * every other surface that composes `pageSpaceTools` without the binding
- * filter (the global assistant, /v1 completions, consult, workflows, and the
- * agent-config tool listings).
+ * Exported for the read-only DRIFT GUARD in this module's tests: every mutating
+ * member must appear in `WRITE_TOOLS` (or a read-only agent could spawn a shell
+ * and write through it, defeating the read-only promise), and every read verb
+ * must NOT (or a read-only agent could not even observe its own sessions). A
+ * tenth tool added to the family without a matching WRITE_TOOLS decision fails
+ * that test rather than silently picking the wrong default.
  */
 export const SESSION_FAMILY_TOOL_NAMES: readonly string[] = [
   'list_sessions',
-  'add_session',
-  'move_session',
-  'kill_session',
-  'read_session',
+  'spawn_session',
   'send_session',
+  'read_session',
+  'kill_session',
+  'spawn_shell',
+  'send_shell',
+  'read_shell',
+  'kill_shell',
 ];
+
+/**
+ * The WHOLE sandbox tool surface — the three families a `sandboxEnabled: false`
+ * agent must not see: core execution (bash/files), the git+gh CLI toolkit, and
+ * session/shell orchestration (whose entire point is the sandbox a session
+ * lazily owns). The per-agent settings switch (`pages.sandboxEnabled`,
+ * successor to the old machineAccess toggle + MACHINE_TOOL_NAMES filter) gates
+ * these BOTH at listing time (the settings tab's Default Tools) and at request
+ * time (`filterToolsForSandboxEnablement` below) — hiding a tool from a picker
+ * is not a gate. The env kill-switch and per-call `canRunCode` remain the
+ * security boundaries underneath; this is agent configuration, not authz.
+ */
+export const SANDBOX_TOOL_NAMES: ReadonlySet<string> = new Set([
+  ...SANDBOX_CORE_TOOL_NAMES,
+  ...SANDBOX_GIT_TOOL_NAMES,
+  ...SESSION_FAMILY_TOOL_NAMES,
+]);
+
+/**
+ * Apply the per-agent sandbox switch: `sandboxEnabled: false` (the default —
+ * code execution is opt-in per agent, as machineAccess was) strips every
+ * sandbox-family tool from the set. Provisioning stays lazy and automatic for
+ * an ENABLED agent — this filter is the only thing the switch controls.
+ */
+export function filterToolsForSandboxEnablement<T>(
+  tools: Record<string, T>,
+  sandboxEnabled: boolean
+): Record<string, T> {
+  if (sandboxEnabled) return tools;
+  return Object.fromEntries(
+    Object.entries(tools).filter(([name]) => !SANDBOX_TOOL_NAMES.has(name))
+  );
+}
 
 // Image-generation tools (a runtime composer toggle, like web search — filtered
 // independently of the saved per-agent allow-list).
@@ -275,55 +309,14 @@ export function filterToolsForMcpScope<T>(
 }
 
 /**
- * Filter tools based on machine-pane binding.
- * Returns all tools when not bound, or drops switch_machine/list_machines
- * when the conversation is bound to a specific machine.
- */
-export function filterToolsForMachineBinding<T>(
-  tools: Record<string, T>,
-  isBound: boolean
-): Record<string, T> {
-  if (!isBound) return tools;
-
-  return Object.fromEntries(
-    Object.entries(tools).filter(([name]) => !MACHINE_BINDING_LOCKED_TOOLS.has(name))
-  );
-}
-
-/**
- * Register the session family for a machine-BOUND conversation.
- *
- * The exact counterpart of `filterToolsForMachineBinding`: that one takes away
- * what a bound conversation must not have (`switch_machine`/`list_machines` —
- * it cannot leave its machine), this one adds what only a bound conversation
- * can use. An unbound conversation gets its input back UNCHANGED — same object
- * contents, same key order — because the drive-agent tool set is not this
- * epic's to change.
- */
-export function withSessionFamilyTools<T>(
-  tools: Record<string, T>,
-  sessionTools: Record<string, T>,
-  isBound: boolean
-): Record<string, T> {
-  if (!isBound) return tools;
-  return { ...tools, ...sessionTools };
-}
-
-/**
  * Apply a page's saved per-agent tool allowlist (`page.enabledTools`).
  *
  * null = unconfigured page, no restriction; [] = every listed PageSpace tool
- * blocked. The SESSION FAMILY is exempt: it is the machine BINDING's
- * orchestration surface, present only when a conversation is bound (see
- * `withSessionFamilyTools`), and a bound page whose allowlist was saved before
- * the family existed must not silently lose it. Unbound conversations never
- * have these names in their input, so the exemption cannot leak them.
- *
- * CAVEAT for whoever surfaces these names in the agent-config tool toggles:
- * the exemption is unconditional, so a toggle for kill_session/send_session
- * would be a silent no-op. If the family ever becomes operator-restrictable,
- * gate this exemption on "the allowlist predates the family" instead of on
- * the tool name.
+ * blocked. The session/shell family gets NO exemption: it is part of the
+ * sandbox tool group like bash/git, and an operator who restricted an agent's
+ * tools restricted these too — the old exemption existed only because the
+ * family used to be registered by machine binding, outside the allowlist's
+ * sight.
  */
 export function filterToolsForAgentAllowlist<T>(
   tools: Record<string, T>,
@@ -331,9 +324,7 @@ export function filterToolsForAgentAllowlist<T>(
 ): Record<string, T> {
   if (allowlist == null) return tools;
   return Object.fromEntries(
-    Object.entries(tools).filter(
-      ([name]) => allowlist.includes(name) || SESSION_FAMILY_TOOL_NAMES.includes(name)
-    )
+    Object.entries(tools).filter(([name]) => allowlist.includes(name))
   );
 }
 

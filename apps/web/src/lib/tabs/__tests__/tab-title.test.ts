@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseTabPath,
   getStaticTabMeta,
+  isDriveScopedPath,
 } from '../tab-title';
 
 describe('tab-title', () => {
@@ -555,5 +556,40 @@ describe('tab-title', () => {
 
       expect(meta!.title).toBe('Personalization');
     });
+  });
+});
+
+// isDriveScopedPath prefix-matches `drive-*`, so a future drive-level PathType
+// named something else would silently reintroduce the bug it was added to fix
+// (the assistant losing the workspace on drive sub-routes) with no compile
+// error. This sweeps every drive route shape parseTabPath can actually return
+// and asserts the predicate holds for all of them.
+describe('isDriveScopedPath', () => {
+  const DRIVE_SECTIONS = [
+    'tasks', 'activity', 'members', 'settings',
+    'trash', 'calendar', 'channels', 'files', 'workflows',
+  ];
+
+  it('holds for the bare drive route and every drive section', () => {
+    const paths = ['/dashboard/drive-1', ...DRIVE_SECTIONS.map((s) => `/dashboard/drive-1/${s}`),
+      '/dashboard/drive-1/members/invite', '/dashboard/drive-1/members/user-9'];
+    for (const path of paths) {
+      const parsed = parseTabPath(path);
+      expect({ path, scoped: isDriveScopedPath(parsed) }).toEqual({ path, scoped: true });
+    }
+  });
+
+  // A page route also carries a driveId, but callers handle it separately (it
+  // resolves to routeType 'page', which already carries the drive).
+  it('does not claim page routes, global routes, or the drive list', () => {
+    for (const path of ['/dashboard/drives', '/dashboard/tasks', '/dashboard/calendar',
+      '/dashboard/channels/c1', '/settings/account', '/dashboard']) {
+      const parsed = parseTabPath(path);
+      expect({ path, scoped: isDriveScopedPath(parsed) }).toEqual({ path, scoped: false });
+    }
+  });
+
+  it('requires a driveId, not merely a drive-shaped type', () => {
+    expect(isDriveScopedPath({ type: 'drive-tasks' })).toBe(false);
   });
 });

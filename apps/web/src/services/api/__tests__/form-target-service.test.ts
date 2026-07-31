@@ -78,6 +78,7 @@ import {
   createFormTarget,
   lookupActiveFormTarget,
   updateFormTargetStatus,
+  updateFormTargetNotification,
   getFormTargetById,
   getFormTargetsByCanvasPageId,
   appendFormSubmission,
@@ -118,6 +119,7 @@ describe('createFormTarget', () => {
         nextRow: 2,
         status: 'active',
         createdBy: 'user-1',
+        notificationEmail: null,
       },
     ]);
   });
@@ -203,6 +205,29 @@ describe('createFormTarget', () => {
 
     expect(mockTxInsertValues.mock.calls[0][0].canvasPageId).toBe('canvas-1');
     expect(txMock.update).not.toHaveBeenCalled();
+  });
+
+  it('stores notificationEmail when provided', async () => {
+    await createFormTarget({
+      sheetPageId: 'sheet-1',
+      fields,
+      createdBy: 'user-1',
+      mutationContext: { userId: 'user-1' },
+      notificationEmail: 'owner@example.com',
+    });
+
+    expect(mockTxInsertValues.mock.calls[0][0].notificationEmail).toBe('owner@example.com');
+  });
+
+  it('defaults notificationEmail to null when omitted', async () => {
+    await createFormTarget({
+      sheetPageId: 'sheet-1',
+      fields,
+      createdBy: 'user-1',
+      mutationContext: { userId: 'user-1' },
+    });
+
+    expect(mockTxInsertValues.mock.calls[0][0].notificationEmail).toBeNull();
   });
 });
 
@@ -307,6 +332,40 @@ describe('updateFormTargetStatus', () => {
 
     const result = await updateFormTargetStatus({ formTargetId: 'ft-1', status: 'archived' });
     expect(result.status).toBe('archived');
+  });
+});
+
+describe('updateFormTargetNotification', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('updates the notificationEmail column and returns the updated row', async () => {
+    mockUpdateReturning.mockResolvedValue([{ id: 'ft-1', notificationEmail: 'new@example.com' }]);
+
+    const result = await updateFormTargetNotification({
+      formTargetId: 'ft-1',
+      notificationEmail: 'new@example.com',
+    });
+    expect(result.notificationEmail).toBe('new@example.com');
+  });
+
+  it('sets notificationEmail to null when clearing', async () => {
+    mockUpdateReturning.mockResolvedValue([{ id: 'ft-1', notificationEmail: null }]);
+
+    const result = await updateFormTargetNotification({
+      formTargetId: 'ft-1',
+      notificationEmail: null,
+    });
+    expect(result.notificationEmail).toBeNull();
+  });
+
+  it('throws when the form target does not exist', async () => {
+    mockUpdateReturning.mockResolvedValue([]);
+
+    await expect(
+      updateFormTargetNotification({ formTargetId: 'missing', notificationEmail: null })
+    ).rejects.toThrow(/not found/i);
   });
 });
 

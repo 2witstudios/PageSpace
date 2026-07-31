@@ -8,7 +8,6 @@ import { CheckCircle2, ArrowLeft, Server } from 'lucide-react';
 import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { MachineAccessCard } from './MachineAccessCard';
 import { ImageGenerationCard } from './ImageGenerationCard';
 
 interface ProviderAvailability {
@@ -94,8 +93,6 @@ export default function AiSettingsPage() {
       </Card>
 
       <ImageGenerationCard />
-
-      <MachineAccessCard />
     </div>
   );
 }

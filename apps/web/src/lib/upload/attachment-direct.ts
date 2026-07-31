@@ -11,10 +11,11 @@
 import {
   getUserStorageQuota,
   checkStorageQuota,
-  updateActiveUploads,
+  reserveConcurrentUploadSlot,
   updateStorageUsage,
   shouldChargeForStore,
 } from '@pagespace/lib/services/storage-limits';
+import { releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { buildS3Key } from '@pagespace/lib/services/upload-validation';
 import { attachmentUploadRepository } from '@pagespace/lib/services/attachment-upload-repository';
@@ -90,7 +91,17 @@ export async function presignAttachment(args: PresignAttachmentArgs): Promise<Or
   // Any failure after the slot is acquired must release it, or it leaks until the
   // semaphore's stale-slot sweep.
   try {
-    await updateActiveUploads(userId, 1);
+    // #2154/#2225: atomic cross-process reservation — see the page-file
+    // presign route's identical comment for why this must be one atomic
+    // check-and-insert rather than a separate check then a separate insert.
+    const reserved = await reserveConcurrentUploadSlot(jobId, userId, fileSize);
+    if (!reserved) {
+      uploadSemaphore.releaseUploadSlot(jobId);
+      return {
+        status: 429,
+        body: { error: 'Too many concurrent uploads. Please wait for current uploads to complete.' },
+      };
+    }
 
     if (exists) {
       return { status: 200, body: { alreadyExists: true, jobId, key } };
@@ -110,7 +121,7 @@ export async function presignAttachment(args: PresignAttachmentArgs): Promise<Or
     return { status: 200, body: { url, jobId, key, expiresAt } };
   } catch (err) {
     uploadSemaphore.releaseUploadSlot(jobId);
-    await updateActiveUploads(userId, -1).catch(() => undefined);
+    await releasePendingUpload(jobId).catch(() => undefined);
     throw err;
   }
 }
@@ -153,13 +164,13 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
     verify = await verifyAttachmentBytes({ userId, target, contentHash });
   } catch (err) {
     uploadSemaphore.releaseUploadSlot(jobId);
-    await updateActiveUploads(userId, -1).catch(() => undefined);
+    await releasePendingUpload(jobId).catch(() => undefined);
     loggers.api.error('Attachment verify call failed', err as Error);
     return { status: 503, body: { error: 'File verification is temporarily unavailable. Please try again.' } };
   }
   if (!verify.ok) {
     uploadSemaphore.releaseUploadSlot(jobId);
-    await updateActiveUploads(userId, -1).catch(() => undefined);
+    await releasePendingUpload(jobId).catch(() => undefined);
     return { status: verify.status, body: { error: verify.error } };
   }
   const storedMime = verify.detectedMime;
@@ -186,7 +197,7 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
     fileWasInserted = saved.inserted;
   } catch (err) {
     uploadSemaphore.releaseUploadSlot(jobId);
-    await updateActiveUploads(userId, -1).catch(() => undefined);
+    await releasePendingUpload(jobId).catch(() => undefined);
     throw err;
   }
 
@@ -196,7 +207,15 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
   // here must not turn a successful upload into a 500 (which would make the client
   // retry and double-charge storage).
   try {
-    await updateActiveUploads(userId, -1);
+    // Isolated from the rest of this block: a transient failure releasing the
+    // pending_uploads row must not skip the storage charge or audit/activity
+    // logging below (#2225 review — CodeRabbit).
+    await releasePendingUpload(jobId).catch((err) => {
+      loggers.api.warn('releasePendingUpload failed after successful complete', {
+        jobId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
     if (shouldChargeForStore(fileWasInserted)) {
       await updateStorageUsage(userId, resolvedSize, {
         driveId: attachmentFileDriveId(target) ?? undefined,
@@ -251,6 +270,6 @@ export async function cancelAttachment(args: { userId: string; jobId: string }):
   }
 
   uploadSemaphore.releaseUploadSlot(jobId);
-  await updateActiveUploads(userId, -1).catch(() => undefined);
+  await releasePendingUpload(jobId).catch(() => undefined);
   return { status: 200, body: { success: true } };
 }

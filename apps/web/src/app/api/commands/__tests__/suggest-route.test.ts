@@ -37,7 +37,14 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { GET } from '../suggest/route';
+import { BUILTIN_COMMANDS } from '@pagespace/lib/commands/command-core';
 import { db } from '@pagespace/db/db';
+
+// Expectations derive from the registry so adding a built-in (e.g. a new
+// skill) doesn't rewrite this file — these tests cover DB merging and
+// suppression, not the registry's contents.
+const withBuiltins = (...triggers: string[]) =>
+  [...BUILTIN_COMMANDS.map((c) => c.trigger), ...triggers].sort();
 import { getBatchPagePermissions, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 
@@ -150,10 +157,9 @@ describe('GET /api/commands/suggest', () => {
 
     const response = await GET(suggestRequest());
     const json = await response.json();
-    expect(json.suggestions.map((s: { trigger: string }) => s.trigger).sort()).toEqual([
-      'help',
-      'mine',
-    ]);
+    expect(json.suggestions.map((s: { trigger: string }) => s.trigger).sort()).toEqual(
+      withBuiltins('mine')
+    );
     expect(mockedBatchPermissions).toHaveBeenCalledWith(USER_ID, [
       'page_ok',
       'page_denied',
@@ -164,10 +170,9 @@ describe('GET /api/commands/suggest', () => {
     mockedDb.query.commands.findMany.mockResolvedValue([userCommand('mine')] as never);
     const response = await GET(suggestRequest());
     const json = await response.json();
-    expect(json.suggestions.map((s: { trigger: string }) => s.trigger).sort()).toEqual([
-      'help',
-      'mine',
-    ]);
+    expect(json.suggestions.map((s: { trigger: string }) => s.trigger).sort()).toEqual(
+      withBuiltins('mine')
+    );
     // Only one findMany call: the personal commands
     expect(mockedDb.query.commands.findMany).toHaveBeenCalledTimes(1);
   });

@@ -72,6 +72,9 @@ vi.mock('@pagespace/db/db', () => {
     includeDrivePrompt: false,
     includePageTree: false,
     pageTreeScope: null,
+    // This suite is ABOUT the sandbox git toolkit reaching the integration
+    // resolver — the per-agent switch must be on for the tools to exist at all.
+    sandboxEnabled: true,
     revision: 0,
   };
   return {
@@ -90,9 +93,14 @@ vi.mock('@pagespace/db/db', () => {
     },
   };
 });
+// exists/sql: globalConversationRepository's module-scope `hasMessages` query
+// (now reachable transitively via stream-takeover -> materialize-interrupted-stream
+// -> global-conversation-repository, #2153) needs both or the module throws on import.
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
+  exists: vi.fn(),
+  sql: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id' },
@@ -167,17 +175,6 @@ vi.mock('@/lib/ai/core/mcp-tool-converter', () => ({
 vi.mock('@/lib/ai/core/personalization-utils', () => ({
   getUserPersonalization: vi.fn().mockResolvedValue(null),
 }));
-// Phase 6 (#2166): the route now derives a Machine Pane binding for every
-// request. None of these requests carry a machine-bound conversationId, so
-// this resolves to null (not a machine-bound pane) — the real DB-backed
-// deps builder is stubbed out since the pure core itself is fully mocked.
-vi.mock('@pagespace/lib/services/machines/machine-pane-binding', () => ({
-  deriveMachinePaneBinding: vi.fn().mockResolvedValue(null),
-}));
-vi.mock('@/lib/ai/machine-pane/machine-pane-binding-runtime', () => ({
-  buildMachinePaneBindingDeps: vi.fn(() => ({})),
-}));
-
 vi.mock('ai', () => ({
   streamText: vi.fn(),
   convertToModelMessages: vi.fn().mockReturnValue([]),

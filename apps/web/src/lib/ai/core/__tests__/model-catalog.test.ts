@@ -3,7 +3,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 // Mock the server-only monitoring module so the test never pulls in the DB client.
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   MODEL_CONTEXT_WINDOWS: {
-    'openai/gpt-5.3-chat': 400000,
+    'openai/gpt-5.6-luna': 1050000,
     'anthropic/claude-opus-4.8': 200000,
   },
 }));
@@ -31,13 +31,13 @@ describe('buildModelCatalog', () => {
   it('populates a known model with id/displayName/free/contextWindow', () => {
     const catalog = buildModelCatalog();
     const openai = catalog.find((p) => p.provider === 'openai')!;
-    const model = openai.models.find((m) => m.id === 'openai/gpt-5.3-chat');
+    const model = openai.models.find((m) => m.id === 'openai/gpt-5.6-luna');
     expect(model).toEqual({
-      id: 'openai/gpt-5.3-chat',
-      displayName: 'GPT-5.3 Chat',
+      id: 'openai/gpt-5.6-luna',
+      displayName: 'GPT-5.6 Luna',
       provider: 'openai',
       free: true,
-      contextWindow: 400000,
+      contextWindow: 1050000,
     });
   });
 
