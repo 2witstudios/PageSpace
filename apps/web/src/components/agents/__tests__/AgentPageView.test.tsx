@@ -744,4 +744,56 @@ describe('AgentPageView', () => {
       expect(window.location.search).toBe('');
     });
   });
+
+  describe('the console\'s Settings link (?tab=) — review finding: chatgpt-codex-connector on PR #2296', () => {
+    it('lands on the requested tab on a fresh mount', () => {
+      resolveTo({ conversationId: 'conv-1', sessionId: null });
+      vi.mocked(useSearchParams).mockReturnValue(new URLSearchParams('tab=settings') as ReturnType<typeof useSearchParams>);
+      window.history.replaceState({}, '', '/dashboard/drive-1/page-1?tab=settings');
+
+      render(<AgentPageView page={pageFixture()} />);
+
+      expect(screen.getByRole('tab', { name: /settings/i })).toHaveAttribute('data-state', 'active');
+    });
+
+    it('strips ?tab= from the URL after consuming it', () => {
+      vi.mocked(useSearchParams).mockReturnValue(new URLSearchParams('tab=history') as ReturnType<typeof useSearchParams>);
+      window.history.replaceState({}, '', '/dashboard/drive-1/page-1?tab=history');
+
+      render(<AgentPageView page={pageFixture()} />);
+
+      expect(new URL(window.location.href).searchParams.has('tab')).toBe(false);
+    });
+
+    it('re-syncs the tab when the SAME mounted instance receives a new ?tab= — a query-only navigation Next does not remount for', () => {
+      // The pane-bar link points at THIS agent's own page: when the user is
+      // already on it (this page's own Chat tab can host a pane for its own
+      // agent), clicking Settings is a query-only navigation to the exact
+      // same route — Next keeps the component instance mounted, so a
+      // mount-only read of `?tab=` would silently no-op.
+      resolveTo({ conversationId: 'conv-1', sessionId: null });
+      vi.mocked(useSearchParams).mockReturnValue(new URLSearchParams() as ReturnType<typeof useSearchParams>);
+      window.history.replaceState({}, '', '/dashboard/drive-1/page-1');
+
+      const { rerender } = render(<AgentPageView page={pageFixture()} />);
+      expect(screen.getByRole('tab', { name: /^chat/i })).toHaveAttribute('data-state', 'active');
+
+      vi.mocked(useSearchParams).mockReturnValue(new URLSearchParams('tab=settings') as ReturnType<typeof useSearchParams>);
+      window.history.replaceState({}, '', '/dashboard/drive-1/page-1?tab=settings');
+      rerender(<AgentPageView page={pageFixture()} />);
+
+      expect(screen.getByRole('tab', { name: /settings/i })).toHaveAttribute('data-state', 'active');
+      expect(new URL(window.location.href).searchParams.has('tab')).toBe(false);
+    });
+
+    it('ignores an unrecognized ?tab= value rather than crashing or clearing the current tab', () => {
+      resolveTo({ conversationId: 'conv-1', sessionId: null });
+      vi.mocked(useSearchParams).mockReturnValue(new URLSearchParams('tab=nonsense') as ReturnType<typeof useSearchParams>);
+      window.history.replaceState({}, '', '/dashboard/drive-1/page-1?tab=nonsense');
+
+      render(<AgentPageView page={pageFixture()} />);
+
+      expect(screen.getByRole('tab', { name: /^chat/i })).toHaveAttribute('data-state', 'active');
+    });
+  });
 });

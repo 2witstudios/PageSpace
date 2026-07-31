@@ -2,9 +2,17 @@
 
 import { useCallback, useMemo } from 'react';
 import { useParams, usePathname } from 'next/navigation';
+import useSWR from 'swr';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { usePageTree, TreePage } from './usePageTree';
 import { findNodeAndParent } from '@/lib/tree/tree-utils';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+
+const fallbackPageFetcher = (url: string) =>
+  fetchWithAuth(url).then((r) => {
+    if (!r.ok) throw new Error('Failed to fetch');
+    return r.json();
+  });
 
 export interface PageRefreshConfig {
   /** Whether pull-to-refresh is available for this page */
@@ -33,14 +41,30 @@ export function usePageRefresh(): PageRefreshConfig {
   const driveId = params.driveId as string | undefined;
   const pageId = params.pageId as string | undefined;
 
-  const { tree, mutate } = usePageTree(driveId);
+  const { tree, isLoading: isTreeLoading, mutate } = usePageTree(driveId);
 
   // Find the current page in the tree
-  const currentPage = useMemo<TreePage | null>(() => {
+  const treePage = useMemo<TreePage | null>(() => {
     if (!pageId || !tree) return null;
     const result = findNodeAndParent(tree, pageId);
     return result?.node ?? null;
   }, [pageId, tree]);
+
+  // A page the tree hasn't caught up to yet (freshly created, or a deep
+  // link) still renders — `CenterPanel`'s `PageContent` falls back to
+  // `/api/pages/${pageId}` for exactly this case. Mirrored here with the
+  // same gate (tree settled, page id present, not already found) so THIS
+  // hook's page-type decision — specifically `managesOwnScroll` — agrees
+  // with what's actually on screen instead of defaulting to "unknown" and
+  // silently double-wrapping a fallback-rendered AI_CHAT/CHANNEL page's
+  // self-managed scroll in `CenterPanel`'s outer `CustomScrollArea` until
+  // the page happens to land in the tree (review finding —
+  // chatgpt-codex-connector on PR #2296).
+  const { data: fallbackPage } = useSWR<TreePage>(
+    !isTreeLoading && !!pageId && !treePage ? `/api/pages/${pageId}` : null,
+    fallbackPageFetcher,
+  );
+  const currentPage = treePage ?? fallbackPage ?? null;
 
   // Create a stable refresh function for the page tree
   const refreshTree = useCallback(async () => {

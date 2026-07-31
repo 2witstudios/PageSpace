@@ -224,6 +224,19 @@ export async function checkSessionEndAccess(
  * Throws `ConversationUnavailableError` (message `conversation_unavailable`)
  * when the id cannot be claimed WITH this binding — foreign owner, legacy
  * message-owner conflict, or an existing row whose binding disagrees.
+ *
+ * Wrapped in the SAME per-session advisory lock `closeConversationInSession`/
+ * `reopenConversationInSession` take (same key: every operation that consumes
+ * or frees an open-listing slot serializes against every other one). Without
+ * this, a create racing a reopen could both read the cap's count before
+ * either writes, and both succeed — two operations each individually under
+ * `MAX_SESSION_CONVERSATIONS`, together over it (caught in review — the
+ * advisory lock previously only coordinated close/reopen against each other,
+ * not against create). The lock only needs to be HELD for the duration of
+ * this call, not used for the actual reads/writes below (the deps still go
+ * through the repository's own `db`) — Postgres advisory locks gate
+ * concurrent CALLERS of the guarded code, independent of which connection
+ * the guarded code's own queries run on.
  */
 export async function createConversationInSession(input: {
   conversationId: string;
@@ -234,50 +247,55 @@ export async function createConversationInSession(input: {
   /** Display label written at birth (a spawned worker's name). */
   title?: string | null;
 }): Promise<void> {
-  return createConversationInSessionWith(
-    {
-      createPageConversation: ({ conversationId, userId, agentPageId, sessionId, title }) =>
-        conversationRepository.createConversation(conversationId, userId, agentPageId, {
-          sessionId,
-          title: title ?? undefined,
-        }),
-      createGlobalConversation: async ({ conversationId, userId, sessionId, title }) => {
-        await resolveOrCreateConversation(userId, conversationId, undefined, {
-          sessionId,
-          title: title ?? undefined,
-        });
+  return db.transaction(async (tx) => {
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtext(${'agent-session-conversations:' + input.sessionId}))`,
+    );
+    return createConversationInSessionWith(
+      {
+        createPageConversation: ({ conversationId, userId, agentPageId, sessionId, title }) =>
+          conversationRepository.createConversation(conversationId, userId, agentPageId, {
+            sessionId,
+            title: title ?? undefined,
+          }),
+        createGlobalConversation: async ({ conversationId, userId, sessionId, title }) => {
+          await resolveOrCreateConversation(userId, conversationId, undefined, {
+            sessionId,
+            title: title ?? undefined,
+          });
+        },
+        findConversation: async (conversationId) => {
+          const row = await conversationRepository.getConversation(conversationId);
+          if (!row) return null;
+          return { userId: row.userId, type: row.type, contextId: row.contextId, sessionId: row.sessionId };
+        },
+        findAgentDriveId: async (agentPageId) => {
+          const agent = await conversationRepository.getAiAgent(agentPageId);
+          return agent?.driveId ?? null;
+        },
+        findSessionDriveId: async (sessionId) => {
+          const row = await findSessionRecord(sessionId);
+          return row ? { driveId: row.driveId } : null;
+        },
+        countActiveConversations: async (sessionId) => {
+          const [row] = await db
+            .select({ n: count() })
+            .from(conversations)
+            .where(
+              and(
+                eq(conversations.sessionId, sessionId),
+                eq(conversations.isActive, true),
+                // A conversation closed OUT of the session's listing no longer
+                // holds a cap slot — closing one frees room for another.
+                isNull(conversations.closedInSessionAt),
+              ),
+            );
+          return row?.n ?? 0;
+        },
       },
-      findConversation: async (conversationId) => {
-        const row = await conversationRepository.getConversation(conversationId);
-        if (!row) return null;
-        return { userId: row.userId, type: row.type, contextId: row.contextId, sessionId: row.sessionId };
-      },
-      findAgentDriveId: async (agentPageId) => {
-        const agent = await conversationRepository.getAiAgent(agentPageId);
-        return agent?.driveId ?? null;
-      },
-      findSessionDriveId: async (sessionId) => {
-        const row = await findSessionRecord(sessionId);
-        return row ? { driveId: row.driveId } : null;
-      },
-      countActiveConversations: async (sessionId) => {
-        const [row] = await db
-          .select({ n: count() })
-          .from(conversations)
-          .where(
-            and(
-              eq(conversations.sessionId, sessionId),
-              eq(conversations.isActive, true),
-              // A conversation closed OUT of the session's listing no longer
-              // holds a cap slot — closing one frees room for another.
-              isNull(conversations.closedInSessionAt),
-            ),
-          );
-        return row?.n ?? 0;
-      },
-    },
-    input,
-  );
+      input,
+    );
+  });
 }
 
 /**

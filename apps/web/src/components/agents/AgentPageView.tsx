@@ -80,39 +80,32 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   // (drive membership + code-execution) on every spawn.
   const canUseSessions = user?.role === 'admin';
 
-  // Deep links into this page — one-time intent, not durable state like the
-  // Agents surface's own `?session=`/`?c=`/`?agent=`, so every one of these is
-  // captured once at mount and never re-read afterward (a later History-tab
-  // pick, "new conversation", or tab click is not fighting a stale URL param):
-  // - `?conversationId=&sessionId=` — the Agents surface's past-conversations list
-  // - `?tab=` — the agents console's per-pane Settings link (via `/p/[pageId]`,
-  //   which forwards the query string verbatim)
+  // A deep link from the Agents surface's past-conversations list
+  // (`?conversationId=&sessionId=`) — one-time intent, not durable state like
+  // the Agents surface's own `?session=`/`?c=`/`?agent=`, so it's captured
+  // once at mount and never re-read afterward (a later History-tab pick or
+  // "new conversation" is not fighting a stale URL param).
   const searchParams = useSearchParams();
   const initialConversationIdRef = useRef(searchParams.get('conversationId') ?? undefined);
   const initialSessionIdRef = useRef(searchParams.get('sessionId'));
-  const initialTab = searchParams.get('tab');
-  const hadDeepLinkParams =
-    initialConversationIdRef.current !== undefined || initialSessionIdRef.current !== null || initialTab !== null;
 
   // Consume-once, for real: strip the params from the URL immediately after
-  // capturing them. Left in place, a refresh after the user later switches to
-  // a DIFFERENT conversation (History tab, "new") or tab would remount this
-  // component, re-read the same stale params from the URL, and silently
-  // reopen the original deep-linked thread/tab instead of respecting where
-  // the user actually navigated to (review finding — this was previously
-  // dismissed as "cosmetic", but it's a real functional bug on refresh, not
-  // just an untidy address bar).
+  // capturing them. Left in place, a refresh after the user later switches
+  // to a DIFFERENT conversation (History tab, "new") would remount this
+  // component, re-read the same stale `conversationId` from the URL, and
+  // silently reopen the original deep-linked thread instead of respecting
+  // where the user actually navigated to (review finding — this was
+  // previously dismissed as "cosmetic", but it's a real functional bug on
+  // refresh, not just an untidy address bar).
   useEffect(() => {
-    if (!hadDeepLinkParams) return;
+    if (initialConversationIdRef.current === undefined) return;
     const url = new URL(window.location.href);
     url.searchParams.delete('conversationId');
     url.searchParams.delete('sessionId');
-    url.searchParams.delete('tab');
     window.history.replaceState({}, '', url.toString());
-    // Deliberately empty deps: this runs once, immediately after the refs/
-    // values above captured their values on this same mount — never re-runs
-    // for this component instance.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Deliberately empty deps: this runs once, immediately after the refs
+    // above captured their values on this same mount — never re-runs for
+    // this component instance.
   }, []);
 
   const { resolved: initialResolved } = useResolvedConversation(page.id, {
@@ -145,9 +138,29 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   const { data: sessionData } = useSessionRecord(current?.sessionId ?? null);
   const panesDriveId = sessionData?.session ? sessionData.session.driveId : page.driveId;
 
-  const [activeTab, setActiveTab] = useState<string>(
-    initialTab === 'history' || initialTab === 'settings' ? initialTab : 'chat',
-  );
+  // `?tab=` deep-links here (the agents console's per-pane Settings link, via
+  // `/p/[pageId]`, which forwards the query string verbatim). Seeded once at
+  // mount (a lazy initializer, so a fresh navigation lands on the right tab
+  // with no flash of "chat" first) AND re-synced by the effect below on every
+  // subsequent `searchParams` change: clicking that link while THIS SAME
+  // `AgentPageView` instance is already mounted — its own Chat tab hosts a
+  // pane for its own agent, so the pane bar's Settings link can point right
+  // back at the page it's already showing — is a query-only navigation Next
+  // does not remount for, so a mount-only read would silently no-op (review
+  // finding — chatgpt-codex-connector on PR #2296).
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    const tab = searchParams.get('tab');
+    return tab === 'history' || tab === 'settings' ? tab : 'chat';
+  });
+
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    if (tab !== 'history' && tab !== 'settings') return;
+    setActiveTab(tab);
+    const url = new URL(window.location.href);
+    url.searchParams.delete('tab');
+    window.history.replaceState({}, '', url.toString());
+  }, [searchParams]);
   const [webhooksOpen, setWebhooksOpen] = useState(false);
   const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
   const [isSettingsSaving, setIsSettingsSaving] = useState(false);
