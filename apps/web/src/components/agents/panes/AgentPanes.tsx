@@ -1113,8 +1113,13 @@ export default function AgentPanes({
         // `decideClosePane` see the just-claimed conversation as not
         // open-listed yet and take the pure layout-close path, orphaning it
         // — holding a cap slot with no pane left to retry the close from
-        // (review finding — final adversarial pass on PR #2302).
-        recordMintedConversation(conversation.id, agentPageId);
+        // (review finding — final adversarial pass on PR #2302). Only when
+        // THIS request actually transitioned the listing — `alreadyInSession`
+        // means some other request already did (or it was never unbound to
+        // begin with), and `recordMintedConversation` has no id-based dedupe,
+        // so calling it again would prepend a second, duplicate row for the
+        // same conversationId into the local cache (self-review finding).
+        if (!claimResult.alreadyInSession) recordMintedConversation(conversation.id, agentPageId);
         void mutate(isAgentSessionsKey);
       }
       if (!isCurrent()) return false;
