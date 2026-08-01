@@ -501,6 +501,31 @@ describe('closeTab', () => {
     const state = base();
     expect(closeTab(state, 'ghost', 'conv-1')).toBe(state);
   });
+
+  it('closing the last tab of a NON-active pane still reverts THAT pane to its own picker', () => {
+    // `handleHistoryDeleteConversation` (AgentPanes.tsx) can call closeTab on
+    // a pane that isn't the grid's currently active one — e.g. the same
+    // deleted conversation was the sole tab in two panes at once. Every
+    // affected pane still gets its own picker; this only pins down that
+    // pane-1 (inactive here) does too, not any claim about which pane's
+    // `pendingPickerPaneId` "wins" when multiple panes revert in the same
+    // sequence of calls (each call sets it, so the last one processed is
+    // what the grid shows a picker for — a pre-existing, low-severity
+    // limitation of the single `pendingPickerPaneId` field, not something
+    // this test asserts either way).
+    let state = splitRight(base(), 'pane-1', 'col-2', 'pane-2');
+    state = selectPane(state, 'pane-2');
+    expect(state.activePaneId).toBe('pane-2');
+
+    state = closeTab(state, 'pane-1', 'conv-1');
+
+    expect(state.columns[0].panes[0].scope).toBeNull();
+    expect(paneTabsOf(state, 'pane-1')).toEqual([]);
+    expect(state.pendingPickerPaneId).toBe('pane-1');
+    // The active pane never moved — closing an inactive pane's own tab must
+    // not steal grid focus.
+    expect(state.activePaneId).toBe('pane-2');
+  });
 });
 
 describe('tabsOf / paneTabsOf', () => {
