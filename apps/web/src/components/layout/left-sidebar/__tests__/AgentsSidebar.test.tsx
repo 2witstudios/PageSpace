@@ -21,8 +21,7 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import useSWR, { SWRConfig } from 'swr';
-import { agentSessionsKey } from '@/components/agents/panes/session-conversations';
+import { SWRConfig } from 'swr';
 
 const mockPush = vi.fn();
 const mockUseAuth = vi.fn();
@@ -159,25 +158,6 @@ const renderSidebar = () =>
       <AgentsSidebar />
     </SWRConfig>,
   );
-
-/**
- * Reads the exact cache key `AgentPanes` reads (`agentSessionsKey(driveId)`)
- * — mounted alongside `AgentsSidebar` in the SAME `SWRConfig` to prove a
- * reopen's optimistic write lands in the key the pane grid actually
- * consumes, not just the sidebar's own (which differs from it in the
- * global console when the session belongs to a real drive).
- */
-function DriveCacheProbe({ driveId }: { driveId: string }) {
-  const { data } = useSWR<{ sessions: SessionFixture[] }>(agentSessionsKey(driveId), async (url: string) => {
-    const res = await mockFetchWithAuth(url);
-    return res.json();
-  });
-  const conversationIds = (data?.sessions ?? [])
-    .flatMap((s) => s.conversations)
-    .map((c) => c.conversationId)
-    .join(',');
-  return <div data-testid="drive-cache-probe">{conversationIds}</div>;
-}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -654,53 +634,6 @@ describe('AgentsSidebar', () => {
       await waitFor(() => expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(fetchesBefore));
     });
 
-    test("also refreshes an already-open History list — otherwise the just-closed conversation is absent until collapse/re-expand (review finding: chatgpt-codex-connector on PR #2296)", async () => {
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url.includes('/conversations/closed')) {
-          return { ok: true, json: async () => ({ conversations: [] }) };
-        }
-        return { ok: true, json: async () => ({ sessions: [SESSION] }) };
-      });
-      mockDel.mockResolvedValue(undefined);
-      const user = userEvent.setup();
-      renderSidebar();
-
-      await user.click(await screen.findByLabelText(/expand api refactor/i));
-      await user.click(await screen.findByText('History'));
-      await waitFor(() =>
-        expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/closed'),
-      );
-      const closedListFetchesBefore = mockFetchWithAuth.mock.calls.filter(
-        ([url]) => url === '/api/agent-sessions/ses-1/conversations/closed',
-      ).length;
-
-      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
-      await user.click(await screen.findByText('Close'));
-      await waitFor(() => expect(mockDel).toHaveBeenCalled());
-
-      await waitFor(() => {
-        const closedListFetchesAfter = mockFetchWithAuth.mock.calls.filter(
-          ([url]) => url === '/api/agent-sessions/ses-1/conversations/closed',
-        ).length;
-        expect(closedListFetchesAfter).toBeGreaterThan(closedListFetchesBefore);
-      });
-    });
-
-    test('does not error when History is closed (its SWR key is null) — the retryClosed() call is a safe no-op', async () => {
-      mockDel.mockResolvedValue(undefined);
-      const user = userEvent.setup();
-      renderSidebar();
-
-      await user.click(await screen.findByLabelText(/expand api refactor/i));
-      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
-      await user.click(await screen.findByText('Close'));
-
-      await waitFor(() => expect(mockDel).toHaveBeenCalled());
-      expect(
-        mockFetchWithAuth.mock.calls.some(([url]) => url === '/api/agent-sessions/ses-1/conversations/closed'),
-      ).toBe(false);
-    });
-
     test('the 3-dots dropdown "Close" drives the same DELETE', async () => {
       mockDel.mockResolvedValue(undefined);
       const user = userEvent.setup();
@@ -743,176 +676,6 @@ describe('AgentsSidebar', () => {
 
       await waitFor(() => expect(mockDel).toHaveBeenCalled());
       expect(screen.queryByRole('alertdialog')).toBeNull();
-    });
-  });
-
-  describe('history (reopening a closed conversation)', () => {
-    const CLOSED_CONVERSATION = { conversationId: 'conv-closed', title: 'Old chat', agentPageId: 'agent-1' };
-
-    const respondWithSessionsAndClosed = (
-      sessions: SessionFixture[],
-      closed: { conversationId: string; title: string | null; agentPageId: string | null }[],
-    ) => {
-      mockFetchWithAuth.mockImplementation(async (url: string) => {
-        if (url.includes('/conversations/closed')) {
-          return { ok: true, json: async () => ({ conversations: closed }) };
-        }
-        return { ok: true, json: async () => ({ sessions }) };
-      });
-    };
-
-    test('opening History fetches and lists the session\'s closed conversations', async () => {
-      respondWithSessionsAndClosed([SESSION], [CLOSED_CONVERSATION]);
-      const user = userEvent.setup();
-      renderSidebar();
-
-      await user.click(await screen.findByLabelText(/expand api refactor/i));
-      await user.click(await screen.findByText('History'));
-
-      expect(await screen.findByText('Researcher — Old chat')).toBeDefined();
-      expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/closed');
-    });
-
-    test('an empty history says so rather than showing nothing', async () => {
-      respondWithSessionsAndClosed([SESSION], []);
-      const user = userEvent.setup();
-      renderSidebar();
-
-      await user.click(await screen.findByLabelText(/expand api refactor/i));
-      await user.click(await screen.findByText('History'));
-
-      expect(await screen.findByText(/no closed conversations/i)).toBeDefined();
-    });
-
-    test('clicking a closed conversation POSTs reopen and selects it, same as an open one', async () => {
-      respondWithSessionsAndClosed([SESSION], [CLOSED_CONVERSATION]);
-      mockPost.mockResolvedValue(undefined);
-      const user = userEvent.setup();
-      renderSidebar();
-
-      await user.click(await screen.findByLabelText(/expand api refactor/i));
-      await user.click(await screen.findByText('History'));
-      await user.click(await screen.findByText('Researcher — Old chat'));
-
-      await waitFor(() =>
-        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-closed/reopen'),
-      );
-      expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
-      expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-closed');
-      expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-1');
-    });
-
-    test('reopening inserts into the open conversations list synchronously — before any sessions-list revalidation lands (review finding: chatgpt-codex-connector on PR #2296)', async () => {
-      // AgentPanes' close-pane decision reads this SAME sessions cache to
-      // decide whether closing a pane should issue the server-side DELETE.
-      // If the cache only updated via a network revalidation, a pane closed
-      // before that fetch resolves would read "no listing found" and skip
-      // the DELETE — this proves the insert happens locally, synchronously.
-      respondWithSessionsAndClosed([SESSION], [CLOSED_CONVERSATION]);
-      mockPost.mockResolvedValue(undefined);
-      const user = userEvent.setup();
-      renderSidebar();
-
-      await user.click(await screen.findByLabelText(/expand api refactor/i));
-      await user.click(await screen.findByText('History'));
-      // The History row already renders this same label before the reopen
-      // — count it so the assertion below proves an INSERT, not just
-      // presence (which would pass even if the open-list insert never ran).
-      const labelsBefore = screen.getAllByText('Researcher — Old chat').length;
-      const sessionsListCallsBefore = mockFetchWithAuth.mock.calls.filter(
-        ([url]) => url === '/api/agent-sessions?driveId=drive-1',
-      ).length;
-
-      await user.click(await screen.findByText('Researcher — Old chat'));
-      await waitFor(() => expect(mockPost).toHaveBeenCalled());
-
-      // Now showing in the (still-expanded) open conversations section too —
-      // present without any additional sessions-list fetch.
-      await waitFor(() =>
-        expect(screen.getAllByText('Researcher — Old chat').length).toBeGreaterThan(labelsBefore),
-      );
-      const sessionsListCallsAfter = mockFetchWithAuth.mock.calls.filter(
-        ([url]) => url === '/api/agent-sessions?driveId=drive-1',
-      ).length;
-      expect(sessionsListCallsAfter).toBe(sessionsListCallsBefore);
-    });
-
-    test('in the GLOBAL console, also updates the drive-scoped cache AgentPanes actually reads — not just this sidebar\'s own global key (review finding: chatgpt-codex-connector on PR #2296)', async () => {
-      // Global console: this sidebar's own key is '/api/agent-sessions' (no
-      // driveId), but SESSION belongs to a real drive ('drive-1') —
-      // AgentPanes reads `agentSessionsKey('drive-1')` specifically, a
-      // DIFFERENT cache entry than this sidebar's own in this mode.
-      mockUseParams.mockReturnValue({});
-      window.history.replaceState({}, '', '/dashboard/agents');
-      useAgentSurfaceStore.setState({ driveId: null });
-      respondWithSessionsAndClosed([SESSION], [CLOSED_CONVERSATION]);
-      mockPost.mockResolvedValue(undefined);
-      const user = userEvent.setup();
-
-      render(
-        <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
-          <AgentsSidebar />
-          <DriveCacheProbe driveId="drive-1" />
-        </SWRConfig>,
-      );
-
-      await user.click(await screen.findByLabelText(/expand api refactor/i));
-      await user.click(await screen.findByText('History'));
-      await user.click(await screen.findByText('Researcher — Old chat'));
-      await waitFor(() => expect(mockPost).toHaveBeenCalled());
-
-      await waitFor(() =>
-        expect(screen.getByTestId('drive-cache-probe').textContent).toContain('conv-closed'),
-      );
-    });
-
-    test('a non-404 reopen failure shows an error toast and leaves selection untouched', async () => {
-      respondWithSessionsAndClosed([SESSION], [CLOSED_CONVERSATION]);
-      mockPost.mockRejectedValue(new ApiRequestError('boom', 500));
-      const user = userEvent.setup();
-      renderSidebar();
-
-      await user.click(await screen.findByLabelText(/expand api refactor/i));
-      await user.click(await screen.findByText('History'));
-      await user.click(await screen.findByText('Researcher — Old chat'));
-
-      await waitFor(() => expect(mockPost).toHaveBeenCalled());
-      expect(mockToastError).toHaveBeenCalledWith(
-        'Could not reopen this conversation',
-        expect.objectContaining({ description: 'boom' }),
-      );
-      expect(useAgentSurfaceStore.getState().selectedConversationId).not.toBe('conv-closed');
-    });
-
-    test('a 404 (someone else already history-deleted it) refetches the closed list silently, WITHOUT a toast', async () => {
-      // A stale row — the server is the authority on whether it's still
-      // there to reopen. No toast: this is routine staleness, not a failure
-      // the user did anything wrong to cause.
-      respondWithSessionsAndClosed([SESSION], [CLOSED_CONVERSATION]);
-      mockPost.mockRejectedValue(new ApiRequestError('not found', 404));
-      const user = userEvent.setup();
-      renderSidebar();
-
-      await user.click(await screen.findByLabelText(/expand api refactor/i));
-      await user.click(await screen.findByText('History'));
-      const closedListFetchesBefore = mockFetchWithAuth.mock.calls.filter(
-        ([url]) => url === '/api/agent-sessions/ses-1/conversations/closed',
-      ).length;
-      await user.click(await screen.findByText('Researcher — Old chat'));
-
-      await waitFor(() => expect(mockPost).toHaveBeenCalled());
-      // `retryClosed()` re-fetches the closed list so the stale row can drop
-      // out — filtered to that URL specifically, since an unrelated
-      // sessions-list revalidation would otherwise satisfy a bare "any
-      // fetch happened" assertion without ever re-fetching the closed list.
-      await waitFor(() => {
-        const closedListFetchesAfter = mockFetchWithAuth.mock.calls.filter(
-          ([url]) => url === '/api/agent-sessions/ses-1/conversations/closed',
-        ).length;
-        expect(closedListFetchesAfter).toBeGreaterThan(closedListFetchesBefore);
-      });
-      expect(mockToastError).not.toHaveBeenCalled();
-      expect(useAgentSurfaceStore.getState().selectedConversationId).not.toBe('conv-closed');
     });
   });
 

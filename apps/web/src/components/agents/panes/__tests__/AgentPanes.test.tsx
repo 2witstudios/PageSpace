@@ -1299,7 +1299,15 @@ describe('AgentPanes', () => {
         return jsonOk(defaultFetchRoute(url));
       });
       let resolveSlowReopen!: (value: unknown) => void;
-      mockPost.mockReturnValue(new Promise((resolve) => (resolveSlowReopen = resolve)));
+      // Unbound (`conv-fast`) now needs a real claim call too, distinct from
+      // the deliberately-slow reopen this test is exercising — only the
+      // reopen URL stays pending; the claim resolves normally.
+      mockPost.mockImplementation((url: string) => {
+        if (url === '/api/agent-sessions/ses-1/conversations/conv-slow/reopen') {
+          return new Promise((resolve) => (resolveSlowReopen = resolve));
+        }
+        return Promise.resolve({ ok: true, alreadyInSession: false });
+      });
       renderPanes();
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
       const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
@@ -1311,8 +1319,9 @@ describe('AgentPanes', () => {
       await user.click(await screen.findByRole('button', { name: 'select-conv-slow' }));
       expect(screen.getByTestId('pane-history-tab')).toBeInTheDocument();
 
-      // A second pick on the SAME pane, before the first resolves — no
-      // reopen needed (unbound), so it lands immediately.
+      // A second pick on the SAME pane, before the first resolves — unbound,
+      // so it claims (resolving promptly per the mock above) rather than
+      // reopening, and lands quickly.
       await user.click(await screen.findByRole('button', { name: 'select-conv-fast' }));
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-fast'));
 
@@ -1403,7 +1412,15 @@ describe('AgentPanes', () => {
         return jsonOk(defaultFetchRoute(url));
       });
       let resolveReopen!: (value: unknown) => void;
-      mockPost.mockReturnValueOnce(new Promise((resolve) => (resolveReopen = resolve)));
+      // `conv-other` is unbound, so picking it now claims (a real POST) —
+      // resolve that one normally; only the reopen this test exercises stays
+      // pending.
+      mockPost.mockImplementation((url: string) => {
+        if (url === '/api/agent-sessions/ses-1/conversations/conv-already-open/reopen') {
+          return new Promise((resolve) => (resolveReopen = resolve));
+        }
+        return Promise.resolve({ ok: true, alreadyInSession: false });
+      });
       renderPanes();
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
 
@@ -1443,7 +1460,10 @@ describe('AgentPanes', () => {
       let resolveNewer!: (value: unknown) => void;
       mockPost
         .mockReturnValueOnce(new Promise((resolve) => (resolveOlder = resolve)))
-        .mockReturnValueOnce(new Promise((resolve) => (resolveNewer = resolve)));
+        .mockReturnValueOnce(new Promise((resolve) => (resolveNewer = resolve)))
+        // The third pick below is unbound, so it claims (a real POST, unlike
+        // the old cosmetic-only assign) — resolve it normally.
+        .mockResolvedValue({ ok: true, alreadyInSession: false });
       mockDel.mockResolvedValue(undefined);
       renderPanes();
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
@@ -1452,8 +1472,8 @@ describe('AgentPanes', () => {
       await user.click(await screen.findByRole('tab', { name: /history/i }));
       await user.click(await screen.findByRole('button', { name: 'select-conv-shared-16' })); // older, pending
       await user.click(await screen.findByRole('button', { name: 'select-conv-shared-16' })); // newer, pending, supersedes older
-      // A third pick (unbound — no reopen call of its own) supersedes the
-      // newer reopen too.
+      // A third pick (unbound — claims via a fresh, promptly-resolved POST)
+      // supersedes the newer reopen too.
       await user.click(await screen.findByRole('button', { name: 'select-conv-other-16' }));
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-other-16'));
 
@@ -1541,8 +1561,9 @@ describe('AgentPanes', () => {
       let resolveFirstReopen!: (value: unknown) => void;
       let resolveDelete!: (value: unknown) => void;
       mockPost
-        .mockReturnValueOnce(new Promise((resolve) => (resolveFirstReopen = resolve))) // first pick
-        .mockResolvedValueOnce({ ok: true, alreadyOpen: false }); // second (fresh) pick
+        .mockReturnValueOnce(new Promise((resolve) => (resolveFirstReopen = resolve))) // first pick: reopen conv-compensate
+        .mockResolvedValueOnce({ ok: true, alreadyInSession: false }) // unbound pick below: claim conv-unbound (a real call now)
+        .mockResolvedValueOnce({ ok: true, alreadyOpen: false }); // second (fresh) pick: reopen conv-compensate again
       mockDel.mockReturnValueOnce(new Promise((resolve) => (resolveDelete = resolve)));
       renderPanes();
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
@@ -1551,7 +1572,8 @@ describe('AgentPanes', () => {
       await user.click(await screen.findByRole('tab', { name: /history/i }));
       await user.click(await screen.findByRole('button', { name: 'select-conv-compensate' })); // reopen #1, pending
 
-      // Superseded by an unbound pick — no network call, lands instantly.
+      // Superseded by an unbound pick — claims (a real POST, resolved
+      // promptly per the mock above) rather than reopening.
       await user.click(await screen.findByRole('button', { name: 'select-conv-unbound' }));
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-unbound'));
 
@@ -1602,9 +1624,11 @@ describe('AgentPanes', () => {
       let resolveFirstDelete!: (value: unknown) => void;
       let resolveCompensatingReopen!: (value: unknown) => void;
       mockPost
-        .mockReturnValueOnce(new Promise((resolve) => (resolveFirstReopen = resolve))) // first pick
-        .mockResolvedValueOnce({ ok: true, alreadyOpen: false }) // fresh second pick
-        .mockReturnValueOnce(new Promise((resolve) => (resolveCompensatingReopen = resolve))); // compensating reopen
+        .mockReturnValueOnce(new Promise((resolve) => (resolveFirstReopen = resolve))) // first pick: reopen #1, pending
+        .mockResolvedValueOnce({ ok: true, alreadyInSession: false }) // unbound pick below: claim (first click)
+        .mockResolvedValueOnce({ ok: true, alreadyOpen: false }) // fresh second pick: reopen conv-recurse again
+        .mockReturnValueOnce(new Promise((resolve) => (resolveCompensatingReopen = resolve))) // compensating reopen
+        .mockResolvedValueOnce({ ok: true, alreadyInSession: false }); // unbound pick below: claim (second click)
       mockDel
         .mockReturnValueOnce(new Promise((resolve) => (resolveFirstDelete = resolve))) // first cleanup DELETE
         .mockResolvedValueOnce(undefined); // second (recursive) cleanup DELETE
@@ -1615,6 +1639,8 @@ describe('AgentPanes', () => {
       await user.click(await screen.findByRole('tab', { name: /history/i }));
       await user.click(await screen.findByRole('button', { name: 'select-conv-recurse' })); // reopen #1, pending
 
+      // Unbound — claims (a real POST, resolved promptly per the mock above)
+      // rather than reopening.
       await user.click(await screen.findByRole('button', { name: 'select-conv-unbound' }));
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-unbound'));
 

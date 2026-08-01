@@ -3,17 +3,18 @@
 import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { formatDistanceToNow } from 'date-fns';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR from 'swr';
 
-import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, post, ApiRequestError } from '@/lib/auth/auth-fetch';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useGlobalChatConversation } from '@/contexts/GlobalChatContext';
 import { useDriveStore } from '@/hooks/useDrive';
 import { cn } from '@/lib/utils';
 import EmptyState from './EmptyState';
-import { resolveNavigationTarget, type ConversationKind } from './resolveNavigationTarget';
+import { resolveNavigationTarget, type ConversationKind, type ClaimableFallback } from './resolveNavigationTarget';
+import { classifySpawnRefusal } from './spawn-refusal';
 
 const PAGE_SIZE = 20;
 
@@ -89,6 +90,10 @@ export default function AgentsPastConversationsList({ driveId }: { driveId?: str
   const [cursorStack, setCursorStack] = useState<Array<string | null>>([null]);
   const [pageIndex, setPageIndex] = useState(0);
   const cursor = cursorStack[pageIndex];
+  // Guards against a double-click spawning two sessions for the same row —
+  // the second claim would lose the race, 409, and have its session rolled
+  // back server-side. Also drives the row's disabled/spinner state.
+  const [claimingId, setClaimingId] = useState<string | null>(null);
 
   const { data, error, isLoading, isValidating } = useSWR<ConversationsResponse>(
     buildKey(driveId, cursor),
@@ -107,7 +112,28 @@ export default function AgentsPastConversationsList({ driveId }: { driveId?: str
 
   const driveNameById = useMemo(() => new Map(drives.map((d) => [d.id, d.name])), [drives]);
 
-  const handleRowClick = (row: ConversationRowDTO) => {
+  const navigateFallback = (fallback: ClaimableFallback) => {
+    switch (fallback.kind) {
+      case 'page':
+        router.push(
+          `/dashboard/${fallback.driveId}/${fallback.pageId}?conversationId=${encodeURIComponent(fallback.conversationId)}`,
+        );
+        return;
+      case 'global':
+        void loadConversation(fallback.conversationId);
+        router.push(
+          fallback.driveId
+            ? `/dashboard/${fallback.driveId}?c=${encodeURIComponent(fallback.conversationId)}`
+            : `/dashboard?c=${encodeURIComponent(fallback.conversationId)}`,
+        );
+        return;
+      case 'unavailable':
+        toast.info("This conversation can't be opened here yet.");
+        return;
+    }
+  };
+
+  const handleRowClick = async (row: ConversationRowDTO) => {
     const target = resolveNavigationTarget(row, driveId);
     switch (target.kind) {
       case 'pane':
@@ -128,6 +154,37 @@ export default function AgentsPastConversationsList({ driveId }: { driveId?: str
             : `/dashboard?c=${encodeURIComponent(target.conversationId)}`,
         );
         return;
+      case 'claimable': {
+        if (claimingId) return;
+        setClaimingId(target.conversationId);
+        try {
+          const created = await post<{ session: { sessionId: string }; conversationId: string }>(
+            '/api/agent-sessions',
+            { firstThing: 'claim', conversationId: target.conversationId, driveId: target.driveId ?? undefined },
+          );
+          selectConversation({
+            sessionId: created.session.sessionId,
+            conversationId: created.conversationId,
+            agentId: target.agentPageId,
+          });
+        } catch (error) {
+          // Same split `useResolvedConversation.ts` uses for an opportunistic
+          // session spawn: QUOTA is worth interrupting the user for (they
+          // have the capability and simply ran out of allowance); every
+          // other refusal degrades silently into the exact behavior this
+          // row had before claiming existed.
+          const status = error instanceof ApiRequestError ? error.status : undefined;
+          const refusal = classifySpawnRefusal(status, error instanceof Error ? error.message : null);
+          console.warn('Session claim refused; falling back:', error);
+          if (refusal.kind === 'quota') {
+            toast.error('Workspace unavailable — opening as before', { description: refusal.message });
+          }
+          navigateFallback(target.fallback);
+        } finally {
+          setClaimingId(null);
+        }
+        return;
+      }
       case 'unavailable':
         toast.info("This conversation can't be opened here yet.");
         return;
@@ -187,11 +244,17 @@ export default function AgentsPastConversationsList({ driveId }: { driveId?: str
           <button
             key={row.conversationId}
             type="button"
-            onClick={() => handleRowClick(row)}
-            className="flex w-full flex-col items-start gap-0.5 px-4 py-3 text-left transition-colors hover:bg-muted/50"
+            disabled={claimingId !== null}
+            onClick={() => void handleRowClick(row)}
+            className="flex w-full flex-col items-start gap-0.5 px-4 py-3 text-left transition-colors hover:bg-muted/50 disabled:opacity-50"
           >
             <div className="flex w-full items-center justify-between gap-2">
-              <span className="truncate text-sm font-medium">{rowLabel(row)}</span>
+              <span className="flex min-w-0 items-center gap-1.5 truncate text-sm font-medium">
+                {claimingId === row.conversationId && (
+                  <Loader2 className="size-3 shrink-0 animate-spin" aria-hidden="true" />
+                )}
+                <span className="truncate">{rowLabel(row)}</span>
+              </span>
               <span className="shrink-0 text-xs text-muted-foreground">
                 {formatDistanceToNow(new Date(row.lastMessageAt ?? row.createdAt), { addSuffix: true })}
               </span>

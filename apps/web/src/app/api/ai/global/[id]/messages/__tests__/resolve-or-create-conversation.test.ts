@@ -19,7 +19,6 @@ vi.mock('@pagespace/db/schema/conversations', () => ({
 import {
   resolveOrCreateConversation,
   ConversationOwnershipError,
-  ConversationBindingConflictError,
   ConversationHistoryDeletedError,
 } from '../resolve-or-create-conversation';
 
@@ -151,49 +150,5 @@ describe('resolveOrCreateConversation', () => {
     await expect(
       resolveOrCreateConversation('user1', 'conv1', db as never)
     ).rejects.toThrow(ConversationHistoryDeletedError);
-  });
-});
-
-describe('session binding at creation (invariant 1)', () => {
-  it('a fresh insert carries the requested sessionId INSIDE the values — binding is congenital', async () => {
-    const created = { ...CONV, sessionId: 'ses-1' };
-    const db = makeDb([], [created]);
-    const result = await resolveOrCreateConversation('user1', 'conv1', db as never, { sessionId: 'ses-1' });
-    expect(result.conversation).toEqual(created);
-    const values = (db.insert.mock.results[0].value.values as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(values.sessionId).toBe('ses-1');
-  });
-
-  it('an existing row already bound to the SAME session is an idempotent retry', async () => {
-    const bound = { ...CONV, sessionId: 'ses-1' };
-    const db = makeDb([bound]);
-    await expect(
-      resolveOrCreateConversation('user1', 'conv1', db as never, { sessionId: 'ses-1' }),
-    ).resolves.toEqual({ conversation: bound, isNew: false });
-  });
-
-  it('an existing UNBOUND row is refused — binding-from-null is a rebind, not a resolve', async () => {
-    const unbound = { ...CONV, sessionId: null };
-    const db = makeDb([unbound]);
-    await expect(
-      resolveOrCreateConversation('user1', 'conv1', db as never, { sessionId: 'ses-1' }),
-    ).rejects.toThrow(ConversationBindingConflictError);
-  });
-
-  it("an existing row bound to a DIFFERENT session is refused — moving a thread is a fork", async () => {
-    const elsewhere = { ...CONV, sessionId: 'ses-other' };
-    const db = makeDb([elsewhere]);
-    await expect(
-      resolveOrCreateConversation('user1', 'conv1', db as never, { sessionId: 'ses-1' }),
-    ).rejects.toThrow(ConversationBindingConflictError);
-  });
-
-  it('with NO binding requested, an existing bound row still resolves — reads stay reads', async () => {
-    const bound = { ...CONV, sessionId: 'ses-1' };
-    const db = makeDb([bound]);
-    await expect(resolveOrCreateConversation('user1', 'conv1', db as never)).resolves.toEqual({
-      conversation: bound,
-      isNew: false,
-    });
   });
 });

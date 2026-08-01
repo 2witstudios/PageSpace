@@ -165,7 +165,7 @@ export const conversationRepository = {
     conversationId: string,
     userId: string,
     pageId: string,
-    opts?: { isShared?: boolean; sessionId?: string; title?: string }
+    opts?: { isShared?: boolean; title?: string }
   ): Promise<'created' | 'exists' | 'message_owner_conflict'> {
     const [existing] = await db
       .select({ id: conversations.id })
@@ -177,6 +177,9 @@ export const conversationRepository = {
     const hasConflictingOwner = await hasConflictingMessageOwner(conversationId, userId);
     if (hasConflictingOwner) return 'message_owner_conflict';
 
+    // Always session-agnostic: this never writes `sessionId` (there is no
+    // param for it). A conversation that needs a session gets one afterward,
+    // via `claimConversationInSession` — see `claim-conversation-in-session.ts`.
     const inserted = await db
       .insert(conversations)
       .values({
@@ -185,15 +188,45 @@ export const conversationRepository = {
         type: 'page',
         contextId: pageId,
         isShared: opts?.isShared ?? false,
-        sessionId: opts?.sessionId ?? null,
+        sessionId: null,
         title: opts?.title ?? null,
         updatedAt: new Date(),
       })
       .onConflictDoNothing()
       .returning({ id: conversations.id });
     // A concurrent first-write winning the race is 'exists' too — the caller's
-    // insert (and therefore the caller's binding) did not happen.
+    // insert did not happen.
     return inserted.length > 0 ? 'created' : 'exists';
+  },
+
+  /**
+   * Bind a NEVER-BOUND conversation to a session — the only UPDATE of
+   * `conversations.sessionId` anywhere in the codebase, and unable to
+   * re-point one: `sessionId IS NULL` in the WHERE makes a rebind attempt
+   * match zero rows rather than depending on a check the caller could skip.
+   * `userId` rides the WHERE too, so ownership is enforced by the write
+   * itself, closing the read-then-write gap that made the H1 rebind finding
+   * exploitable in the old create-then-UPDATE shape. See
+   * `claim-conversation-in-session.ts` for the full gate this backs.
+   *
+   * `closedInSessionAt` is cleared in the same statement: a row whose former
+   * session was deleted (FK `ON DELETE SET NULL`) can arrive here
+   * `sessionId`-null but still stamped closed, and binding it without
+   * clearing would produce a bound-but-invisible thread that holds no cap
+   * slot and shows in no listing.
+   */
+  async claimConversation(conversationId: string, userId: string, sessionId: string): Promise<'claimed' | 'noop'> {
+    const updated = await db
+      .update(conversations)
+      .set({ sessionId, closedInSessionAt: null, updatedAt: new Date() })
+      .where(and(
+        eq(conversations.id, conversationId),
+        eq(conversations.userId, userId),
+        isNull(conversations.sessionId),
+        eq(conversations.isActive, true),
+      ))
+      .returning({ id: conversations.id });
+    return updated.length > 0 ? 'claimed' : 'noop';
   },
 
   /**

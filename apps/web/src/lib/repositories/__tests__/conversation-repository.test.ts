@@ -219,24 +219,23 @@ describe('conversationRepository.createConversation', () => {
     expect(onConflictDoNothing).toHaveBeenCalled();
   });
 
-  it('carries sessionId and title inside the INSERT itself — binding is congenital, never an UPDATE', async () => {
+  it('carries title inside the INSERT (sessionId is never a param here — binding is claimed separately, never at creation)', async () => {
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))
       .mockImplementationOnce(() => mockChatMessagesLookup([]));
     const { valuesMock } = mockInsert([{ id: 'conv-bound' }]);
 
     const outcome = await conversationRepository.createConversation('conv-bound', 'user-1', 'agent-1', {
-      sessionId: 'ses-1',
       title: 'Worker: research',
     });
 
     expect(outcome).toBe('created');
     expect(valuesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'conv-bound', sessionId: 'ses-1', title: 'Worker: research' })
+      expect.objectContaining({ id: 'conv-bound', sessionId: null, title: 'Worker: research' })
     );
   });
 
-  it('defaults sessionId and title to null when opts omit them (sessionless page thread)', async () => {
+  it('defaults title to null when opts omit it, always inserting sessionId: null', async () => {
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))
       .mockImplementationOnce(() => mockChatMessagesLookup([]));
@@ -249,15 +248,13 @@ describe('conversationRepository.createConversation', () => {
     );
   });
 
-  it("reports 'exists' when RETURNING yields no row — a concurrent first-write won and this caller's binding did NOT persist", async () => {
+  it("reports 'exists' when RETURNING yields no row — a concurrent first-write won and this caller's insert did NOT persist", async () => {
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))
       .mockImplementationOnce(() => mockChatMessagesLookup([]));
     mockInsert([]);
 
-    const outcome = await conversationRepository.createConversation('conv-race', 'user-1', 'agent-1', {
-      sessionId: 'ses-1',
-    });
+    const outcome = await conversationRepository.createConversation('conv-race', 'user-1', 'agent-1');
 
     expect(outcome).toBe('exists');
   });

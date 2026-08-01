@@ -16,10 +16,15 @@ export const conversations = pgTable('conversations', {
   contextId: text('contextId'), // null for global, pageId for page chats, driveId for drive chats
   /**
    * The agent session (working context / sandbox) this thread lives in, or
-   * NULL for a plain chat with no session. Set at creation and PERMANENT —
-   * a thread's history and its filesystem always agree; moving a thread to
-   * another session is a fork, never a rebind. ON DELETE SET NULL: deleting a
-   * session keeps its threads as plain history.
+   * NULL for a plain chat with no session. The binding is write-once: set
+   * either at creation, or — for a conversation that has never had one — by
+   * exactly one guarded claim of the caller's own row
+   * (`conversationRepository.claimConversation`, `WHERE sessionId IS NULL AND
+   * userId = :caller`; see `apps/web/src/lib/agent-sessions/claim-conversation-in-session.ts`).
+   * It never re-points an already-bound row: a thread's history and its
+   * filesystem always agree, so moving a thread to another session is a
+   * fork, never a rebind. ON DELETE SET NULL: deleting a session keeps its
+   * threads as plain history (also reachable via the same claim path again).
    */
   sessionId: text('sessionId').references(() => agentSessions.id, { onDelete: 'set null' }),
   /**

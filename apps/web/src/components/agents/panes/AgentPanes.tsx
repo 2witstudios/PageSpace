@@ -845,23 +845,24 @@ export default function AgentPanes({
 
   /**
    * A pane's own History tab picking a past conversation — assign it to THIS
-   * pane, reopening it into the session's listing first when it's bound to
-   * THIS session and closed. A conversation that is unbound, or bound to a
-   * DIFFERENT session, is never subject to this session's cap/listing at
-   * all — no server call needed, straight to `assignPane` (the same client-
-   * only mechanism `openConversation`/`handleSwitchAgent`'s focus branch
-   * already use to point a pane at an existing conversationId). Verified
-   * against the sandbox/tool-execution layer too (review question —
-   * chatgpt-codex-connector on PR #2299): tool calls resolve their sandbox
-   * from the CONVERSATION ROW's own persisted `sessionId`
-   * (`findSessionForConversation`, a fresh DB read keyed only on
-   * `conversationId`), never from which pane grid happens to display it —
-   * so a foreign-session or unbound conversation opened here can never
-   * execute tools against the wrong session's sandbox.
+   * pane, first either reopening it (bound to THIS session, closed) or
+   * claiming it (never bound to ANY session — `claim-conversation-in-session.ts`)
+   * into this session's listing, as needed. Only a conversation bound to a
+   * DIFFERENT session is never subject to this session's cap/listing at
+   * all — no server call, straight to `assignPane` (the same client-only
+   * mechanism `openConversation`/`handleSwitchAgent`'s focus branch already
+   * use to point a pane at an existing conversationId): claiming a
+   * foreign-bound conversation would be a real rebind, which the claim route
+   * refuses. Tool calls resolve their sandbox from the CONVERSATION ROW's
+   * own persisted `sessionId` (`findSessionForConversation`, a fresh DB read
+   * keyed only on `conversationId`), never from which pane grid happens to
+   * display it (review question — chatgpt-codex-connector on PR #2299) — so
+   * the claim above is what makes that lookup resolve to THIS session's
+   * sandbox afterward, rather than the pane's chrome being purely cosmetic.
    *
-   * Returns whether the pick actually landed — `false` on a failed reopen,
-   * so the caller (the pane's own tab-switch) can stay on History rather
-   * than following a pick that never happened (review finding —
+   * Returns whether the pick actually landed — `false` on a failed reopen or
+   * claim, so the caller (the pane's own tab-switch) can stay on History
+   * rather than following a pick that never happened (review finding —
    * chatgpt-codex-connector on PR #2299).
    */
   const handlePickHistoryConversation = useCallback(
@@ -992,6 +993,52 @@ export default function AgentPanes({
         // Instant-freshness nudge, same as every other listing-changing
         // action here — the sidebar's own open list otherwise lags until its
         // next poll.
+        void mutate(isAgentSessionsKey);
+      } else if (conversation.sessionId === null) {
+        // Genuinely never bound to ANY session — claim it into this one so
+        // tool calls actually resolve a sandbox afterward, instead of the
+        // old cosmetic assign-only path (which left `findSessionForConversation`
+        // reading the same null forever and denying every tool call as
+        // `no_session`). No `pendingReopenCounts`/`deferredReopenSuccess`
+        // ceremony here: unlike reopen, a claim is not idempotent ACROSS
+        // concurrent callers racing for the SAME conversation — exactly one
+        // wins the guarded UPDATE, and every other caller gets
+        // `alreadyInSession: true` with nothing of its own to roll back, so
+        // the "who cleans up a superseded sibling's success" problem reopen
+        // solves for doesn't arise here.
+        const deleteGenerationAtStart = historyDeleteGenerations.current.get(conversation.id) ?? 0;
+        let claimResult: { ok: boolean; alreadyInSession: boolean };
+        try {
+          claimResult = await post<{ ok: boolean; alreadyInSession: boolean }>(
+            `/api/agent-sessions/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversation.id)}/claim`,
+            {},
+          );
+        } catch (error) {
+          if (!isCurrent()) return false;
+          console.error('Failed to move this conversation into the session:', error);
+          toast.error('Could not move this conversation into the session', {
+            description: error instanceof Error ? error.message : 'Please try again.',
+          });
+          return false;
+        }
+        if (!isCurrent()) {
+          // The BINDING itself is permanent and can never be rolled back
+          // (claiming is not a rebind primitive) — only the open-listing
+          // SLOT it just consumed can be, and only when this request
+          // genuinely transitioned it and nothing else is already showing
+          // it, the same non-destructive-rollback rule the reopen branch
+          // above uses.
+          if (!claimResult.alreadyInSession && !isConversationShownSomewhere(conversation.id)) {
+            void cleanupOrphanedConversation(conversation.id);
+          }
+          return false;
+        }
+        if ((historyDeleteGenerations.current.get(conversation.id) ?? 0) !== deleteGenerationAtStart) {
+          // Same staleness hazard the reopen branch guards against above: a
+          // History delete landed mid-flight, so assigning now would bind
+          // this pane to a transcript that already 404s on send.
+          return false;
+        }
         void mutate(isAgentSessionsKey);
       }
       if (!isCurrent()) return false;
@@ -1395,6 +1442,7 @@ function ChatPane({
     conversations,
     isLoading: conversationsLoading,
     deleteConversation,
+    refreshConversations,
   } = useConversations({
     agentId: scope.agentPageId,
     currentConversationId: conversationId,
@@ -1447,9 +1495,16 @@ function ChatPane({
         title: picked?.title ?? null,
         sessionId: picked?.sessionId ?? null,
       });
-      if (landed) setActiveTab('chat');
+      if (landed) {
+        setActiveTab('chat');
+        // A successful pick of a never-bound conversation just claimed it
+        // into this session — this pane's own History list still holds the
+        // stale `sessionId: null` for that row until refreshed, which would
+        // make an immediate re-pick attempt a redundant claim.
+        refreshConversations();
+      }
     },
-    [conversations, onPickHistoryConversation],
+    [conversations, onPickHistoryConversation, refreshConversations],
   );
 
   const handleCreateNewFromHistory = useCallback(async () => {
