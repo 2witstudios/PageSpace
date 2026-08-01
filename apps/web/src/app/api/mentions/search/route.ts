@@ -7,7 +7,7 @@ import { buildSearchAuditDetails } from '@pagespace/lib/audit/search-audit-detai
 import { escapeLikePattern } from '@pagespace/lib/db/like-pattern';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
-import { and, eq, ilike, inArray, desc, SQL } from '@pagespace/db/operators'
+import { and, eq, ilike, inArray, notInArray, desc, SQL } from '@pagespace/db/operators'
 import { decryptUserRows } from '@pagespace/lib/auth/user-repository'
 import { users } from '@pagespace/db/schema/auth'
 import { pages, drives, pageType, type PageTypeEnum } from '@pagespace/db/schema/core';
@@ -143,8 +143,31 @@ export async function GET(request: Request) {
   // Further restrict FILE results to image mime types — for image pickers
   // (OG image, favicon) that only want to offer uploaded pictures.
   const imageOnly = searchParams.get('imageOnly') === 'true';
+  // The inverse of pageType: drop specific types rather than narrow to one —
+  // for callers whose picker can't render several types at all (e.g. the
+  // agent-pane "Pages" search, which excludes FOLDER/AI_CHAT). Enforced in
+  // the SQL WHERE clause below (`notInArray`), NOT as an after-the-fetch
+  // in-memory skip — excluded types must never occupy a row of the DB's own
+  // `.limit(50)`/`.limit(20)` window in the first place, or the final
+  // `.slice(0, 10)` (and that window itself) could still silently shrink the
+  // visible list any time excluded types dominated the ranking, even when
+  // plenty of eligible pages exist further down it.
+  const rawExcludePageTypes = searchParams.get('excludePageTypes');
+  const excludePageTypesParam: Set<PageTypeEnum> = new Set(
+    (rawExcludePageTypes?.split(',') ?? []).filter((t): t is PageTypeEnum =>
+      (pageType.enumValues as readonly string[]).includes(t)
+    )
+  );
 
-  loggers.api.debug('[API] Search params', { query, driveId, crossDrive, types: typesParam, pageType: pageTypeParam, imageOnly });
+  loggers.api.debug('[API] Search params', {
+    query,
+    driveId,
+    crossDrive,
+    types: typesParam,
+    pageType: pageTypeParam,
+    imageOnly,
+    excludePageTypes: [...excludePageTypesParam],
+  });
   
   // For within-drive searches, driveId is required
   // For cross-drive searches, driveId is optional (searches all accessible drives)
@@ -313,6 +336,7 @@ export async function GET(request: Request) {
           searchCondition, // undefined when empty query = no filter = all pages
           eq(pages.isTrashed, false),
           pageTypeParam ? eq(pages.type, pageTypeParam) : undefined,
+          excludePageTypesParam.size > 0 ? notInArray(pages.type, [...excludePageTypesParam]) : undefined,
           imageOnly ? ilike(pages.mimeType, 'image/%') : undefined
         )
       );
@@ -332,6 +356,11 @@ export async function GET(request: Request) {
         // checker rather than widening that type to admit a value nothing
         // can produce.
         if (page.type === 'MACHINE') continue;
+        // excludePageTypesParam is enforced in the WHERE clause above (SQL,
+        // not here) — excluded types never occupy a row in `pageResults` at
+        // all, so the DB's own `.limit(50)`/`.limit(20)` window is composed
+        // entirely of eligible candidates, not just whatever's left of it
+        // after an after-the-fact skip.
 
         const accessLevel = await getUserAccessLevel(userId, page.id);
         if (!accessLevel) continue;

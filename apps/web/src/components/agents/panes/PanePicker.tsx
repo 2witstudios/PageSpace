@@ -13,9 +13,16 @@
  * the only thing that knows whether a pick should reuse an existing row.
  */
 
-import { useEffect, useRef } from 'react';
-import { Bot, TerminalSquare } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Bot, Search, TerminalSquare } from 'lucide-react';
+import useSWR from 'swr';
+import { PageType } from '@pagespace/lib/utils/enums';
+import { isPaneablePageType } from '@pagespace/lib/content/page-types.config';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { PageTypeIcon } from '@/components/common/PageTypeIcon';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useDebounce } from '@/hooks/useDebounce';
 
 /** The picker needs a label and an id — never the whole agent record. */
 export interface PickableAgent {
@@ -36,8 +43,33 @@ export interface ReattachableShell {
   name: string;
 }
 
+/** One `/api/mentions/search` result — the shape both `PagePickerPopover` and `TriggerPagePicker` already fetch. */
+interface PageSearchResult {
+  id: string;
+  label: string;
+  type: 'page' | 'user';
+  description?: string;
+  data?: { pageType?: PageType };
+}
+
+async function searchPagesFetcher(url: string): Promise<PageSearchResult[]> {
+  const response = await fetchWithAuth(url);
+  if (!response.ok) throw new Error('Failed to search pages');
+  const json: unknown = await response.json();
+  return Array.isArray(json) ? (json as PageSearchResult[]) : [];
+}
+
+/**
+ * The same exclusion `isPaneablePageType` applies, sent to `/api/mentions/search`
+ * as `excludePageTypes` so the endpoint drops these BEFORE its own 10-result
+ * cap, not after — see the `searchKey` comment in `PagesSection`.
+ */
+const PANE_UNSUPPORTED_TYPES_PARAM = `${PageType.FOLDER},${PageType.AI_CHAT}`;
+
 export interface PanePickerProps {
   agents: readonly PickableAgent[];
+  /** This session's drive, to scope the Pages search — cross-drive when null (a global-assistant session). */
+  driveId?: string | null;
   /** No agents resolved yet — distinct from "this drive has none". */
   isLoading?: boolean;
   /**
@@ -66,10 +98,13 @@ export interface PanePickerProps {
   onPickShell(): void;
   /** Bind this pane to an already-running shell instead of spawning a new one. */
   onReattachShell?(shellId: string, name: string): void;
+  /** Bind this pane to a page — `title` is a display label, never an address. */
+  onPickPage?(pageId: string, title: string): void;
 }
 
 export default function PanePicker({
   agents,
+  driveId = null,
   isLoading = false,
   autoFocus = false,
   canPickAssistant = false,
@@ -77,6 +112,7 @@ export default function PanePicker({
   onPickAgent,
   onPickShell,
   onReattachShell,
+  onPickPage,
 }: PanePickerProps) {
   const firstRef = useRef<HTMLButtonElement>(null);
 
@@ -178,6 +214,93 @@ export default function PanePicker({
           ))}
         </div>
       ) : null}
+
+      {/* Search-as-you-type rather than a bounded list like Agents/Shells —
+          a drive can hold far more pages than agents, so there is no fixed
+          set to enumerate up front. */}
+      {onPickPage && <PagesSection driveId={driveId} onPickPage={onPickPage} />}
+    </div>
+  );
+}
+
+/**
+ * The "Pages" section: debounced search against the same `/api/mentions/search`
+ * endpoint `PagePickerPopover`/`TriggerPagePicker` already use, filtered to
+ * pane-safe types (`isPaneablePageType` — no FOLDER, no AI_CHAT). Its own
+ * component (rather than inline) so its `useSWR`/`useState` hooks stay
+ * independent of `PanePicker`'s own render.
+ */
+function PagesSection({
+  driveId,
+  onPickPage,
+}: {
+  driveId: string | null;
+  onPickPage(pageId: string, title: string): void;
+}) {
+  const [query, setQuery] = useState('');
+  const debouncedQuery = useDebounce(query, 200);
+
+  // Excluded SERVER-SIDE, not just client-side: the endpoint caps its
+  // response to 10 suggestions before this component ever sees them, so
+  // filtering only after the fetch can silently shrink (even empty) the
+  // visible list whenever the top 10 by relevance/recency happen to include
+  // FOLDER/AI_CHAT pages, hiding eligible pages ranked just below them.
+  const excludeParam = `&excludePageTypes=${PANE_UNSUPPORTED_TYPES_PARAM}`;
+  const searchKey = driveId
+    ? `/api/mentions/search?q=${encodeURIComponent(debouncedQuery)}&driveId=${encodeURIComponent(driveId)}&types=page${excludeParam}`
+    : `/api/mentions/search?q=${encodeURIComponent(debouncedQuery)}&crossDrive=true&types=page${excludeParam}`;
+  // `isValidating`, not `isLoading`: with `keepPreviousData: true`, `isLoading`
+  // is false for every key after the first once ANY data has loaded (SWR
+  // shows the previous results while revalidating) — retyping after the
+  // first search would otherwise show stale results with no "Searching…"
+  // signal while the new request is in flight.
+  const { data: results = [], isValidating: searching } = useSWR(searchKey, searchPagesFetcher, {
+    revalidateOnFocus: false,
+    keepPreviousData: true,
+  });
+
+  const pages = results.filter(
+    (result) => result.type === 'page' && isPaneablePageType(result.data?.pageType ?? PageType.DOCUMENT),
+  );
+
+  return (
+    <div className="flex shrink-0 flex-col gap-1">
+      <p className="shrink-0 pt-1 text-xs font-medium text-muted-foreground">Pages</p>
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+        <Input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search pages…"
+          className="h-8 pl-7 text-sm"
+          data-testid="pane-picker-page-search"
+        />
+      </div>
+      {searching && query !== debouncedQuery ? (
+        <p className="px-2 text-xs text-muted-foreground">Searching…</p>
+      ) : pages.length === 0 ? (
+        // An empty query still fetches (the endpoint answers with the
+        // drive's most recently updated pages), so an empty result here
+        // means genuinely none — never "haven't typed yet".
+        <p className="px-2 text-xs text-muted-foreground">No pages found.</p>
+      ) : (
+        pages.map((page) => (
+          <Button
+            key={page.id}
+            variant="ghost"
+            size="sm"
+            className="h-8 justify-start gap-2 px-2"
+            onClick={() => onPickPage(page.id, page.label)}
+            data-testid={`pick-page-${page.id}`}
+          >
+            <PageTypeIcon
+              type={page.data?.pageType ?? PageType.DOCUMENT}
+              className="size-3.5 shrink-0 text-muted-foreground"
+            />
+            <span className="truncate">{page.label}</span>
+          </Button>
+        ))
+      )}
     </div>
   );
 }

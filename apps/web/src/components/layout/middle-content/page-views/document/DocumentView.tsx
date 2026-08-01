@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useId } from 'react';
 import dynamic from 'next/dynamic';
 import { useDocument } from '@/hooks/useDocument';
 import { Editor } from '@tiptap/react';
@@ -36,6 +36,12 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const isDirtyRef = useRef(false);
   const { user } = useAuth();
+  // Distinguishes this mount from any other simultaneous mount of the SAME
+  // page (e.g. the main center panel and an agent-session pane both showing
+  // it) — without this, both compute the identical `document-${pageId}` key
+  // and collide in useEditingStore's Map: whichever unmounts first calls
+  // endEditing and wipes the entry while the other is still dirty.
+  const instanceId = useId();
 
   const {
     document: documentState,
@@ -99,7 +105,7 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
 
   // Register editing state when document is dirty
   useEffect(() => {
-    const componentId = `document-${pageId}`;
+    const componentId = `document-${pageId}-${instanceId}`;
 
     if (documentState?.isDirty && !isReadOnly) {
       useEditingStore.getState().startEditing(componentId, 'document', {
@@ -113,7 +119,7 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
     return () => {
       useEditingStore.getState().endEditing(componentId);
     };
-  }, [documentState?.isDirty, pageId, isReadOnly]);
+  }, [documentState?.isDirty, pageId, isReadOnly, instanceId]);
 
   // Check user permissions
   useEffect(() => {

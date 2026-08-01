@@ -17,11 +17,14 @@ import { SessionChatView } from './SessionChat';
 import { useAssistantSessionChat } from './useAssistantSessionChat';
 
 export default function AssistantSessionChat({
+  sessionId,
   conversationId,
   driveId,
   context,
   isReadOnly = false,
 }: {
+  /** This conversation's pane-hosting session — see `SessionChatViewProps.sessionId`. */
+  sessionId: string | null;
   conversationId: string;
   /** The session's own drive, when it has one — see `useAssistantSessionChat`'s doc. */
   driveId: string | null;
@@ -33,6 +36,8 @@ export default function AssistantSessionChat({
 
   return (
     <SessionChatView
+      sessionId={sessionId}
+      conversationId={conversationId}
       chat={chat}
       name="Global Assistant"
       visionModel={currentModel || ''}

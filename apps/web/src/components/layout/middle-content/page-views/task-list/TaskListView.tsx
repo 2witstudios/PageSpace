@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback, memo, useMemo } from 'react';
+import { useState, useEffect, useId, useRef, useCallback, memo, useMemo } from 'react';
 import { type Editor } from '@tiptap/react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
@@ -531,7 +531,12 @@ function TaskListView({ page }: TaskListViewProps) {
     })
   );
 
-  useEditingSession(page.id, !!editingTaskId, 'form', {
+  // instanceId distinguishes this mount from any other simultaneous mount of
+  // the SAME page (main center panel vs. an agent-session pane) — without it,
+  // both compute the identical `page.id` key and collide in useEditingStore's
+  // Map (see DocumentView's identical fix).
+  const instanceId = useId();
+  useEditingSession(`${page.id}-${instanceId}`, !!editingTaskId, 'form', {
     pageId: page.id,
     componentName: 'TaskListView',
   });

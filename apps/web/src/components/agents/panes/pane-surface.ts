@@ -25,7 +25,8 @@ export type PaneSurface =
   /** Bound, but the row it addresses does not exist yet. Hold. */
   | { surface: 'loading' }
   | { surface: 'terminal'; shellId: string }
-  | { surface: 'chat'; conversationId: string; agentPageId: string | null };
+  | { surface: 'chat'; conversationId: string; agentPageId: string | null }
+  | { surface: 'page'; pageId: string };
 
 export function resolvePaneSurface(scope: PaneScope | null): PaneSurface {
   if (scope === null) return { surface: 'picker' };
@@ -37,6 +38,9 @@ export function resolvePaneSurface(scope: PaneScope | null): PaneSurface {
 
   if (scope.kind === 'chat') return { surface: 'chat', conversationId: scope.targetId, agentPageId: scope.agentPageId };
   if (scope.kind === 'terminal') return { surface: 'terminal', shellId: scope.targetId };
+  // A page binding addresses an existing page directly — there is no mint to
+  // wait on, so this is reachable the very first render after assignment.
+  if (scope.kind === 'page') return { surface: 'page', pageId: scope.targetId };
 
   // A `kind` this module has never heard of — a stale persisted value that
   // predates a schema change, or a corrupted store slipping past
