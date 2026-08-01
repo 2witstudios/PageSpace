@@ -125,11 +125,19 @@ export type PaneScope = z.infer<typeof paneScopeSchema>;
  * is which tab is active, `tabs` is the full ordered set. Empty for a
  * terminal/page pane or an unbound picker, since only chat panes tab.
  */
-export const persistedPaneStateSchema = z.object({
-  id: z.string().min(1),
-  scope: paneScopeSchema.nullable(),
-  tabs: z.array(paneScopeSchema).default([]),
-});
+export const persistedPaneStateSchema = z
+  .object({
+    id: z.string().min(1),
+    scope: paneScopeSchema.nullable(),
+    tabs: z.array(paneScopeSchema).default([]),
+  })
+  // A pre-tabs grid (old localStorage, pre-migration DB row) parses with
+  // `tabs` defaulted to `[]` even though `scope` names a real open
+  // conversation — backfill it as that chat pane's one known tab instead of
+  // leaving `tabs` empty, which would violate the invariant documented above
+  // and make tab-aware close treat an actually-open conversation as already
+  // gone (review finding).
+  .transform((pane) => (pane.scope?.kind === 'chat' && pane.tabs.length === 0 ? { ...pane, tabs: [pane.scope] } : pane));
 export type PersistedPaneState = z.infer<typeof persistedPaneStateSchema>;
 
 export const persistedColumnStateSchema = z.object({
@@ -142,7 +150,7 @@ export const persistedWorkspaceStateSchema = z.object({
   id: z.string().min(1),
   columns: z.array(persistedColumnStateSchema).min(1),
   activePaneId: z.string().min(1),
-  pendingPickerPaneId: z.string().nullable(),
+  pendingPickerPaneId: z.string().min(1).nullable(),
 });
 export type PersistedWorkspaceState = z.infer<typeof persistedWorkspaceStateSchema>;
 

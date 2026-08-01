@@ -1509,7 +1509,12 @@ export default function AgentPanes({
           onSplitRight={() => splitRight(sessionId, pane.id)}
           onSplitDown={() => splitDown(sessionId, pane.id)}
           onClose={() => handleClosePane(pane.id)}
-          onCreateNewFromHistory={() => handlePickAgent(pane.id, pane.scope!.agentPageId)}
+          // Starting a NEW conversation for the same agent from History is a
+          // distinct thread alongside whatever this pane is already showing,
+          // not a replacement of it — `'append'`, matching the "+" tab
+          // gesture's semantics rather than `handlePickAgent`'s replace
+          // default (review finding).
+          onCreateNewFromHistory={() => handlePickAgent(pane.id, pane.scope!.agentPageId, { mode: 'append' })}
           onPickHistoryConversation={(conversation) =>
             handlePickHistoryConversation(pane.id, pane.scope!.agentPageId, conversation)
           }

@@ -194,6 +194,15 @@ describe('selectPane', () => {
     const state = base();
     expect(selectPane(state, 'ghost')).toBe(state);
   });
+
+  it('given the pane is already active, returns the SAME reference — not just an equal one', () => {
+    // Reference stability here is load-bearing: `useWorkspaceServerSync`'s
+    // hydration guard (and `updateWorkspace`'s own `next === current` check)
+    // depend on a true no-op producing the identical object, not a fresh
+    // copy that merely deep-equals it (review finding).
+    const state = base();
+    expect(selectPane(state, state.activePaneId)).toBe(state);
+  });
 });
 
 describe('dismissPicker', () => {

@@ -25,6 +25,7 @@ import { usePageAgents, type DriveWithAgents } from '@/hooks/page-agents/usePage
 import { useAgentSurfaceStore, SHEET_BREAKPOINT_QUERY } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { panesOf, type PaneState } from '@/stores/agent-workspace/pane-reducer';
+import { decideCloseTab } from '@/components/agents/panes/close-pane-tab';
 import { fetchWithAuth, del, ApiRequestError } from '@/lib/auth/auth-fetch';
 import type { PersistedWorkspaceState } from '@pagespace/lib/agent-sessions/contract';
 import { buildSessionGroups, ASSISTANT_GROUP_KEY } from './session-groups';
@@ -464,6 +465,8 @@ function SessionRow({
   const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
   const selectSession = useAgentSurfaceStore((state) => state.selectSession);
   const forgetWorkspace = useAgentWorkspaceStore((state) => state.forgetWorkspace);
+  const switchTab = useAgentWorkspaceStore((state) => state.switchTab);
+  const closeTab = useAgentWorkspaceStore((state) => state.closeTab);
   const [expanded, setExpanded] = useState(false);
   const [confirmingEnd, setConfirmingEnd] = useState(false);
   const [ending, setEnding] = useState(false);
@@ -585,6 +588,70 @@ function SessionRow({
     [onChanged, session.sessionId],
   );
 
+  // A specific pane's tab, clicked from the sidebar — routed through the
+  // SAME pane-local `switchTab` the header's tab strip uses, not the
+  // session-wide `openConversation`/`focusOrAssignScope` path. That path
+  // resolves "already showing" via `paneShowing`, which only checks a pane's
+  // ACTIVE scope, never its background tabs — a background tab clicked here
+  // would go unrecognized and get reassigned into a (possibly different)
+  // pane instead of simply activating the existing tab (review finding).
+  const switchPaneTab = useCallback(
+    (paneId: string, targetId: string) => {
+      switchTab(session.sessionId, paneId, targetId);
+    },
+    [switchTab, session.sessionId],
+  );
+
+  // Closing a pane's tab from the sidebar — routed through the same
+  // `decideCloseTab` decision `AgentPanes.tsx`'s own tab-close control uses,
+  // instead of a raw DELETE: a tab shown in another pane too must only be
+  // removed from THIS pane locally, never close the shared server listing
+  // out from under that other pane, and either way the local workspace store
+  // needs the tab removed so this row stops rendering it (review finding).
+  const closePaneTab = useCallback(
+    async (paneId: string, conversationId: string) => {
+      const allTabs = session.workspace
+        ? panesOf(session.workspace).flatMap((pane) =>
+            pane.tabs
+              .filter((tab): tab is typeof tab & { targetId: string } => tab.targetId !== null)
+              .map((tab) => ({ paneId: pane.id, targetId: tab.targetId })),
+          )
+        : [];
+      const decision = decideCloseTab({
+        allTabs,
+        paneId,
+        conversationId,
+        activeConversations: session.conversations.map((c) => ({
+          conversationId: c.conversationId,
+          agentPageId: c.agentPageId,
+          lastMessageAt: null,
+        })),
+      });
+      if (decision.action === 'noop') return;
+      if (decision.action === 'close-tab') {
+        closeTab(session.sessionId, paneId, conversationId);
+        return;
+      }
+      try {
+        await del(
+          `/api/agent-sessions/${encodeURIComponent(session.sessionId)}/conversations/${encodeURIComponent(conversationId)}`,
+        );
+        closeTab(session.sessionId, paneId, conversationId);
+        onChanged();
+      } catch (error) {
+        if (error instanceof ApiRequestError && error.status === 409) {
+          setConfirmingEnd(true);
+          return;
+        }
+        console.error('Failed to close this conversation:', error);
+        toast.error('Could not close this conversation', {
+          description: error instanceof Error ? error.message : 'Please try again.',
+        });
+      }
+    },
+    [session.workspace, session.conversations, session.sessionId, closeTab, onChanged],
+  );
+
   const conversationLabel = useCallback(
     (conversation: SessionConversationEntry) => {
       const agentName =
@@ -681,7 +748,8 @@ function SessionRow({
                   conversationLabel={conversationLabel}
                   selectedConversationId={selectedConversationId}
                   onOpenConversation={openConversation}
-                  onCloseConversation={closeConversation}
+                  onSwitchTab={switchPaneTab}
+                  onCloseTab={closePaneTab}
                 />
               ))
             : session.conversations.map((conversation) => (
@@ -744,14 +812,16 @@ function PaneRow({
   conversationLabel,
   selectedConversationId,
   onOpenConversation,
-  onCloseConversation,
+  onSwitchTab,
+  onCloseTab,
 }: {
   pane: PaneState & { scope: { kind: 'chat'; targetId: string; agentPageId: string | null } };
   conversationEntryForTarget: (targetId: string, agentPageId: string | null) => SessionConversationEntry;
   conversationLabel: (conversation: SessionConversationEntry) => string;
   selectedConversationId: string | null;
   onOpenConversation: (conversation: SessionConversationEntry) => void;
-  onCloseConversation: (conversationId: string) => void | Promise<void>;
+  onSwitchTab: (paneId: string, targetId: string) => void;
+  onCloseTab: (paneId: string, conversationId: string) => void | Promise<void>;
 }) {
   const activeEntry = conversationEntryForTarget(pane.scope.targetId, pane.scope.agentPageId);
   // Only worth a nested strip once there's something to switch BETWEEN —
@@ -767,7 +837,7 @@ function PaneRow({
           {
             label: 'Close',
             icon: X,
-            onSelect: () => void onCloseConversation(pane.scope.targetId),
+            onSelect: () => void onCloseTab(pane.id, pane.scope.targetId),
             destructive: true,
           },
         ]}
@@ -798,7 +868,7 @@ function PaneRow({
                   {
                     label: 'Close',
                     icon: X,
-                    onSelect: () => void onCloseConversation(targetId),
+                    onSelect: () => void onCloseTab(pane.id, targetId),
                     destructive: true,
                   },
                 ]}
@@ -811,7 +881,14 @@ function PaneRow({
                 <button
                   type="button"
                   className="flex min-w-0 flex-1 items-center text-left"
-                  onClick={() => onOpenConversation(entry)}
+                  onClick={() => {
+                    // Activate the tab in ITS pane first, then let selection
+                    // follow — in that order, `AgentPanes`' own mount effect
+                    // sees the pane already showing this target and no-ops,
+                    // instead of racing this switch with a fresh reassignment.
+                    onSwitchTab(pane.id, targetId);
+                    onOpenConversation(entry);
+                  }}
                 >
                   <span className="truncate">{conversationLabel(entry)}</span>
                 </button>

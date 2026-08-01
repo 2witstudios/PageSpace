@@ -100,16 +100,18 @@ interface AgentWorkspaceState {
   forgetWorkspace(sessionId: string): void;
   /**
    * Seed a session's grid from a server-saved layout — `useWorkspaceServerSync`'s
-   * hydration path. Unconditional (unlike `ensureWorkspace`, which no-ops on an
-   * existing grid): the caller already decided this write is safe (nothing
-   * local has diverged since the fetch began) before calling it.
+   * hydration path. Unconditional and server-wins (unlike `ensureWorkspace`,
+   * which no-ops on an existing grid): whatever the mount-time seeding effect
+   * already did to this session's grid is overwritten, by design. Ignored if
+   * `workspace.id` doesn't match `sessionId` — a mismatch means the wrong
+   * session's grid was fetched and must not be seated here.
    */
   hydrateWorkspace(sessionId: string, workspace: WorkspaceState): void;
   /** Replace a pane's active tab with `newScope`, closing out whichever tab addressed `oldTargetId` (`null` = nothing to replace, just append-or-dedupe). */
   replaceTab(sessionId: string, paneId: string, oldTargetId: string | null, newScope: PaneScope): void;
   /** Append `newScope` as a new tab (dedupe-and-activate if already open) — the "+" chip. */
   openTab(sessionId: string, paneId: string, newScope: PaneScope): void;
-  /** Activate an already-open tab — local only, no network. */
+  /** Activate an already-open tab; the tab list is unchanged, and the new active scope is persisted by the debounced sync. */
   switchTab(sessionId: string, paneId: string, targetId: string): void;
   /** Remove a tab; activates a neighbor, or reverts to the picker if it was the last one. */
   closeTab(sessionId: string, paneId: string, targetId: string): void;
@@ -310,7 +312,14 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
         }),
 
       hydrateWorkspace: (sessionId, workspace) =>
-        set((state) => ({ workspaces: { ...state.workspaces, [sessionId]: workspace } })),
+        set((state) =>
+          // `workspace.id` is documented as "the SESSION id whose grid this
+          // is" — a mismatch means the caller fetched the wrong session's
+          // saved grid (or the server payload was tampered with); seating it
+          // under a DIFFERENT session's key would poison every consumer that
+          // trusts `workspace.id` (review finding).
+          workspace.id === sessionId ? { workspaces: { ...state.workspaces, [sessionId]: workspace } } : {},
+        ),
 
       replaceTab: (sessionId, paneId, oldTargetId, newScope) =>
         set((state) => updateWorkspace(state, sessionId, (w) => replaceTabIn(w, paneId, oldTargetId, newScope)) ?? {}),

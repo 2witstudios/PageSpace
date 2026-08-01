@@ -50,7 +50,7 @@ describe('decideOpenTab', () => {
     ).toEqual({ action: 'mint' });
   });
 
-  it('given the pane\'s ACTIVE agent picked again, should still focus a second, separate tab — this is the deliberate duplicate action', () => {
+  it('given the pane\'s ACTIVE agent picked again, should focus its existing tab rather than open a duplicate', () => {
     // Unlike selectPaneAgent's same-agent no-op, "+" has no notion of "the
     // pane's current agent" to compare against — every pick here is "open
     // this agent as a tab," and a tab already open for it is focused, full

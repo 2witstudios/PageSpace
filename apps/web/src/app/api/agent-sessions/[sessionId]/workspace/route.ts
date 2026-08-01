@@ -70,6 +70,13 @@ export async function PUT(request: Request, context: RouteContext) {
   if (!parsed.success) {
     return NextResponse.json({ error: 'Invalid workspace payload', issues: parsed.error.issues }, { status: 400 });
   }
+  // `workspace.id` is documented as the session id whose grid this is — a
+  // caller passing a different session's grid here would seat it under THIS
+  // session's row, corrupting whatever later trusts `workspace.id` to match
+  // (review finding).
+  if (parsed.data.id !== sessionId) {
+    return NextResponse.json({ error: 'workspace.id must match the session' }, { status: 400 });
+  }
 
   try {
     await saveSessionWorkspace({ sessionId, workspace: parsed.data });

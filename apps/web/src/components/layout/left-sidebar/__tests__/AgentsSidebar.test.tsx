@@ -19,7 +19,7 @@
  * - The admin gate is a DISABLED FETCH (null SWR key), not a hidden list.
  */
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SWRConfig } from 'swr';
 
@@ -107,6 +107,7 @@ import { ApiRequestError } from '@/lib/auth/auth-fetch';
 import AgentsSidebar, { resolveListNotice } from '../AgentsSidebar';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
+import type { WorkspaceState } from '@/stores/agent-workspace/pane-reducer';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore, type Drive } from '@/hooks/useDrive';
 
@@ -311,6 +312,30 @@ describe('AgentsSidebar', () => {
       expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-2');
     });
 
+    test('clicking a nested background tab activates it in ITS OWN pane via switchTab, not a session-wide reassignment', async () => {
+      // The generic session-wide `openConversation` path resolves "already
+      // showing" via `paneShowing`, which only checks a pane's ACTIVE scope
+      // — never its background tabs — so a background-tab click routed
+      // through it would go unrecognized and reassign the pane instead of
+      // simply activating the existing tab (review finding). Seed the real
+      // workspace store (not just the SWR fixture) so `switchTab`'s effect
+      // is observable.
+      act(() => {
+        useAgentWorkspaceStore.getState().hydrateWorkspace('ses-1', workspaceFixture as WorkspaceState);
+      });
+      respondWithSessions([{ ...SESSION, workspace: workspaceFixture }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      await user.click(await screen.findByText('Researcher — Second chat'));
+
+      const pane = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0];
+      expect(pane.scope?.targetId).toBe('conv-2');
+      // Both tabs remain open — a switch, not a replace.
+      expect(pane.tabs.map((t) => t.targetId)).toEqual(['conv-1', 'conv-2']);
+    });
+
     test('a pane with only ONE tab shows no nested strip at all', async () => {
       const singleTabWorkspace = {
         ...workspaceFixture,
@@ -347,7 +372,14 @@ describe('AgentsSidebar', () => {
       expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-1');
     });
 
-    test('closing a pane row\'s "Close" menu item closes its active tab\'s listing', async () => {
+    test('closing a pane row\'s "Close" menu item closes its active tab\'s listing and removes it from the local grid', async () => {
+      // Routed through `decideCloseTab` — the same tab-aware decision
+      // `AgentPanes.tsx`'s own close control uses — instead of a raw DELETE
+      // that leaves the persisted workspace still rendering the closed tab
+      // (review finding).
+      act(() => {
+        useAgentWorkspaceStore.getState().hydrateWorkspace('ses-1', workspaceFixture as WorkspaceState);
+      });
       respondWithSessions([{ ...SESSION, workspace: workspaceFixture }]);
       mockDel.mockResolvedValue(undefined);
       const user = userEvent.setup();
@@ -360,6 +392,57 @@ describe('AgentsSidebar', () => {
       await waitFor(() =>
         expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'),
       );
+      await waitFor(() => {
+        const pane = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0];
+        expect(pane.tabs.map((t) => t.targetId)).toEqual(['conv-2']);
+      });
+    });
+
+    test('closing a tab that is also open in ANOTHER pane removes it locally only — never DELETEs the shared listing', async () => {
+      const sharedWorkspace = {
+        id: 'ses-1',
+        columns: [
+          {
+            id: 'col-1',
+            panes: [
+              {
+                id: 'pane-1',
+                scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' },
+                tabs: [{ kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' }],
+              },
+              {
+                id: 'pane-2',
+                scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' },
+                tabs: [{ kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' }],
+              },
+            ],
+          },
+        ],
+        activePaneId: 'pane-1',
+        pendingPickerPaneId: null,
+      };
+      act(() => {
+        useAgentWorkspaceStore.getState().hydrateWorkspace('ses-1', sharedWorkspace as WorkspaceState);
+      });
+      respondWithSessions([{ ...SESSION, workspace: sharedWorkspace }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      // Both panes show the identical label (same shared conversation) —
+      // pane-1 renders first, matching `columns[0].panes` order.
+      const [pane1Row] = await screen.findAllByText('Researcher — First chat');
+      fireEvent.contextMenu(pane1Row);
+      await user.click(await screen.findByText('Close'));
+
+      await waitFor(() => {
+        const panes = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes;
+        expect(panes.find((p) => p.id === 'pane-1')?.tabs).toEqual([]);
+        // The other pane's tab is untouched, and the server listing was
+        // never asked to close — it's still shown there.
+        expect(panes.find((p) => p.id === 'pane-2')?.tabs.map((t) => t.targetId)).toEqual(['conv-1']);
+      });
+      expect(mockDel).not.toHaveBeenCalled();
     });
   });
 

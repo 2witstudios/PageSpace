@@ -333,6 +333,18 @@ describe('persistedPaneStateSchema', () => {
     expect(parsed.tabs).toEqual([]);
   });
 
+  it('given a pre-tabs chat pane (scope set, tabs missing entirely), should backfill tabs from scope', () => {
+    const active = chatScope('conv-1', 'agent-a');
+    const parsed = persistedPaneStateSchema.parse({ id: 'pane-1', scope: active });
+    expect(parsed.tabs).toEqual([active]);
+  });
+
+  it('given a chat pane with an explicit empty tabs array, should still backfill from scope', () => {
+    const active = chatScope('conv-1', 'agent-a');
+    const parsed = persistedPaneStateSchema.parse({ id: 'pane-1', scope: active, tabs: [] });
+    expect(parsed.tabs).toEqual([active]);
+  });
+
   it('should carry every open tab, including the active one', () => {
     const active = chatScope('conv-1', 'agent-a');
     const background = chatScope('conv-2', 'agent-b');
@@ -391,5 +403,9 @@ describe('persistedWorkspaceStateSchema', () => {
 
   it('should reject an empty activePaneId', () => {
     expect(persistedWorkspaceStateSchema.safeParse({ ...workspace, activePaneId: '' }).success).toBe(false);
+  });
+
+  it('should reject an empty-string pendingPickerPaneId — same non-empty rule as every other pane id', () => {
+    expect(persistedWorkspaceStateSchema.safeParse({ ...workspace, pendingPickerPaneId: '' }).success).toBe(false);
   });
 });

@@ -15,7 +15,7 @@
 import { db } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
 import { agentSessions } from '@pagespace/db/schema/agent-sessions';
-import type { PersistedWorkspaceState } from '@pagespace/lib/agent-sessions/contract';
+import { persistedWorkspaceStateSchema, type PersistedWorkspaceState } from '@pagespace/lib/agent-sessions/contract';
 
 /** `null` when the session has no row (never happens for a real session id) or has never saved a grid yet. */
 export async function getSessionWorkspace(sessionId: string): Promise<PersistedWorkspaceState | null> {
@@ -24,7 +24,12 @@ export async function getSessionWorkspace(sessionId: string): Promise<PersistedW
     .from(agentSessions)
     .where(eq(agentSessions.id, sessionId))
     .limit(1);
-  return (row?.workspaceState as PersistedWorkspaceState | undefined) ?? null;
+  if (!row?.workspaceState) return null;
+  // Re-validate on the way out, same discipline as the PUT that wrote it —
+  // the schema can tighten after a row was saved (review finding), and this
+  // route's callers (AgentsSidebar, AgentPanes) trust the result as-is.
+  const parsed = persistedWorkspaceStateSchema.safeParse(row.workspaceState);
+  return parsed.success ? parsed.data : null;
 }
 
 /**
@@ -44,7 +49,9 @@ export async function getSessionWorkspacesBulk(
     .from(agentSessions)
     .where(inArray(agentSessions.id, sessionIds));
   for (const row of rows) {
-    if (row.workspaceState) grouped.set(row.id, row.workspaceState as PersistedWorkspaceState);
+    if (!row.workspaceState) continue;
+    const parsed = persistedWorkspaceStateSchema.safeParse(row.workspaceState);
+    if (parsed.success) grouped.set(row.id, parsed.data);
   }
   return grouped;
 }

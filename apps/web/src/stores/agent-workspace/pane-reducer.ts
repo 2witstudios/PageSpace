@@ -318,6 +318,7 @@ export function closePane(state: WorkspaceState, id: string): WorkspaceState {
 }
 
 export function selectPane(state: WorkspaceState, id: string): WorkspaceState {
+  if (state.activePaneId === id) return state;
   if (!findPaneLocation(state, id)) return state;
   return { ...state, activePaneId: id };
 }

@@ -68,20 +68,23 @@ describe('hydration', () => {
     });
   });
 
-  it('does NOT hydrate when a local mutation happened before the fetch resolved', async () => {
+  it('hydrates even when a local mutation happened before the fetch resolved — server wins on first load', async () => {
     store().ensureWorkspace('ses-1', scope());
     let resolveFetch!: (value: unknown) => void;
     mockFetch.mockReturnValue(new Promise((resolve) => { resolveFetch = resolve; }));
 
     renderHook(() => useWorkspaceServerSync('ses-1'));
 
-    // A local change races ahead of the GET — e.g. the user split a pane
-    // before the server responded.
+    // A local change races ahead of the GET — e.g. the mount-time
+    // `openConversation` seed effect (or, here, a stand-in split) runs in
+    // the same commit as the fetch is kicked off, before it resolves. A
+    // reference-equality guard against this would see it as "something
+    // moved on" and skip hydration on effectively every real mount — the
+    // bug this test used to (wrongly) lock in (review finding).
     const paneIdBeforeSplit = grid().activePaneId;
     act(() => {
       store().splitRight('ses-1', paneIdBeforeSplit);
     });
-    const afterLocalMutation = grid();
 
     const saved = {
       id: 'ses-1',
@@ -95,8 +98,8 @@ describe('hydration', () => {
       await Promise.resolve();
     });
 
-    // The local split survives — hydration backed off rather than clobbering it.
-    expect(grid()).toEqual(afterLocalMutation);
+    // The server's saved grid wins, overwriting the local split.
+    expect(grid()).toEqual(saved);
   });
 
   it('given no saved workspace, leaves the local grid untouched', async () => {
@@ -136,6 +139,34 @@ describe('debounced save', () => {
     const [, init] = putCalls[0];
     const sentBody = JSON.parse(init.body as string);
     expect(sentBody.workspace).toEqual(grid());
+  });
+
+  it('keeps a save pending after a non-2xx response, instead of treating it as delivered', async () => {
+    vi.useFakeTimers();
+    store().ensureWorkspace('ses-1', scope());
+    mockFetch.mockResolvedValue({ ok: false, status: 403, json: () => Promise.resolve({}) });
+
+    const { unmount } = renderHook(() => useWorkspaceServerSync('ses-1', { debounceMs: 1000 }));
+
+    const paneId = grid().activePaneId;
+    act(() => {
+      store().splitRight('ses-1', paneId);
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+    });
+    expect(mockFetch.mock.calls.filter((c) => c[1]?.method === 'PUT')).toHaveLength(1);
+
+    // The rejected save left `pendingRef` populated — unmount must still
+    // flush it (a silently "cleared" pending ref would skip this retry).
+    unmount();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mockFetch.mock.calls.filter((c) => c[1]?.method === 'PUT')).toHaveLength(2);
   });
 
   it('does not redundantly PUT the value hydration itself just wrote', async () => {
@@ -204,5 +235,25 @@ describe('unmount', () => {
       await Promise.resolve();
     });
     expect(mockFetch.mock.calls.filter((c) => c[1]?.method === 'PUT')).toHaveLength(0);
+  });
+
+  it('flushes a pending save when disabled mid-session, not only on unmount', async () => {
+    store().ensureWorkspace('ses-1', scope());
+    const { rerender } = renderHook(({ enabled }: { enabled: boolean }) => useWorkspaceServerSync('ses-1', { debounceMs: 60_000, enabled }), {
+      initialProps: { enabled: true },
+    });
+
+    const paneId = grid().activePaneId;
+    act(() => {
+      store().splitRight('ses-1', paneId);
+    });
+    const latest = grid();
+
+    rerender({ enabled: false });
+    await new Promise((r) => setTimeout(r, 0));
+
+    const putCalls = mockFetch.mock.calls.filter((c) => c[1]?.method === 'PUT');
+    expect(putCalls).toHaveLength(1);
+    expect(JSON.parse(putCalls[0][1].body as string).workspace).toEqual(latest);
   });
 });

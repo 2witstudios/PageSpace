@@ -428,6 +428,21 @@ describe('hydrateWorkspace', () => {
 
     expect(grid()).toEqual(saved);
   });
+
+  it('ignores a saved grid whose id does not match the target session', () => {
+    store().ensureWorkspace('ses-1', scope());
+    const before = grid();
+
+    const wrongSession = {
+      id: 'ses-OTHER',
+      columns: [{ id: 'col-x', panes: [{ id: 'pane-x', scope: scope('Restored'), tabs: [scope('Restored')] }] }],
+      activePaneId: 'pane-x',
+      pendingPickerPaneId: null,
+    };
+    store().hydrateWorkspace('ses-1', wrongSession);
+
+    expect(grid()).toEqual(before);
+  });
 });
 
 describe('tab actions', () => {
@@ -441,7 +456,7 @@ describe('tab actions', () => {
     expect(panesOf(grid())[0].tabs).toEqual([agent2()]);
   });
 
-  it('openTab appends a new tab without touching the active one', () => {
+  it('openTab appends a new tab and activates it, keeping the existing tab open', () => {
     store().ensureWorkspace('ses-1', scope());
     const paneId = grid().activePaneId;
     store().openTab('ses-1', paneId, agent2());

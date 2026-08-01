@@ -57,11 +57,15 @@ export function useWorkspaceServerSync(
     async (toSave: WorkspaceState) => {
       useEditingStore.getState().startEditing(syncId, 'other', { componentName: `workspace-sync:${sessionId}` });
       try {
-        await fetchWithAuth(workspaceUrl(sessionId), {
+        const response = await fetchWithAuth(workspaceUrl(sessionId), {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspace: toSave }),
         });
+        // A non-2xx (400/403/502/…) is a failed save, not a completed one —
+        // leave it pending so the next mutation or the unmount flush retries
+        // it, instead of silently dropping the layout.
+        if (!response.ok) return;
         // Only clear pending if no newer layout arrived while this save was in-flight.
         if (pendingRef.current === toSave) pendingRef.current = null;
       } catch {
@@ -90,16 +94,22 @@ export function useWorkspaceServerSync(
     };
   }, [enabled, workspace, debounceMs, performSave]);
 
-  // Hydrate once per session from the server. Only applies if nothing local
-  // changed in the interim — reference equality against the workspace
-  // captured right as the fetch began, since every reducer transition
-  // produces a NEW object; an unchanged reference means nothing moved on.
+  // Hydrate once per session from the server — unconditionally, by design
+  // (see file header: "Server response wins over any stale localStorage
+  // seed"). The mount-time `openConversation`/`ensureWorkspace` seeding this
+  // hook's caller does (selecting the initial conversation, or defaulting a
+  // brand-new session to one pane) always runs in the SAME commit as this
+  // effect, before the fetch below resolves — so a reference-equality guard
+  // here would see that local seed as "something moved on" and skip
+  // hydration on effectively every mount, defeating cross-device restore
+  // entirely (review finding). The narrow risk this trades away — a genuine
+  // user edit landing in the single round-trip before hydration resolves
+  // gets overwritten — is accepted, same as any other server-wins seed.
   useEffect(() => {
     if (!enabled) return;
     if (hydratedSessionRef.current === sessionId) return;
     hydratedSessionRef.current = sessionId;
 
-    const capturedWorkspace = useAgentWorkspaceStore.getState().workspaces[sessionId];
     let cancelled = false;
 
     fetchWithAuth(workspaceUrl(sessionId))
@@ -108,8 +118,6 @@ export function useWorkspaceServerSync(
         if (cancelled || !json?.workspace) return;
         const parsed = persistedWorkspaceStateSchema.safeParse(json.workspace);
         if (!parsed.success) return;
-        const current = useAgentWorkspaceStore.getState().workspaces[sessionId];
-        if (current !== capturedWorkspace) return; // something local already moved on — respect it
         justHydratedRef.current = true;
         hydrateWorkspace(sessionId, parsed.data);
       })
@@ -137,5 +145,5 @@ export function useWorkspaceServerSync(
         .catch(() => {})
         .finally(() => useEditingStore.getState().endEditing(syncId));
     };
-  }, [sessionId, syncId]);
+  }, [enabled, sessionId, syncId]);
 }

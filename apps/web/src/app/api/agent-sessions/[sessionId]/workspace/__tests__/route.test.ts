@@ -50,7 +50,13 @@ const workspace = {
   columns: [
     {
       id: 'col-1',
-      panes: [{ id: 'pane-1', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: null }, tabs: [] }],
+      panes: [
+        {
+          id: 'pane-1',
+          scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: null },
+          tabs: [{ kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: null }],
+        },
+      ],
     },
   ],
   activePaneId: 'pane-1',
@@ -127,6 +133,12 @@ describe('PUT /api/agent-sessions/[sessionId]/workspace', () => {
 
   it('400s a missing body', async () => {
     const response = await put(undefined);
+    expect(response.status).toBe(400);
+    expect(mockSaveSessionWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("400s a workspace whose id does not match the route's sessionId", async () => {
+    const response = await put({ workspace: { ...workspace, id: 'ses-OTHER' } });
     expect(response.status).toBe(400);
     expect(mockSaveSessionWorkspace).not.toHaveBeenCalled();
   });

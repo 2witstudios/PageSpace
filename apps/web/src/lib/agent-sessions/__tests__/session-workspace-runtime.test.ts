@@ -52,7 +52,13 @@ const workspace: PersistedWorkspaceState = {
   columns: [
     {
       id: 'col-1',
-      panes: [{ id: 'pane-1', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: null }, tabs: [] }],
+      panes: [
+        {
+          id: 'pane-1',
+          scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: null },
+          tabs: [{ kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: null }],
+        },
+      ],
     },
   ],
   activePaneId: 'pane-1',
@@ -78,6 +84,14 @@ describe('getSessionWorkspace', () => {
     queueResponse([]);
     expect(await getSessionWorkspace('ses-missing')).toBeNull();
   });
+
+  it('returns null for a malformed saved row rather than trusting it as-is', async () => {
+    // `columns: []` fails `persistedWorkspaceStateSchema`'s `min(1)` — a row
+    // that could only have been written under an older, looser schema
+    // (review finding) must not reach callers unvalidated.
+    queueResponse([{ workspaceState: { id: 'ses-1', columns: [], activePaneId: 'pane-1', pendingPickerPaneId: null } }]);
+    expect(await getSessionWorkspace('ses-1')).toBeNull();
+  });
 });
 
 describe('saveSessionWorkspace', () => {
@@ -100,6 +114,17 @@ describe('getSessionWorkspacesBulk', () => {
     queueResponse([
       { id: 'ses-1', workspaceState: workspace },
       { id: 'ses-2', workspaceState: null },
+    ]);
+    const result = await getSessionWorkspacesBulk(['ses-1', 'ses-2']);
+    expect(result.get('ses-1')).toEqual(workspace);
+    expect(result.has('ses-2')).toBe(false);
+    expect(result.size).toBe(1);
+  });
+
+  it('drops a malformed saved row instead of returning it unvalidated', async () => {
+    queueResponse([
+      { id: 'ses-1', workspaceState: workspace },
+      { id: 'ses-2', workspaceState: { id: 'ses-2', columns: [], activePaneId: 'pane-1', pendingPickerPaneId: null } },
     ]);
     const result = await getSessionWorkspacesBulk(['ses-1', 'ses-2']);
     expect(result.get('ses-1')).toEqual(workspace);
