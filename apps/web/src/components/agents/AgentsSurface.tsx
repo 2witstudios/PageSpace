@@ -12,6 +12,7 @@ import { useSessionRecord } from './useSessionRecord';
 import AgentPanes from './panes/AgentPanes';
 import EmptyState from './EmptyState';
 import AgentsPastConversationsList from './AgentsPastConversationsList';
+import AgentsListHeader from './AgentsListHeader';
 
 /**
  * The Agents console: mounted for the lifetime of the route, whatever is
@@ -191,7 +192,12 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
         // naming a position in the PREVIOUS drive's ordering. Remounting via
         // `key` resets everything at once rather than chasing every piece of
         // state that would otherwise need its own reset effect (review).
-        <AgentsPastConversationsList key={driveId ?? 'global'} driveId={driveId} />
+        <div className="flex h-full flex-col">
+          <AgentsListHeader driveId={driveId} />
+          <div className="flex-1 min-h-0">
+            <AgentsPastConversationsList key={driveId ?? 'global'} driveId={driveId} />
+          </div>
+        </div>
       )}
     </div>
   );
