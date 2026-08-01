@@ -21,13 +21,15 @@ export const CHECK_ME_TIMEOUT_MS = 8000;
 
 // Backstop for the whole recovery driver — longer than the worst-case BOUNDED chain, so it
 // never fires while a legitimate (merely slow, not hung) recovery is still in flight. On the
-// bearer platforms (iOS/Android) this is sequential: DEVICE_TOKEN_TIMEOUT_MS (hasDeviceToken)
-// + CHECK_ME_TIMEOUT_MS (checkMeAuthenticated) + refreshBearerSession's own two-stage bound
-// (its Keychain read, capped at AuthFetch's TOKEN_RETRIEVAL_TIMEOUT_MS, then its refresh POST,
-// capped at AuthFetch's REFRESH_FETCH_TIMEOUT_MS) = 3000 + 8000 + (3000 + 8000) = 22000, plus
-// margin. Guards against a hang anywhere in the chain we haven't found or bounded yet —
-// notably the web and desktop device-token refresh paths, which remain unbounded (deferred
-// follow-up) — without misfiring mid-chain on the platform this recovery flow exists for.
+// bearer platforms (iOS/Android) this is sequential: hasDeviceToken, then checkMeAuthenticated,
+// then (if needed) refreshBearerSession's own two-stage timeout in AuthFetch (its Keychain
+// read, then its refresh POST) — roughly 22s at today's per-step timeouts (DEVICE_TOKEN_TIMEOUT_MS,
+// CHECK_ME_TIMEOUT_MS, and AuthFetch's TOKEN_RETRIEVAL_TIMEOUT_MS + REFRESH_FETCH_TIMEOUT_MS,
+// summed by hand here since the AuthFetch constants are private and this value can't reference
+// them directly — re-check this sum if any of those change). Guards against a hang anywhere in
+// the chain we haven't found or bounded yet — notably the web and desktop device-token refresh
+// paths, which remain unbounded (deferred follow-up) — without misfiring mid-chain on the
+// platform this recovery flow exists for.
 export const RECOVERY_FAILSAFE_TIMEOUT_MS = 25000;
 
 /**

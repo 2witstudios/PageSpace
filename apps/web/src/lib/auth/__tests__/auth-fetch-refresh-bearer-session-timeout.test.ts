@@ -32,6 +32,18 @@ type RefreshInternals = {
   refreshBearerSession: () => Promise<{ success: boolean; shouldLogout: boolean }>;
 };
 
+// Mirrors real fetch()'s AbortController contract: the returned promise only settles once the
+// passed signal actually fires, never on its own.
+function rejectOnAbort<T>(signal: AbortSignal | undefined): Promise<T> {
+  return new Promise((_resolve, reject) => {
+    signal?.addEventListener('abort', () => {
+      const err = new Error('The operation was aborted');
+      err.name = 'AbortError';
+      reject(err);
+    });
+  });
+}
+
 describe('refreshBearerSession: getStoredSession timeout', () => {
   let originalFetch: typeof global.fetch;
   let mockFetch: ReturnType<typeof vi.fn>;
@@ -123,17 +135,8 @@ describe('refreshBearerSession: refresh fetch timeout', () => {
   it('never hangs if the refresh fetch never resolves, and does NOT force a logout', async () => {
     vi.useFakeTimers();
     try {
-      // Mirrors real fetch()'s AbortController contract: the request promise only settles
-      // once the passed signal actually fires.
-      mockFetch.mockImplementation(
-        (_url: string, options?: { signal?: AbortSignal }) =>
-          new Promise((_resolve, reject) => {
-            options?.signal?.addEventListener('abort', () => {
-              const err = new Error('The operation was aborted');
-              err.name = 'AbortError';
-              reject(err);
-            });
-          }),
+      mockFetch.mockImplementation((_url: string, options?: { signal?: AbortSignal }) =>
+        rejectOnAbort(options?.signal),
       );
 
       const { AuthFetch } = await import('../auth-fetch');
@@ -165,14 +168,7 @@ describe('refreshBearerSession: refresh fetch timeout', () => {
         Promise.resolve({
           ok: true,
           status: 200,
-          json: () =>
-            new Promise((_resolve, reject) => {
-              options?.signal?.addEventListener('abort', () => {
-                const err = new Error('The operation was aborted');
-                err.name = 'AbortError';
-                reject(err);
-              });
-            }),
+          json: () => rejectOnAbort(options?.signal),
         }),
       );
 
