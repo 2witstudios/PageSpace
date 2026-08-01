@@ -691,7 +691,18 @@ export default function AgentPanes({
           });
           return false;
         }
-        if (!isCurrent()) return false;
+        if (!isCurrent()) {
+          // The reopen SUCCEEDED server-side (closedInSessionAt cleared, a
+          // cap slot consumed) after a newer pick or agent mint already
+          // superseded this one on the same pane — returning early without
+          // undoing that leaves an invisible open listing occupying a slot
+          // no pane shows, which can make a LATER reopen fail as "session
+          // full" for no visible reason. Close it right back out, the same
+          // way an orphaned mint is cleaned up above (review finding —
+          // chatgpt-codex-connector on PR #2299).
+          void cleanupOrphanedConversation(conversation.id);
+          return false;
+        }
         // Instant-freshness nudge, same as every other listing-changing
         // action here — the sidebar's own open list otherwise lags until its
         // next poll.
@@ -703,9 +714,16 @@ export default function AgentPanes({
       // transcript (review finding — chatgpt-codex-connector on PR #2299;
       // the same dedup `openConversation`'s own focus branch enforces
       // elsewhere, applied here since this path assigns directly rather
-      // than going through that store action).
-      const existingPane = workspace
-        ? panesOf(workspace).find(
+      // than going through that store action). Read FRESH, not the
+      // `workspace` this callback closed over: two panes racing to reopen
+      // the SAME closed conversation each run this check after their own
+      // await, so a stale pre-request snapshot could make BOTH miss the
+      // other's just-completed assignment and independently assign — the
+      // exact duplicate this check exists to prevent (review finding —
+      // chatgpt-codex-connector on PR #2299).
+      const liveWorkspace = useAgentWorkspaceStore.getState().workspaces[sessionId];
+      const existingPane = liveWorkspace
+        ? panesOf(liveWorkspace).find(
             (p) => p.id !== paneId && p.scope?.kind === 'chat' && p.scope.targetId === conversation.id,
           )
         : undefined;
@@ -729,7 +747,7 @@ export default function AgentPanes({
       });
       return true;
     },
-    [sessionId, assignPane, workspace, selectPane, beginPaneAssign],
+    [sessionId, assignPane, selectPane, beginPaneAssign, cleanupOrphanedConversation],
   );
 
   /**

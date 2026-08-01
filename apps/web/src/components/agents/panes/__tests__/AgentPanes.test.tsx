@@ -1091,7 +1091,10 @@ describe('AgentPanes', () => {
       await user.click(await screen.findByRole('button', { name: 'select-conv-fast' }));
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-fast'));
 
-      // NOW the stale reopen resolves — must be ignored.
+      // NOW the stale reopen resolves — must be ignored, AND rolled back:
+      // it succeeded server-side (closedInSessionAt cleared, a cap slot
+      // consumed) for a pick nothing shows anymore, which could otherwise
+      // make a later reopen fail as "session full" for no visible reason.
       resolveSlowReopen({});
       await waitFor(() => {
         const pane = useAgentWorkspaceStore
@@ -1100,6 +1103,9 @@ describe('AgentPanes', () => {
           .find((p) => p.id === paneId);
         expect(pane?.scope?.targetId).toBe('conv-fast');
       });
+      await waitFor(() =>
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-slow'),
+      );
     });
 
     // review finding — chatgpt-codex-connector on PR #2299: History-delete

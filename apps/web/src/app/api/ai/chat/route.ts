@@ -213,8 +213,33 @@ export async function POST(request: Request) {
     args: Omit<Parameters<typeof saveMessageToDatabase>[0], 'mentionNotify'>,
   ): Promise<void> => {
     const mentionNotify = mentionNotifyFor(args.content);
-    await saveMessageToDatabase({ ...args, ...(mentionNotify && { mentionNotify }) });
-    if (mentionNotify) mentionNotified = true;
+    // The SAME atomic re-check the user's own message write uses, applied
+    // here too: the earlier lock only covers the moment the user's message
+    // was persisted, and model generation between then and THIS terminal
+    // write can run for seconds — plenty of room for a History delete
+    // (permitted the whole time; nothing else in this route blocks it mid-
+    // generation) to land in between. Without this, the assistant's reply
+    // persists as an ACTIVE message beneath a conversation already excluded
+    // from every session listing — generation the user cancelled by
+    // deleting the conversation, billed and answered into a transcript
+    // they can no longer reach (review finding — chatgpt-codex-connector on
+    // PR #2299). A deleted conversation silently drops the reply rather
+    // than persisting it as orphaned; the provider call itself already
+    // happened and is billed/tracked independently of this write via the
+    // usual trackUsage path, which this does not touch — only what gets
+    // WRITTEN to the (now-gone) conversation's transcript.
+    const persisted = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .select({ isActive: conversations.isActive })
+        .from(conversations)
+        .where(eq(conversations.id, args.conversationId))
+        .for('update')
+        .limit(1);
+      if (!row?.isActive) return false;
+      await saveMessageToDatabase({ ...args, ...(mentionNotify && { mentionNotify }), dbClient: tx });
+      return true;
+    });
+    if (persisted && mentionNotify) mentionNotified = true;
   };
   // Captured by the inner catch (createUIMessageStream construction failure) BEFORE it calls
   // lifecycle.finish() — finish() deletes the multicast registry entry getBufferedParts() reads

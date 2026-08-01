@@ -274,6 +274,39 @@ export async function POST(
   // pre-generation exit (auth/permission/provider/save failure) doesn't strand the
   // reservation against the user's balance + in-flight cap until the cron sweeps it.
   let holdHandedOff = false;
+  // The SAME atomic re-check the user's own message write uses (this
+  // route's own earlier `db.transaction` around the FIRST message), applied
+  // here too: that lock only covers the moment the user's message was
+  // persisted, and model generation between then and a TERMINAL write can
+  // run for seconds — plenty of room for a History delete (permitted the
+  // whole time; nothing else in this route blocks it mid-generation) to
+  // land in between. Without this, the assistant's reply persists as an
+  // ACTIVE message beneath a conversation already excluded from every
+  // session listing — generation the user cancelled by deleting the
+  // conversation, answered into a transcript they can no longer reach
+  // (review finding — chatgpt-codex-connector on PR #2299, filed against
+  // the page-agent chat route's identical gap; the same class of bug here
+  // too). A deleted conversation silently drops the reply rather than
+  // persisting it as orphaned; the provider call itself already happened
+  // and is billed/tracked independently via the usual trackUsage path,
+  // which this does not touch — only what gets WRITTEN to the (now-gone)
+  // conversation's transcript. One shared choke point (all 3 terminal-write
+  // sites below route through it) rather than three separate re-checks.
+  const saveTerminalGlobalAssistantMessage = async (
+    args: Parameters<typeof saveGlobalAssistantMessageToDatabase>[0],
+  ): Promise<boolean> => {
+    return db.transaction(async (tx) => {
+      const [row] = await tx
+        .select({ isActive: conversations.isActive })
+        .from(conversations)
+        .where(eq(conversations.id, args.conversationId))
+        .for('update')
+        .limit(1);
+      if (!row?.isActive) return false;
+      await saveGlobalAssistantMessageToDatabase({ ...args, dbClient: tx });
+      return true;
+    });
+  };
   try {
     loggers.api.debug('Global Assistant Chat API: Starting request processing', {});
 
@@ -1387,7 +1420,7 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
           const aborted = isRunAborted({ agentRun, abortSignal });
           const payload = buildAssistantPersistencePayload(serverAssistantMessageId, bufferedParts);
           try {
-            await saveGlobalAssistantMessageToDatabase({
+            await saveTerminalGlobalAssistantMessage({
               messageId: serverAssistantMessageId,
               conversationId,
               userId,
@@ -1452,7 +1485,7 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
               toolResultsCount: extractedToolResults.length,
             });
 
-            await saveGlobalAssistantMessageToDatabase({
+            await saveTerminalGlobalAssistantMessage({
               messageId,
               conversationId,
               userId,
@@ -1592,7 +1625,7 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
     if (!assistantMessagePersisted && cleanupContext && lifecycle && !lifecycle.preAborted) {
       try {
         const payload = buildAssistantPersistencePayload(cleanupContext.serverAssistantMessageId, bufferedPartsAtError);
-        await saveGlobalAssistantMessageToDatabase({
+        await saveTerminalGlobalAssistantMessage({
           messageId: cleanupContext.serverAssistantMessageId,
           conversationId: cleanupContext.conversationId,
           userId: cleanupContext.userId,
