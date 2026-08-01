@@ -163,9 +163,9 @@ export default function AgentPanes({
     return () => paneAssignTokens.current.get(paneId) === token;
   }, []);
 
-  // Two more races the pane-token above can't catch on its own, since it's
-  // scoped per PANE while these are scoped per CONVERSATION (review finding
-  // — chatgpt-codex-connector on PR #2299, round 8):
+  // Races the pane-token above can't catch on its own, since it's scoped
+  // per PANE while these are scoped per CONVERSATION (review findings —
+  // chatgpt-codex-connector on PR #2299, rounds 8-9):
   //
   // 1. The SAME conversation picked twice (same pane or two panes) can have
   //    the OLDER reopen resolve first while the NEWER one is still in
@@ -174,14 +174,31 @@ export default function AgentPanes({
   //    closes the conversation the newer request is about to legitimately
   //    land. Tracked as an in-flight count per conversationId; the rollback
   //    below only fires once nothing else is still reopening the same id.
+  //
+  //    That alone still drops the ball when the LAST settler is the one
+  //    that FAILS: an earlier (superseded) reopen for the same id can
+  //    succeed-but-defer its own rollback because this one was still
+  //    pending — if this one then rejects instead of landing it, nothing
+  //    is left to finish that deferred cleanup. `deferredReopenSuccess`
+  //    marks that case; whichever request is the LAST to settle for a
+  //    given conversationId (by count reaching zero) is responsible for
+  //    checking it and finishing the cleanup if still nothing shows it.
   const pendingReopenCounts = useRef(new Map<string, number>());
+  const deferredReopenSuccess = useRef(new Set<string>());
   // 2. A reopen can commit server-side, then have its OWN response delayed
   //    long enough for the SAME conversation to be deleted from History (a
   //    different pane, or the same one) before the reopen's completion
   //    assigns it — landing a pane on a transcript that already 404s on
-  //    send. `handleHistoryDeleteConversation` marks the id here; the
-  //    reopen completion checks-and-consumes it right before assigning.
-  const historyDeletedDuringReopen = useRef(new Set<string>());
+  //    send. A single consumable flag isn't enough here either: TWO panes
+  //    concurrently reopening the same conversation both need to observe
+  //    the same delete, but a boolean/Set entry consumed by whichever
+  //    completion checks it first would leave the second one blind. A
+  //    per-conversationId generation counter instead: each reopen captures
+  //    the generation at start, `handleHistoryDeleteConversation` bumps it
+  //    on delete, and every completion (however many are in flight)
+  //    independently compares its own captured start value against the
+  //    current one — no consumption, so no reader ever misses it.
+  const historyDeleteGenerations = useRef(new Map<string, number>());
 
   // The picker's agent list. A drive session offers only that drive's agents;
   // a global-assistant session (driveId null) has no home drive to filter by,
@@ -694,15 +711,30 @@ export default function AgentPanes({
     ): Promise<boolean> => {
       const isCurrent = beginPaneAssign(paneId);
       if (conversation.sessionId === sessionId) {
+        const isShownSomewhere = () => {
+          const liveWorkspace = useAgentWorkspaceStore.getState().workspaces[sessionId];
+          return (
+            !!liveWorkspace &&
+            panesOf(liveWorkspace).some((p) => p.scope?.kind === 'chat' && p.scope.targetId === conversation.id)
+          );
+        };
         pendingReopenCounts.current.set(conversation.id, (pendingReopenCounts.current.get(conversation.id) ?? 0) + 1);
+        // Captured BEFORE the request starts — compared, never consumed, so
+        // every concurrent reopen for this same conversationId independently
+        // notices a delete that happened anywhere during its own flight
+        // (round 9 review finding).
+        const deleteGenerationAtStart = historyDeleteGenerations.current.get(conversation.id) ?? 0;
         // Exactly-once decrement regardless of which exit path below runs.
+        // Returns the count still outstanding AFTER this one settles, so the
+        // caller can tell whether it was the LAST one for this conversationId.
         let reopenSettled = false;
         const settleReopen = () => {
-          if (reopenSettled) return;
+          if (reopenSettled) return pendingReopenCounts.current.get(conversation.id) ?? 0;
           reopenSettled = true;
           const next = (pendingReopenCounts.current.get(conversation.id) ?? 1) - 1;
           if (next <= 0) pendingReopenCounts.current.delete(conversation.id);
           else pendingReopenCounts.current.set(conversation.id, next);
+          return next;
         };
         try {
           await post(
@@ -710,7 +742,16 @@ export default function AgentPanes({
             {},
           );
         } catch (error) {
-          settleReopen();
+          const remaining = settleReopen();
+          // I was the LAST outstanding reopen for this conversationId, and
+          // an EARLIER (superseded) request already reopened it server-side
+          // but deferred its own cleanup because I was still pending —
+          // nothing else will ever revisit that now that I've failed
+          // instead of landing it. Finish the job it punted on (round 9
+          // review finding — chatgpt-codex-connector on PR #2299).
+          if (remaining <= 0 && deferredReopenSuccess.current.delete(conversation.id) && !isShownSomewhere()) {
+            void cleanupOrphanedConversation(conversation.id);
+          }
           // A newer pick (or agent switch) on this pane already superseded
           // this one — its own outcome, success or failure, is no longer
           // this pane's concern, and surfacing an error toast for a request
@@ -722,7 +763,7 @@ export default function AgentPanes({
           });
           return false;
         }
-        settleReopen();
+        const remaining = settleReopen();
         if (!isCurrent()) {
           // The reopen SUCCEEDED server-side (closedInSessionAt cleared, a
           // cap slot consumed) after a newer pick or agent mint already
@@ -741,23 +782,23 @@ export default function AgentPanes({
           // reopened, currently-visible conversation back out from under
           // whichever pane is showing it. Read live state across every pane
           // in the grid (not just this one) before deciding (review finding
-          // — chatgpt-codex-connector on PR #2299). That alone still misses
-          // the case where the NEWER request hasn't landed yet (still
-          // in-flight) when the older one resolves — nothing shows it YET,
-          // but something is about to. Check the in-flight count too (round
-          // 8 review finding): only clean up when no reopen for this same
-          // conversation is still pending anywhere.
-          const liveWorkspace = useAgentWorkspaceStore.getState().workspaces[sessionId];
-          const shownSomewhere =
-            !!liveWorkspace &&
-            panesOf(liveWorkspace).some((p) => p.scope?.kind === 'chat' && p.scope.targetId === conversation.id);
-          const anotherReopenPending = pendingReopenCounts.current.has(conversation.id);
-          if (!shownSomewhere && !anotherReopenPending) {
+          // — chatgpt-codex-connector on PR #2299).
+          if (isShownSomewhere()) return false;
+          if (remaining > 0) {
+            // Something else is still reopening this same conversationId —
+            // premature to clean up (that request might land it). Defer:
+            // whichever reopen is the LAST to settle for this id is
+            // responsible for finishing this check (round 9 review finding).
+            deferredReopenSuccess.current.add(conversation.id);
+          } else {
             void cleanupOrphanedConversation(conversation.id);
           }
           return false;
         }
-        if (historyDeletedDuringReopen.current.delete(conversation.id)) {
+        // I'm the one landing this — any deferred-cleanup marker left by an
+        // earlier superseded request for this id is moot now.
+        deferredReopenSuccess.current.delete(conversation.id);
+        if ((historyDeleteGenerations.current.get(conversation.id) ?? 0) !== deleteGenerationAtStart) {
           // This reopen's HTTP round trip was still in flight when the SAME
           // conversation was deleted from History (possibly from a
           // different pane) — the reopen may have already committed
@@ -827,13 +868,17 @@ export default function AgentPanes({
    */
   const handleHistoryDeleteConversation = useCallback(
     (deletedConversationId: string) => {
-      // Marked unconditionally (not just when a pane is currently affected
+      // Bumped unconditionally (not just when a pane is currently affected
       // below): a History pick's reopen for this exact id can be mid-flight
-      // right now, having already committed server-side, with its
-      // completion still to come — that completion checks and consumes this
-      // mark before assigning (review finding — chatgpt-codex-connector on
-      // PR #2299, round 8).
-      historyDeletedDuringReopen.current.add(deletedConversationId);
+      // right now, possibly from more than one pane at once, having already
+      // committed server-side, with its completion(s) still to come — each
+      // one independently compares its own captured start value against
+      // this counter before assigning (review finding — chatgpt-codex-
+      // connector on PR #2299, rounds 8-9).
+      historyDeleteGenerations.current.set(
+        deletedConversationId,
+        (historyDeleteGenerations.current.get(deletedConversationId) ?? 0) + 1,
+      );
       // Read fresh at call time, not the `workspace` this callback closed
       // over — this always runs after the DELETE's own async round trip,
       // during which the user could have already reassigned an affected

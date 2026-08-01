@@ -1249,6 +1249,113 @@ describe('AgentPanes', () => {
       expect(pane?.scope?.targetId).not.toBe('conv-doomed-live');
     });
 
+    // review finding — chatgpt-codex-connector on PR #2299 (round 9): the
+    // Set-based mark above is a SINGLE consumable flag — fine for one
+    // pending reopen, but TWO panes concurrently reopening the same closed
+    // conversation both need to observe the same delete, and whichever
+    // completion checks first would consume it, leaving the second one
+    // blind and assigning a deleted conversation anyway.
+    it('rejects EVERY pending reopen for a conversation deleted from History, not just the first to check', async () => {
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url === '/api/ai/page-agents/agent-1/conversations') {
+          return conversationsFixture([{ id: 'conv-shared', title: 'Shared chat', sessionId: 'ses-1' }]);
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      let resolveA!: (value: unknown) => void;
+      let resolveB!: (value: unknown) => void;
+      mockPost
+        .mockReturnValueOnce(new Promise((resolve) => (resolveA = resolve)))
+        .mockReturnValueOnce(new Promise((resolve) => (resolveB = resolve)));
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
+      const secondPaneId = useAgentWorkspaceStore
+        .getState()
+        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+        .find((p) => p.id !== firstPaneId)!.id;
+
+      const user = userEvent.setup();
+      const historyTabs = await screen.findAllByRole('tab', { name: /history/i });
+      await user.click(historyTabs[0]);
+      await user.click(historyTabs[1]);
+
+      // Both panes reopen the SAME conversation — both pending.
+      const selectButtonsFirst = await screen.findAllByRole('button', { name: 'select-conv-shared' });
+      await user.click(selectButtonsFirst[0]);
+      const selectButtonsSecond = await screen.findAllByRole('button', { name: 'select-conv-shared' });
+      await user.click(selectButtonsSecond[1]);
+
+      // Deleted from History while BOTH reopens are still in flight.
+      const deleteButtons = await screen.findAllByRole('button', { name: 'delete-conv-shared' });
+      await user.click(deleteButtons[0]);
+      await waitFor(() =>
+        expect(mockFetchWithAuth).toHaveBeenCalledWith(
+          '/api/ai/page-agents/agent-1/conversations/conv-shared',
+          { method: 'DELETE' },
+        ),
+      );
+
+      // Both delayed reopens resolve — NEITHER pane may end up bound to the
+      // deleted conversation.
+      resolveA({});
+      resolveB({});
+      await act(async () => {
+        await Promise.resolve();
+      });
+      const finalPanes = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns.flatMap((c) => c.panes);
+      expect(finalPanes.find((p) => p.id === firstPaneId)?.scope?.targetId).not.toBe('conv-shared');
+      expect(finalPanes.find((p) => p.id === secondPaneId)?.scope?.targetId).not.toBe('conv-shared');
+    });
+
+    // review finding — chatgpt-codex-connector on PR #2299 (round 9): the
+    // round-8 fix deferred cleanup when another reopen for the same
+    // conversation was still pending, on the assumption that request would
+    // either land it (fine) or fail leaving cleanup moot (WRONG — a failed
+    // final request leaves the earlier successful-but-deferred reopen
+    // dangling forever, since nothing else will ever revisit it).
+    it('cleans up an earlier successful-but-deferred reopen when the final pending reopen for it fails', async () => {
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url === '/api/ai/page-agents/agent-1/conversations') {
+          return conversationsFixture([{ id: 'conv-orphan', title: 'Orphan chat', sessionId: 'ses-1' }]);
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      let resolveOlder!: (value: unknown) => void;
+      let rejectNewer!: (reason: unknown) => void;
+      mockPost
+        .mockReturnValueOnce(new Promise((resolve) => (resolveOlder = resolve)))
+        .mockReturnValueOnce(new Promise((_resolve, reject) => (rejectNewer = reject)));
+      mockDel.mockResolvedValue(undefined);
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('tab', { name: /history/i }));
+      // Two picks of the same conversation on the same pane — the second
+      // supersedes the first's token.
+      await user.click(await screen.findByRole('button', { name: 'select-conv-orphan' }));
+      await user.click(await screen.findByRole('button', { name: 'select-conv-orphan' }));
+
+      // The OLDER (now-superseded) reopen resolves successfully first —
+      // deferred, since the newer one is still pending and nothing shows it
+      // yet.
+      resolveOlder({});
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-orphan');
+
+      // The NEWER (current) reopen then fails outright — nothing else will
+      // ever revisit the older one's dangling server-side success; the
+      // failing settle must finish that deferred cleanup itself.
+      rejectNewer(new Error('network down'));
+      await waitFor(() =>
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-orphan'),
+      );
+    });
+
     // review finding — chatgpt-codex-connector on PR #2299: History-delete
     // deactivates the CANONICAL row, not just the deleting pane's own
     // listing — every pane showing that id (in this grid), whichever pane's
