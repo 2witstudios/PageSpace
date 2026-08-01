@@ -48,7 +48,7 @@ import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { fetchWithAuth, post, del, ApiRequestError } from '@/lib/auth/auth-fetch';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { useWorkspaceServerSync } from '@/stores/agent-workspace/useWorkspaceServerSync';
-import { panesOf, tabsOf, isLastPane, type PaneState } from '@/stores/agent-workspace/pane-reducer';
+import { panesOf, tabsOf, isLastPane, paneShowing, type PaneState } from '@/stores/agent-workspace/pane-reducer';
 import { usePageAgents } from '@/hooks/page-agents/usePageAgents';
 import { useAuth } from '@/hooks/useAuth';
 import { useConversationActiveStream } from '@/hooks/useActiveStream';
@@ -424,6 +424,26 @@ export default function AgentPanes({
   // session it focuses the pane already showing the thread, or opens it in a
   // non-terminal pane — the store owns that policy (`openConversation`).
   useEffect(() => {
+    const workspace = useAgentWorkspaceStore.getState().workspaces[sessionId];
+    // A brand-new grid (`ensureWorkspace`'s fast path) or a target that's
+    // already showing (`openConversation`'s own focus path) never reaches
+    // `isReplaceable`'s eviction logic, so there is nothing to protect —
+    // safe to seed immediately regardless of cache readiness. Otherwise,
+    // WAIT for the live set before risking an eviction decision at all:
+    // calling this with an unprotected `undefined` set on a pre-existing
+    // grid would let a cold reload or a slow/failed listing fetch reproduce
+    // the exact eviction issue #2295 fixes — and since
+    // `sessionKnownToConversationsCache` is otherwise excluded from this
+    // effect's deps (to avoid re-seeding on every 20s poll), a later
+    // successful fetch could never repair a premature eviction after the
+    // fact (review finding, PR #2307). `sessionKnownToConversationsCache`
+    // is safe to depend on despite that: it only flips false→true once
+    // (unlike `sessionConversations`, whose array reference changes on
+    // every poll), so this adds at most one extra effect run, not a
+    // recurring one.
+    const alreadyShowing = workspace ? paneShowing(workspace, initialConversation.conversationId) !== undefined : false;
+    if (workspace && !alreadyShowing && !sessionKnownToConversationsCache) return;
+
     openConversation(
       sessionId,
       {
@@ -433,21 +453,16 @@ export default function AgentPanes({
         agentPageId: initialConversation.agentPageId,
       },
       {
-        // Gated on the cache actually knowing this session — before that,
-        // `sessionConversations` reads as `[]`, and an empty live set would
-        // make every existing chat pane non-replaceable, forcing an unwanted
-        // split on first load instead of today's correct reuse (issue #2295
-        // fix must not regress the common case it wasn't built for).
         liveConversationIds: sessionKnownToConversationsCache
           ? new Set(sessionConversationsRef.current.map((c) => c.conversationId))
           : undefined,
       },
     );
     // name/agentPageId describe the same conversation — the id is the identity.
-    // sessionConversations/sessionKnownToConversationsCache deliberately excluded —
-    // read via ref above so a 20s poll refresh doesn't re-run the seed.
+    // sessionConversations itself deliberately excluded — read via ref above
+    // so a 20s poll refresh doesn't re-run the seed on every tick.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, initialConversation.conversationId, openConversation]);
+  }, [sessionId, initialConversation.conversationId, openConversation, sessionKnownToConversationsCache]);
 
   // Ending the session: peeked, confirmed, and gated on the server (findings
   // 1 + 2). `pendingEndClose` carries the pane and its scope from the PEEK,

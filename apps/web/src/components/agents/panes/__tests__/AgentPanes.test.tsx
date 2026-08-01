@@ -1357,6 +1357,60 @@ describe('AgentPanes', () => {
       expect(shown).toContain('conv-2');
     });
 
+    // review finding — chatgpt-codex-connector on PR #2307: before THIS
+    // session's own entry has appeared in the switch-decision cache (a cold
+    // reload, a slow fetch, or one that never resolves), `sessionKnownToConversationsCache`
+    // reads false. The seeding effect must not fall back to the OLD
+    // unprotected eviction behavior in that window — that would reopen the
+    // exact race issue #2295 fixes on every cold load — and once the fetch
+    // DOES resolve, the deferred decision must still run (protected) rather
+    // than leaving the pane stuck on stale data forever.
+    it('defers the eviction decision (rather than evicting unprotected) while the live listing has not resolved, then finishes it once it does', async () => {
+      let resolveSessions!: () => void;
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        // The sessions-LISTING endpoint specifically (`?driveId=`) — not the
+        // per-session `/workspace` sub-route `useWorkspaceServerSync` also
+        // fetches (same prefix, see the readiness test above this block).
+        if (url.includes('/api/agent-sessions?')) {
+          return new Promise((resolve) => {
+            resolveSessions = () =>
+              resolve(
+                jsonOk({
+                  sessions: [
+                    { sessionId: 'ses-1', conversations: [{ conversationId: 'conv-2', agentPageId: 'agent-1', lastMessageAt: null }] },
+                  ],
+                }),
+              );
+          });
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      // A pre-existing grid — e.g. restored from persisted storage — already
+      // showing conv-1, before this mount's seeding effect (targeting
+      // conv-2) ever runs.
+      useAgentWorkspaceStore
+        .getState()
+        .ensureWorkspace('ses-1', { kind: 'chat', name: 'Existing', targetId: 'conv-1', agentPageId: 'agent-1' });
+
+      renderPanes({ initialConversation: { conversationId: 'conv-2', agentPageId: 'agent-1', name: 'Conversation 2' } });
+
+      // The listing fetch hasn't resolved yet — the effect must have
+      // deferred rather than evicting conv-1's pane unprotected.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(screen.getAllByTestId('pane-chat')).toHaveLength(1);
+      expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1');
+
+      resolveSessions();
+
+      // conv-1 is absent from the resolved live listing (closed-in-session):
+      // the deferred decision runs protected — conv-1's pane survives, conv-2
+      // opens in a split rather than evicting it.
+      await waitFor(() => expect(screen.getAllByTestId('pane-chat')).toHaveLength(2));
+      const shownAfter = screen.getAllByTestId('pane-chat').map((el) => el.textContent);
+      expect(shownAfter).toContain('conv-1');
+      expect(shownAfter).toContain('conv-2');
+    });
+
     // review finding — chatgpt-codex-connector on PR #2299: switching to Chat
     // immediately (fire-and-forget) after starting an async reopen showed the
     // OLD pane content as if a failed pick had succeeded.
