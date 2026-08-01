@@ -622,6 +622,19 @@ export default function AgentPanes({
     onSessionEnded?.();
   }, [pendingEndClose, sessionId, forgetWorkspace, closeTerminalShell, onSessionEnded]);
 
+  // Shared by cleanupOrphanedConversation's own post-DELETE recheck below and
+  // handlePickHistoryConversation's rollback decision.
+  const isConversationShownSomewhere = useCallback(
+    (conversationId: string) => {
+      const liveWorkspace = useAgentWorkspaceStore.getState().workspaces[sessionId];
+      return (
+        !!liveWorkspace &&
+        panesOf(liveWorkspace).some((p) => p.scope?.kind === 'chat' && p.scope.targetId === conversationId)
+      );
+    },
+    [sessionId],
+  );
+
   const cleanupOrphanedConversation = useCallback(
     async (conversationId: string) => {
       // Best-effort: the pane that wanted this is already gone, so a failure
@@ -634,11 +647,24 @@ export default function AgentPanes({
         await del(
           `/api/agent-sessions/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversationId)}`,
         );
+        // This DELETE can be delayed (a slow network) long enough for a
+        // LATER, independent pick of this exact conversation to land in a
+        // pane before it reaches the server — closing a listing that is now
+        // visibly displayed. Re-check right after the delete resolves and
+        // compensate by reopening it back rather than leaving the pane
+        // pointed at a transcript that would 404 on send (review finding —
+        // chatgpt-codex-connector on PR #2299, round 17).
+        if (isConversationShownSomewhere(conversationId)) {
+          await post(
+            `/api/agent-sessions/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversationId)}/reopen`,
+            {},
+          );
+        }
       } catch (error) {
         console.error('Failed to clean up an orphaned conversation:', error);
       }
     },
-    [sessionId],
+    [sessionId, isConversationShownSomewhere],
   );
 
   const handlePickAgent = useCallback(
@@ -811,13 +837,7 @@ export default function AgentPanes({
     ): Promise<boolean> => {
       const isCurrent = beginPaneAssign(paneId);
       if (conversation.sessionId === sessionId) {
-        const isShownSomewhere = () => {
-          const liveWorkspace = useAgentWorkspaceStore.getState().workspaces[sessionId];
-          return (
-            !!liveWorkspace &&
-            panesOf(liveWorkspace).some((p) => p.scope?.kind === 'chat' && p.scope.targetId === conversation.id)
-          );
-        };
+        const isShownSomewhere = () => isConversationShownSomewhere(conversation.id);
         pendingReopenCounts.current.set(conversation.id, (pendingReopenCounts.current.get(conversation.id) ?? 0) + 1);
         // Captured BEFORE the request starts — compared, never consumed, so
         // every concurrent reopen for this same conversationId independently
@@ -978,7 +998,7 @@ export default function AgentPanes({
       });
       return true;
     },
-    [sessionId, assignPane, selectPane, beginPaneAssign, cleanupOrphanedConversation],
+    [sessionId, assignPane, selectPane, beginPaneAssign, cleanupOrphanedConversation, isConversationShownSomewhere],
   );
 
   /**

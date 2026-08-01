@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useImperativeHandle, forwardRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useImperativeHandle, forwardRef, useCallback, useMemo, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
@@ -209,24 +209,42 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
     }
   });
 
-  // Reset form when config changes
+  // Read early (moved up from its original spot near the useEditingStore
+  // registration below) so the reset effect right below can gate on it.
+  const { isDirty: formIsDirty } = useFormState({ control });
+  // Set right before THIS instance's own save propagates the new config
+  // into the shared cache (onSubmit below) — distinguishes "my own save,
+  // whose values I want as my new clean baseline" from "a SIBLING Settings
+  // surface for the same agent just saved, and its update arrived here via
+  // the shared SWR cache."
+  const justSavedOwnConfigRef = useRef(false);
+
+  // Reset form when config changes — but NOT when this surface has its own
+  // unsaved edits from an EXTERNAL update (a different pane's Settings tab
+  // for the SAME agent saving propagates through the shared config cache
+  // `useAgentConfig` — see AgentPanes.tsx — and this effect used to reset
+  // unconditionally, silently discarding whatever the user was mid-typing
+  // here). Always resets for THIS instance's own save (justSavedOwnConfigRef)
+  // — its own newly-saved values become the new clean baseline as before
+  // (review finding — chatgpt-codex-connector on PR #2299, round 17).
   useEffect(() => {
-    if (config) {
-      reset({
-        systemPrompt: config.systemPrompt,
-        enabledTools: config.enabledTools,
-        aiProvider: config.aiProvider || selectedProvider || '',
-        aiModel: config.aiModel || selectedModel || '',
-        includeDrivePrompt: config.includeDrivePrompt ?? false,
-        agentDefinition: config.agentDefinition || '',
-        visibleToGlobalAssistant: config.visibleToGlobalAssistant ?? true,
-        includePageTree: config.includePageTree ?? false,
-        pageTreeScope: config.pageTreeScope ?? 'children',
-        toolExposureMode: config.toolExposureMode ?? 'upfront',
-        sandboxEnabled: config.sandboxEnabled ?? false,
-      });
-    }
-  }, [config, reset, selectedProvider, selectedModel]);
+    if (!config) return;
+    if (formIsDirty && !justSavedOwnConfigRef.current) return;
+    justSavedOwnConfigRef.current = false;
+    reset({
+      systemPrompt: config.systemPrompt,
+      enabledTools: config.enabledTools,
+      aiProvider: config.aiProvider || selectedProvider || '',
+      aiModel: config.aiModel || selectedModel || '',
+      includeDrivePrompt: config.includeDrivePrompt ?? false,
+      agentDefinition: config.agentDefinition || '',
+      visibleToGlobalAssistant: config.visibleToGlobalAssistant ?? true,
+      includePageTree: config.includePageTree ?? false,
+      pageTreeScope: config.pageTreeScope ?? 'children',
+      toolExposureMode: config.toolExposureMode ?? 'upfront',
+      sandboxEnabled: config.sandboxEnabled ?? false,
+    });
+  }, [config, reset, selectedProvider, selectedModel, formIsDirty]);
 
   // Fetch Ollama models dynamically
   const fetchOllamaModels = useCallback(async () => {
@@ -322,6 +340,11 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
         includePageTree: data.includePageTree,
         pageTreeScope: data.pageTreeScope,
       } as AgentConfig;
+      // This save's own values should always become this instance's new
+      // clean baseline, even though the form is (still, momentarily) dirty
+      // when the reset effect runs — the dirty-guard above only exists to
+      // protect against a DIFFERENT (sibling) surface's external update.
+      justSavedOwnConfigRef.current = true;
       onConfigUpdate(updatedConfig);
       toast.success('Agent configuration saved successfully');
     } catch (error) {
@@ -382,8 +405,8 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   };
 
   // Register with useEditingStore while dirty so SWR doesn't revalidate this
-  // page mid-edit and clobber unsaved changes.
-  const { isDirty: formIsDirty } = useFormState({ control });
+  // page mid-edit and clobber unsaved changes. (formIsDirty is declared
+  // earlier, above the config-reset effect it also gates.)
   useEffect(() => {
     const componentId = `page-agent-settings-${pageId}`;
     if (formIsDirty) {

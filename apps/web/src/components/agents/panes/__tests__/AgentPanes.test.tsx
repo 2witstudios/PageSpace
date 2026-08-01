@@ -1473,6 +1473,67 @@ describe('AgentPanes', () => {
       expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-race');
     });
 
+    // review finding — chatgpt-codex-connector on PR #2299 (round 17): the
+    // cleanup DELETE itself can be delayed long enough for a LATER,
+    // independent pick of the exact same conversation to land in a pane
+    // before it reaches the server — closing a listing that is now visibly
+    // displayed. cleanupOrphanedConversation must recheck after its own
+    // DELETE resolves and compensate (reopen it back) if so.
+    it('compensates by reopening a conversation that landed in a pane while its own delayed cleanup DELETE was still in flight', async () => {
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url === '/api/ai/page-agents/agent-1/conversations') {
+          return conversationsFixture([
+            { id: 'conv-compensate', title: 'Compensate', sessionId: 'ses-1' },
+            { id: 'conv-unbound', title: 'Unbound', sessionId: null },
+          ]);
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      let resolveFirstReopen!: (value: unknown) => void;
+      let resolveDelete!: (value: unknown) => void;
+      mockPost
+        .mockReturnValueOnce(new Promise((resolve) => (resolveFirstReopen = resolve))) // first pick
+        .mockResolvedValueOnce({ ok: true, alreadyOpen: false }); // second (fresh) pick
+      mockDel.mockReturnValueOnce(new Promise((resolve) => (resolveDelete = resolve)));
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('tab', { name: /history/i }));
+      await user.click(await screen.findByRole('button', { name: 'select-conv-compensate' })); // reopen #1, pending
+
+      // Superseded by an unbound pick — no network call, lands instantly.
+      await user.click(await screen.findByRole('button', { name: 'select-conv-unbound' }));
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-unbound'));
+
+      // Reopen #1 resolves — genuinely orphaned (nothing shows it, nothing
+      // else pending for this id) — triggers a DIRECT cleanup, DELETE
+      // pending.
+      resolveFirstReopen({ ok: true, alreadyOpen: false });
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-compensate'));
+
+      // WHILE that DELETE is still in flight, a fresh pick of the SAME
+      // conversation lands it back in the pane (back to History first —
+      // landing conv-unbound switched the tab to Chat).
+      await user.click(await screen.findByRole('tab', { name: /history/i }));
+      await user.click(await screen.findByRole('button', { name: 'select-conv-compensate' }));
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-compensate'));
+
+      // NOW the delayed cleanup DELETE resolves — must compensate by
+      // reopening the conversation it just closed back out, since a pane
+      // is now showing it.
+      resolveDelete(undefined);
+      // 2 reopen calls happened already (the first pick, the fresh second
+      // pick) — the compensating call is a THIRD.
+      await waitFor(() =>
+        expect(
+          mockPost.mock.calls.filter(
+            (c) => c[0] === '/api/agent-sessions/ses-1/conversations/conv-compensate/reopen',
+          ),
+        ).toHaveLength(3),
+      );
+    });
+
     // review finding — chatgpt-codex-connector on PR #2299 (round 8): a
     // reopen can commit server-side and then have its OWN response delayed
     // long enough for the SAME conversation to be deleted from History
