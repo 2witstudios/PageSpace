@@ -24,6 +24,7 @@
 import { describe, test, expect, beforeEach, vi, afterEach } from 'vitest';
 import { useAgentSurfaceStore } from '../useAgentSurfaceStore';
 import { useLayoutStore } from '@/stores/useLayoutStore';
+import { useTabsStore } from '@/stores/useTabsStore';
 
 const resetStore = () => {
   useAgentSurfaceStore.setState({
@@ -286,6 +287,44 @@ describe('URL mirroring', () => {
     useAgentSurfaceStore.getState().selectSession('ses-1');
     expect(pushSpy).toHaveBeenCalledTimes(1);
     expect(replaceSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('tab sync', () => {
+  // `commit()` writes the URL with a raw `pushState`, which Next's router (and
+  // therefore `useTabSync`) never sees — so this is the one call site that must
+  // keep the browser-style tab bar's record of this tab's address truthful,
+  // otherwise switching tabs away and back lands on the bare route.
+  beforeEach(() => {
+    useTabsStore.setState({ tabs: [], activeTabId: null });
+    useTabsStore.getState().createTab({ path: '/dashboard/agents' });
+  });
+
+  const activeTabSearch = () => {
+    const { tabs, activeTabId } = useTabsStore.getState();
+    return tabs.find((t) => t.id === activeTabId)?.search;
+  };
+
+  test('selecting a session updates the active tab', () => {
+    useAgentSurfaceStore.getState().selectSession('ses-1');
+    expect(activeTabSearch()).toBe('session=ses-1');
+  });
+
+  test('selecting a conversation updates the active tab', () => {
+    useAgentSurfaceStore.getState().selectConversation({
+      sessionId: 'ses-1',
+      conversationId: 'conv-1',
+      agentId: 'agent-1',
+    });
+    expect(activeTabSearch()).toBe('session=ses-1&c=conv-1&agent=agent-1');
+  });
+
+  test('re-selecting the same session (a no-op push) leaves the active tab search untouched', () => {
+    useAgentSurfaceStore.getState().selectSession('ses-1');
+    setLocation('/dashboard/agents?session=ses-1');
+    const tabsBefore = useTabsStore.getState().tabs;
+    useAgentSurfaceStore.getState().selectSession('ses-1');
+    expect(useTabsStore.getState().tabs).toBe(tabsBefore);
   });
 });
 

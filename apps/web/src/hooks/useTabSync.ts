@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef } from 'react';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useTabsStore, selectActiveTab } from '@/stores/useTabsStore';
+import { toHref } from '@/lib/tabs/tab-navigation';
 
 /**
  * Syncs URL navigation with the browser-style tabs store.
@@ -14,15 +15,44 @@ import { useTabsStore, selectActiveTab } from '@/stores/useTabsStore';
  */
 export function useTabSync() {
   const pathname = usePathname();
+  const search = useSearchParams().toString();
   const router = useRouter();
-  const lastSyncedPath = useRef<string | null>(null);
+  const lastSyncedHref = useRef<string | null>(null);
+  // Set by a REAL browser popstate — the one unambiguous signal that a URL
+  // change is Back/Forward rather than a new step, regardless of whether the
+  // destination was pushed by Next's own router or by application code (e.g.
+  // the Agents surface's `history.pushState`; Next patches `pushState`
+  // globally to copy its internal history markers onto ANY push, so even
+  // those entries get the ordinary soft `usePathname`/`useSearchParams`
+  // update on Back — verified against next@15.5.18's app-router.js).
+  // Consumed and cleared at the top of the sync effect below on its very next
+  // run. Not given an expiry: the only way it could go unconsumed is a
+  // popstate landing on a href IDENTICAL to what's already showing (nothing
+  // for `pathname`/`search` to change, so the effect wouldn't re-run at all)
+  // — and every write path here (`commit()`'s own same-URL guard,
+  // `navigateInTab`'s no-op check) already prevents two ADJACENT history
+  // entries from ever being identical, so that state isn't reachable.
+  const isPopStateRef = useRef(false);
 
   const rehydrated = useTabsStore((state) => state.rehydrated);
   const setDesktopRestoreAttempted = useTabsStore((state) => state.setDesktopRestoreAttempted);
 
   useEffect(() => {
+    const onPopState = () => { isPopStateRef.current = true; };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  useEffect(() => {
     // Wait for store to rehydrate from localStorage
     if (!rehydrated) return;
+
+    const href = toHref(pathname, search);
+    // Read-and-clear atomically so every branch below (bootstrap restore,
+    // early returns, new navigation) starts this run with a fresh flag
+    // regardless of which branch it takes.
+    const wasPopState = isPopStateRef.current;
+    isPopStateRef.current = false;
 
     const state = useTabsStore.getState();
     const hasTabs = state.tabs.length > 0;
@@ -43,28 +73,28 @@ export function useTabSync() {
 
       if (pathname === '/dashboard' && hasTabs) {
         const activeTab = selectActiveTab(useTabsStore.getState());
-        const restorePath = activeTab?.path;
+        const restoreHref = activeTab ? toHref(activeTab.path, activeTab.search) : undefined;
 
-        if (restorePath && restorePath !== '/dashboard') {
+        if (restoreHref && restoreHref !== '/dashboard') {
           // Guard against immediate re-runs (e.g. strict mode) before replace updates pathname.
           // Keep '/dashboard' marked as already handled so we don't sync it into tab history.
-          lastSyncedPath.current = pathname;
-          router.replace(restorePath);
+          lastSyncedHref.current = href;
+          router.replace(restoreHref);
           return;
         }
       }
     }
 
-    // Skip if we already synced this path
-    if (lastSyncedPath.current === pathname) return;
+    // Skip if we already synced this href
+    if (lastSyncedHref.current === href) return;
 
     // Re-read after potential healing / restore
     const currentState = useTabsStore.getState();
 
     // If no tabs exist, create one from current path
     if (currentState.tabs.length === 0) {
-      currentState.createTab({ path: pathname });
-      lastSyncedPath.current = pathname;
+      currentState.createTab({ path: pathname, search });
+      lastSyncedHref.current = href;
       return;
     }
 
@@ -72,13 +102,34 @@ export function useTabSync() {
     const activeTab = selectActiveTab(currentState);
 
     // If active tab already at this path, just update sync ref
-    if (activeTab?.path === pathname) {
-      lastSyncedPath.current = pathname;
+    if (activeTab?.path === pathname && activeTab?.search === search) {
+      lastSyncedHref.current = href;
       return;
     }
 
+    // A URL change isn't always a NEW step — a real popstate (native
+    // Back/Forward, of any distance, e.g. a long-press-selected entry several
+    // steps away) restores an address that should already be SOMEWHERE in
+    // this tab's own history, whether that entry was pushed by Next's router
+    // or by application code (e.g. the Agents surface's `history.pushState`).
+    // Reconcile the index to match rather than pushing a new entry, which
+    // would truncate everything after the current index — silently
+    // discarding real forward history — and leave this tab's own
+    // Back/Forward buttons one entry off from what the browser just did.
+    // Gated on an ACTUAL popstate (not just string adjacency) so an ordinary
+    // new navigation that happens to coincidentally match an existing entry
+    // still gets appended as a new step rather than misread as a jump back.
+    if (activeTab && wasPopState) {
+      const matchIndex = activeTab.history.indexOf(href);
+      if (matchIndex !== -1) {
+        currentState.setActiveTabHistoryIndex(matchIndex);
+        lastSyncedHref.current = href;
+        return;
+      }
+    }
+
     // Navigate within the active tab
-    currentState.navigateInActiveTab(pathname);
-    lastSyncedPath.current = pathname;
-  }, [pathname, rehydrated, router, setDesktopRestoreAttempted]);
+    currentState.navigateInActiveTab(pathname, search);
+    lastSyncedHref.current = href;
+  }, [pathname, search, rehydrated, router, setDesktopRestoreAttempted]);
 }

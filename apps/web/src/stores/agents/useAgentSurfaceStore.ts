@@ -2,6 +2,8 @@ import { create } from 'zustand';
 
 import { buildAgentSelectionUrl, parseAgentSelection } from '@/lib/agents/agent-selection';
 import { useLayoutStore } from '@/stores/useLayoutStore';
+import { useTabsStore } from '@/stores/useTabsStore';
+import { fromHref } from '@/lib/tabs/tab-navigation';
 
 /**
  * What is selected on the Agents surface — and nothing else.
@@ -127,6 +129,14 @@ export const useAgentSurfaceStore = create<AgentSurfaceState>()((set, get) => {
     });
     if (url === currentUrl()) return;
     window.history.pushState({}, '', url);
+    // Next's own `pushState` patch does eventually fold this into its router
+    // state too (it copies its internal history markers onto any external
+    // push and dispatches a restore, which is what makes `useSearchParams()`
+    // in `AgentsSurface`/`useTabSync` react to this at all) — but that path is
+    // async (wrapped in a `startTransition`). Set it directly here as well so
+    // the tab bar's record of this tab's address is correct the instant this
+    // selection commits, not just eventually.
+    useTabsStore.getState().updateActiveTabSearch(fromHref(url).search);
   };
 
   return {

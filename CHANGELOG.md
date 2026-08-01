@@ -7,6 +7,15 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **The Agents console's tab now shows "Agents" and remembers what was open when you switch away and back** —
+  the browser-style tab bar didn't recognize `/dashboard/agents` as a page at all, so its tab showed
+  "Drive" or "Untitled" instead of "Agents". Worse, the console keeps its selected session/conversation/panes
+  in the URL's query string (so clicking around never kills a live shell or streaming chat), but the tab bar
+  never carried that query string along — so switching to another tab and back always dropped the selection,
+  landing on "Select a session" even though the panes were still safely persisted underneath. Tabs now carry
+  their full address, the Agents route is registered with a proper title and icon, reactivating a different
+  tab pointing at the same Agents page now correctly re-reads its own selection, and the header's Back/Forward
+  buttons no longer get one step out of sync after the browser's own Back restores an earlier selection.
 - **Global Assistant is no longer unclickable right after splitting a pane in the Agents console** —
   a short pane's empty-pane picker could crush its "Shell"/"Global Assistant" choices under the
   "Agents" list below them, so the Global Assistant button visually collided with — and lost clicks
