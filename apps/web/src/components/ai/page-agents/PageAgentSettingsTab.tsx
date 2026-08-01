@@ -17,6 +17,7 @@ import { getRoleColorClasses } from '@/lib/utils';
 import { AgentDrivesCard } from './AgentDrivesCard';
 import { SANDBOX_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
 import { useEditingStore } from '@/stores/useEditingStore';
+import { useAgentMembership } from '@/lib/ai/shared/hooks/useAgentMembership';
 
 interface AgentConfig {
   systemPrompt: string;
@@ -32,17 +33,6 @@ interface AgentConfig {
   pageTreeScope?: 'children' | 'drive';
   toolExposureMode?: 'upfront' | 'search';
   sandboxEnabled?: boolean;
-}
-
-interface AgentMembership {
-  role: string;
-  customRole: { id: string; name: string; color: string | null } | null;
-}
-
-interface DriveRole {
-  id: string;
-  name: string;
-  color?: string | null;
 }
 
 interface PageAgentSettingsTabProps {
@@ -137,66 +127,21 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   // useEditingStore registration below, round 20).
   const mountId = useId();
   const [isSaving, setIsSaving] = useState(false);
-  const [membership, setMembership] = useState<AgentMembership | null | undefined>(undefined);
-  const [membershipUserRole, setMembershipUserRole] = useState<'OWNER' | 'ADMIN' | 'MEMBER'>('MEMBER');
-  const [driveRoles, setDriveRoles] = useState<DriveRole[]>([]);
-  const [membershipSaving, setMembershipSaving] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function loadMembership() {
-      try {
-        const [membersRes, rolesRes] = await Promise.all([
-          fetchWithAuth(`/api/drives/${driveId}/agents/members`),
-          fetchWithAuth(`/api/drives/${driveId}/roles`),
-        ]);
-        if (cancelled) return;
-        if (membersRes.ok) {
-          const data = await membersRes.json();
-          const entry = (data.agentMembers ?? []).find(
-            (m: { agentPageId: string }) => m.agentPageId === pageId,
-          );
-          setMembership(entry ? { role: entry.role, customRole: entry.customRole } : null);
-          setMembershipUserRole(data.currentUserRole ?? 'MEMBER');
-        } else {
-          setMembership(null);
-        }
-        if (rolesRes.ok) {
-          const data = await rolesRes.json();
-          setDriveRoles(data.roles ?? []);
-        }
-      } catch {
-        if (!cancelled) setMembership(null);
-      }
-    }
-    loadMembership();
-    return () => { cancelled = true; };
-  }, [pageId, driveId]);
+  // Shared across every mounted Settings surface for this agent (keyed by
+  // driveId in SWR's cache) — see useAgentMembership for why a per-instance
+  // useState here previously let two Settings surfaces for the same agent
+  // drift out of sync.
+  const { membership, membershipUserRole, driveRoles, updateRole, isSaving: membershipSaving } =
+    useAgentMembership(driveId, pageId);
 
   const handleMembershipRoleChange = useCallback(async (value: string) => {
-    setMembershipSaving(true);
     try {
-      const body: { role: 'MEMBER' | 'ADMIN'; customRoleId: string | null } =
-        value === 'ADMIN'
-          ? { role: 'ADMIN', customRoleId: null }
-          : value === 'MEMBER'
-          ? { role: 'MEMBER', customRoleId: null }
-          : { role: 'MEMBER', customRoleId: value };
-      await patch(`/api/drives/${driveId}/agents/${pageId}`, body);
-      const customRole = body.customRoleId
-        ? (driveRoles.find((r) => r.id === body.customRoleId) ?? null)
-        : null;
-      setMembership({
-        role: body.role,
-        customRole: customRole ? { id: customRole.id, name: customRole.name, color: customRole.color ?? null } : null,
-      });
+      await updateRole(value);
       toast.success('Role updated');
     } catch {
       toast.error('Failed to update role');
-    } finally {
-      setMembershipSaving(false);
     }
-  }, [driveId, pageId, driveRoles]);
+  }, [updateRole]);
 
   // Dynamic Ollama models state
   const [ollamaModels, setOllamaModels] = useState<Record<string, string> | null>(null);
@@ -239,6 +184,21 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   // relative to a sibling's later save" (see onSubmit below, round 18).
   const providerTouchedRef = useRef(false);
   const modelTouchedRef = useRef(false);
+
+  // What to actually SHOW in the provider/model Selects — same resolution
+  // as onSubmit's resolvedProvider/resolvedModel (this instance's own
+  // untouched selection defers to the shared config), but read at render
+  // time rather than only at submit time. Without this, an untouched
+  // instance kept rendering its stale `selectedProvider`/`selectedModel`
+  // prop (owned by a separate, non-shared useProviderSettings() per mount)
+  // even after a SIBLING Settings surface for the same agent saved a
+  // different provider — the save itself was already correct (onSubmit's
+  // own resolution prevented the stale prop from being submitted), but the
+  // display never caught up (review finding — chatgpt-codex-connector on
+  // PR #2299, round 26, thread r3694897525).
+  const providerOrModelTouched = providerTouchedRef.current || modelTouchedRef.current;
+  const displayedProvider = providerOrModelTouched ? selectedProvider : (config?.aiProvider || selectedProvider);
+  const displayedModel = providerOrModelTouched ? selectedModel : (config?.aiModel || selectedModel);
 
   // Reset form when config changes — but NOT when this surface has its own
   // unsaved edits from an EXTERNAL update (a different pane's Settings tab
@@ -321,15 +281,20 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
     }
   }, [lmstudioModels]);
 
-  // Get models for the current provider (dynamic for Ollama and LM Studio, static for others)
+  // Get models for the DISPLAYED provider (dynamic for Ollama and LM Studio,
+  // static for others) — must match displayedProvider, not selectedProvider:
+  // an untouched instance can be displaying a sibling's saved provider (see
+  // displayedProvider above) while selectedProvider still holds this
+  // instance's own stale value, and listing the wrong provider's models
+  // would offer a model that doesn't belong to the shown provider.
   const getCurrentProviderModels = (): Record<string, string> => {
-    if (selectedProvider === 'ollama' && ollamaModels) {
+    if (displayedProvider === 'ollama' && ollamaModels) {
       return ollamaModels;
     }
-    if (selectedProvider === 'lmstudio' && lmstudioModels) {
+    if (displayedProvider === 'lmstudio' && lmstudioModels) {
       return lmstudioModels;
     }
-    return AI_PROVIDERS[selectedProvider as keyof typeof AI_PROVIDERS]?.models || {};
+    return AI_PROVIDERS[displayedProvider as keyof typeof AI_PROVIDERS]?.models || {};
   };
 
   const onSubmit = useCallback(async (data: FormData) => {
@@ -465,20 +430,22 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
     isSaving
   }), [handleSubmit, onSubmit, isSaving]);
 
-  // Eagerly fetch models when provider is Ollama or LM Studio
+  // Eagerly fetch models for the DISPLAYED provider (see displayedProvider
+  // above) when it's Ollama or LM Studio — must match what's actually
+  // rendered, not this instance's own possibly-stale selectedProvider.
   useEffect(() => {
-    if (selectedProvider === 'ollama' && !ollamaModels) {
+    if (displayedProvider === 'ollama' && !ollamaModels) {
       fetchOllamaModels().catch(() => {
         console.debug('Initial Ollama model fetch failed');
       });
     }
-    if (selectedProvider === 'lmstudio' && !lmstudioModels) {
+    if (displayedProvider === 'lmstudio' && !lmstudioModels) {
       fetchLMStudioModels().catch(() => {
         console.debug('Initial LM Studio model fetch failed');
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedProvider]); // Only selectedProvider - fetch functions are stable, models checked inline
+  }, [displayedProvider]); // Only displayedProvider - fetch functions are stable, models checked inline
 
   // Watch enabledTools for the count display
   const enabledTools = watch('enabledTools', []);
@@ -557,7 +524,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
               {/* Provider Selector */}
               <div>
                 <label className="text-sm font-medium mb-2 block">AI Provider</label>
-                <Select value={selectedProvider} onValueChange={handleProviderSelectChange}>
+                <Select value={displayedProvider} onValueChange={handleProviderSelectChange}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
@@ -580,13 +547,13 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
               {/* Model Selector */}
               <div>
                 <label className="text-sm font-medium mb-2 block">Model</label>
-                <Select value={selectedModel} onValueChange={handleModelSelectChange}>
+                <Select value={displayedModel} onValueChange={handleModelSelectChange}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
-                      <SelectLabel>{AI_PROVIDERS[selectedProvider as keyof typeof AI_PROVIDERS]?.name} Models</SelectLabel>
+                      <SelectLabel>{AI_PROVIDERS[displayedProvider as keyof typeof AI_PROVIDERS]?.name} Models</SelectLabel>
                       {Object.entries(getCurrentProviderModels()).map(([key, name]) => (
                         <SelectItem key={key} value={key}>
                           {name}
