@@ -148,21 +148,14 @@ export function useWorkspaceServerSync(
   }, [enabled, sessionId, hydrateWorkspace]);
 
   // Force-flush on unmount (or session/enabled change) — a pending debounced
-  // save must not evaporate when the grid closes before it fires.
+  // save must not evaporate when the grid closes before it fires. Reuses
+  // `performSave` itself (same PUT, same editing-store bookkeeping, same
+  // response.ok handling) rather than duplicating the request inline.
   useEffect(() => {
     return () => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
       const pending = pendingRef.current;
-      if (!pending) return;
-      pendingRef.current = null;
-      useEditingStore.getState().startEditing(syncId, 'other', { componentName: `workspace-sync:${sessionId}` });
-      fetchWithAuth(workspaceUrl(sessionId), {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspace: pending }),
-      })
-        .catch(() => {})
-        .finally(() => useEditingStore.getState().endEditing(syncId));
+      if (pending) void performSave(pending);
     };
-  }, [enabled, sessionId, syncId]);
+  }, [enabled, sessionId, syncId, performSave]);
 }
