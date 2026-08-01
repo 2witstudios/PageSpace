@@ -151,7 +151,7 @@ describe('useConversations deleteConversation', () => {
     mockFetchWithAuth.mockReset();
   });
 
-  it('given the DELETE succeeds, resolves true and invalidates the SWR cache', async () => {
+  it('given the DELETE succeeds, resolves true and notifies the parent', async () => {
     mockFetchWithAuth.mockResolvedValue({ ok: true });
     const onConversationDelete = vi.fn();
     const { result } = renderHook(() =>
