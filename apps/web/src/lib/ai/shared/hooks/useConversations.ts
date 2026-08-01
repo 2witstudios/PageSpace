@@ -55,8 +55,8 @@ interface UseConversationsResult {
   loadConversation: (conversationId: string) => Promise<void>;
   /** Create a new conversation */
   createConversation: () => Promise<string | null>;
-  /** Delete a conversation */
-  deleteConversation: (conversationId: string) => Promise<void>;
+  /** Delete a conversation. Resolves to whether it actually succeeded — a refused delete (e.g. a 409) or a network failure both resolve `false`, never throw. */
+  deleteConversation: (conversationId: string) => Promise<boolean>;
   /** Refresh conversations list */
   refreshConversations: () => void;
   /**
@@ -258,9 +258,16 @@ export function useConversations({
     return conversationId;
   }, [isAgentMode, agentId, swrKey, onConversationCreate]);
 
-  // Delete a conversation
+  // Delete a conversation. Returns whether it actually succeeded — a caller
+  // that reacts to the deletion (e.g. resetting UI bound to this
+  // conversationId) must not do so on a REFUSED delete (a 409, e.g. "this
+  // is the session's only open listing") or a network failure, both of
+  // which leave the conversation exactly as it was server-side (review
+  // finding — chatgpt-codex-connector and coderabbitai on PR #2299: the
+  // previous version resolved regardless of outcome, with no way for a
+  // caller to tell success from failure).
   const deleteConversation = useCallback(
-    async (conversationId: string) => {
+    async (conversationId: string): Promise<boolean> => {
       try {
         const deleteUrl = isAgentMode
           ? `/api/ai/page-agents/${agentId}/conversations/${conversationId}`
@@ -268,20 +275,35 @@ export function useConversations({
 
         const response = await fetchWithAuth(deleteUrl, { method: 'DELETE' });
 
-        if (response.ok) {
-          // Invalidate SWR cache
-          if (swrKey) {
-            mutate(swrKey);
+        if (!response.ok) {
+          // Surface WHY — a 409 is a real, intentional refusal (not a
+          // transient failure), and silently doing nothing left it
+          // invisible to the user.
+          let message = 'Failed to delete conversation';
+          try {
+            const body = await response.json();
+            if (typeof body?.error === 'string') message = body.error;
+          } catch {
+            // Non-JSON error body — fall back to the generic message.
           }
-
-          // If deleting current conversation, notify parent
-          if (conversationId === currentConversationId) {
-            onConversationDelete?.(conversationId);
-          }
+          toast.error(message);
+          return false;
         }
+
+        // Invalidate SWR cache
+        if (swrKey) {
+          mutate(swrKey);
+        }
+
+        // If deleting current conversation, notify parent
+        if (conversationId === currentConversationId) {
+          onConversationDelete?.(conversationId);
+        }
+        return true;
       } catch (error) {
         console.error('Failed to delete conversation:', error);
         toast.error('Failed to delete conversation');
+        return false;
       }
     },
     [isAgentMode, agentId, swrKey, currentConversationId, onConversationDelete]

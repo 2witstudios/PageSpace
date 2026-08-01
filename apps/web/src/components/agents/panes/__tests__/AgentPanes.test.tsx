@@ -1103,6 +1103,76 @@ describe('AgentPanes', () => {
       });
     });
 
+    // review finding — chatgpt-codex-connector and coderabbitai on PR #2299:
+    // deleteConversation used to resolve regardless of outcome, so a REFUSED
+    // delete (the never-empty guard's 409) still reset every pane showing
+    // it, discarding a working binding for a conversation the server never
+    // actually deleted.
+    it('does NOT reset panes when the History delete is refused (a 409)', async () => {
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url === '/api/ai/page-agents/agent-1/conversations') {
+          return conversationsFixture([{ id: 'conv-doomed', title: 'Doomed chat', sessionId: null }]);
+        }
+        if (url === '/api/ai/page-agents/agent-1/conversations/conv-doomed') {
+          return { ok: false, json: async () => ({ error: 'last conversation', reason: 'last_conversation' }) };
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
+      const secondPaneId = useAgentWorkspaceStore
+        .getState()
+        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+        .find((p) => p.id !== firstPaneId)!.id;
+      act(() =>
+        useAgentWorkspaceStore.getState().assignPane('ses-1', secondPaneId, {
+          kind: 'chat',
+          name: 'Doomed chat',
+          targetId: 'conv-doomed',
+          agentPageId: 'agent-1',
+        }),
+      );
+
+      const user = userEvent.setup();
+      const historyTabs = await screen.findAllByRole('tab', { name: /history/i });
+      await user.click(historyTabs[0]);
+      await user.click(await screen.findByRole('button', { name: 'delete-conv-doomed' }));
+
+      await waitFor(() =>
+        expect(mockFetchWithAuth).toHaveBeenCalledWith(
+          '/api/ai/page-agents/agent-1/conversations/conv-doomed',
+          expect.objectContaining({ method: 'DELETE' }),
+        ),
+      );
+      const secondPaneAfter = useAgentWorkspaceStore
+        .getState()
+        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+        .find((p) => p.id === secondPaneId);
+      expect(secondPaneAfter?.scope?.targetId).toBe('conv-doomed');
+    });
+
+    // review finding — coderabbitai on PR #2299: `showSettings` hides the tab
+    // once agentPageId becomes null, but a stuck `activeTab: 'settings'` fell
+    // through to a spinner branch that could never resolve for the Assistant.
+    it('resets away from the Settings tab when the pane switches to a different agent', async () => {
+      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+      mockPost.mockResolvedValue({});
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('tab', { name: /researcher settings/i }));
+      await screen.findByTestId('pane-settings-tab');
+
+      await user.click(await findEnabledSelector(/Researcher/));
+      await user.click(await screen.findByRole('menuitem', { name: /Writer/ }));
+
+      await waitFor(() => expect(screen.getAllByTestId('pane-chat').length).toBeGreaterThan(0));
+      expect(screen.queryByTestId('pane-settings-tab')).not.toBeInTheDocument();
+    });
+
     // review finding — chatgpt-codex-connector on PR #2299: PageAgentSettingsTab
     // registers submitForm before its own config-loaded check returns, and its
     // form defaults contain an empty prompt/tool list — clicking Save before

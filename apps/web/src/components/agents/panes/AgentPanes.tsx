@@ -1001,6 +1001,18 @@ function ChatPane({
 
   const [activeTab, setActiveTab] = useState<PaneChatTab>('chat');
 
+  // A pane's agent can change under it (the AISelector switch) without
+  // remounting this component. Settings belongs to the OLD agent — showing
+  // it (or leaving `activeTab: 'settings'` set) after switching to a
+  // DIFFERENT agent presents that agent's config as if requested, and
+  // switching to the Assistant (no Settings tab at all) leaves the body on
+  // its final "not agentPageId or no agent" branch, a spinner that never
+  // resolves since neither condition can ever become true again for this
+  // scope (review finding — coderabbitai on PR #2299).
+  useEffect(() => {
+    setActiveTab('chat');
+  }, [scope.agentPageId]);
+
   const {
     conversations,
     isLoading: conversationsLoading,
@@ -1152,8 +1164,16 @@ function ChatPane({
             onSelectConversation={handleSelectHistoryConversation}
             onCreateNew={handleCreateNewFromHistory}
             onDeleteConversation={(id) => {
-              void deleteConversation(id);
-              onHistoryDeleteConversation(id);
+              // Only rebind panes once the delete actually succeeded — a
+              // refused delete (the never-empty guard's 409, e.g.) or a
+              // network failure both leave the conversation exactly as it
+              // was server-side, and resetting live panes for it anyway
+              // would discard a working pane binding for nothing (review
+              // finding — chatgpt-codex-connector and coderabbitai on PR
+              // #2299).
+              void deleteConversation(id).then((succeeded) => {
+                if (succeeded) onHistoryDeleteConversation(id);
+              });
             }}
             onToggleShare={toggleConversationShare}
             isLoading={conversationsLoading}

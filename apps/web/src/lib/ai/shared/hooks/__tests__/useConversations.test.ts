@@ -141,3 +141,72 @@ describe('useConversations createConversation', () => {
     });
   });
 });
+
+// A caller reacting to the deletion (resetting UI bound to this
+// conversationId) needs to tell success from failure — the previous version
+// resolved regardless of outcome, with no signal either way (review finding
+// — chatgpt-codex-connector and coderabbitai on PR #2299).
+describe('useConversations deleteConversation', () => {
+  beforeEach(() => {
+    mockFetchWithAuth.mockReset();
+  });
+
+  it('given the DELETE succeeds, resolves true and invalidates the SWR cache', async () => {
+    mockFetchWithAuth.mockResolvedValue({ ok: true });
+    const onConversationDelete = vi.fn();
+    const { result } = renderHook(() =>
+      useConversations({
+        agentId: 'agent-1',
+        currentConversationId: 'conv-1',
+        enabled: false,
+        onConversationDelete,
+      })
+    );
+
+    const succeeded = await act(() => result.current.deleteConversation('conv-1'));
+
+    expect(succeeded).toBe(true);
+    expect(onConversationDelete).toHaveBeenCalledWith('conv-1');
+  });
+
+  it('given the DELETE is refused (e.g. a 409), resolves false, surfaces the server-provided reason, and does NOT notify the parent', async () => {
+    mockFetchWithAuth.mockResolvedValue({
+      ok: false,
+      json: async () => ({ error: 'This is the only open conversation in its session.' }),
+    });
+    const onConversationDelete = vi.fn();
+    const { result } = renderHook(() =>
+      useConversations({
+        agentId: 'agent-1',
+        currentConversationId: 'conv-1',
+        enabled: false,
+        onConversationDelete,
+      })
+    );
+
+    const { toast } = await import('sonner');
+    const succeeded = await act(() => result.current.deleteConversation('conv-1'));
+
+    expect(succeeded).toBe(false);
+    expect(onConversationDelete).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith('This is the only open conversation in its session.');
+  });
+
+  it('given the DELETE request throws (network failure), resolves false and does NOT notify the parent', async () => {
+    mockFetchWithAuth.mockRejectedValue(new Error('network down'));
+    const onConversationDelete = vi.fn();
+    const { result } = renderHook(() =>
+      useConversations({
+        agentId: 'agent-1',
+        currentConversationId: 'conv-1',
+        enabled: false,
+        onConversationDelete,
+      })
+    );
+
+    const succeeded = await act(() => result.current.deleteConversation('conv-1'));
+
+    expect(succeeded).toBe(false);
+    expect(onConversationDelete).not.toHaveBeenCalled();
+  });
+});
