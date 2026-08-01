@@ -413,18 +413,39 @@ export default function AgentPanes({
     ? sessionConversations
     : null;
 
+  // Read fresh inside the seeding effect below without widening its
+  // deliberately narrow dep list (that would re-seed on every 20s poll) —
+  // same idiom as this file's other `useAgentWorkspaceStore.getState()` reads.
+  const sessionConversationsRef = useRef(sessionConversations);
+  sessionConversationsRef.current = sessionConversations;
+
   // Selection IS an instruction to show the conversation (review M1): on
   // mount this seeds the first pane; on a later selection within the same
   // session it focuses the pane already showing the thread, or opens it in a
   // non-terminal pane — the store owns that policy (`openConversation`).
   useEffect(() => {
-    openConversation(sessionId, {
-      kind: 'chat',
-      name: initialConversation.name,
-      targetId: initialConversation.conversationId,
-      agentPageId: initialConversation.agentPageId,
-    });
+    openConversation(
+      sessionId,
+      {
+        kind: 'chat',
+        name: initialConversation.name,
+        targetId: initialConversation.conversationId,
+        agentPageId: initialConversation.agentPageId,
+      },
+      {
+        // Gated on the cache actually knowing this session — before that,
+        // `sessionConversations` reads as `[]`, and an empty live set would
+        // make every existing chat pane non-replaceable, forcing an unwanted
+        // split on first load instead of today's correct reuse (issue #2295
+        // fix must not regress the common case it wasn't built for).
+        liveConversationIds: sessionKnownToConversationsCache
+          ? new Set(sessionConversationsRef.current.map((c) => c.conversationId))
+          : undefined,
+      },
+    );
     // name/agentPageId describe the same conversation — the id is the identity.
+    // sessionConversations/sessionKnownToConversationsCache deliberately excluded —
+    // read via ref above so a 20s poll refresh doesn't re-run the seed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, initialConversation.conversationId, openConversation]);
 

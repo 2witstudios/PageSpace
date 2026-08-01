@@ -1324,6 +1324,39 @@ describe('AgentPanes', () => {
       expect(firstPaneAfter?.scope?.targetId).toBe('conv-1');
     });
 
+    // issue #2295: a pane the user closed out of this session
+    // (`closedInSessionAt`) must never be silently overwritten by an
+    // unrelated LATER conversation selection — e.g. clicking a different
+    // row in the past-conversations list, or the sidebar's session
+    // re-entry, both of which funnel into the seeding effect that fires
+    // `openConversation` on an `initialConversation` prop change. `conv-1`
+    // is deliberately absent from the live listing below to simulate it.
+    it('does not evict a pane showing a conversation absent from the live listing when a different conversation is selected', async () => {
+      mockSessionConversations([{ conversationId: 'conv-2', agentPageId: 'agent-1' }]);
+      const { rerender } = renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
+      // Wait for the session's own entry to have actually appeared in the
+      // switch-decision cache — the same readiness signal `findEnabledSelector`
+      // above waits on — so the seeding effect's `liveConversationIds` is
+      // populated from real data rather than racing an unresolved fetch.
+      await waitFor(() => expect(screen.getByRole('button', { name: /Researcher/ })).not.toBeDisabled());
+
+      rerender(
+        <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+          <AgentPanes
+            sessionId="ses-1"
+            driveId="drive-1"
+            initialConversation={{ conversationId: 'conv-2', agentPageId: 'agent-1', name: 'Conversation 2' }}
+          />
+        </SWRConfig>,
+      );
+
+      await waitFor(() => expect(screen.getAllByTestId('pane-chat')).toHaveLength(2));
+      const shown = screen.getAllByTestId('pane-chat').map((el) => el.textContent);
+      expect(shown).toContain('conv-1');
+      expect(shown).toContain('conv-2');
+    });
+
     // review finding — chatgpt-codex-connector on PR #2299: switching to Chat
     // immediately (fire-and-forget) after starting an async reopen showed the
     // OLD pane content as if a failed pick had succeeded.
