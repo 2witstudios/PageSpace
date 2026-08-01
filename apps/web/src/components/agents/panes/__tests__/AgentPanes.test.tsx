@@ -78,14 +78,17 @@ vi.mock('@/components/ai/page-agents', () => ({
   PageAgentHistoryTab: ({
     conversations,
     onSelectConversation,
+    onCreateNew,
     onDeleteConversation,
   }: {
     conversations: Array<{ id: string; title: string | null; sessionId: string | null }>;
     onSelectConversation: (id: string) => void;
+    onCreateNew: () => void;
     onDeleteConversation: (id: string) => void;
   }) => (
     <div data-testid="pane-history-tab">
       {conversations.length} conversations
+      <button onClick={() => onCreateNew()}>create-new-from-history</button>
       {conversations.map((c) => (
         <div key={c.id}>
           <button onClick={() => onSelectConversation(c.id)}>select-{c.id}</button>
@@ -646,6 +649,38 @@ describe('AgentPanes', () => {
         expect(newPane.scope).toBeNull();
       });
       expect(await screen.findAllByTestId('pane-picker')).toHaveLength(1);
+    });
+
+    // review finding — chatgpt-codex-connector on PR #2299 (round 13): unlike
+    // the picker-flow test above (nothing to lose), "New Conversation" picked
+    // from a pane's OWN History tab starts from a pane already showing a
+    // real, working conversation. The unconditional reset-to-picker on
+    // failure lost that conversation to a blank picker for no reason — a
+    // transient failure (session full, network drop) should not cost the
+    // user a working conversation they never asked to leave.
+    it('given "New Conversation" from History fails, restores the prior working conversation instead of resetting to the picker', async () => {
+      mockPost.mockRejectedValue(new Error('session full'));
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
+      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('tab', { name: /history/i }));
+      expect(screen.getByTestId('pane-history-tab')).toBeInTheDocument();
+      await user.click(await screen.findByRole('button', { name: 'create-new-from-history' }));
+
+      await waitFor(() => {
+        const pane = useAgentWorkspaceStore
+          .getState()
+          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+          .find((p) => p.id === paneId);
+        // Restored to the ORIGINAL working conversation, not reset to a
+        // blank picker and not left on the failed mint's loading sentinel.
+        expect(pane?.scope?.targetId).toBe('conv-1');
+      });
+      // Stayed on History — the failed create never landed, so the tab
+      // switch to Chat that would follow a successful one never fires.
+      expect(screen.getByTestId('pane-history-tab')).toBeInTheDocument();
     });
 
     it('a pane closed mid-mint does not resurrect once the POST resolves, and the orphaned row is cleaned up', async () => {

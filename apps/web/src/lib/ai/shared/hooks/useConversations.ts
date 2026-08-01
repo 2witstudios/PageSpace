@@ -23,6 +23,31 @@ import type { OptimisticConversationEntry } from '@/stores/useOptimisticConversa
 // value when no optimistic entries exist (prevents unnecessary re-renders).
 const EMPTY_OPTIMISTIC: OptimisticConversationEntry[] = [];
 
+/** The shape `/api/ai/global?paginated=true` actually returns per conversation
+ * (globalConversationRepository.ConversationSummary, serialized over JSON). */
+interface GlobalConversationSummary {
+  id: string;
+  title: string | null;
+  lastMessageAt: string | null;
+  createdAt: string;
+  sessionId: string | null;
+}
+
+/** Bridges GlobalConversationSummary to RawConversationData — see the cacheKey
+ * comment below for why this exists. */
+function adaptGlobalConversationSummary(raw: GlobalConversationSummary): RawConversationData {
+  return {
+    id: raw.id,
+    title: raw.title ?? 'New conversation',
+    preview: '',
+    createdAt: raw.createdAt,
+    updatedAt: raw.lastMessageAt ?? raw.createdAt,
+    messageCount: 0,
+    sessionId: raw.sessionId,
+    lastMessage: { role: '', timestamp: raw.lastMessageAt ?? raw.createdAt },
+  };
+}
+
 interface UseConversationsOptions {
   /**
    * For agent mode: the agent/page ID
@@ -97,11 +122,17 @@ export function useConversations({
   // store can be addressed across hook-mount lifetimes (e.g. when a
   // chat:conversation_added broadcast arrives while the history tab is
   // closed).
+  //
+  // Global mode uses the PAGINATED endpoint (`?paginated=true`), not the
+  // legacy bare-array one: the legacy shape has no `.conversations` wrapper
+  // at all, so this hook's `data?.conversations` read silently resolved to
+  // nothing and the Assistant's History tab was always empty (review
+  // finding — chatgpt-codex-connector on PR #2299, round 13).
   const cacheKey = useMemo(
     () =>
       isAgentMode
         ? `/api/ai/page-agents/${agentId}/conversations`
-        : `/api/ai/global`,
+        : `/api/ai/global?paginated=true`,
     [isAgentMode, agentId],
   );
   // SWR key for conversations list — null disables the SWR fetch.
@@ -113,7 +144,16 @@ export function useConversations({
     async (url) => {
       const response = await fetchWithAuth(url);
       if (!response.ok) throw new Error('Failed to load conversations');
-      return response.json();
+      const json = await response.json();
+      if (isAgentMode) return json; // already { conversations: RawConversationData[] }
+      // The paginated global endpoint's ConversationSummary is narrower than
+      // RawConversationData — no preview/messageCount/lastMessage (those
+      // require a join this repository doesn't do yet). Adapted here with
+      // safe placeholders so the list renders at all rather than staying
+      // empty; a richer summary query is a scoped follow-up, not required
+      // to fix the reported bug (the list being empty).
+      const summaries = (json.conversations ?? []) as GlobalConversationSummary[];
+      return { conversations: summaries.map(adaptGlobalConversationSummary) };
     },
     {
       // Only pause revalidation after initial load - never block the first fetch

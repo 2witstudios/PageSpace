@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { createElement } from 'react';
+import { renderHook, act, waitFor } from '@testing-library/react';
+import { SWRConfig } from 'swr';
 import { useConversations } from '../useConversations';
 
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
@@ -208,5 +210,60 @@ describe('useConversations deleteConversation', () => {
 
     expect(succeeded).toBe(false);
     expect(onConversationDelete).not.toHaveBeenCalled();
+  });
+});
+
+// round 13 review finding — chatgpt-codex-connector on PR #2299: the
+// Assistant pane's History tab (agentId null) fetched the LEGACY, bare-array
+// `/api/ai/global` endpoint and read `data.conversations` from it — which is
+// undefined on a bare array, so the list was always empty regardless of what
+// conversations actually existed.
+describe('useConversations global-mode conversation list', () => {
+  const wrapper = ({ children }: { children: React.ReactNode }) =>
+    createElement(SWRConfig, { value: { provider: () => new Map() } }, children);
+
+  beforeEach(() => {
+    mockFetchWithAuth.mockReset();
+  });
+
+  it('given agentId is null, fetches the PAGINATED endpoint (not the legacy bare array) and returns a non-empty list', async () => {
+    mockFetchWithAuth.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        conversations: [
+          { id: 'conv-a', title: 'Chat A', lastMessageAt: '2026-01-02T00:00:00.000Z', createdAt: '2026-01-01T00:00:00.000Z', sessionId: null },
+        ],
+        pagination: { hasMore: false, nextCursor: null, prevCursor: null, limit: 20 },
+      }),
+    });
+
+    const { result } = renderHook(
+      () => useConversations({ agentId: null, currentConversationId: null, enabled: true }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.conversations).toHaveLength(1));
+    expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/ai/global?paginated=true');
+    expect(result.current.conversations[0]).toMatchObject({ id: 'conv-a', title: 'Chat A' });
+  });
+
+  it('given a global conversation with a null title, falls back to a display placeholder rather than crashing', async () => {
+    mockFetchWithAuth.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        conversations: [
+          { id: 'conv-b', title: null, lastMessageAt: null, createdAt: '2026-01-01T00:00:00.000Z', sessionId: null },
+        ],
+        pagination: { hasMore: false, nextCursor: null, prevCursor: null, limit: 20 },
+      }),
+    });
+
+    const { result } = renderHook(
+      () => useConversations({ agentId: null, currentConversationId: null, enabled: true }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.conversations).toHaveLength(1));
+    expect(result.current.conversations[0].title).toBeTruthy();
   });
 });

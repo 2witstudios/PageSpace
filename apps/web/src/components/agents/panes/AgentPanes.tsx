@@ -626,7 +626,7 @@ export default function AgentPanes({
   );
 
   const handlePickAgent = useCallback(
-    async (paneId: string, agentPageId: string | null) => {
+    async (paneId: string, agentPageId: string | null): Promise<boolean> => {
       // Also supersedes any pending `handlePickHistoryConversation` call for
       // this pane — a slow reopen resolving after the user has since minted
       // a different agent into this same pane must not overwrite it (review
@@ -636,6 +636,19 @@ export default function AgentPanes({
       // OTHER call path.
       beginPaneAssign(paneId);
       const conversationId = createId();
+      // Captured BEFORE the loading-state overwrite below — a failed mint
+      // then restores THIS instead of always falling back to the picker.
+      // For the normal "pick from an empty picker" call site this is
+      // already null (restoring null IS today's reset-to-picker behavior),
+      // but "New Conversation" picked from a pane's own History tab starts
+      // from a pane already showing a real, working conversation — losing
+      // that to a blank picker on a transient failure (session full,
+      // network drop) is a real regression the user did not ask for
+      // (review finding — chatgpt-codex-connector on PR #2299, round 13).
+      const liveWorkspaceAtStart = useAgentWorkspaceStore.getState().workspaces[sessionId];
+      const priorScope = liveWorkspaceAtStart
+        ? (panesOf(liveWorkspaceAtStart).find((p) => p.id === paneId)?.scope ?? null)
+        : null;
       // Bind first, render after: the pane goes to `loading` (kind set, target
       // null) while the mint is in flight — never a speculative surface.
       assignPane(sessionId, paneId, { kind: 'chat', name: 'New conversation', targetId: null, agentPageId });
@@ -659,7 +672,7 @@ export default function AgentPanes({
           // rather than leaving an orphaned, unbound thread (or clobbering
           // the rebind with this now-abandoned mint's result).
           void cleanupOrphanedConversation(conversationId);
-          return;
+          return false;
         }
         assignPane(sessionId, paneId, { kind: 'chat', name: 'New conversation', targetId: conversationId, agentPageId });
         // Local optimistic update for THIS component's own switch/close
@@ -678,6 +691,7 @@ export default function AgentPanes({
         // orphaned conversation that holds a cap slot forever (caught in
         // review).
         void mutate(isAgentSessionsKey);
+        return true;
       } catch (error) {
         console.error('Failed to start a conversation in this pane:', error);
         toast.error('Could not start a conversation', {
@@ -688,8 +702,13 @@ export default function AgentPanes({
         // something else while this request was in flight (caught in
         // review — the earlier fix only guarded the success path).
         if (paneStillLoading(paneId, { kind: 'chat', agentPageId })) {
-          resetPane(sessionId, paneId);
+          if (priorScope) {
+            assignPane(sessionId, paneId, priorScope);
+          } else {
+            resetPane(sessionId, paneId);
+          }
         }
+        return false;
       }
     },
     [assignPane, resetPane, sessionId, paneStillLoading, cleanupOrphanedConversation, recordMintedConversation, beginPaneAssign],
@@ -1019,7 +1038,7 @@ export default function AgentPanes({
           onSplitRight={() => splitRight(sessionId, pane.id)}
           onSplitDown={() => splitDown(sessionId, pane.id)}
           onClose={() => handleClosePane(pane.id)}
-          onCreateNewFromHistory={() => void handlePickAgent(pane.id, pane.scope!.agentPageId)}
+          onCreateNewFromHistory={() => handlePickAgent(pane.id, pane.scope!.agentPageId)}
           onPickHistoryConversation={(conversation) =>
             handlePickHistoryConversation(pane.id, pane.scope!.agentPageId, conversation)
           }
@@ -1169,7 +1188,8 @@ function ChatPane({
   onSplitRight: () => void;
   onSplitDown: () => void;
   onClose: () => void;
-  onCreateNewFromHistory: () => void;
+  /** Resolves to whether the mint actually landed — false on a failed create. */
+  onCreateNewFromHistory: () => Promise<boolean>;
   /** Resolves to whether the pick actually landed — false on a failed reopen. */
   onPickHistoryConversation: (conversation: { id: string; title: string | null; sessionId: string | null }) => Promise<boolean>;
   /** A History delete's canonical-row deactivation reaches every pane showing that id, not just this one — the container resets each affected pane. */
@@ -1263,9 +1283,16 @@ function ChatPane({
     [conversations, onPickHistoryConversation],
   );
 
-  const handleCreateNewFromHistory = useCallback(() => {
-    onCreateNewFromHistory();
-    setActiveTab('chat');
+  const handleCreateNewFromHistory = useCallback(async () => {
+    // Only follow to Chat once the mint actually landed — same discipline
+    // as handleSelectHistoryConversation above. A failed create (session
+    // full, permission changed, network drop) now restores this pane's
+    // PRIOR scope internally (handlePickAgent), so staying on History here
+    // shows that restored, still-working conversation underneath rather
+    // than switching to a blank/lost pane (review finding — chatgpt-codex-
+    // connector on PR #2299, round 13).
+    const landed = await onCreateNewFromHistory();
+    if (landed) setActiveTab('chat');
   }, [onCreateNewFromHistory]);
 
   return (
