@@ -1153,6 +1153,102 @@ describe('AgentPanes', () => {
       expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-slow');
     });
 
+    // review finding — chatgpt-codex-connector on PR #2299 (round 8): the
+    // "is anyone showing this?" rollback check above still misses the case
+    // where the newer reopen for the SAME conversation hasn't LANDED yet
+    // when the older one resolves — nothing shows it yet, but something is
+    // about to. The rollback must also check for a still-in-flight reopen.
+    it('does not close a conversation when an older reopen resolves first while a newer reopen for the same conversation is still pending', async () => {
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url === '/api/ai/page-agents/agent-1/conversations') {
+          return conversationsFixture([{ id: 'conv-race', title: 'Race chat', sessionId: 'ses-1' }]);
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      let resolveOlder!: (value: unknown) => void;
+      let resolveNewer!: (value: unknown) => void;
+      mockPost
+        .mockReturnValueOnce(new Promise((resolve) => (resolveOlder = resolve)))
+        .mockReturnValueOnce(new Promise((resolve) => (resolveNewer = resolve)));
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('tab', { name: /history/i }));
+      // Both picks fire before either reopen resolves — neither has landed.
+      await user.click(await screen.findByRole('button', { name: 'select-conv-race' }));
+      await user.click(await screen.findByRole('button', { name: 'select-conv-race' }));
+      expect(screen.getByTestId('pane-history-tab')).toBeInTheDocument();
+
+      // The OLDER reopen resolves first. No pane shows conv-race yet, but
+      // the newer request is still in flight — must not close it.
+      resolveOlder({});
+      await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(2));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-race');
+
+      // The newer reopen resolves too — legitimately lands it.
+      resolveNewer({});
+      await waitFor(() => {
+        const pane = useAgentWorkspaceStore
+          .getState()
+          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+          .find((p) => p.id === paneId);
+        expect(pane?.scope?.targetId).toBe('conv-race');
+      });
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-race');
+    });
+
+    // review finding — chatgpt-codex-connector on PR #2299 (round 8): a
+    // reopen can commit server-side and then have its OWN response delayed
+    // long enough for the SAME conversation to be deleted from History
+    // before the completion assigns it — landing a pane on a transcript
+    // that already 404s on send.
+    it('does not assign a pane to a conversation deleted from History while its reopen was still in flight', async () => {
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url === '/api/ai/page-agents/agent-1/conversations') {
+          return conversationsFixture([{ id: 'conv-doomed-live', title: 'Doomed live chat', sessionId: 'ses-1' }]);
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      let resolveReopen!: (value: unknown) => void;
+      mockPost.mockReturnValue(new Promise((resolve) => (resolveReopen = resolve)));
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('tab', { name: /history/i }));
+      // Reopen starts and commits server-side but its response is delayed.
+      await user.click(await screen.findByRole('button', { name: 'select-conv-doomed-live' }));
+      expect(screen.getByTestId('pane-history-tab')).toBeInTheDocument();
+
+      // The SAME conversation is deleted from History before the reopen
+      // above completes.
+      await user.click(await screen.findByRole('button', { name: 'delete-conv-doomed-live' }));
+      await waitFor(() =>
+        expect(mockFetchWithAuth).toHaveBeenCalledWith(
+          '/api/ai/page-agents/agent-1/conversations/conv-doomed-live',
+          { method: 'DELETE' },
+        ),
+      );
+
+      // NOW the delayed reopen resolves — must NOT assign the pane to the
+      // just-deleted conversation.
+      resolveReopen({});
+      await act(async () => {
+        await Promise.resolve();
+      });
+      const pane = useAgentWorkspaceStore
+        .getState()
+        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+        .find((p) => p.id === paneId);
+      expect(pane?.scope?.targetId).not.toBe('conv-doomed-live');
+    });
+
     // review finding — chatgpt-codex-connector on PR #2299: History-delete
     // deactivates the CANONICAL row, not just the deleting pane's own
     // listing — every pane showing that id (in this grid), whichever pane's

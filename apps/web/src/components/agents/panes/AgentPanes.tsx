@@ -163,6 +163,26 @@ export default function AgentPanes({
     return () => paneAssignTokens.current.get(paneId) === token;
   }, []);
 
+  // Two more races the pane-token above can't catch on its own, since it's
+  // scoped per PANE while these are scoped per CONVERSATION (review finding
+  // — chatgpt-codex-connector on PR #2299, round 8):
+  //
+  // 1. The SAME conversation picked twice (same pane or two panes) can have
+  //    the OLDER reopen resolve first while the NEWER one is still in
+  //    flight — at that instant no pane shows it yet, so the older (stale)
+  //    request's "is anyone showing this?" check reads false-orphaned and
+  //    closes the conversation the newer request is about to legitimately
+  //    land. Tracked as an in-flight count per conversationId; the rollback
+  //    below only fires once nothing else is still reopening the same id.
+  const pendingReopenCounts = useRef(new Map<string, number>());
+  // 2. A reopen can commit server-side, then have its OWN response delayed
+  //    long enough for the SAME conversation to be deleted from History (a
+  //    different pane, or the same one) before the reopen's completion
+  //    assigns it — landing a pane on a transcript that already 404s on
+  //    send. `handleHistoryDeleteConversation` marks the id here; the
+  //    reopen completion checks-and-consumes it right before assigning.
+  const historyDeletedDuringReopen = useRef(new Set<string>());
+
   // The picker's agent list. A drive session offers only that drive's agents;
   // a global-assistant session (driveId null) has no home drive to filter by,
   // so it offers every agent the caller can access, across all their drives —
@@ -674,12 +694,23 @@ export default function AgentPanes({
     ): Promise<boolean> => {
       const isCurrent = beginPaneAssign(paneId);
       if (conversation.sessionId === sessionId) {
+        pendingReopenCounts.current.set(conversation.id, (pendingReopenCounts.current.get(conversation.id) ?? 0) + 1);
+        // Exactly-once decrement regardless of which exit path below runs.
+        let reopenSettled = false;
+        const settleReopen = () => {
+          if (reopenSettled) return;
+          reopenSettled = true;
+          const next = (pendingReopenCounts.current.get(conversation.id) ?? 1) - 1;
+          if (next <= 0) pendingReopenCounts.current.delete(conversation.id);
+          else pendingReopenCounts.current.set(conversation.id, next);
+        };
         try {
           await post(
             `/api/agent-sessions/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversation.id)}/reopen`,
             {},
           );
         } catch (error) {
+          settleReopen();
           // A newer pick (or agent switch) on this pane already superseded
           // this one — its own outcome, success or failure, is no longer
           // this pane's concern, and surfacing an error toast for a request
@@ -691,6 +722,7 @@ export default function AgentPanes({
           });
           return false;
         }
+        settleReopen();
         if (!isCurrent()) {
           // The reopen SUCCEEDED server-side (closedInSessionAt cleared, a
           // cap slot consumed) after a newer pick or agent mint already
@@ -709,14 +741,30 @@ export default function AgentPanes({
           // reopened, currently-visible conversation back out from under
           // whichever pane is showing it. Read live state across every pane
           // in the grid (not just this one) before deciding (review finding
-          // — chatgpt-codex-connector on PR #2299).
+          // — chatgpt-codex-connector on PR #2299). That alone still misses
+          // the case where the NEWER request hasn't landed yet (still
+          // in-flight) when the older one resolves — nothing shows it YET,
+          // but something is about to. Check the in-flight count too (round
+          // 8 review finding): only clean up when no reopen for this same
+          // conversation is still pending anywhere.
           const liveWorkspace = useAgentWorkspaceStore.getState().workspaces[sessionId];
-          const stillOrphaned =
-            !liveWorkspace ||
-            !panesOf(liveWorkspace).some((p) => p.scope?.kind === 'chat' && p.scope.targetId === conversation.id);
-          if (stillOrphaned) {
+          const shownSomewhere =
+            !!liveWorkspace &&
+            panesOf(liveWorkspace).some((p) => p.scope?.kind === 'chat' && p.scope.targetId === conversation.id);
+          const anotherReopenPending = pendingReopenCounts.current.has(conversation.id);
+          if (!shownSomewhere && !anotherReopenPending) {
             void cleanupOrphanedConversation(conversation.id);
           }
+          return false;
+        }
+        if (historyDeletedDuringReopen.current.delete(conversation.id)) {
+          // This reopen's HTTP round trip was still in flight when the SAME
+          // conversation was deleted from History (possibly from a
+          // different pane) — the reopen may have already committed
+          // server-side before that delete landed, so assigning now would
+          // bind this pane to a transcript that already 404s on send.
+          // Treated like a superseded pick: no assignment, stay put (review
+          // finding — chatgpt-codex-connector on PR #2299, round 8).
           return false;
         }
         // Instant-freshness nudge, same as every other listing-changing
@@ -779,6 +827,13 @@ export default function AgentPanes({
    */
   const handleHistoryDeleteConversation = useCallback(
     (deletedConversationId: string) => {
+      // Marked unconditionally (not just when a pane is currently affected
+      // below): a History pick's reopen for this exact id can be mid-flight
+      // right now, having already committed server-side, with its
+      // completion still to come — that completion checks and consumes this
+      // mark before assigning (review finding — chatgpt-codex-connector on
+      // PR #2299, round 8).
+      historyDeletedDuringReopen.current.add(deletedConversationId);
       // Read fresh at call time, not the `workspace` this callback closed
       // over — this always runs after the DELETE's own async round trip,
       // during which the user could have already reassigned an affected
