@@ -59,6 +59,13 @@ async function searchPagesFetcher(url: string): Promise<PageSearchResult[]> {
   return Array.isArray(json) ? (json as PageSearchResult[]) : [];
 }
 
+/**
+ * The same exclusion `isPaneablePageType` applies, sent to `/api/mentions/search`
+ * as `excludePageTypes` so the endpoint drops these BEFORE its own 10-result
+ * cap, not after — see the `searchKey` comment in `PagesSection`.
+ */
+const PANE_UNSUPPORTED_TYPES_PARAM = `${PageType.FOLDER},${PageType.AI_CHAT}`;
+
 export interface PanePickerProps {
   agents: readonly PickableAgent[];
   /** This session's drive, to scope the Pages search — cross-drive when null (a global-assistant session). */
@@ -233,9 +240,15 @@ function PagesSection({
   const [query, setQuery] = useState('');
   const debouncedQuery = useDebounce(query, 200);
 
+  // Excluded SERVER-SIDE, not just client-side: the endpoint caps its
+  // response to 10 suggestions before this component ever sees them, so
+  // filtering only after the fetch can silently shrink (even empty) the
+  // visible list whenever the top 10 by relevance/recency happen to include
+  // FOLDER/AI_CHAT pages, hiding eligible pages ranked just below them.
+  const excludeParam = `&excludePageTypes=${PANE_UNSUPPORTED_TYPES_PARAM}`;
   const searchKey = driveId
-    ? `/api/mentions/search?q=${encodeURIComponent(debouncedQuery)}&driveId=${encodeURIComponent(driveId)}&types=page`
-    : `/api/mentions/search?q=${encodeURIComponent(debouncedQuery)}&crossDrive=true&types=page`;
+    ? `/api/mentions/search?q=${encodeURIComponent(debouncedQuery)}&driveId=${encodeURIComponent(driveId)}&types=page${excludeParam}`
+    : `/api/mentions/search?q=${encodeURIComponent(debouncedQuery)}&crossDrive=true&types=page${excludeParam}`;
   // `isValidating`, not `isLoading`: with `keepPreviousData: true`, `isLoading`
   // is false for every key after the first once ANY data has loaded (SWR
   // shows the previous results while revalidating) — retyping after the

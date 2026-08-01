@@ -143,8 +143,30 @@ export async function GET(request: Request) {
   // Further restrict FILE results to image mime types — for image pickers
   // (OG image, favicon) that only want to offer uploaded pictures.
   const imageOnly = searchParams.get('imageOnly') === 'true';
+  // The inverse of pageType: drop specific types rather than narrow to one —
+  // for callers whose picker can't render several types at all (e.g. the
+  // agent-pane "Pages" search, which excludes FOLDER/AI_CHAT). Applied to
+  // EACH ROW before `suggestions` is built, i.e. before the final
+  // `.slice(0, 10)` below — excluding after that slice would silently shrink
+  // the visible list any time the top 10 by relevance/recency happened to
+  // include excluded types, even when plenty of eligible pages exist further
+  // down the ranking.
+  const rawExcludePageTypes = searchParams.get('excludePageTypes');
+  const excludePageTypesParam: Set<PageTypeEnum> = new Set(
+    (rawExcludePageTypes?.split(',') ?? []).filter((t): t is PageTypeEnum =>
+      (pageType.enumValues as readonly string[]).includes(t)
+    )
+  );
 
-  loggers.api.debug('[API] Search params', { query, driveId, crossDrive, types: typesParam, pageType: pageTypeParam, imageOnly });
+  loggers.api.debug('[API] Search params', {
+    query,
+    driveId,
+    crossDrive,
+    types: typesParam,
+    pageType: pageTypeParam,
+    imageOnly,
+    excludePageTypes: [...excludePageTypesParam],
+  });
   
   // For within-drive searches, driveId is required
   // For cross-drive searches, driveId is optional (searches all accessible drives)
@@ -332,6 +354,7 @@ export async function GET(request: Request) {
         // checker rather than widening that type to admit a value nothing
         // can produce.
         if (page.type === 'MACHINE') continue;
+        if (excludePageTypesParam.has(page.type)) continue;
 
         const accessLevel = await getUserAccessLevel(userId, page.id);
         if (!accessLevel) continue;

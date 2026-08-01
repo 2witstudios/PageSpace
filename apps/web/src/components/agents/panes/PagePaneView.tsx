@@ -99,18 +99,19 @@ export default function PagePaneView({ pageId }: PagePaneViewProps) {
 
   // Same calling-convention split as CenterPanel.tsx's PageContent: the
   // pageId-only views fetch their own data; everything else still takes the
-  // full page object. DocumentView's driveId is the PAGE's own drive
-  // (`page.driveId`) — never the session's, which is null for a
-  // global-assistant session and would otherwise disable (or misroute)
-  // `usePageContentSocket`'s realtime updates for a page that always
-  // belongs to a real drive regardless of which kind of session opened it.
+  // full page object. DocumentView/CodePageView's driveId is the PAGE's own
+  // drive (`page.driveId`) — never the session's (null for a global-assistant
+  // session) or the route's (a pane has none, or the wrong one for a
+  // cross-drive page) — either of which would disable or misroute
+  // `usePageContentSocket`'s realtime updates for a page that always belongs
+  // to a real drive regardless of which kind of session opened it.
   let pageComponent: ReactNode;
   if (componentName === 'DocumentView') {
     const DocumentView = componentMap.DocumentView;
     pageComponent = <DocumentView key={`document-${page.id}`} pageId={page.id} driveId={page.driveId} />;
   } else if (componentName === 'CodePageView') {
     const CodePageView = componentMap.CodePageView;
-    pageComponent = <CodePageView key={`code-${page.id}`} pageId={page.id} />;
+    pageComponent = <CodePageView key={`code-${page.id}`} pageId={page.id} driveId={page.driveId} />;
   } else if (componentName === 'CanvasPageView') {
     const CanvasPageView = componentMap.CanvasPageView;
     pageComponent = <CanvasPageView key={`canvas-${page.id}`} pageId={page.id} />;

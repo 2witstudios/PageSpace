@@ -22,7 +22,11 @@ vi.mock('@/components/layout/middle-content/page-views/document/DocumentView', (
   ),
 }));
 vi.mock('@/components/layout/middle-content/page-views/code/CodePageView', () => ({
-  default: ({ pageId }: { pageId: string }) => <div data-testid="code-view">{pageId}</div>,
+  default: ({ pageId, driveId }: { pageId: string; driveId?: string }) => (
+    <div data-testid="code-view">
+      {pageId}:{driveId ?? 'no-drive'}
+    </div>
+  ),
 }));
 vi.mock('@/components/layout/middle-content/page-views/canvas/CanvasPageView', () => ({
   default: ({ pageId }: { pageId: string }) => <div data-testid="canvas-view">{pageId}</div>,
@@ -74,10 +78,10 @@ describe('PagePaneView', () => {
     expect(await screen.findByTestId('document-view')).toHaveTextContent('page-1:drive-owning-the-page');
   });
 
-  it('renders CodePageView with pageId only', async () => {
-    mockFetchWithAuth.mockResolvedValue(jsonOk({ id: 'page-1', type: 'CODE', driveId: 'drive-1' }));
+  it('renders CodePageView with pageId + the PAGE\'s own driveId (not a session/route driveId)', async () => {
+    mockFetchWithAuth.mockResolvedValue(jsonOk({ id: 'page-1', type: 'CODE', driveId: 'drive-owning-the-page' }));
     renderPane();
-    expect(await screen.findByTestId('code-view')).toHaveTextContent('page-1');
+    expect(await screen.findByTestId('code-view')).toHaveTextContent('page-1:drive-owning-the-page');
   });
 
   it('renders CanvasPageView with pageId only', async () => {

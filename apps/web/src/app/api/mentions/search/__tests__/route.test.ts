@@ -383,6 +383,90 @@ describe('GET /api/mentions/search', () => {
     });
   });
 
+  // ==========================================================================
+  // excludePageTypes — the inverse of pageType, for callers whose picker can't
+  // render several types at all (the agent-pane "Pages" search, which excludes
+  // FOLDER/AI_CHAT). Applied per-row BEFORE the final slice(0, 10), so an
+  // excluded type occupying a top-10 slot doesn't shrink the visible list.
+  // ==========================================================================
+  describe('excludePageTypes filter', () => {
+    beforeEach(() => {
+      vi.mocked(getUserDriveAccess).mockResolvedValue(true);
+      vi.mocked(getUserAccessLevel).mockResolvedValue('VIEW' as never);
+      vi.mocked(getDriveRecipientUserIds).mockResolvedValue([mockUserId]);
+    });
+
+    it('drops excluded types even when they occupy the top of the DB result window', async () => {
+      // Simulates the exact bug: the most-recently-updated rows are folders,
+      // which would otherwise starve a client-side-only filter down to zero
+      // even though a real, paneable page exists right behind them.
+      const selectChain = {
+        from: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        // No `q=` in this request, so the route takes the "recent pages"
+        // branch (`.orderBy(...).limit(20)`), not `.limit(50)` directly.
+        orderBy: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockResolvedValue([
+          { id: 'folder-1', title: 'Projects', type: 'FOLDER', driveId: mockDriveId, mimeType: null },
+          { id: 'chat-1', title: 'Assistant', type: 'AI_CHAT', driveId: mockDriveId, mimeType: null },
+          { id: 'doc-1', title: 'Roadmap', type: 'DOCUMENT', driveId: mockDriveId, mimeType: null },
+        ]),
+      };
+      vi.mocked(db.select).mockReturnValue(selectChain as unknown as ReturnType<typeof db.select>);
+
+      const request = new Request(
+        `https://example.com/api/mentions/search?driveId=${mockDriveId}&types=page&excludePageTypes=FOLDER,AI_CHAT`
+      );
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body).toHaveLength(1);
+      expect(body[0]).toMatchObject({ id: 'doc-1', data: { pageType: 'DOCUMENT' } });
+    });
+
+    it('behaves like an unfiltered search when excludePageTypes is omitted', async () => {
+      const selectChain = {
+        from: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        orderBy: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockResolvedValue([
+          { id: 'folder-1', title: 'Projects', type: 'FOLDER', driveId: mockDriveId, mimeType: null },
+        ]),
+      };
+      vi.mocked(db.select).mockReturnValue(selectChain as unknown as ReturnType<typeof db.select>);
+
+      const request = new Request(`https://example.com/api/mentions/search?driveId=${mockDriveId}&types=page`);
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body).toHaveLength(1);
+      expect(body[0]).toMatchObject({ id: 'folder-1' });
+    });
+
+    it('ignores unrecognized values rather than erroring', async () => {
+      const selectChain = {
+        from: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        orderBy: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockResolvedValue([
+          { id: 'doc-1', title: 'Roadmap', type: 'DOCUMENT', driveId: mockDriveId, mimeType: null },
+        ]),
+      };
+      vi.mocked(db.select).mockReturnValue(selectChain as unknown as ReturnType<typeof db.select>);
+
+      const request = new Request(
+        `https://example.com/api/mentions/search?driveId=${mockDriveId}&types=page&excludePageTypes=NOT_A_REAL_TYPE`
+      );
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body).toHaveLength(1);
+    });
+  });
+
   describe('search term escaping', () => {
     it('escapes LIKE metacharacters in the search term before building the ilike condition (regression: over-matching fix)', async () => {
       vi.mocked(getUserDriveAccess).mockResolvedValue(true);
