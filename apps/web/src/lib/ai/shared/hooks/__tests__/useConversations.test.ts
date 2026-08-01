@@ -243,7 +243,7 @@ describe('useConversations global-mode conversation list', () => {
     );
 
     await waitFor(() => expect(result.current.conversations).toHaveLength(1));
-    expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/ai/global?paginated=true');
+    expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/ai/global?paginated=true&limit=100');
     expect(result.current.conversations[0]).toMatchObject({ id: 'conv-a', title: 'Chat A' });
   });
 

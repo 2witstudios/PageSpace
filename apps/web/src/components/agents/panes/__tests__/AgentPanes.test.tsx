@@ -683,6 +683,108 @@ describe('AgentPanes', () => {
       expect(screen.getByTestId('pane-history-tab')).toBeInTheDocument();
     });
 
+    // review finding — chatgpt-codex-connector on PR #2299 (round 14): two
+    // mints for the SAME pane install the identical, indistinguishable
+    // loading scope — without a per-call token, the OLDER one's failure
+    // could restore over the NEWER one's still-pending (and about to
+    // succeed) mint, which then finds itself "superseded" and discards its
+    // own just-created row.
+    it('given New Conversation is clicked twice before either settles, an older rejection does not clobber the still-pending newer mint', async () => {
+      let rejectOlder!: (reason: unknown) => void;
+      let resolveNewer!: (value: unknown) => void;
+      mockPost
+        .mockReturnValueOnce(new Promise((_resolve, reject) => (rejectOlder = reject)))
+        .mockReturnValueOnce(new Promise((resolve) => (resolveNewer = resolve)));
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
+      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('tab', { name: /history/i }));
+      await user.click(await screen.findByRole('button', { name: 'create-new-from-history' })); // older, pending
+      await user.click(await screen.findByRole('button', { name: 'create-new-from-history' })); // newer, pending
+
+      // The OLDER mint rejects first — must be a no-op (superseded), not a
+      // restore, since the newer mint is still pending and about to land.
+      rejectOlder(new Error('transient'));
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      // The NEWER mint then succeeds — must land normally.
+      resolveNewer({});
+      await waitFor(() => {
+        const pane = useAgentWorkspaceStore
+          .getState()
+          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+          .find((p) => p.id === paneId);
+        expect(pane?.scope?.targetId).toBe('new-id-2');
+      });
+      // Not cleaned up as if it had been superseded.
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/new-id-2');
+    });
+
+    // review finding — chatgpt-codex-connector on PR #2299 (round 14): the
+    // pane's captured priorScope can itself go stale — if the conversation
+    // it points at is deleted from History (elsewhere) while this mint is
+    // still pending, restoring it on failure would bind the pane to a
+    // transcript that already 404s on send.
+    it('given the prior conversation is deleted from History while New Conversation is pending and the mint then fails, resets to the picker instead of restoring the deleted conversation', async () => {
+      // Inline fixture — `conversationsFixture` below is scoped to a
+      // different (later) describe block.
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url === '/api/ai/page-agents/agent-1/conversations') {
+          return jsonOk({
+            conversations: [
+              {
+                id: 'conv-1',
+                title: 'Conversation',
+                preview: '',
+                createdAt: new Date('2026-01-01').toISOString(),
+                updatedAt: new Date('2026-01-01').toISOString(),
+                messageCount: 1,
+                sessionId: null,
+                lastMessage: { role: 'user', timestamp: new Date('2026-01-01').toISOString() },
+              },
+            ],
+          });
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      let rejectMint!: (reason: unknown) => void;
+      mockPost.mockReturnValue(new Promise((_resolve, reject) => (rejectMint = reject)));
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
+      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('tab', { name: /history/i }));
+      // Confirm the History list (including conv-1) has actually loaded
+      // before starting the mint below.
+      await screen.findByRole('button', { name: 'delete-conv-1' });
+      await user.click(await screen.findByRole('button', { name: 'create-new-from-history' })); // mint pending
+
+      // The prior conversation (conv-1) is deleted from History while the
+      // mint above is still pending — the pane's own scope is the generic
+      // loading sentinel at this point, so the delete's own affected-panes
+      // scan can't identify and reset this pane directly.
+      await user.click(await screen.findByRole('button', { name: 'delete-conv-1' }));
+      await waitFor(() =>
+        expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/ai/page-agents/agent-1/conversations/conv-1', { method: 'DELETE' }),
+      );
+
+      // NOW the mint fails — must NOT restore the pane to the just-deleted
+      // conv-1; falls back to the picker instead.
+      rejectMint(new Error('quota exceeded'));
+      await waitFor(() => {
+        const pane = useAgentWorkspaceStore
+          .getState()
+          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+          .find((p) => p.id === paneId);
+        expect(pane?.scope?.targetId).not.toBe('conv-1');
+      });
+    });
+
     it('a pane closed mid-mint does not resurrect once the POST resolves, and the orphaned row is cleaned up', async () => {
       let resolvePost!: (value: unknown) => void;
       mockPost.mockReturnValue(new Promise((resolve) => (resolvePost = resolve)));

@@ -127,12 +127,17 @@ export function useConversations({
   // legacy bare-array one: the legacy shape has no `.conversations` wrapper
   // at all, so this hook's `data?.conversations` read silently resolved to
   // nothing and the Assistant's History tab was always empty (review
-  // finding — chatgpt-codex-connector on PR #2299, round 13).
+  // finding — chatgpt-codex-connector on PR #2299, round 13). `limit=100`
+  // (the route's own max) rather than its 20 default — this hook has no
+  // load-more path (same pre-existing limitation the page-agent History
+  // listing already has at its own default page size), so widening the
+  // single page is the safe mitigation; true pagination is a separate,
+  // larger scoped change (review finding, round 14).
   const cacheKey = useMemo(
     () =>
       isAgentMode
         ? `/api/ai/page-agents/${agentId}/conversations`
-        : `/api/ai/global?paginated=true`,
+        : `/api/ai/global?paginated=true&limit=100`,
     [isAgentMode, agentId],
   );
   // SWR key for conversations list — null disables the SWR fetch.

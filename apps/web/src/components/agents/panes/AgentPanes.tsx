@@ -630,11 +630,16 @@ export default function AgentPanes({
       // Also supersedes any pending `handlePickHistoryConversation` call for
       // this pane — a slow reopen resolving after the user has since minted
       // a different agent into this same pane must not overwrite it (review
-      // finding — chatgpt-codex-connector on PR #2299). This mint has its
-      // OWN, separate staleness guard below (`paneStillLoading`); bumping
-      // the shared token here just extends that same protection to the
-      // OTHER call path.
-      beginPaneAssign(paneId);
+      // finding — chatgpt-codex-connector on PR #2299). Captured (not
+      // discarded) so THIS call can tell a genuinely stale completion of
+      // ITSELF apart from a same-shaped sibling: two mints started back to
+      // back before either settles install the SAME indistinguishable
+      // loading scope, so `paneStillLoading`'s shape check alone can't tell
+      // them apart — the older one's catch could restore over the newer
+      // one's still-pending success, which then finds itself "superseded"
+      // and cleans up its own just-created row (review finding — chatgpt-
+      // codex-connector on PR #2299, round 14).
+      const isCurrent = beginPaneAssign(paneId);
       const conversationId = createId();
       // Captured BEFORE the loading-state overwrite below — a failed mint
       // then restores THIS instead of always falling back to the picker.
@@ -649,6 +654,17 @@ export default function AgentPanes({
       const priorScope = liveWorkspaceAtStart
         ? (panesOf(liveWorkspaceAtStart).find((p) => p.id === paneId)?.scope ?? null)
         : null;
+      // The pane's LOADING scope (targetId null) doesn't identify the prior
+      // conversation, so a History-delete of it while this mint is pending
+      // can't reset this pane the normal way — capture its delete
+      // generation now and re-check before restoring, so a since-deleted
+      // prior conversation is never resurrected onto a pane whose sends
+      // would just 404 (review finding — chatgpt-codex-connector on PR
+      // #2299, round 14).
+      const priorScopeConversationId = priorScope?.kind === 'chat' ? priorScope.targetId : null;
+      const priorScopeDeleteGenerationAtStart = priorScopeConversationId
+        ? (historyDeleteGenerations.current.get(priorScopeConversationId) ?? 0)
+        : 0;
       // Bind first, render after: the pane goes to `loading` (kind set, target
       // null) while the mint is in flight — never a speculative surface.
       assignPane(sessionId, paneId, { kind: 'chat', name: 'New conversation', targetId: null, agentPageId });
@@ -665,12 +681,14 @@ export default function AgentPanes({
             sessionId,
           });
         }
-        if (!paneStillLoading(paneId, { kind: 'chat', agentPageId })) {
-          // The pane closed mid-mint, OR a grid-last close already rebound it
-          // to another open listing while this request was in flight. Either
-          // way, the row was already created server-side — clean it up
-          // rather than leaving an orphaned, unbound thread (or clobbering
-          // the rebind with this now-abandoned mint's result).
+        if (!isCurrent() || !paneStillLoading(paneId, { kind: 'chat', agentPageId })) {
+          // Either a NEWER call for this same pane superseded this one
+          // (isCurrent false — round 14), or the pane closed mid-mint, or a
+          // grid-last close already rebound it to another open listing
+          // while this request was in flight. Either way, the row was
+          // already created server-side — clean it up rather than leaving
+          // an orphaned, unbound thread (or clobbering a newer assignment
+          // with this now-abandoned mint's result).
           void cleanupOrphanedConversation(conversationId);
           return false;
         }
@@ -700,9 +718,16 @@ export default function AgentPanes({
         // Same rebind-survives rule as the success path above: a rejected
         // mint must not reset a pane a grid-last close already rebound to
         // something else while this request was in flight (caught in
-        // review — the earlier fix only guarded the success path).
-        if (paneStillLoading(paneId, { kind: 'chat', agentPageId })) {
-          if (priorScope) {
+        // review — the earlier fix only guarded the success path). Also
+        // gated on `isCurrent()` (round 14) — a NEWER call for this same
+        // pane already owns whatever happens to it now; this stale one must
+        // not restore over that in-flight sibling.
+        if (isCurrent() && paneStillLoading(paneId, { kind: 'chat', agentPageId })) {
+          const priorScopeStillValid =
+            !priorScopeConversationId ||
+            (historyDeleteGenerations.current.get(priorScopeConversationId) ?? 0) ===
+              priorScopeDeleteGenerationAtStart;
+          if (priorScope && priorScopeStillValid) {
             assignPane(sessionId, paneId, priorScope);
           } else {
             resetPane(sessionId, paneId);
