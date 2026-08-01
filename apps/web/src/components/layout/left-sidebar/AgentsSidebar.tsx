@@ -610,8 +610,16 @@ function SessionRow({
   // needs the tab removed so this row stops rendering it (review finding).
   const closePaneTab = useCallback(
     async (paneId: string, conversationId: string) => {
-      const allTabs = session.workspace
-        ? panesOf(session.workspace).flatMap((pane) =>
+      // Read the LIVE grid, not the `session.workspace` prop — that's an
+      // SWR snapshot (polled every 20s, otherwise only as fresh as the last
+      // `onChanged()`), so a tab opened in another pane moments ago could be
+      // invisible to it. `AgentPanes.tsx`'s own close control reads the
+      // store the same way, for the same reason: the "shown elsewhere"
+      // check this decision makes is only trustworthy against current state
+      // (review finding).
+      const liveWorkspace = useAgentWorkspaceStore.getState().workspaces[session.sessionId];
+      const allTabs = liveWorkspace
+        ? panesOf(liveWorkspace).flatMap((pane) =>
             pane.tabs
               .filter((tab): tab is typeof tab & { targetId: string } => tab.targetId !== null)
               .map((tab) => ({ paneId: pane.id, targetId: tab.targetId })),

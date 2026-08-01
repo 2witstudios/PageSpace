@@ -104,6 +104,7 @@ vi.mock('@/components/ai/page-agents', () => ({
 
 import AgentPanes from '../AgentPanes';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
+import { __resetHydratedSessionsForTests } from '@/stores/agent-workspace/useWorkspaceServerSync';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
 
 const jsonOk = (body: unknown) => ({ ok: true, json: async () => body });
@@ -162,6 +163,10 @@ beforeEach(() => {
   cuidCounter = 0;
   useAgentWorkspaceStore.setState({ workspaces: {} });
   usePendingStreamsStore.setState({ streams: new Map() });
+  // `useWorkspaceServerSync`'s "hydrated this session already" tracking is
+  // module-level (deliberately survives real remounts — see its own
+  // comment); reset it so one test's mount doesn't suppress another's.
+  __resetHydratedSessionsForTests();
   mockUsePageAgents.mockReturnValue({
     allAgents: [
       { id: 'agent-1', title: 'Researcher', driveId: 'drive-1' },

@@ -357,15 +357,29 @@ export function resetPane(state: WorkspaceState, id: string): WorkspaceState {
 }
 
 /**
- * Assign whichever pane is showing `oldTargetId` to a new scope — used when
- * the row it addressed was deleted and replaced, so the pane the user was
- * looking at follows the replacement instead of dangling on a dead id. A
- * target shown nowhere is a no-op: there is nothing stale to prune.
+ * Repoint EVERY pane referencing `oldTargetId` — as its active tab, or just
+ * a background one — to `newScope` instead. Used when the row `oldTargetId`
+ * addressed was deleted and replaced, so every dangling reference to it
+ * follows the replacement instead of pointing at a dead id — not only
+ * whichever pane happens to have it active; the same conversation can be
+ * open as a background tab in others too (`pane.tabs`), and leaving those
+ * stale would 404 the moment someone switches to them (review finding). A
+ * pane where it was the active tab follows the usual assign (activates the
+ * grid focus, retires a matching picker); a pane where it was only a
+ * background tab has just that stale tab entry swapped in place, without
+ * stealing focus. A target shown nowhere is a no-op.
  */
 export function assignPaneShowing(state: WorkspaceState, oldTargetId: string, newScope: PaneScope): WorkspaceState {
-  const pane = paneShowing(state, oldTargetId);
-  if (!pane) return state;
-  return assignPane(state, pane.id, newScope);
+  let next = state;
+  for (const pane of panesOf(state)) {
+    if (!pane.tabs.some((tab) => tab.targetId === oldTargetId)) continue;
+    const wasActive = pane.scope?.kind === 'chat' && pane.scope.targetId === oldTargetId;
+    const newTabs = tabsForChatAssign(pane.tabs, oldTargetId, newScope);
+    next = wasActive
+      ? withPaneScopeAndTabs(next, pane.id, newScope, newTabs)
+      : withPaneScopeAndTabsNoRefocus(next, pane.id, pane.scope, newTabs);
+  }
+  return next;
 }
 
 /** Every pane, flattened in visual order (left-to-right, top-to-bottom). */

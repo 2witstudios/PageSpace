@@ -294,6 +294,44 @@ describe('assignPaneShowing', () => {
     state = assignPaneShowing(state, 'conv-1', chatScope('conv-2', 'agent-2'));
     expect(paneTabsOf(state, 'pane-1')).toEqual([chatScope('conv-2', 'agent-2')]);
   });
+
+  it('should also repoint a BACKGROUND tab in another pane, without stealing its focus', () => {
+    // The deleted/replaced conversation can be open as a non-active tab in
+    // a pane whose active scope is something else entirely — that pane's
+    // own focus and active tab must be untouched, only the stale tab entry
+    // itself gets swapped (review finding: this used to only check each
+    // pane's ACTIVE scope, leaving background tabs dangling on a dead id).
+    let state = splitRight(base(), 'pane-1', 'col-2', 'pane-2');
+    // pane-2 opens conv-1 (background — pane-1 stays the grid's active pane).
+    state = openTab(state, 'pane-2', chatScope('conv-1'));
+    state = openTab(state, 'pane-2', chatScope('conv-9', 'agent-9'));
+    expect(state.activePaneId).toBe('pane-2');
+    state = selectPane(state, 'pane-1');
+
+    state = assignPaneShowing(state, 'conv-1', chatScope('conv-2', 'agent-2'));
+
+    const pane2 = panesOf(state).find((p) => p.id === 'pane-2')!;
+    expect(pane2.tabs).toEqual([chatScope('conv-2', 'agent-2'), chatScope('conv-9', 'agent-9')]);
+    // Still showing conv-9 (its active tab) — repointing the BACKGROUND tab
+    // must not change what the pane is currently displaying or steal focus.
+    expect(pane2.scope).toEqual(chatScope('conv-9', 'agent-9'));
+    expect(state.activePaneId).toBe('pane-1');
+  });
+
+  it('should repoint EVERY pane referencing the old target at once — active in one, background in another', () => {
+    let state = splitRight(base(), 'pane-1', 'col-2', 'pane-2');
+    // pane-1: conv-1 is the ACTIVE tab (from `base()`).
+    // pane-2: conv-1 is a BACKGROUND tab.
+    state = openTab(state, 'pane-2', chatScope('conv-1'));
+    state = openTab(state, 'pane-2', chatScope('conv-9', 'agent-9'));
+
+    state = assignPaneShowing(state, 'conv-1', chatScope('conv-2', 'agent-2'));
+
+    const [pane1, pane2] = panesOf(state);
+    expect(pane1.scope).toEqual(chatScope('conv-2', 'agent-2'));
+    expect(pane2.tabs).toEqual([chatScope('conv-2', 'agent-2'), chatScope('conv-9', 'agent-9')]);
+    expect(pane2.scope).toEqual(chatScope('conv-9', 'agent-9'));
+  });
 });
 
 describe('newWorkspace: tab seeding', () => {

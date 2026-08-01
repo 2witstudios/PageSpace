@@ -26,8 +26,22 @@ import type { WorkspaceState } from './pane-reducer';
 
 const DEFAULT_DEBOUNCE_MS = 1500;
 
+// Sessions already hydrated once THIS page load. Module-level, not a
+// per-mount ref: `AgentPanes` is rendered `key={selectedSessionId}`
+// (`AgentsSurface.tsx`), so switching to another session and back is a
+// FRESH mount every time — a per-mount ref would reopen the server-wins
+// hydration window (see the hydration effect below) on every single
+// session switch, not just once per page load (review finding from an
+// independent audit of the fix that removed the reference-equality guard).
+const hydratedSessionsThisPageLoad = new Set<string>();
+
 function workspaceUrl(sessionId: string): string {
   return `/api/agent-sessions/${encodeURIComponent(sessionId)}/workspace`;
+}
+
+/** Test-only: a real page load never needs to forget this — tests, run in one shared module scope, do. */
+export function __resetHydratedSessionsForTests(): void {
+  hydratedSessionsThisPageLoad.clear();
 }
 
 export function useWorkspaceServerSync(
@@ -46,7 +60,6 @@ export function useWorkspaceServerSync(
   // (triggered by that very write) knows there is nothing NEW to persist —
   // the server is already holding exactly what was just written.
   const justHydratedRef = useRef(false);
-  const hydratedSessionRef = useRef<string | null>(null);
   // A purely local identifier for `useEditingStore` bookkeeping — `useId()`,
   // not the domain `createId()` (`@paralleldrive/cuid2`): this is never a
   // conversation/session id, and sharing that generator would (and in
@@ -94,28 +107,34 @@ export function useWorkspaceServerSync(
     };
   }, [enabled, workspace, debounceMs, performSave]);
 
-  // Hydrate once per session from the server — unconditionally, by design
-  // (see file header: "Server response wins over any stale localStorage
-  // seed"). The mount-time `openConversation`/`ensureWorkspace` seeding this
-  // hook's caller does (selecting the initial conversation, or defaulting a
-  // brand-new session to one pane) always runs in the SAME commit as this
-  // effect, before the fetch below resolves — so a reference-equality guard
-  // here would see that local seed as "something moved on" and skip
-  // hydration on effectively every mount, defeating cross-device restore
-  // entirely (review finding). The narrow risk this trades away — a genuine
-  // user edit landing in the single round-trip before hydration resolves
-  // gets overwritten — is accepted, same as any other server-wins seed.
+  // Hydrate once per session PER PAGE LOAD from the server — unconditionally,
+  // by design (see file header: "Server response wins over any stale
+  // localStorage seed"). The mount-time `openConversation`/`ensureWorkspace`
+  // seeding this hook's caller does (selecting the initial conversation, or
+  // defaulting a brand-new session to one pane) always runs in the SAME
+  // commit as this effect, before the fetch below resolves — so a
+  // reference-equality guard here would see that local seed as "something
+  // moved on" and skip hydration on effectively every mount, defeating
+  // cross-device restore entirely (review finding). The narrow risk this
+  // trades away — a genuine user edit landing in the single round-trip
+  // before hydration resolves gets overwritten — is accepted, same as any
+  // other server-wins seed. "Once per page load" (not once per mount) is
+  // load-bearing here: only marked hydrated on a settled (not cancelled)
+  // fetch, so a session switched away from mid-request retries cleanly on
+  // its next mount instead of getting stuck un-hydrated for the rest of the
+  // page's life.
   useEffect(() => {
     if (!enabled) return;
-    if (hydratedSessionRef.current === sessionId) return;
-    hydratedSessionRef.current = sessionId;
+    if (hydratedSessionsThisPageLoad.has(sessionId)) return;
 
     let cancelled = false;
 
     fetchWithAuth(workspaceUrl(sessionId))
       .then((res) => (res.ok ? res.json() : null))
       .then((json: { workspace?: unknown } | null) => {
-        if (cancelled || !json?.workspace) return;
+        if (cancelled) return;
+        hydratedSessionsThisPageLoad.add(sessionId);
+        if (!json?.workspace) return;
         const parsed = persistedWorkspaceStateSchema.safeParse(json.workspace);
         if (!parsed.success) return;
         justHydratedRef.current = true;

@@ -444,6 +444,66 @@ describe('AgentsSidebar', () => {
       });
       expect(mockDel).not.toHaveBeenCalled();
     });
+
+    test('closing a tab reads the LIVE workspace store, not the stale SWR session.workspace snapshot', async () => {
+      // `session.workspace` is only as fresh as the last 20s poll or
+      // `onChanged()` — a tab opened in another pane moments ago can be
+      // invisible to it. Seed a STALE single-pane snapshot (as if the tab
+      // had not yet been opened elsewhere when this SWR response landed)
+      // while the live store already has it in TWO panes, and confirm the
+      // close decision follows the live store (review finding).
+      const staleSnapshot = {
+        id: 'ses-1',
+        columns: [
+          {
+            id: 'col-1',
+            panes: [
+              {
+                id: 'pane-1',
+                scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' },
+                tabs: [{ kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' }],
+              },
+            ],
+          },
+        ],
+        activePaneId: 'pane-1',
+        pendingPickerPaneId: null,
+      };
+      const liveWorkspace = {
+        ...staleSnapshot,
+        columns: [
+          {
+            id: 'col-1',
+            panes: [
+              ...staleSnapshot.columns[0].panes,
+              {
+                id: 'pane-2',
+                scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' },
+                tabs: [{ kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' }],
+              },
+            ],
+          },
+        ],
+      };
+      act(() => {
+        useAgentWorkspaceStore.getState().hydrateWorkspace('ses-1', liveWorkspace as WorkspaceState);
+      });
+      respondWithSessions([{ ...SESSION, workspace: staleSnapshot }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
+      await user.click(await screen.findByText('Close'));
+
+      // If the decision had read the stale snapshot, it would see conv-1 as
+      // shown in only ONE pane and issue a real DELETE. It must not.
+      await waitFor(() => {
+        const panes = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes;
+        expect(panes.find((p) => p.id === 'pane-1')?.tabs).toEqual([]);
+      });
+      expect(mockDel).not.toHaveBeenCalled();
+    });
   });
 
   describe('selection', () => {

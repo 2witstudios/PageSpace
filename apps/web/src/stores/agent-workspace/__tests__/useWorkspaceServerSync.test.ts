@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
-import { useWorkspaceServerSync } from '../useWorkspaceServerSync';
+import { useWorkspaceServerSync, __resetHydratedSessionsForTests } from '../useWorkspaceServerSync';
 import { useAgentWorkspaceStore } from '../useAgentWorkspaceStore';
 
 vi.mock('@/lib/auth/auth-fetch', () => ({
@@ -35,6 +35,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   useAgentWorkspaceStore.setState({ workspaces: {} });
   mockFetch.mockResolvedValue(notSaved);
+  // The "hydrated this session already" tracking is module-level (survives
+  // real remounts on purpose — see the hook's own comment) — tests share
+  // that module scope across the whole file, so it must be reset per test.
+  __resetHydratedSessionsForTests();
 });
 
 afterEach(() => {
@@ -108,6 +112,56 @@ describe('hydration', () => {
     renderHook(() => useWorkspaceServerSync('ses-1'));
     await new Promise((r) => setTimeout(r, 0));
     expect(grid()).toEqual(before);
+  });
+
+  // GET-only count — `mockFetch` also backs the debounced-save PUT, which
+  // the mount-time `ensureWorkspace` seed can itself trigger; a plain call
+  // count would conflate the two.
+  const getCalls = () => mockFetch.mock.calls.filter((c) => c[1] === undefined);
+
+  it('does not re-fetch on a REMOUNT for a session already hydrated this page load', async () => {
+    // `AgentPanes` is rendered `key={selectedSessionId}` — switching to
+    // another session and back is a fresh mount of this hook every time.
+    // Re-hydrating on every one of those would reopen the server-wins
+    // clobber window against the debounced save on every session switch,
+    // not just once per page load (review finding).
+    store().ensureWorkspace('ses-1', scope());
+    const { unmount } = renderHook(() => useWorkspaceServerSync('ses-1'));
+    await waitFor(() => expect(getCalls()).toHaveLength(1));
+
+    unmount();
+    renderHook(() => useWorkspaceServerSync('ses-1'));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(getCalls()).toHaveLength(1);
+  });
+
+  it('given a DIFFERENT session, still hydrates on its own first mount', async () => {
+    store().ensureWorkspace('ses-1', scope());
+    renderHook(() => useWorkspaceServerSync('ses-1'));
+    await waitFor(() => expect(getCalls()).toHaveLength(1));
+
+    store().ensureWorkspace('ses-2', scope());
+    renderHook(() => useWorkspaceServerSync('ses-2'));
+    await waitFor(() => expect(getCalls()).toHaveLength(2));
+  });
+
+  it('a hydration cancelled by unmount before it resolves is retried on the next mount', async () => {
+    store().ensureWorkspace('ses-1', scope());
+    let resolveFetch!: (value: unknown) => void;
+    mockFetch.mockReturnValueOnce(new Promise((resolve) => { resolveFetch = resolve; }));
+
+    const { unmount } = renderHook(() => useWorkspaceServerSync('ses-1'));
+    unmount();
+    // The first fetch's `.then` fires with `cancelled: true` — must not mark
+    // the session hydrated, or a genuinely-never-hydrated session would be
+    // stuck that way for the rest of the page's life.
+    resolveFetch({ ok: true, json: () => Promise.resolve({ workspace: null }) });
+    await new Promise((r) => setTimeout(r, 0));
+
+    mockFetch.mockResolvedValue(notSaved);
+    renderHook(() => useWorkspaceServerSync('ses-1'));
+    await waitFor(() => expect(getCalls()).toHaveLength(2));
   });
 });
 
