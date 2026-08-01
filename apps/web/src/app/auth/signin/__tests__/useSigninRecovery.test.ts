@@ -390,4 +390,88 @@ describe('useSigninRecovery', () => {
       vi.useRealTimers();
     }
   });
+
+  it('control: the failsafe does not misfire mid-chain on a legitimately slow (not hung) full recovery', async () => {
+    // The failsafe budget must cover the FULL bearer-platform chain, not just hasDeviceToken +
+    // checkMeAuthenticated: check-me failing routes to a device-token refresh, whose own
+    // AuthFetch-side timeout (Keychain read + refresh POST) adds up to another ~11s on top.
+    // Each step here resolves just under its own guard's deadline — genuinely slow, never
+    // hung — so the failsafe (25s) must not fire before the chain's own ~21.7s completes.
+    vi.useFakeTimers();
+    try {
+      const delayedResolve = <T,>(value: T, ms: number) =>
+        new Promise<T>((resolve) => setTimeout(() => resolve(value), ms));
+
+      getStoredSession.mockImplementation(() => delayedResolve({ deviceToken: 'dt_valid' }, 2900));
+      fetchWithAuth.mockImplementation(() => delayedResolve({ ok: false } as Response, 7900));
+      refreshAuthSession.mockImplementation(() =>
+        delayedResolve({ success: true, shouldLogout: false }, 10900),
+      );
+
+      const { result } = renderHook(() => useSigninRecovery('/dashboard', true));
+
+      // Just before the chain's own ~21.7s completion: still legitimately in progress.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2900 + 7900 + 10800);
+      });
+      expect(replace).not.toHaveBeenCalled();
+      expect(result.current.recovering).toBe(true);
+
+      // The chain completes on its own, well before the 25s failsafe deadline.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(replace).toHaveBeenCalledWith('/dashboard');
+      expect(result.current.recovering).toBe(true); // stays true through the nav
+
+      // Advancing the rest of the way to the failsafe deadline must not disturb that outcome.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(RECOVERY_FAILSAFE_TIMEOUT_MS);
+      });
+      expect(replace).toHaveBeenCalledTimes(1);
+      expect(result.current.recovering).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a refresh that resolves AFTER the failsafe already gave up must not redirect out from under the form', async () => {
+    // Defense-in-depth for the platforms whose device-token refresh has no timeout of its own
+    // yet (web's refreshWebSession, desktop's attemptDesktopDeviceRefresh — both deferred
+    // follow-ups). If one of those truly hangs past the failsafe, the user sees the form; if
+    // the hung call THEN eventually resolves successfully, it must not yank them into a
+    // surprise navigation after they've already started looking at (or filling in) the form.
+    vi.useFakeTimers();
+    try {
+      mockMe(false);
+      getStoredSession.mockResolvedValue({ deviceToken: 'dt_valid' });
+
+      let resolveRefresh: ((result: { success: boolean; shouldLogout: boolean }) => void) | undefined;
+      refreshAuthSession.mockReturnValue(
+        new Promise((resolve) => {
+          resolveRefresh = resolve;
+        }),
+      );
+
+      const { result } = renderHook(() => useSigninRecovery('/dashboard', true));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(RECOVERY_FAILSAFE_TIMEOUT_MS);
+      });
+      expect(result.current.recovering).toBe(false);
+      expect(replace).not.toHaveBeenCalled();
+
+      // The stuck refresh finally settles, long after the failsafe already showed the form.
+      await act(async () => {
+        resolveRefresh?.({ success: true, shouldLogout: false });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(replace).not.toHaveBeenCalled();
+      expect(result.current.recovering).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

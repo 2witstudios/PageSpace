@@ -19,11 +19,16 @@ export const DEVICE_TOKEN_TIMEOUT_MS = 3000;
 // screen against a true network stall (no rejection, no resolution).
 export const CHECK_ME_TIMEOUT_MS = 8000;
 
-// Backstop for the whole recovery driver — longer than the worst-case chain (up to
-// DEVICE_TOKEN_TIMEOUT_MS Keychain read + up to CHECK_ME_TIMEOUT_MS check-me + margin), so it
-// never fires on a normal run. Guards against a hang anywhere in the chain we haven't found
-// (or guarded) yet, including outside the two fetches above.
-export const RECOVERY_FAILSAFE_TIMEOUT_MS = 12000;
+// Backstop for the whole recovery driver — longer than the worst-case BOUNDED chain, so it
+// never fires while a legitimate (merely slow, not hung) recovery is still in flight. On the
+// bearer platforms (iOS/Android) this is sequential: DEVICE_TOKEN_TIMEOUT_MS (hasDeviceToken)
+// + CHECK_ME_TIMEOUT_MS (checkMeAuthenticated) + refreshBearerSession's own two-stage bound
+// (its Keychain read, capped at AuthFetch's TOKEN_RETRIEVAL_TIMEOUT_MS, then its refresh POST,
+// capped at AuthFetch's REFRESH_FETCH_TIMEOUT_MS) = 3000 + 8000 + (3000 + 8000) = 22000, plus
+// margin. Guards against a hang anywhere in the chain we haven't found or bounded yet —
+// notably the web and desktop device-token refresh paths, which remain unbounded (deferred
+// follow-up) — without misfiring mid-chain on the platform this recovery flow exists for.
+export const RECOVERY_FAILSAFE_TIMEOUT_MS = 25000;
 
 /**
  * Whether a device token exists to recover an expired session from — read from PLATFORM storage
@@ -124,8 +129,17 @@ export function useSigninRecovery(
     // Unconditional backstop: whatever hangs anywhere in the chain below, the loading screen
     // cannot outlive this timer. Cleared on every terminal path (show-form, redirect, the
     // fail-open catch, and unmount) so it never fires after a normal completion.
+    //
+    // Also marks the run cancelled, same as unmount: an unbounded step still pending when the
+    // failsafe fires (e.g. the web/desktop device-token refresh paths, which have no timeout
+    // of their own yet) must not be allowed to act on the page later — without this, a refresh
+    // that eventually resolves `redirect` after the form is already showing would yank the
+    // user away from it with no warning.
     const failsafeTimer = setTimeout(() => {
-      if (!cancelled) setRecovering(false);
+      if (!cancelled) {
+        cancelled = true;
+        setRecovering(false);
+      }
     }, RECOVERY_FAILSAFE_TIMEOUT_MS);
 
     const run = async () => {

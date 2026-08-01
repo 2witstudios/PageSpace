@@ -154,6 +154,44 @@ describe('refreshBearerSession: refresh fetch timeout', () => {
     }
   });
 
+  it('never hangs if the response body stalls after ok headers arrive (P1: timeout must stay armed through response.json())', async () => {
+    // fetch() resolves as soon as headers arrive, before the body is fully read — a server
+    // that flushes headers then stalls mid-body would otherwise hang here with no timeout
+    // protection if the abort controller were cleared right after the fetch() await, since
+    // response.json() runs afterward, outside that guard.
+    vi.useFakeTimers();
+    try {
+      mockFetch.mockImplementation((_url: string, options?: { signal?: AbortSignal }) =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            new Promise((_resolve, reject) => {
+              options?.signal?.addEventListener('abort', () => {
+                const err = new Error('The operation was aborted');
+                err.name = 'AbortError';
+                reject(err);
+              });
+            }),
+        }),
+      );
+
+      const { AuthFetch } = await import('../auth-fetch');
+      const authFetch = new AuthFetch() as unknown as RefreshInternals;
+
+      const resultPromise = authFetch.refreshBearerSession();
+
+      await vi.advanceTimersByTimeAsync(8000);
+
+      const result = await resultPromise;
+
+      expect(result).toEqual({ success: false, shouldLogout: false });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('control: a fast successful refresh is unaffected by the new timeout', async () => {
     mockFetch.mockResolvedValue({
       ok: true,
