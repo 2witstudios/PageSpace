@@ -891,7 +891,7 @@ export default function AgentPanes({
     async (
       paneId: string,
       agentPageId: string | null,
-      conversation: { id: string; title: string | null; sessionId: string | null },
+      conversation: { id: string; title: string | null; sessionId: string | null; isOwner: boolean },
     ): Promise<boolean> => {
       const isCurrent = beginPaneAssign(paneId);
       if (conversation.sessionId === sessionId) {
@@ -1016,12 +1016,22 @@ export default function AgentPanes({
         // action here — the sidebar's own open list otherwise lags until its
         // next poll.
         void mutate(isAgentSessionsKey);
-      } else if (conversation.sessionId === null) {
-        // Genuinely never bound to ANY session — claim it into this one so
-        // tool calls actually resolve a sandbox afterward, instead of the
-        // old cosmetic assign-only path (which left `findSessionForConversation`
-        // reading the same null forever and denying every tool call as
-        // `no_session`). Needs the SAME in-flight-count + deferred-cleanup
+      } else if (conversation.sessionId === null && conversation.isOwner) {
+        // Genuinely never bound to ANY session, AND this pane's caller owns
+        // it — claim it into this one so tool calls actually resolve a
+        // sandbox afterward, instead of the old cosmetic assign-only path
+        // (which left `findSessionForConversation` reading the same null
+        // forever and denying every tool call as `no_session`). A History
+        // list routinely also contains OTHER users' shared, still-unbound
+        // conversations (`GET .../conversations`'s own `isShared` clause) —
+        // claiming one of those would just 404 (the primitive's ownership
+        // gate refuses it), stranding the pick on the History tab instead of
+        // opening the shared transcript read-only the way it always has
+        // (review finding — final adversarial pass on PR #2302). The
+        // `!isOwner` case falls through to the same plain `assignPane` below
+        // this whole if/else chain uses for an already-foreign-bound row.
+        //
+        // Needs the SAME in-flight-count + deferred-cleanup
         // coordination reopen uses above: the request that actually lands
         // the claim can go stale and see "nothing shows it yet" while a
         // LATER, now-current request for the same id is still in flight —
@@ -1097,6 +1107,14 @@ export default function AgentPanes({
           // this pane to a transcript that already 404s on send.
           return false;
         }
+        // Same local-optimistic-write-before-revalidate discipline
+        // `handlePickAgent`'s own mint uses (see its comment above): without
+        // this, closing this pane before the `mutate` below resolves makes
+        // `decideClosePane` see the just-claimed conversation as not
+        // open-listed yet and take the pure layout-close path, orphaning it
+        // — holding a cap slot with no pane left to retry the close from
+        // (review finding — final adversarial pass on PR #2302).
+        recordMintedConversation(conversation.id, agentPageId);
         void mutate(isAgentSessionsKey);
       }
       if (!isCurrent()) return false;
@@ -1138,7 +1156,7 @@ export default function AgentPanes({
       });
       return true;
     },
-    [sessionId, assignPane, selectPane, beginPaneAssign, cleanupOrphanedConversation, isConversationShownSomewhere],
+    [sessionId, assignPane, selectPane, beginPaneAssign, cleanupOrphanedConversation, isConversationShownSomewhere, recordMintedConversation],
   );
 
   /**
@@ -1469,7 +1487,7 @@ function ChatPane({
   /** Resolves to whether the mint actually landed — false on a failed create. */
   onCreateNewFromHistory: () => Promise<boolean>;
   /** Resolves to whether the pick actually landed — false on a failed reopen. */
-  onPickHistoryConversation: (conversation: { id: string; title: string | null; sessionId: string | null }) => Promise<boolean>;
+  onPickHistoryConversation: (conversation: { id: string; title: string | null; sessionId: string | null; isOwner: boolean }) => Promise<boolean>;
   /** A History delete's canonical-row deactivation reaches every pane showing that id, not just this one — the container resets each affected pane. */
   onHistoryDeleteConversation: (conversationId: string) => void;
 }) {
@@ -1496,9 +1514,16 @@ function ChatPane({
   // its final "not agentPageId or no agent" branch, a spinner that never
   // resolves since neither condition can ever become true again for this
   // scope (review finding — coderabbitai on PR #2299).
+  //
+  // This pane's identity collapsing to `hostConversationId` (see `PaneBar`'s
+  // `identity` below) removes the Chat/History/Settings tab strip entirely —
+  // staying on History/Settings with no strip left to switch back from
+  // would strand the pane exactly like the agent-switch case above (review
+  // finding — final adversarial pass on PR #2302).
+  const isHostIdentity = conversationId !== null && conversationId === hostConversationId;
   useEffect(() => {
     setActiveTab('chat');
-  }, [scope.agentPageId]);
+  }, [scope.agentPageId, isHostIdentity]);
 
   const {
     conversations,
@@ -1556,6 +1581,7 @@ function ChatPane({
         id,
         title: picked?.title ?? null,
         sessionId: picked?.sessionId ?? null,
+        isOwner: picked?.isOwner ?? false,
       });
       if (landed) {
         setActiveTab('chat');
@@ -1592,7 +1618,7 @@ function ChatPane({
       <PaneBar
         isActive={isActive}
         identity={
-          conversationId !== null && conversationId === hostConversationId ? (
+          isHostIdentity ? (
             // This pane is showing the SAME conversation the hosting AI_CHAT
             // page's own header already identifies (Chat/History/Settings
             // pills, agent name) — a second selector + tab-strip here would

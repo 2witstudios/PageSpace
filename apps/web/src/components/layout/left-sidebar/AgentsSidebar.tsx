@@ -116,9 +116,7 @@ export default function AgentsSidebar({ className }: SidebarProps) {
               hasError={!!sessionsError}
               onRetry={() => void retrySessions()}
               agentsByDrive={agentsByDrive}
-              onChanged={(updater) =>
-                void (updater ? retrySessions(updater, { revalidate: false }) : retrySessions())
-              }
+              onChanged={() => void retrySessions()}
             />
           </div>
         </div>
@@ -144,10 +142,8 @@ interface SessionListEntry {
   shells: Array<{ shellId: string; name: string }>;
 }
 
-type SessionsCacheData = { sessions: SessionListEntry[] } | undefined;
-
 /** The sessions list changed — revalidate. */
-type OnSessionsChanged = (updater?: (current: SessionsCacheData) => SessionsCacheData) => void;
+type OnSessionsChanged = () => void;
 
 async function sessionsFetcher(url: string): Promise<{ sessions: SessionListEntry[] }> {
   const response = await fetchWithAuth(url);

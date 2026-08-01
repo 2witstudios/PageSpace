@@ -1240,7 +1240,9 @@ describe('AgentPanes', () => {
       expect(screen.queryByTestId('pane-history-tab')).not.toBeInTheDocument();
     });
 
-    const conversationsFixture = (entries: Array<{ id: string; title: string; sessionId: string | null }>) =>
+    const conversationsFixture = (
+      entries: Array<{ id: string; title: string; sessionId: string | null; isOwner?: boolean }>,
+    ) =>
       jsonOk({
         conversations: entries.map((e) => ({
           id: e.id,
@@ -1250,6 +1252,11 @@ describe('AgentPanes', () => {
           updatedAt: new Date('2026-01-01').toISOString(),
           messageCount: 1,
           sessionId: e.sessionId,
+          // Every existing fixture entry represents the test's own caller's
+          // conversation unless a test opts a shared/foreign one in —
+          // defaulting true keeps every pre-existing claim-branch test
+          // exercising the SAME path it always has.
+          isOwner: e.isOwner ?? true,
           lastMessage: { role: 'user', timestamp: new Date('2026-01-01').toISOString() },
         })),
       });
@@ -1384,6 +1391,36 @@ describe('AgentPanes', () => {
       });
       await waitFor(() =>
         expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-slow'),
+      );
+    });
+
+    // review finding — final adversarial pass on PR #2302: a pane's History
+    // list routinely also contains OTHER users' shared, still-unbound
+    // conversations (the list route's own `isShared` clause). Claiming one
+    // of those 404s (the claim primitive's ownership gate refuses a foreign
+    // row), which used to strand the pick on the History tab entirely
+    // instead of opening the shared transcript the old, pre-claim, cosmetic
+    // way.
+    it('opens a session-less SHARED conversation the caller does not own via plain assignment, never a claim', async () => {
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url === '/api/ai/page-agents/agent-1/conversations') {
+          return conversationsFixture([
+            { id: 'conv-not-owned', title: 'Shared chat', sessionId: null, isOwner: false },
+          ]);
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('tab', { name: /history/i }));
+      await user.click(await screen.findByRole('button', { name: 'select-conv-not-owned' }));
+
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-not-owned'));
+      expect(mockPost).not.toHaveBeenCalledWith(
+        expect.stringContaining('/conversations/conv-not-owned/claim'),
+        expect.anything(),
       );
     });
 

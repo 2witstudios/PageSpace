@@ -206,9 +206,8 @@ describe('POST /api/agent-sessions — spawn', () => {
     expect(mockCreateConversationInSession).toHaveBeenCalledWith(
       expect.objectContaining({ agentPageId: 'agent-1', sessionId: 'ses-new', userId: 'user-1' }),
     );
-    // Spawn is instant and free: nothing here may provision. There is no
-    // provision mock to assert against because the route does not import one —
-    // the absence is structural.
+    // Spawn is instant and free: nothing here may provision a sandbox.
+    expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
   });
 
   it('spawns a GLOBAL-ASSISTANT session from the both-null shape, auto-naming it "Global Assistant"', async () => {
