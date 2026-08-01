@@ -138,7 +138,29 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   const { data: sessionData } = useSessionRecord(current?.sessionId ?? null);
   const panesDriveId = sessionData?.session ? sessionData.session.driveId : page.driveId;
 
-  const [activeTab, setActiveTab] = useState<string>('chat');
+  // `?tab=` deep-links here (the agents console's per-pane Settings link, via
+  // `/p/[pageId]`, which forwards the query string verbatim). Seeded once at
+  // mount (a lazy initializer, so a fresh navigation lands on the right tab
+  // with no flash of "chat" first) AND re-synced by the effect below on every
+  // subsequent `searchParams` change: clicking that link while THIS SAME
+  // `AgentPageView` instance is already mounted — its own Chat tab hosts a
+  // pane for its own agent, so the pane bar's Settings link can point right
+  // back at the page it's already showing — is a query-only navigation Next
+  // does not remount for, so a mount-only read would silently no-op (review
+  // finding — chatgpt-codex-connector on PR #2296).
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    const tab = searchParams.get('tab');
+    return tab === 'history' || tab === 'settings' ? tab : 'chat';
+  });
+
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    if (tab !== 'history' && tab !== 'settings') return;
+    setActiveTab(tab);
+    const url = new URL(window.location.href);
+    url.searchParams.delete('tab');
+    window.history.replaceState({}, '', url.toString());
+  }, [searchParams]);
   const [webhooksOpen, setWebhooksOpen] = useState(false);
   const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
   const [isSettingsSaving, setIsSettingsSaving] = useState(false);

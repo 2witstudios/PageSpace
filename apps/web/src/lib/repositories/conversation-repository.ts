@@ -368,13 +368,34 @@ export const conversationRepository = {
    * Soft-delete a conversation (mark all messages as inactive)
    */
   async softDeleteConversation(agentId: string, conversationId: string): Promise<void> {
-    await db
-      .update(chatMessages)
-      .set({ isActive: false })
-      .where(and(
-        eq(chatMessages.pageId, agentId),
-        eq(chatMessages.conversationId, conversationId)
-      ));
+    // Both UPDATEs in one transaction — a failure between them must not
+    // leave messages inactive but the canonical row still active (or vice
+    // versa): a retry after a partial failure would fail whatever
+    // active-message precondition the route checks, stranding the row in
+    // the inconsistent state this pairing exists to eliminate (review
+    // finding — chatgpt-codex-connector on PR #2296).
+    await db.transaction(async (tx) => {
+      await tx
+        .update(chatMessages)
+        .set({ isActive: false })
+        .where(and(
+          eq(chatMessages.pageId, agentId),
+          eq(chatMessages.conversationId, conversationId)
+        ));
+      // The canonical row itself, not just its messages — mirrors
+      // `globalConversationRepository.softDeleteConversation`'s pattern, and
+      // matches `conversations.isActive`'s own doc comment ("history soft-
+      // delete"). Every reader that gates on `conversations.isActive`
+      // (agent-sessions-runtime.ts's session listings/caps, the v1/MCP
+      // conversations API, the compliance retention purge) previously kept
+      // treating a page conversation deleted from History as live forever —
+      // including, most concretely, letting the agents console's reopen
+      // affordance resurrect one with no messages left.
+      await tx
+        .update(conversations)
+        .set({ isActive: false })
+        .where(eq(conversations.id, conversationId));
+    });
     // Whole conversation cleared — any summary is stale; the tombstone also
     // guards against a first compaction that may still be in flight.
     await invalidateCompaction(conversationId, { source: 'page', pageId: agentId });

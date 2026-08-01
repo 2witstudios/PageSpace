@@ -363,9 +363,20 @@ export default function CenterPanel() {
             onRefresh={pageRefresh.refresh}
             disabled={!pageRefresh.canRefresh}
           >
-            <CustomScrollArea className="h-full">
-              <PageContent pageId={activePageId} />
-            </CustomScrollArea>
+            {pageRefresh.managesOwnScroll ? (
+              // Chat-shaped pages (AI_CHAT, CHANNEL) own their scroll region
+              // end to end. Wrapping them in another `overflow-auto` area
+              // stacks two independent scroll containers over the same
+              // content — the outer one wins the wheel/touch gesture and the
+              // inner message list stops scrolling.
+              <div className="h-full overflow-hidden">
+                <PageContent pageId={activePageId} />
+              </div>
+            ) : (
+              <CustomScrollArea className="h-full">
+                <PageContent pageId={activePageId} />
+              </CustomScrollArea>
+            )}
           </PullToRefresh>
         </div>
       </div>

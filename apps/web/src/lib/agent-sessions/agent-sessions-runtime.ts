@@ -17,8 +17,9 @@
  * wrappers that return result unions — never throws — for the routes to map.
  */
 
-import { db } from '@pagespace/db/db';
-import { and, count, eq, inArray, isNull, sql } from '@pagespace/db/operators';
+import { db, getAdvisoryLockPool } from '@pagespace/db/db';
+import { withAdvisoryLock } from '@pagespace/db/advisory-lock';
+import { and, count, eq, inArray, isNull, isNotNull, sql } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
 import { checkAgentSessionConcurrency } from '@pagespace/lib/services/sandbox/quota';
@@ -76,6 +77,10 @@ import {
   closeConversationInSessionWith,
   type CloseConversationOutcome,
 } from '@/lib/agent-sessions/close-conversation-in-session';
+import {
+  reopenConversationInSessionWith,
+  type ReopenConversationOutcome,
+} from '@/lib/agent-sessions/reopen-conversation-in-session';
 
 export { isCodeExecutionEnabled };
 
@@ -209,6 +214,68 @@ export async function checkSessionEndAccess(
 // Lifecycle
 // ---------------------------------------------------------------------------
 
+const SESSION_LISTING_LOCK_MAX_RETRIES = 5;
+const SESSION_LISTING_LOCK_RETRY_DELAY_MS = 200;
+
+function sessionListingLockKey(sessionId: string): string {
+  return 'agent-session-conversations:' + sessionId;
+}
+
+/** Every retry was met with `lock_busy` — the caller's remedy is a plain retry, not a silent unlocked write. */
+export class SessionListingLockBusyError extends Error {
+  constructor(sessionId: string) {
+    super(`Could not acquire the session-listing lock for ${sessionId} after ${SESSION_LISTING_LOCK_MAX_RETRIES} retries`);
+    this.name = 'SessionListingLockBusyError';
+  }
+}
+
+/**
+ * Serializes every operation that consumes or frees a session's open-listing
+ * slot — create, close, reopen, and (via this same export) the page-agent
+ * History delete route's own never-empty guard — via a session-level
+ * advisory lock on a DEDICATED connection (`getAdvisoryLockPool`), never
+ * `db.transaction`. A transaction would hold the MAIN pool's connection for
+ * `fn`'s whole duration; `fn` here always needs a SECOND connection from
+ * that same pool (every dependency — `conversationRepository.*`,
+ * `resolveOrCreateConversation` — uses the plain, unwrapped `db`), so a
+ * `DB_POOL_MAX=1` deployment, or a burst of calls equal to any pool size,
+ * would deadlock every caller waiting on a connection the held transaction
+ * was never going to release (review finding — chatgpt-codex-connector on
+ * PR #2296; this is exactly the hazard `db.ts`'s own doc comment on
+ * `getAdvisoryLockPool` warns a session-level lock holder must avoid). The
+ * dedicated lock pool sidesteps it entirely: the lock connection and `fn`'s
+ * own connection(s) are never drawn from the same pool.
+ *
+ * `withAdvisoryLock` TRIES the lock (fails fast on contention) rather than
+ * blocking the way `pg_advisory_xact_lock` did — retried a bounded few
+ * times here. Unlike `start-generation-exclusive.ts`'s BEST-EFFORT
+ * degrade-to-unlocked fallback for a duplicate-generation guard, exhausting
+ * retries here throws (`SessionListingLockBusyError`): an unlocked
+ * create/close/reopen/delete is exactly the cap-violating race this lock
+ * exists to prevent, so "proceed anyway" can never be this caller's answer.
+ */
+export async function withSessionListingLock<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+  const pool = getAdvisoryLockPool();
+  const lockKey = sessionListingLockKey(sessionId);
+
+  let attemptsMade = 0;
+  for (;;) {
+    const attempt = await withAdvisoryLock(pool, lockKey, fn);
+
+    if (attempt.outcome === 'acquired') return attempt.result;
+
+    if (attempt.outcome === 'connection_error') {
+      throw attempt.error instanceof Error ? attempt.error : new Error(String(attempt.error));
+    }
+
+    attemptsMade += 1;
+    if (attemptsMade > SESSION_LISTING_LOCK_MAX_RETRIES) {
+      throw new SessionListingLockBusyError(sessionId);
+    }
+    await new Promise((resolve) => setTimeout(resolve, SESSION_LISTING_LOCK_RETRY_DELAY_MS));
+  }
+}
+
 /**
  * Create a conversation BORN INTO a session. Decision logic lives in the pure
  * module (`create-conversation-in-session.ts`) — this is only its production
@@ -220,6 +287,15 @@ export async function checkSessionEndAccess(
  * Throws `ConversationUnavailableError` (message `conversation_unavailable`)
  * when the id cannot be claimed WITH this binding — foreign owner, legacy
  * message-owner conflict, or an existing row whose binding disagrees.
+ *
+ * Wrapped in the SAME per-session listing lock `closeConversationInSession`/
+ * `reopenConversationInSession` take — see `withSessionListingLock`'s own
+ * doc for why that's a dedicated-pool advisory lock, never `db.transaction`.
+ * Without this serialization at all, a create racing a reopen could both
+ * read the cap's count before either writes, and both succeed — two
+ * operations each individually under `MAX_SESSION_CONVERSATIONS`, together
+ * over it (caught in review — the lock previously only coordinated
+ * close/reopen against each other, not against create).
  */
 export async function createConversationInSession(input: {
   conversationId: string;
@@ -230,56 +306,98 @@ export async function createConversationInSession(input: {
   /** Display label written at birth (a spawned worker's name). */
   title?: string | null;
 }): Promise<void> {
-  return createConversationInSessionWith(
-    {
-      createPageConversation: ({ conversationId, userId, agentPageId, sessionId, title }) =>
-        conversationRepository.createConversation(conversationId, userId, agentPageId, {
-          sessionId,
-          title: title ?? undefined,
-        }),
-      createGlobalConversation: async ({ conversationId, userId, sessionId, title }) => {
-        await resolveOrCreateConversation(userId, conversationId, undefined, {
-          sessionId,
-          title: title ?? undefined,
-        });
+  return withSessionListingLock(input.sessionId, () =>
+    createConversationInSessionWith(
+      {
+        createPageConversation: ({ conversationId, userId, agentPageId, sessionId, title }) =>
+          conversationRepository.createConversation(conversationId, userId, agentPageId, {
+            sessionId,
+            title: title ?? undefined,
+          }),
+        createGlobalConversation: async ({ conversationId, userId, sessionId, title }) => {
+          await resolveOrCreateConversation(userId, conversationId, undefined, {
+            sessionId,
+            title: title ?? undefined,
+          });
+        },
+        findConversation: async (conversationId) => {
+          const row = await conversationRepository.getConversation(conversationId);
+          if (!row) return null;
+          return { userId: row.userId, type: row.type, contextId: row.contextId, sessionId: row.sessionId };
+        },
+        findAgentDriveId: async (agentPageId) => {
+          const agent = await conversationRepository.getAiAgent(agentPageId);
+          return agent?.driveId ?? null;
+        },
+        findSessionDriveId: async (sessionId) => {
+          const row = await findSessionRecord(sessionId);
+          return row ? { driveId: row.driveId } : null;
+        },
+        countActiveConversations: async (sessionId) => {
+          const [row] = await db
+            .select({ n: count() })
+            .from(conversations)
+            .where(
+              and(
+                eq(conversations.sessionId, sessionId),
+                eq(conversations.isActive, true),
+                // A conversation closed OUT of the session's listing no longer
+                // holds a cap slot — closing one frees room for another.
+                isNull(conversations.closedInSessionAt),
+              ),
+            );
+          return row?.n ?? 0;
+        },
       },
-      findConversation: async (conversationId) => {
-        const row = await conversationRepository.getConversation(conversationId);
-        if (!row) return null;
-        return { userId: row.userId, type: row.type, contextId: row.contextId, sessionId: row.sessionId };
-      },
-      findAgentDriveId: async (agentPageId) => {
-        const agent = await conversationRepository.getAiAgent(agentPageId);
-        return agent?.driveId ?? null;
-      },
-      findSessionDriveId: async (sessionId) => {
-        const row = await findSessionRecord(sessionId);
-        return row ? { driveId: row.driveId } : null;
-      },
-      countActiveConversations: async (sessionId) => {
-        const [row] = await db
-          .select({ n: count() })
-          .from(conversations)
-          .where(
-            and(
-              eq(conversations.sessionId, sessionId),
-              eq(conversations.isActive, true),
-              // A conversation closed OUT of the session's listing no longer
-              // holds a cap slot — closing one frees room for another.
-              isNull(conversations.closedInSessionAt),
-            ),
-          );
-        return row?.n ?? 0;
-      },
-    },
-    input,
+      input,
+    ),
   );
 }
 
 /**
- * Close a conversation OUT of its session's listing — the transactional
- * wiring for `close-conversation-in-session.ts`'s pure decision. A per-session
- * advisory lock (the `agent-sessions-store.ts` `createIfUnderLimit` pattern)
+ * The read half of the close/reopen deps — `findConversation` and
+ * `countOpenConversations` are IDENTICAL between the two (both weigh the same
+ * "is this row open" fact), and the cap's symmetry between close and reopen
+ * depends on them staying that way: one copy drifting from the other would
+ * silently unbalance which listings count toward `MAX_SESSION_CONVERSATIONS`.
+ * One definition, shared, rather than two that must be kept in lockstep by
+ * hand (review finding — coderabbitai on PR #2296). Always the plain `db` —
+ * `withSessionListingLock`'s lock is on a separate dedicated connection, not
+ * a transaction these reads need to share.
+ */
+function sessionListingReadDeps() {
+  return {
+    findConversation: async (conversationId: string) => {
+      const [row] = await db
+        .select({
+          sessionId: conversations.sessionId,
+          closedInSessionAt: conversations.closedInSessionAt,
+          isActive: conversations.isActive,
+        })
+        .from(conversations)
+        .where(eq(conversations.id, conversationId))
+        .limit(1);
+      return row ?? null;
+    },
+    countOpenConversations: async (sessionId: string) => {
+      const [row] = await db
+        .select({ n: count() })
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.sessionId, sessionId),
+            eq(conversations.isActive, true),
+            isNull(conversations.closedInSessionAt),
+          ),
+        );
+      return row?.n ?? 0;
+    },
+  };
+}
+
+/**
+ * Close a conversation OUT of its session's listing — the wiring for
+ * `close-conversation-in-session.ts`'s pure decision. `withSessionListingLock`
  * serializes concurrent closes of THIS session's listings, so two racing
  * closes of the last two open conversations cannot both read "more than one
  * open" and both succeed — the second sees the first's write and gets
@@ -289,39 +407,12 @@ export async function closeConversationInSession(input: {
   conversationId: string;
   sessionId: string;
 }): Promise<CloseConversationOutcome> {
-  return db.transaction(async (tx) => {
-    await tx.execute(
-      sql`SELECT pg_advisory_xact_lock(hashtext(${'agent-session-conversations:' + input.sessionId}))`,
-    );
-    return closeConversationInSessionWith(
+  return withSessionListingLock(input.sessionId, () =>
+    closeConversationInSessionWith(
       {
-        findConversation: async (conversationId) => {
-          const [row] = await tx
-            .select({
-              sessionId: conversations.sessionId,
-              closedInSessionAt: conversations.closedInSessionAt,
-              isActive: conversations.isActive,
-            })
-            .from(conversations)
-            .where(eq(conversations.id, conversationId))
-            .limit(1);
-          return row ?? null;
-        },
-        countOpenConversations: async (sessionId) => {
-          const [row] = await tx
-            .select({ n: count() })
-            .from(conversations)
-            .where(
-              and(
-                eq(conversations.sessionId, sessionId),
-                eq(conversations.isActive, true),
-                isNull(conversations.closedInSessionAt),
-              ),
-            );
-          return row?.n ?? 0;
-        },
+        ...sessionListingReadDeps(),
         closeConversation: async (conversationId) => {
-          const updated = await tx
+          const updated = await db
             .update(conversations)
             .set({ closedInSessionAt: new Date() })
             .where(and(eq(conversations.id, conversationId), isNull(conversations.closedInSessionAt)))
@@ -330,8 +421,81 @@ export async function closeConversationInSession(input: {
         },
       },
       input,
-    );
-  });
+    ),
+  );
+}
+
+/**
+ * Reopen a conversation OUT of "closed" and back into its session's
+ * listing — the wiring for `reopen-conversation-in-session.ts`'s pure
+ * decision. Same `withSessionListingLock` key as `closeConversationInSession`,
+ * so a reopen can never race a close — or another reopen — of the same
+ * session's listings.
+ */
+export async function reopenConversationInSession(input: {
+  conversationId: string;
+  sessionId: string;
+}): Promise<ReopenConversationOutcome> {
+  return withSessionListingLock(input.sessionId, () =>
+    reopenConversationInSessionWith(
+      {
+        ...sessionListingReadDeps(),
+        reopenConversation: async (conversationId) => {
+          const updated = await db
+            .update(conversations)
+            .set({ closedInSessionAt: null })
+            .where(and(eq(conversations.id, conversationId), isNotNull(conversations.closedInSessionAt)))
+            .returning({ id: conversations.id });
+          return updated.length > 0 ? 'reopened' : 'noop';
+        },
+      },
+      input,
+    ),
+  );
+}
+
+/**
+ * A session's CLOSED conversations — the reopen affordance's listing. Mirrors
+ * `listSessionConversationsBulk`'s shape and cap for a single session, with
+ * the closed/open predicate flipped: `isActive` still gates history-deleted
+ * rows out, but `closedInSessionAt` must be SET rather than null. Newest
+ * activity first, capped at {@link MAX_SESSION_CONVERSATIONS} — history
+ * beyond that is reachable through the agent's own page History tab, not
+ * this session-scoped reopen list.
+ */
+export async function listClosedSessionConversations(sessionId: string): Promise<SessionConversationEntry[]> {
+  const rows = await db
+    .select({
+      conversationId: conversations.id,
+      title: conversations.title,
+      type: conversations.type,
+      contextId: conversations.contextId,
+      lastMessageAt: conversations.lastMessageAt,
+    })
+    .from(conversations)
+    .where(
+      and(
+        eq(conversations.sessionId, sessionId),
+        eq(conversations.isActive, true),
+        isNotNull(conversations.closedInSessionAt),
+      ),
+    )
+    // `lastMessageAt` is nullable, and Postgres sorts NULLs FIRST for a plain
+    // DESC order — without NULLS LAST, a closed conversation that never got a
+    // message would rank ABOVE genuinely recent ones and could crowd them out
+    // of the LIMIT below, contradicting "newest activity first" (review
+    // finding — coderabbitai on PR #2296).
+    .orderBy(sql`${conversations.lastMessageAt} DESC NULLS LAST`)
+    .limit(MAX_SESSION_CONVERSATIONS);
+
+  return rows.map((row) => ({
+    conversationId: row.conversationId,
+    title: row.title,
+    // Same mapping `listSessionConversationsBulk` uses: `contextId` is only
+    // meaningful as an agent page id for a 'page' conversation.
+    agentPageId: row.type === 'page' ? row.contextId : null,
+    lastMessageAt: row.lastMessageAt,
+  }));
 }
 
 /**

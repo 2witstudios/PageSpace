@@ -9,28 +9,39 @@ import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 
 interface PageProps {
   params: Promise<{ pageId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
 
 /**
  * Page redirect route - navigates to the correct dashboard URL for a page
  * This allows mentions to link directly to a page ID without knowing the driveId
  */
-export default async function PageRedirect({ params }: PageProps) {
+export default async function PageRedirect({ params, searchParams }: PageProps) {
   const { pageId } = await params;
+  // Forwarded verbatim (e.g. `?tab=settings` from the agents console's
+  // Settings link) — this route only resolves the driveId, it must not drop
+  // query params the destination page itself interprets.
+  const query = new URLSearchParams(
+    Object.entries(await searchParams).flatMap(([key, value]): [string, string][] =>
+      value === undefined ? [] : (typeof value === 'string' ? [value] : value).map((v): [string, string] => [key, v]),
+    ),
+  ).toString();
 
   // Get session token from cookies
   const cookieStore = await cookies();
   const cookieHeader = cookieStore.toString();
   const sessionToken = getSessionFromCookies(cookieHeader);
 
+  const callbackUrl = query ? `/p/${pageId}?${query}` : `/p/${pageId}`;
+
   if (!sessionToken) {
-    redirect(`/auth/signin?callbackUrl=/p/${pageId}`);
+    redirect(`/auth/signin?callbackUrl=${encodeURIComponent(callbackUrl)}`);
   }
 
   // Validate the session token — only a browser session may drive this redirect.
   const session = await sessionService.validateSession(sessionToken, { expectedType: 'user' });
   if (!session) {
-    redirect(`/auth/signin?callbackUrl=/p/${pageId}`);
+    redirect(`/auth/signin?callbackUrl=${encodeURIComponent(callbackUrl)}`);
   }
 
   const userId = session.userId;
@@ -52,5 +63,5 @@ export default async function PageRedirect({ params }: PageProps) {
   }
 
   // Redirect to the full dashboard URL
-  redirect(`/dashboard/${page.driveId}/${pageId}`);
+  redirect(query ? `/dashboard/${page.driveId}/${pageId}?${query}` : `/dashboard/${page.driveId}/${pageId}`);
 }
