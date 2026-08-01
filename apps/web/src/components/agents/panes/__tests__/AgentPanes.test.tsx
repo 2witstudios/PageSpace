@@ -69,6 +69,19 @@ vi.mock('../PaneChat', () => ({
 vi.mock('../../shell/Shell', () => ({
   default: ({ shellId }: { shellId: string }) => <div data-testid="pane-shell">{shellId}</div>,
 }));
+// Leaf renderers for the pane's History/Settings tabs — same philosophy as
+// PaneChat/Shell above: this suite is the pane's own tab-switching wiring,
+// not PageAgentHistoryTab/PageAgentSettingsTab's internals (867 lines of
+// react-hook-form for the latter — exercising it for real here would test
+// a different component's own test file's job).
+vi.mock('@/components/ai/page-agents', () => ({
+  PageAgentHistoryTab: ({ conversations }: { conversations: Array<{ id: string }> }) => (
+    <div data-testid="pane-history-tab">{conversations.length} conversations</div>
+  ),
+  PageAgentSettingsTab: ({ pageId, config }: { pageId: string; config: unknown }) => (
+    <div data-testid="pane-settings-tab" data-page-id={pageId} data-has-config={String(config !== null)} />
+  ),
+}));
 
 import AgentPanes from '../AgentPanes';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
@@ -904,21 +917,41 @@ describe('AgentPanes', () => {
       expect(await screen.findByRole('button', { name: /Researcher/ })).toBeInTheDocument();
     });
 
-    it("links to the pane's agent settings — the console's only Settings entry point", async () => {
+    it("has a Settings tab for the pane's agent, which switches the pane body to the settings form", async () => {
       renderPanes();
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
 
-      const settingsLink = await screen.findByRole('link', { name: /researcher settings/i });
-      expect(settingsLink).toHaveAttribute('href', '/p/agent-1?tab=settings');
+      const settingsTab = await screen.findByRole('tab', { name: /researcher settings/i });
+      await userEvent.click(settingsTab);
+
+      expect(await screen.findByTestId('pane-settings-tab')).toHaveAttribute('data-page-id', 'agent-1');
+      expect(screen.queryByTestId('pane-chat')).not.toBeInTheDocument();
     });
 
-    it('hides the settings link for the Assistant (no agent page, so no settings)', async () => {
+    it('hides the Settings tab for the Assistant (no agent page, so no settings)', async () => {
       renderPanes({
         initialConversation: { conversationId: 'conv-1', agentPageId: null, name: 'Assistant' },
       });
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
 
-      expect(screen.queryByRole('link', { name: /settings/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('tab', { name: /settings/i })).not.toBeInTheDocument();
+    });
+
+    it('has a History tab that switches the pane body to the conversation list, and back to Chat on selection', async () => {
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+
+      const historyTab = await screen.findByRole('tab', { name: /history/i });
+      await userEvent.click(historyTab);
+
+      expect(await screen.findByTestId('pane-history-tab')).toBeInTheDocument();
+      expect(screen.queryByTestId('pane-chat')).not.toBeInTheDocument();
+
+      const chatTab = screen.getByRole('tab', { name: /^chat$/i });
+      await userEvent.click(chatTab);
+
+      expect(await screen.findByTestId('pane-chat')).toBeInTheDocument();
+      expect(screen.queryByTestId('pane-history-tab')).not.toBeInTheDocument();
     });
 
     it("is disabled until THIS session's entry appears in the switch decision's own data", async () => {

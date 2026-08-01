@@ -35,10 +35,9 @@
  * session already has that isn't currently shown anywhere.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createId } from '@paralleldrive/cuid2';
-import { Loader2, Settings } from 'lucide-react';
+import { History, Loader2, MessageSquare, Save, Settings } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR, { mutate } from 'swr';
 import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
@@ -50,6 +49,11 @@ import { usePageAgents } from '@/hooks/page-agents/usePageAgents';
 import { useAuth } from '@/hooks/useAuth';
 import { useConversationActiveStream } from '@/hooks/useActiveStream';
 import { AISelector } from '@/components/ai/shared';
+import { useConversations } from '@/lib/ai/shared/hooks/useConversations';
+import { useAgentConfig } from '@/lib/ai/shared/hooks/useAgentConfig';
+import { useProviderSettings } from '@/lib/ai/shared/hooks/useProviderSettings';
+import { PageAgentHistoryTab, PageAgentSettingsTab, type PageAgentSettingsTabRef } from '@/components/ai/page-agents';
+import { cn } from '@/lib/utils';
 import EndSessionDialog from '../EndSessionDialog';
 import { useResolvedAgent } from '../useResolvedAgent';
 import SessionPanes from './SessionPanes';
@@ -615,6 +619,45 @@ export default function AgentPanes({
     [assignPane, resetPane, sessionId, paneStillLoading, cleanupOrphanedConversation, recordMintedConversation],
   );
 
+  /**
+   * A pane's own History tab picking a past conversation — assign it to THIS
+   * pane, reopening it into the session's listing first when it's bound to
+   * THIS session and closed. A conversation that is unbound, or bound to a
+   * DIFFERENT session, is never subject to this session's cap/listing at
+   * all — no server call needed, straight to `assignPane` (the same client-
+   * only mechanism `openConversation`/`handleSwitchAgent`'s focus branch
+   * already use to point a pane at an existing conversationId).
+   */
+  const handlePickHistoryConversation = useCallback(
+    async (paneId: string, agentPageId: string | null, conversation: { id: string; title: string | null; sessionId: string | null }) => {
+      if (conversation.sessionId === sessionId) {
+        try {
+          await post(
+            `/api/agent-sessions/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversation.id)}/reopen`,
+            {},
+          );
+        } catch (error) {
+          console.error('Failed to reopen conversation:', error);
+          toast.error('Could not reopen this conversation', {
+            description: error instanceof Error ? error.message : 'Please try again.',
+          });
+          return;
+        }
+        // Instant-freshness nudge, same as every other listing-changing
+        // action here — the sidebar's own open list otherwise lags until its
+        // next poll.
+        void mutate(isAgentSessionsKey);
+      }
+      assignPane(sessionId, paneId, {
+        kind: 'chat',
+        name: conversation.title || 'Conversation',
+        targetId: conversation.id,
+        agentPageId,
+      });
+    },
+    [sessionId, assignPane],
+  );
+
   // The pane bar selector's switch — focus-or-mint, decided by the pure
   // module above. Focusing reuses the store's dedup-aware `openConversation`
   // (the same conversation never shows in two panes at once — review M1);
@@ -695,6 +738,39 @@ export default function AgentPanes({
 
   const renderPane = ({ pane, isActive, canSplit }: { pane: PaneState; isActive: boolean; canSplit: boolean }) => {
     const surface = resolvePaneSurface(pane.scope);
+
+    // A chat pane owns real Chat/History/Settings tabs and the state that
+    // switches between them — pulled into its own component (not inlined
+    // here) for the same reason `ChatPaneIdentity`/`ChatPane`'s predecessor
+    // was: hooks cannot run inside a render-prop map across a pane count
+    // that changes on every split/close.
+    if (pane.scope?.kind === 'chat') {
+      return (
+        <ChatPane
+          scope={pane.scope}
+          surface={surface}
+          isActive={isActive}
+          canSplit={canSplit}
+          pickableAgents={pickableAgents}
+          agentsLoading={agentsLoading}
+          conversationsReady={sessionKnownToConversationsCache}
+          driveId={driveId}
+          sessionId={sessionId}
+          chatContext={chatContext}
+          isReadOnly={isReadOnly}
+          onSelectAgent={(nextAgentPageId) => handleSwitchAgent(pane.id, pane.scope!.agentPageId, nextAgentPageId)}
+          onSelectPane={() => selectPane(sessionId, pane.id)}
+          onSplitRight={() => splitRight(sessionId, pane.id)}
+          onSplitDown={() => splitDown(sessionId, pane.id)}
+          onClose={() => handleClosePane(pane.id)}
+          onCreateNewFromHistory={() => void handlePickAgent(pane.id, pane.scope!.agentPageId)}
+          onPickHistoryConversation={(conversation) =>
+            void handlePickHistoryConversation(pane.id, pane.scope!.agentPageId, conversation)
+          }
+        />
+      );
+    }
+
     // Unbound (scope null) is the only picker shape now — `resetPane` is the
     // one path back to it, so there is no longer a bound-but-empty sentinel
     // to also treat as one (issue #2263, finding 5).
@@ -711,19 +787,7 @@ export default function AgentPanes({
         <PaneBar
           isActive={isActive}
           identity={
-            pane.scope?.kind === 'chat' ? (
-              <ChatPaneIdentity
-                scope={pane.scope}
-                surface={surface}
-                pickableAgents={pickableAgents}
-                agentsLoading={agentsLoading}
-                conversationsReady={sessionKnownToConversationsCache}
-                driveId={driveId}
-                onSelectAgent={(nextAgentPageId) =>
-                  handleSwitchAgent(pane.id, pane.scope!.agentPageId, nextAgentPageId)
-                }
-              />
-            ) : pane.scope ? (
+            pane.scope ? (
               <PaneSessionIdentity name={pane.scope.name || 'pane'} />
             ) : (
               <span className="text-muted-foreground">New pane</span>
@@ -761,17 +825,9 @@ export default function AgentPanes({
             <div className="flex h-full items-center justify-center">
               <Loader2 className="size-4 animate-spin text-muted-foreground" />
             </div>
-          ) : surface.surface === 'chat' ? (
-            <PaneChat
-              conversationId={surface.conversationId}
-              agentPageId={surface.agentPageId}
-              driveId={driveId}
-              context={chatContext}
-              isReadOnly={isReadOnly}
-            />
-          ) : (
+          ) : surface.surface === 'terminal' ? (
             <Shell shellId={surface.shellId} name={pane.scope?.name} />
-          )}
+          ) : null}
         </div>
       </div>
     );
@@ -792,31 +848,50 @@ export default function AgentPanes({
   );
 }
 
+type PaneChatTab = 'chat' | 'history' | 'settings';
+
 /**
- * A chat pane's bar identity: the `/development` AISelector, restored as a
- * first-class pane bar control (a pane-close-lifecycle audit follow-up). Own
- * component (rather than inline in `renderPane`) so its hooks — resolving the
- * pane's agent, reading whether it's streaming — obey the rules of hooks
- * across a pane count that changes on every split/close.
+ * A chat pane, in full: the bar identity (AISelector + Chat/History/Settings
+ * tab strip) AND the body those tabs switch between. One component, not two,
+ * because the tabs live in the bar but the state they drive has to reach the
+ * body below it — `renderPane` itself cannot hold that state (a plain
+ * function invoked per pane, not a component; hooks would violate their own
+ * rules across a pane count that changes on every split/close), so this is
+ * the pane-bar-plus-body wrapper every OTHER pane kind's inline JSX in
+ * `renderPane` also uses, just pulled out for this one kind's own hooks.
  *
- * `pickableAgents` is what scopes the dropdown to the session's own drive
- * (or to nothing, for a global-assistant session — see `AISelector`'s
- * `agents` override): the same list the split picker already offers, so a
- * pane's selector and "Split → pick an agent" never disagree about what's
- * choosable here.
+ * History and Settings reuse the SAME hooks (`useConversations`,
+ * `useAgentConfig`) the page's own `AgentPageView` tabs use — the whole
+ * point (raised in review on PR #2296/#2299) being that a pane and the page
+ * view are not two parallel implementations of "this agent's history/
+ * settings": they are the same SWR-keyed data, so two panes on the same
+ * agent (or a pane and the page view) can never silently drift.
  */
-function ChatPaneIdentity({
+function ChatPane({
   scope,
   surface,
+  isActive,
+  canSplit,
   pickableAgents,
   agentsLoading,
   conversationsReady,
   driveId,
+  sessionId,
+  chatContext,
+  isReadOnly,
   onSelectAgent,
+  onSelectPane,
+  onSplitRight,
+  onSplitDown,
+  onClose,
+  onCreateNewFromHistory,
+  onPickHistoryConversation,
 }: {
   /** Always `kind: 'chat'` at the call site — `PaneScope` isn't a discriminated union, so this stays the full type. */
   scope: PaneScope;
   surface: PaneSurface;
+  isActive: boolean;
+  canSplit: boolean;
   pickableAgents: PickableAgent[];
   agentsLoading: boolean;
   /**
@@ -828,7 +903,16 @@ function ChatPaneIdentity({
    */
   conversationsReady: boolean;
   driveId: string | null;
+  sessionId: string;
+  chatContext?: 'page' | 'console';
+  isReadOnly: boolean;
   onSelectAgent: (agentPageId: string | null) => void;
+  onSelectPane: () => void;
+  onSplitRight: () => void;
+  onSplitDown: () => void;
+  onClose: () => void;
+  onCreateNewFromHistory: () => void;
+  onPickHistoryConversation: (conversation: { id: string; title: string | null; sessionId: string | null }) => void;
 }) {
   const { user } = useAuth();
   const { agent } = useResolvedAgent(scope.agentPageId);
@@ -841,33 +925,216 @@ function ChatPaneIdentity({
   // Mid-mint (the row isn't there yet), mid-stream, or the switch decision's
   // own data doesn't know this session yet: none of these have anything
   // safe to switch against.
-  const disabled = surface.surface === 'loading' || activeStream !== undefined || !conversationsReady;
+  const disabledAgentSwitch = surface.surface === 'loading' || activeStream !== undefined || !conversationsReady;
+
+  const [activeTab, setActiveTab] = useState<PaneChatTab>('chat');
+
+  const {
+    conversations,
+    isLoading: conversationsLoading,
+    deleteConversation,
+  } = useConversations({
+    agentId: scope.agentPageId,
+    currentConversationId: conversationId,
+    // Only fetched while History is actually showing — same lazy-load
+    // discipline `AgentPageView`'s own History tab uses.
+    enabled: activeTab === 'history',
+  });
+
+  const { config: agentConfig, setConfig: setAgentConfig } = useAgentConfig(scope.agentPageId);
+  const {
+    selectedProvider,
+    setSelectedProvider,
+    selectedModel,
+    setSelectedModel,
+    isProviderConfigured,
+  } = useProviderSettings(scope.agentPageId ? { pageId: scope.agentPageId } : {});
+  const [isSettingsSaving, setIsSettingsSaving] = useState(false);
+  const settingsRef = useRef<PageAgentSettingsTabRef>(null);
+
+  const toggleConversationShare = useCallback(
+    async (targetConversationId: string, isShared: boolean) => {
+      if (scope.agentPageId === null) return;
+      try {
+        const response = await fetchWithAuth(
+          `/api/ai/page-agents/${scope.agentPageId}/conversations/${targetConversationId}`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ isShared }),
+          },
+        );
+        if (!response.ok) console.error('Failed to update conversation sharing');
+      } catch (error) {
+        console.error('Failed to update conversation sharing:', error);
+      }
+    },
+    [scope.agentPageId],
+  );
+
+  const handleSelectHistoryConversation = useCallback(
+    (id: string) => {
+      const picked = conversations.find((c) => c.id === id);
+      onPickHistoryConversation({ id, title: picked?.title ?? null, sessionId: picked?.sessionId ?? null });
+      setActiveTab('chat');
+    },
+    [conversations, onPickHistoryConversation],
+  );
+
+  const handleCreateNewFromHistory = useCallback(() => {
+    onCreateNewFromHistory();
+    setActiveTab('chat');
+  }, [onCreateNewFromHistory]);
 
   return (
-    <div className="flex min-w-0 flex-1 items-center gap-0.5">
-      <AISelector
-        selectedAgent={scope.agentPageId === null ? null : agent}
-        onSelectAgent={(next) => onSelectAgent(next?.id ?? null)}
-        driveId={driveId ?? undefined}
-        agents={pickableAgents}
-        agentsLoading={agentsLoading}
-        disabled={disabled}
-        className="h-6 min-w-0 flex-1 justify-start gap-1 px-1.5 py-0 text-xs font-medium"
+    <div
+      className="group/pane flex h-full min-h-0 flex-col"
+      onClick={onSelectPane}
+      // Tabbing into any control inside a pane (the chat input, a close
+      // button) must activate it too — a click is not the only way in.
+      onFocusCapture={onSelectPane}
+    >
+      <PaneBar
+        isActive={isActive}
+        identity={
+          <div className="flex min-w-0 flex-1 items-center gap-0.5">
+            <AISelector
+              selectedAgent={scope.agentPageId === null ? null : agent}
+              onSelectAgent={(next) => onSelectAgent(next?.id ?? null)}
+              driveId={driveId ?? undefined}
+              agents={pickableAgents}
+              agentsLoading={agentsLoading}
+              disabled={disabledAgentSwitch}
+              className="h-6 min-w-0 flex-1 justify-start gap-1 px-1.5 py-0 text-xs font-medium"
+            />
+            <PaneChatTabStrip
+              activeTab={activeTab}
+              onSelectTab={setActiveTab}
+              // The Assistant (agentPageId null) has no page, so no Settings —
+              // every other pane's agent does.
+              showSettings={scope.agentPageId !== null}
+              agentTitle={agent?.title ?? 'Agent'}
+            />
+          </div>
+        }
+        actions={
+          <>
+            {activeTab === 'settings' && scope.agentPageId !== null && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  settingsRef.current?.submitForm();
+                }}
+                disabled={isSettingsSaving}
+                className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+              >
+                {isSettingsSaving ? <Loader2 className="size-3 animate-spin" aria-hidden="true" /> : <Save className="size-3" aria-hidden="true" />}
+                Save
+              </button>
+            )}
+            <PaneSplitCloseActions
+              canSplit={canSplit}
+              canClose
+              onSplitRight={onSplitRight}
+              onSplitDown={onSplitDown}
+              onClose={onClose}
+            />
+          </>
+        }
       />
-      {/* The Assistant (agentPageId null) has no page, so no Settings — every
-          other pane's agent does. `/p/[pageId]` resolves the drive-scoped
-          URL without this component needing to know it. */}
-      {scope.agentPageId !== null && (
-        <Link
-          href={`/p/${scope.agentPageId}?tab=settings`}
-          aria-label={`${agent?.title ?? 'Agent'} settings`}
-          title="Agent settings"
-          className="flex shrink-0 items-center justify-center rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <Settings className="size-3" aria-hidden="true" />
-        </Link>
+      <div className="min-h-0 flex-1 overflow-hidden">
+        {activeTab === 'chat' ? (
+          surface.surface === 'loading' ? (
+            <div className="flex h-full items-center justify-center">
+              <Loader2 className="size-4 animate-spin text-muted-foreground" />
+            </div>
+          ) : surface.surface === 'chat' ? (
+            <PaneChat
+              conversationId={surface.conversationId}
+              agentPageId={surface.agentPageId}
+              driveId={driveId}
+              context={chatContext}
+              isReadOnly={isReadOnly}
+            />
+          ) : null
+        ) : activeTab === 'history' ? (
+          <PageAgentHistoryTab
+            conversations={conversations}
+            currentConversationId={conversationId}
+            onSelectConversation={handleSelectHistoryConversation}
+            onCreateNew={handleCreateNewFromHistory}
+            onDeleteConversation={(id) => void deleteConversation(id)}
+            onToggleShare={toggleConversationShare}
+            isLoading={conversationsLoading}
+          />
+        ) : scope.agentPageId !== null && agent ? (
+          <div className="h-full overflow-auto">
+            <PageAgentSettingsTab
+              ref={settingsRef}
+              pageId={scope.agentPageId}
+              driveId={agent.driveId}
+              config={agentConfig}
+              onConfigUpdate={setAgentConfig}
+              selectedProvider={selectedProvider}
+              selectedModel={selectedModel}
+              onProviderChange={setSelectedProvider}
+              onModelChange={setSelectedModel}
+              isProviderConfigured={isProviderConfigured}
+              onSavingChange={setIsSettingsSaving}
+            />
+          </div>
+        ) : (
+          <div className="flex h-full items-center justify-center">
+            <Loader2 className="size-4 animate-spin text-muted-foreground" />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The tab strip itself — icon-only (a pane bar is 30px tall, no room for
+ * `AgentPageView`'s spacious text pills), tooltipped/aria-labeled for the
+ * text a mouse-hover or screen reader still needs.
+ */
+function PaneChatTabStrip({
+  activeTab,
+  onSelectTab,
+  showSettings,
+  agentTitle,
+}: {
+  activeTab: PaneChatTab;
+  onSelectTab: (tab: PaneChatTab) => void;
+  showSettings: boolean;
+  agentTitle: string;
+}) {
+  const tabButton = (tab: PaneChatTab, label: string, Icon: typeof MessageSquare) => (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={activeTab === tab}
+      aria-label={label}
+      title={label}
+      onClick={(e) => {
+        e.stopPropagation();
+        onSelectTab(tab);
+      }}
+      className={cn(
+        'flex shrink-0 items-center justify-center rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground',
+        activeTab === tab && 'bg-accent text-foreground',
       )}
+    >
+      <Icon className="size-3" aria-hidden="true" />
+    </button>
+  );
+
+  return (
+    <div role="tablist" className="flex shrink-0 items-center gap-0.5">
+      {tabButton('chat', 'Chat', MessageSquare)}
+      {tabButton('history', 'History', History)}
+      {showSettings && tabButton('settings', `${agentTitle} settings`, Settings)}
     </div>
   );
 }

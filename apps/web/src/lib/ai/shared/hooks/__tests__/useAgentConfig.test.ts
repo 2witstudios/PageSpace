@@ -104,4 +104,14 @@ describe('useAgentConfig', () => {
     await waitFor(() => expect(r1.current.config?.systemPrompt).toBe('config-for-1'));
     await waitFor(() => expect(r2.current.config?.systemPrompt).toBe('config-for-2'));
   });
+
+  // The global assistant has no page — a pane hosting it must still be able
+  // to call this hook unconditionally (stable hook order across an agent
+  // switch within the same pane instance) without issuing a request.
+  it('given pageId: null (the global assistant), never fetches and config stays null', async () => {
+    const { result } = renderHook(() => useAgentConfig(null), { wrapper });
+
+    expect(mockFetchWithAuth).not.toHaveBeenCalled();
+    expect(result.current.config).toBeNull();
+  });
 });

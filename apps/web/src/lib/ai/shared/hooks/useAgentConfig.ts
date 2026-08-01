@@ -2,7 +2,7 @@
  * useAgentConfig - Shared, SWR-backed hook for a page agent's config.
  *
  * SWR's cache is keyed by URL, so every mounted consumer of the SAME
- * `pageId` — the page's own Settings tab, and now every pane showing that
+ * `pageId` — the page's own Settings tab, and every pane showing that
  * agent — reads the identical cache entry: one fetch, one in-flight state,
  * one value. `setConfig` writes through that SAME cache (no revalidate,
  * since the caller already has the server's own fresh response — see
@@ -12,13 +12,19 @@
  * Settings tab, cannot be shadowed by a stale copy held in another (the gap
  * a per-instance `useState` fetch would have: two panes on the same agent
  * would otherwise each hold their own independent snapshot).
+ *
+ * `pageId: null` — the global assistant, which has no page and so no
+ * config to fetch — disables the SWR key entirely (mirrors `useConversations`'s
+ * own `enabled`/null-key pattern), so a pane hosting the assistant can call
+ * this hook unconditionally (stable hook order across an agent switch)
+ * without ever issuing a request.
  */
 import useSWR from 'swr';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import type { AgentConfig } from '../chat-types';
 
-function agentConfigKey(pageId: string): string {
-  return `/api/pages/${pageId}/agent-config`;
+function agentConfigKey(pageId: string | null): string | null {
+  return pageId === null ? null : `/api/pages/${pageId}/agent-config`;
 }
 
 interface UseAgentConfigResult {
@@ -26,7 +32,7 @@ interface UseAgentConfigResult {
   setConfig: (next: AgentConfig) => void;
 }
 
-export function useAgentConfig(pageId: string): UseAgentConfigResult {
+export function useAgentConfig(pageId: string | null): UseAgentConfigResult {
   const { data, mutate } = useSWR<AgentConfig>(
     agentConfigKey(pageId),
     async (url) => {
