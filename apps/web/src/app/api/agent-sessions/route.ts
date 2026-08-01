@@ -485,6 +485,19 @@ export async function POST(request: Request) {
         );
         return NextResponse.json({ error: 'That conversation is not available' }, { status: 400 });
       }
+      if (outcome === 'not_found') {
+        // The preflight above already refused every non-racy cause of
+        // `not_found` (missing, foreign, inactive, already bound elsewhere)
+        // with its own 409/404 — reaching it HERE means the identical
+        // condition changed underneath us in the gap between that read and
+        // this atomic claim (most likely: another request claimed it first).
+        // Same conflict, same status the preflight gives it — not a server
+        // fault, so not 502.
+        return NextResponse.json(
+          { error: 'That conversation is no longer available to claim' },
+          { status: 409 },
+        );
+      }
       loggers.api.error(
         'Agent session spawn: claim of first conversation failed',
         undefined,

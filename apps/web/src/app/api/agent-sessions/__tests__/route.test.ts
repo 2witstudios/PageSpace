@@ -508,8 +508,15 @@ describe("POST /api/agent-sessions — firstThing: 'claim'", () => {
     );
   });
 
-  it('given the claim fails (a lost race after the preflight), ENDS the just-minted session — no empty workspace exists', async () => {
+  it('given the claim loses a race after the preflight (not_found), ENDS the just-minted session and responds 409 — same conflict, same status the preflight itself would give it, not a server fault', async () => {
     mockClaimConversationInSession.mockResolvedValue('not_found');
+    const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
+    expect(response.status).toBe(409);
+    expect(mockEndSession).toHaveBeenCalledWith('ses-new');
+  });
+
+  it('given claim fails for a truly unexpected outcome, ENDS the session and responds 502', async () => {
+    mockClaimConversationInSession.mockResolvedValue('session_ended');
     const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
     expect(response.status).toBe(502);
     expect(mockEndSession).toHaveBeenCalledWith('ses-new');
