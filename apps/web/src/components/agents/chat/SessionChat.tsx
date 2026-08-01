@@ -24,6 +24,7 @@ import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ChatInput } from '@/components/ai/chat/input';
 import { UndoAiChangesDialog } from '@/components/ai/shared/chat';
+import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
 import { ChatErrorBanner } from '@/components/ai/shared/chat/ChatErrorBanner';
 import { ChatMessagesArea } from '@/components/ai/shared/chat/ChatMessagesArea';
 import { Conversation, ConversationScrollButton } from '@/components/ai/ui/conversation';
@@ -128,6 +129,10 @@ export function SessionChatView({
     chat.isMessagesLoading && chat.messages.length === 0 && chat.remoteStreams.length === 0;
 
   return (
+    // isReadOnly viewers get no answer plumbing at all — same as rendering
+    // outside a chat surface entirely — so AskUserQuestionCard's options and
+    // Submit stay disabled instead of letting a viewer attempt a 403'd resume.
+    <AskUserAnswerProvider value={isReadOnly ? null : chat.askUserAnswering}>
     <div
       data-testid="session-chat"
       className="@container flex h-full min-w-0 min-h-0 flex-col bg-background"
@@ -225,5 +230,6 @@ export function SessionChatView({
         />
       )}
     </div>
+    </AskUserAnswerProvider>
   );
 }
