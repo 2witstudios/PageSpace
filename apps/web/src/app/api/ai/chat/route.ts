@@ -754,54 +754,47 @@ export async function POST(request: Request) {
 
         loggers.ai.debug('AI Chat API: Saving user message immediately', { id: messageId, contentLength: messageContent.length });
 
-        if (existingConversation) {
-          // Atomic re-check immediately adjacent to the write: `existingConversation`
-          // was read (and validated active) far above, but the credit-gate check,
-          // @mention processing, and command resolution in between all do their own
-          // unrelated I/O — plenty of room for a concurrent History-delete to commit
-          // in that gap. A `SELECT ... FOR UPDATE` + the insert in ONE short
-          // transaction (not wrapping any of the intervening work, which must never
-          // run inside an open transaction) closes that window rather than trusting
-          // the stale earlier read (review finding — chatgpt-codex-connector on PR
-          // #2299). Gated on `existingConversation`: a brand-new conversation has no
-          // row to race against yet (or, per the eager-create call above, may have
-          // none at all — that failure is explicitly tolerated/non-fatal there, and
-          // this check must not turn it into a hard rejection).
-          await db.transaction(async (tx) => {
-            const [row] = await tx
-              .select({ isActive: conversations.isActive })
-              .from(conversations)
-              .where(eq(conversations.id, conversationId!))
-              .for('update')
-              .limit(1);
-            if (!row?.isActive) throw new ConversationHistoryDeletedError();
+        // Atomic re-check immediately adjacent to the write: `existingConversation`
+        // (if any) was read far above, but the credit-gate check, @mention
+        // processing, and command resolution in between all do their own
+        // unrelated I/O — plenty of room for a concurrent History-delete to commit
+        // in that gap. A `SELECT ... FOR UPDATE` + the insert in ONE short
+        // transaction (not wrapping any of the intervening work, which must never
+        // run inside an open transaction) closes that window rather than trusting
+        // the stale earlier read (review finding — chatgpt-codex-connector on PR
+        // #2299).
+        //
+        // Unconditional — NOT gated on `existingConversation` (that snapshot
+        // predates the eager createConversation() call a few lines up, and
+        // stayed null for BOTH "genuinely no row anywhere yet" and "a LEGACY
+        // conversation whose row that eager call just created": skipping the
+        // lock for the second case let a concurrent History-delete land between
+        // that create and this write with nothing to catch it — review finding,
+        // round 11). `row` undefined here means no row exists even now (the
+        // eager create's own failure, tolerated/non-fatal there) — not a
+        // History-delete, so only an explicitly inactive row blocks the write.
+        await db.transaction(async (tx) => {
+          const [row] = await tx
+            .select({ isActive: conversations.isActive })
+            .from(conversations)
+            .where(eq(conversations.id, conversationId!))
+            .for('update')
+            .limit(1);
+          if (row && !row.isActive) throw new ConversationHistoryDeletedError();
 
-            await saveMessageToDatabase({
-              messageId,
-              pageId: chatId!,
-              conversationId: conversationId!,
-              userId: userId!,
-              role: 'user',
-              content: messageContent,
-              toolCalls: undefined,
-              toolResults: undefined,
-              uiMessage: userMessage,
-              dbClient: tx,
-            });
-          });
-        } else {
           await saveMessageToDatabase({
             messageId,
-            pageId: chatId,
-            conversationId,
-            userId,
+            pageId: chatId!,
+            conversationId: conversationId!,
+            userId: userId!,
             role: 'user',
             content: messageContent,
             toolCalls: undefined,
             toolResults: undefined,
             uiMessage: userMessage,
+            dbClient: tx,
           });
-        }
+        });
 
         // Fire-and-forget: title derivation must never fail or delay the chat
         // response, matching how createConversation above is treated as

@@ -625,6 +625,28 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       expect(response.status).toBe(404);
       expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
     });
+
+    // round 11 review finding — chatgpt-codex-connector on PR #2299: a LEGACY
+    // conversation (messages exist, but no `conversations` row — the early
+    // ownership check's mockGetConversation resolves null, same as a
+    // genuinely brand-new one) has its row created by the EAGER, best-effort
+    // createConversation() call a few lines below that check. The guard used
+    // to be gated on the early null snapshot and skip the lock entirely for
+    // this case — missing the window between that eager create succeeding
+    // and this write, where a concurrent History-delete could land with
+    // nothing to catch it. The guard now always runs; a row that exists NOW
+    // (even though the early snapshot found none) and is inactive must still
+    // 404.
+    it('given a legacy conversation whose row the eager createConversation() call just produced, but a concurrent History-delete then deactivated it before this write, should 404', async () => {
+      mockGetConversation.mockResolvedValue(null); // legacy: no row at the early check
+      mockConversationRowExistsAtLockTime.current = true; // ...but the eager create found/made one
+      mockConversationActiveAtLockTime.current = false; // ...and it's now inactive
+
+      const response = await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(response.status).toBe(404);
+      expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
+    });
   });
 
   // The user-message write's atomic re-check above only covers that ONE write. The
