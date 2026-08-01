@@ -93,7 +93,11 @@ import {
   withCacheBreakpoints,
 } from '@/lib/ai/core/prompt-assembly';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
-import { resolveOrCreateConversation, ConversationOwnershipError } from './resolve-or-create-conversation';
+import {
+  resolveOrCreateConversation,
+  ConversationOwnershipError,
+  ConversationHistoryDeletedError,
+} from './resolve-or-create-conversation';
 import { deriveConversationTitle } from '@/lib/repositories/derive-conversation-title';
 
 // Allow streaming responses up to 5 minutes
@@ -333,7 +337,7 @@ export async function POST(
     try {
       ({ conversation, isNew: conversationIsNew } = await resolveOrCreateConversation(userId, conversationId));
     } catch (e) {
-      if (e instanceof ConversationOwnershipError) {
+      if (e instanceof ConversationOwnershipError || e instanceof ConversationHistoryDeletedError) {
         return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
       }
       throw e;

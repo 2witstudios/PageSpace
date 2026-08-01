@@ -547,6 +547,21 @@ export async function POST(request: Request) {
           return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         }
       } else {
+        // A history-deleted row (`conversations.isActive: false`) must never
+        // accept a new message — the send would appear to succeed while the
+        // canonical row stays excluded from both open and closed session
+        // listings, leaving the new transcript unreachable after the stale
+        // pane refreshes. This is reachable now that History-delete
+        // deactivates the CANONICAL row (not just its messages) while a
+        // conversation can still be open in another pane or browser tab
+        // (review finding — chatgpt-codex-connector on PR #2296).
+        if (existingConversation.isActive === false) {
+          loggers.ai.warn('AI Chat API: rejected send to a history-deleted conversation', {
+            userId,
+            requestConversationId,
+          });
+          return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+        }
         const ownsIt = existingConversation.userId === userId;
         const isSharedConversation = existingConversation.isShared === true;
         // contextId is nullable in the schema (null for global conversations), so only

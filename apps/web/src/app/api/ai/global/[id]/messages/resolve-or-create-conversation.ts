@@ -24,6 +24,26 @@ export class ConversationBindingConflictError extends Error {
   }
 }
 
+/**
+ * The id resolves to a row, but it has been history-deleted
+ * (`isActive: false`) — reachable via the concurrent-insert fallback below:
+ * the initial SELECT filters `isActive: true` (so a history-deleted row
+ * reads as "does not exist"), the INSERT then collides on the id's primary
+ * key and is swallowed by `onConflictDoNothing`, and the fallback SELECT
+ * that resolves "who won the race" has no `isActive` filter at all — so it
+ * silently returns the STALE INACTIVE row, mislabeled `isNew: true`, and
+ * the caller would persist a new message beneath a conversation excluded
+ * from every session listing (same class of bug as the page-agent send
+ * route's missing isActive check — review finding, chatgpt-codex-connector
+ * on PR #2296).
+ */
+export class ConversationHistoryDeletedError extends Error {
+  constructor() {
+    super('Conversation has been deleted from history');
+    this.name = 'ConversationHistoryDeletedError';
+  }
+}
+
 // CUID2 format: starts with lowercase letter, followed by 1–31 lowercase alphanumeric chars.
 const CUID2_RE = /^[a-z][a-z0-9]{1,31}$/;
 
@@ -108,6 +128,7 @@ export async function resolveOrCreateConversation(
     .limit(1);
 
   if (!winner) throw new Error(`Failed to resolve conversation ${conversationId}`);
+  if (!winner.isActive) throw new ConversationHistoryDeletedError();
   if (winner.userId !== userId) throw new ConversationOwnershipError();
   if (opts?.sessionId !== undefined && winner.sessionId !== opts.sessionId) {
     // The racing insert won without our binding — same refusal as any other

@@ -532,6 +532,34 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       expect(response.status).not.toBe(403);
       expect(mockCreateStreamLifecycle).toHaveBeenCalled();
     });
+
+    // A conversation whose CANONICAL row is history-deleted (isActive: false) must never
+    // accept a new message: the send would appear to succeed while the row stays excluded
+    // from every open/closed session listing, leaving the new transcript unreachable once
+    // the stale pane refreshes (review finding — chatgpt-codex-connector on PR #2296, filed
+    // after History-delete was changed to deactivate the canonical row, not just its
+    // messages).
+    it('given an existing conversation row that is isActive: false (history-deleted), should 404 and never invoke the lifecycle', async () => {
+      mockGetConversation.mockResolvedValue({
+        id: CONV_ID, userId: 'user-1', isShared: false, contextId: 'page-1', isActive: false,
+      });
+
+      const response = await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(response.status).toBe(404);
+      expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
+    });
+
+    it('given an existing conversation row that is isActive: true, should NOT be rejected on that basis', async () => {
+      mockGetConversation.mockResolvedValue({
+        id: CONV_ID, userId: 'user-1', isShared: false, contextId: 'page-1', isActive: true,
+      });
+
+      const response = await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(response.status).not.toBe(404);
+      expect(mockCreateStreamLifecycle).toHaveBeenCalled();
+    });
   });
 
   // AC5 — takeover, never 409. This route called takeOverConversationStreams and NOTHING asserted
