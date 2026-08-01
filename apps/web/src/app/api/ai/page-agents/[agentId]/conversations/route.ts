@@ -203,8 +203,9 @@ export async function POST(
         : createId();
 
     // Optional session binding — the thread is BORN into its working context
-    // (contract invariant 1: set once at creation, permanent; a session hosts
-    // many conversations and owns the one sandbox they share). Gated on the
+    // (contract invariant 1: write-once, either here at creation or later via
+    // a claim of the caller's own still-unbound row; a session hosts many
+    // conversations and owns the one sandbox they share). Gated on the
     // session access check so a caller cannot bind a thread into a workspace
     // they cannot reach.
     const sessionId: string | null =

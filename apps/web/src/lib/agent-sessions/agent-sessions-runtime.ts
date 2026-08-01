@@ -81,6 +81,11 @@ import {
   reopenConversationInSessionWith,
   type ReopenConversationOutcome,
 } from '@/lib/agent-sessions/reopen-conversation-in-session';
+import {
+  claimConversationInSessionWith,
+  type ClaimConversationOutcome,
+  type ClaimConversationInSessionDeps,
+} from '@/lib/agent-sessions/claim-conversation-in-session';
 
 export { isCodeExecutionEnabled };
 
@@ -277,25 +282,79 @@ export async function withSessionListingLock<T>(sessionId: string, fn: () => Pro
 }
 
 /**
- * Create a conversation BORN INTO a session. Decision logic lives in the pure
- * module (`create-conversation-in-session.ts`) — this is only its production
- * wiring: the squat-guarded repository creator for page threads, the
- * ownership-guarded resolver for global ones, both carrying the binding
- * INSIDE their INSERT (no `conversations.sessionId` UPDATE exists anywhere —
- * rebinding is unrepresentable, per invariant 1).
+ * The claim primitive's deps, shared verbatim by both wirings below —
+ * `createConversationInSession` needs the exact same row/agent/session/cap
+ * facts `claimConversationInSession` does (it composes on top of the same
+ * primitive), so this is built once rather than duplicated at both call
+ * sites (review finding — simplify pass: the two closures had drifted into
+ * an exact copy of each other).
+ */
+function buildClaimDeps(): ClaimConversationInSessionDeps {
+  return {
+    // Same "ACTIVE, open-listing" predicate create/close/reopen all share —
+    // `countOpenConversations` is just this dep under the name those pure
+    // modules use.
+    countActiveConversations: sessionListingReadDeps().countOpenConversations,
+    findConversation: async (conversationId) => {
+      const row = await conversationRepository.getConversation(conversationId);
+      if (!row) return null;
+      return {
+        userId: row.userId,
+        type: row.type,
+        contextId: row.contextId,
+        sessionId: row.sessionId,
+        isActive: row.isActive,
+      };
+    },
+    findAgentDriveId: async (agentPageId) => {
+      const agent = await conversationRepository.getAiAgent(agentPageId);
+      return agent?.driveId ?? null;
+    },
+    findSession: async (sessionId) => {
+      const row = await findSessionRecord(sessionId);
+      return row ? { driveId: row.driveId, endedAt: row.endedAt } : null;
+    },
+    claimConversation: ({ conversationId, userId, sessionId }) =>
+      conversationRepository.claimConversation(conversationId, userId, sessionId),
+  };
+}
+
+/**
+ * Claim a NEVER-BOUND conversation into a session — the wiring for
+ * `claim-conversation-in-session.ts`'s pure decision. Same
+ * `withSessionListingLock` key create/close/reopen use, so a claim can never
+ * race any of them for the session's last open-listing slot.
+ */
+export async function claimConversationInSession(input: {
+  conversationId: string;
+  userId: string;
+  sessionId: string;
+}): Promise<ClaimConversationOutcome> {
+  return withSessionListingLock(input.sessionId, () => claimConversationInSessionWith(buildClaimDeps(), input));
+}
+
+/**
+ * Create a conversation and land it in a session. Decision logic lives in the
+ * pure module (`create-conversation-in-session.ts`) — this is only its
+ * production wiring: the squat-guarded repository creator for page threads
+ * and the ownership-guarded resolver for global ones (both session-agnostic
+ * inserts), composed with `buildClaimDeps()` above so the binding itself
+ * goes through the exact same guarded UPDATE `claimConversationInSession`
+ * uses — the ONE place `conversations.sessionId` is ever written.
  *
  * Throws `ConversationUnavailableError` (message `conversation_unavailable`)
  * when the id cannot be claimed WITH this binding — foreign owner, legacy
  * message-owner conflict, or an existing row whose binding disagrees.
  *
  * Wrapped in the SAME per-session listing lock `closeConversationInSession`/
- * `reopenConversationInSession` take — see `withSessionListingLock`'s own
- * doc for why that's a dedicated-pool advisory lock, never `db.transaction`.
- * Without this serialization at all, a create racing a reopen could both
- * read the cap's count before either writes, and both succeed — two
- * operations each individually under `MAX_SESSION_CONVERSATIONS`, together
- * over it (caught in review — the lock previously only coordinated
- * close/reopen against each other, not against create).
+ * `reopenConversationInSession`/`claimConversationInSession` take — see
+ * `withSessionListingLock`'s own doc for why that's a dedicated-pool advisory
+ * lock, never `db.transaction`. Without this serialization at all, a create
+ * racing a reopen (or a claim) could both read the cap's count before either
+ * writes, and both succeed — two operations each individually under
+ * `MAX_SESSION_CONVERSATIONS`, together over it (caught in review — the lock
+ * previously only coordinated close/reopen against each other, not against
+ * create).
  */
 export async function createConversationInSession(input: {
   conversationId: string;
@@ -309,44 +368,15 @@ export async function createConversationInSession(input: {
   return withSessionListingLock(input.sessionId, () =>
     createConversationInSessionWith(
       {
-        createPageConversation: ({ conversationId, userId, agentPageId, sessionId, title }) =>
+        ...buildClaimDeps(),
+        createPageConversation: ({ conversationId, userId, agentPageId, title }) =>
           conversationRepository.createConversation(conversationId, userId, agentPageId, {
-            sessionId,
             title: title ?? undefined,
           }),
-        createGlobalConversation: async ({ conversationId, userId, sessionId, title }) => {
+        createGlobalConversation: async ({ conversationId, userId, title }) => {
           await resolveOrCreateConversation(userId, conversationId, undefined, {
-            sessionId,
             title: title ?? undefined,
           });
-        },
-        findConversation: async (conversationId) => {
-          const row = await conversationRepository.getConversation(conversationId);
-          if (!row) return null;
-          return { userId: row.userId, type: row.type, contextId: row.contextId, sessionId: row.sessionId };
-        },
-        findAgentDriveId: async (agentPageId) => {
-          const agent = await conversationRepository.getAiAgent(agentPageId);
-          return agent?.driveId ?? null;
-        },
-        findSessionDriveId: async (sessionId) => {
-          const row = await findSessionRecord(sessionId);
-          return row ? { driveId: row.driveId } : null;
-        },
-        countActiveConversations: async (sessionId) => {
-          const [row] = await db
-            .select({ n: count() })
-            .from(conversations)
-            .where(
-              and(
-                eq(conversations.sessionId, sessionId),
-                eq(conversations.isActive, true),
-                // A conversation closed OUT of the session's listing no longer
-                // holds a cap slot — closing one frees room for another.
-                isNull(conversations.closedInSessionAt),
-              ),
-            );
-          return row?.n ?? 0;
         },
       },
       input,
@@ -452,50 +482,6 @@ export async function reopenConversationInSession(input: {
       input,
     ),
   );
-}
-
-/**
- * A session's CLOSED conversations — the reopen affordance's listing. Mirrors
- * `listSessionConversationsBulk`'s shape and cap for a single session, with
- * the closed/open predicate flipped: `isActive` still gates history-deleted
- * rows out, but `closedInSessionAt` must be SET rather than null. Newest
- * activity first, capped at {@link MAX_SESSION_CONVERSATIONS} — history
- * beyond that is reachable through the agent's own page History tab, not
- * this session-scoped reopen list.
- */
-export async function listClosedSessionConversations(sessionId: string): Promise<SessionConversationEntry[]> {
-  const rows = await db
-    .select({
-      conversationId: conversations.id,
-      title: conversations.title,
-      type: conversations.type,
-      contextId: conversations.contextId,
-      lastMessageAt: conversations.lastMessageAt,
-    })
-    .from(conversations)
-    .where(
-      and(
-        eq(conversations.sessionId, sessionId),
-        eq(conversations.isActive, true),
-        isNotNull(conversations.closedInSessionAt),
-      ),
-    )
-    // `lastMessageAt` is nullable, and Postgres sorts NULLs FIRST for a plain
-    // DESC order — without NULLS LAST, a closed conversation that never got a
-    // message would rank ABOVE genuinely recent ones and could crowd them out
-    // of the LIMIT below, contradicting "newest activity first" (review
-    // finding — coderabbitai on PR #2296).
-    .orderBy(sql`${conversations.lastMessageAt} DESC NULLS LAST`)
-    .limit(MAX_SESSION_CONVERSATIONS);
-
-  return rows.map((row) => ({
-    conversationId: row.conversationId,
-    title: row.title,
-    // Same mapping `listSessionConversationsBulk` uses: `contextId` is only
-    // meaningful as an agent page id for a 'page' conversation.
-    agentPageId: row.type === 'page' ? row.contextId : null,
-    lastMessageAt: row.lastMessageAt,
-  }));
 }
 
 /**

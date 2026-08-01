@@ -24,10 +24,25 @@ export interface PastConversationRow {
   driveId: string | null;
 }
 
-export type NavigationTarget =
-  | { kind: 'pane'; sessionId: string; conversationId: string; agentId: string | null }
+/** Where a `claimable` row's click routes if the claim-into-a-session attempt fails. */
+export type ClaimableFallback =
   | { kind: 'page'; driveId: string; pageId: string; conversationId: string; sessionId: string | null }
   | { kind: 'global'; conversationId: string; driveId: string | null }
+  | { kind: 'unavailable' };
+
+export type NavigationTarget =
+  | { kind: 'pane'; sessionId: string; conversationId: string; agentId: string | null }
+  /**
+   * A session-less `type: 'page'` or `type: 'global'` row — clicking it
+   * should spawn a session and claim this SAME conversation into it (see
+   * `claim-conversation-in-session.ts`), landing it in the pane grid with a
+   * real sandbox, rather than opening it read-only outside any session.
+   * `fallback` carries exactly what this row would have resolved to before
+   * claiming existed — the old `page`/`global` target — so a failed claim
+   * (quota, a race, a permission edge) degrades to today's exact behavior
+   * instead of a dead end.
+   */
+  | { kind: 'claimable'; conversationId: string; agentPageId: string | null; driveId: string | null; fallback: ClaimableFallback }
   /**
    * No surface in the app can open this row today. NOT the same as an
    * error — the row still belongs in "every conversation you own", it just
@@ -71,20 +86,33 @@ export function resolveNavigationTarget(
     case 'page': {
       if (!row.agentPageId || !row.driveId) return { kind: 'unavailable' };
       return {
-        kind: 'page',
-        driveId: row.driveId,
-        pageId: row.agentPageId,
+        kind: 'claimable',
         conversationId: row.conversationId,
-        sessionId: null,
+        agentPageId: row.agentPageId,
+        driveId: row.driveId,
+        fallback: {
+          kind: 'page',
+          driveId: row.driveId,
+          pageId: row.agentPageId,
+          conversationId: row.conversationId,
+          sessionId: null,
+        },
       };
     }
     // API-managed (POST /api/v1/conversations) — always session-less (confirmed:
     // nothing ever binds a `client` row to a session) and has no in-app chat
-    // surface to open into.
+    // surface to open into, and no session claim can grant it one either
+    // (claim refuses `type: 'client'` — see `claim-conversation-in-session.ts`).
     case 'client':
       return { kind: 'unavailable' };
     case 'global':
-      return { kind: 'global', conversationId: row.conversationId, driveId: currentDriveId ?? null };
+      return {
+        kind: 'claimable',
+        conversationId: row.conversationId,
+        agentPageId: null,
+        driveId: currentDriveId ?? null,
+        fallback: { kind: 'global', conversationId: row.conversationId, driveId: currentDriveId ?? null },
+      };
     default: {
       // Exhaustiveness guard: adding a new `ConversationKind` value fails to
       // compile here instead of silently misrouting through this switch.

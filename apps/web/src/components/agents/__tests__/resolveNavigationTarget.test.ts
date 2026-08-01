@@ -42,17 +42,23 @@ describe('resolveNavigationTarget', () => {
     expect(target).toEqual({ kind: 'unavailable' });
   });
 
-  it('a plain page conversation navigates to its agent page, in its own drive', () => {
+  it('a session-less page conversation is claimable — spawning a session is tried before falling back to its agent page', () => {
     const target = resolveNavigationTarget(
       row({ type: 'page', agentPageId: 'agent-1', driveId: 'drive-1' }),
       undefined,
     );
     expect(target).toEqual({
-      kind: 'page',
-      driveId: 'drive-1',
-      pageId: 'agent-1',
+      kind: 'claimable',
       conversationId: 'conv-1',
-      sessionId: null,
+      agentPageId: 'agent-1',
+      driveId: 'drive-1',
+      fallback: {
+        kind: 'page',
+        driveId: 'drive-1',
+        pageId: 'agent-1',
+        conversationId: 'conv-1',
+        sessionId: null,
+      },
     });
   });
 
@@ -70,13 +76,33 @@ describe('resolveNavigationTarget', () => {
     expect(target).toEqual({ kind: 'unavailable' });
   });
 
-  it('a global conversation navigates wherever the global assistant currently lives', () => {
+  it('a session-less global conversation is claimable — its fallback is wherever the global assistant currently lives', () => {
     const target = resolveNavigationTarget(row({ type: 'global' }), 'drive-current');
-    expect(target).toEqual({ kind: 'global', conversationId: 'conv-1', driveId: 'drive-current' });
+    expect(target).toEqual({
+      kind: 'claimable',
+      conversationId: 'conv-1',
+      agentPageId: null,
+      driveId: 'drive-current',
+      fallback: { kind: 'global', conversationId: 'conv-1', driveId: 'drive-current' },
+    });
   });
 
-  it('a global conversation with no current drive scope resolves to the dashboard home', () => {
+  it('a session-less global conversation with no current drive scope falls back to the dashboard home', () => {
     const target = resolveNavigationTarget(row({ type: 'global' }), undefined);
-    expect(target).toEqual({ kind: 'global', conversationId: 'conv-1', driveId: null });
+    expect(target).toEqual({
+      kind: 'claimable',
+      conversationId: 'conv-1',
+      agentPageId: null,
+      driveId: null,
+      fallback: { kind: 'global', conversationId: 'conv-1', driveId: null },
+    });
+  });
+
+  it('a session-bound row still wins the pane grid even for a claimable-shaped type (branch-ordering regression guard)', () => {
+    const target = resolveNavigationTarget(
+      row({ type: 'global', sessionId: 'ses-1' }),
+      'drive-current',
+    );
+    expect(target).toEqual({ kind: 'pane', sessionId: 'ses-1', conversationId: 'conv-1', agentId: null });
   });
 });

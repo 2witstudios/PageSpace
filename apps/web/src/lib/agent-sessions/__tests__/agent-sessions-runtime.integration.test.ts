@@ -27,9 +27,9 @@ import { conversations } from '@pagespace/db/schema/conversations';
 import { factories } from '@pagespace/db/test/factories';
 import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-sessions/plan-spawn-session';
 import {
+  claimConversationInSession,
   createConversationInSession,
   reopenConversationInSession,
-  listClosedSessionConversations,
 } from '../agent-sessions-runtime';
 import { SessionFullError } from '../create-conversation-in-session';
 
@@ -142,7 +142,7 @@ describe('create/reopen — the open-listing cap serializes across BOTH operatio
   }, 20_000);
 });
 
-describe('listClosedSessionConversations — NULLS LAST (review finding: coderabbitai on PR #2296)', () => {
+describe('claim — real concurrency (the guarded UPDATE, not the advisory lock, is what serializes it)', () => {
   beforeAll(async () => {
     try {
       await db.select().from(pages).limit(1);
@@ -152,42 +152,178 @@ describe('listClosedSessionConversations — NULLS LAST (review finding: coderab
     }
   });
 
-  it('sorts a closed conversation that never received a message LAST, not first — Postgres DESC sorts NULLs first by default', async () => {
+  async function openCountFor(sessionId: string): Promise<number> {
+    const [row] = await db
+      .select({ n: count() })
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.sessionId, sessionId),
+          eq(conversations.isActive, true),
+          isNull(conversations.closedInSessionAt),
+        ),
+      );
+    return row?.n ?? 0;
+  }
+
+  it('two concurrent claims of the SAME conversation into TWO DIFFERENT sessions: exactly one wins, even though the two sessions take different lock keys', async () => {
     if (!dbAvailable) return;
 
     const owner = await factories.createUser();
     const drive = await factories.createDrive(owner.id);
-    const agentPage = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Sort Agent' });
+    const agentPage = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Claim Race Agent' });
+    const [sessionA] = await db.insert(agentSessions).values({ id: createId(), driveId: drive.id, ownerId: owner.id }).returning();
+    const [sessionB] = await db.insert(agentSessions).values({ id: createId(), driveId: drive.id, ownerId: owner.id }).returning();
+
+    const conversationId = createId();
+    await db.insert(conversations).values({
+      id: conversationId,
+      userId: owner.id,
+      type: 'page',
+      contextId: agentPage.id,
+      sessionId: null,
+      isActive: true,
+    });
+
+    const [resultA, resultB] = await Promise.all([
+      claimConversationInSession({ conversationId, userId: owner.id, sessionId: sessionA.id }),
+      claimConversationInSession({ conversationId, userId: owner.id, sessionId: sessionB.id }),
+    ]);
+
+    // `withSessionListingLock` locks per-SESSION — sessionA and sessionB take
+    // DIFFERENT keys, so the lock provides no mutual exclusion between these
+    // two calls at all. The `sessionId IS NULL` predicate in the guarded
+    // UPDATE is the only thing serializing this correctly.
+    const outcomes = [resultA, resultB];
+    expect(outcomes.filter((o) => o === 'claimed')).toHaveLength(1);
+    expect(outcomes.filter((o) => o === 'not_found')).toHaveLength(1);
+
+    const [row] = await db.select().from(conversations).where(eq(conversations.id, conversationId)).limit(1);
+    const winnerSessionId = resultA === 'claimed' ? sessionA.id : sessionB.id;
+    expect(row.sessionId).toBe(winnerSessionId);
+  }, 20_000);
+
+  it('two concurrent claims of the SAME conversation into the SAME session: one claimed, one already_in_session, exactly one row bound', async () => {
+    if (!dbAvailable) return;
+
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const agentPage = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Same-Session Claim Race' });
     const [session] = await db.insert(agentSessions).values({ id: createId(), driveId: drive.id, ownerId: owner.id }).returning();
 
-    // Closed, never messaged — `lastMessageAt` stays NULL.
-    const neverMessaged = createId();
+    const conversationId = createId();
     await db.insert(conversations).values({
-      id: neverMessaged, userId: owner.id, type: 'page', contextId: agentPage.id, sessionId: session.id,
-      isActive: true, closedInSessionAt: new Date(),
+      id: conversationId,
+      userId: owner.id,
+      type: 'page',
+      contextId: agentPage.id,
+      sessionId: null,
+      isActive: true,
     });
 
-    // Closed, with real (older) activity.
-    const older = createId();
+    const outcomes = await Promise.all([
+      claimConversationInSession({ conversationId, userId: owner.id, sessionId: session.id }),
+      claimConversationInSession({ conversationId, userId: owner.id, sessionId: session.id }),
+    ]);
+
+    expect(outcomes.filter((o) => o === 'claimed')).toHaveLength(1);
+    expect(outcomes.filter((o) => o === 'already_in_session')).toHaveLength(1);
+    expect(await openCountFor(session.id)).toBe(1);
+  }, 20_000);
+
+  it("claim racing create for the session's LAST slot: exactly one wins, the count never exceeds the cap", async () => {
+    if (!dbAvailable) return;
+
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const agentPage = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Claim-vs-Create Race' });
+    const [session] = await db.insert(agentSessions).values({ id: createId(), driveId: drive.id, ownerId: owner.id }).returning();
+
+    const filler = Array.from({ length: MAX_SESSION_CONVERSATIONS - 1 }, () => ({
+      id: createId(),
+      userId: owner.id,
+      type: 'page' as const,
+      contextId: agentPage.id,
+      sessionId: session.id,
+      isActive: true,
+    }));
+    await db.insert(conversations).values(filler);
+
+    // The ONE never-bound conversation available to claim — contends for
+    // the same last slot the concurrent create is also trying to fill.
+    const claimableConversationId = createId();
     await db.insert(conversations).values({
-      id: older, userId: owner.id, type: 'page', contextId: agentPage.id, sessionId: session.id,
-      isActive: true, closedInSessionAt: new Date(), lastMessageAt: new Date('2020-01-01'),
+      id: claimableConversationId,
+      userId: owner.id,
+      type: 'page',
+      contextId: agentPage.id,
+      sessionId: null,
+      isActive: true,
     });
 
-    // Closed, with real (newer) activity.
-    const newer = createId();
+    expect(await openCountFor(session.id)).toBe(MAX_SESSION_CONVERSATIONS - 1);
+
+    const newConversationId = createId();
+    const [createResult, claimResult] = await Promise.allSettled([
+      createConversationInSession({
+        conversationId: newConversationId,
+        userId: owner.id,
+        agentPageId: agentPage.id,
+        sessionId: session.id,
+      }),
+      claimConversationInSession({ conversationId: claimableConversationId, userId: owner.id, sessionId: session.id }),
+    ]);
+
+    const isRefused = (o: PromiseSettledResult<unknown>) =>
+      o.status === 'rejected' || (o.status === 'fulfilled' && o.value === 'session_full');
+    const outcomes = [createResult, claimResult];
+    expect(outcomes.filter((o) => !isRefused(o))).toHaveLength(1);
+    expect(outcomes.filter(isRefused)).toHaveLength(1);
+
+    if (createResult.status === 'rejected') {
+      expect(createResult.reason).toBeInstanceOf(SessionFullError);
+    }
+    expect(claimResult.status).toBe('fulfilled');
+    if (claimResult.status === 'fulfilled') {
+      expect(claimResult.value === 'claimed' || claimResult.value === 'session_full').toBe(true);
+    }
+
+    expect(await openCountFor(session.id)).toBe(MAX_SESSION_CONVERSATIONS);
+  }, 20_000);
+
+  it('a row with sessionId: null but closedInSessionAt still set (FK-set-null residue) claims successfully and comes back OPEN', async () => {
+    if (!dbAvailable) return;
+
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const agentPage = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Residue Agent' });
+    const [oldSession] = await db.insert(agentSessions).values({ id: createId(), driveId: drive.id, ownerId: owner.id }).returning();
+    const [newSession] = await db.insert(agentSessions).values({ id: createId(), driveId: drive.id, ownerId: owner.id }).returning();
+
+    const conversationId = createId();
+    // Simulate the residue: bound to oldSession, closed, then oldSession
+    // deleted (ON DELETE SET NULL clears sessionId but NOT closedInSessionAt).
     await db.insert(conversations).values({
-      id: newer, userId: owner.id, type: 'page', contextId: agentPage.id, sessionId: session.id,
-      isActive: true, closedInSessionAt: new Date(), lastMessageAt: new Date('2026-01-01'),
+      id: conversationId,
+      userId: owner.id,
+      type: 'page',
+      contextId: agentPage.id,
+      sessionId: oldSession.id,
+      isActive: true,
+      closedInSessionAt: new Date(),
     });
+    await db.delete(agentSessions).where(eq(agentSessions.id, oldSession.id));
 
-    const result = await listClosedSessionConversations(session.id);
-    const order = result.map((c) => c.conversationId);
+    const [row] = await db.select().from(conversations).where(eq(conversations.id, conversationId)).limit(1);
+    expect(row.sessionId).toBeNull();
+    expect(row.closedInSessionAt).not.toBeNull();
 
-    // Newest-activity-first among the real rows, and the never-messaged row
-    // LAST — not first, which is what a plain `DESC` (no `NULLS LAST`) would
-    // have produced, silently pushing it ahead of `older` and `newer` and
-    // able to crowd them out of the MAX_SESSION_CONVERSATIONS cap.
-    expect(order).toEqual([newer, older, neverMessaged]);
-  });
+    const outcome = await claimConversationInSession({ conversationId, userId: owner.id, sessionId: newSession.id });
+    expect(outcome).toBe('claimed');
+
+    const [claimed] = await db.select().from(conversations).where(eq(conversations.id, conversationId)).limit(1);
+    expect(claimed.sessionId).toBe(newSession.id);
+    expect(claimed.closedInSessionAt).toBeNull();
+    expect(await openCountFor(newSession.id)).toBe(1);
+  }, 20_000);
 });
