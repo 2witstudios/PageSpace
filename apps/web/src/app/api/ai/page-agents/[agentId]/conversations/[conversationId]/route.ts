@@ -251,12 +251,19 @@ export async function DELETE(
       const sessionId = conversationRow.sessionId;
       const outcome = await withSessionListingLock(sessionId, async () => {
         const fresh = await conversationRepository.getConversation(conversationId);
-        if (!fresh || fresh.sessionId !== sessionId || !fresh.isActive) {
-          // Already history-deleted by a concurrent request (or no longer
-          // bound to this session) — nothing left to guard or delete.
+        if (!fresh || !fresh.isActive) {
+          // Already history-deleted by a concurrent request — nothing left
+          // to guard or delete.
           return 'already_deleted' as const;
         }
-        if (fresh.closedInSessionAt === null) {
+        // A row whose session was cleared (`conversations.sessionId` is
+        // `ON DELETE SET NULL`) is still an active conversation that must
+        // be deleted — it's merely detached from `sessionId`'s cap, not
+        // history-deleted. Only weigh the never-empty guard when the row is
+        // STILL bound to the session this lock is keyed on (review finding
+        // — coderabbitai on PR #2296: the prior version folded "detached"
+        // into "already deleted" and silently skipped the soft-delete).
+        if (fresh.sessionId === sessionId && fresh.closedInSessionAt === null) {
           // Still open — occupies a listing slot, so the never-empty guard applies.
           const openCount = await countOpenConversationsForSession(sessionId);
           if (openCount <= 1) return 'last_conversation' as const;

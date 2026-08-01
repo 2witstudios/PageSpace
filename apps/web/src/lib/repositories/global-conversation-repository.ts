@@ -25,6 +25,10 @@ export interface Conversation extends ConversationSummary {
   userId: string;
   isActive: boolean;
   updatedAt: Date;
+  /** Null for a plain (non-session) conversation. */
+  sessionId: string | null;
+  /** Set when closed out of its session's listing; null while open (or never session-bound). */
+  closedInSessionAt: Date | null;
 }
 
 export interface CreateConversationInput {

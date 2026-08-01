@@ -88,6 +88,8 @@ const mockConversation = (overrides: Partial<{
   lastMessageAt: new Date(),
   createdAt: new Date(),
   updatedAt: new Date(),
+  sessionId: null,
+  closedInSessionAt: null,
 });
 
 const mockUsageLog = (overrides: Partial<{

@@ -569,6 +569,26 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
       expect(conversationRepository.softDeleteConversation).not.toHaveBeenCalled();
     });
 
+    it('still soft-deletes a row whose session was cleared between the pre-lock read and the lock-held read — detached is not the same as history-deleted', async () => {
+      // `conversations.sessionId` is `ON DELETE SET NULL`: a session
+      // deleted between the two reads leaves this row active but detached.
+      // The prior version folded "sessionId no longer matches" into
+      // "already deleted" and silently skipped the soft-delete, so a
+      // detached-but-active conversation was reported as removed while
+      // staying in History (review finding — coderabbitai on PR #2296).
+      vi.mocked(conversationRepository.getConversation)
+        .mockResolvedValueOnce(mockConversationRow({ sessionId: 'ses_1', closedInSessionAt: null }))
+        .mockResolvedValueOnce(mockConversationRow({ sessionId: null, closedInSessionAt: null }));
+
+      const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
+      const context = createContext(mockAgentId, mockConversationId);
+      const response = await DELETE(request, context);
+
+      expect(response.status).toBe(200);
+      expect(countOpenConversationsForSession).not.toHaveBeenCalled();
+      expect(conversationRepository.softDeleteConversation).toHaveBeenCalledWith(mockAgentId, mockConversationId);
+    });
+
     it('is idempotent when a concurrent request already history-deleted the row before this one entered the lock', async () => {
       vi.mocked(conversationRepository.getConversation)
         .mockResolvedValueOnce(mockConversationRow({ sessionId: 'ses_1', closedInSessionAt: null }))

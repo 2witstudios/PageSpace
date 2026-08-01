@@ -125,6 +125,13 @@ describe('create/reopen — the open-listing cap serializes across BOTH operatio
     if (createResult.status === 'rejected') {
       expect(createResult.reason).toBeInstanceOf(SessionFullError);
     }
+    // Unlike create, reopen never REJECTS for a cap refusal — it RETURNS
+    // 'session_full'. `isRefused` above treats any rejection as a
+    // legitimate cap refusal, so a reopen rejecting for an unrelated reason
+    // (e.g. `SessionListingLockBusyError`) would silently pass as "refused"
+    // here without this explicit fulfilled check (review finding —
+    // coderabbitai on PR #2296).
+    expect(reopenResult.status).toBe('fulfilled');
     if (reopenResult.status === 'fulfilled') {
       expect(reopenResult.value === 'reopened' || reopenResult.value === 'session_full').toBe(true);
     }

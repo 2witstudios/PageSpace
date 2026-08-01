@@ -815,6 +815,10 @@ describe('AgentsSidebar', () => {
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
       await user.click(await screen.findByText('History'));
+      // The History row already renders this same label before the reopen
+      // — count it so the assertion below proves an INSERT, not just
+      // presence (which would pass even if the open-list insert never ran).
+      const labelsBefore = screen.getAllByText('Researcher — Old chat').length;
       const sessionsListCallsBefore = mockFetchWithAuth.mock.calls.filter(
         ([url]) => url === '/api/agent-sessions?driveId=drive-1',
       ).length;
@@ -824,7 +828,9 @@ describe('AgentsSidebar', () => {
 
       // Now showing in the (still-expanded) open conversations section too —
       // present without any additional sessions-list fetch.
-      expect(screen.getAllByText('Researcher — Old chat').length).toBeGreaterThan(0);
+      await waitFor(() =>
+        expect(screen.getAllByText('Researcher — Old chat').length).toBeGreaterThan(labelsBefore),
+      );
       const sessionsListCallsAfter = mockFetchWithAuth.mock.calls.filter(
         ([url]) => url === '/api/agent-sessions?driveId=drive-1',
       ).length;
@@ -889,12 +895,22 @@ describe('AgentsSidebar', () => {
 
       await user.click(await screen.findByLabelText(/expand api refactor/i));
       await user.click(await screen.findByText('History'));
-      const fetchesBeforeClick = mockFetchWithAuth.mock.calls.length;
+      const closedListFetchesBefore = mockFetchWithAuth.mock.calls.filter(
+        ([url]) => url === '/api/agent-sessions/ses-1/conversations/closed',
+      ).length;
       await user.click(await screen.findByText('Researcher — Old chat'));
 
       await waitFor(() => expect(mockPost).toHaveBeenCalled());
-      // `retryClosed()` re-fetches the closed list so the stale row can drop out.
-      await waitFor(() => expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(fetchesBeforeClick));
+      // `retryClosed()` re-fetches the closed list so the stale row can drop
+      // out — filtered to that URL specifically, since an unrelated
+      // sessions-list revalidation would otherwise satisfy a bare "any
+      // fetch happened" assertion without ever re-fetching the closed list.
+      await waitFor(() => {
+        const closedListFetchesAfter = mockFetchWithAuth.mock.calls.filter(
+          ([url]) => url === '/api/agent-sessions/ses-1/conversations/closed',
+        ).length;
+        expect(closedListFetchesAfter).toBeGreaterThan(closedListFetchesBefore);
+      });
       expect(mockToastError).not.toHaveBeenCalled();
       expect(useAgentSurfaceStore.getState().selectedConversationId).not.toBe('conv-closed');
     });
