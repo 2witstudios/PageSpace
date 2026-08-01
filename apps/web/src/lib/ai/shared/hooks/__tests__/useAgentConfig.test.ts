@@ -89,6 +89,42 @@ describe('useAgentConfig', () => {
     expect(mockFetchWithAuth.mock.calls.length).toBe(callsAfterInitialLoad);
   });
 
+  // review finding — chatgpt-codex-connector on PR #2299, round 23: two
+  // sibling surfaces PATCHing the SAME field race not just on which save
+  // STARTS first, but on which HTTP RESPONSE arrives first — that need not
+  // match DB-write order. Merging optimistic updates alone can't tell the
+  // two apart; revalidate() lets the cache reconcile to server ground
+  // truth.
+  it('revalidate() re-fetches and replaces the cache with the server response', async () => {
+    mockFetchWithAuth
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ systemPrompt: 'original', enabledTools: [], availableTools: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ systemPrompt: 'ground-truth-from-server', enabledTools: [], availableTools: [] }),
+      });
+
+    const { result } = renderHook(() => useAgentConfig('agent-1'), { wrapper });
+    await waitFor(() => expect(result.current.config?.systemPrompt).toBe('original'));
+
+    // An optimistic update that (in the real bug) could be wrong relative
+    // to a sibling's out-of-order response.
+    act(() => {
+      result.current.setConfig({ systemPrompt: 'optimistic-guess', enabledTools: [], availableTools: [] });
+    });
+    expect(result.current.config?.systemPrompt).toBe('optimistic-guess');
+
+    await act(async () => {
+      result.current.revalidate();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(result.current.config?.systemPrompt).toBe('ground-truth-from-server'));
+    expect(mockFetchWithAuth).toHaveBeenCalledTimes(2);
+  });
+
   it('two different pageIds are independent cache entries', async () => {
     mockFetchWithAuth.mockImplementation(async (url: string) => ({
       ok: true,

@@ -165,7 +165,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   // SWR-backed and keyed by `page.id` — shared with every pane showing this
   // agent's Settings tab (see `useAgentConfig`'s own doc), not a private
   // per-instance fetch.
-  const { config: agentConfig, setConfig: setAgentConfig } = useAgentConfig(page.id);
+  const { config: agentConfig, setConfig: setAgentConfig, revalidate: revalidateAgentConfig } = useAgentConfig(page.id);
   const [isSettingsSaving, setIsSettingsSaving] = useState(false);
   const agentSettingsRef = useRef<PageAgentSettingsTabRef>(null);
 
@@ -565,6 +565,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
             driveId={page.driveId}
             config={agentConfig}
             onConfigUpdate={setAgentConfig}
+            onConfigRevalidate={revalidateAgentConfig}
             selectedProvider={selectedProvider}
             selectedModel={selectedModel}
             onProviderChange={setSelectedProvider}

@@ -45,6 +45,20 @@ interface UseAgentConfigResult {
    * `null`, for "no value yet", since it's passed straight through.)
    */
   setConfig: (next: AgentConfig | ((current: AgentConfig | undefined) => AgentConfig)) => void;
+  /**
+   * Re-fetches and reconciles the cache with whatever the server actually
+   * holds right now. Needed because `setConfig`'s optimistic updates can
+   * still end up wrong for a reason merging alone can't fix: two mounted
+   * surfaces PATCHing the SAME field with different values race not just
+   * on which save STARTS first, but on which HTTP response ARRIVES first
+   * — that need not match DB-write order (the earlier write can have the
+   * slower response). Whichever completion applies last here wins the
+   * cache regardless of which write actually landed last in the DB. Call
+   * this after a save to let the fetch settle the cache to ground truth
+   * once any overlapping sibling save has also had a chance to land
+   * (review finding — chatgpt-codex-connector on PR #2299, round 23).
+   */
+  revalidate: () => void;
 }
 
 export function useAgentConfig(pageId: string | null): UseAgentConfigResult {
@@ -65,6 +79,11 @@ export function useAgentConfig(pageId: string | null): UseAgentConfigResult {
       // through so the updater form runs against whatever the cache
       // actually holds when it executes.
       void mutate(next, { revalidate: false });
+    },
+    // No-argument mutate() re-fetches the key and replaces the cache with
+    // the response — SWR's own revalidate primitive.
+    revalidate: () => {
+      void mutate();
     },
   };
 }

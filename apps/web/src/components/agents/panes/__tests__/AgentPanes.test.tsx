@@ -651,6 +651,55 @@ describe('AgentPanes', () => {
       expect(await screen.findAllByTestId('pane-picker')).toHaveLength(1);
     });
 
+    // review finding — chatgpt-codex-connector on PR #2299 (round 23): the
+    // round-10 fix bumped the closing pane's assignment token BEFORE
+    // deciding what the close actually does — including when the decision
+    // turns out to be a no-op (the grid-last pane's session-conversation
+    // listing hasn't resolved yet, so decideClosePane can't safely act).
+    // Invalidating a pending mint's token for a close that never actually
+    // happened left the mint's own completion treating itself as
+    // superseded, discarding its result without ever moving the pane out
+    // of its loading state — stuck spinning forever for nothing.
+    it('does not invalidate a pending mint when closing turns out to be a no-op (listing not yet resolved)', async () => {
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url.includes('/api/agent-sessions')) {
+          // Never resolves — closeDecisionListing stays null the whole test.
+          return new Promise(() => {});
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      let resolveMint!: (value: unknown) => void;
+      mockPost.mockReturnValue(new Promise((resolve) => (resolveMint = resolve)));
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
+      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('tab', { name: /history/i }));
+      await user.click(await screen.findByRole('button', { name: 'create-new-from-history' })); // mint pending
+
+      // Close the pane WHILE the mint is pending and the listing hasn't
+      // resolved — the grid's only pane, so this is a no-op (nothing to
+      // fall back to is confirmed yet).
+      await user.click(screen.getByLabelText('Close pane'));
+      // Still there — a no-op close doesn't remove anything.
+      expect(
+        useAgentWorkspaceStore.getState().workspaces['ses-1'].columns.flatMap((c) => c.panes),
+      ).toHaveLength(1);
+
+      // The mint then succeeds — must land normally, not be discarded as
+      // "superseded" by the no-op close attempt.
+      resolveMint({});
+      await waitFor(() => {
+        const pane = useAgentWorkspaceStore
+          .getState()
+          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+          .find((p) => p.id === paneId);
+        expect(pane?.scope?.targetId).toBe('new-id-1');
+      });
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/new-id-1');
+    });
+
     // review finding — chatgpt-codex-connector on PR #2299 (round 13): unlike
     // the picker-flow test above (nothing to lose), "New Conversation" picked
     // from a pane's OWN History tab starts from a pane already showing a

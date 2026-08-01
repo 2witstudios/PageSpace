@@ -52,6 +52,10 @@ interface PageAgentSettingsTabProps {
   /** Accepts a plain value OR an updater `(current) => next` — see onSubmit
    * below for why the updater form matters (round 22). */
   onConfigUpdate: (config: AgentConfig | ((current: AgentConfig | undefined) => AgentConfig)) => void;
+  /** Re-fetches the shared config cache to reconcile it with the server's
+   * ground truth — see onSubmit below for why the optimistic update above
+   * isn't always enough on its own (round 23). */
+  onConfigRevalidate: () => void;
   selectedProvider: string;
   selectedModel: string;
   onProviderChange: (provider: string) => void;
@@ -120,6 +124,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   driveId,
   config,
   onConfigUpdate,
+  onConfigRevalidate,
   selectedProvider,
   selectedModel,
   onProviderChange,
@@ -417,6 +422,16 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
         ...patchThisSave,
         ...providerModelPatch,
       } as AgentConfig));
+      // The optimistic merge above is instant but not the last word: a
+      // sibling surface PATCHing the SAME field concurrently can have its
+      // OWN response arrive after this one despite its write having
+      // committed FIRST in the DB (HTTP response order need not match
+      // write order) — merging alone can't tell the two apart, since both
+      // completions look identical from here. Re-fetching lets the cache
+      // reconcile to whatever the server actually holds once any
+      // overlapping sibling save has also had a chance to land (review
+      // finding — chatgpt-codex-connector on PR #2299, round 23).
+      onConfigRevalidate();
       toast.success('Agent configuration saved successfully');
     } catch (error) {
       console.error('Error saving agent configuration:', error);
@@ -425,7 +440,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       setIsSaving(false);
       onSavingChange?.(false);
     }
-  }, [pageId, config, onConfigUpdate, selectedProvider, selectedModel, onSavingChange, dirtyFields]);
+  }, [pageId, config, onConfigUpdate, onConfigRevalidate, selectedProvider, selectedModel, onSavingChange, dirtyFields]);
 
   const handleProviderSelectChange = useCallback(
     (provider: string) => {

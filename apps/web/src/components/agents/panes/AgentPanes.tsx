@@ -515,18 +515,6 @@ export default function AgentPanes({
   const handleClosePane = useCallback(
     (paneId: string) => {
       if (!workspace) return;
-      // Supersede any pending mint/reopen for this pane the instant a close
-      // is initiated — none of the close branches below otherwise touch
-      // this paneId's token, so a History reopen still in flight when the
-      // user closes the pane would stay "current" and either try to
-      // assignPane onto a pane that's about to be gone (no-op, leaving an
-      // invisible open listing that consumes a session cap slot forever),
-      // or — if it resolves before this close's own DELETE — silently
-      // repurpose the pane the user just asked to close. Bumping the token
-      // here routes that stale completion into the existing orphan-cleanup
-      // path (rounds 8-9) instead (review finding — chatgpt-codex-connector
-      // on PR #2299, round 10).
-      beginPaneAssign(paneId);
       const pane = panesOf(workspace).find((p) => p.id === paneId);
       const decision = decideClosePane({
         panes: panesOf(workspace),
@@ -539,9 +527,40 @@ export default function AgentPanes({
       if (decision.action === 'end-session') {
         // Emptying the session ends it — ask first, same as the sidebar's
         // identical act, and don't touch the grid until the user confirms.
+        // Deliberately no beginPaneAssign here: the user can still CANCEL
+        // this dialog, in which case nothing about this pane actually
+        // changes, and bumping the token regardless would invalidate a
+        // pending mint/reopen for a close that never happened (same class
+        // of bug as the noop case below). If the user DOES confirm,
+        // confirmEndSession tears down the whole workspace via
+        // forgetWorkspace — at that point the existing paneStillLoading
+        // shape-check already correctly detects this pane is gone, with no
+        // token needed.
         beginEndSessionConfirm(paneId);
         return;
       }
+
+      // Only reachable once a decision ACTUALLY commits to altering this
+      // pane below — supersede any pending mint/reopen for it here, not
+      // before the noop/end-session checks above. Bumping it unconditionally
+      // at the top of this function (the original round-10 fix) invalidated
+      // a pending mint even when the close turned out to be a no-op (the
+      // grid-last pane's listing hadn't resolved yet) or was later cancelled
+      // — the mint's own completion then treated itself as superseded and
+      // discarded its result without ever moving the pane out of its
+      // loading state, leaving it stuck spinning forever for a close that
+      // never actually happened (review finding — chatgpt-codex-connector
+      // on PR #2299, round 23). None of the branches below otherwise touch
+      // this paneId's token themselves, so a History reopen still in flight
+      // when the user closes the pane would stay "current" and either try
+      // to assignPane onto a pane that's about to be gone (no-op, leaving
+      // an invisible open listing that consumes a session cap slot
+      // forever), or — if it resolves before this close's own DELETE —
+      // silently repurpose the pane the user just asked to close. Bumping
+      // the token here routes that stale completion into the existing
+      // orphan-cleanup path (rounds 8-9) instead (review finding —
+      // chatgpt-codex-connector on PR #2299, round 10).
+      beginPaneAssign(paneId);
 
       if (decision.action === 'close-pane') {
         closePane(sessionId, paneId);
@@ -1366,7 +1385,7 @@ function ChatPane({
     enabled: activeTab === 'history',
   });
 
-  const { config: agentConfig, setConfig: setAgentConfig } = useAgentConfig(scope.agentPageId);
+  const { config: agentConfig, setConfig: setAgentConfig, revalidate: revalidateAgentConfig } = useAgentConfig(scope.agentPageId);
   const {
     selectedProvider,
     setSelectedProvider,
@@ -1534,6 +1553,7 @@ function ChatPane({
               driveId={agent.driveId}
               config={agentConfig}
               onConfigUpdate={setAgentConfig}
+              onConfigRevalidate={revalidateAgentConfig}
               selectedProvider={selectedProvider}
               selectedModel={selectedModel}
               onProviderChange={setSelectedProvider}
