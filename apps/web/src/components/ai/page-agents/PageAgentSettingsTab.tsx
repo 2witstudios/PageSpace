@@ -362,6 +362,16 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       // when the reset effect runs — the dirty-guard above only exists to
       // protect against a DIFFERENT (sibling) surface's external update.
       justSavedOwnConfigRef.current = true;
+      // Cleared here, not left true forever: `config.aiProvider`/`aiModel`
+      // now correctly reflect what THIS instance just chose (onConfigUpdate
+      // below), so "prefer the shared config" is exactly as correct for
+      // this instance's own just-saved value as it is for reacting to a
+      // LATER sibling's save. Leaving these true past this point would
+      // permanently pin onSubmit to this instance's local snapshot and
+      // revert every subsequent sibling save forever (review finding —
+      // chatgpt-codex-connector on PR #2299, round 19).
+      providerTouchedRef.current = false;
+      modelTouchedRef.current = false;
       onConfigUpdate(updatedConfig);
       toast.success('Agent configuration saved successfully');
     } catch (error) {
