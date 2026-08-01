@@ -87,6 +87,15 @@ export default function SessionPanes({ workspace, onSelectPane, renderPane }: Se
     );
   }
 
+  // Same fallback the mobile branch above already has — `activePaneId` should
+  // always name a live pane, but a saved grid restored from the server isn't
+  // guaranteed to (the persisted-workspace schema doesn't cross-validate that
+  // reference). Every pane still renders its own content either way here
+  // (unlike mobile, where only the active one is visible) — this only
+  // decides which one gets the "active" styling/focus, so falling back to
+  // the first pane rather than leaving NONE active is strictly better.
+  const activeId = panes.some((pane) => pane.id === activePaneId) ? activePaneId : panes[0]?.id;
+
   return (
     <div className="h-full bg-background" data-testid="session-panes">
       <ResizablePanelGroup orientation="horizontal" className="h-full">
@@ -99,7 +108,7 @@ export default function SessionPanes({ workspace, onSelectPane, renderPane }: Se
                   <Fragment key={pane.id}>
                     {paneIndex > 0 && <ResizableHandle variant="chrome-free" />}
                     <ResizablePanel defaultSize={100 / column.panes.length} minSize={15}>
-                      {renderPane({ pane, isActive: pane.id === activePaneId, canSplit: true })}
+                      {renderPane({ pane, isActive: pane.id === activeId, canSplit: true })}
                     </ResizablePanel>
                   </Fragment>
                 ))}

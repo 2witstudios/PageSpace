@@ -112,6 +112,48 @@ export const paneScopeSchema = z.object({
 
 export type PaneScope = z.infer<typeof paneScopeSchema>;
 
+/**
+ * A session's server-persisted pane grid — columns, panes, and each pane's
+ * open conversation tabs. This is the ONE declaration both the DB column's
+ * `$type` (`packages/db/schema/agent-sessions.ts`'s `PersistedWorkspaceState`,
+ * a structural mirror only — `packages/db` cannot import `@pagespace/lib`)
+ * and every API route's body validator use; parse with this, never trust an
+ * `as` cast.
+ *
+ * `PersistedPaneState.tabs` holds every open conversation tab for that pane,
+ * INCLUDING the currently active one when `scope.kind === 'chat'` — `scope`
+ * is which tab is active, `tabs` is the full ordered set. Empty for a
+ * terminal/page pane or an unbound picker, since only chat panes tab.
+ */
+export const persistedPaneStateSchema = z
+  .object({
+    id: z.string().min(1),
+    scope: paneScopeSchema.nullable(),
+    tabs: z.array(paneScopeSchema).default([]),
+  })
+  // A pre-tabs grid (old localStorage, pre-migration DB row) parses with
+  // `tabs` defaulted to `[]` even though `scope` names a real open
+  // conversation — backfill it as that chat pane's one known tab instead of
+  // leaving `tabs` empty, which would violate the invariant documented above
+  // and make tab-aware close treat an actually-open conversation as already
+  // gone (review finding).
+  .transform((pane) => (pane.scope?.kind === 'chat' && pane.tabs.length === 0 ? { ...pane, tabs: [pane.scope] } : pane));
+export type PersistedPaneState = z.infer<typeof persistedPaneStateSchema>;
+
+export const persistedColumnStateSchema = z.object({
+  id: z.string().min(1),
+  panes: z.array(persistedPaneStateSchema).min(1),
+});
+export type PersistedColumnState = z.infer<typeof persistedColumnStateSchema>;
+
+export const persistedWorkspaceStateSchema = z.object({
+  id: z.string().min(1),
+  columns: z.array(persistedColumnStateSchema).min(1),
+  activePaneId: z.string().min(1),
+  pendingPickerPaneId: z.string().min(1).nullable(),
+});
+export type PersistedWorkspaceState = z.infer<typeof persistedWorkspaceStateSchema>;
+
 /** Wire timestamps are ISO-8601 strings; `Date` never crosses the boundary. */
 const isoTimestamp = z.string().datetime();
 

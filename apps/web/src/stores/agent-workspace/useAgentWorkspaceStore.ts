@@ -15,6 +15,10 @@ import {
   isLastPane,
   resetPane as resetPaneIn,
   selectPane as selectPaneIn,
+  replaceTab as replaceTabIn,
+  openTab as openTabIn,
+  switchTab as switchTabIn,
+  closeTab as closeTabIn,
   type PaneState,
   type WorkspaceState,
 } from './pane-reducer';
@@ -94,6 +98,26 @@ interface AgentWorkspaceState {
   replaceConversation(sessionId: string, oldConversationId: string, newScope: PaneScope): void;
   /** Drop a session's grid entirely (the session was ended elsewhere). */
   forgetWorkspace(sessionId: string): void;
+  /**
+   * Seed a session's grid from a server-saved layout — `useWorkspaceServerSync`'s
+   * hydration path. Unconditional and server-wins (unlike `ensureWorkspace`,
+   * which no-ops on an existing grid): whatever the mount-time seeding effect
+   * already did to this session's grid is overwritten, by design. Ignored if
+   * `workspace.id` doesn't match `sessionId` — a mismatch means the wrong
+   * session's grid was fetched and must not be seated here. `activePaneId`
+   * is normalized to the first pane if the saved value doesn't name a real
+   * one in `columns` — the persisted schema doesn't cross-validate that
+   * reference.
+   */
+  hydrateWorkspace(sessionId: string, workspace: WorkspaceState): void;
+  /** Replace a pane's active tab with `newScope`, closing out whichever tab addressed `oldTargetId` (`null` = nothing to replace, just append-or-dedupe). */
+  replaceTab(sessionId: string, paneId: string, oldTargetId: string | null, newScope: PaneScope): void;
+  /** Append `newScope` as a new tab (dedupe-and-activate if already open) — the "+" chip. */
+  openTab(sessionId: string, paneId: string, newScope: PaneScope): void;
+  /** Activate an already-open tab; the tab list is unchanged, and the new active scope is persisted by the debounced sync. */
+  switchTab(sessionId: string, paneId: string, targetId: string): void;
+  /** Remove a tab; activates a neighbor, or reverts to the picker if it was the last one. */
+  closeTab(sessionId: string, paneId: string, targetId: string): void;
 }
 
 /**
@@ -289,6 +313,38 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
           const { [sessionId]: _dropped, ...rest } = state.workspaces;
           return { workspaces: rest };
         }),
+
+      hydrateWorkspace: (sessionId, workspace) =>
+        set((state) => {
+          // `workspace.id` is documented as "the SESSION id whose grid this
+          // is" — a mismatch means the caller fetched the wrong session's
+          // saved grid (or the server payload was tampered with); seating it
+          // under a DIFFERENT session's key would poison every consumer that
+          // trusts `workspace.id` (review finding).
+          if (workspace.id !== sessionId) return {};
+          // The persisted schema doesn't cross-validate that `activePaneId`
+          // names a real pane in `columns` — normalize it here, at the one
+          // place a saved grid enters the store, rather than leaving every
+          // consumer (`SessionPanes.tsx`'s render, future callers) to each
+          // grow their own fallback (review finding).
+          const panes = panesOf(workspace);
+          const normalized = panes.some((pane) => pane.id === workspace.activePaneId)
+            ? workspace
+            : { ...workspace, activePaneId: panes[0].id };
+          return { workspaces: { ...state.workspaces, [sessionId]: normalized } };
+        }),
+
+      replaceTab: (sessionId, paneId, oldTargetId, newScope) =>
+        set((state) => updateWorkspace(state, sessionId, (w) => replaceTabIn(w, paneId, oldTargetId, newScope)) ?? {}),
+
+      openTab: (sessionId, paneId, newScope) =>
+        set((state) => updateWorkspace(state, sessionId, (w) => openTabIn(w, paneId, newScope)) ?? {}),
+
+      switchTab: (sessionId, paneId, targetId) =>
+        set((state) => updateWorkspace(state, sessionId, (w) => switchTabIn(w, paneId, targetId)) ?? {}),
+
+      closeTab: (sessionId, paneId, targetId) =>
+        set((state) => updateWorkspace(state, sessionId, (w) => closeTabIn(w, paneId, targetId)) ?? {}),
     }),
     {
       name: 'agent-workspace-storage',

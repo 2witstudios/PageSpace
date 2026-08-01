@@ -1,9 +1,35 @@
-import { pgTable, text, timestamp, boolean, bigint, index, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, boolean, bigint, jsonb, index, uniqueIndex } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 import { drives } from './core';
 import { conversations } from './conversations';
+
+/**
+ * A mirror of `@pagespace/lib`'s `persistedWorkspaceStateSchema`-inferred
+ * shape — duplicated, not imported, because `packages/db` does not depend on
+ * `@pagespace/lib` (same boundary `WorkflowStep`/`EventTrigger` above already
+ * cross). This type is a compile-time cast only; the zod schema in
+ * `@pagespace/lib/agent-sessions/contract` is the actual runtime validator on
+ * every read and write.
+ */
+type PersistedPaneScope = {
+  kind: 'chat' | 'terminal' | 'page';
+  name: string;
+  targetId: string | null;
+  agentPageId: string | null;
+};
+type PersistedPaneState = {
+  id: string;
+  scope: PersistedPaneScope | null;
+  tabs: PersistedPaneScope[];
+};
+type PersistedWorkspaceState = {
+  id: string;
+  columns: { id: string; panes: PersistedPaneState[] }[];
+  activePaneId: string;
+  pendingPickerPaneId: string | null;
+};
 
 /**
  * Agent Sessions
@@ -72,6 +98,20 @@ export const agentSessions = pgTable('agent_sessions', {
 
   /** Display label only (auto-named at spawn). Deliberately NOT unique and never an address. */
   name: text('name'),
+
+  /**
+   * The session's pane grid — columns, panes, and each pane's open
+   * conversation tabs — serialized as one unit and written only via the
+   * client's debounced sync (`PUT /api/agent-sessions/{id}/workspace`).
+   * NULL = never saved (a session born before this shipped, or one the user
+   * has never opened in a browser that persisted it yet); the client falls
+   * back to a fresh single-pane default. This is a layout/addressing
+   * concern only — no pane or tab is ever queried by its internal fields,
+   * which is why it is one jsonb blob rather than child tables (the
+   * `agent_session_shells` pattern is for rows that need independent
+   * server-side addressing; panes and tabs don't).
+   */
+  workspaceState: jsonb('workspaceState').$type<PersistedWorkspaceState>(),
 
   // ---------------------------------------------------------------------------
   // Per-session Sprite identity. All NULLABLE: a row exists from the moment a
@@ -249,3 +289,4 @@ export type AgentSession = typeof agentSessions.$inferSelect;
 export type NewAgentSession = typeof agentSessions.$inferInsert;
 export type AgentSessionShell = typeof agentSessionShells.$inferSelect;
 export type NewAgentSessionShell = typeof agentSessionShells.$inferInsert;
+export type { PersistedWorkspaceState, PersistedPaneState, PersistedPaneScope };

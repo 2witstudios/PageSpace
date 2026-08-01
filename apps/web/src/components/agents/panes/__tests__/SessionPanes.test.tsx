@@ -63,6 +63,17 @@ describe('SessionPanes — desktop grid', () => {
     renderGrid(state);
     expect(screen.queryByTestId('pane-strip')).not.toBeInTheDocument();
   });
+
+  it('given an activePaneId that no longer resolves, should fall back to the first pane rather than mark NONE active', () => {
+    // The store always points activePaneId at a live pane, but a grid
+    // restored from the server isn't schema-guaranteed to (no
+    // cross-reference check on the persisted shape) — same fallback the
+    // mobile branch already has, applied here too.
+    let state = splitRight(base(), 'pane-1', 'col-2', 'pane-2');
+    state = { ...state, activePaneId: 'ghost' };
+    const { seen } = renderGrid(state);
+    expect(seen.filter((p) => p.isActive).map((p) => p.id)).toEqual(['pane-1']);
+  });
 });
 
 describe('SessionPanes — narrow viewport', () => {

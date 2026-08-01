@@ -73,4 +73,18 @@ describe('validatePersistedWorkspaces', () => {
   it('given a workspaces value that is not itself an object, returns an empty map', () => {
     expect(validatePersistedWorkspaces({ workspaces: 'nope' })).toEqual({});
   });
+
+  it('backfills a missing tabs array from a pre-tabs browser using the pane\'s own scope, not an empty list', () => {
+    const legacy = validWorkspace('ses-1');
+    // A grid written before `tabs` existed on `PaneState` — still structurally
+    // valid by every OTHER field, just missing the key entirely. Backfilling
+    // to `[]` here would violate the documented "tabs includes the active
+    // one" invariant and make tab-aware close treat this real, open
+    // conversation as already gone (review finding).
+    const paneWithoutTabs: Record<string, unknown> = { ...legacy.columns[0].panes[0] };
+    delete paneWithoutTabs.tabs;
+    const raw = { ...legacy, columns: [{ ...legacy.columns[0], panes: [paneWithoutTabs] }] };
+    const result = validatePersistedWorkspaces({ workspaces: { 'ses-1': raw } });
+    expect(result['ses-1']?.columns[0].panes[0].tabs).toEqual([legacy.columns[0].panes[0].scope]);
+  });
 });

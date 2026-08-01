@@ -33,6 +33,13 @@ export interface PaneState {
   id: string;
   /** `null` = unbound: the pane renders the picker. */
   scope: PaneScope | null;
+  /**
+   * This pane's open conversation tabs, INCLUDING the active one when
+   * `scope.kind === 'chat'` — `scope` is which tab is active, `tabs` is the
+   * full ordered set. Always `[]` for a terminal/page pane or an unbound
+   * picker: only chat panes tab.
+   */
+  tabs: PaneScope[];
 }
 
 export interface ColumnState {
@@ -80,24 +87,166 @@ export function newWorkspace(params: {
 }): WorkspaceState {
   return {
     id: params.sessionId,
-    columns: [{ id: params.columnId, panes: [{ id: params.paneId, scope: params.scope }] }],
+    columns: [
+      {
+        id: params.columnId,
+        panes: [{ id: params.paneId, scope: params.scope, tabs: params.scope.kind === 'chat' ? [params.scope] : [] }],
+      },
+    ],
     activePaneId: params.paneId,
     pendingPickerPaneId: null,
   };
 }
 
-/** Bind a pane to what the picker chose, and retire the picker for it. */
-export function assignPane(state: WorkspaceState, paneId: string, scope: PaneScope): WorkspaceState {
-  if (!findPaneLocation(state, paneId)) return state;
+/**
+ * The shared tab-list transition behind `assignPane`'s implicit bookkeeping,
+ * `replaceTab`, and `openTab` — all three are really "replace whichever tab
+ * matches `oldTargetId` (or, if none does, dedupe-or-append `newScope`) and
+ * make it active"; they differ only in WHERE `oldTargetId` comes from:
+ *
+ * - `assignPane` derives it from `pane.scope` at call time — correct for a
+ *   single-step, already-settled assign (e.g. an instant History-pick), but
+ *   NOT across an async two-step mint (loading → resolved): the loading call
+ *   already overwrote `pane.scope` by the time the resolved call runs.
+ * - `replaceTab` takes it as an explicit parameter, so a caller can capture
+ *   the ORIGINAL id once, before starting a mint sequence, and reuse it for
+ *   both the loading and resolved calls.
+ * - `openTab` is `replaceTab` with `oldTargetId: null` — nothing to replace,
+ *   only dedupe-or-append.
+ *
+ * A still-loading `newScope` (`targetId === null`) always leaves `tabs`
+ * untouched — there is nothing settled yet to record.
+ */
+function tabsForChatAssign(currentTabs: PaneScope[], oldTargetId: string | null, newScope: PaneScope): PaneScope[] {
+  if (newScope.targetId === null) return currentTabs;
+  if (oldTargetId !== null) {
+    const idx = currentTabs.findIndex((tab) => tab.targetId === oldTargetId);
+    if (idx !== -1) return currentTabs.map((tab, i) => (i === idx ? newScope : tab));
+  }
+  const dupIdx = currentTabs.findIndex((tab) => tab.targetId === newScope.targetId);
+  if (dupIdx !== -1) return currentTabs.map((tab, i) => (i === dupIdx ? newScope : tab));
+  return [...currentTabs, newScope];
+}
+
+function withPaneScopeAndTabs(
+  state: WorkspaceState,
+  paneId: string,
+  scope: PaneScope,
+  tabs: PaneScope[],
+): WorkspaceState {
   return {
     ...state,
     columns: state.columns.map((column) => ({
       ...column,
-      panes: column.panes.map((pane) => (pane.id === paneId ? { ...pane, scope } : pane)),
+      panes: column.panes.map((pane) => (pane.id === paneId ? { ...pane, scope, tabs } : pane)),
     })),
     activePaneId: paneId,
     pendingPickerPaneId: state.pendingPickerPaneId === paneId ? null : state.pendingPickerPaneId,
   };
+}
+
+/** Bind a pane to what the picker chose, and retire the picker for it. */
+export function assignPane(state: WorkspaceState, paneId: string, scope: PaneScope): WorkspaceState {
+  const location = findPaneLocation(state, paneId);
+  if (!location) return state;
+  const pane = state.columns[location.columnIndex].panes[location.paneIndex];
+  if (scope.kind !== 'chat') return withPaneScopeAndTabs(state, paneId, scope, []);
+  const oldTargetId = pane.scope?.kind === 'chat' ? pane.scope.targetId : null;
+  return withPaneScopeAndTabs(state, paneId, scope, tabsForChatAssign(pane.tabs, oldTargetId, scope));
+}
+
+/**
+ * Replace the tab addressed by `oldTargetId` with `newScope` and activate it
+ * — the explicit-identity sibling of `assignPane`'s own bookkeeping, for a
+ * caller that cannot rely on `pane.scope` still naming the original tab (see
+ * `tabsForChatAssign`'s docblock). `oldTargetId: null` degrades to
+ * dedupe-or-append, which is exactly `openTab`'s behavior.
+ */
+export function replaceTab(
+  state: WorkspaceState,
+  paneId: string,
+  oldTargetId: string | null,
+  newScope: PaneScope,
+): WorkspaceState {
+  const location = findPaneLocation(state, paneId);
+  if (!location) return state;
+  const pane = state.columns[location.columnIndex].panes[location.paneIndex];
+  return withPaneScopeAndTabs(state, paneId, newScope, tabsForChatAssign(pane.tabs, oldTargetId, newScope));
+}
+
+/** Append `newScope` as a new tab (dedupe-and-activate if already open) and activate it — the "+" primitive. */
+export function openTab(state: WorkspaceState, paneId: string, newScope: PaneScope): WorkspaceState {
+  return replaceTab(state, paneId, null, newScope);
+}
+
+/** Activate an already-open tab — purely local, the tab list itself is untouched. No-ops if `targetId` isn't one of this pane's tabs. */
+export function switchTab(state: WorkspaceState, paneId: string, targetId: string): WorkspaceState {
+  const location = findPaneLocation(state, paneId);
+  if (!location) return state;
+  const pane = state.columns[location.columnIndex].panes[location.paneIndex];
+  const match = pane.tabs.find((tab) => tab.targetId === targetId);
+  if (!match) return state;
+  return {
+    ...state,
+    columns: state.columns.map((column) => ({
+      ...column,
+      panes: column.panes.map((p) => (p.id === paneId ? { ...p, scope: match } : p)),
+    })),
+    activePaneId: paneId,
+  };
+}
+
+/**
+ * Remove the tab addressed by `targetId`. If it was the active one, activate
+ * the tab immediately before it (or the new first, if it WAS first) — a
+ * neighbor rather than losing the pane's focus. With no tabs left, the pane
+ * reverts to the picker, mirroring `resetPane`.
+ */
+export function closeTab(state: WorkspaceState, paneId: string, targetId: string): WorkspaceState {
+  const location = findPaneLocation(state, paneId);
+  if (!location) return state;
+  const pane = state.columns[location.columnIndex].panes[location.paneIndex];
+  const idx = pane.tabs.findIndex((tab) => tab.targetId === targetId);
+  if (idx === -1) return state;
+
+  const tabs = [...pane.tabs.slice(0, idx), ...pane.tabs.slice(idx + 1)];
+  const wasActive = pane.scope?.kind === 'chat' && pane.scope.targetId === targetId;
+  if (!wasActive) return withPaneScopeAndTabsNoRefocus(state, paneId, pane.scope, tabs);
+
+  if (tabs.length === 0) {
+    return {
+      ...withPaneScopeAndTabsNoRefocus(state, paneId, null, tabs),
+      pendingPickerPaneId: paneId,
+    };
+  }
+  const nextActive = tabs[Math.max(0, idx - 1)];
+  return withPaneScopeAndTabsNoRefocus(state, paneId, nextActive, tabs);
+}
+
+/** Like the assign helper above, but never steals grid focus or dismisses another pane's picker — used by `closeTab`, which changes a pane's OWN content, not which pane is active. */
+function withPaneScopeAndTabsNoRefocus(
+  state: WorkspaceState,
+  paneId: string,
+  scope: PaneScope | null,
+  tabs: PaneScope[],
+): WorkspaceState {
+  return {
+    ...state,
+    columns: state.columns.map((column) => ({
+      ...column,
+      panes: column.panes.map((pane) => (pane.id === paneId ? { ...pane, scope, tabs } : pane)),
+    })),
+  };
+}
+
+/** Every open tab across the grid, tagged with the pane that owns it. */
+export function tabsOf(state: WorkspaceState): { paneId: string; tab: PaneScope }[] {
+  return panesOf(state).flatMap((pane) => pane.tabs.map((tab) => ({ paneId: pane.id, tab })));
+}
+
+/** One pane's own open tabs — `[]` for an unresolvable pane. */
+export function paneTabsOf(state: WorkspaceState, paneId: string): PaneScope[] {
+  return panesOf(state).find((pane) => pane.id === paneId)?.tabs ?? [];
 }
 
 export function dismissPicker(state: WorkspaceState, paneId: string): WorkspaceState {
@@ -119,7 +268,7 @@ export function splitRight(
   if (!location) return state;
 
   const columns = [...state.columns];
-  columns.splice(location.columnIndex + 1, 0, { id: newColumnId, panes: [{ id: newPaneId, scope: null }] });
+  columns.splice(location.columnIndex + 1, 0, { id: newColumnId, panes: [{ id: newPaneId, scope: null, tabs: [] }] });
 
   return { ...state, columns, activePaneId: newPaneId, pendingPickerPaneId: newPaneId };
 }
@@ -131,7 +280,7 @@ export function splitDown(state: WorkspaceState, fromPaneId: string, newPaneId: 
 
   const columns = state.columns.map((column, columnIndex) =>
     columnIndex === location.columnIndex
-      ? { ...column, panes: [...column.panes, { id: newPaneId, scope: null }] }
+      ? { ...column, panes: [...column.panes, { id: newPaneId, scope: null, tabs: [] }] }
       : column,
   );
 
@@ -169,6 +318,7 @@ export function closePane(state: WorkspaceState, id: string): WorkspaceState {
 }
 
 export function selectPane(state: WorkspaceState, id: string): WorkspaceState {
+  if (state.activePaneId === id) return state;
   if (!findPaneLocation(state, id)) return state;
   return { ...state, activePaneId: id };
 }
@@ -200,22 +350,36 @@ export function resetPane(state: WorkspaceState, id: string): WorkspaceState {
     ...state,
     columns: state.columns.map((column) => ({
       ...column,
-      panes: column.panes.map((pane) => (pane.id === id ? { ...pane, scope: null } : pane)),
+      panes: column.panes.map((pane) => (pane.id === id ? { ...pane, scope: null, tabs: [] } : pane)),
     })),
     pendingPickerPaneId: id,
   };
 }
 
 /**
- * Assign whichever pane is showing `oldTargetId` to a new scope — used when
- * the row it addressed was deleted and replaced, so the pane the user was
- * looking at follows the replacement instead of dangling on a dead id. A
- * target shown nowhere is a no-op: there is nothing stale to prune.
+ * Repoint EVERY pane referencing `oldTargetId` — as its active tab, or just
+ * a background one — to `newScope` instead. Used when the row `oldTargetId`
+ * addressed was deleted and replaced, so every dangling reference to it
+ * follows the replacement instead of pointing at a dead id — not only
+ * whichever pane happens to have it active; the same conversation can be
+ * open as a background tab in others too (`pane.tabs`), and leaving those
+ * stale would 404 the moment someone switches to them (review finding). A
+ * pane where it was the active tab follows the usual assign (activates the
+ * grid focus, retires a matching picker); a pane where it was only a
+ * background tab has just that stale tab entry swapped in place, without
+ * stealing focus. A target shown nowhere is a no-op.
  */
 export function assignPaneShowing(state: WorkspaceState, oldTargetId: string, newScope: PaneScope): WorkspaceState {
-  const pane = paneShowing(state, oldTargetId);
-  if (!pane) return state;
-  return assignPane(state, pane.id, newScope);
+  let next = state;
+  for (const pane of panesOf(state)) {
+    if (!pane.tabs.some((tab) => tab.targetId === oldTargetId)) continue;
+    const wasActive = pane.scope?.kind === 'chat' && pane.scope.targetId === oldTargetId;
+    const newTabs = tabsForChatAssign(pane.tabs, oldTargetId, newScope);
+    next = wasActive
+      ? withPaneScopeAndTabs(next, pane.id, newScope, newTabs)
+      : withPaneScopeAndTabsNoRefocus(next, pane.id, pane.scope, newTabs);
+  }
+  return next;
 }
 
 /** Every pane, flattened in visual order (left-to-right, top-to-bottom). */
