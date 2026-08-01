@@ -58,7 +58,12 @@ async function fetcher(url: string): Promise<TreePage> {
 }
 
 export default function PagePaneView({ pageId }: PagePaneViewProps) {
-  const { data: page, error, isLoading } = useSWR<TreePage>(`/api/pages/${pageId}`, fetcher);
+  // Encoded — unlike every other `/api/pages/${pageId}` call site in the app
+  // (all sourced from the loaded tree or a URL param), this one can carry a
+  // pageId straight from an agent's `open_page_pane` tool call: a free-text
+  // string, not a validated id. A `/`, `?`, or `#` in it must not reroute or
+  // reshape this request; it should just 404 into the error state below.
+  const { data: page, error, isLoading } = useSWR<TreePage>(`/api/pages/${encodeURIComponent(pageId)}`, fetcher);
 
   if (isLoading) {
     return <Skeleton className="h-full w-full" />;
