@@ -1108,6 +1108,51 @@ describe('AgentPanes', () => {
       );
     });
 
+    // review finding — chatgpt-codex-connector on PR #2299 (round 7): the
+    // rollback above must not fire when the SAME conversation was picked
+    // twice and the NEWER pick's reopen wins the race, legitimately landing
+    // in a pane before the older (now-stale) reopen resolves — closing it
+    // back out would rip a currently-visible conversation out of its pane.
+    it('does not roll back a stale reopen when a newer pick already landed the same conversation', async () => {
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url === '/api/ai/page-agents/agent-1/conversations') {
+          return conversationsFixture([{ id: 'conv-slow', title: 'Slow chat', sessionId: 'ses-1' }]);
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      let resolveSlowReopen!: (value: unknown) => void;
+      mockPost
+        .mockReturnValueOnce(new Promise((resolve) => (resolveSlowReopen = resolve)))
+        .mockResolvedValueOnce({});
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('tab', { name: /history/i }));
+      // First pick of conv-slow — still pending, stays on History.
+      await user.click(await screen.findByRole('button', { name: 'select-conv-slow' }));
+      expect(screen.getByTestId('pane-history-tab')).toBeInTheDocument();
+
+      // Second pick of the SAME conversation, on the SAME pane, before the
+      // first resolves — its own reopen resolves immediately and legitimately
+      // lands it in the pane.
+      await user.click(await screen.findByRole('button', { name: 'select-conv-slow' }));
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-slow'));
+
+      // NOW the first (stale) reopen resolves — must NOT close conv-slow,
+      // since a pane is currently showing it.
+      resolveSlowReopen({});
+      await waitFor(() => {
+        const pane = useAgentWorkspaceStore
+          .getState()
+          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+          .find((p) => p.id === paneId);
+        expect(pane?.scope?.targetId).toBe('conv-slow');
+      });
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-slow');
+    });
+
     // review finding — chatgpt-codex-connector on PR #2299: History-delete
     // deactivates the CANONICAL row, not just the deleting pane's own
     // listing — every pane showing that id (in this grid), whichever pane's

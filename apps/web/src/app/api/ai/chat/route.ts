@@ -1507,19 +1507,44 @@ export async function POST(request: Request) {
         // itself still proceeds.
         if (!streamLifecycle.preAborted) {
           try {
-            await db.insert(chatMessages).values({
-              id: serverAssistantMessageId!,
-              pageId: chatId!,
-              conversationId: conversationId!,
-              role: 'assistant',
-              content: '',
-              toolCalls: null,
-              toolResults: null,
-              isActive: true,
-              userId: null,
-              sourceAgentId: null,
-              status: 'streaming',
+            // Same atomic re-check as saveTerminalAssistantMessage above: a History delete
+            // permitted between the user-message write and here would otherwise let this
+            // best-effort insert plant an isActive:true 'streaming' row under a conversation
+            // already gone from every listing — and since the row is BRAND NEW here (not yet
+            // existing for saveTerminalAssistantMessage's own isActive check to catch via its
+            // upsert), that later check finding the conversation inactive would just skip its
+            // update, leaving this row stuck at 'streaming' forever. Visible again, permanently
+            // "in progress", the moment this PR's reopen feature brings the conversation back
+            // (review finding — chatgpt-codex-connector on PR #2299).
+            const conversationActive = await db.transaction(async (tx) => {
+              const [row] = await tx
+                .select({ isActive: conversations.isActive })
+                .from(conversations)
+                .where(eq(conversations.id, conversationId!))
+                .for('update')
+                .limit(1);
+              if (!row?.isActive) return false;
+              await tx.insert(chatMessages).values({
+                id: serverAssistantMessageId!,
+                pageId: chatId!,
+                conversationId: conversationId!,
+                role: 'assistant',
+                content: '',
+                toolCalls: null,
+                toolResults: null,
+                isActive: true,
+                userId: null,
+                sourceAgentId: null,
+                status: 'streaming',
+              });
+              return true;
             });
+            if (!conversationActive) {
+              loggers.ai.warn('AI Chat API: skipped placeholder assistant row, conversation no longer active', {
+                messageId: serverAssistantMessageId,
+                conversationId,
+              });
+            }
           } catch (error) {
             loggers.ai.warn('AI Chat API: placeholder assistant row INSERT failed', {
               messageId: serverAssistantMessageId,

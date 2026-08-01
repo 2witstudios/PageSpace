@@ -700,7 +700,23 @@ export default function AgentPanes({
           // full" for no visible reason. Close it right back out, the same
           // way an orphaned mint is cleaned up above (review finding —
           // chatgpt-codex-connector on PR #2299).
-          void cleanupOrphanedConversation(conversation.id);
+          //
+          // BUT only when it's genuinely orphaned: the same conversation
+          // picked twice in quick succession can have the NEWER request's
+          // reopen resolve first and legitimately land in a pane (this one
+          // or another), with this now-stale request's reopen resolving
+          // second. Unconditionally closing here would rip that just-
+          // reopened, currently-visible conversation back out from under
+          // whichever pane is showing it. Read live state across every pane
+          // in the grid (not just this one) before deciding (review finding
+          // — chatgpt-codex-connector on PR #2299).
+          const liveWorkspace = useAgentWorkspaceStore.getState().workspaces[sessionId];
+          const stillOrphaned =
+            !liveWorkspace ||
+            !panesOf(liveWorkspace).some((p) => p.scope?.kind === 'chat' && p.scope.targetId === conversation.id);
+          if (stillOrphaned) {
+            void cleanupOrphanedConversation(conversation.id);
+          }
           return false;
         }
         // Instant-freshness nudge, same as every other listing-changing

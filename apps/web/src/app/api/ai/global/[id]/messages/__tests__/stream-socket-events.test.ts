@@ -405,6 +405,7 @@ import { MAX_BROWSER_SESSION_ID_LENGTH } from '@/lib/ai/core/browser-session-id-
 import { createStreamAbortController } from '@/lib/ai/core/stream-abort-registry';
 import { db } from '@pagespace/db/db';
 import { conversations } from '@pagespace/db/schema/conversations';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 /** A signal that reports aborted=true — simulates onAbort having already fired. */
 const abortedSignal = (): AbortSignal => {
@@ -529,6 +530,45 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
 
       expect(response.status).toBe(404);
       expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
+    });
+  });
+
+  // The user-message write's atomic re-check above only covers that ONE write. The
+  // 'streaming' placeholder row inserted right after createStreamLifecycle resolves is a
+  // SEPARATE, later write, with its own window for a concurrent History-delete to land in
+  // between (review finding — chatgpt-codex-connector on PR #2299, round 7).
+  describe('assistant placeholder row (stream start) — atomic re-check', () => {
+    it('given the conversation looked active through the message write but a concurrent History-delete commits before the placeholder insert, should skip the insert without failing the request', async () => {
+      mockCreateStreamLifecycle.mockImplementationOnce(async () => {
+        // The user-message write above already ran (and saw isActive: true) by this
+        // point — flipping here simulates the delete committing in the window between
+        // that write and this stream-start placeholder insert.
+        mockConversationActiveAtLockTime.current = false;
+        return {
+          pushPart: mockLifecyclePushPart,
+          finish: mockLifecycleFinish,
+          getBufferedParts: vi.fn().mockReturnValue([]),
+        };
+      });
+
+      const response = await POST(makeRequest(), makeContext());
+
+      // Best-effort, same as an insert failure: the generation still proceeds.
+      expect(response.status).not.toBe(404);
+      expect(mockCreateStreamLifecycle).toHaveBeenCalled();
+      expect(loggers.ai.warn).toHaveBeenCalledWith(
+        'Global AI messages API: skipped placeholder assistant row, conversation no longer active',
+        expect.objectContaining({ conversationId: 'conv-1' }),
+      );
+    });
+
+    it('given the conversation is still active at placeholder-insert time, should NOT skip (no false-positive warning)', async () => {
+      await POST(makeRequest(), makeContext());
+
+      expect(loggers.ai.warn).not.toHaveBeenCalledWith(
+        'Global AI messages API: skipped placeholder assistant row, conversation no longer active',
+        expect.anything(),
+      );
     });
   });
 

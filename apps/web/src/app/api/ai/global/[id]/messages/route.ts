@@ -1248,17 +1248,40 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
         // itself still proceeds.
         if (!streamLifecycle.preAborted) {
           try {
-            await db.insert(messages).values({
-              id: serverAssistantMessageId,
-              conversationId,
-              userId,
-              role: 'assistant',
-              content: '',
-              toolCalls: null,
-              toolResults: null,
-              isActive: true,
-              status: 'streaming',
+            // Same atomic re-check as saveTerminalGlobalAssistantMessage: a History delete
+            // permitted between the user-message write and here would otherwise let this
+            // best-effort insert plant an isActive:true 'streaming' row under a conversation
+            // already gone from every listing — and since the row is BRAND NEW here, the later
+            // terminal-write check finding the conversation inactive would just skip its
+            // update, leaving this row stuck at 'streaming' forever, visible again the moment
+            // the conversation is reopened (review finding — chatgpt-codex-connector on PR #2299).
+            const conversationActive = await db.transaction(async (tx) => {
+              const [row] = await tx
+                .select({ isActive: conversations.isActive })
+                .from(conversations)
+                .where(eq(conversations.id, conversationId))
+                .for('update')
+                .limit(1);
+              if (!row?.isActive) return false;
+              await tx.insert(messages).values({
+                id: serverAssistantMessageId,
+                conversationId,
+                userId,
+                role: 'assistant',
+                content: '',
+                toolCalls: null,
+                toolResults: null,
+                isActive: true,
+                status: 'streaming',
+              });
+              return true;
             });
+            if (!conversationActive) {
+              loggers.ai.warn('Global AI messages API: skipped placeholder assistant row, conversation no longer active', {
+                messageId: serverAssistantMessageId,
+                conversationId,
+              });
+            }
           } catch (error) {
             loggers.ai.warn('Global AI messages API: placeholder assistant row INSERT failed', {
               messageId: serverAssistantMessageId,
