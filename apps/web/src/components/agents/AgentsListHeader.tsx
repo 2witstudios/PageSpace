@@ -1,11 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Plus } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import CreateDriveDialog from '@/components/layout/left-sidebar/CreateDriveDialog';
+import { useAuth } from '@/hooks/useAuth';
 import { useDriveStore } from '@/hooks/useDrive';
 import { usePageAgents } from '@/hooks/page-agents/usePageAgents';
 import { useUIStore } from '@/stores/useUIStore';
@@ -19,20 +20,42 @@ import DrivePickerDialog from './DrivePickerDialog';
  * palette. Drive-scoped, "New Session"/"New Agent" act on this drive
  * directly; on the global console (no `driveId`) they open a drive picker
  * first, since neither creation path has anywhere else to put the result.
+ *
+ * "New Session" is hidden for non-admins, mirroring `AgentsSidebar`'s own
+ * `canSpawn` gate — sandboxes are admin-only everywhere else in this
+ * console, and showing the button here would be the one place that UI
+ * promise doesn't hold. "New Drive" and "New Agent" are ordinary
+ * page/drive creation, open to anyone with the underlying permission, same
+ * as `DrivesBrowser` and the Quick Create palette.
  */
 export default function AgentsListHeader({ driveId }: { driveId?: string }) {
   const router = useRouter();
+  const { user, isLoading: authLoading } = useAuth();
+  const canSpawn = user?.role === 'admin' && !authLoading;
   const drives = useDriveStore((state) => state.drives);
   const driveName = driveId ? (drives.find((drive) => drive.id === driveId)?.name ?? null) : null;
 
   const [createDriveOpen, setCreateDriveOpen] = useState(false);
-  const { agentsByDrive } = usePageAgents();
+  const { agentsByDrive } = usePageAgents(undefined, { enabled: canSpawn });
   const { openSpawn, paletteElement } = useSpawnSession(agentsByDrive);
   const openQuickCreate = useUIStore((state) => state.openQuickCreate);
 
   // Which button opened the picker — decides what happens once a drive is
   // picked. Null means the picker is closed.
   const [pickerFor, setPickerFor] = useState<'session' | 'agent' | null>(null);
+
+  // Quick Create resolves its own driveId from the route (`useParams()`),
+  // not from anything passed here — so a global-page "New Agent" must wait
+  // for THIS component's own `driveId` prop to reflect the just-navigated
+  // route before opening it, rather than opening in the same tick as
+  // `router.push` and racing the navigation.
+  const [pendingAgentDriveId, setPendingAgentDriveId] = useState<string | null>(null);
+  useEffect(() => {
+    if (pendingAgentDriveId && driveId === pendingAgentDriveId) {
+      openQuickCreate(null);
+      setPendingAgentDriveId(null);
+    }
+  }, [pendingAgentDriveId, driveId, openQuickCreate]);
 
   const handleNewSession = () => {
     if (driveId) {
@@ -57,11 +80,8 @@ export default function AgentsListHeader({ driveId }: { driveId?: string }) {
       return;
     }
     if (pickerFor === 'agent') {
-      // Quick Create resolves its own driveId from the route — unlike
-      // spawning a session, there's no override to pass it directly, so
-      // land on that drive's Agents page first.
+      setPendingAgentDriveId(pickedDriveId);
       router.push(`/dashboard/${pickedDriveId}/agents`);
-      openQuickCreate(null);
     }
   };
 
@@ -77,10 +97,12 @@ export default function AgentsListHeader({ driveId }: { driveId?: string }) {
           <Plus className="h-4 w-4 mr-1" />
           New Agent
         </Button>
-        <Button size="sm" onClick={handleNewSession}>
-          <Plus className="h-4 w-4 mr-1" />
-          New Session
-        </Button>
+        {canSpawn && (
+          <Button size="sm" onClick={handleNewSession}>
+            <Plus className="h-4 w-4 mr-1" />
+            New Session
+          </Button>
+        )}
       </div>
 
       <CreateDriveDialog isOpen={createDriveOpen} setIsOpen={setCreateDriveOpen} />
