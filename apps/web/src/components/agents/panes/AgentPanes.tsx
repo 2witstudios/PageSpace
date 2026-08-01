@@ -104,12 +104,17 @@ export interface AgentPanesProps {
    */
   chatContext?: 'page' | 'console';
   /**
-   * The page hosting this grid, when it's an AI_CHAT page's own embedded grid — the pane
-   * bound to THIS agent is showing the same conversation the page's own header already
-   * identifies, so its pane bar drops the (duplicate) selector/tab-strip down to a plain
-   * label. Undefined for the console, which has no single hosting page.
+   * The conversation the HOSTING AI_CHAT page's own header is currently showing, when
+   * this is that page's own embedded grid — the one pane bound to exactly this
+   * conversation is displaying the same thing the page's own selector/Chat/History/
+   * Settings chrome already identifies, so its pane bar drops to a plain label instead.
+   * Deliberately keyed by CONVERSATION, not agent: a split pane the user pointed at the
+   * same agent but a DIFFERENT conversation (via the picker) is still a distinct thing
+   * the page's own header isn't showing — it keeps its full selector/tab-strip, since
+   * that's its only in-grid way to be managed. Undefined for the console, which has no
+   * single hosting page.
    */
-  hostAgentPageId?: string | null;
+  hostConversationId?: string | null;
   /** Read-only viewers get history but no send/edit/delete/retry in any chat pane. */
   isReadOnly?: boolean;
 }
@@ -143,7 +148,7 @@ export default function AgentPanes({
   onSessionEnded,
   onConversationClosed,
   chatContext = 'console',
-  hostAgentPageId,
+  hostConversationId,
   isReadOnly = false,
 }: AgentPanesProps) {
   const workspace = useAgentWorkspaceStore((state) => state.workspaces[sessionId]);
@@ -1205,7 +1210,7 @@ export default function AgentPanes({
           driveId={driveId}
           sessionId={sessionId}
           chatContext={chatContext}
-          hostAgentPageId={hostAgentPageId}
+          hostConversationId={hostConversationId}
           isReadOnly={isReadOnly}
           onSelectAgent={(nextAgentPageId) => handleSwitchAgent(pane.id, pane.scope!.agentPageId, nextAgentPageId)}
           onSelectPane={() => selectPane(sessionId, pane.id)}
@@ -1332,7 +1337,7 @@ function ChatPane({
   driveId,
   sessionId,
   chatContext,
-  hostAgentPageId,
+  hostConversationId,
   isReadOnly,
   onSelectAgent,
   onSelectPane,
@@ -1361,8 +1366,8 @@ function ChatPane({
   driveId: string | null;
   sessionId: string;
   chatContext?: 'page' | 'console';
-  /** The page hosting this grid — see `AgentPanesProps.hostAgentPageId`'s own doc. */
-  hostAgentPageId?: string | null;
+  /** The hosting page's own current conversation — see `AgentPanesProps.hostConversationId`'s own doc. */
+  hostConversationId?: string | null;
   isReadOnly: boolean;
   onSelectAgent: (agentPageId: string | null) => void;
   onSelectPane: () => void;
@@ -1487,14 +1492,18 @@ function ChatPane({
       <PaneBar
         isActive={isActive}
         identity={
-          scope.agentPageId !== null && scope.agentPageId === hostAgentPageId ? (
+          conversationId !== null && conversationId === hostConversationId ? (
             // This pane is showing the SAME conversation the hosting AI_CHAT
             // page's own header already identifies (Chat/History/Settings
             // pills, agent name) — a second selector + tab-strip here would
-            // just be duplicate chrome for the identical thing. Drop to the
-            // same plain, non-interactive label the other pane kinds
-            // (terminal, page, picker) already use; split/close (below,
-            // unaffected) is still this pane bar's job.
+            // just be duplicate chrome for the identical thing. Matched by
+            // CONVERSATION, not agent: a split pane pointed at the same
+            // agent but a DIFFERENT conversation is still something the
+            // page's own header isn't showing, so it keeps its full
+            // selector/tab-strip below. Drop to the same plain,
+            // non-interactive label the other pane kinds (terminal, page,
+            // picker) already use; split/close (below, unaffected) is still
+            // this pane bar's job.
             <PaneSessionIdentity name={agent?.title ?? 'Agent'} />
           ) : (
             <div className="flex min-w-0 flex-1 items-center gap-0.5">

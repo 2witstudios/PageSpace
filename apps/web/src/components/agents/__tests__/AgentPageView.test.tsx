@@ -75,7 +75,7 @@ vi.mock('../panes/AgentPanes', () => ({
     driveId,
     initialConversation,
     chatContext,
-    hostAgentPageId,
+    hostConversationId,
     isReadOnly,
     onConversationClosed,
   }: {
@@ -83,7 +83,7 @@ vi.mock('../panes/AgentPanes', () => ({
     driveId: string | null;
     initialConversation: { conversationId: string };
     chatContext?: string;
-    hostAgentPageId?: string | null;
+    hostConversationId?: string | null;
     isReadOnly?: boolean;
     onConversationClosed?: (event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => void;
   }) => {
@@ -95,7 +95,7 @@ vi.mock('../panes/AgentPanes', () => ({
       <div
         data-testid="agent-panes"
         data-chat-context={chatContext}
-        data-host-agent-page-id={hostAgentPageId ?? ''}
+        data-host-conversation-id={hostConversationId ?? ''}
         data-readonly={String(!!isReadOnly)}
         data-drive-id={driveId ?? ''}
       >
@@ -253,10 +253,11 @@ describe('AgentPageView', () => {
 
     await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-1'));
     expect(screen.getByTestId('agent-panes')).toHaveAttribute('data-chat-context', 'page');
-    // The page's own id — lets the grid tell "the pane matching this page's
-    // own agent" (duplicate chrome, dropped) apart from any other pane
-    // (a split on a different agent, which keeps its own selector/tabs).
-    expect(screen.getByTestId('agent-panes')).toHaveAttribute('data-host-agent-page-id', 'agent-1');
+    // The page's own current conversation — lets the grid tell "the pane
+    // showing exactly this conversation" (duplicate chrome, dropped) apart
+    // from any other pane (a split on a different conversation — even of the
+    // SAME agent — which keeps its own selector/tabs).
+    expect(screen.getByTestId('agent-panes')).toHaveAttribute('data-host-conversation-id', 'conv-1');
     // Defaults to the agent page's own drive while the session record is
     // unresolved — correct for the overwhelming common case.
     expect(screen.getByTestId('agent-panes')).toHaveAttribute('data-drive-id', 'drive-1');
