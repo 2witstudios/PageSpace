@@ -103,6 +103,13 @@ export interface AgentPanesProps {
    * the full renderer, the console with the compact one. Layout is identical.
    */
   chatContext?: 'page' | 'console';
+  /**
+   * The page hosting this grid, when it's an AI_CHAT page's own embedded grid — the pane
+   * bound to THIS agent is showing the same conversation the page's own header already
+   * identifies, so its pane bar drops the (duplicate) selector/tab-strip down to a plain
+   * label. Undefined for the console, which has no single hosting page.
+   */
+  hostAgentPageId?: string | null;
   /** Read-only viewers get history but no send/edit/delete/retry in any chat pane. */
   isReadOnly?: boolean;
 }
@@ -136,6 +143,7 @@ export default function AgentPanes({
   onSessionEnded,
   onConversationClosed,
   chatContext = 'console',
+  hostAgentPageId,
   isReadOnly = false,
 }: AgentPanesProps) {
   const workspace = useAgentWorkspaceStore((state) => state.workspaces[sessionId]);
@@ -1197,6 +1205,7 @@ export default function AgentPanes({
           driveId={driveId}
           sessionId={sessionId}
           chatContext={chatContext}
+          hostAgentPageId={hostAgentPageId}
           isReadOnly={isReadOnly}
           onSelectAgent={(nextAgentPageId) => handleSwitchAgent(pane.id, pane.scope!.agentPageId, nextAgentPageId)}
           onSelectPane={() => selectPane(sessionId, pane.id)}
@@ -1323,6 +1332,7 @@ function ChatPane({
   driveId,
   sessionId,
   chatContext,
+  hostAgentPageId,
   isReadOnly,
   onSelectAgent,
   onSelectPane,
@@ -1351,6 +1361,8 @@ function ChatPane({
   driveId: string | null;
   sessionId: string;
   chatContext?: 'page' | 'console';
+  /** The page hosting this grid — see `AgentPanesProps.hostAgentPageId`'s own doc. */
+  hostAgentPageId?: string | null;
   isReadOnly: boolean;
   onSelectAgent: (agentPageId: string | null) => void;
   onSelectPane: () => void;
@@ -1475,25 +1487,36 @@ function ChatPane({
       <PaneBar
         isActive={isActive}
         identity={
-          <div className="flex min-w-0 flex-1 items-center gap-0.5">
-            <AISelector
-              selectedAgent={scope.agentPageId === null ? null : agent}
-              onSelectAgent={(next) => onSelectAgent(next?.id ?? null)}
-              driveId={driveId ?? undefined}
-              agents={pickableAgents}
-              agentsLoading={agentsLoading}
-              disabled={disabledAgentSwitch}
-              className="h-6 min-w-0 flex-1 justify-start gap-1 px-1.5 py-0 text-xs font-medium"
-            />
-            <PaneChatTabStrip
-              activeTab={activeTab}
-              onSelectTab={setActiveTab}
-              // The Assistant (agentPageId null) has no page, so no Settings —
-              // every other pane's agent does.
-              showSettings={scope.agentPageId !== null}
-              agentTitle={agent?.title ?? 'Agent'}
-            />
-          </div>
+          scope.agentPageId !== null && scope.agentPageId === hostAgentPageId ? (
+            // This pane is showing the SAME conversation the hosting AI_CHAT
+            // page's own header already identifies (Chat/History/Settings
+            // pills, agent name) — a second selector + tab-strip here would
+            // just be duplicate chrome for the identical thing. Drop to the
+            // same plain, non-interactive label the other pane kinds
+            // (terminal, page, picker) already use; split/close (below,
+            // unaffected) is still this pane bar's job.
+            <PaneSessionIdentity name={agent?.title ?? 'Agent'} />
+          ) : (
+            <div className="flex min-w-0 flex-1 items-center gap-0.5">
+              <AISelector
+                selectedAgent={scope.agentPageId === null ? null : agent}
+                onSelectAgent={(next) => onSelectAgent(next?.id ?? null)}
+                driveId={driveId ?? undefined}
+                agents={pickableAgents}
+                agentsLoading={agentsLoading}
+                disabled={disabledAgentSwitch}
+                className="h-6 min-w-0 flex-1 justify-start gap-1 px-1.5 py-0 text-xs font-medium"
+              />
+              <PaneChatTabStrip
+                activeTab={activeTab}
+                onSelectTab={setActiveTab}
+                // The Assistant (agentPageId null) has no page, so no Settings —
+                // every other pane's agent does.
+                showSettings={scope.agentPageId !== null}
+                agentTitle={agent?.title ?? 'Agent'}
+              />
+            </div>
+          )
         }
         actions={
           <>
