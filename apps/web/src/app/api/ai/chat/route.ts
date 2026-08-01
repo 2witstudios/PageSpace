@@ -235,7 +235,18 @@ export async function POST(request: Request) {
         .where(eq(conversations.id, args.conversationId))
         .for('update')
         .limit(1);
-      if (!row?.isActive) return false;
+      // `row` is undefined for a brand-new conversation whose eager
+      // `createConversation()` call (above, before generation started)
+      // failed — deliberately tolerated there (best-effort/non-fatal, see
+      // that call site) so the user's own message still saves and
+      // generation still proceeds. Treating "no row" the same as
+      // "explicitly inactive" here would then silently drop the assistant's
+      // reply too: the user sees it stream in, then loses it on refresh
+      // while their own prompt remains (review finding — chatgpt-codex-
+      // connector on PR #2299). Only skip when a row exists AND is
+      // explicitly inactive (a real History-delete) — an absent row is not
+      // that, it's the same tolerated gap the user message already crossed.
+      if (row && !row.isActive) return false;
       await saveMessageToDatabase({ ...args, ...(mentionNotify && { mentionNotify }), dbClient: tx });
       return true;
     });
@@ -1523,7 +1534,13 @@ export async function POST(request: Request) {
                 .where(eq(conversations.id, conversationId!))
                 .for('update')
                 .limit(1);
-              if (!row?.isActive) return false;
+              // See saveTerminalAssistantMessage's own comment above: `row`
+              // undefined means the eager createConversation() call earlier
+              // in this request failed (tolerated, best-effort) — not that
+              // History deleted it. Only an explicitly inactive row is a
+              // real delete (review finding — chatgpt-codex-connector on
+              // PR #2299, round 10).
+              if (row && !row.isActive) return false;
               await tx.insert(chatMessages).values({
                 id: serverAssistantMessageId!,
                 pageId: chatId!,

@@ -1356,6 +1356,82 @@ describe('AgentPanes', () => {
       );
     });
 
+    // review finding — chatgpt-codex-connector on PR #2299 (round 10): none
+    // of the close branches touched the closing pane's assignment token, so
+    // a History reopen still in flight for that exact pane stayed "current"
+    // even after the pane was gone — either no-oping assignPane onto a
+    // removed pane (leaving an invisible open listing that consumes a
+    // session cap slot forever) or, if it resolved before the close's own
+    // effect, silently repurposing the pane the user just asked to close.
+    it('cancels a pending History reopen when its own pane is closed before the reopen resolves', async () => {
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url === '/api/ai/page-agents/agent-1/conversations') {
+          return conversationsFixture([{ id: 'conv-closed-mid-close', title: 'Closed chat', sessionId: 'ses-1' }]);
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      let resolveReopen!: (value: unknown) => void;
+      mockPost.mockReturnValue(new Promise((resolve) => (resolveReopen = resolve)));
+      mockDel.mockResolvedValue(undefined);
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
+      const secondPaneId = useAgentWorkspaceStore
+        .getState()
+        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+        .find((p) => p.id !== firstPaneId)!.id;
+      // History needs an agent context to know whose conversations to list —
+      // give the second pane one without landing a conversation of its own
+      // yet (the same "agent picked, mint still pending" shape handlePickAgent
+      // itself produces).
+      act(() =>
+        useAgentWorkspaceStore
+          .getState()
+          .assignPane('ses-1', secondPaneId, { kind: 'chat', name: 'Conversation', targetId: null, agentPageId: 'agent-1' }),
+      );
+
+      const user = userEvent.setup();
+      // Correlate the SECOND pane's own DOM subtree by content rather than
+      // array/DOM order (unreliable — a `pane-bar` and its pane body are
+      // siblings under one `group/pane` container; the first pane is the
+      // only one ever showing "conv-1").
+      await waitFor(() => expect(screen.getAllByTestId('pane-bar')).toHaveLength(2));
+      const secondPaneContainer = screen
+        .getAllByTestId('pane-bar')
+        .map((bar) => bar.parentElement!)
+        .find((container) => !container.textContent?.includes('conv-1'))!;
+
+      await user.click(within(secondPaneContainer).getByRole('tab', { name: /history/i }));
+      await user.click(
+        await within(secondPaneContainer).findByRole('button', { name: 'select-conv-closed-mid-close' }),
+      );
+
+      // Close that SAME (second) pane while the reopen is still in flight —
+      // a pure layout close (unbound pane, another pane still in the grid),
+      // no DELETE of its own.
+      await user.click(within(secondPaneContainer).getByLabelText('Close pane'));
+      await waitFor(() =>
+        expect(
+          useAgentWorkspaceStore.getState().workspaces['ses-1'].columns.flatMap((c) => c.panes),
+        ).toHaveLength(1),
+      );
+
+      // NOW the reopen resolves — must not repurpose (there is no pane left
+      // to assign to) and must clean up the now-invisible open listing it
+      // left behind server-side.
+      resolveReopen({});
+      await waitFor(() =>
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-closed-mid-close'),
+      );
+      // The surviving (first) pane was never touched by any of this.
+      const survivingPane = useAgentWorkspaceStore
+        .getState()
+        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+        .find((p) => p.id === firstPaneId);
+      expect(survivingPane?.scope?.targetId).not.toBe('conv-closed-mid-close');
+    });
+
     // review finding — chatgpt-codex-connector on PR #2299: History-delete
     // deactivates the CANONICAL row, not just the deleting pane's own
     // listing — every pane showing that id (in this grid), whichever pane's

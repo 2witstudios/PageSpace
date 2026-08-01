@@ -105,6 +105,11 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 // between the route's early ownership check and its late, lock-guarded
 // re-check — flip false, call POST, flip back in the next test's beforeEach.
 const mockConversationActiveAtLockTime = vi.hoisted(() => ({ current: true }));
+// Separate from the flag above: false simulates NO row at all (the eager
+// createConversation() call for a brand-new conversation failed, tolerated
+// as best-effort) rather than a row that exists and is explicitly inactive
+// — the two must be told apart (round 10 review finding).
+const mockConversationRowExistsAtLockTime = vi.hoisted(() => ({ current: true }));
 
 vi.mock('@pagespace/db/db', () => {
   // Reused inside `transaction()`'s callback too — `tx` needs the identical
@@ -126,7 +131,13 @@ vi.mock('@pagespace/db/db', () => {
           // default so the happy-path tests below don't each need their
           // own override.
           for: vi.fn(() => ({
-            limit: vi.fn(() => Promise.resolve([{ isActive: mockConversationActiveAtLockTime.current }])),
+            limit: vi.fn(() =>
+              Promise.resolve(
+                mockConversationRowExistsAtLockTime.current
+                  ? [{ isActive: mockConversationActiveAtLockTime.current }]
+                  : [],
+              ),
+            ),
           })),
         })),
       })),
@@ -420,6 +431,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
     mockHasConflictingMessageOwner.mockResolvedValue(false);
     mockTakeOverConversationStreams.mockResolvedValue({ aborted: [], reconciled: [] });
     mockConversationActiveAtLockTime.current = true;
+    mockConversationRowExistsAtLockTime.current = true;
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
     mockCreateStreamLifecycle.mockResolvedValue({
       pushPart: mockLifecyclePushPart,
@@ -654,6 +666,26 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
       await POST(makeRequest({ conversationId: CONV_ID }));
 
+      expect(loggers.ai.warn).not.toHaveBeenCalledWith(
+        'AI Chat API: skipped placeholder assistant row, conversation no longer active',
+        expect.anything(),
+      );
+    });
+
+    // round 10 review finding — chatgpt-codex-connector on PR #2299: a
+    // brand-new conversation's eager createConversation() call (tolerated
+    // best-effort) can fail, leaving NO row in `conversations` at all —
+    // distinct from a row that exists and was explicitly deactivated by a
+    // History delete. Treating "no row" the same as "inactive" here would
+    // silently drop the assistant's reply while the user's own message
+    // (saved via the unguarded new-conversation path) still persists.
+    it('given a brand-new conversation whose eager createConversation() call failed (no row exists), should NOT skip the placeholder insert', async () => {
+      mockGetConversation.mockResolvedValue(null); // brand-new — no existing row
+      mockConversationRowExistsAtLockTime.current = false;
+
+      const response = await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(response.status).not.toBe(404);
       expect(loggers.ai.warn).not.toHaveBeenCalledWith(
         'AI Chat API: skipped placeholder assistant row, conversation no longer active',
         expect.anything(),
@@ -1058,6 +1090,31 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
         userId: null,
         role: 'assistant',
       });
+    });
+
+    // round 10 review finding — chatgpt-codex-connector on PR #2299: a
+    // brand-new conversation's eager createConversation() call is tolerated
+    // best-effort (see that call site) — if it fails, NO row exists in
+    // `conversations` at all, distinct from a row that exists and was
+    // explicitly deactivated. saveTerminalAssistantMessage's own atomic
+    // re-check must not treat the two the same, or the assistant's reply
+    // silently vanishes (streamed to the user, gone on refresh) while their
+    // own message — saved via the unguarded new-conversation path — sticks.
+    it('given no conversations row exists at execute-end time (brand-new conversation, failed eager create), should still persist the assistant reply', async () => {
+      mockGetConversation.mockResolvedValue(null); // brand-new — no existing row
+      mockConversationRowExistsAtLockTime.current = false;
+      mockCreateStreamLifecycle.mockResolvedValueOnce({
+        pushPart: mockLifecyclePushPart,
+        finish: mockLifecycleFinish,
+        getBufferedParts: vi.fn().mockReturnValue([{ type: 'text', text: 'server reply' }]),
+      });
+
+      await POST(makeRequest({ conversationId: CONV_ID }));
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      const saveCalls = mockSaveMessageToDatabase.mock.calls;
+      const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
+      expect(assistantSave).toBeDefined();
     });
 
     // CodeRabbit review: this used to be a "should NOT persist" test — but skipping the

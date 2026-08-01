@@ -499,6 +499,18 @@ export default function AgentPanes({
   const handleClosePane = useCallback(
     (paneId: string) => {
       if (!workspace) return;
+      // Supersede any pending mint/reopen for this pane the instant a close
+      // is initiated — none of the close branches below otherwise touch
+      // this paneId's token, so a History reopen still in flight when the
+      // user closes the pane would stay "current" and either try to
+      // assignPane onto a pane that's about to be gone (no-op, leaving an
+      // invisible open listing that consumes a session cap slot forever),
+      // or — if it resolves before this close's own DELETE — silently
+      // repurpose the pane the user just asked to close. Bumping the token
+      // here routes that stale completion into the existing orphan-cleanup
+      // path (rounds 8-9) instead (review finding — chatgpt-codex-connector
+      // on PR #2299, round 10).
+      beginPaneAssign(paneId);
       const pane = panesOf(workspace).find((p) => p.id === paneId);
       const decision = decideClosePane({
         panes: panesOf(workspace),
@@ -547,6 +559,7 @@ export default function AgentPanes({
       closeConversationListing,
       assignPane,
       beginEndSessionConfirm,
+      beginPaneAssign,
     ],
   );
 
