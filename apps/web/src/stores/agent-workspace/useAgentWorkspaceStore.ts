@@ -104,7 +104,10 @@ interface AgentWorkspaceState {
    * which no-ops on an existing grid): whatever the mount-time seeding effect
    * already did to this session's grid is overwritten, by design. Ignored if
    * `workspace.id` doesn't match `sessionId` — a mismatch means the wrong
-   * session's grid was fetched and must not be seated here.
+   * session's grid was fetched and must not be seated here. `activePaneId`
+   * is normalized to the first pane if the saved value doesn't name a real
+   * one in `columns` — the persisted schema doesn't cross-validate that
+   * reference.
    */
   hydrateWorkspace(sessionId: string, workspace: WorkspaceState): void;
   /** Replace a pane's active tab with `newScope`, closing out whichever tab addressed `oldTargetId` (`null` = nothing to replace, just append-or-dedupe). */
@@ -312,14 +315,24 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
         }),
 
       hydrateWorkspace: (sessionId, workspace) =>
-        set((state) =>
+        set((state) => {
           // `workspace.id` is documented as "the SESSION id whose grid this
           // is" — a mismatch means the caller fetched the wrong session's
           // saved grid (or the server payload was tampered with); seating it
           // under a DIFFERENT session's key would poison every consumer that
           // trusts `workspace.id` (review finding).
-          workspace.id === sessionId ? { workspaces: { ...state.workspaces, [sessionId]: workspace } } : {},
-        ),
+          if (workspace.id !== sessionId) return {};
+          // The persisted schema doesn't cross-validate that `activePaneId`
+          // names a real pane in `columns` — normalize it here, at the one
+          // place a saved grid enters the store, rather than leaving every
+          // consumer (`SessionPanes.tsx`'s render, future callers) to each
+          // grow their own fallback (review finding).
+          const panes = panesOf(workspace);
+          const normalized = panes.some((pane) => pane.id === workspace.activePaneId)
+            ? workspace
+            : { ...workspace, activePaneId: panes[0].id };
+          return { workspaces: { ...state.workspaces, [sessionId]: normalized } };
+        }),
 
       replaceTab: (sessionId, paneId, oldTargetId, newScope) =>
         set((state) => updateWorkspace(state, sessionId, (w) => replaceTabIn(w, paneId, oldTargetId, newScope)) ?? {}),

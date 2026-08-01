@@ -443,6 +443,27 @@ describe('hydrateWorkspace', () => {
 
     expect(grid()).toEqual(before);
   });
+
+  it('normalizes activePaneId to the first pane when the saved value names no real pane', () => {
+    // The persisted schema doesn't cross-validate that activePaneId points
+    // at a pane inside columns — a saved grid restored from the server
+    // isn't guaranteed to satisfy that invariant (review finding).
+    store().ensureWorkspace('ses-1', scope());
+    const saved = {
+      id: 'ses-1',
+      columns: [
+        { id: 'col-x', panes: [{ id: 'pane-x', scope: scope('Restored'), tabs: [scope('Restored')] }] },
+        { id: 'col-y', panes: [{ id: 'pane-y', scope: scope('Also restored'), tabs: [scope('Also restored')] }] },
+      ],
+      activePaneId: 'ghost',
+      pendingPickerPaneId: null,
+    };
+    store().hydrateWorkspace('ses-1', saved);
+
+    expect(grid().activePaneId).toBe('pane-x');
+    // Nothing else about the grid was touched.
+    expect(grid().columns).toEqual(saved.columns);
+  });
 });
 
 describe('tab actions', () => {
