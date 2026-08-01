@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
+import { useEditingStore } from '@/stores/useEditingStore';
 import {
   newWorkspace,
   paneShowing,
@@ -61,11 +62,16 @@ interface AgentWorkspaceState {
   openConversation(sessionId: string, scope: PaneScope): void;
   /**
    * Make a PAGE visible in the session's grid — the page-pane sibling of
-   * `openConversation`, sharing its exact focus-or-replace-or-split policy.
-   * Used both by the picker's "Pages" section and by the agent-driven
-   * `open_page_pane` tool's client-side resolution.
+   * `openConversation`, sharing its focus-or-replace-or-split policy (with
+   * two extra guards `openConversation` doesn't need, since a page pane can
+   * hold unsaved edits and can itself BE the conversation that asked to open
+   * it): a pane is never replaceable while its page has an active dirty
+   * `useEditingStore` session, and `excludeTargetId` (the invoking
+   * conversation's own id, for the agent-driven `open_page_pane` path) is
+   * never replaced either — both fall through to a split instead. Used by
+   * the picker's "Pages" section and by `useOpenPagePane`'s resolution.
    */
-  openPage(sessionId: string, scope: PaneScope): void;
+  openPage(sessionId: string, scope: PaneScope, options?: { excludeTargetId?: string }): void;
   splitRight(sessionId: string, fromPaneId: string): void;
   splitDown(sessionId: string, fromPaneId: string): void;
   /**
@@ -123,10 +129,29 @@ function updateWorkspace(
 }
 
 /**
+ * Is `pane` a PAGE pane whose target currently has unsaved edits? Checked
+ * against `useEditingStore` by pageId (not by the pane's own id — the
+ * editing-store componentId carries a per-mount `useId()` suffix the pane
+ * model knows nothing about), so a dirty document/canvas/sheet page is never
+ * silently overwritten by `focusOrAssignScope`'s replace path (only 'document'
+ * and 'form' session types count as dirty for this purpose — see
+ * `useEditingStore.isAnyEditing`'s identical set).
+ */
+function isPaneDirty(pane: PaneState): boolean {
+  if (pane.scope?.kind !== 'page' || pane.scope.targetId === null) return false;
+  const targetPageId = pane.scope.targetId;
+  return useEditingStore
+    .getState()
+    .getActiveSessions()
+    .some((session) => (session.type === 'document' || session.type === 'form') && session.metadata?.pageId === targetPageId);
+}
+
+/**
  * Shared by `openConversation` and `openPage`: make `scope`'s target VISIBLE
  * in the session's grid. Focus the pane already showing it; otherwise replace
  * a replaceable pane (unbound, or bound to a resolved non-terminal row —
- * never a running terminal, which has no reattach UI); otherwise split the
+ * never a running terminal, which has no reattach UI; never one with unsaved
+ * edits; never `options.excludeTargetId`, when given); otherwise split the
  * active pane right. Scope-kind-agnostic: a chat scope and a page scope
  * follow the identical policy, which is why one function serves both.
  */
@@ -134,6 +159,7 @@ function focusOrAssignScope(
   set: (fn: (state: AgentWorkspaceState) => Partial<AgentWorkspaceState>) => void,
   sessionId: string,
   scope: PaneScope,
+  options?: { excludeTargetId?: string },
 ) {
   const state = useAgentWorkspaceStore.getState();
   const workspace = state.workspaces[sessionId];
@@ -154,15 +180,22 @@ function focusOrAssignScope(
   // row. A pane whose mint is still in flight (`targetId === null`) is
   // EXCLUDED even though its kind isn't terminal: landing a different
   // selection there now means the mint's own success callback later
-  // overwrites it with the stale pick (review low-batch #1).
+  // overwrites it with the stale pick (review low-batch #1). Also excluded:
+  // a pane with unsaved edits (`isPaneDirty`), and — when the caller passed
+  // `excludeTargetId` — the pane already showing THAT target (the
+  // `open_page_pane` tool's own invoking conversation must never be evicted
+  // by its own tool call; it should get a split beside it instead).
   const isReplaceable = (pane: PaneState) =>
-    pane.scope === null || (pane.scope.kind !== 'terminal' && pane.scope.targetId !== null);
+    (pane.scope === null || (pane.scope.kind !== 'terminal' && pane.scope.targetId !== null)) &&
+    !isPaneDirty(pane) &&
+    (options?.excludeTargetId === undefined || pane.scope?.targetId !== options.excludeTargetId);
   const replaceable = active && isReplaceable(active) ? active : panes.find(isReplaceable);
   if (replaceable) {
     state.assignPane(sessionId, replaceable.id, scope);
     return;
   }
-  // Every pane is a running terminal — open beside them.
+  // Nothing replaceable (every pane is a running terminal, dirty, or the
+  // excluded invoker) — open beside them instead of losing anything.
   set(
     (current) =>
       updateWorkspace(current, sessionId, (w) => {
@@ -195,7 +228,7 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
 
       openConversation: (sessionId, scope) => focusOrAssignScope(set, sessionId, scope),
 
-      openPage: (sessionId, scope) => focusOrAssignScope(set, sessionId, scope),
+      openPage: (sessionId, scope, options) => focusOrAssignScope(set, sessionId, scope, options),
 
       splitRight: (sessionId, fromPaneId) =>
         set(

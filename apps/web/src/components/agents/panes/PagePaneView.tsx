@@ -19,6 +19,7 @@
 import { AlertCircle } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import useSWR from 'swr';
+import type { ComponentType, ReactNode } from 'react';
 import { getPageTypeComponent, isPaneablePageType } from '@pagespace/lib/content/page-types.config';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import type { TreePage } from '@/hooks/usePageTree';
@@ -26,8 +27,6 @@ import { Skeleton } from '@/components/ui/skeleton';
 
 export interface PagePaneViewProps {
   pageId: string;
-  /** The session's drive, for DocumentView's cross-drive socket scoping. Null for a global-assistant session. */
-  driveId: string | null;
 }
 
 // Lazily loaded, same as DocumentView's own MonacoEditor/RichEditor split —
@@ -58,7 +57,7 @@ async function fetcher(url: string): Promise<TreePage> {
   return { ...page, aiChat: null };
 }
 
-export default function PagePaneView({ pageId, driveId }: PagePaneViewProps) {
+export default function PagePaneView({ pageId }: PagePaneViewProps) {
   const { data: page, error, isLoading } = useSWR<TreePage>(`/api/pages/${pageId}`, fetcher);
 
   if (isLoading) {
@@ -95,11 +94,15 @@ export default function PagePaneView({ pageId, driveId }: PagePaneViewProps) {
 
   // Same calling-convention split as CenterPanel.tsx's PageContent: the
   // pageId-only views fetch their own data; everything else still takes the
-  // full page object.
-  let pageComponent: React.ReactNode;
+  // full page object. DocumentView's driveId is the PAGE's own drive
+  // (`page.driveId`) — never the session's, which is null for a
+  // global-assistant session and would otherwise disable (or misroute)
+  // `usePageContentSocket`'s realtime updates for a page that always
+  // belongs to a real drive regardless of which kind of session opened it.
+  let pageComponent: ReactNode;
   if (componentName === 'DocumentView') {
     const DocumentView = componentMap.DocumentView;
-    pageComponent = <DocumentView key={`document-${page.id}`} pageId={page.id} driveId={driveId ?? undefined} />;
+    pageComponent = <DocumentView key={`document-${page.id}`} pageId={page.id} driveId={page.driveId} />;
   } else if (componentName === 'CodePageView') {
     const CodePageView = componentMap.CodePageView;
     pageComponent = <CodePageView key={`code-${page.id}`} pageId={page.id} />;
@@ -107,7 +110,7 @@ export default function PagePaneView({ pageId, driveId }: PagePaneViewProps) {
     const CanvasPageView = componentMap.CanvasPageView;
     pageComponent = <CanvasPageView key={`canvas-${page.id}`} pageId={page.id} />;
   } else {
-    const Component = ViewComponent as React.ComponentType<{ page: TreePage }>;
+    const Component = ViewComponent as ComponentType<{ page: TreePage }>;
     pageComponent = <Component key={`${componentName}-${page.id}`} page={page} />;
   }
 

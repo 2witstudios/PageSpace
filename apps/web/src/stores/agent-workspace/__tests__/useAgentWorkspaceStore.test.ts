@@ -3,10 +3,11 @@
  * transition aimed at a grid that is gone. The layout rules themselves are the
  * reducer's, and are tested there.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
 import { useAgentWorkspaceStore } from '../useAgentWorkspaceStore';
 import { panesOf } from '../pane-reducer';
+import { useEditingStore } from '@/stores/useEditingStore';
 
 const scope = (name = 'Planning'): PaneScope => ({
   kind: 'chat',
@@ -274,6 +275,110 @@ describe('openConversation — selection means SHOW it (review M1)', () => {
     expect(panes).toHaveLength(2);
     expect(panes.find((p) => p.id === inFlightPane.id)?.scope?.targetId).toBeNull();
     expect(panes.find((p) => p.scope?.targetId === 'conv-2')).toBeDefined();
+  });
+});
+
+describe('openPage — the page-pane sibling of openConversation', () => {
+  const page = (targetId: string, name = 'Doc'): PaneScope => ({
+    kind: 'page',
+    name,
+    targetId,
+    agentPageId: null,
+  });
+  const conv = (targetId: string, name = 'Thread'): PaneScope => ({
+    kind: 'chat',
+    name,
+    targetId,
+    agentPageId: 'agent-1',
+  });
+
+  afterEach(() => {
+    useEditingStore.getState().clearAllSessions();
+  });
+
+  it('with no workspace, seeds the opening grid on the page (ensure semantics)', () => {
+    store().openPage('ses-1', page('page-1'));
+    expect(panesOf(grid())).toHaveLength(1);
+    expect(panesOf(grid())[0].scope?.targetId).toBe('page-1');
+  });
+
+  it('focuses the pane already showing the page instead of duplicating it', () => {
+    store().openPage('ses-1', page('page-1'));
+    const first = panesOf(grid())[0];
+    store().splitRight('ses-1', first.id);
+    const second = panesOf(grid()).find((p) => p.id !== first.id)!;
+    store().assignPane('ses-1', second.id, page('page-2'));
+
+    store().openPage('ses-1', page('page-1'));
+    expect(grid().activePaneId).toBe(first.id);
+    expect(panesOf(grid())).toHaveLength(2);
+  });
+
+  it('replaces an unseen page in the ACTIVE pane, same as a conversation would', () => {
+    store().openPage('ses-1', page('page-1'));
+    const paneId = panesOf(grid())[0].id;
+    store().openPage('ses-1', page('page-2'));
+    expect(panesOf(grid())).toHaveLength(1);
+    expect(panesOf(grid())[0].id).toBe(paneId);
+    expect(panesOf(grid())[0].scope?.targetId).toBe('page-2');
+  });
+
+  it('never replaces a page pane with unsaved edits — it splits beside it instead', () => {
+    store().openPage('ses-1', page('page-1'));
+    const dirtyPane = panesOf(grid())[0];
+    // A real dirty registration, keyed the way DocumentView/etc actually key it
+    // (pageId carried in metadata, a useId()-suffixed componentId — the store's
+    // guard reads metadata.pageId, never the componentId string itself).
+    useEditingStore.getState().startEditing('document-page-1-:r1:', 'document', { pageId: 'page-1' });
+
+    store().openPage('ses-1', page('page-2'));
+
+    const panes = panesOf(grid());
+    expect(panes).toHaveLength(2);
+    expect(panes.find((p) => p.id === dirtyPane.id)?.scope?.targetId).toBe('page-1');
+    expect(panes.find((p) => p.scope?.targetId === 'page-2')).toBeDefined();
+  });
+
+  it('stops treating a page as dirty once its editing session ends', () => {
+    store().openPage('ses-1', page('page-1'));
+    const onlyPane = panesOf(grid())[0];
+    useEditingStore.getState().startEditing('document-page-1-:r1:', 'document', { pageId: 'page-1' });
+    useEditingStore.getState().endEditing('document-page-1-:r1:');
+
+    store().openPage('ses-1', page('page-2'));
+
+    expect(panesOf(grid())).toHaveLength(1);
+    expect(panesOf(grid())[0].id).toBe(onlyPane.id);
+    expect(panesOf(grid())[0].scope?.targetId).toBe('page-2');
+  });
+
+  it('never replaces the pane the caller excluded (the open_page_pane tool\'s own invoking chat)', () => {
+    // A lone chat pane — exactly the shape a real agent session starts with —
+    // must not be evicted by its OWN tool call opening a page beside it.
+    store().ensureWorkspace('ses-1', conv('conv-1'));
+    const chatPane = panesOf(grid())[0];
+
+    store().openPage('ses-1', page('page-1'), { excludeTargetId: 'conv-1' });
+
+    const panes = panesOf(grid());
+    expect(panes).toHaveLength(2);
+    expect(panes.find((p) => p.id === chatPane.id)?.scope?.targetId).toBe('conv-1');
+    expect(panes.find((p) => p.scope?.targetId === 'page-1')).toBeDefined();
+  });
+
+  it('still replaces a DIFFERENT replaceable pane when excludeTargetId only protects the invoker', () => {
+    store().ensureWorkspace('ses-1', conv('conv-1'));
+    const chatPane = panesOf(grid())[0];
+    store().splitRight('ses-1', chatPane.id);
+    const otherPane = panesOf(grid()).find((p) => p.id !== chatPane.id)!;
+    store().assignPane('ses-1', otherPane.id, page('page-1'));
+
+    store().openPage('ses-1', page('page-2'), { excludeTargetId: 'conv-1' });
+
+    const panes = panesOf(grid());
+    expect(panes).toHaveLength(2);
+    expect(panes.find((p) => p.id === chatPane.id)?.scope?.targetId).toBe('conv-1');
+    expect(panes.find((p) => p.id === otherPane.id)?.scope?.targetId).toBe('page-2');
   });
 });
 

@@ -37,6 +37,7 @@ export default function AssistantSessionChat({
   return (
     <SessionChatView
       sessionId={sessionId}
+      conversationId={conversationId}
       chat={chat}
       name="Global Assistant"
       visionModel={currentModel || ''}

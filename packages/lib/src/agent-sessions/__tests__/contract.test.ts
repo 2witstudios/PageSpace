@@ -271,11 +271,13 @@ describe('shellSendPayloadSchema', () => {
 });
 
 describe('paneScopeSchema', () => {
-  it('should offer BOTH surfaces — a pane that can only be a terminal makes panes pointless', () => {
+  it('should offer every surface — a pane that can only be a terminal makes panes pointless', () => {
     // The regression this guards: `SHELL_AGENT_TYPES` being PTY-only was read as
     // "the whole pane surface is PTY-only", which removed the ability to open an
     // agent conversation in a pane and left splitting with nothing to split into.
-    expect([...PANE_KINDS].sort()).toEqual(['chat', 'terminal']);
+    // `'page'` extends this the same way: a page pane addresses an existing
+    // PageSpace page directly, so a pane surface still isn't just PTY-only.
+    expect([...PANE_KINDS].sort()).toEqual(['chat', 'page', 'terminal']);
   });
 
   it('should bind a chat pane to a conversation and its agent', () => {

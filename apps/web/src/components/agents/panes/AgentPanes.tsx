@@ -787,7 +787,7 @@ export default function AgentPanes({
               isReadOnly={isReadOnly}
             />
           ) : surface.surface === 'page' ? (
-            <PagePaneView pageId={surface.pageId} driveId={driveId} />
+            <PagePaneView pageId={surface.pageId} />
           ) : (
             <Shell shellId={surface.shellId} name={pane.scope?.name} />
           )}

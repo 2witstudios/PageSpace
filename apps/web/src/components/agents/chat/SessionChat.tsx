@@ -57,6 +57,7 @@ export default function SessionChat({
   return (
     <SessionChatView
       sessionId={sessionId}
+      conversationId={conversationId}
       chat={chat}
       name={agent.title}
       visionModel={agent.aiModel || ''}
@@ -75,6 +76,8 @@ export interface SessionChatViewProps {
    * about where this surface is mounted, not about the conversation itself.
    */
   sessionId: string | null;
+  /** This conversation's own id — see `useOpenPagePane`'s `excludeTargetId` doc. */
+  conversationId: string;
   /** The chat's whole state — from either pipeline's hook. */
   chat: UseAgentSessionChatReturn;
   /** The counterpart's display name (composer placeholder, compact-renderer label). */
@@ -87,6 +90,7 @@ export interface SessionChatViewProps {
 
 export function SessionChatView({
   sessionId,
+  conversationId,
   chat,
   name,
   visionModel,
@@ -97,7 +101,7 @@ export function SessionChatView({
   const [showError, setShowError] = useState(true);
   const [undoMessageId, setUndoMessageId] = useState<string | null>(null);
 
-  useOpenPagePane({ sessionId, messages: chat.messages });
+  useOpenPagePane({ sessionId, conversationId, messages: chat.messages });
 
   const handleSendClick = useCallback(async () => {
     const text = input;

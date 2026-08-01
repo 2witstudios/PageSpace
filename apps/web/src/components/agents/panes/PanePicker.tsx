@@ -236,7 +236,12 @@ function PagesSection({
   const searchKey = driveId
     ? `/api/mentions/search?q=${encodeURIComponent(debouncedQuery)}&driveId=${encodeURIComponent(driveId)}&types=page`
     : `/api/mentions/search?q=${encodeURIComponent(debouncedQuery)}&crossDrive=true&types=page`;
-  const { data: results = [], isLoading: searching } = useSWR(searchKey, searchPagesFetcher, {
+  // `isValidating`, not `isLoading`: with `keepPreviousData: true`, `isLoading`
+  // is false for every key after the first once ANY data has loaded (SWR
+  // shows the previous results while revalidating) — retyping after the
+  // first search would otherwise show stale results with no "Searching…"
+  // signal while the new request is in flight.
+  const { data: results = [], isValidating: searching } = useSWR(searchKey, searchPagesFetcher, {
     revalidateOnFocus: false,
     keepPreviousData: true,
   });
@@ -261,9 +266,10 @@ function PagesSection({
       {searching && query !== debouncedQuery ? (
         <p className="px-2 text-xs text-muted-foreground">Searching…</p>
       ) : pages.length === 0 ? (
-        <p className="px-2 text-xs text-muted-foreground">
-          {query ? 'No pages found.' : 'Type to search this drive’s pages.'}
-        </p>
+        // An empty query still fetches (the endpoint answers with the
+        // drive's most recently updated pages), so an empty result here
+        // means genuinely none — never "haven't typed yet".
+        <p className="px-2 text-xs text-muted-foreground">No pages found.</p>
       ) : (
         pages.map((page) => (
           <Button

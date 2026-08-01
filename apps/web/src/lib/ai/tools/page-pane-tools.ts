@@ -12,8 +12,6 @@ export const openPagePaneInputSchema = z
   })
   .strict();
 
-export type OpenPagePaneInput = z.infer<typeof openPagePaneInputSchema>;
-
 export const openPagePaneOutputSchema = z.object({
   opened: z.literal(true),
   pageId: z.string(),
