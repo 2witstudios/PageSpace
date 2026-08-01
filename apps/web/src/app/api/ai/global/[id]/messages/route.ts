@@ -93,7 +93,11 @@ import {
   withCacheBreakpoints,
 } from '@/lib/ai/core/prompt-assembly';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
-import { resolveOrCreateConversation, ConversationOwnershipError } from './resolve-or-create-conversation';
+import {
+  resolveOrCreateConversation,
+  ConversationOwnershipError,
+  ConversationHistoryDeletedError,
+} from './resolve-or-create-conversation';
 import { deriveConversationTitle } from '@/lib/repositories/derive-conversation-title';
 
 // Allow streaming responses up to 5 minutes
@@ -270,6 +274,39 @@ export async function POST(
   // pre-generation exit (auth/permission/provider/save failure) doesn't strand the
   // reservation against the user's balance + in-flight cap until the cron sweeps it.
   let holdHandedOff = false;
+  // The SAME atomic re-check the user's own message write uses (this
+  // route's own earlier `db.transaction` around the FIRST message), applied
+  // here too: that lock only covers the moment the user's message was
+  // persisted, and model generation between then and a TERMINAL write can
+  // run for seconds — plenty of room for a History delete (permitted the
+  // whole time; nothing else in this route blocks it mid-generation) to
+  // land in between. Without this, the assistant's reply persists as an
+  // ACTIVE message beneath a conversation already excluded from every
+  // session listing — generation the user cancelled by deleting the
+  // conversation, answered into a transcript they can no longer reach
+  // (review finding — chatgpt-codex-connector on PR #2299, filed against
+  // the page-agent chat route's identical gap; the same class of bug here
+  // too). A deleted conversation silently drops the reply rather than
+  // persisting it as orphaned; the provider call itself already happened
+  // and is billed/tracked independently via the usual trackUsage path,
+  // which this does not touch — only what gets WRITTEN to the (now-gone)
+  // conversation's transcript. One shared choke point (all 3 terminal-write
+  // sites below route through it) rather than three separate re-checks.
+  const saveTerminalGlobalAssistantMessage = async (
+    args: Parameters<typeof saveGlobalAssistantMessageToDatabase>[0],
+  ): Promise<boolean> => {
+    return db.transaction(async (tx) => {
+      const [row] = await tx
+        .select({ isActive: conversations.isActive })
+        .from(conversations)
+        .where(eq(conversations.id, args.conversationId))
+        .for('update')
+        .limit(1);
+      if (!row?.isActive) return false;
+      await saveGlobalAssistantMessageToDatabase({ ...args, dbClient: tx });
+      return true;
+    });
+  };
   try {
     loggers.api.debug('Global Assistant Chat API: Starting request processing', {});
 
@@ -333,7 +370,7 @@ export async function POST(
     try {
       ({ conversation, isNew: conversationIsNew } = await resolveOrCreateConversation(userId, conversationId));
     } catch (e) {
-      if (e instanceof ConversationOwnershipError) {
+      if (e instanceof ConversationOwnershipError || e instanceof ConversationHistoryDeletedError) {
         return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
       }
       throw e;
@@ -510,15 +547,34 @@ export async function POST(
 
         loggers.api.debug('Global Assistant Chat API: Saving user message immediately', { id: messageId, contentLength: messageContent.length });
         
-        await saveGlobalAssistantMessageToDatabase({
-          messageId,
-          conversationId,
-          userId,
-          role: 'user',
-          content: messageContent,
-          toolCalls: undefined,
-          toolResults: undefined,
-          uiMessage: userMessage, // Pass UIMessage to preserve part ordering
+        // Atomic re-check immediately adjacent to the write: `resolveOrCreateConversation`
+        // resolved this conversation as active well above, but the credit-gate check,
+        // @mention processing, and command resolution in between all do their own
+        // unrelated I/O — plenty of room for a concurrent History-delete to commit in
+        // that gap. A `SELECT ... FOR UPDATE` + the insert in ONE short transaction (not
+        // wrapping any of the intervening work, which must never run inside an open
+        // transaction) closes that window rather than trusting the stale earlier read
+        // (review finding — chatgpt-codex-connector and coderabbitai on PR #2299).
+        await db.transaction(async (tx) => {
+          const [row] = await tx
+            .select({ isActive: conversations.isActive })
+            .from(conversations)
+            .where(eq(conversations.id, conversationId))
+            .for('update')
+            .limit(1);
+          if (!row?.isActive) throw new ConversationHistoryDeletedError();
+
+          await saveGlobalAssistantMessageToDatabase({
+            messageId,
+            conversationId,
+            userId,
+            role: 'user',
+            content: messageContent,
+            toolCalls: undefined,
+            toolResults: undefined,
+            uiMessage: userMessage, // Pass UIMessage to preserve part ordering
+            dbClient: tx,
+          });
         });
 
         auditRequest(request, { eventType: 'data.write', userId, resourceType: 'global_chat_message', resourceId: conversationId, details: {
@@ -549,6 +605,9 @@ export async function POST(
         
         loggers.api.debug('Global Assistant Chat API: User message saved to database', {});
       } catch (error) {
+        if (error instanceof ConversationHistoryDeletedError) {
+          return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+        }
         loggers.api.error('Global Assistant Chat API: Failed to save user message', error as Error);
         return NextResponse.json({
           error: 'Failed to save message to database',
@@ -1189,19 +1248,42 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
         // itself still proceeds.
         if (!streamLifecycle.preAborted) {
           try {
-            await db.insert(messages).values({
-              id: serverAssistantMessageId,
-              conversationId,
-              userId,
-              role: 'assistant',
-              content: '',
-              toolCalls: null,
-              toolResults: null,
-              isActive: true,
-              status: 'streaming',
+            // Same atomic re-check as saveTerminalGlobalAssistantMessage: a History delete
+            // permitted between the user-message write and here would otherwise let this
+            // best-effort insert plant an isActive:true 'streaming' row under a conversation
+            // already gone from every listing — and since the row is BRAND NEW here, the later
+            // terminal-write check finding the conversation inactive would just skip its
+            // update, leaving this row stuck at 'streaming' forever, visible again the moment
+            // the conversation is reopened (review finding — chatgpt-codex-connector on PR #2299).
+            const conversationActive = await db.transaction(async (tx) => {
+              const [row] = await tx
+                .select({ isActive: conversations.isActive })
+                .from(conversations)
+                .where(eq(conversations.id, conversationId))
+                .for('update')
+                .limit(1);
+              if (!row?.isActive) return false;
+              await tx.insert(messages).values({
+                id: serverAssistantMessageId,
+                conversationId,
+                userId,
+                role: 'assistant',
+                content: '',
+                toolCalls: null,
+                toolResults: null,
+                isActive: true,
+                status: 'streaming',
+              });
+              return true;
             });
+            if (!conversationActive) {
+              loggers.api.warn('Global AI messages API: skipped placeholder assistant row, conversation no longer active', {
+                messageId: serverAssistantMessageId,
+                conversationId,
+              });
+            }
           } catch (error) {
-            loggers.ai.warn('Global AI messages API: placeholder assistant row INSERT failed', {
+            loggers.api.warn('Global AI messages API: placeholder assistant row INSERT failed', {
               messageId: serverAssistantMessageId,
               conversationId,
               error: error instanceof Error ? error.message : 'unknown',
@@ -1361,7 +1443,7 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
           const aborted = isRunAborted({ agentRun, abortSignal });
           const payload = buildAssistantPersistencePayload(serverAssistantMessageId, bufferedParts);
           try {
-            await saveGlobalAssistantMessageToDatabase({
+            await saveTerminalGlobalAssistantMessage({
               messageId: serverAssistantMessageId,
               conversationId,
               userId,
@@ -1426,7 +1508,7 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
               toolResultsCount: extractedToolResults.length,
             });
 
-            await saveGlobalAssistantMessageToDatabase({
+            await saveTerminalGlobalAssistantMessage({
               messageId,
               conversationId,
               userId,
@@ -1566,7 +1648,7 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
     if (!assistantMessagePersisted && cleanupContext && lifecycle && !lifecycle.preAborted) {
       try {
         const payload = buildAssistantPersistencePayload(cleanupContext.serverAssistantMessageId, bufferedPartsAtError);
-        await saveGlobalAssistantMessageToDatabase({
+        await saveTerminalGlobalAssistantMessage({
           messageId: cleanupContext.serverAssistantMessageId,
           conversationId: cleanupContext.conversationId,
           userId: cleanupContext.userId,

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useImperativeHandle, forwardRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useImperativeHandle, forwardRef, useCallback, useMemo, useRef, useId } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
@@ -17,6 +17,7 @@ import { getRoleColorClasses } from '@/lib/utils';
 import { AgentDrivesCard } from './AgentDrivesCard';
 import { SANDBOX_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
 import { useEditingStore } from '@/stores/useEditingStore';
+import { useAgentMembership } from '@/lib/ai/shared/hooks/useAgentMembership';
 
 interface AgentConfig {
   systemPrompt: string;
@@ -34,22 +35,17 @@ interface AgentConfig {
   sandboxEnabled?: boolean;
 }
 
-interface AgentMembership {
-  role: string;
-  customRole: { id: string; name: string; color: string | null } | null;
-}
-
-interface DriveRole {
-  id: string;
-  name: string;
-  color?: string | null;
-}
-
 interface PageAgentSettingsTabProps {
   pageId: string;
   driveId: string;
   config: AgentConfig | null;
-  onConfigUpdate: (config: AgentConfig) => void;
+  /** Accepts a plain value OR an updater `(current) => next` — see onSubmit
+   * below for why the updater form matters (round 22). */
+  onConfigUpdate: (config: AgentConfig | ((current: AgentConfig | undefined) => AgentConfig)) => void;
+  /** Re-fetches the shared config cache to reconcile it with the server's
+   * ground truth — see onSubmit below for why the optimistic update above
+   * isn't always enough on its own (round 23). */
+  onConfigRevalidate: () => void;
   selectedProvider: string;
   selectedModel: string;
   onProviderChange: (provider: string) => void;
@@ -118,6 +114,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   driveId,
   config,
   onConfigUpdate,
+  onConfigRevalidate,
   selectedProvider,
   selectedModel,
   onProviderChange,
@@ -125,67 +122,26 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   isProviderConfigured,
   onSavingChange
 }, ref) => {
+  // Stable per-MOUNT identifier — distinguishes this instance from another
+  // Settings surface for the SAME agent mounted elsewhere (see the
+  // useEditingStore registration below, round 20).
+  const mountId = useId();
   const [isSaving, setIsSaving] = useState(false);
-  const [membership, setMembership] = useState<AgentMembership | null | undefined>(undefined);
-  const [membershipUserRole, setMembershipUserRole] = useState<'OWNER' | 'ADMIN' | 'MEMBER'>('MEMBER');
-  const [driveRoles, setDriveRoles] = useState<DriveRole[]>([]);
-  const [membershipSaving, setMembershipSaving] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function loadMembership() {
-      try {
-        const [membersRes, rolesRes] = await Promise.all([
-          fetchWithAuth(`/api/drives/${driveId}/agents/members`),
-          fetchWithAuth(`/api/drives/${driveId}/roles`),
-        ]);
-        if (cancelled) return;
-        if (membersRes.ok) {
-          const data = await membersRes.json();
-          const entry = (data.agentMembers ?? []).find(
-            (m: { agentPageId: string }) => m.agentPageId === pageId,
-          );
-          setMembership(entry ? { role: entry.role, customRole: entry.customRole } : null);
-          setMembershipUserRole(data.currentUserRole ?? 'MEMBER');
-        } else {
-          setMembership(null);
-        }
-        if (rolesRes.ok) {
-          const data = await rolesRes.json();
-          setDriveRoles(data.roles ?? []);
-        }
-      } catch {
-        if (!cancelled) setMembership(null);
-      }
-    }
-    loadMembership();
-    return () => { cancelled = true; };
-  }, [pageId, driveId]);
+  // Shared across every mounted Settings surface for this agent (keyed by
+  // driveId in SWR's cache) — see useAgentMembership for why a per-instance
+  // useState here previously let two Settings surfaces for the same agent
+  // drift out of sync.
+  const { membership, membershipUserRole, driveRoles, updateRole, isSaving: membershipSaving } =
+    useAgentMembership(driveId, pageId);
 
   const handleMembershipRoleChange = useCallback(async (value: string) => {
-    setMembershipSaving(true);
     try {
-      const body: { role: 'MEMBER' | 'ADMIN'; customRoleId: string | null } =
-        value === 'ADMIN'
-          ? { role: 'ADMIN', customRoleId: null }
-          : value === 'MEMBER'
-          ? { role: 'MEMBER', customRoleId: null }
-          : { role: 'MEMBER', customRoleId: value };
-      await patch(`/api/drives/${driveId}/agents/${pageId}`, body);
-      const customRole = body.customRoleId
-        ? (driveRoles.find((r) => r.id === body.customRoleId) ?? null)
-        : null;
-      setMembership({
-        role: body.role,
-        customRole: customRole ? { id: customRole.id, name: customRole.name, color: customRole.color ?? null } : null,
-      });
+      await updateRole(value);
       toast.success('Role updated');
     } catch {
       toast.error('Failed to update role');
-    } finally {
-      setMembershipSaving(false);
     }
-  }, [driveId, pageId, driveRoles]);
+  }, [updateRole]);
 
   // Dynamic Ollama models state
   const [ollamaModels, setOllamaModels] = useState<Record<string, string> | null>(null);
@@ -209,24 +165,67 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
     }
   });
 
-  // Reset form when config changes
+  // Read early (moved up from its original spot near the useEditingStore
+  // registration below) so the reset effect right below can gate on it.
+  // `dirtyFields` additionally lets onSubmit tell "the user actually
+  // edited this field in THIS instance" apart from "still whatever this
+  // instance's own (possibly now-stale) form snapshot happens to hold" —
+  // see onSubmit below, round 20.
+  const { isDirty: formIsDirty, dirtyFields } = useFormState({ control });
+  // Set right before THIS instance's own save propagates the new config
+  // into the shared cache (onSubmit below) — distinguishes "my own save,
+  // whose values I want as my new clean baseline" from "a SIBLING Settings
+  // surface for the same agent just saved, and its update arrived here via
+  // the shared SWR cache."
+  const justSavedOwnConfigRef = useRef(false);
+  // Set the first time THIS instance's own provider/model controls are
+  // touched — distinguishes "the user explicitly picked this here" from
+  // "still whatever useProviderSettings loaded on mount, possibly stale
+  // relative to a sibling's later save" (see onSubmit below, round 18).
+  const providerTouchedRef = useRef(false);
+  const modelTouchedRef = useRef(false);
+
+  // What to actually SHOW in the provider/model Selects — same resolution
+  // as onSubmit's resolvedProvider/resolvedModel (this instance's own
+  // untouched selection defers to the shared config), but read at render
+  // time rather than only at submit time. Without this, an untouched
+  // instance kept rendering its stale `selectedProvider`/`selectedModel`
+  // prop (owned by a separate, non-shared useProviderSettings() per mount)
+  // even after a SIBLING Settings surface for the same agent saved a
+  // different provider — the save itself was already correct (onSubmit's
+  // own resolution prevented the stale prop from being submitted), but the
+  // display never caught up (review finding — chatgpt-codex-connector on
+  // PR #2299, round 26, thread r3694897525).
+  const providerOrModelTouched = providerTouchedRef.current || modelTouchedRef.current;
+  const displayedProvider = providerOrModelTouched ? selectedProvider : (config?.aiProvider || selectedProvider);
+  const displayedModel = providerOrModelTouched ? selectedModel : (config?.aiModel || selectedModel);
+
+  // Reset form when config changes — but NOT when this surface has its own
+  // unsaved edits from an EXTERNAL update (a different pane's Settings tab
+  // for the SAME agent saving propagates through the shared config cache
+  // `useAgentConfig` — see AgentPanes.tsx — and this effect used to reset
+  // unconditionally, silently discarding whatever the user was mid-typing
+  // here). Always resets for THIS instance's own save (justSavedOwnConfigRef)
+  // — its own newly-saved values become the new clean baseline as before
+  // (review finding — chatgpt-codex-connector on PR #2299, round 17).
   useEffect(() => {
-    if (config) {
-      reset({
-        systemPrompt: config.systemPrompt,
-        enabledTools: config.enabledTools,
-        aiProvider: config.aiProvider || selectedProvider || '',
-        aiModel: config.aiModel || selectedModel || '',
-        includeDrivePrompt: config.includeDrivePrompt ?? false,
-        agentDefinition: config.agentDefinition || '',
-        visibleToGlobalAssistant: config.visibleToGlobalAssistant ?? true,
-        includePageTree: config.includePageTree ?? false,
-        pageTreeScope: config.pageTreeScope ?? 'children',
-        toolExposureMode: config.toolExposureMode ?? 'upfront',
-        sandboxEnabled: config.sandboxEnabled ?? false,
-      });
-    }
-  }, [config, reset, selectedProvider, selectedModel]);
+    if (!config) return;
+    if (formIsDirty && !justSavedOwnConfigRef.current) return;
+    justSavedOwnConfigRef.current = false;
+    reset({
+      systemPrompt: config.systemPrompt,
+      enabledTools: config.enabledTools,
+      aiProvider: config.aiProvider || selectedProvider || '',
+      aiModel: config.aiModel || selectedModel || '',
+      includeDrivePrompt: config.includeDrivePrompt ?? false,
+      agentDefinition: config.agentDefinition || '',
+      visibleToGlobalAssistant: config.visibleToGlobalAssistant ?? true,
+      includePageTree: config.includePageTree ?? false,
+      pageTreeScope: config.pageTreeScope ?? 'children',
+      toolExposureMode: config.toolExposureMode ?? 'upfront',
+      sandboxEnabled: config.sandboxEnabled ?? false,
+    });
+  }, [config, reset, selectedProvider, selectedModel, formIsDirty]);
 
   // Fetch Ollama models dynamically
   const fetchOllamaModels = useCallback(async () => {
@@ -282,47 +281,122 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
     }
   }, [lmstudioModels]);
 
-  // Get models for the current provider (dynamic for Ollama and LM Studio, static for others)
+  // Get models for the DISPLAYED provider (dynamic for Ollama and LM Studio,
+  // static for others) — must match displayedProvider, not selectedProvider:
+  // an untouched instance can be displaying a sibling's saved provider (see
+  // displayedProvider above) while selectedProvider still holds this
+  // instance's own stale value, and listing the wrong provider's models
+  // would offer a model that doesn't belong to the shown provider.
   const getCurrentProviderModels = (): Record<string, string> => {
-    if (selectedProvider === 'ollama' && ollamaModels) {
+    if (displayedProvider === 'ollama' && ollamaModels) {
       return ollamaModels;
     }
-    if (selectedProvider === 'lmstudio' && lmstudioModels) {
+    if (displayedProvider === 'lmstudio' && lmstudioModels) {
       return lmstudioModels;
     }
-    return AI_PROVIDERS[selectedProvider as keyof typeof AI_PROVIDERS]?.models || {};
+    return AI_PROVIDERS[displayedProvider as keyof typeof AI_PROVIDERS]?.models || {};
   };
 
   const onSubmit = useCallback(async (data: FormData) => {
     setIsSaving(true);
     onSavingChange?.(true);
     try {
-      // Include the current provider and model from props
+      // `selectedProvider`/`selectedModel` are OWNED by the parent's own
+      // useProviderSettings() instance — a separate, per-mount hook with no
+      // shared cache (unlike useAgentConfig). If this instance never
+      // touched the provider/model controls itself, its copy can be stale
+      // relative to a SIBLING Settings surface for the same agent that
+      // just saved a provider change: submitting the stale prop here would
+      // silently revert that sibling's save the moment this instance saves
+      // anything else. Prefer the shared config's value in that case; only
+      // this instance's OWN explicit selection overrides it (review
+      // finding — chatgpt-codex-connector on PR #2299, round 18).
+      //
+      // Provider and model are a COUPLED pair — a model must belong to its
+      // provider — so they are resolved from the SAME source together, not
+      // independently: touching only the model here while a sibling
+      // changed the provider must not combine this instance's (stale-
+      // provider) model with the sibling's new provider, an invalid pair
+      // the route rejects with a 400 (review finding — chatgpt-codex-
+      // connector on PR #2299, round 20).
+      const providerOrModelTouched = providerTouchedRef.current || modelTouchedRef.current;
+      const resolvedProvider = providerOrModelTouched ? selectedProvider : (config?.aiProvider || selectedProvider);
+      const resolvedModel = providerOrModelTouched ? selectedModel : (config?.aiModel || selectedModel);
+      // Every OTHER field: send ONLY what THIS instance's form actually has
+      // a pending edit for (react-hook-form's own dirtyFields) — a SPARSE
+      // PATCH, omitting untouched fields entirely rather than merging in a
+      // value copied from this instance's own (possibly already-stale)
+      // config snapshot. The route already applies each field only `if
+      // (field !== undefined)`, so an omitted field is left untouched
+      // server-side. Round 20's "merge from local config" still raced: two
+      // surfaces saving different fields close enough together that
+      // neither's SWR update had reached the other yet would both submit
+      // the SAME stale snapshot for their own "unedited" fields, and
+      // whichever PATCH landed second would stomp the first's just-saved
+      // change. Never sending a field this instance didn't touch removes
+      // that race entirely (review finding — chatgpt-codex-connector on
+      // PR #2299, round 21).
+      const dirtyPatch: Partial<FormData> = {};
+      if (dirtyFields.systemPrompt) dirtyPatch.systemPrompt = data.systemPrompt;
+      if (dirtyFields.enabledTools) dirtyPatch.enabledTools = data.enabledTools;
+      if (dirtyFields.includeDrivePrompt) dirtyPatch.includeDrivePrompt = data.includeDrivePrompt;
+      if (dirtyFields.agentDefinition) dirtyPatch.agentDefinition = data.agentDefinition;
+      if (dirtyFields.visibleToGlobalAssistant) dirtyPatch.visibleToGlobalAssistant = data.visibleToGlobalAssistant;
+      if (dirtyFields.includePageTree) dirtyPatch.includePageTree = data.includePageTree;
+      if (dirtyFields.pageTreeScope) dirtyPatch.pageTreeScope = data.pageTreeScope;
+      if (dirtyFields.toolExposureMode) dirtyPatch.toolExposureMode = data.toolExposureMode;
+      if (dirtyFields.sandboxEnabled) dirtyPatch.sandboxEnabled = data.sandboxEnabled;
       const requestData = {
-        ...data,
-        aiProvider: selectedProvider,
-        aiModel: selectedModel,
-        includeDrivePrompt: data.includeDrivePrompt,
-        agentDefinition: data.agentDefinition,
-        visibleToGlobalAssistant: data.visibleToGlobalAssistant,
-        includePageTree: data.includePageTree,
-        pageTreeScope: data.pageTreeScope,
+        ...dirtyPatch,
+        ...(providerOrModelTouched && { aiProvider: resolvedProvider, aiModel: resolvedModel }),
       };
 
       await patch(`/api/pages/${pageId}/agent-config`, requestData);
 
-      const updatedConfig = {
-        ...config,
-        ...data,
-        aiProvider: selectedProvider,
-        aiModel: selectedModel,
-        includeDrivePrompt: data.includeDrivePrompt,
-        agentDefinition: data.agentDefinition,
-        visibleToGlobalAssistant: data.visibleToGlobalAssistant,
-        includePageTree: data.includePageTree,
-        pageTreeScope: data.pageTreeScope,
-      } as AgentConfig;
-      onConfigUpdate(updatedConfig);
+      // Updater form — merges against whatever the SHARED SWR cache
+      // actually holds at the moment this runs, not the `config` this
+      // closure captured when onSubmit was created. Two surfaces saving
+      // DIFFERENT fields concurrently each hold their OWN stale closure
+      // from before either save started; whichever finishes last spreading
+      // that closure as a plain value would publish a snapshot missing the
+      // other's meanwhile-arrived change, making it disappear from every
+      // mounted consumer even though both sparse PATCHes above persisted
+      // correctly server-side (review finding — chatgpt-codex-connector on
+      // PR #2299, round 22).
+      const patchThisSave = dirtyPatch;
+      const providerModelPatch = providerOrModelTouched
+        ? { aiProvider: resolvedProvider, aiModel: resolvedModel }
+        : {};
+      // This save's own values should always become this instance's new
+      // clean baseline, even though the form is (still, momentarily) dirty
+      // when the reset effect runs — the dirty-guard above only exists to
+      // protect against a DIFFERENT (sibling) surface's external update.
+      justSavedOwnConfigRef.current = true;
+      // Cleared here, not left true forever: `config.aiProvider`/`aiModel`
+      // now correctly reflect what THIS instance just chose (onConfigUpdate
+      // below), so "prefer the shared config" is exactly as correct for
+      // this instance's own just-saved value as it is for reacting to a
+      // LATER sibling's save. Leaving these true past this point would
+      // permanently pin onSubmit to this instance's local snapshot and
+      // revert every subsequent sibling save forever (review finding —
+      // chatgpt-codex-connector on PR #2299, round 19).
+      providerTouchedRef.current = false;
+      modelTouchedRef.current = false;
+      onConfigUpdate((current) => ({
+        ...current,
+        ...patchThisSave,
+        ...providerModelPatch,
+      } as AgentConfig));
+      // The optimistic merge above is instant but not the last word: a
+      // sibling surface PATCHing the SAME field concurrently can have its
+      // OWN response arrive after this one despite its write having
+      // committed FIRST in the DB (HTTP response order need not match
+      // write order) — merging alone can't tell the two apart, since both
+      // completions look identical from here. Re-fetching lets the cache
+      // reconcile to whatever the server actually holds once any
+      // overlapping sibling save has also had a chance to land (review
+      // finding — chatgpt-codex-connector on PR #2299, round 23).
+      onConfigRevalidate();
       toast.success('Agent configuration saved successfully');
     } catch (error) {
       console.error('Error saving agent configuration:', error);
@@ -331,7 +405,22 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       setIsSaving(false);
       onSavingChange?.(false);
     }
-  }, [pageId, config, onConfigUpdate, selectedProvider, selectedModel, onSavingChange]);
+  }, [pageId, config, onConfigUpdate, onConfigRevalidate, selectedProvider, selectedModel, onSavingChange, dirtyFields]);
+
+  const handleProviderSelectChange = useCallback(
+    (provider: string) => {
+      providerTouchedRef.current = true;
+      onProviderChange(provider);
+    },
+    [onProviderChange],
+  );
+  const handleModelSelectChange = useCallback(
+    (model: string) => {
+      modelTouchedRef.current = true;
+      onModelChange(model);
+    },
+    [onModelChange],
+  );
 
   // Expose form submission to parent component
   useImperativeHandle(ref, () => ({
@@ -341,20 +430,22 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
     isSaving
   }), [handleSubmit, onSubmit, isSaving]);
 
-  // Eagerly fetch models when provider is Ollama or LM Studio
+  // Eagerly fetch models for the DISPLAYED provider (see displayedProvider
+  // above) when it's Ollama or LM Studio — must match what's actually
+  // rendered, not this instance's own possibly-stale selectedProvider.
   useEffect(() => {
-    if (selectedProvider === 'ollama' && !ollamaModels) {
+    if (displayedProvider === 'ollama' && !ollamaModels) {
       fetchOllamaModels().catch(() => {
         console.debug('Initial Ollama model fetch failed');
       });
     }
-    if (selectedProvider === 'lmstudio' && !lmstudioModels) {
+    if (displayedProvider === 'lmstudio' && !lmstudioModels) {
       fetchLMStudioModels().catch(() => {
         console.debug('Initial LM Studio model fetch failed');
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedProvider]); // Only selectedProvider - fetch functions are stable, models checked inline
+  }, [displayedProvider]); // Only displayedProvider - fetch functions are stable, models checked inline
 
   // Watch enabledTools for the count display
   const enabledTools = watch('enabledTools', []);
@@ -373,26 +464,38 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
     [config, sandboxEnabled]
   );
 
+  // shouldDirty: true — without it, dirtyFields.enabledTools stays false
+  // even though the displayed selection changed, so onSubmit's dirty-only
+  // merge below would silently discard the bulk selection and resubmit
+  // the stale config value instead (review finding — chatgpt-codex-
+  // connector on PR #2299, round 21).
   const handleSelectAllTools = () => {
-    setValue('enabledTools', visibleTools.map(tool => tool.name));
+    setValue('enabledTools', visibleTools.map(tool => tool.name), { shouldDirty: true });
   };
 
   const handleDeselectAllTools = () => {
-    setValue('enabledTools', []);
+    setValue('enabledTools', [], { shouldDirty: true });
   };
 
   // Register with useEditingStore while dirty so SWR doesn't revalidate this
-  // page mid-edit and clobber unsaved changes.
-  const { isDirty: formIsDirty } = useFormState({ control });
+  // page mid-edit and clobber unsaved changes. (formIsDirty is declared
+  // earlier, above the config-reset effect it also gates.) Keyed by a
+  // per-MOUNT id (mountId, below), not just pageId: two Settings surfaces
+  // for the SAME agent otherwise register the identical key, and either
+  // one saving/unmounting deletes the shared Map entry out from under the
+  // OTHER — a still-dirty sibling then silently drops out of
+  // isAnyEditing(), letting SWR revalidation and other editing-paused
+  // background work resume while it still has unsaved edits (review
+  // finding — chatgpt-codex-connector on PR #2299, round 20).
   useEffect(() => {
-    const componentId = `page-agent-settings-${pageId}`;
+    const componentId = `page-agent-settings-${pageId}-${mountId}`;
     if (formIsDirty) {
       useEditingStore.getState().startEditing(componentId, 'form', { pageId });
     } else {
       useEditingStore.getState().endEditing(componentId);
     }
     return () => { useEditingStore.getState().endEditing(componentId); };
-  }, [formIsDirty, pageId]);
+  }, [formIsDirty, pageId, mountId]);
 
   if (!config) {
     return (
@@ -421,7 +524,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
               {/* Provider Selector */}
               <div>
                 <label className="text-sm font-medium mb-2 block">AI Provider</label>
-                <Select value={selectedProvider} onValueChange={onProviderChange}>
+                <Select value={displayedProvider} onValueChange={handleProviderSelectChange}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
@@ -444,13 +547,13 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
               {/* Model Selector */}
               <div>
                 <label className="text-sm font-medium mb-2 block">Model</label>
-                <Select value={selectedModel} onValueChange={onModelChange}>
+                <Select value={displayedModel} onValueChange={handleModelSelectChange}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
-                      <SelectLabel>{AI_PROVIDERS[selectedProvider as keyof typeof AI_PROVIDERS]?.name} Models</SelectLabel>
+                      <SelectLabel>{AI_PROVIDERS[displayedProvider as keyof typeof AI_PROVIDERS]?.name} Models</SelectLabel>
                       {Object.entries(getCurrentProviderModels()).map(([key, name]) => (
                         <SelectItem key={key} value={key}>
                           {name}

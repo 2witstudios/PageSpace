@@ -94,28 +94,41 @@ const mockUserProfile = { displayName: 'Display User' };
 const mockAuthUser = { name: 'Auth User', subscriptionTier: 'free' };
 
 vi.mock('@pagespace/db/db', () => {
-  const select = vi.fn(() => ({
-    from: vi.fn((table: unknown) => {
-      const tableLabel = table as { __label?: string } | undefined;
-      const isUsers = tableLabel?.__label === 'users';
-      return {
-        where: vi.fn(() => ({
-          then: <T>(
-            resolve?: ((value: unknown[]) => T | PromiseLike<T>) | null,
-            reject?: ((reason: unknown) => T | PromiseLike<T>) | null,
-          ) => Promise.resolve(isUsers ? [mockAuthUser] : [mockConversation]).then(resolve, reject),
-          orderBy: vi.fn().mockResolvedValue([]),
-          limit: vi.fn().mockResolvedValue(isUsers ? [mockAuthUser] : [mockUserProfile]),
-        })),
-      };
-    }),
-  }));
-  const insert = vi.fn(() => ({
-    values: vi.fn(() => ({
-      onConflictDoUpdate: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ id: 'msg-1' }]) })),
-    })),
-  }));
-  const update = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })) }));
+  // Reused inside `transaction()`'s callback too — see the identical
+  // pattern (and its own doc) in stream-socket-events.test.ts's db mock.
+  const makeDbLike = () => {
+    const select = vi.fn(() => ({
+      from: vi.fn((table: unknown) => {
+        const tableLabel = table as { __label?: string } | undefined;
+        const isUsers = tableLabel?.__label === 'users';
+        const isConversations = tableLabel?.__label === 'conversations';
+        return {
+          where: vi.fn(() => ({
+            then: <T>(
+              resolve?: ((value: unknown[]) => T | PromiseLike<T>) | null,
+              reject?: ((reason: unknown) => T | PromiseLike<T>) | null,
+            ) => Promise.resolve(isUsers ? [mockAuthUser] : [mockConversation]).then(resolve, reject),
+            orderBy: vi.fn().mockResolvedValue([]),
+            limit: vi.fn().mockResolvedValue(isUsers ? [mockAuthUser] : [mockUserProfile]),
+            for: vi.fn(() => ({
+              limit: vi.fn().mockResolvedValue(isConversations ? [{ isActive: true }] : [mockConversation]),
+            })),
+          })),
+        };
+      }),
+    }));
+    const insert = vi.fn(() => ({
+      values: vi.fn(() => ({
+        onConflictDoUpdate: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ id: 'msg-1' }]) })),
+      })),
+    }));
+    const update = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })) }));
+    return { select, insert, update };
+  };
+  const dbLike = makeDbLike();
+  const transaction = vi.fn(async (callback: (tx: ReturnType<typeof makeDbLike>) => Promise<unknown>) => {
+    return callback(makeDbLike());
+  });
   // startGenerationExclusive's advisory lock: always free, so takeover+lifecycle-create run
   // exactly as before. Its own retry/degrade behavior is covered by
   // start-generation-exclusive.test.ts — this file only verifies this route wires it in.
@@ -125,7 +138,7 @@ vi.mock('@pagespace/db/db', () => {
       release: vi.fn(),
     })),
   }));
-  return { db: { select, insert, update }, getAdvisoryLockPool };
+  return { db: { ...dbLike, transaction }, getAdvisoryLockPool };
 });
 
 vi.mock('@pagespace/db/operators', () => ({
@@ -139,11 +152,12 @@ vi.mock('../resolve-or-create-conversation', () => ({
     isNew: false,
   }),
   ConversationOwnershipError: class ConversationOwnershipError extends Error {},
+  ConversationHistoryDeletedError: class ConversationHistoryDeletedError extends Error {},
 }));
 vi.mock('@pagespace/db/schema/core', () => ({ drives: { id: 'id', drivePrompt: 'drivePrompt' } }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { __label: 'users', id: 'id', name: 'name', subscriptionTier: 'subscriptionTier' } }));
 vi.mock('@pagespace/db/schema/conversations', () => ({
-  conversations: { id: 'id', userId: 'userId', isActive: 'isActive', lastMessageAt: 'lastMessageAt', updatedAt: 'updatedAt', title: 'title' },
+  conversations: { __label: 'conversations', id: 'id', userId: 'userId', isActive: 'isActive', lastMessageAt: 'lastMessageAt', updatedAt: 'updatedAt', title: 'title' },
   messages: { conversationId: 'conversationId', isActive: 'isActive', createdAt: 'createdAt', id: 'id' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({

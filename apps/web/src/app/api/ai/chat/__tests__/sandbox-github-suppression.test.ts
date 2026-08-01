@@ -77,19 +77,28 @@ vi.mock('@pagespace/db/db', () => {
     sandboxEnabled: true,
     revision: 0,
   };
+  const dbLike = {
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => {
+          const result = Promise.resolve([pageRow]);
+          return Object.assign(result, {
+            orderBy: vi.fn().mockResolvedValue([]),
+            limit: vi.fn().mockResolvedValue([]),
+            // The route's atomic active-conversation re-check
+            // (`.where(...).for('update').limit(1)`) — active by default,
+            // this suite isn't about that race.
+            for: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([{ isActive: true }]) })),
+          });
+        }),
+      })),
+    })),
+  };
   return {
     db: {
-      select: vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: vi.fn(() => {
-            const result = Promise.resolve([pageRow]);
-            return Object.assign(result, {
-              orderBy: vi.fn().mockResolvedValue([]),
-              limit: vi.fn().mockResolvedValue([]),
-            });
-          }),
-        })),
-      })),
+      ...dbLike,
+      // A transaction runs its callback against the same db-like shape.
+      transaction: vi.fn(async (callback: (tx: typeof dbLike) => Promise<unknown>) => callback(dbLike)),
     },
   };
 });

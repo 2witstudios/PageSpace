@@ -142,6 +142,7 @@ vi.mock('../resolve-or-create-conversation', () => ({
     isNew: false,
   }),
   ConversationOwnershipError: class ConversationOwnershipError extends Error {},
+  ConversationHistoryDeletedError: class ConversationHistoryDeletedError extends Error {},
 }));
 vi.mock('@pagespace/db/schema/core', () => ({ drives: { id: 'id', drivePrompt: 'drivePrompt' } }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { __label: 'users', id: 'id', name: 'name', subscriptionTier: 'subscriptionTier' } }));
@@ -304,7 +305,7 @@ vi.mock('@/lib/ai/core/compaction/prepare-context', () => ({
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import type { SessionAuthResult } from '@/lib/auth';
-import { resolveOrCreateConversation } from '../resolve-or-create-conversation';
+import { resolveOrCreateConversation, ConversationHistoryDeletedError } from '../resolve-or-create-conversation';
 
 const mockAuth = (): SessionAuthResult => ({
   userId: 'user-1',
@@ -352,5 +353,16 @@ describe('POST /api/ai/global/[id]/messages — conversation identity resolution
     await POST(makeRequest({}), makeContext());
 
     expect(resolveOrCreateConversation).toHaveBeenCalledWith('user-1', 'url-conv-id');
+  });
+
+  // The lazy-create race fallback can resolve to a history-deleted row (see
+  // resolve-or-create-conversation.test.ts for the mechanism) — the route must
+  // translate that into the same 404 an ownership mismatch gets, not a 500.
+  it('given resolveOrCreateConversation rejects with ConversationHistoryDeletedError, should 404', async () => {
+    vi.mocked(resolveOrCreateConversation).mockRejectedValueOnce(new ConversationHistoryDeletedError());
+
+    const response = await POST(makeRequest({}), makeContext());
+
+    expect(response.status).toBe(404);
   });
 });

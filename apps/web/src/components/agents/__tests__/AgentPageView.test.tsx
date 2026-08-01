@@ -140,6 +140,14 @@ vi.mock('@/lib/ai/shared/hooks/useConversations', () => ({
   },
 }));
 
+// The hook's OWN fetch/shared-cache behavior is covered by useAgentConfig.test.ts
+// directly — this suite only needs to verify AgentPageView WIRES it correctly
+// (calls it with page.id, passes the result through to the Settings tab).
+const mockUseAgentConfig = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/ai/shared/hooks/useAgentConfig', () => ({
+  useAgentConfig: (...args: unknown[]) => mockUseAgentConfig(...args),
+}));
+
 vi.mock('@/components/ai/page-agents', () => ({
   PageAgentSettingsTab: ({ config }: { config: unknown }) => (
     <div data-testid="page-agent-settings-tab" data-has-config={String(config !== null)} />
@@ -198,6 +206,7 @@ beforeEach(() => {
   // one test's override (the global-assistant-session test below) can never
   // leak into whichever test happens to run next.
   mockUseSWR.mockReturnValue({ data: undefined });
+  mockUseAgentConfig.mockReturnValue({ config: null, setConfig: vi.fn() });
   resolvedConversation.current = { resolved: null, isLoading: true };
   authState.current = { user: { id: 'user-1', role: 'admin' } };
   conversationsState.current = {
@@ -345,15 +354,19 @@ describe('AgentPageView', () => {
     // The rewrite once dropped this fetch entirely — PageAgentSettingsTab
     // shows its loading state until config arrives, so a page that never
     // fetches it has a Settings tab that never works (codex review, P1).
+    // Now sourced from the SWR-backed useAgentConfig hook (shared with every
+    // pane showing this agent's Settings tab, see useAgentConfig.test.ts for
+    // its own fetch/cache-sharing behavior) — this suite only verifies
+    // AgentPageView wires it with the right pageId and threads the result
+    // through to the Settings tab.
+    mockUseAgentConfig.mockReturnValue({
+      config: { systemPrompt: '', enabledTools: [], availableTools: [] },
+      setConfig: vi.fn(),
+    });
     resolveTo({ conversationId: 'conv-1', sessionId: null });
     render(<AgentPageView page={pageFixture()} />);
 
-    await waitFor(() =>
-      expect(mockFetchWithAuth).toHaveBeenCalledWith(
-        '/api/pages/agent-1/agent-config',
-        expect.objectContaining({ signal: expect.anything() }),
-      ),
-    );
+    expect(mockUseAgentConfig).toHaveBeenCalledWith('agent-1');
     await userEvent.click(screen.getByRole('tab', { name: /settings/i }));
     await waitFor(() =>
       expect(screen.getByTestId('page-agent-settings-tab')).toHaveAttribute('data-has-config', 'true'),

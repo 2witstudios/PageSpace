@@ -66,6 +66,7 @@ const mockConversationSummary = (overrides: Partial<{
   contextId: string | null;
   lastMessageAt: Date;
   createdAt: Date;
+  sessionId: string | null;
 }> = {}) => ({
   id: overrides.id ?? 'conv_123',
   title: overrides.title ?? 'Test Conversation',
@@ -73,6 +74,7 @@ const mockConversationSummary = (overrides: Partial<{
   contextId: overrides.contextId ?? null,
   lastMessageAt: overrides.lastMessageAt ?? new Date(),
   createdAt: overrides.createdAt ?? new Date(),
+  sessionId: overrides.sessionId ?? null,
 });
 
 const createRequest = () =>

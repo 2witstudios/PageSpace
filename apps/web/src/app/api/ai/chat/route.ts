@@ -43,6 +43,20 @@ import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPP
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+
+/**
+ * The conversation was still active at the ownership check far above, but a
+ * concurrent History-delete committed sometime in the (long, I/O-heavy) gap
+ * between that check and the user-message persist below. Thrown from inside
+ * the short, tightly-scoped transaction that re-verifies immediately
+ * adjacent to the write — see that call site's own comment.
+ */
+class ConversationHistoryDeletedError extends Error {
+  constructor() {
+    super('Conversation has been deleted from history');
+    this.name = 'ConversationHistoryDeletedError';
+  }
+}
 // canUserViewPage stays user-level here: it gates mention-notification RECIPIENTS
 // (other users), not the requesting principal.
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
@@ -94,6 +108,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, ne } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { chatMessages, pages, drives } from '@pagespace/db/schema/core';
+import { conversations } from '@pagespace/db/schema/conversations';
 import { userProfiles } from '@pagespace/db/schema/members';
 import { createId, isCuid } from '@paralleldrive/cuid2';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -198,8 +213,44 @@ export async function POST(request: Request) {
     args: Omit<Parameters<typeof saveMessageToDatabase>[0], 'mentionNotify'>,
   ): Promise<void> => {
     const mentionNotify = mentionNotifyFor(args.content);
-    await saveMessageToDatabase({ ...args, ...(mentionNotify && { mentionNotify }) });
-    if (mentionNotify) mentionNotified = true;
+    // The SAME atomic re-check the user's own message write uses, applied
+    // here too: the earlier lock only covers the moment the user's message
+    // was persisted, and model generation between then and THIS terminal
+    // write can run for seconds — plenty of room for a History delete
+    // (permitted the whole time; nothing else in this route blocks it mid-
+    // generation) to land in between. Without this, the assistant's reply
+    // persists as an ACTIVE message beneath a conversation already excluded
+    // from every session listing — generation the user cancelled by
+    // deleting the conversation, billed and answered into a transcript
+    // they can no longer reach (review finding — chatgpt-codex-connector on
+    // PR #2299). A deleted conversation silently drops the reply rather
+    // than persisting it as orphaned; the provider call itself already
+    // happened and is billed/tracked independently of this write via the
+    // usual trackUsage path, which this does not touch — only what gets
+    // WRITTEN to the (now-gone) conversation's transcript.
+    const persisted = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .select({ isActive: conversations.isActive })
+        .from(conversations)
+        .where(eq(conversations.id, args.conversationId))
+        .for('update')
+        .limit(1);
+      // `row` is undefined for a brand-new conversation whose eager
+      // `createConversation()` call (above, before generation started)
+      // failed — deliberately tolerated there (best-effort/non-fatal, see
+      // that call site) so the user's own message still saves and
+      // generation still proceeds. Treating "no row" the same as
+      // "explicitly inactive" here would then silently drop the assistant's
+      // reply too: the user sees it stream in, then loses it on refresh
+      // while their own prompt remains (review finding — chatgpt-codex-
+      // connector on PR #2299). Only skip when a row exists AND is
+      // explicitly inactive (a real History-delete) — an absent row is not
+      // that, it's the same tolerated gap the user message already crossed.
+      if (row && !row.isActive) return false;
+      await saveMessageToDatabase({ ...args, ...(mentionNotify && { mentionNotify }), dbClient: tx });
+      return true;
+    });
+    if (persisted && mentionNotify) mentionNotified = true;
   };
   // Captured by the inner catch (createUIMessageStream construction failure) BEFORE it calls
   // lifecycle.finish() — finish() deletes the multicast registry entry getBufferedParts() reads
@@ -547,6 +598,21 @@ export async function POST(request: Request) {
           return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         }
       } else {
+        // A history-deleted row (`conversations.isActive: false`) must never
+        // accept a new message — the send would appear to succeed while the
+        // canonical row stays excluded from both open and closed session
+        // listings, leaving the new transcript unreachable after the stale
+        // pane refreshes. This is reachable now that History-delete
+        // deactivates the CANONICAL row (not just its messages) while a
+        // conversation can still be open in another pane or browser tab
+        // (review finding — chatgpt-codex-connector on PR #2296).
+        if (existingConversation.isActive === false) {
+          loggers.ai.warn('AI Chat API: rejected send to a history-deleted conversation', {
+            userId,
+            requestConversationId,
+          });
+          return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+        }
         const ownsIt = existingConversation.userId === userId;
         const isSharedConversation = existingConversation.isShared === true;
         // contextId is nullable in the schema (null for global conversations), so only
@@ -688,16 +754,90 @@ export async function POST(request: Request) {
 
         loggers.ai.debug('AI Chat API: Saving user message immediately', { id: messageId, contentLength: messageContent.length });
 
-        await saveMessageToDatabase({
-          messageId,
-          pageId: chatId,
-          conversationId,
-          userId,
-          role: 'user',
-          content: messageContent,
-          toolCalls: undefined,
-          toolResults: undefined,
-          uiMessage: userMessage,
+        // Atomic re-check immediately adjacent to the write: `existingConversation`
+        // (if any) was read far above, but the credit-gate check, @mention
+        // processing, and command resolution in between all do their own
+        // unrelated I/O — plenty of room for a concurrent History-delete to commit
+        // in that gap. A `SELECT ... FOR UPDATE` + the insert in ONE short
+        // transaction (not wrapping any of the intervening work, which must never
+        // run inside an open transaction) closes that window rather than trusting
+        // the stale earlier read (review finding — chatgpt-codex-connector on PR
+        // #2299).
+        //
+        // Unconditional — NOT gated on `existingConversation` (that snapshot
+        // predates the eager createConversation() call a few lines up, and
+        // stayed null for BOTH "genuinely no row anywhere yet" and "a LEGACY
+        // conversation whose row that eager call just created": skipping the
+        // lock for the second case let a concurrent History-delete land between
+        // that create and this write with nothing to catch it — review finding,
+        // round 11).
+        await db.transaction(async (tx) => {
+          const [row] = await tx
+            .select({ isActive: conversations.isActive })
+            .from(conversations)
+            .where(eq(conversations.id, conversationId!))
+            .for('update')
+            .limit(1);
+
+          if (row) {
+            if (!row.isActive) throw new ConversationHistoryDeletedError();
+          } else {
+            // `FOR UPDATE` on zero rows locks nothing — if the eager
+            // createConversation() call above hasn't landed a row yet (raced
+            // with a concurrent request, or failed), there is nothing here
+            // yet for the lock to serialize against: a concurrent create
+            // (this request's own eager call, or another request's) plus a
+            // History-delete could still interleave between here and the
+            // message insert below, unguarded. Idempotently claim/create the
+            // row IN THIS transaction instead — same create-then-select-the-
+            // winner pattern resolveOrCreateConversation already uses for
+            // the global route — so something is always actually locked
+            // before the write proceeds (review finding — chatgpt-codex-
+            // connector on PR #2299, round 12). Mirrors createConversation's
+            // own insert shape/defaults exactly, since a caller landing here
+            // supplied no `opts`.
+            const [created] = await tx
+              .insert(conversations)
+              .values({
+                id: conversationId!,
+                userId: userId!,
+                type: 'page',
+                contextId: chatId!,
+                isShared: false,
+                sessionId: null,
+                title: null,
+                updatedAt: new Date(),
+              })
+              .onConflictDoNothing()
+              .returning({ isActive: conversations.isActive });
+
+            if (created) {
+              if (!created.isActive) throw new ConversationHistoryDeletedError();
+            } else {
+              // A concurrent insert won the race — re-select, locked, same
+              // reasoning as the initial SELECT above.
+              const [winner] = await tx
+                .select({ isActive: conversations.isActive })
+                .from(conversations)
+                .where(eq(conversations.id, conversationId!))
+                .for('update')
+                .limit(1);
+              if (!winner?.isActive) throw new ConversationHistoryDeletedError();
+            }
+          }
+
+          await saveMessageToDatabase({
+            messageId,
+            pageId: chatId!,
+            conversationId: conversationId!,
+            userId: userId!,
+            role: 'user',
+            content: messageContent,
+            toolCalls: undefined,
+            toolResults: undefined,
+            uiMessage: userMessage,
+            dbClient: tx,
+          });
         });
 
         // Fire-and-forget: title derivation must never fail or delay the chat
@@ -747,6 +887,9 @@ export async function POST(request: Request) {
             .catch((err) => loggers.ai.error('AI Chat: Failed to expand mentions', err as Error));
         }
       } catch (error) {
+        if (error instanceof ConversationHistoryDeletedError) {
+          return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+        }
         loggers.ai.error('AI Chat API: Failed to save user message', error as Error);
         return NextResponse.json({
           error: 'Failed to save message to database',
@@ -1412,19 +1555,50 @@ export async function POST(request: Request) {
         // itself still proceeds.
         if (!streamLifecycle.preAborted) {
           try {
-            await db.insert(chatMessages).values({
-              id: serverAssistantMessageId!,
-              pageId: chatId!,
-              conversationId: conversationId!,
-              role: 'assistant',
-              content: '',
-              toolCalls: null,
-              toolResults: null,
-              isActive: true,
-              userId: null,
-              sourceAgentId: null,
-              status: 'streaming',
+            // Same atomic re-check as saveTerminalAssistantMessage above: a History delete
+            // permitted between the user-message write and here would otherwise let this
+            // best-effort insert plant an isActive:true 'streaming' row under a conversation
+            // already gone from every listing — and since the row is BRAND NEW here (not yet
+            // existing for saveTerminalAssistantMessage's own isActive check to catch via its
+            // upsert), that later check finding the conversation inactive would just skip its
+            // update, leaving this row stuck at 'streaming' forever. Visible again, permanently
+            // "in progress", the moment this PR's reopen feature brings the conversation back
+            // (review finding — chatgpt-codex-connector on PR #2299).
+            const conversationActive = await db.transaction(async (tx) => {
+              const [row] = await tx
+                .select({ isActive: conversations.isActive })
+                .from(conversations)
+                .where(eq(conversations.id, conversationId!))
+                .for('update')
+                .limit(1);
+              // See saveTerminalAssistantMessage's own comment above: `row`
+              // undefined means the eager createConversation() call earlier
+              // in this request failed (tolerated, best-effort) — not that
+              // History deleted it. Only an explicitly inactive row is a
+              // real delete (review finding — chatgpt-codex-connector on
+              // PR #2299, round 10).
+              if (row && !row.isActive) return false;
+              await tx.insert(chatMessages).values({
+                id: serverAssistantMessageId!,
+                pageId: chatId!,
+                conversationId: conversationId!,
+                role: 'assistant',
+                content: '',
+                toolCalls: null,
+                toolResults: null,
+                isActive: true,
+                userId: null,
+                sourceAgentId: null,
+                status: 'streaming',
+              });
+              return true;
             });
+            if (!conversationActive) {
+              loggers.ai.warn('AI Chat API: skipped placeholder assistant row, conversation no longer active', {
+                messageId: serverAssistantMessageId,
+                conversationId,
+              });
+            }
           } catch (error) {
             loggers.ai.warn('AI Chat API: placeholder assistant row INSERT failed', {
               messageId: serverAssistantMessageId,

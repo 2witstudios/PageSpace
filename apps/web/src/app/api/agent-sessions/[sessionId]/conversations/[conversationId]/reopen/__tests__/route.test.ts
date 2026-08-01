@@ -58,7 +58,7 @@ describe('POST /api/agent-sessions/[sessionId]/conversations/[conversationId]/re
   it('reopens a closed listing', async () => {
     const response = await post();
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ok: true });
+    expect(await response.json()).toEqual({ ok: true, alreadyOpen: false });
     expect(mockReopenConversationInSession).toHaveBeenCalledWith({
       conversationId: CONVERSATION_ID,
       sessionId: SESSION_ID,
@@ -73,6 +73,11 @@ describe('POST /api/agent-sessions/[sessionId]/conversations/[conversationId]/re
     mockReopenConversationInSession.mockResolvedValue('already_open');
     const response = await post();
     expect(response.status).toBe(200);
+    // Distinguishes a no-op from a genuine transition — a caller that races
+    // this response with a supersession must know whether it's safe to roll
+    // the listing back out (review finding — chatgpt-codex-connector on
+    // PR #2299, round 15).
+    expect(await response.json()).toEqual({ ok: true, alreadyOpen: true });
     expect(mockAuditRequest).not.toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ eventType: 'data.write' }),

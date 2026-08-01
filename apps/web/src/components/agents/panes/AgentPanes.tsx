@@ -35,10 +35,9 @@
  * session already has that isn't currently shown anywhere.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createId } from '@paralleldrive/cuid2';
-import { Loader2, Settings } from 'lucide-react';
+import { History, Loader2, MessageSquare, Save, Settings } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR, { mutate } from 'swr';
 import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
@@ -50,6 +49,11 @@ import { usePageAgents } from '@/hooks/page-agents/usePageAgents';
 import { useAuth } from '@/hooks/useAuth';
 import { useConversationActiveStream } from '@/hooks/useActiveStream';
 import { AISelector } from '@/components/ai/shared';
+import { useConversations } from '@/lib/ai/shared/hooks/useConversations';
+import { useAgentConfig } from '@/lib/ai/shared/hooks/useAgentConfig';
+import { useProviderSettings } from '@/lib/ai/shared/hooks/useProviderSettings';
+import { PageAgentHistoryTab, PageAgentSettingsTab, type PageAgentSettingsTabRef } from '@/components/ai/page-agents';
+import { cn } from '@/lib/utils';
 import EndSessionDialog from '../EndSessionDialog';
 import { useResolvedAgent } from '../useResolvedAgent';
 import SessionPanes from './SessionPanes';
@@ -140,6 +144,77 @@ export default function AgentPanes({
   const resetPane = useAgentWorkspaceStore((state) => state.resetPane);
   const replaceConversation = useAgentWorkspaceStore((state) => state.replaceConversation);
   const forgetWorkspace = useAgentWorkspaceStore((state) => state.forgetWorkspace);
+
+  // The latest "assign this pane to conversation X" request per pane —
+  // bumped by every such request (a History pick, an agent mint) so an
+  // OLDER one's async completion (a slow reopen, a slow mint) can detect
+  // it's been superseded and skip applying its now-stale result. A pane id
+  // is reused across a pane's whole lifetime (split/close mint new ids, but
+  // WITHIN one pane's life the id is stable), so a plain per-paneId counter
+  // is enough — no cleanup needed, a closed pane's entry is simply never
+  // read again (review finding — chatgpt-codex-connector on PR #2299: two
+  // rapid History picks, or a History pick raced by an agent switch, could
+  // resolve out of order and let network timing pick the visible
+  // transcript).
+  const paneAssignTokens = useRef(new Map<string, number>());
+  const beginPaneAssign = useCallback((paneId: string) => {
+    const token = (paneAssignTokens.current.get(paneId) ?? 0) + 1;
+    paneAssignTokens.current.set(paneId, token);
+    return () => paneAssignTokens.current.get(paneId) === token;
+  }, []);
+
+  // Races the pane-token above can't catch on its own, since it's scoped
+  // per PANE while these are scoped per CONVERSATION (review findings —
+  // chatgpt-codex-connector on PR #2299, rounds 8-9):
+  //
+  // 1. The SAME conversation picked twice (same pane or two panes) can have
+  //    the OLDER reopen resolve first while the NEWER one is still in
+  //    flight — at that instant no pane shows it yet, so the older (stale)
+  //    request's "is anyone showing this?" check reads false-orphaned and
+  //    closes the conversation the newer request is about to legitimately
+  //    land. Tracked as an in-flight count per conversationId; the rollback
+  //    below only fires once nothing else is still reopening the same id.
+  //
+  //    That alone still drops the ball when the LAST settler is the one
+  //    that FAILS: an earlier (superseded) reopen for the same id can
+  //    succeed-but-defer its own rollback because this one was still
+  //    pending — if this one then rejects instead of landing it, nothing
+  //    is left to finish that deferred cleanup. `deferredReopenSuccess`
+  //    marks that case; whichever request is the LAST to settle for a
+  //    given conversationId (by count reaching zero) is responsible for
+  //    checking it and finishing the cleanup if still nothing shows it.
+  const pendingReopenCounts = useRef(new Map<string, number>());
+  const deferredReopenSuccess = useRef(new Set<string>());
+  // 2. A reopen can commit server-side, then have its OWN response delayed
+  //    long enough for the SAME conversation to be deleted from History (a
+  //    different pane, or the same one) before the reopen's completion
+  //    assigns it — landing a pane on a transcript that already 404s on
+  //    send. A single consumable flag isn't enough here either: TWO panes
+  //    concurrently reopening the same conversation both need to observe
+  //    the same delete, but a boolean/Set entry consumed by whichever
+  //    completion checks it first would leave the second one blind. A
+  //    per-conversationId generation counter instead: each reopen captures
+  //    the generation at start, `handleHistoryDeleteConversation` bumps it
+  //    on delete, and every completion (however many are in flight)
+  //    independently compares its own captured start value against the
+  //    current one — no consumption, so no reader ever misses it.
+  const historyDeleteGenerations = useRef(new Map<string, number>());
+  // 3. New Conversation from History captures the pane's PRIOR scope so a
+  //    failed mint can restore it (round 13) — but re-reading "the live
+  //    scope right now" at the start of EVERY call breaks the moment two
+  //    mints for the SAME pane overlap: the second call's "live scope" is
+  //    already the FIRST call's loading sentinel, not the true original.
+  //    A failed second call would then "restore" that sentinel, leaving the
+  //    pane stuck spinning forever. Captured ONCE per paneId (only by
+  //    whichever mint is first to start while none is in flight) and reused
+  //    by every overlapping sibling; reference-counted so the entry clears
+  //    once every overlapping mint for that pane has settled, letting a
+  //    LATER, non-overlapping mint capture fresh state again (review
+  //    finding — chatgpt-codex-connector on PR #2299, round 15).
+  const pendingMintCounts = useRef(new Map<string, number>());
+  const priorScopeBeforeMint = useRef(
+    new Map<string, { scope: PaneScope | null; deleteGenerationAtStart: number }>(),
+  );
 
   // The picker's agent list. A drive session offers only that drive's agents;
   // a global-assistant session (driveId null) has no home drive to filter by,
@@ -452,9 +527,40 @@ export default function AgentPanes({
       if (decision.action === 'end-session') {
         // Emptying the session ends it — ask first, same as the sidebar's
         // identical act, and don't touch the grid until the user confirms.
+        // Deliberately no beginPaneAssign here: the user can still CANCEL
+        // this dialog, in which case nothing about this pane actually
+        // changes, and bumping the token regardless would invalidate a
+        // pending mint/reopen for a close that never happened (same class
+        // of bug as the noop case below). If the user DOES confirm,
+        // confirmEndSession tears down the whole workspace via
+        // forgetWorkspace — at that point the existing paneStillLoading
+        // shape-check already correctly detects this pane is gone, with no
+        // token needed.
         beginEndSessionConfirm(paneId);
         return;
       }
+
+      // Only reachable once a decision ACTUALLY commits to altering this
+      // pane below — supersede any pending mint/reopen for it here, not
+      // before the noop/end-session checks above. Bumping it unconditionally
+      // at the top of this function (the original round-10 fix) invalidated
+      // a pending mint even when the close turned out to be a no-op (the
+      // grid-last pane's listing hadn't resolved yet) or was later cancelled
+      // — the mint's own completion then treated itself as superseded and
+      // discarded its result without ever moving the pane out of its
+      // loading state, leaving it stuck spinning forever for a close that
+      // never actually happened (review finding — chatgpt-codex-connector
+      // on PR #2299, round 23). None of the branches below otherwise touch
+      // this paneId's token themselves, so a History reopen still in flight
+      // when the user closes the pane would stay "current" and either try
+      // to assignPane onto a pane that's about to be gone (no-op, leaving
+      // an invisible open listing that consumes a session cap slot
+      // forever), or — if it resolves before this close's own DELETE —
+      // silently repurpose the pane the user just asked to close. Bumping
+      // the token here routes that stale completion into the existing
+      // orphan-cleanup path (rounds 8-9) instead (review finding —
+      // chatgpt-codex-connector on PR #2299, round 10).
+      beginPaneAssign(paneId);
 
       if (decision.action === 'close-pane') {
         closePane(sessionId, paneId);
@@ -488,6 +594,7 @@ export default function AgentPanes({
       closeConversationListing,
       assignPane,
       beginEndSessionConfirm,
+      beginPaneAssign,
     ],
   );
 
@@ -534,6 +641,19 @@ export default function AgentPanes({
     onSessionEnded?.();
   }, [pendingEndClose, sessionId, forgetWorkspace, closeTerminalShell, onSessionEnded]);
 
+  // Shared by cleanupOrphanedConversation's own post-DELETE recheck below and
+  // handlePickHistoryConversation's rollback decision.
+  const isConversationShownSomewhere = useCallback(
+    (conversationId: string) => {
+      const liveWorkspace = useAgentWorkspaceStore.getState().workspaces[sessionId];
+      return (
+        !!liveWorkspace &&
+        panesOf(liveWorkspace).some((p) => p.scope?.kind === 'chat' && p.scope.targetId === conversationId)
+      );
+    },
+    [sessionId],
+  );
+
   const cleanupOrphanedConversation = useCallback(
     async (conversationId: string) => {
       // Best-effort: the pane that wanted this is already gone, so a failure
@@ -546,16 +666,103 @@ export default function AgentPanes({
         await del(
           `/api/agent-sessions/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversationId)}`,
         );
+        // This DELETE can be delayed (a slow network) long enough for a
+        // LATER, independent pick of this exact conversation to land in a
+        // pane before it reaches the server — closing a listing that is now
+        // visibly displayed. Re-check right after the delete resolves and
+        // compensate by reopening it back rather than leaving the pane
+        // pointed at a transcript that would 404 on send (review finding —
+        // chatgpt-codex-connector on PR #2299, round 17).
+        if (isConversationShownSomewhere(conversationId)) {
+          await post(
+            `/api/agent-sessions/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversationId)}/reopen`,
+            {},
+          );
+          // The SAME race applies to this compensating reopen itself: the
+          // pane that caused the check above to pass can move on to
+          // something else before this call's own response arrives,
+          // leaving the conversation orphaned again with nothing left to
+          // notice. Re-check once more and, if so, clean up again — this
+          // recurses rather than loops, so it naturally terminates the
+          // moment the grid stops churning through this exact conversation
+          // (review finding — chatgpt-codex-connector on PR #2299,
+          // round 18).
+          if (!isConversationShownSomewhere(conversationId)) {
+            await cleanupOrphanedConversation(conversationId);
+          }
+        }
       } catch (error) {
         console.error('Failed to clean up an orphaned conversation:', error);
       }
     },
-    [sessionId],
+    [sessionId, isConversationShownSomewhere],
   );
 
   const handlePickAgent = useCallback(
-    async (paneId: string, agentPageId: string | null) => {
+    async (paneId: string, agentPageId: string | null): Promise<boolean> => {
+      // Also supersedes any pending `handlePickHistoryConversation` call for
+      // this pane — a slow reopen resolving after the user has since minted
+      // a different agent into this same pane must not overwrite it (review
+      // finding — chatgpt-codex-connector on PR #2299). Captured (not
+      // discarded) so THIS call can tell a genuinely stale completion of
+      // ITSELF apart from a same-shaped sibling: two mints started back to
+      // back before either settles install the SAME indistinguishable
+      // loading scope, so `paneStillLoading`'s shape check alone can't tell
+      // them apart — the older one's catch could restore over the newer
+      // one's still-pending success, which then finds itself "superseded"
+      // and cleans up its own just-created row (review finding — chatgpt-
+      // codex-connector on PR #2299, round 14).
+      const isCurrent = beginPaneAssign(paneId);
       const conversationId = createId();
+      // Captured ONLY when no mint is already in flight for this pane — a
+      // failed mint then restores THIS instead of always falling back to
+      // the picker. For the normal "pick from an empty picker" call site
+      // this is already null (restoring null IS today's reset-to-picker
+      // behavior), but "New Conversation" picked from a pane's own History
+      // tab starts from a pane already showing a real, working conversation
+      // — losing that to a blank picker on a transient failure (session
+      // full, network drop) is a real regression the user did not ask for
+      // (review finding — chatgpt-codex-connector on PR #2299, round 13).
+      // Reused (not re-captured) by any OVERLAPPING sibling mint for this
+      // same pane — re-reading "the live scope now" on every call would see
+      // an earlier sibling's own loading sentinel, not the true original
+      // (review finding — chatgpt-codex-connector on PR #2299, round 15).
+      if (!priorScopeBeforeMint.current.has(paneId)) {
+        const liveWorkspaceAtStart = useAgentWorkspaceStore.getState().workspaces[sessionId];
+        const capturedScope = liveWorkspaceAtStart
+          ? (panesOf(liveWorkspaceAtStart).find((p) => p.id === paneId)?.scope ?? null)
+          : null;
+        // The pane's LOADING scope (targetId null) doesn't identify the
+        // prior conversation, so a History-delete of it while this mint is
+        // pending can't reset this pane the normal way — capture its
+        // delete generation now and re-check before restoring, so a
+        // since-deleted prior conversation is never resurrected onto a
+        // pane whose sends would just 404 (review finding — chatgpt-codex-
+        // connector on PR #2299, round 14).
+        const capturedConversationId = capturedScope?.kind === 'chat' ? capturedScope.targetId : null;
+        const deleteGenerationAtStart = capturedConversationId
+          ? (historyDeleteGenerations.current.get(capturedConversationId) ?? 0)
+          : 0;
+        priorScopeBeforeMint.current.set(paneId, { scope: capturedScope, deleteGenerationAtStart });
+      }
+      pendingMintCounts.current.set(paneId, (pendingMintCounts.current.get(paneId) ?? 0) + 1);
+      const { scope: priorScope, deleteGenerationAtStart: priorScopeDeleteGenerationAtStart } =
+        priorScopeBeforeMint.current.get(paneId)!;
+      const priorScopeConversationId = priorScope?.kind === 'chat' ? priorScope.targetId : null;
+      // Exactly-once decrement regardless of exit path; clears the shared
+      // capture only once every overlapping mint for this pane has settled.
+      let mintSettled = false;
+      const settleMint = () => {
+        if (mintSettled) return;
+        mintSettled = true;
+        const next = (pendingMintCounts.current.get(paneId) ?? 1) - 1;
+        if (next <= 0) {
+          pendingMintCounts.current.delete(paneId);
+          priorScopeBeforeMint.current.delete(paneId);
+        } else {
+          pendingMintCounts.current.set(paneId, next);
+        }
+      };
       // Bind first, render after: the pane goes to `loading` (kind set, target
       // null) while the mint is in flight — never a speculative surface.
       assignPane(sessionId, paneId, { kind: 'chat', name: 'New conversation', targetId: null, agentPageId });
@@ -572,14 +779,17 @@ export default function AgentPanes({
             sessionId,
           });
         }
-        if (!paneStillLoading(paneId, { kind: 'chat', agentPageId })) {
-          // The pane closed mid-mint, OR a grid-last close already rebound it
-          // to another open listing while this request was in flight. Either
-          // way, the row was already created server-side — clean it up
-          // rather than leaving an orphaned, unbound thread (or clobbering
-          // the rebind with this now-abandoned mint's result).
+        settleMint();
+        if (!isCurrent() || !paneStillLoading(paneId, { kind: 'chat', agentPageId })) {
+          // Either a NEWER call for this same pane superseded this one
+          // (isCurrent false — round 14), or the pane closed mid-mint, or a
+          // grid-last close already rebound it to another open listing
+          // while this request was in flight. Either way, the row was
+          // already created server-side — clean it up rather than leaving
+          // an orphaned, unbound thread (or clobbering a newer assignment
+          // with this now-abandoned mint's result).
           void cleanupOrphanedConversation(conversationId);
-          return;
+          return false;
         }
         assignPane(sessionId, paneId, { kind: 'chat', name: 'New conversation', targetId: conversationId, agentPageId });
         // Local optimistic update for THIS component's own switch/close
@@ -598,7 +808,9 @@ export default function AgentPanes({
         // orphaned conversation that holds a cap slot forever (caught in
         // review).
         void mutate(isAgentSessionsKey);
+        return true;
       } catch (error) {
+        settleMint();
         console.error('Failed to start a conversation in this pane:', error);
         toast.error('Could not start a conversation', {
           description: error instanceof Error ? error.message : 'Please try again.',
@@ -606,13 +818,270 @@ export default function AgentPanes({
         // Same rebind-survives rule as the success path above: a rejected
         // mint must not reset a pane a grid-last close already rebound to
         // something else while this request was in flight (caught in
-        // review — the earlier fix only guarded the success path).
-        if (paneStillLoading(paneId, { kind: 'chat', agentPageId })) {
-          resetPane(sessionId, paneId);
+        // review — the earlier fix only guarded the success path). Also
+        // gated on `isCurrent()` (round 14) — a NEWER call for this same
+        // pane already owns whatever happens to it now; this stale one must
+        // not restore over that in-flight sibling.
+        if (isCurrent() && paneStillLoading(paneId, { kind: 'chat', agentPageId })) {
+          const priorScopeStillValid =
+            !priorScopeConversationId ||
+            (historyDeleteGenerations.current.get(priorScopeConversationId) ?? 0) ===
+              priorScopeDeleteGenerationAtStart;
+          if (priorScope && priorScopeStillValid) {
+            assignPane(sessionId, paneId, priorScope);
+          } else {
+            resetPane(sessionId, paneId);
+          }
         }
+        return false;
       }
     },
-    [assignPane, resetPane, sessionId, paneStillLoading, cleanupOrphanedConversation, recordMintedConversation],
+    [assignPane, resetPane, sessionId, paneStillLoading, cleanupOrphanedConversation, recordMintedConversation, beginPaneAssign],
+  );
+
+  /**
+   * A pane's own History tab picking a past conversation — assign it to THIS
+   * pane, reopening it into the session's listing first when it's bound to
+   * THIS session and closed. A conversation that is unbound, or bound to a
+   * DIFFERENT session, is never subject to this session's cap/listing at
+   * all — no server call needed, straight to `assignPane` (the same client-
+   * only mechanism `openConversation`/`handleSwitchAgent`'s focus branch
+   * already use to point a pane at an existing conversationId). Verified
+   * against the sandbox/tool-execution layer too (review question —
+   * chatgpt-codex-connector on PR #2299): tool calls resolve their sandbox
+   * from the CONVERSATION ROW's own persisted `sessionId`
+   * (`findSessionForConversation`, a fresh DB read keyed only on
+   * `conversationId`), never from which pane grid happens to display it —
+   * so a foreign-session or unbound conversation opened here can never
+   * execute tools against the wrong session's sandbox.
+   *
+   * Returns whether the pick actually landed — `false` on a failed reopen,
+   * so the caller (the pane's own tab-switch) can stay on History rather
+   * than following a pick that never happened (review finding —
+   * chatgpt-codex-connector on PR #2299).
+   */
+  const handlePickHistoryConversation = useCallback(
+    async (
+      paneId: string,
+      agentPageId: string | null,
+      conversation: { id: string; title: string | null; sessionId: string | null },
+    ): Promise<boolean> => {
+      const isCurrent = beginPaneAssign(paneId);
+      if (conversation.sessionId === sessionId) {
+        const isShownSomewhere = () => isConversationShownSomewhere(conversation.id);
+        pendingReopenCounts.current.set(conversation.id, (pendingReopenCounts.current.get(conversation.id) ?? 0) + 1);
+        // Captured BEFORE the request starts — compared, never consumed, so
+        // every concurrent reopen for this same conversationId independently
+        // notices a delete that happened anywhere during its own flight
+        // (round 9 review finding).
+        const deleteGenerationAtStart = historyDeleteGenerations.current.get(conversation.id) ?? 0;
+        // Exactly-once decrement regardless of which exit path below runs.
+        // Returns the count still outstanding AFTER this one settles, so the
+        // caller can tell whether it was the LAST one for this conversationId.
+        let reopenSettled = false;
+        const settleReopen = () => {
+          if (reopenSettled) return pendingReopenCounts.current.get(conversation.id) ?? 0;
+          reopenSettled = true;
+          const next = (pendingReopenCounts.current.get(conversation.id) ?? 1) - 1;
+          if (next <= 0) pendingReopenCounts.current.delete(conversation.id);
+          else pendingReopenCounts.current.set(conversation.id, next);
+          return next;
+        };
+        let reopenResult: { ok: boolean; alreadyOpen: boolean };
+        try {
+          reopenResult = await post<{ ok: boolean; alreadyOpen: boolean }>(
+            `/api/agent-sessions/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversation.id)}/reopen`,
+            {},
+          );
+        } catch (error) {
+          const remaining = settleReopen();
+          // I was the LAST outstanding reopen for this conversationId, and
+          // an EARLIER (superseded) request already reopened it server-side
+          // but deferred its own cleanup because I was still pending —
+          // nothing else will ever revisit that now that I've failed
+          // instead of landing it. Finish the job it punted on (round 9
+          // review finding — chatgpt-codex-connector on PR #2299).
+          if (remaining <= 0 && deferredReopenSuccess.current.delete(conversation.id) && !isShownSomewhere()) {
+            void cleanupOrphanedConversation(conversation.id);
+          }
+          // A newer pick (or agent switch) on this pane already superseded
+          // this one — its own outcome, success or failure, is no longer
+          // this pane's concern, and surfacing an error toast for a request
+          // the user has already moved past would be confusing.
+          if (!isCurrent()) return false;
+          console.error('Failed to reopen conversation:', error);
+          toast.error('Could not reopen this conversation', {
+            description: error instanceof Error ? error.message : 'Please try again.',
+          });
+          return false;
+        }
+        const remaining = settleReopen();
+        if (!isCurrent()) {
+          // The reopen SUCCEEDED server-side (closedInSessionAt cleared, a
+          // cap slot consumed) after a newer pick or agent mint already
+          // superseded this one on the same pane — returning early without
+          // undoing that leaves an invisible open listing occupying a slot
+          // no pane shows, which can make a LATER reopen fail as "session
+          // full" for no visible reason. Close it right back out, the same
+          // way an orphaned mint is cleaned up above (review finding —
+          // chatgpt-codex-connector on PR #2299).
+          //
+          // BUT only when it's genuinely orphaned: the same conversation
+          // picked twice in quick succession can have the NEWER request's
+          // reopen resolve first and legitimately land in a pane (this one
+          // or another), with this now-stale request's reopen resolving
+          // second. Unconditionally closing here would rip that just-
+          // reopened, currently-visible conversation back out from under
+          // whichever pane is showing it. Read live state across every pane
+          // in the grid (not just this one) before deciding (review finding
+          // — chatgpt-codex-connector on PR #2299).
+          //
+          // And only when THIS request actually transitioned the listing:
+          // the reopen runtime returns `already_open` (folded into the same
+          // `{ ok: true }` shape client-side used to see) when the
+          // conversation was already open elsewhere (another pane/tab, or
+          // an agent switch that left it open unshown) — this request never
+          // opened it, so rolling it back would close a listing still in
+          // use for a no-op this request didn't cause (review finding —
+          // chatgpt-codex-connector on PR #2299, round 15).
+          const shownSomewhere = isShownSomewhere();
+          // The LAST settler for this conversationId is responsible for
+          // finishing a SIBLING's deferred cleanup regardless of THIS
+          // request's own outcome — an `alreadyOpen` no-op response still
+          // needs to drain it if nothing else is left pending, or an
+          // earlier request that genuinely transitioned the listing (and
+          // deferred because this one was still in flight) leaks an
+          // invisible open listing forever, since nothing else will ever
+          // revisit it (review finding — chatgpt-codex-connector on PR
+          // #2299, round 16).
+          const hadDeferredSibling = remaining <= 0 && deferredReopenSuccess.current.delete(conversation.id);
+          if (shownSomewhere) return false;
+          if (hadDeferredSibling) {
+            void cleanupOrphanedConversation(conversation.id);
+            return false;
+          }
+          if (reopenResult.alreadyOpen) return false;
+          if (remaining > 0) {
+            // Something else is still reopening this same conversationId —
+            // premature to clean up (that request might land it). Defer:
+            // whichever reopen is the LAST to settle for this id is
+            // responsible for finishing this check (round 9 review finding).
+            deferredReopenSuccess.current.add(conversation.id);
+          } else {
+            void cleanupOrphanedConversation(conversation.id);
+          }
+          return false;
+        }
+        // I'm the one landing this — any deferred-cleanup marker left by an
+        // earlier superseded request for this id is moot now.
+        deferredReopenSuccess.current.delete(conversation.id);
+        if ((historyDeleteGenerations.current.get(conversation.id) ?? 0) !== deleteGenerationAtStart) {
+          // This reopen's HTTP round trip was still in flight when the SAME
+          // conversation was deleted from History (possibly from a
+          // different pane) — the reopen may have already committed
+          // server-side before that delete landed, so assigning now would
+          // bind this pane to a transcript that already 404s on send.
+          // Treated like a superseded pick: no assignment, stay put (review
+          // finding — chatgpt-codex-connector on PR #2299, round 8).
+          return false;
+        }
+        // Instant-freshness nudge, same as every other listing-changing
+        // action here — the sidebar's own open list otherwise lags until its
+        // next poll.
+        void mutate(isAgentSessionsKey);
+      }
+      if (!isCurrent()) return false;
+      // Already showing in another pane in THIS grid — focus it rather than
+      // mounting a second, independently interactive surface for the same
+      // transcript (review finding — chatgpt-codex-connector on PR #2299;
+      // the same dedup `openConversation`'s own focus branch enforces
+      // elsewhere, applied here since this path assigns directly rather
+      // than going through that store action). Read FRESH, not the
+      // `workspace` this callback closed over: two panes racing to reopen
+      // the SAME closed conversation each run this check after their own
+      // await, so a stale pre-request snapshot could make BOTH miss the
+      // other's just-completed assignment and independently assign — the
+      // exact duplicate this check exists to prevent (review finding —
+      // chatgpt-codex-connector on PR #2299).
+      const liveWorkspace = useAgentWorkspaceStore.getState().workspaces[sessionId];
+      const existingPane = liveWorkspace
+        ? panesOf(liveWorkspace).find(
+            (p) => p.id !== paneId && p.scope?.kind === 'chat' && p.scope.targetId === conversation.id,
+          )
+        : undefined;
+      if (existingPane) {
+        // Deferred: the click that triggered this pick originated INSIDE
+        // paneId's own DOM subtree, and `ChatPane`'s outer `group/pane` div
+        // still has its own bubble-phase `onClick={onSelectPane}` — a plain
+        // synchronous `selectPane` here would run before that handler and
+        // get immediately clobbered back to paneId once bubbling reaches it
+        // (caught in testing: `activePaneId` kept reverting to the pane the
+        // pick was made FROM). A macrotask runs after the entire bubble
+        // phase has finished, so this is the call that actually wins.
+        setTimeout(() => selectPane(sessionId, existingPane.id), 0);
+        return true;
+      }
+      assignPane(sessionId, paneId, {
+        kind: 'chat',
+        name: conversation.title || 'Conversation',
+        targetId: conversation.id,
+        agentPageId,
+      });
+      return true;
+    },
+    [sessionId, assignPane, selectPane, beginPaneAssign, cleanupOrphanedConversation, isConversationShownSomewhere],
+  );
+
+  /**
+   * A pane's History tab deleting a conversation (`softDeleteConversation`
+   * deactivates the CANONICAL row, not just this pane's own listing) —
+   * every pane in THIS grid still pointing at that id, whichever pane's
+   * History tab the delete came from, is left showing a dead transcript:
+   * switching it back to Chat would render nothing sendable (the row now
+   * 404s per the send-route's own isActive guard) with no obvious way out.
+   * Reset each one to the picker — the simplest, safe recovery; the user
+   * explicitly picks what's next rather than a guessed replacement (review
+   * finding — chatgpt-codex-connector on PR #2299).
+   */
+  const handleHistoryDeleteConversation = useCallback(
+    (deletedConversationId: string) => {
+      // Bumped unconditionally (not just when a pane is currently affected
+      // below): a History pick's reopen for this exact id can be mid-flight
+      // right now, possibly from more than one pane at once, having already
+      // committed server-side, with its completion(s) still to come — each
+      // one independently compares its own captured start value against
+      // this counter before assigning (review finding — chatgpt-codex-
+      // connector on PR #2299, rounds 8-9).
+      historyDeleteGenerations.current.set(
+        deletedConversationId,
+        (historyDeleteGenerations.current.get(deletedConversationId) ?? 0) + 1,
+      );
+      // Instant-freshness nudge, unconditional — the canonical row is gone
+      // from the session's listing regardless of whether any pane in THIS
+      // grid happens to be showing it right now. Scoping this to "only when
+      // a pane was affected" left every OTHER consumer of the cached
+      // listing (handleSwitchAgent's focus branch, a close decision's
+      // fallback) trusting a stale row for up to the poll interval —
+      // binding a pane to a transcript that already 404s on send (review
+      // finding — chatgpt-codex-connector on PR #2299, round 15).
+      void mutate(isAgentSessionsKey);
+      // Read fresh at call time, not the `workspace` this callback closed
+      // over — this always runs after the DELETE's own async round trip,
+      // during which the user could have already reassigned an affected
+      // pane to something else. Resetting based on the STALE pre-DELETE
+      // snapshot would discard that newer selection even though the pane
+      // no longer shows the deleted conversation at all (review finding —
+      // chatgpt-codex-connector on PR #2299).
+      const liveWorkspace = useAgentWorkspaceStore.getState().workspaces[sessionId];
+      if (!liveWorkspace) return;
+      const affectedPanes = panesOf(liveWorkspace).filter(
+        (p) => p.scope?.kind === 'chat' && p.scope.targetId === deletedConversationId,
+      );
+      for (const pane of affectedPanes) {
+        resetPane(sessionId, pane.id);
+      }
+    },
+    [sessionId, resetPane],
   );
 
   // The pane bar selector's switch — focus-or-mint, decided by the pure
@@ -695,6 +1164,40 @@ export default function AgentPanes({
 
   const renderPane = ({ pane, isActive, canSplit }: { pane: PaneState; isActive: boolean; canSplit: boolean }) => {
     const surface = resolvePaneSurface(pane.scope);
+
+    // A chat pane owns real Chat/History/Settings tabs and the state that
+    // switches between them — pulled into its own component (not inlined
+    // here) for the same reason `ChatPaneIdentity`/`ChatPane`'s predecessor
+    // was: hooks cannot run inside a render-prop map across a pane count
+    // that changes on every split/close.
+    if (pane.scope?.kind === 'chat') {
+      return (
+        <ChatPane
+          scope={pane.scope}
+          surface={surface}
+          isActive={isActive}
+          canSplit={canSplit}
+          pickableAgents={pickableAgents}
+          agentsLoading={agentsLoading}
+          conversationsReady={sessionKnownToConversationsCache}
+          driveId={driveId}
+          sessionId={sessionId}
+          chatContext={chatContext}
+          isReadOnly={isReadOnly}
+          onSelectAgent={(nextAgentPageId) => handleSwitchAgent(pane.id, pane.scope!.agentPageId, nextAgentPageId)}
+          onSelectPane={() => selectPane(sessionId, pane.id)}
+          onSplitRight={() => splitRight(sessionId, pane.id)}
+          onSplitDown={() => splitDown(sessionId, pane.id)}
+          onClose={() => handleClosePane(pane.id)}
+          onCreateNewFromHistory={() => handlePickAgent(pane.id, pane.scope!.agentPageId)}
+          onPickHistoryConversation={(conversation) =>
+            handlePickHistoryConversation(pane.id, pane.scope!.agentPageId, conversation)
+          }
+          onHistoryDeleteConversation={handleHistoryDeleteConversation}
+        />
+      );
+    }
+
     // Unbound (scope null) is the only picker shape now — `resetPane` is the
     // one path back to it, so there is no longer a bound-but-empty sentinel
     // to also treat as one (issue #2263, finding 5).
@@ -711,19 +1214,7 @@ export default function AgentPanes({
         <PaneBar
           isActive={isActive}
           identity={
-            pane.scope?.kind === 'chat' ? (
-              <ChatPaneIdentity
-                scope={pane.scope}
-                surface={surface}
-                pickableAgents={pickableAgents}
-                agentsLoading={agentsLoading}
-                conversationsReady={sessionKnownToConversationsCache}
-                driveId={driveId}
-                onSelectAgent={(nextAgentPageId) =>
-                  handleSwitchAgent(pane.id, pane.scope!.agentPageId, nextAgentPageId)
-                }
-              />
-            ) : pane.scope ? (
+            pane.scope ? (
               <PaneSessionIdentity name={pane.scope.name || 'pane'} />
             ) : (
               <span className="text-muted-foreground">New pane</span>
@@ -761,17 +1252,9 @@ export default function AgentPanes({
             <div className="flex h-full items-center justify-center">
               <Loader2 className="size-4 animate-spin text-muted-foreground" />
             </div>
-          ) : surface.surface === 'chat' ? (
-            <PaneChat
-              conversationId={surface.conversationId}
-              agentPageId={surface.agentPageId}
-              driveId={driveId}
-              context={chatContext}
-              isReadOnly={isReadOnly}
-            />
-          ) : (
+          ) : surface.surface === 'terminal' ? (
             <Shell shellId={surface.shellId} name={pane.scope?.name} />
-          )}
+          ) : null}
         </div>
       </div>
     );
@@ -792,31 +1275,51 @@ export default function AgentPanes({
   );
 }
 
+type PaneChatTab = 'chat' | 'history' | 'settings';
+
 /**
- * A chat pane's bar identity: the `/development` AISelector, restored as a
- * first-class pane bar control (a pane-close-lifecycle audit follow-up). Own
- * component (rather than inline in `renderPane`) so its hooks — resolving the
- * pane's agent, reading whether it's streaming — obey the rules of hooks
- * across a pane count that changes on every split/close.
+ * A chat pane, in full: the bar identity (AISelector + Chat/History/Settings
+ * tab strip) AND the body those tabs switch between. One component, not two,
+ * because the tabs live in the bar but the state they drive has to reach the
+ * body below it — `renderPane` itself cannot hold that state (a plain
+ * function invoked per pane, not a component; hooks would violate their own
+ * rules across a pane count that changes on every split/close), so this is
+ * the pane-bar-plus-body wrapper every OTHER pane kind's inline JSX in
+ * `renderPane` also uses, just pulled out for this one kind's own hooks.
  *
- * `pickableAgents` is what scopes the dropdown to the session's own drive
- * (or to nothing, for a global-assistant session — see `AISelector`'s
- * `agents` override): the same list the split picker already offers, so a
- * pane's selector and "Split → pick an agent" never disagree about what's
- * choosable here.
+ * History and Settings reuse the SAME hooks (`useConversations`,
+ * `useAgentConfig`) the page's own `AgentPageView` tabs use — the whole
+ * point (raised in review on PR #2296/#2299) being that a pane and the page
+ * view are not two parallel implementations of "this agent's history/
+ * settings": they are the same SWR-keyed data, so two panes on the same
+ * agent (or a pane and the page view) can never silently drift.
  */
-function ChatPaneIdentity({
+function ChatPane({
   scope,
   surface,
+  isActive,
+  canSplit,
   pickableAgents,
   agentsLoading,
   conversationsReady,
   driveId,
+  sessionId,
+  chatContext,
+  isReadOnly,
   onSelectAgent,
+  onSelectPane,
+  onSplitRight,
+  onSplitDown,
+  onClose,
+  onCreateNewFromHistory,
+  onPickHistoryConversation,
+  onHistoryDeleteConversation,
 }: {
   /** Always `kind: 'chat'` at the call site — `PaneScope` isn't a discriminated union, so this stays the full type. */
   scope: PaneScope;
   surface: PaneSurface;
+  isActive: boolean;
+  canSplit: boolean;
   pickableAgents: PickableAgent[];
   agentsLoading: boolean;
   /**
@@ -828,7 +1331,20 @@ function ChatPaneIdentity({
    */
   conversationsReady: boolean;
   driveId: string | null;
+  sessionId: string;
+  chatContext?: 'page' | 'console';
+  isReadOnly: boolean;
   onSelectAgent: (agentPageId: string | null) => void;
+  onSelectPane: () => void;
+  onSplitRight: () => void;
+  onSplitDown: () => void;
+  onClose: () => void;
+  /** Resolves to whether the mint actually landed — false on a failed create. */
+  onCreateNewFromHistory: () => Promise<boolean>;
+  /** Resolves to whether the pick actually landed — false on a failed reopen. */
+  onPickHistoryConversation: (conversation: { id: string; title: string | null; sessionId: string | null }) => Promise<boolean>;
+  /** A History delete's canonical-row deactivation reaches every pane showing that id, not just this one — the container resets each affected pane. */
+  onHistoryDeleteConversation: (conversationId: string) => void;
 }) {
   const { user } = useAuth();
   const { agent } = useResolvedAgent(scope.agentPageId);
@@ -841,33 +1357,262 @@ function ChatPaneIdentity({
   // Mid-mint (the row isn't there yet), mid-stream, or the switch decision's
   // own data doesn't know this session yet: none of these have anything
   // safe to switch against.
-  const disabled = surface.surface === 'loading' || activeStream !== undefined || !conversationsReady;
+  const disabledAgentSwitch = surface.surface === 'loading' || activeStream !== undefined || !conversationsReady;
+
+  const [activeTab, setActiveTab] = useState<PaneChatTab>('chat');
+
+  // A pane's agent can change under it (the AISelector switch) without
+  // remounting this component. Settings belongs to the OLD agent — showing
+  // it (or leaving `activeTab: 'settings'` set) after switching to a
+  // DIFFERENT agent presents that agent's config as if requested, and
+  // switching to the Assistant (no Settings tab at all) leaves the body on
+  // its final "not agentPageId or no agent" branch, a spinner that never
+  // resolves since neither condition can ever become true again for this
+  // scope (review finding — coderabbitai on PR #2299).
+  useEffect(() => {
+    setActiveTab('chat');
+  }, [scope.agentPageId]);
+
+  const {
+    conversations,
+    isLoading: conversationsLoading,
+    deleteConversation,
+  } = useConversations({
+    agentId: scope.agentPageId,
+    currentConversationId: conversationId,
+    // Only fetched while History is actually showing — same lazy-load
+    // discipline `AgentPageView`'s own History tab uses.
+    enabled: activeTab === 'history',
+  });
+
+  const { config: agentConfig, setConfig: setAgentConfig, revalidate: revalidateAgentConfig } = useAgentConfig(scope.agentPageId);
+  const {
+    selectedProvider,
+    setSelectedProvider,
+    selectedModel,
+    setSelectedModel,
+    isProviderConfigured,
+  } = useProviderSettings(scope.agentPageId ? { pageId: scope.agentPageId } : {});
+  const [isSettingsSaving, setIsSettingsSaving] = useState(false);
+  const settingsRef = useRef<PageAgentSettingsTabRef>(null);
+
+  const toggleConversationShare = useCallback(
+    async (targetConversationId: string, isShared: boolean) => {
+      if (scope.agentPageId === null) return;
+      try {
+        const response = await fetchWithAuth(
+          `/api/ai/page-agents/${scope.agentPageId}/conversations/${targetConversationId}`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ isShared }),
+          },
+        );
+        if (!response.ok) console.error('Failed to update conversation sharing');
+      } catch (error) {
+        console.error('Failed to update conversation sharing:', error);
+      }
+    },
+    [scope.agentPageId],
+  );
+
+  const handleSelectHistoryConversation = useCallback(
+    async (id: string) => {
+      const picked = conversations.find((c) => c.id === id);
+      // Only follow the pick to Chat once it actually landed — a failed
+      // reopen (session full, deleted, access changed) leaves the pane
+      // untouched, and switching tabs anyway would show the OLD pane
+      // content as if the pick had succeeded (review finding —
+      // chatgpt-codex-connector on PR #2299).
+      const landed = await onPickHistoryConversation({
+        id,
+        title: picked?.title ?? null,
+        sessionId: picked?.sessionId ?? null,
+      });
+      if (landed) setActiveTab('chat');
+    },
+    [conversations, onPickHistoryConversation],
+  );
+
+  const handleCreateNewFromHistory = useCallback(async () => {
+    // Only follow to Chat once the mint actually landed — same discipline
+    // as handleSelectHistoryConversation above. A failed create (session
+    // full, permission changed, network drop) now restores this pane's
+    // PRIOR scope internally (handlePickAgent), so staying on History here
+    // shows that restored, still-working conversation underneath rather
+    // than switching to a blank/lost pane (review finding — chatgpt-codex-
+    // connector on PR #2299, round 13).
+    const landed = await onCreateNewFromHistory();
+    if (landed) setActiveTab('chat');
+  }, [onCreateNewFromHistory]);
 
   return (
-    <div className="flex min-w-0 flex-1 items-center gap-0.5">
-      <AISelector
-        selectedAgent={scope.agentPageId === null ? null : agent}
-        onSelectAgent={(next) => onSelectAgent(next?.id ?? null)}
-        driveId={driveId ?? undefined}
-        agents={pickableAgents}
-        agentsLoading={agentsLoading}
-        disabled={disabled}
-        className="h-6 min-w-0 flex-1 justify-start gap-1 px-1.5 py-0 text-xs font-medium"
+    <div
+      className="group/pane flex h-full min-h-0 flex-col"
+      onClick={onSelectPane}
+      // Tabbing into any control inside a pane (the chat input, a close
+      // button) must activate it too — a click is not the only way in.
+      onFocusCapture={onSelectPane}
+    >
+      <PaneBar
+        isActive={isActive}
+        identity={
+          <div className="flex min-w-0 flex-1 items-center gap-0.5">
+            <AISelector
+              selectedAgent={scope.agentPageId === null ? null : agent}
+              onSelectAgent={(next) => onSelectAgent(next?.id ?? null)}
+              driveId={driveId ?? undefined}
+              agents={pickableAgents}
+              agentsLoading={agentsLoading}
+              disabled={disabledAgentSwitch}
+              className="h-6 min-w-0 flex-1 justify-start gap-1 px-1.5 py-0 text-xs font-medium"
+            />
+            <PaneChatTabStrip
+              activeTab={activeTab}
+              onSelectTab={setActiveTab}
+              // The Assistant (agentPageId null) has no page, so no Settings —
+              // every other pane's agent does.
+              showSettings={scope.agentPageId !== null}
+              agentTitle={agent?.title ?? 'Agent'}
+            />
+          </div>
+        }
+        actions={
+          <>
+            {activeTab === 'settings' && scope.agentPageId !== null && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  settingsRef.current?.submitForm();
+                }}
+                // `PageAgentSettingsTab` registers `submitForm` before its own
+                // config-loaded check returns, and its form defaults contain
+                // an EMPTY prompt/tool list — clicking Save before agentConfig
+                // arrives would PATCH those defaults over the agent's real
+                // config (review finding — chatgpt-codex-connector on PR
+                // #2299).
+                disabled={isSettingsSaving || agentConfig === null}
+                className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+              >
+                {isSettingsSaving ? <Loader2 className="size-3 animate-spin" aria-hidden="true" /> : <Save className="size-3" aria-hidden="true" />}
+                Save
+              </button>
+            )}
+            <PaneSplitCloseActions
+              canSplit={canSplit}
+              canClose
+              onSplitRight={onSplitRight}
+              onSplitDown={onSplitDown}
+              onClose={onClose}
+            />
+          </>
+        }
       />
-      {/* The Assistant (agentPageId null) has no page, so no Settings — every
-          other pane's agent does. `/p/[pageId]` resolves the drive-scoped
-          URL without this component needing to know it. */}
-      {scope.agentPageId !== null && (
-        <Link
-          href={`/p/${scope.agentPageId}?tab=settings`}
-          aria-label={`${agent?.title ?? 'Agent'} settings`}
-          title="Agent settings"
-          className="flex shrink-0 items-center justify-center rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <Settings className="size-3" aria-hidden="true" />
-        </Link>
+      <div className="min-h-0 flex-1 overflow-hidden">
+        {activeTab === 'chat' ? (
+          surface.surface === 'loading' ? (
+            <div className="flex h-full items-center justify-center">
+              <Loader2 className="size-4 animate-spin text-muted-foreground" />
+            </div>
+          ) : surface.surface === 'chat' ? (
+            <PaneChat
+              conversationId={surface.conversationId}
+              agentPageId={surface.agentPageId}
+              driveId={driveId}
+              context={chatContext}
+              isReadOnly={isReadOnly}
+            />
+          ) : null
+        ) : activeTab === 'history' ? (
+          <PageAgentHistoryTab
+            conversations={conversations}
+            currentConversationId={conversationId}
+            onSelectConversation={handleSelectHistoryConversation}
+            onCreateNew={handleCreateNewFromHistory}
+            onDeleteConversation={(id) => {
+              // Only rebind panes once the delete actually succeeded — a
+              // refused delete (the never-empty guard's 409, e.g.) or a
+              // network failure both leave the conversation exactly as it
+              // was server-side, and resetting live panes for it anyway
+              // would discard a working pane binding for nothing (review
+              // finding — chatgpt-codex-connector and coderabbitai on PR
+              // #2299).
+              void deleteConversation(id).then((succeeded) => {
+                if (succeeded) onHistoryDeleteConversation(id);
+              });
+            }}
+            onToggleShare={toggleConversationShare}
+            isLoading={conversationsLoading}
+          />
+        ) : scope.agentPageId !== null && agent ? (
+          <div className="h-full overflow-auto">
+            <PageAgentSettingsTab
+              ref={settingsRef}
+              pageId={scope.agentPageId}
+              driveId={agent.driveId}
+              config={agentConfig}
+              onConfigUpdate={setAgentConfig}
+              onConfigRevalidate={revalidateAgentConfig}
+              selectedProvider={selectedProvider}
+              selectedModel={selectedModel}
+              onProviderChange={setSelectedProvider}
+              onModelChange={setSelectedModel}
+              isProviderConfigured={isProviderConfigured}
+              onSavingChange={setIsSettingsSaving}
+            />
+          </div>
+        ) : (
+          <div className="flex h-full items-center justify-center">
+            <Loader2 className="size-4 animate-spin text-muted-foreground" />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The tab strip itself — icon-only (a pane bar is 30px tall, no room for
+ * `AgentPageView`'s spacious text pills), tooltipped/aria-labeled for the
+ * text a mouse-hover or screen reader still needs.
+ */
+function PaneChatTabStrip({
+  activeTab,
+  onSelectTab,
+  showSettings,
+  agentTitle,
+}: {
+  activeTab: PaneChatTab;
+  onSelectTab: (tab: PaneChatTab) => void;
+  showSettings: boolean;
+  agentTitle: string;
+}) {
+  const tabButton = (tab: PaneChatTab, label: string, Icon: typeof MessageSquare) => (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={activeTab === tab}
+      aria-label={label}
+      title={label}
+      onClick={(e) => {
+        e.stopPropagation();
+        onSelectTab(tab);
+      }}
+      className={cn(
+        'flex shrink-0 items-center justify-center rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground',
+        activeTab === tab && 'bg-accent text-foreground',
       )}
+    >
+      <Icon className="size-3" aria-hidden="true" />
+    </button>
+  );
+
+  return (
+    <div role="tablist" className="flex shrink-0 items-center gap-0.5">
+      {tabButton('chat', 'Chat', MessageSquare)}
+      {tabButton('history', 'History', History)}
+      {showSettings && tabButton('settings', `${agentTitle} settings`, Settings)}
     </div>
   );
 }

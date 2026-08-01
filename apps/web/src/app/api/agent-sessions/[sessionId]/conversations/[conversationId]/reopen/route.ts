@@ -74,5 +74,13 @@ export async function POST(request: Request, context: RouteContext) {
     });
   }
 
-  return NextResponse.json({ ok: true });
+  // `alreadyOpen` (outcome === 'already_open'): this call did NOT transition
+  // the listing — it was already open (e.g. a different pane, tab, or an
+  // agent switch that left it open but unshown). The caller needs this to
+  // know whether it's safe to roll the listing back out if THIS request
+  // turns out to be superseded — doing so unconditionally would close a
+  // listing the request never actually opened, possibly still in use
+  // elsewhere (review finding — chatgpt-codex-connector on PR #2299,
+  // round 15).
+  return NextResponse.json({ ok: true, alreadyOpen: outcome === 'already_open' });
 }
