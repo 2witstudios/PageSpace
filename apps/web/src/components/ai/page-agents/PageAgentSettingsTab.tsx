@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useImperativeHandle, forwardRef, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useImperativeHandle, forwardRef, useCallback, useMemo, useRef, useId } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
@@ -125,6 +125,10 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   isProviderConfigured,
   onSavingChange
 }, ref) => {
+  // Stable per-MOUNT identifier — distinguishes this instance from another
+  // Settings surface for the SAME agent mounted elsewhere (see the
+  // useEditingStore registration below, round 20).
+  const mountId = useId();
   const [isSaving, setIsSaving] = useState(false);
   const [membership, setMembership] = useState<AgentMembership | null | undefined>(undefined);
   const [membershipUserRole, setMembershipUserRole] = useState<'OWNER' | 'ADMIN' | 'MEMBER'>('MEMBER');
@@ -211,7 +215,11 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
 
   // Read early (moved up from its original spot near the useEditingStore
   // registration below) so the reset effect right below can gate on it.
-  const { isDirty: formIsDirty } = useFormState({ control });
+  // `dirtyFields` additionally lets onSubmit tell "the user actually
+  // edited this field in THIS instance" apart from "still whatever this
+  // instance's own (possibly now-stale) form snapshot happens to hold" —
+  // see onSubmit below, round 20.
+  const { isDirty: formIsDirty, dirtyFields } = useFormState({ control });
   // Set right before THIS instance's own save propagates the new config
   // into the shared cache (onSubmit below) — distinguishes "my own save,
   // whose values I want as my new clean baseline" from "a SIBLING Settings
@@ -331,31 +339,53 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       // anything else. Prefer the shared config's value in that case; only
       // this instance's OWN explicit selection overrides it (review
       // finding — chatgpt-codex-connector on PR #2299, round 18).
-      const resolvedProvider = providerTouchedRef.current ? selectedProvider : (config?.aiProvider || selectedProvider);
-      const resolvedModel = modelTouchedRef.current ? selectedModel : (config?.aiModel || selectedModel);
+      //
+      // Provider and model are a COUPLED pair — a model must belong to its
+      // provider — so they are resolved from the SAME source together, not
+      // independently: touching only the model here while a sibling
+      // changed the provider must not combine this instance's (stale-
+      // provider) model with the sibling's new provider, an invalid pair
+      // the route rejects with a 400 (review finding — chatgpt-codex-
+      // connector on PR #2299, round 20).
+      const providerOrModelTouched = providerTouchedRef.current || modelTouchedRef.current;
+      const resolvedProvider = providerOrModelTouched ? selectedProvider : (config?.aiProvider || selectedProvider);
+      const resolvedModel = providerOrModelTouched ? selectedModel : (config?.aiModel || selectedModel);
+      // Every OTHER field: only what THIS instance's form actually has a
+      // pending edit for (react-hook-form's own dirtyFields) should
+      // override the freshest config. This surface's reset effect above
+      // deliberately keeps its old form snapshot while dirty, so anything
+      // NOT edited here can be stale relative to a sibling's own save of
+      // that same field — submitting the whole form regardless would
+      // silently revert it (review finding — chatgpt-codex-connector on
+      // PR #2299, round 20).
+      const mergedFields = {
+        systemPrompt: dirtyFields.systemPrompt ? data.systemPrompt : (config?.systemPrompt ?? data.systemPrompt),
+        enabledTools: dirtyFields.enabledTools ? data.enabledTools : (config?.enabledTools ?? data.enabledTools),
+        includeDrivePrompt: dirtyFields.includeDrivePrompt
+          ? data.includeDrivePrompt
+          : (config?.includeDrivePrompt ?? data.includeDrivePrompt),
+        agentDefinition: dirtyFields.agentDefinition ? data.agentDefinition : (config?.agentDefinition ?? data.agentDefinition),
+        visibleToGlobalAssistant: dirtyFields.visibleToGlobalAssistant
+          ? data.visibleToGlobalAssistant
+          : (config?.visibleToGlobalAssistant ?? data.visibleToGlobalAssistant),
+        includePageTree: dirtyFields.includePageTree ? data.includePageTree : (config?.includePageTree ?? data.includePageTree),
+        pageTreeScope: dirtyFields.pageTreeScope ? data.pageTreeScope : (config?.pageTreeScope ?? data.pageTreeScope),
+        toolExposureMode: dirtyFields.toolExposureMode ? data.toolExposureMode : (config?.toolExposureMode ?? data.toolExposureMode),
+        sandboxEnabled: dirtyFields.sandboxEnabled ? data.sandboxEnabled : (config?.sandboxEnabled ?? data.sandboxEnabled),
+      };
       const requestData = {
-        ...data,
+        ...mergedFields,
         aiProvider: resolvedProvider,
         aiModel: resolvedModel,
-        includeDrivePrompt: data.includeDrivePrompt,
-        agentDefinition: data.agentDefinition,
-        visibleToGlobalAssistant: data.visibleToGlobalAssistant,
-        includePageTree: data.includePageTree,
-        pageTreeScope: data.pageTreeScope,
       };
 
       await patch(`/api/pages/${pageId}/agent-config`, requestData);
 
       const updatedConfig = {
         ...config,
-        ...data,
+        ...mergedFields,
         aiProvider: resolvedProvider,
         aiModel: resolvedModel,
-        includeDrivePrompt: data.includeDrivePrompt,
-        agentDefinition: data.agentDefinition,
-        visibleToGlobalAssistant: data.visibleToGlobalAssistant,
-        includePageTree: data.includePageTree,
-        pageTreeScope: data.pageTreeScope,
       } as AgentConfig;
       // This save's own values should always become this instance's new
       // clean baseline, even though the form is (still, momentarily) dirty
@@ -381,7 +411,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       setIsSaving(false);
       onSavingChange?.(false);
     }
-  }, [pageId, config, onConfigUpdate, selectedProvider, selectedModel, onSavingChange]);
+  }, [pageId, config, onConfigUpdate, selectedProvider, selectedModel, onSavingChange, dirtyFields]);
 
   const handleProviderSelectChange = useCallback(
     (provider: string) => {
@@ -448,16 +478,23 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
 
   // Register with useEditingStore while dirty so SWR doesn't revalidate this
   // page mid-edit and clobber unsaved changes. (formIsDirty is declared
-  // earlier, above the config-reset effect it also gates.)
+  // earlier, above the config-reset effect it also gates.) Keyed by a
+  // per-MOUNT id (mountId, below), not just pageId: two Settings surfaces
+  // for the SAME agent otherwise register the identical key, and either
+  // one saving/unmounting deletes the shared Map entry out from under the
+  // OTHER — a still-dirty sibling then silently drops out of
+  // isAnyEditing(), letting SWR revalidation and other editing-paused
+  // background work resume while it still has unsaved edits (review
+  // finding — chatgpt-codex-connector on PR #2299, round 20).
   useEffect(() => {
-    const componentId = `page-agent-settings-${pageId}`;
+    const componentId = `page-agent-settings-${pageId}-${mountId}`;
     if (formIsDirty) {
       useEditingStore.getState().startEditing(componentId, 'form', { pageId });
     } else {
       useEditingStore.getState().endEditing(componentId);
     }
     return () => { useEditingStore.getState().endEditing(componentId); };
-  }, [formIsDirty, pageId]);
+  }, [formIsDirty, pageId, mountId]);
 
   if (!config) {
     return (
