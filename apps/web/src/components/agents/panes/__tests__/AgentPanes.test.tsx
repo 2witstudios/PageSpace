@@ -1534,6 +1534,75 @@ describe('AgentPanes', () => {
       );
     });
 
+    // review finding — chatgpt-codex-connector on PR #2299 (round 18): the
+    // SAME race that motivates the compensating reopen above applies to
+    // that compensating reopen itself — if IT is slow, the pane that made
+    // it necessary can move on again before it lands, leaving the
+    // conversation orphaned a second time with nothing left to notice.
+    it('recursively re-checks and cleans up again if the pane moves on before the compensating reopen itself lands', async () => {
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url === '/api/ai/page-agents/agent-1/conversations') {
+          return conversationsFixture([
+            { id: 'conv-recurse', title: 'Recurse', sessionId: 'ses-1' },
+            { id: 'conv-unbound', title: 'Unbound', sessionId: null },
+          ]);
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      let resolveFirstReopen!: (value: unknown) => void;
+      let resolveFirstDelete!: (value: unknown) => void;
+      let resolveCompensatingReopen!: (value: unknown) => void;
+      mockPost
+        .mockReturnValueOnce(new Promise((resolve) => (resolveFirstReopen = resolve))) // first pick
+        .mockResolvedValueOnce({ ok: true, alreadyOpen: false }) // fresh second pick
+        .mockReturnValueOnce(new Promise((resolve) => (resolveCompensatingReopen = resolve))); // compensating reopen
+      mockDel
+        .mockReturnValueOnce(new Promise((resolve) => (resolveFirstDelete = resolve))) // first cleanup DELETE
+        .mockResolvedValueOnce(undefined); // second (recursive) cleanup DELETE
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('tab', { name: /history/i }));
+      await user.click(await screen.findByRole('button', { name: 'select-conv-recurse' })); // reopen #1, pending
+
+      await user.click(await screen.findByRole('button', { name: 'select-conv-unbound' }));
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-unbound'));
+
+      // Reopen #1 resolves, genuinely orphaned — DIRECT cleanup, DELETE
+      // pending.
+      resolveFirstReopen({ ok: true, alreadyOpen: false });
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-recurse'));
+
+      // A fresh pick lands it back while that first DELETE is pending.
+      await user.click(await screen.findByRole('tab', { name: /history/i }));
+      await user.click(await screen.findByRole('button', { name: 'select-conv-recurse' }));
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-recurse'));
+
+      // First DELETE resolves — triggers a compensating reopen, pending.
+      resolveFirstDelete(undefined);
+      await waitFor(() =>
+        expect(
+          mockPost.mock.calls.filter((c) => c[0] === '/api/agent-sessions/ses-1/conversations/conv-recurse/reopen'),
+        ).toHaveLength(3),
+      );
+
+      // WHILE that compensating reopen is still pending, the pane moves on
+      // to something else again.
+      await user.click(await screen.findByRole('tab', { name: /history/i }));
+      await user.click(await screen.findByRole('button', { name: 'select-conv-unbound' }));
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-unbound'));
+
+      // The compensating reopen resolves — must recheck and, since nothing
+      // shows conv-recurse anymore, clean it up AGAIN.
+      resolveCompensatingReopen({ ok: true, alreadyOpen: false });
+      await waitFor(() =>
+        expect(
+          mockDel.mock.calls.filter((c) => c[0] === '/api/agent-sessions/ses-1/conversations/conv-recurse'),
+        ).toHaveLength(2),
+      );
+    });
+
     // review finding — chatgpt-codex-connector on PR #2299 (round 8): a
     // reopen can commit server-side and then have its OWN response delayed
     // long enough for the SAME conversation to be deleted from History

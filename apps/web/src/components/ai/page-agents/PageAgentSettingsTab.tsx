@@ -218,6 +218,12 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   // surface for the same agent just saved, and its update arrived here via
   // the shared SWR cache."
   const justSavedOwnConfigRef = useRef(false);
+  // Set the first time THIS instance's own provider/model controls are
+  // touched — distinguishes "the user explicitly picked this here" from
+  // "still whatever useProviderSettings loaded on mount, possibly stale
+  // relative to a sibling's later save" (see onSubmit below, round 18).
+  const providerTouchedRef = useRef(false);
+  const modelTouchedRef = useRef(false);
 
   // Reset form when config changes — but NOT when this surface has its own
   // unsaved edits from an EXTERNAL update (a different pane's Settings tab
@@ -315,11 +321,22 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
     setIsSaving(true);
     onSavingChange?.(true);
     try {
-      // Include the current provider and model from props
+      // `selectedProvider`/`selectedModel` are OWNED by the parent's own
+      // useProviderSettings() instance — a separate, per-mount hook with no
+      // shared cache (unlike useAgentConfig). If this instance never
+      // touched the provider/model controls itself, its copy can be stale
+      // relative to a SIBLING Settings surface for the same agent that
+      // just saved a provider change: submitting the stale prop here would
+      // silently revert that sibling's save the moment this instance saves
+      // anything else. Prefer the shared config's value in that case; only
+      // this instance's OWN explicit selection overrides it (review
+      // finding — chatgpt-codex-connector on PR #2299, round 18).
+      const resolvedProvider = providerTouchedRef.current ? selectedProvider : (config?.aiProvider || selectedProvider);
+      const resolvedModel = modelTouchedRef.current ? selectedModel : (config?.aiModel || selectedModel);
       const requestData = {
         ...data,
-        aiProvider: selectedProvider,
-        aiModel: selectedModel,
+        aiProvider: resolvedProvider,
+        aiModel: resolvedModel,
         includeDrivePrompt: data.includeDrivePrompt,
         agentDefinition: data.agentDefinition,
         visibleToGlobalAssistant: data.visibleToGlobalAssistant,
@@ -332,8 +349,8 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       const updatedConfig = {
         ...config,
         ...data,
-        aiProvider: selectedProvider,
-        aiModel: selectedModel,
+        aiProvider: resolvedProvider,
+        aiModel: resolvedModel,
         includeDrivePrompt: data.includeDrivePrompt,
         agentDefinition: data.agentDefinition,
         visibleToGlobalAssistant: data.visibleToGlobalAssistant,
@@ -355,6 +372,21 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       onSavingChange?.(false);
     }
   }, [pageId, config, onConfigUpdate, selectedProvider, selectedModel, onSavingChange]);
+
+  const handleProviderSelectChange = useCallback(
+    (provider: string) => {
+      providerTouchedRef.current = true;
+      onProviderChange(provider);
+    },
+    [onProviderChange],
+  );
+  const handleModelSelectChange = useCallback(
+    (model: string) => {
+      modelTouchedRef.current = true;
+      onModelChange(model);
+    },
+    [onModelChange],
+  );
 
   // Expose form submission to parent component
   useImperativeHandle(ref, () => ({
@@ -444,7 +476,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
               {/* Provider Selector */}
               <div>
                 <label className="text-sm font-medium mb-2 block">AI Provider</label>
-                <Select value={selectedProvider} onValueChange={onProviderChange}>
+                <Select value={selectedProvider} onValueChange={handleProviderSelectChange}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
@@ -467,7 +499,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
               {/* Model Selector */}
               <div>
                 <label className="text-sm font-medium mb-2 block">Model</label>
-                <Select value={selectedModel} onValueChange={onModelChange}>
+                <Select value={selectedModel} onValueChange={handleModelSelectChange}>
                   <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>

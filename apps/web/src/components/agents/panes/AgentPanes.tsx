@@ -659,6 +659,18 @@ export default function AgentPanes({
             `/api/agent-sessions/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversationId)}/reopen`,
             {},
           );
+          // The SAME race applies to this compensating reopen itself: the
+          // pane that caused the check above to pass can move on to
+          // something else before this call's own response arrives,
+          // leaving the conversation orphaned again with nothing left to
+          // notice. Re-check once more and, if so, clean up again — this
+          // recurses rather than loops, so it naturally terminates the
+          // moment the grid stops churning through this exact conversation
+          // (review finding — chatgpt-codex-connector on PR #2299,
+          // round 18).
+          if (!isConversationShownSomewhere(conversationId)) {
+            await cleanupOrphanedConversation(conversationId);
+          }
         }
       } catch (error) {
         console.error('Failed to clean up an orphaned conversation:', error);
