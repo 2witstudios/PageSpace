@@ -770,9 +770,7 @@ export async function POST(request: Request) {
         // conversation whose row that eager call just created": skipping the
         // lock for the second case let a concurrent History-delete land between
         // that create and this write with nothing to catch it — review finding,
-        // round 11). `row` undefined here means no row exists even now (the
-        // eager create's own failure, tolerated/non-fatal there) — not a
-        // History-delete, so only an explicitly inactive row blocks the write.
+        // round 11).
         await db.transaction(async (tx) => {
           const [row] = await tx
             .select({ isActive: conversations.isActive })
@@ -780,7 +778,53 @@ export async function POST(request: Request) {
             .where(eq(conversations.id, conversationId!))
             .for('update')
             .limit(1);
-          if (row && !row.isActive) throw new ConversationHistoryDeletedError();
+
+          if (row) {
+            if (!row.isActive) throw new ConversationHistoryDeletedError();
+          } else {
+            // `FOR UPDATE` on zero rows locks nothing — if the eager
+            // createConversation() call above hasn't landed a row yet (raced
+            // with a concurrent request, or failed), there is nothing here
+            // yet for the lock to serialize against: a concurrent create
+            // (this request's own eager call, or another request's) plus a
+            // History-delete could still interleave between here and the
+            // message insert below, unguarded. Idempotently claim/create the
+            // row IN THIS transaction instead — same create-then-select-the-
+            // winner pattern resolveOrCreateConversation already uses for
+            // the global route — so something is always actually locked
+            // before the write proceeds (review finding — chatgpt-codex-
+            // connector on PR #2299, round 12). Mirrors createConversation's
+            // own insert shape/defaults exactly, since a caller landing here
+            // supplied no `opts`.
+            const [created] = await tx
+              .insert(conversations)
+              .values({
+                id: conversationId!,
+                userId: userId!,
+                type: 'page',
+                contextId: chatId!,
+                isShared: false,
+                sessionId: null,
+                title: null,
+                updatedAt: new Date(),
+              })
+              .onConflictDoNothing()
+              .returning({ isActive: conversations.isActive });
+
+            if (created) {
+              if (!created.isActive) throw new ConversationHistoryDeletedError();
+            } else {
+              // A concurrent insert won the race — re-select, locked, same
+              // reasoning as the initial SELECT above.
+              const [winner] = await tx
+                .select({ isActive: conversations.isActive })
+                .from(conversations)
+                .where(eq(conversations.id, conversationId!))
+                .for('update')
+                .limit(1);
+              if (!winner?.isActive) throw new ConversationHistoryDeletedError();
+            }
+          }
 
           await saveMessageToDatabase({
             messageId,

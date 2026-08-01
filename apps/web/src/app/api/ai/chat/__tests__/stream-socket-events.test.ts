@@ -110,6 +110,13 @@ const mockConversationActiveAtLockTime = vi.hoisted(() => ({ current: true }));
 // as best-effort) rather than a row that exists and is explicitly inactive
 // — the two must be told apart (round 10 review finding).
 const mockConversationRowExistsAtLockTime = vi.hoisted(() => ({ current: true }));
+// The round-12 in-transaction claim insert (`.insert(conversations).values(...)
+// .onConflictDoNothing().returning(...)`), reached only when the flag above is
+// false. Defaults to "this insert won, row is active" so the round-10/11
+// no-row tests keep proceeding normally; a test simulating a concurrent
+// winner sets this to `[]` (conflict — nothing returned) and relies on the
+// `for('update').limit()` mock above for the follow-up winner re-select.
+const mockConversationClaimInsertRows = vi.hoisted(() => ({ current: [{ isActive: true }] as Array<{ isActive: boolean }> }));
 
 vi.mock('@pagespace/db/db', () => {
   // Reused inside `transaction()`'s callback too — `tx` needs the identical
@@ -142,8 +149,34 @@ vi.mock('@pagespace/db/db', () => {
         })),
       })),
     })),
-    // Server Stream Durability epic PR 2: assistant placeholder row insert at stream start.
-    insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue(undefined) })),
+    // Server Stream Durability epic PR 2: assistant placeholder row insert at
+    // stream start (a plain, directly-awaited insert). Round 12's in-
+    // transaction claim insert for a missing conversations row additionally
+    // chains `.onConflictDoNothing().returning(...)` off the same `values()`
+    // call — the returned object supports both: awaiting it directly
+    // resolves like the plain insert, and it also exposes the chain.
+    insert: vi.fn(() => ({
+      values: vi.fn(() => {
+        const chain = {
+          then: <T>(
+            resolve?: ((value: undefined) => T | PromiseLike<T>) | null,
+            reject?: ((reason: unknown) => T | PromiseLike<T>) | null,
+          ) => Promise.resolve(undefined).then(resolve, reject),
+          onConflictDoNothing: vi.fn(() => ({
+            returning: vi.fn(() => {
+              const rows = mockConversationClaimInsertRows.current;
+              // An empty result means a CONCURRENT insert won the conflict —
+              // which by definition means a row exists now, for the
+              // production code's own follow-up winner re-select (via the
+              // same for('update').limit() mock above) to find.
+              if (rows.length === 0) mockConversationRowExistsAtLockTime.current = true;
+              return Promise.resolve(rows);
+            }),
+          })),
+        };
+        return chain;
+      }),
+    })),
   });
 
   const dbLike = makeDbLike();
@@ -432,6 +465,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
     mockTakeOverConversationStreams.mockResolvedValue({ aborted: [], reconciled: [] });
     mockConversationActiveAtLockTime.current = true;
     mockConversationRowExistsAtLockTime.current = true;
+    mockConversationClaimInsertRows.current = [{ isActive: true }];
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
     mockCreateStreamLifecycle.mockResolvedValue({
       pushPart: mockLifecyclePushPart,
@@ -641,6 +675,36 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       mockGetConversation.mockResolvedValue(null); // legacy: no row at the early check
       mockConversationRowExistsAtLockTime.current = true; // ...but the eager create found/made one
       mockConversationActiveAtLockTime.current = false; // ...and it's now inactive
+
+      const response = await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(response.status).toBe(404);
+      expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
+    });
+
+    // round 12 review finding — chatgpt-codex-connector on PR #2299: `FOR
+    // UPDATE` on a SELECT that returns zero rows locks nothing at all — the
+    // round 10/11 "no row → proceed" tolerance closed the wrong-rejection
+    // bug but reopened a DIFFERENT one: with nothing locked, a concurrent
+    // create-then-delete for the same conversationId had no serialization
+    // to catch it. The write must now claim/create the row INSIDE this same
+    // transaction so something is actually locked before proceeding.
+    it('given no row exists and this transaction wins the claim-insert, should proceed (not reject)', async () => {
+      mockGetConversation.mockResolvedValue(null);
+      mockConversationRowExistsAtLockTime.current = false;
+      mockConversationClaimInsertRows.current = [{ isActive: true }]; // this insert wins
+
+      const response = await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(response.status).not.toBe(404);
+      expect(mockCreateStreamLifecycle).toHaveBeenCalled();
+    });
+
+    it('given no row exists and a CONCURRENT insert wins the claim race, should re-check the winner and 404 if it is inactive', async () => {
+      mockGetConversation.mockResolvedValue(null);
+      mockConversationRowExistsAtLockTime.current = false; // no row at the FIRST select
+      mockConversationClaimInsertRows.current = []; // conflict — someone else's insert won
+      mockConversationActiveAtLockTime.current = false; // ...and the winner's row is inactive
 
       const response = await POST(makeRequest({ conversationId: CONV_ID }));
 

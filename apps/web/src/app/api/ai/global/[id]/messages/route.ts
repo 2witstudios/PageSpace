@@ -1277,13 +1277,13 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
               return true;
             });
             if (!conversationActive) {
-              loggers.ai.warn('Global AI messages API: skipped placeholder assistant row, conversation no longer active', {
+              loggers.api.warn('Global AI messages API: skipped placeholder assistant row, conversation no longer active', {
                 messageId: serverAssistantMessageId,
                 conversationId,
               });
             }
           } catch (error) {
-            loggers.ai.warn('Global AI messages API: placeholder assistant row INSERT failed', {
+            loggers.api.warn('Global AI messages API: placeholder assistant row INSERT failed', {
               messageId: serverAssistantMessageId,
               conversationId,
               error: error instanceof Error ? error.message : 'unknown',

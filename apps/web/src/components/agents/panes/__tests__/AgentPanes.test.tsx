@@ -1143,6 +1143,14 @@ describe('AgentPanes', () => {
       // NOW the first (stale) reopen resolves — must NOT close conv-slow,
       // since a pane is currently showing it.
       resolveSlowReopen({});
+      // Flush the stale completion's own continuation — without this, the
+      // waitFor below can pass on its first attempt (the pane already shows
+      // conv-slow from the SECOND pick) before the rollback guard even runs,
+      // making the assertion below pass trivially (review finding —
+      // coderabbitai on PR #2299, round 12).
+      await act(async () => {
+        await Promise.resolve();
+      });
       await waitFor(() => {
         const pane = useAgentWorkspaceStore
           .getState()

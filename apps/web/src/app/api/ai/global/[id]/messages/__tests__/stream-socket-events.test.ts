@@ -556,7 +556,7 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
       // Best-effort, same as an insert failure: the generation still proceeds.
       expect(response.status).not.toBe(404);
       expect(mockCreateStreamLifecycle).toHaveBeenCalled();
-      expect(loggers.ai.warn).toHaveBeenCalledWith(
+      expect(loggers.api.warn).toHaveBeenCalledWith(
         'Global AI messages API: skipped placeholder assistant row, conversation no longer active',
         expect.objectContaining({ conversationId: 'conv-1' }),
       );
@@ -565,7 +565,7 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
     it('given the conversation is still active at placeholder-insert time, should NOT skip (no false-positive warning)', async () => {
       await POST(makeRequest(), makeContext());
 
-      expect(loggers.ai.warn).not.toHaveBeenCalledWith(
+      expect(loggers.api.warn).not.toHaveBeenCalledWith(
         'Global AI messages API: skipped placeholder assistant row, conversation no longer active',
         expect.anything(),
       );
