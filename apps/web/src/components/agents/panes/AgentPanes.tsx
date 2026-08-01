@@ -199,6 +199,22 @@ export default function AgentPanes({
   //    independently compares its own captured start value against the
   //    current one — no consumption, so no reader ever misses it.
   const historyDeleteGenerations = useRef(new Map<string, number>());
+  // 3. New Conversation from History captures the pane's PRIOR scope so a
+  //    failed mint can restore it (round 13) — but re-reading "the live
+  //    scope right now" at the start of EVERY call breaks the moment two
+  //    mints for the SAME pane overlap: the second call's "live scope" is
+  //    already the FIRST call's loading sentinel, not the true original.
+  //    A failed second call would then "restore" that sentinel, leaving the
+  //    pane stuck spinning forever. Captured ONCE per paneId (only by
+  //    whichever mint is first to start while none is in flight) and reused
+  //    by every overlapping sibling; reference-counted so the entry clears
+  //    once every overlapping mint for that pane has settled, letting a
+  //    LATER, non-overlapping mint capture fresh state again (review
+  //    finding — chatgpt-codex-connector on PR #2299, round 15).
+  const pendingMintCounts = useRef(new Map<string, number>());
+  const priorScopeBeforeMint = useRef(
+    new Map<string, { scope: PaneScope | null; deleteGenerationAtStart: number }>(),
+  );
 
   // The picker's agent list. A drive session offers only that drive's agents;
   // a global-assistant session (driveId null) has no home drive to filter by,
@@ -641,30 +657,55 @@ export default function AgentPanes({
       // codex-connector on PR #2299, round 14).
       const isCurrent = beginPaneAssign(paneId);
       const conversationId = createId();
-      // Captured BEFORE the loading-state overwrite below — a failed mint
-      // then restores THIS instead of always falling back to the picker.
-      // For the normal "pick from an empty picker" call site this is
-      // already null (restoring null IS today's reset-to-picker behavior),
-      // but "New Conversation" picked from a pane's own History tab starts
-      // from a pane already showing a real, working conversation — losing
-      // that to a blank picker on a transient failure (session full,
-      // network drop) is a real regression the user did not ask for
+      // Captured ONLY when no mint is already in flight for this pane — a
+      // failed mint then restores THIS instead of always falling back to
+      // the picker. For the normal "pick from an empty picker" call site
+      // this is already null (restoring null IS today's reset-to-picker
+      // behavior), but "New Conversation" picked from a pane's own History
+      // tab starts from a pane already showing a real, working conversation
+      // — losing that to a blank picker on a transient failure (session
+      // full, network drop) is a real regression the user did not ask for
       // (review finding — chatgpt-codex-connector on PR #2299, round 13).
-      const liveWorkspaceAtStart = useAgentWorkspaceStore.getState().workspaces[sessionId];
-      const priorScope = liveWorkspaceAtStart
-        ? (panesOf(liveWorkspaceAtStart).find((p) => p.id === paneId)?.scope ?? null)
-        : null;
-      // The pane's LOADING scope (targetId null) doesn't identify the prior
-      // conversation, so a History-delete of it while this mint is pending
-      // can't reset this pane the normal way — capture its delete
-      // generation now and re-check before restoring, so a since-deleted
-      // prior conversation is never resurrected onto a pane whose sends
-      // would just 404 (review finding — chatgpt-codex-connector on PR
-      // #2299, round 14).
+      // Reused (not re-captured) by any OVERLAPPING sibling mint for this
+      // same pane — re-reading "the live scope now" on every call would see
+      // an earlier sibling's own loading sentinel, not the true original
+      // (review finding — chatgpt-codex-connector on PR #2299, round 15).
+      if (!priorScopeBeforeMint.current.has(paneId)) {
+        const liveWorkspaceAtStart = useAgentWorkspaceStore.getState().workspaces[sessionId];
+        const capturedScope = liveWorkspaceAtStart
+          ? (panesOf(liveWorkspaceAtStart).find((p) => p.id === paneId)?.scope ?? null)
+          : null;
+        // The pane's LOADING scope (targetId null) doesn't identify the
+        // prior conversation, so a History-delete of it while this mint is
+        // pending can't reset this pane the normal way — capture its
+        // delete generation now and re-check before restoring, so a
+        // since-deleted prior conversation is never resurrected onto a
+        // pane whose sends would just 404 (review finding — chatgpt-codex-
+        // connector on PR #2299, round 14).
+        const capturedConversationId = capturedScope?.kind === 'chat' ? capturedScope.targetId : null;
+        const deleteGenerationAtStart = capturedConversationId
+          ? (historyDeleteGenerations.current.get(capturedConversationId) ?? 0)
+          : 0;
+        priorScopeBeforeMint.current.set(paneId, { scope: capturedScope, deleteGenerationAtStart });
+      }
+      pendingMintCounts.current.set(paneId, (pendingMintCounts.current.get(paneId) ?? 0) + 1);
+      const { scope: priorScope, deleteGenerationAtStart: priorScopeDeleteGenerationAtStart } =
+        priorScopeBeforeMint.current.get(paneId)!;
       const priorScopeConversationId = priorScope?.kind === 'chat' ? priorScope.targetId : null;
-      const priorScopeDeleteGenerationAtStart = priorScopeConversationId
-        ? (historyDeleteGenerations.current.get(priorScopeConversationId) ?? 0)
-        : 0;
+      // Exactly-once decrement regardless of exit path; clears the shared
+      // capture only once every overlapping mint for this pane has settled.
+      let mintSettled = false;
+      const settleMint = () => {
+        if (mintSettled) return;
+        mintSettled = true;
+        const next = (pendingMintCounts.current.get(paneId) ?? 1) - 1;
+        if (next <= 0) {
+          pendingMintCounts.current.delete(paneId);
+          priorScopeBeforeMint.current.delete(paneId);
+        } else {
+          pendingMintCounts.current.set(paneId, next);
+        }
+      };
       // Bind first, render after: the pane goes to `loading` (kind set, target
       // null) while the mint is in flight — never a speculative surface.
       assignPane(sessionId, paneId, { kind: 'chat', name: 'New conversation', targetId: null, agentPageId });
@@ -681,6 +722,7 @@ export default function AgentPanes({
             sessionId,
           });
         }
+        settleMint();
         if (!isCurrent() || !paneStillLoading(paneId, { kind: 'chat', agentPageId })) {
           // Either a NEWER call for this same pane superseded this one
           // (isCurrent false — round 14), or the pane closed mid-mint, or a
@@ -711,6 +753,7 @@ export default function AgentPanes({
         void mutate(isAgentSessionsKey);
         return true;
       } catch (error) {
+        settleMint();
         console.error('Failed to start a conversation in this pane:', error);
         toast.error('Could not start a conversation', {
           description: error instanceof Error ? error.message : 'Please try again.',
@@ -793,8 +836,9 @@ export default function AgentPanes({
           else pendingReopenCounts.current.set(conversation.id, next);
           return next;
         };
+        let reopenResult: { ok: boolean; alreadyOpen: boolean };
         try {
-          await post(
+          reopenResult = await post<{ ok: boolean; alreadyOpen: boolean }>(
             `/api/agent-sessions/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversation.id)}/reopen`,
             {},
           );
@@ -840,7 +884,16 @@ export default function AgentPanes({
           // whichever pane is showing it. Read live state across every pane
           // in the grid (not just this one) before deciding (review finding
           // — chatgpt-codex-connector on PR #2299).
-          if (isShownSomewhere()) return false;
+          //
+          // And only when THIS request actually transitioned the listing:
+          // the reopen runtime returns `already_open` (folded into the same
+          // `{ ok: true }` shape client-side used to see) when the
+          // conversation was already open elsewhere (another pane/tab, or
+          // an agent switch that left it open unshown) — this request never
+          // opened it, so rolling it back would close a listing still in
+          // use for a no-op this request didn't cause (review finding —
+          // chatgpt-codex-connector on PR #2299, round 15).
+          if (reopenResult.alreadyOpen || isShownSomewhere()) return false;
           if (remaining > 0) {
             // Something else is still reopening this same conversationId —
             // premature to clean up (that request might land it). Defer:
@@ -936,6 +989,15 @@ export default function AgentPanes({
         deletedConversationId,
         (historyDeleteGenerations.current.get(deletedConversationId) ?? 0) + 1,
       );
+      // Instant-freshness nudge, unconditional — the canonical row is gone
+      // from the session's listing regardless of whether any pane in THIS
+      // grid happens to be showing it right now. Scoping this to "only when
+      // a pane was affected" left every OTHER consumer of the cached
+      // listing (handleSwitchAgent's focus branch, a close decision's
+      // fallback) trusting a stale row for up to the poll interval —
+      // binding a pane to a transcript that already 404s on send (review
+      // finding — chatgpt-codex-connector on PR #2299, round 15).
+      void mutate(isAgentSessionsKey);
       // Read fresh at call time, not the `workspace` this callback closed
       // over — this always runs after the DELETE's own async round trip,
       // during which the user could have already reassigned an affected
@@ -950,9 +1012,6 @@ export default function AgentPanes({
       );
       for (const pane of affectedPanes) {
         resetPane(sessionId, pane.id);
-      }
-      if (affectedPanes.length > 0) {
-        void mutate(isAgentSessionsKey);
       }
     },
     [sessionId, resetPane],

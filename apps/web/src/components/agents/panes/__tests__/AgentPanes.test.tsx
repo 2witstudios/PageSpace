@@ -724,6 +724,45 @@ describe('AgentPanes', () => {
       expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/new-id-2');
     });
 
+    // review finding — chatgpt-codex-connector on PR #2299 (round 15): the
+    // round-13 restore-on-failure fix re-read "the pane's live scope" fresh
+    // at the start of EVERY mint call — for a SECOND overlapping mint,
+    // that live scope is already the FIRST mint's own loading sentinel, not
+    // the true original conversation. A failed second mint then "restored"
+    // that sentinel, leaving the pane stuck spinning forever.
+    it('given New Conversation is clicked twice before either settles and BOTH fail, restores the TRUE original conversation, not an intermediate loading sentinel', async () => {
+      let rejectOlder!: (reason: unknown) => void;
+      let rejectNewer!: (reason: unknown) => void;
+      mockPost
+        .mockReturnValueOnce(new Promise((_resolve, reject) => (rejectOlder = reject)))
+        .mockReturnValueOnce(new Promise((_resolve, reject) => (rejectNewer = reject)));
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
+      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('tab', { name: /history/i }));
+      await user.click(await screen.findByRole('button', { name: 'create-new-from-history' })); // older, pending
+      await user.click(await screen.findByRole('button', { name: 'create-new-from-history' })); // newer, pending
+
+      // The OLDER mint rejects first — superseded, no-op.
+      rejectOlder(new Error('transient'));
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      // The NEWER (current) mint then ALSO rejects — must restore the
+      // ORIGINAL conv-1, not the older mint's own loading sentinel.
+      rejectNewer(new Error('session full'));
+      await waitFor(() => {
+        const pane = useAgentWorkspaceStore
+          .getState()
+          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+          .find((p) => p.id === paneId);
+        expect(pane?.scope?.targetId).toBe('conv-1');
+      });
+    });
+
     // review finding — chatgpt-codex-connector on PR #2299 (round 14): the
     // pane's captured priorScope can itself go stale — if the conversation
     // it points at is deleted from History (elsewhere) while this mint is
@@ -1296,6 +1335,44 @@ describe('AgentPanes', () => {
         expect(pane?.scope?.targetId).toBe('conv-slow');
       });
       expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-slow');
+    });
+
+    // review finding — chatgpt-codex-connector on PR #2299 (round 15): the
+    // reopen endpoint returns the same { ok: true } shape for a genuine
+    // transition AND a no-op ("already_open" — the conversation was already
+    // open elsewhere, e.g. another pane/tab, or an agent switch that left
+    // it open unshown). Rolling back a superseded pick unconditionally
+    // could close a listing this request never actually opened.
+    it('does not roll back a superseded reopen whose response reports alreadyOpen (a no-op, not a transition)', async () => {
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url === '/api/ai/page-agents/agent-1/conversations') {
+          return conversationsFixture([
+            { id: 'conv-already-open', title: 'Already open', sessionId: 'ses-1' },
+            { id: 'conv-other', title: 'Other', sessionId: null },
+          ]);
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      let resolveReopen!: (value: unknown) => void;
+      mockPost.mockReturnValueOnce(new Promise((resolve) => (resolveReopen = resolve)));
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('tab', { name: /history/i }));
+      await user.click(await screen.findByRole('button', { name: 'select-conv-already-open' })); // pending
+
+      // Superseded by picking a DIFFERENT conversation on the same pane.
+      await user.click(await screen.findByRole('button', { name: 'select-conv-other' }));
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-other'));
+
+      // The stale reopen resolves reporting alreadyOpen — this request
+      // never transitioned the listing, so no cleanup DELETE should fire.
+      resolveReopen({ ok: true, alreadyOpen: true });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-already-open');
     });
 
     // review finding — chatgpt-codex-connector on PR #2299 (round 8): the
