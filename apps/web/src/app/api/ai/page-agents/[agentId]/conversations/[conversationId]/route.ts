@@ -3,7 +3,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrin
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import { countOpenConversationsForSession } from '@/lib/agent-sessions/agent-sessions-runtime';
+import { countOpenConversationsForSession, withSessionListingLock } from '@/lib/agent-sessions/agent-sessions-runtime';
 import { broadcastAiConversationAdded, broadcastAiConversationRenamed, broadcastAiConversationDeleted } from '@/lib/websocket/socket-utils';
 import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
 import { maskIdentifier } from '@/lib/logging/mask';
@@ -219,25 +219,38 @@ export async function DELETE(
       );
     }
 
+    // Get conversation metadata before deletion for audit log
+    const metadata = await conversationRepository.getConversationMetadata(agentId, conversationId);
+
     // History-deleting a session-bound conversation now also deactivates its
     // CANONICAL row (`softDeleteConversation` below) — which, unlike the
     // console's own "Close" action, does not go through
     // `closeConversationInSessionWith`'s never-empty guard. Refusing here
     // when this is the session's LAST open listing keeps that same
-    // invariant true regardless of which route emptied it (review finding —
-    // chatgpt-codex-connector on PR #2296): an active session left with a
-    // live sandbox and zero reachable conversations is worse than a plain
-    // 409 telling the user to close the pane (which offers to end the
-    // session) or delete history from a different conversation first.
+    // invariant true regardless of which route emptied it: an active session
+    // left with a live sandbox and zero reachable conversations is worse
+    // than a plain 409 telling the user to close the pane (which offers to
+    // end the session) or delete history from a different conversation
+    // first. The count-then-delete pair runs inside `withSessionListingLock`
+    // — the SAME per-session lock create/close/reopen already serialize
+    // under — so this can never race one of them into reading a stale count
+    // (review findings — chatgpt-codex-connector on PR #2296).
     if (conversationRow?.sessionId && conversationRow.closedInSessionAt === null) {
-      const openCount = await countOpenConversationsForSession(conversationRow.sessionId);
-      if (openCount <= 1) {
+      const sessionId = conversationRow.sessionId;
+      const outcome = await withSessionListingLock(sessionId, async () => {
+        const openCount = await countOpenConversationsForSession(sessionId);
+        if (openCount <= 1) return 'last_conversation' as const;
+        await conversationRepository.softDeleteConversation(agentId, conversationId);
+        return 'deleted' as const;
+      });
+
+      if (outcome === 'last_conversation') {
         auditRequest(request, {
           eventType: 'security.rate.limited',
           userId: auth.userId,
           resourceType: 'page_agent_conversation',
           resourceId: conversationId,
-          details: { reason: 'last_session_conversation', agentId, sessionId: conversationRow.sessionId, method: 'DELETE' },
+          details: { reason: 'last_session_conversation', agentId, sessionId, method: 'DELETE' },
           riskScore: 0,
         });
         return NextResponse.json(
@@ -248,13 +261,12 @@ export async function DELETE(
           { status: 409 },
         );
       }
+    } else {
+      // Not session-bound (or already closed out of its session, so it
+      // holds no open slot to protect) — no lock needed, nothing to
+      // serialize against.
+      await conversationRepository.softDeleteConversation(agentId, conversationId);
     }
-
-    // Get conversation metadata before deletion for audit log
-    const metadata = await conversationRepository.getConversationMetadata(agentId, conversationId);
-
-    // Soft-delete all messages in the conversation
-    await conversationRepository.softDeleteConversation(agentId, conversationId);
 
     // Audit log the deletion for security and compliance
     await conversationRepository.logConversationDeletion({

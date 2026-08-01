@@ -69,6 +69,11 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
   countOpenConversationsForSession: vi.fn(),
+  // Real semantics for the mock: just run `fn` — the route's own tests
+  // aren't about lock contention (that's `agent-sessions-runtime`'s own
+  // test suite), only about the guard-then-delete sequence being atomic
+  // AT THE CALL SITE, which a pass-through faithfully exercises.
+  withSessionListingLock: vi.fn((_sessionId: string, fn: () => Promise<unknown>) => fn()),
 }));
 
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
@@ -77,7 +82,7 @@ import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastAiConversationAdded, broadcastAiConversationDeleted } from '@/lib/websocket/socket-utils';
-import { countOpenConversationsForSession } from '@/lib/agent-sessions/agent-sessions-runtime';
+import { countOpenConversationsForSession, withSessionListingLock } from '@/lib/agent-sessions/agent-sessions-runtime';
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -486,6 +491,9 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
         expect.anything(),
         expect.objectContaining({ eventType: 'security.rate.limited' }),
       );
+      // The count-then-refuse decision ran under the SAME per-session lock
+      // create/close/reopen serialize under — not a bare unlocked read.
+      expect(withSessionListingLock).toHaveBeenCalledWith('ses_1', expect.any(Function));
     });
 
     it('allows deleting a session-bound conversation when another open listing remains in the same session', async () => {
@@ -515,6 +523,7 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
       expect(response.status).toBe(200);
       expect(countOpenConversationsForSession).not.toHaveBeenCalled();
       expect(conversationRepository.softDeleteConversation).toHaveBeenCalledWith(mockAgentId, mockConversationId);
+      expect(withSessionListingLock).not.toHaveBeenCalled();
     });
 
     it('does not weigh the guard for a plain (non-session-bound) conversation', async () => {
@@ -528,6 +537,7 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
 
       expect(response.status).toBe(200);
       expect(countOpenConversationsForSession).not.toHaveBeenCalled();
+      expect(withSessionListingLock).not.toHaveBeenCalled();
     });
   });
 
