@@ -111,7 +111,7 @@ const mockAgent = () => ({
 });
 
 const mockConversationRow = (
-  overrides: Partial<{ userId: string; isShared: boolean; sessionId: string | null; closedInSessionAt: Date | null }> = {},
+  overrides: Partial<{ userId: string; isShared: boolean; sessionId: string | null; closedInSessionAt: Date | null; isActive: boolean }> = {},
 ) => ({
   id: mockConversationId,
   userId: mockUserId,
@@ -510,7 +510,7 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
       expect(conversationRepository.softDeleteConversation).toHaveBeenCalledWith(mockAgentId, mockConversationId);
     });
 
-    it('does not weigh the guard at all for a conversation ALREADY closed out of its session — it holds no open slot to protect', async () => {
+    it('does not weigh the never-empty guard for a conversation ALREADY closed out of its session — it holds no open slot to protect — but STILL serializes under the session lock', async () => {
       vi.mocked(conversationRepository.getConversation).mockResolvedValue(
         mockConversationRow({ sessionId: 'ses_1', closedInSessionAt: new Date('2026-01-01') }),
       );
@@ -523,7 +523,14 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
       expect(response.status).toBe(200);
       expect(countOpenConversationsForSession).not.toHaveBeenCalled();
       expect(conversationRepository.softDeleteConversation).toHaveBeenCalledWith(mockAgentId, mockConversationId);
-      expect(withSessionListingLock).not.toHaveBeenCalled();
+      // A CLOSED conversation's delete is not exempt from the lock — only
+      // from the never-empty guard's count check. Without the lock, this
+      // delete could interleave with a concurrent reopen's own lock-held
+      // critical section and leave `isActive: false` with
+      // `closedInSessionAt: null` — "reopened" but invisible to every
+      // session listing (review finding — chatgpt-codex-connector on PR
+      // #2296, filed after the previous round's open-only guard).
+      expect(withSessionListingLock).toHaveBeenCalledWith('ses_1', expect.any(Function));
     });
 
     it('does not weigh the guard for a plain (non-session-bound) conversation', async () => {
@@ -538,6 +545,42 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
       expect(response.status).toBe(200);
       expect(countOpenConversationsForSession).not.toHaveBeenCalled();
       expect(withSessionListingLock).not.toHaveBeenCalled();
+    });
+
+    it('re-reads the row INSIDE the lock rather than trusting the pre-lock snapshot — a since-reopened conversation still trips the never-empty guard even though the outer read saw it closed', async () => {
+      // The pre-lock snapshot (read for ownership/audit purposes) sees the
+      // conversation closed; a concurrent reopen commits between that read
+      // and the lock being acquired, so the FRESH read taken inside the
+      // lock — the only one this route's decision actually uses — must see
+      // it open and weigh the guard, or a stale-snapshot bypass would let a
+      // since-reopened conversation slip past it.
+      vi.mocked(conversationRepository.getConversation)
+        .mockResolvedValueOnce(mockConversationRow({ sessionId: 'ses_1', closedInSessionAt: new Date('2026-01-01') }))
+        .mockResolvedValueOnce(mockConversationRow({ sessionId: 'ses_1', closedInSessionAt: null }));
+      vi.mocked(countOpenConversationsForSession).mockResolvedValue(1);
+
+      const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
+      const context = createContext(mockAgentId, mockConversationId);
+      const response = await DELETE(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(409);
+      expect(body.reason).toBe('last_conversation');
+      expect(conversationRepository.softDeleteConversation).not.toHaveBeenCalled();
+    });
+
+    it('is idempotent when a concurrent request already history-deleted the row before this one entered the lock', async () => {
+      vi.mocked(conversationRepository.getConversation)
+        .mockResolvedValueOnce(mockConversationRow({ sessionId: 'ses_1', closedInSessionAt: null }))
+        .mockResolvedValueOnce(mockConversationRow({ sessionId: 'ses_1', closedInSessionAt: null, isActive: false }));
+
+      const request = createRequest(mockAgentId, mockConversationId, 'DELETE');
+      const context = createContext(mockAgentId, mockConversationId);
+      const response = await DELETE(request, context);
+
+      expect(response.status).toBe(200);
+      expect(countOpenConversationsForSession).not.toHaveBeenCalled();
+      expect(conversationRepository.softDeleteConversation).not.toHaveBeenCalled();
     });
   });
 

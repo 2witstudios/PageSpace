@@ -231,15 +231,36 @@ export async function DELETE(
     // left with a live sandbox and zero reachable conversations is worse
     // than a plain 409 telling the user to close the pane (which offers to
     // end the session) or delete history from a different conversation
-    // first. The count-then-delete pair runs inside `withSessionListingLock`
-    // — the SAME per-session lock create/close/reopen already serialize
-    // under — so this can never race one of them into reading a stale count
-    // (review findings — chatgpt-codex-connector on PR #2296).
-    if (conversationRow?.sessionId && conversationRow.closedInSessionAt === null) {
+    // first.
+    //
+    // EVERY session-bound deletion takes the lock — not just open-listing
+    // ones — and re-reads the row's live state once inside it, rather than
+    // branching on `conversationRow`'s pre-lock snapshot. An already-CLOSED
+    // conversation still needs the lock: without it, this delete could
+    // interleave with a concurrent reopen's own lock-held critical section
+    // arbitrarily (they'd never even contend for the same lock), so a delete
+    // racing a reopen could commit `isActive: false` right as the reopen's
+    // stale-free `isActive` read passed, letting the reopen's UPDATE clear
+    // `closedInSessionAt` on a row that never got a listing slot back —
+    // "reopened successfully" but invisible to every session listing (review
+    // finding — chatgpt-codex-connector on PR #2296, filed after the
+    // previous round's open-only guard). Re-reading inside the lock also
+    // means a stale pre-lock snapshot can never smuggle a since-reopened
+    // conversation past the never-empty guard.
+    if (conversationRow?.sessionId) {
       const sessionId = conversationRow.sessionId;
       const outcome = await withSessionListingLock(sessionId, async () => {
-        const openCount = await countOpenConversationsForSession(sessionId);
-        if (openCount <= 1) return 'last_conversation' as const;
+        const fresh = await conversationRepository.getConversation(conversationId);
+        if (!fresh || fresh.sessionId !== sessionId || !fresh.isActive) {
+          // Already history-deleted by a concurrent request (or no longer
+          // bound to this session) — nothing left to guard or delete.
+          return 'already_deleted' as const;
+        }
+        if (fresh.closedInSessionAt === null) {
+          // Still open — occupies a listing slot, so the never-empty guard applies.
+          const openCount = await countOpenConversationsForSession(sessionId);
+          if (openCount <= 1) return 'last_conversation' as const;
+        }
         await conversationRepository.softDeleteConversation(agentId, conversationId);
         return 'deleted' as const;
       });
@@ -261,10 +282,11 @@ export async function DELETE(
           { status: 409 },
         );
       }
+      // 'already_deleted' falls through to the success response below —
+      // idempotent from the caller's point of view, since the end state
+      // (isActive: false) is exactly what a DELETE asks for.
     } else {
-      // Not session-bound (or already closed out of its session, so it
-      // holds no open slot to protect) — no lock needed, nothing to
-      // serialize against.
+      // Not session-bound at all — no listing to protect, no lock needed.
       await conversationRepository.softDeleteConversation(agentId, conversationId);
     }
 
