@@ -73,6 +73,69 @@ describe('useOpenPagePane', () => {
     expect(panesOf(grid()).map((p) => p.scope)).toEqual(before);
   });
 
+  it('does NOT replay a DIFFERENT conversation\'s already-completed call when the same pane switches to it (no remount)', () => {
+    // The pane-bar agent switcher rebinds a pane's conversationId IN PLACE —
+    // SessionChat/AssistantSessionChat are never keyed by conversationId, so
+    // this hook's refs must not treat conv-2's own history as "new" just
+    // because they were already seeded (by conv-1) before the switch.
+    store().ensureWorkspace('ses-1', { kind: 'chat', name: 'Thread', targetId: 'conv-1', agentPageId: 'agent-1' });
+    store().splitRight('ses-1', panesOf(grid())[0].id);
+
+    const { rerender } = renderHook(
+      ({ conversationId, messages }: { conversationId: string; messages: UIMessage[] }) =>
+        useOpenPagePane({ sessionId: 'ses-1', conversationId, messages }),
+      { initialProps: { conversationId: 'conv-1', messages: [msg('a1', 'assistant', [])] } },
+    );
+    // Seed conv-1 as already-history (matches the "history replay guard" test above).
+    rerender({
+      conversationId: 'conv-1',
+      messages: [
+        msg('a1', 'assistant', [
+          toolPart('tc1', 'output-available', { opened: true, pageId: 'page-1', title: 'Conv 1 Doc' }),
+        ]),
+      ],
+    });
+    const before = panesOf(grid()).map((p) => p.scope);
+
+    // Switch the SAME pane to conv-2, whose own last message already ends in
+    // a completed call — must be seeded as conv-2's history, not fired.
+    rerender({
+      conversationId: 'conv-2',
+      messages: [
+        msg('a2', 'assistant', [
+          toolPart('tc2', 'output-available', { opened: true, pageId: 'page-2', title: 'Conv 2 Doc' }),
+        ]),
+      ],
+    });
+
+    expect(panesOf(grid()).map((p) => p.scope)).toEqual(before);
+  });
+
+  it('still fires a genuinely NEW call after switching to a different conversation', () => {
+    store().ensureWorkspace('ses-1', { kind: 'chat', name: 'Thread', targetId: 'conv-1', agentPageId: 'agent-1' });
+    store().splitRight('ses-1', panesOf(grid())[0].id);
+
+    const { rerender } = renderHook(
+      ({ conversationId, messages }: { conversationId: string; messages: UIMessage[] }) =>
+        useOpenPagePane({ sessionId: 'ses-1', conversationId, messages }),
+      { initialProps: { conversationId: 'conv-1', messages: [msg('a1', 'assistant', [])] } },
+    );
+    // Switch to conv-2 with no completed call yet...
+    rerender({ conversationId: 'conv-2', messages: [msg('a2', 'assistant', [])] });
+    // ...then a NEW call streams in live for conv-2.
+    rerender({
+      conversationId: 'conv-2',
+      messages: [
+        msg('a2', 'assistant', [
+          toolPart('tc2', 'output-available', { opened: true, pageId: 'page-2', title: 'Conv 2 Doc' }),
+        ]),
+      ],
+    });
+
+    const pagePane = panesOf(grid()).find((p) => p.scope?.kind === 'page');
+    expect(pagePane?.scope?.targetId).toBe('page-2');
+  });
+
   it('never double-fires the same toolCallId across rerenders', () => {
     store().ensureWorkspace('ses-1', { kind: 'chat', name: 'Thread', targetId: 'conv-1', agentPageId: 'agent-1' });
     store().splitRight('ses-1', panesOf(grid())[0].id);

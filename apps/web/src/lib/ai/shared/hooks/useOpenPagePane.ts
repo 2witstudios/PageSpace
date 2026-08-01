@@ -43,18 +43,34 @@ export function useOpenPagePane({
   messages: UIMessage[];
 }) {
   const handledRef = useRef<Set<string>>(new Set());
-  // Whether we've ever inspected a REAL last-assistant-message yet. `false`
-  // on the very first sighting means every already-`output-available` call
-  // found there is HISTORY (loaded on mount, a remount, or a reopened
-  // conversation) rather than something that just streamed in — reacting to
-  // it would re-open/re-focus a pane the user may have since closed or
-  // repurposed, on every remount, forever. Those are marked handled without
-  // being acted on; only a call that becomes `output-available` on a LATER
-  // run (a genuinely new stream) is acted on.
+  // Whether we've ever inspected a REAL last-assistant-message yet FOR THIS
+  // CONVERSATION. `false` on the very first sighting means every already-
+  // `output-available` call found there is HISTORY (loaded on mount, a
+  // remount, a reopened conversation, or — see `seenConversationIdRef` below
+  // — a DIFFERENT conversation the pane bar just switched this same pane to)
+  // rather than something that just streamed in; reacting to it would
+  // re-open/re-focus a pane the user may have since closed or repurposed.
+  // Those are marked handled without being acted on; only a call that
+  // becomes `output-available` on a LATER run (a genuinely new stream) is
+  // acted on.
   const hasSeededRef = useRef(false);
+  // `SessionChat`/`AssistantSessionChat` are never keyed by conversationId
+  // (`AgentPanes`'s pane-bar agent switcher rebinds the SAME pane's scope to
+  // a different conversation in place — `handleSwitchAgent` → `assignPane`),
+  // so this hook's refs can outlive the conversation they were seeded for.
+  // Without this reset, switching a pane from conversation A to a FRESH
+  // mount-free conversation B whose own history already ends in a completed
+  // `open_page_pane` call would read B's history through A's now-stale
+  // `hasSeededRef === true` and wrongly treat it as new.
+  const seenConversationIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!sessionId) return;
+    if (seenConversationIdRef.current !== conversationId) {
+      seenConversationIdRef.current = conversationId;
+      handledRef.current = new Set();
+      hasSeededRef.current = false;
+    }
     const last = messages[messages.length - 1];
     if (!last || last.role !== 'assistant') return;
 
