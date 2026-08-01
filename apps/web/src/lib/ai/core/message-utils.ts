@@ -525,6 +525,7 @@ export async function saveMessageToDatabase({
   sourceAgentId,
   mentionNotify,
   status = 'complete',
+  dbClient = db,
 }: {
   messageId: string;
   pageId: string;
@@ -546,6 +547,14 @@ export async function saveMessageToDatabase({
    * See Server Stream Durability epic PR 2.
    */
   status?: 'complete' | 'interrupted';
+  /**
+   * Override the connection this write runs on — a caller that already
+   * opened a transaction (e.g. to hold a row lock across an active-
+   * conversation check and this insert, atomically) passes its `tx` here so
+   * the insert runs on the SAME connection/transaction rather than a second,
+   * unlocked one. Defaults to the plain module `db`.
+   */
+  dbClient?: typeof db;
 }) {
   try {
     let structuredContent = content;
@@ -582,7 +591,7 @@ export async function saveMessageToDatabase({
     // still pass the conversationId check and overwrite that assistant reply's content —
     // content-spoofing an AI response within a conversation the client already has access
     // to write to (ids aren't secret; they're visible in the conversation's own history).
-    const result = await db.insert(chatMessages)
+    const result = await dbClient.insert(chatMessages)
       .values({
         id: messageId,
         pageId,
@@ -700,6 +709,7 @@ export async function saveGlobalAssistantMessageToDatabase({
   toolResults,
   uiMessage,
   status = 'complete',
+  dbClient = db,
 }: {
   messageId: string;
   conversationId: string;
@@ -712,6 +722,8 @@ export async function saveGlobalAssistantMessageToDatabase({
   /** Terminal status for a formerly-'streaming' placeholder row. See saveMessageToDatabase's
    * param doc for the full rationale — same contract, mirrored for the global assistant table. */
   status?: 'complete' | 'interrupted';
+  /** See saveMessageToDatabase's own doc — same override, same purpose. */
+  dbClient?: typeof db;
 }) {
   try {
     let structuredContent = content;
@@ -732,7 +744,7 @@ export async function saveGlobalAssistantMessageToDatabase({
     // DID silently overwrite another conversation's content on a colliding id — the
     // `where` closes that too, plus the same same-conversation role-spoofing gap
     // (a 'user'-role save whose id collides with an existing 'assistant' row).
-    const result = await db.insert(messages)
+    const result = await dbClient.insert(messages)
       .values({
         id: messageId,
         conversationId,

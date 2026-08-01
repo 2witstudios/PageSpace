@@ -51,6 +51,7 @@ import { AgentIntegrationsPanel } from '@/components/ai/page-agents/AgentIntegra
 import { PageWebhooksDialog } from '@/components/shared/PageWebhooksDialog';
 import { useProviderSettings } from '@/lib/ai/shared/hooks/useProviderSettings';
 import { useConversations } from '@/lib/ai/shared/hooks/useConversations';
+import { useAgentConfig } from '@/lib/ai/shared/hooks/useAgentConfig';
 import { buildAgentSelectionUrl } from '@/lib/agents/agent-selection';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useAuth } from '@/hooks/useAuth';
@@ -68,7 +69,6 @@ import AgentPanes from './panes/AgentPanes';
 import { agentSessionsKey, isAgentSessionsKey, type SessionListEntry } from './panes/session-conversations';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import type { TreePage } from '@/hooks/usePageTree';
-import type { AgentConfig } from '@/lib/ai/shared/chat-types';
 
 export interface AgentPageViewProps {
   page: TreePage;
@@ -162,32 +162,16 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
     window.history.replaceState({}, '', url.toString());
   }, [searchParams]);
   const [webhooksOpen, setWebhooksOpen] = useState(false);
-  const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null);
+  // SWR-backed and keyed by `page.id` — shared with every pane showing this
+  // agent's Settings tab (see `useAgentConfig`'s own doc), not a private
+  // per-instance fetch.
+  const { config: agentConfig, setConfig: setAgentConfig, revalidate: revalidateAgentConfig } = useAgentConfig(page.id);
   const [isSettingsSaving, setIsSettingsSaving] = useState(false);
   const agentSettingsRef = useRef<PageAgentSettingsTabRef>(null);
 
   const isReadOnly = usePermissionsCheck(page.id, user?.id);
 
   const { agent, isLoading: agentLoading, error: agentError, retry: retryAgent } = useResolvedAgent(page.id);
-
-  // The Settings tab's data: PageAgentSettingsTab renders its loading state
-  // until `config` arrives, so this fetch is what makes Settings (and Save)
-  // work at all — the AiChatView effect this page's rewrite dropped, restored.
-  useEffect(() => {
-    const controller = new AbortController();
-    (async () => {
-      try {
-        const response = await fetchWithAuth(`/api/pages/${page.id}/agent-config`, {
-          signal: controller.signal,
-        });
-        if (response.ok) setAgentConfig(await response.json());
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        console.error('Failed to load agent config:', error);
-      }
-    })();
-    return () => controller.abort();
-  }, [page.id]);
 
   const {
     selectedProvider,
@@ -582,6 +566,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
             driveId={page.driveId}
             config={agentConfig}
             onConfigUpdate={setAgentConfig}
+            onConfigRevalidate={revalidateAgentConfig}
             selectedProvider={selectedProvider}
             selectedModel={selectedModel}
             onProviderChange={setSelectedProvider}

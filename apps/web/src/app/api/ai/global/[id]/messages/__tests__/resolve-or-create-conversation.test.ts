@@ -16,16 +16,29 @@ vi.mock('@pagespace/db/schema/conversations', () => ({
   },
 }));
 
-import { resolveOrCreateConversation, ConversationOwnershipError, ConversationBindingConflictError } from '../resolve-or-create-conversation';
+import {
+  resolveOrCreateConversation,
+  ConversationOwnershipError,
+  ConversationBindingConflictError,
+  ConversationHistoryDeletedError,
+} from '../resolve-or-create-conversation';
 
-const makeDb = (selectResult: object[], insertResult: object[] = []) => ({
-  select: vi.fn().mockReturnValue({
-    from: vi.fn().mockReturnValue({
-      where: vi.fn().mockReturnValue({
-        limit: vi.fn().mockResolvedValue(selectResult),
+// The real query chain is `.select().from().where().for('update').limit()` —
+// row-locked so a caller wrapping this in an explicit transaction can
+// serialize against a concurrent History-delete (see resolve-or-create-
+// conversation.ts's own doc on the `.for('update')` calls).
+const selectChain = (result: object[]) => ({
+  from: vi.fn().mockReturnValue({
+    where: vi.fn().mockReturnValue({
+      for: vi.fn().mockReturnValue({
+        limit: vi.fn().mockResolvedValue(result),
       }),
     }),
   }),
+});
+
+const makeDb = (selectResult: object[], insertResult: object[] = []) => ({
+  select: vi.fn().mockReturnValue(selectChain(selectResult)),
   insert: vi.fn().mockReturnValue({
     values: vi.fn().mockReturnValue({
       onConflictDoNothing: vi.fn().mockReturnValue({
@@ -56,13 +69,7 @@ describe('resolveOrCreateConversation', () => {
   it('given existing conversation owned by a different user, throws ConversationOwnershipError', async () => {
     const otherUserConv = { ...CONV, userId: 'user2' };
     const db = {
-      select: vi.fn().mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([otherUserConv]),
-          }),
-        }),
-      }),
+      select: vi.fn().mockReturnValue(selectChain([otherUserConv])),
       insert: vi.fn(),
     };
     await expect(
@@ -103,17 +110,9 @@ describe('resolveOrCreateConversation', () => {
     const db = {
       select: vi.fn()
         // First call: no existing row (triggers insert path)
-        .mockReturnValueOnce({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
-          }),
-        })
+        .mockReturnValueOnce(selectChain([]))
         // Second call: fallback select finds the winner
-        .mockReturnValueOnce({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([winner]) }),
-          }),
-        }),
+        .mockReturnValueOnce(selectChain([winner])),
       insert: vi.fn().mockReturnValue({
         values: vi.fn().mockReturnValue({
           onConflictDoNothing: vi.fn().mockReturnValue({
@@ -125,6 +124,33 @@ describe('resolveOrCreateConversation', () => {
     const result = await resolveOrCreateConversation('user1', 'conv1', db as never);
     expect(result).toEqual({ conversation: winner, isNew: true });
     expect(db.insert).toHaveBeenCalledTimes(1);
+  });
+
+  // The initial SELECT filters isActive: true, so a history-deleted row reads as "no
+  // existing row" and falls into this same insert-then-conflict path — the INSERT
+  // collides with the inactive row's id, onConflictDoNothing swallows it, and the
+  // fallback "who won the race" select has no isActive filter of its own. Without this
+  // guard it would silently hand back the STALE INACTIVE row mislabeled isNew: true,
+  // letting a caller resume sending into a conversation excluded from every session
+  // listing (review finding — chatgpt-codex-connector on PR #2296, the same class of
+  // bug fixed on the page-agent send route via an explicit isActive check).
+  it('given the conflict winner is a history-deleted (isActive: false) row, throws ConversationHistoryDeletedError', async () => {
+    const deletedWinner = { ...CONV, isActive: false };
+    const db = {
+      select: vi.fn()
+        .mockReturnValueOnce(selectChain([]))
+        .mockReturnValueOnce(selectChain([deletedWinner])),
+      insert: vi.fn().mockReturnValue({
+        values: vi.fn().mockReturnValue({
+          onConflictDoNothing: vi.fn().mockReturnValue({
+            returning: vi.fn().mockResolvedValue([]),
+          }),
+        }),
+      }),
+    };
+    await expect(
+      resolveOrCreateConversation('user1', 'conv1', db as never)
+    ).rejects.toThrow(ConversationHistoryDeletedError);
   });
 });
 

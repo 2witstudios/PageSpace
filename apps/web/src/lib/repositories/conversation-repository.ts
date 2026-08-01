@@ -374,7 +374,39 @@ export const conversationRepository = {
     // active-message precondition the route checks, stranding the row in
     // the inconsistent state this pairing exists to eliminate (review
     // finding — chatgpt-codex-connector on PR #2296).
+    //
+    // The CONVERSATIONS row first, THEN its messages — not the other order.
+    // The page-agent chat route's own atomic active-conversation re-check
+    // (agent-sessions-runtime's sibling, apps/web/src/app/api/ai/chat/
+    // route.ts) takes `SELECT ... FOR UPDATE` on THIS conversations row
+    // before persisting a message. If this transaction touched
+    // `chatMessages` first, that lock stays free for the whole message
+    // sweep — a concurrent send can acquire it, read `isActive: true`
+    // (still true, since this transaction hasn't reached the conversations
+    // UPDATE yet), insert a new active message, and commit, ALL before this
+    // transaction finally tombstones the conversation a moment later. The
+    // new message then survives as an active row under a now-inactive
+    // conversation — exactly the same class of bug the FOR UPDATE guard
+    // exists to prevent, just reachable through this transaction's own
+    // internal ordering rather than the read-then-write gap that guard
+    // already closes (review finding — chatgpt-codex-connector on PR
+    // #2299). Acquiring the conversations lock FIRST here means a
+    // concurrent send's own FOR UPDATE blocks for this transaction's WHOLE
+    // duration, including the message sweep — there is no window left.
     await db.transaction(async (tx) => {
+      await tx
+        .update(conversations)
+        .set({ isActive: false })
+        .where(eq(conversations.id, conversationId));
+      // Mirrors `globalConversationRepository.softDeleteConversation`'s
+      // pattern, and matches `conversations.isActive`'s own doc comment
+      // ("history soft-delete"). Every reader that gates on
+      // `conversations.isActive` (agent-sessions-runtime.ts's session
+      // listings/caps, the v1/MCP conversations API, the compliance
+      // retention purge) previously kept treating a page conversation
+      // deleted from History as live forever — including, most concretely,
+      // letting the agents console's reopen affordance resurrect one with
+      // no messages left.
       await tx
         .update(chatMessages)
         .set({ isActive: false })
@@ -382,19 +414,6 @@ export const conversationRepository = {
           eq(chatMessages.pageId, agentId),
           eq(chatMessages.conversationId, conversationId)
         ));
-      // The canonical row itself, not just its messages — mirrors
-      // `globalConversationRepository.softDeleteConversation`'s pattern, and
-      // matches `conversations.isActive`'s own doc comment ("history soft-
-      // delete"). Every reader that gates on `conversations.isActive`
-      // (agent-sessions-runtime.ts's session listings/caps, the v1/MCP
-      // conversations API, the compliance retention purge) previously kept
-      // treating a page conversation deleted from History as live forever —
-      // including, most concretely, letting the agents console's reopen
-      // affordance resurrect one with no messages left.
-      await tx
-        .update(conversations)
-        .set({ isActive: false })
-        .where(eq(conversations.id, conversationId));
     });
     // Whole conversation cleared — any summary is stale; the tombstone also
     // guards against a first compaction that may still be in flight.
