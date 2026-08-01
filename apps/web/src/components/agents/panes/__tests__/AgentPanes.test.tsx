@@ -1375,6 +1375,55 @@ describe('AgentPanes', () => {
       expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-already-open');
     });
 
+    // review finding — chatgpt-codex-connector on PR #2299 (round 16): the
+    // round-15 alreadyOpen early-return skipped the "am I the last settler,
+    // do I need to finish a SIBLING's deferred cleanup" check entirely —
+    // an alreadyOpen no-op response for the LAST pending reopen left an
+    // earlier request's genuine (but deferred) transition orphaned forever.
+    it("given the last-to-settle reopen reports alreadyOpen, still drains an earlier sibling's deferred cleanup", async () => {
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url === '/api/ai/page-agents/agent-1/conversations') {
+          return conversationsFixture([
+            { id: 'conv-shared-16', title: 'Shared', sessionId: 'ses-1' },
+            { id: 'conv-other-16', title: 'Other', sessionId: null },
+          ]);
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      let resolveOlder!: (value: unknown) => void;
+      let resolveNewer!: (value: unknown) => void;
+      mockPost
+        .mockReturnValueOnce(new Promise((resolve) => (resolveOlder = resolve)))
+        .mockReturnValueOnce(new Promise((resolve) => (resolveNewer = resolve)));
+      mockDel.mockResolvedValue(undefined);
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('tab', { name: /history/i }));
+      await user.click(await screen.findByRole('button', { name: 'select-conv-shared-16' })); // older, pending
+      await user.click(await screen.findByRole('button', { name: 'select-conv-shared-16' })); // newer, pending, supersedes older
+      // A third pick (unbound — no reopen call of its own) supersedes the
+      // newer reopen too.
+      await user.click(await screen.findByRole('button', { name: 'select-conv-other-16' }));
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-other-16'));
+
+      // Older resolves first, genuinely transitioning the listing —
+      // deferred, since the newer reopen is still pending.
+      resolveOlder({ ok: true, alreadyOpen: false });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-shared-16');
+
+      // The newer (LAST to settle) reports alreadyOpen — its OWN outcome is
+      // a no-op, but it must still drain the older's deferred cleanup.
+      resolveNewer({ ok: true, alreadyOpen: true });
+      await waitFor(() =>
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-shared-16'),
+      );
+    });
+
     // review finding — chatgpt-codex-connector on PR #2299 (round 8): the
     // "is anyone showing this?" rollback check above still misses the case
     // where the newer reopen for the SAME conversation hasn't LANDED yet

@@ -893,7 +893,23 @@ export default function AgentPanes({
           // opened it, so rolling it back would close a listing still in
           // use for a no-op this request didn't cause (review finding —
           // chatgpt-codex-connector on PR #2299, round 15).
-          if (reopenResult.alreadyOpen || isShownSomewhere()) return false;
+          const shownSomewhere = isShownSomewhere();
+          // The LAST settler for this conversationId is responsible for
+          // finishing a SIBLING's deferred cleanup regardless of THIS
+          // request's own outcome — an `alreadyOpen` no-op response still
+          // needs to drain it if nothing else is left pending, or an
+          // earlier request that genuinely transitioned the listing (and
+          // deferred because this one was still in flight) leaks an
+          // invisible open listing forever, since nothing else will ever
+          // revisit it (review finding — chatgpt-codex-connector on PR
+          // #2299, round 16).
+          const hadDeferredSibling = remaining <= 0 && deferredReopenSuccess.current.delete(conversation.id);
+          if (shownSomewhere) return false;
+          if (hadDeferredSibling) {
+            void cleanupOrphanedConversation(conversation.id);
+            return false;
+          }
+          if (reopenResult.alreadyOpen) return false;
           if (remaining > 0) {
             // Something else is still reopening this same conversationId —
             // premature to clean up (that request might land it). Defer:
