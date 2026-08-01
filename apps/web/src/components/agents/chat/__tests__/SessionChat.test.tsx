@@ -10,6 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { AgentInfo } from '@/types/agent';
+import { useAskUserAnswerContext } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
 
 const chatState = vi.hoisted(() => ({
   current: {} as Record<string, unknown>,
@@ -20,7 +21,10 @@ vi.mock('../useAgentSessionChat', () => ({
 }));
 
 vi.mock('@/components/ai/shared/chat/ChatMessagesArea', () => ({
-  ChatMessagesArea: () => <div data-testid="chat-messages-area" />,
+  ChatMessagesArea: () => {
+    const ctx = useAskUserAnswerContext();
+    return <div data-testid="chat-messages-area" data-ask-user-ctx={ctx ? 'present' : 'absent'} />;
+  },
 }));
 
 vi.mock('@/components/layout/right-sidebar/ai-assistant/SidebarChatTab', () => ({
@@ -167,6 +171,22 @@ describe('SessionChat', () => {
     const input = screen.getByTestId('chat-input') as HTMLInputElement;
     expect(input.disabled).toBe(true);
     expect(input.placeholder).toBe('View only');
+  });
+
+  it('provides ask_user answering context to the message renderer when not read-only', () => {
+    render(<SessionChat agent={agentFixture()} conversationId="conv-1" context="page" />);
+    expect(screen.getByTestId('chat-messages-area')).toHaveAttribute('data-ask-user-ctx', 'present');
+  });
+
+  // The bug this covers (Codex P2, PR #2303): the provider ignored `isReadOnly`, so a
+  // viewer without edit permission could still submit ask_user answers — enabling
+  // options/Submit that would 403 (or actually resume a global-assistant pane) despite
+  // the surface showing "View only".
+  it('withholds ask_user answering context from the message renderer in read-only mode', () => {
+    render(
+      <SessionChat agent={agentFixture()} conversationId="conv-1" context="page" isReadOnly />,
+    );
+    expect(screen.getByTestId('chat-messages-area')).toHaveAttribute('data-ask-user-ctx', 'absent');
   });
 
   it('shows the error banner when an error cause is present', () => {

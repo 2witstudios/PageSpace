@@ -129,7 +129,10 @@ export function SessionChatView({
     chat.isMessagesLoading && chat.messages.length === 0 && chat.remoteStreams.length === 0;
 
   return (
-    <AskUserAnswerProvider value={chat.askUserAnswering}>
+    // isReadOnly viewers get no answer plumbing at all — same as rendering
+    // outside a chat surface entirely — so AskUserQuestionCard's options and
+    // Submit stay disabled instead of letting a viewer attempt a 403'd resume.
+    <AskUserAnswerProvider value={isReadOnly ? null : chat.askUserAnswering}>
     <div
       data-testid="session-chat"
       className="@container flex h-full min-w-0 min-h-0 flex-col bg-background"
