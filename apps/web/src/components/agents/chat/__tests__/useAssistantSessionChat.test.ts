@@ -55,8 +55,19 @@ const loaders = vi.hoisted(() => ({
 }));
 vi.mock('@/hooks/conversationMessagesLoaders', () => loaders);
 
+const activeStream = vi.hoisted(() => ({
+  remoteStreams: [] as Array<{
+    messageId: string;
+    pageId: string;
+    conversationId: string;
+    triggeredBy: { userId: string; displayName: string };
+    parts: unknown[];
+    isOwn: boolean;
+    startedAt?: string;
+  }>,
+}));
 vi.mock('@/hooks/useActiveStream', () => ({
-  useActiveStream: () => ({ streams: [] }),
+  useActiveStream: () => ({ streams: activeStream.remoteStreams }),
   useConversationActiveStream: () => undefined,
 }));
 
@@ -114,6 +125,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   chat.capturedConfigs.length = 0;
   route.pathname = '/dashboard/agents';
+  activeStream.remoteStreams = [];
   useConversationMessagesStore.setState({ byConversationId: {} });
   useDriveStore.setState({ drives: [driveFixture('drive-1', 'Engineering')] });
   mockFetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({}) });
@@ -211,5 +223,39 @@ describe('useAssistantSessionChat — ask_user answering', () => {
     const [callArgs] = chat.instance.addToolResult.mock.calls[0] as [{ toolCallId: string; tool: string }];
     expect(callArgs.toolCallId).toBe('tc-1');
     expect(callArgs.tool).toBe('ask_user');
+  });
+
+  // Codex review, PR #2303 (P1): displayIsStreaming is own-stream-only (what Stop is
+  // scoped to). A REMOTE collaborator's stream leaves it false while renderedMessages
+  // filters their in-flight message out, so a stale ask_user prompt from before their
+  // run started would otherwise stay answerable — submitting it invokes addToolResult,
+  // whose server-side takeover aborts the collaborator's still-running generation.
+  it('given a remote collaborator is streaming in this conversation, does not mark a stale ask_user answerable', async () => {
+    const { conversationId } = ids('ask-user-remote-stream');
+    const generation = conversationMessagesActions.startLoad(conversationId);
+    conversationMessagesActions.applyLoad(conversationId, generation, [
+      {
+        id: 'm-ask-1',
+        role: 'assistant',
+        parts: [
+          { type: 'tool-ask_user', toolCallId: 'tc-1', state: 'input-available', input: { questions: [] } },
+        ],
+      } as unknown as UIMessage,
+    ]);
+    activeStream.remoteStreams = [
+      {
+        messageId: 'm-remote-1',
+        pageId: 'global',
+        conversationId,
+        triggeredBy: { userId: 'other-user', displayName: 'Other User' },
+        parts: [],
+        isOwn: false,
+        startedAt: '2026-01-01T00:00:00.000Z',
+      },
+    ];
+
+    const { result } = renderHook(() => useAssistantSessionChat({ conversationId, driveId: null }));
+
+    expect(result.current.askUserAnswering.answerableToolCallIds.has('tc-1')).toBe(false);
   });
 });

@@ -207,10 +207,18 @@ export function useAgentSessionChat({
   // decided by whether the ask_user part sits on the conversation's LAST message, and
   // remote edits/deletes/messages update the store, not useChat's local array.
   // isConversationBusy replaces status==='ready' — see selectAnswerableAskUserToolCallIds.
+  //
+  // Deliberately NOT displayIsStreaming (own-stream-only, what Stop is scoped to): a
+  // REMOTE collaborator's stream leaves displayIsStreaming false while renderedMessages
+  // filters out their in-flight message, so the conversation's last SETTLED message can
+  // still be a stale ask_user prompt from before their run started. Submitting it would
+  // invoke addToolResult, whose server-side per-conversation takeover aborts their
+  // generation and resumes the stale prompt (Codex review, PR #2303).
+  const isConversationBusyForAskUser = displayIsStreaming || remoteStreams.some((s) => !s.isOwn);
   const askUserAnswering = useAnswerAskUser({
     conversationId,
     renderedMessages,
-    isConversationBusy: displayIsStreaming,
+    isConversationBusy: isConversationBusyForAskUser,
     setMessages,
     addToolResult,
     wrapSend,
