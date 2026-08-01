@@ -24,6 +24,7 @@
  * `agent-sessions-runtime.ts` only wires the production deps.
  */
 
+import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-sessions/plan-spawn-session';
 import {
   claimConversationInSessionWith,
   type ClaimConversationInSessionDeps,
@@ -114,6 +115,28 @@ export async function createConversationInSessionWith(
     title?: string | null;
   },
 ): Promise<void> {
+  // Cheap, early exits before inserting ANYTHING — claim's own gates (below)
+  // remain the ENFORCED backstop for the narrow race window between here and
+  // the atomic claim; these just avoid leaving an ORPHANED SESSIONLESS ROW
+  // behind for the common, non-racy case where the outcome is already
+  // knowable up front. Creation and binding are decoupled on purpose (a
+  // sessionless conversation is an ordinary state), but a doomed mint must
+  // not still leave a blank conversation cluttering the caller's history on
+  // every retry (review finding — chatgpt-codex-connector: P1).
+  const sessionRow = await deps.findSession(sessionId);
+  if (sessionRow === null) throw new ConversationUnavailableError();
+  if (sessionRow.endedAt !== null) throw new ConversationUnavailableError();
+  if ((await deps.countActiveConversations(sessionId)) >= MAX_SESSION_CONVERSATIONS) {
+    // Exempt an idempotent retry of a conversation ALREADY bound HERE — a
+    // retry mints nothing new, so the cap must not stand between a caller
+    // and its own already-created, already-bound conversation. Mirrors
+    // claim's own `already_in_session` idempotency, re-checked properly
+    // (and enforced) by the claim call below regardless of this pre-check.
+    const existing = await deps.findConversation(conversationId);
+    const isRetryInThisSession = existing !== null && existing.sessionId === sessionId;
+    if (!isRetryInThisSession) throw new SessionFullError();
+  }
+
   if (agentPageId === null) {
     try {
       await deps.createGlobalConversation({ conversationId, userId, title });
@@ -124,14 +147,12 @@ export async function createConversationInSessionWith(
     }
   } else {
     // Cheap, early cross-drive exit before inserting a page conversation for
-    // a mismatched agent. Claim's own gate (below) is the ENFORCED check;
-    // this just avoids the insert in the common case where the mismatch is
-    // already knowable up front. Fail-closed on unresolved facts.
-    const [agentDriveId, sessionRow] = await Promise.all([
-      deps.findAgentDriveId(agentPageId),
-      deps.findSession(sessionId),
-    ]);
-    if (agentDriveId === null || sessionRow === null) throw new ConversationUnavailableError();
+    // a mismatched agent — reuses `sessionRow` fetched above. Claim's own
+    // gate (below) is the ENFORCED check; this just avoids the insert in the
+    // common case where the mismatch is already knowable up front. Fail-
+    // closed on unresolved facts.
+    const agentDriveId = await deps.findAgentDriveId(agentPageId);
+    if (agentDriveId === null) throw new ConversationUnavailableError();
     if (sessionRow.driveId !== null && sessionRow.driveId !== agentDriveId) {
       throw new AgentNotInSessionDriveError();
     }

@@ -250,33 +250,36 @@ describe('the cross-drive gate (one binding path, review #43)', () => {
   });
 });
 
-describe('the per-session conversation cap (issue #2262 finding 2 — now enforced entirely by claim)', () => {
+describe('the per-session conversation cap (issue #2262 finding 2, plus the P1 orphan-row finding on this PR)', () => {
   // This module is the ONE write path both HTTP routes
   // (agent-sessions/[sessionId]/conversations, page-agents/[agentId]/conversations)
   // and the session-tools spawn dep (createWorkerSession) funnel through, so a
-  // cap enforced by the claim step it composes covers every conversation-
-  // minting entry point at once — including the ones that never call the
-  // pure tool-side planner.
+  // cap enforced here bounds every conversation-minting entry point at once —
+  // including the ones with no pure-planner preflight of their own.
+  //
+  // Checked BEFORE either creator runs (review finding — chatgpt-codex-
+  // connector, P1): letting the plain row get created regardless, and only
+  // refusing the BINDING afterward, left a blank, sessionless conversation
+  // behind in the caller's history on every ordinary cap-exceeded mint
+  // attempt — creation and binding are decoupled by design, but a doomed
+  // mint must not still leave visible clutter. The atomic claim call remains
+  // the ENFORCED backstop for the narrow race window between this pre-check
+  // and the actual write; this pre-check only short-circuits the common,
+  // non-racy case.
 
-  it('the plain conversation row still gets created even when the session is at its ceiling — only the BINDING is refused', async () => {
-    // Intentional behavior change: creation and binding are now decoupled
-    // steps, so a full session no longer prevents the row from existing at
-    // all — it just stays sessionless, same as any other cap refusal would
-    // leave it. No cleanup is needed: a sessionless conversation is an
-    // ordinary, harmless state, not an orphan.
+  it('refuses a NEW page conversation BEFORE creating anything when the session is already at its ceiling', async () => {
     deps.countActiveConversations.mockResolvedValue(MAX_SESSION_CONVERSATIONS);
     await expect(run()).rejects.toThrow(SessionFullError);
-    expect(deps.createPageConversation).toHaveBeenCalled();
+    expect(deps.createPageConversation).not.toHaveBeenCalled();
     expect(deps.claimConversation).not.toHaveBeenCalled();
   });
 
-  it('same for the global arm — the resolver still runs; only the claim is refused', async () => {
+  it('refuses a NEW global conversation BEFORE creating anything when the session is already at its ceiling', async () => {
     deps.countActiveConversations.mockResolvedValue(MAX_SESSION_CONVERSATIONS);
-    deps.findConversation.mockResolvedValue(FRESH_UNBOUND_GLOBAL_ROW);
     await expect(
       createConversationInSessionWith(deps as CreateConversationInSessionDeps, input({ agentPageId: null })),
     ).rejects.toThrow(SessionFullError);
-    expect(deps.createGlobalConversation).toHaveBeenCalled();
+    expect(deps.createGlobalConversation).not.toHaveBeenCalled();
   });
 
   it('allows creation with one conversation slot left', async () => {
@@ -285,25 +288,41 @@ describe('the per-session conversation cap (issue #2262 finding 2 — now enforc
     expect(deps.createPageConversation).toHaveBeenCalled();
   });
 
-  it('lets an IDEMPOTENT RETRY of an existing conversation in THIS session through, even at the ceiling — claim never checks the cap for one', async () => {
+  it('lets an IDEMPOTENT RETRY of an existing conversation in THIS session through, even at the ceiling', async () => {
     // A retry mints nothing new, so the cap must not stand between a caller
-    // and its own already-created, already-bound conversation. Claim's own
-    // `already_in_session` branch returns before its cap check runs at all.
+    // and its own already-created, already-bound conversation — the
+    // pre-check's own retry exemption covers this (before the insert is
+    // even attempted a second time), and claim's own `already_in_session`
+    // is the second, independent guarantee of the same idempotency.
     deps.countActiveConversations.mockResolvedValue(MAX_SESSION_CONVERSATIONS);
     deps.createPageConversation.mockResolvedValue('exists');
     deps.findConversation.mockResolvedValue({ ...FRESH_UNBOUND_PAGE_ROW, sessionId: 'ses-1' });
     await expect(run()).resolves.toBeUndefined();
-    expect(deps.countActiveConversations).not.toHaveBeenCalled();
   });
 
-  it('refuses an id bound to a DIFFERENT session regardless of the cap — that row was never available here, capacity or not', async () => {
-    // Claim's "any other session" gate fires before its cap check ever runs,
-    // so this is `ConversationUnavailableError`, not `SessionFullError` — the
-    // cap is moot when the row was refused for a more fundamental reason.
+  it('refuses an id bound to a DIFFERENT session at the ceiling with SessionFullError — the pre-check cannot yet tell that apart from "no room", and claim never even runs to give the more specific answer', async () => {
+    // Matches the pre-collapse behavior exactly: the retry-exemption check
+    // only recognizes a row already bound to THIS session as safe to let
+    // through the cap; anything else (including a different session's row)
+    // is indistinguishable from "genuinely no room" at this pre-check layer.
     deps.countActiveConversations.mockResolvedValue(MAX_SESSION_CONVERSATIONS);
     deps.createPageConversation.mockResolvedValue('exists');
     deps.findConversation.mockResolvedValue({ ...FRESH_UNBOUND_PAGE_ROW, sessionId: 'ses-other' });
-    await expect(run()).rejects.toThrow(ConversationUnavailableError);
+    await expect(run()).rejects.toThrow(SessionFullError);
     expect(deps.claimConversation).not.toHaveBeenCalled();
+  });
+
+  it('fails CLOSED when the session cannot be resolved, before weighing the cap at all', async () => {
+    deps.findSession.mockResolvedValue(null);
+    await expect(run()).rejects.toThrow(ConversationUnavailableError);
+    expect(deps.countActiveConversations).not.toHaveBeenCalled();
+    expect(deps.createPageConversation).not.toHaveBeenCalled();
+  });
+
+  it('refuses an ENDED session before weighing the cap or creating anything', async () => {
+    deps.findSession.mockResolvedValue({ driveId: 'drive-1', endedAt: new Date('2026-01-01') });
+    await expect(run()).rejects.toThrow(ConversationUnavailableError);
+    expect(deps.countActiveConversations).not.toHaveBeenCalled();
+    expect(deps.createPageConversation).not.toHaveBeenCalled();
   });
 });

@@ -19,7 +19,8 @@
  */
 
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, canPrincipalViewPage } from '@/lib/auth';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkSessionAccess, claimConversationInSession } from '@/lib/agent-sessions/agent-sessions-runtime';
@@ -40,6 +41,33 @@ export async function POST(request: Request, context: RouteContext) {
   const access = await checkSessionAccess(auth.userId, sessionId);
   if (!access.allowed) {
     return sessionNotFoundOrDenied(request, auth.userId, sessionId, access.reason, ROUTE);
+  }
+
+  // A `type: 'page'` row's agent-view permission can have been revoked since
+  // the conversation was created — the claim primitive only checks agent
+  // EXISTENCE and drive match (its pure DB-fact scope deliberately excludes
+  // auth, same as create/reopen/close never take a permission dependency
+  // either). `firstThing: 'claim'` on `POST /api/agent-sessions` already
+  // enforces this in its own route-level preflight; mirror it here so THIS
+  // route can't permanently bind a conversation the caller can no longer
+  // view (review finding — chatgpt-codex-connector). Ownership/state
+  // mismatches are still the claim call's own job below — this only ever
+  // adds a 403 on TOP of what claim would otherwise allow, never replaces
+  // its checks.
+  const row = await conversationRepository.getConversation(conversationId);
+  if (row && row.userId === auth.userId && row.isActive && row.type === 'page' && row.contextId) {
+    const canView = await canPrincipalViewPage(auth, row.contextId);
+    if (!canView) {
+      auditRequest(request, {
+        eventType: 'authz.access.denied',
+        userId: auth.userId,
+        resourceType: 'page_agent_conversation',
+        resourceId: row.contextId,
+        details: { reason: 'no_view_permission', method: 'POST', route: ROUTE },
+        riskScore: 0.5,
+      });
+      return NextResponse.json({ error: 'Insufficient permissions to use this agent' }, { status: 403 });
+    }
   }
 
   let outcome: Awaited<ReturnType<typeof claimConversationInSession>>;

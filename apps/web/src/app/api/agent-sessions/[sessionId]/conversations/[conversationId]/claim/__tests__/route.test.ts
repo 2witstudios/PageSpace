@@ -10,17 +10,29 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockAuthenticateRequest, mockAuditRequest, mockCheckSessionAccess, mockClaimConversationInSession } =
-  vi.hoisted(() => ({
-    mockAuthenticateRequest: vi.fn(),
-    mockAuditRequest: vi.fn(),
-    mockCheckSessionAccess: vi.fn(),
-    mockClaimConversationInSession: vi.fn(),
-  }));
+const {
+  mockAuthenticateRequest,
+  mockAuditRequest,
+  mockCheckSessionAccess,
+  mockClaimConversationInSession,
+  mockGetConversation,
+  mockCanPrincipalViewPage,
+} = vi.hoisted(() => ({
+  mockAuthenticateRequest: vi.fn(),
+  mockAuditRequest: vi.fn(),
+  mockCheckSessionAccess: vi.fn(),
+  mockClaimConversationInSession: vi.fn(),
+  mockGetConversation: vi.fn(),
+  mockCanPrincipalViewPage: vi.fn(),
+}));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: (...args: unknown[]) => mockAuthenticateRequest(...args),
   isAuthError: (result: unknown) => result != null && typeof result === 'object' && 'error' in result,
+  canPrincipalViewPage: (...args: unknown[]) => mockCanPrincipalViewPage(...args),
+}));
+vi.mock('@/lib/repositories/conversation-repository', () => ({
+  conversationRepository: { getConversation: (...args: unknown[]) => mockGetConversation(...args) },
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: (...args: unknown[]) => mockAuditRequest(...args),
@@ -53,6 +65,10 @@ beforeEach(() => {
   mockAuthenticateRequest.mockResolvedValue(AUTH_USER);
   mockCheckSessionAccess.mockResolvedValue({ allowed: true });
   mockClaimConversationInSession.mockResolvedValue('claimed');
+  // No row (or a non-page row) by default — the permission preflight is a
+  // no-op unless a test explicitly opts a `type: 'page'` row in.
+  mockGetConversation.mockResolvedValue(null);
+  mockCanPrincipalViewPage.mockResolvedValue(true);
 });
 
 describe('POST /api/agent-sessions/[sessionId]/conversations/[conversationId]/claim', () => {
@@ -69,6 +85,66 @@ describe('POST /api/agent-sessions/[sessionId]/conversations/[conversationId]/cl
       expect.anything(),
       expect.objectContaining({ eventType: 'data.write', details: expect.objectContaining({ op: 'claim_conversation' }) }),
     );
+  });
+
+  it("403s + audits when the caller can no longer view a page conversation's agent — owning the conversation is not permission to use the agent (review finding — chatgpt-codex-connector)", async () => {
+    mockGetConversation.mockResolvedValue({
+      userId: AUTH_USER.userId,
+      type: 'page',
+      contextId: 'agent-1',
+      sessionId: null,
+      isActive: true,
+    });
+    mockCanPrincipalViewPage.mockResolvedValue(false);
+    const response = await post();
+    expect(response.status).toBe(403);
+    expect(mockClaimConversationInSession).not.toHaveBeenCalled();
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'authz.access.denied', resourceId: 'agent-1' }),
+    );
+  });
+
+  it('claims a page conversation when the caller can still view its agent', async () => {
+    mockGetConversation.mockResolvedValue({
+      userId: AUTH_USER.userId,
+      type: 'page',
+      contextId: 'agent-1',
+      sessionId: null,
+      isActive: true,
+    });
+    mockCanPrincipalViewPage.mockResolvedValue(true);
+    const response = await post();
+    expect(response.status).toBe(200);
+    expect(mockCanPrincipalViewPage).toHaveBeenCalledWith(AUTH_USER, 'agent-1');
+    expect(mockClaimConversationInSession).toHaveBeenCalled();
+  });
+
+  it('skips the page-permission check entirely for a global conversation — no agent to view', async () => {
+    mockGetConversation.mockResolvedValue({
+      userId: AUTH_USER.userId,
+      type: 'global',
+      contextId: null,
+      sessionId: null,
+      isActive: true,
+    });
+    const response = await post();
+    expect(response.status).toBe(200);
+    expect(mockCanPrincipalViewPage).not.toHaveBeenCalled();
+  });
+
+  it("skips the page-permission check for a conversation the caller doesn't own — the claim call's own H1 gate refuses it instead, not a permission 403", async () => {
+    mockGetConversation.mockResolvedValue({
+      userId: 'someone-else',
+      type: 'page',
+      contextId: 'agent-1',
+      sessionId: null,
+      isActive: true,
+    });
+    mockClaimConversationInSession.mockResolvedValue('not_found');
+    const response = await post();
+    expect(response.status).toBe(404);
+    expect(mockCanPrincipalViewPage).not.toHaveBeenCalled();
   });
 
   it('an idempotent re-claim (already_in_session) still answers 200, with no fresh data.write audit', async () => {

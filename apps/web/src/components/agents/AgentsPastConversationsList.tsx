@@ -139,21 +139,6 @@ export default function AgentsPastConversationsList({ driveId }: { driveId?: str
       case 'pane':
         selectConversation({ sessionId: target.sessionId, conversationId: target.conversationId, agentId: target.agentId });
         return;
-      case 'page':
-        router.push(
-          `/dashboard/${target.driveId}/${target.pageId}?conversationId=${encodeURIComponent(target.conversationId)}${
-            target.sessionId ? `&sessionId=${encodeURIComponent(target.sessionId)}` : ''
-          }`,
-        );
-        return;
-      case 'global':
-        void loadConversation(target.conversationId);
-        router.push(
-          target.driveId
-            ? `/dashboard/${target.driveId}?c=${encodeURIComponent(target.conversationId)}`
-            : `/dashboard?c=${encodeURIComponent(target.conversationId)}`,
-        );
-        return;
       case 'claimable': {
         if (claimingId) return;
         setClaimingId(target.conversationId);

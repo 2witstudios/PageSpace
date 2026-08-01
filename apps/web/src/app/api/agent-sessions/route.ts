@@ -58,6 +58,33 @@ function nextUniqueSessionName(base: string, existingNames: readonly string[]): 
   return `${base} ${index}`;
 }
 
+/**
+ * The `canPrincipalViewPage` gate every agent-permission check in this route
+ * shares — same denial shape, same audit payload, whether the agent came
+ * from the ordinary mint path's `agentPageId` or a claim's own conversation
+ * row. Factored out because this exact check→audit→403 sequence appeared
+ * verbatim at two call sites in this file (review finding — reuse pass).
+ * Returns the ready 403 response on denial, or `null` when the caller may
+ * proceed.
+ */
+async function denyIfCannotViewAgent(
+  request: Request,
+  auth: Parameters<typeof canPrincipalViewPage>[0],
+  agentPageId: string,
+): Promise<NextResponse | null> {
+  const canView = await canPrincipalViewPage(auth, agentPageId);
+  if (canView) return null;
+  auditRequest(request, {
+    eventType: 'authz.access.denied',
+    userId: auth.userId,
+    resourceType: 'page_agent_conversation',
+    resourceId: agentPageId,
+    details: { reason: 'no_view_permission', method: 'POST', route: 'agent-sessions' },
+    riskScore: 0.5,
+  });
+  return NextResponse.json({ error: 'Insufficient permissions to use this agent' }, { status: 403 });
+}
+
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -267,21 +294,8 @@ export async function POST(request: Request) {
         );
       }
       driveId = agent.driveId;
-      const canView = await canPrincipalViewPage(auth, row.contextId);
-      if (!canView) {
-        auditRequest(request, {
-          eventType: 'authz.access.denied',
-          userId: auth.userId,
-          resourceType: 'page_agent_conversation',
-          resourceId: row.contextId,
-          details: { reason: 'no_view_permission', method: 'POST', route: 'agent-sessions' },
-          riskScore: 0.5,
-        });
-        return NextResponse.json(
-          { error: 'Insufficient permissions to use this agent' },
-          { status: 403 },
-        );
-      }
+      const denied = await denyIfCannotViewAgent(request, auth, row.contextId);
+      if (denied) return denied;
       agentTitle = agent.title;
     } else if (row.type === 'global') {
       claimIsGlobal = true;
@@ -312,21 +326,8 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     }
-    const canView = await canPrincipalViewPage(auth, agentPageId);
-    if (!canView) {
-      auditRequest(request, {
-        eventType: 'authz.access.denied',
-        userId: auth.userId,
-        resourceType: 'page_agent_conversation',
-        resourceId: agentPageId,
-        details: { reason: 'no_view_permission', method: 'POST', route: 'agent-sessions' },
-        riskScore: 0.5,
-      });
-      return NextResponse.json(
-        { error: 'Insufficient permissions to use this agent' },
-        { status: 403 },
-      );
-    }
+    const denied = await denyIfCannotViewAgent(request, auth, agentPageId);
+    if (denied) return denied;
     agentTitle = agent.title;
   }
 
@@ -376,7 +377,11 @@ export async function POST(request: Request) {
     const baseLabel = wantsShellFirst
       ? 'Shell'
       : wantsClaim
-        ? (claimTitle?.trim() || (claimIsGlobal ? null : agentTitle) || 'Global Assistant')
+        // A page claim with no title anywhere must fall back to 'Agent', not
+        // 'Global Assistant' — that terminal fallback is for the GLOBAL
+        // claim case only (review finding — CodeRabbit: a titleless page
+        // claim was misnaming a drive-scoped session "Global Assistant").
+        ? (claimTitle?.trim() || (claimIsGlobal ? 'Global Assistant' : (agentTitle ?? 'Agent')))
         : agentPageId !== null
           ? (agentTitle ?? 'Agent')
           : 'Global Assistant';

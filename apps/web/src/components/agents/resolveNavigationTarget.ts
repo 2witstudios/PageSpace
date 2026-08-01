@@ -32,8 +32,6 @@ export type ClaimableFallback =
 
 export type NavigationTarget =
   | { kind: 'pane'; sessionId: string; conversationId: string; agentId: string | null }
-  | { kind: 'page'; driveId: string; pageId: string; conversationId: string; sessionId: string | null }
-  | { kind: 'global'; conversationId: string; driveId: string | null }
   /**
    * A session-less `type: 'page'` or `type: 'global'` row — clicking it
    * should spawn a session and claim this SAME conversation into it (see

@@ -189,6 +189,15 @@ export default function AgentPanes({
   //    checking it and finishing the cleanup if still nothing shows it.
   const pendingReopenCounts = useRef(new Map<string, number>());
   const deferredReopenSuccess = useRef(new Set<string>());
+  // Same coordination, for the CLAIM branch below (a never-bound row picked
+  // twice rapidly races exactly like a reopen does: the request that lands
+  // the actual claim can go stale and see "nothing shows it yet" before the
+  // now-current, later request has assigned it — review finding, chatgpt-
+  // codex-connector: reusing the counters above would conflate the two
+  // operations under one key namespace for no benefit, so this is a
+  // parallel pair instead of a rename).
+  const pendingClaimCounts = useRef(new Map<string, number>());
+  const deferredClaimSuccess = useRef(new Set<string>());
   // 2. A reopen can commit server-side, then have its OWN response delayed
   //    long enough for the SAME conversation to be deleted from History (a
   //    different pane, or the same one) before the reopen's completion
@@ -999,14 +1008,27 @@ export default function AgentPanes({
         // tool calls actually resolve a sandbox afterward, instead of the
         // old cosmetic assign-only path (which left `findSessionForConversation`
         // reading the same null forever and denying every tool call as
-        // `no_session`). No `pendingReopenCounts`/`deferredReopenSuccess`
-        // ceremony here: unlike reopen, a claim is not idempotent ACROSS
-        // concurrent callers racing for the SAME conversation — exactly one
-        // wins the guarded UPDATE, and every other caller gets
-        // `alreadyInSession: true` with nothing of its own to roll back, so
-        // the "who cleans up a superseded sibling's success" problem reopen
-        // solves for doesn't arise here.
+        // `no_session`). Needs the SAME in-flight-count + deferred-cleanup
+        // coordination reopen uses above: the request that actually lands
+        // the claim can go stale and see "nothing shows it yet" while a
+        // LATER, now-current request for the same id is still in flight —
+        // without coordinating, the stale request's cleanup can close the
+        // listing right after the later request already decided nothing
+        // needed cleaning up, leaving a pane displaying a conversation the
+        // session lists as closed (review finding — chatgpt-codex-connector
+        // on PR #2299, claim analog of the same round-9/15/16 races).
+        const isShownSomewhere = () => isConversationShownSomewhere(conversation.id);
+        pendingClaimCounts.current.set(conversation.id, (pendingClaimCounts.current.get(conversation.id) ?? 0) + 1);
         const deleteGenerationAtStart = historyDeleteGenerations.current.get(conversation.id) ?? 0;
+        let claimSettled = false;
+        const settleClaim = () => {
+          if (claimSettled) return pendingClaimCounts.current.get(conversation.id) ?? 0;
+          claimSettled = true;
+          const next = (pendingClaimCounts.current.get(conversation.id) ?? 1) - 1;
+          if (next <= 0) pendingClaimCounts.current.delete(conversation.id);
+          else pendingClaimCounts.current.set(conversation.id, next);
+          return next;
+        };
         let claimResult: { ok: boolean; alreadyInSession: boolean };
         try {
           claimResult = await post<{ ok: boolean; alreadyInSession: boolean }>(
@@ -1014,6 +1036,10 @@ export default function AgentPanes({
             {},
           );
         } catch (error) {
+          const remaining = settleClaim();
+          if (remaining <= 0 && deferredClaimSuccess.current.delete(conversation.id) && !isShownSomewhere()) {
+            void cleanupOrphanedConversation(conversation.id);
+          }
           if (!isCurrent()) return false;
           console.error('Failed to move this conversation into the session:', error);
           toast.error('Could not move this conversation into the session', {
@@ -1021,18 +1047,37 @@ export default function AgentPanes({
           });
           return false;
         }
+        const remaining = settleClaim();
         if (!isCurrent()) {
           // The BINDING itself is permanent and can never be rolled back
           // (claiming is not a rebind primitive) — only the open-listing
           // SLOT it just consumed can be, and only when this request
-          // genuinely transitioned it and nothing else is already showing
-          // it, the same non-destructive-rollback rule the reopen branch
-          // above uses.
-          if (!claimResult.alreadyInSession && !isConversationShownSomewhere(conversation.id)) {
+          // genuinely transitioned it, nothing else is already showing it,
+          // AND nothing else is still pending for the same id (which might
+          // yet land it) — same non-destructive-rollback rule the reopen
+          // branch above uses.
+          const shownSomewhere = isShownSomewhere();
+          const hadDeferredSibling = remaining <= 0 && deferredClaimSuccess.current.delete(conversation.id);
+          if (shownSomewhere) return false;
+          if (hadDeferredSibling) {
+            void cleanupOrphanedConversation(conversation.id);
+            return false;
+          }
+          if (claimResult.alreadyInSession) return false;
+          if (remaining > 0) {
+            // Something else is still claiming this same conversationId —
+            // premature to clean up (that request might land it). Defer:
+            // whichever claim is the LAST to settle for this id is
+            // responsible for finishing this check.
+            deferredClaimSuccess.current.add(conversation.id);
+          } else {
             void cleanupOrphanedConversation(conversation.id);
           }
           return false;
         }
+        // I'm the one landing this — any deferred-cleanup marker left by an
+        // earlier superseded request for this id is moot now.
+        deferredClaimSuccess.current.delete(conversation.id);
         if ((historyDeleteGenerations.current.get(conversation.id) ?? 0) !== deleteGenerationAtStart) {
           // Same staleness hazard the reopen branch guards against above: a
           // History delete landed mid-flight, so assigning now would bind

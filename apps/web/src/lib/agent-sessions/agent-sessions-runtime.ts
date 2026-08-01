@@ -84,6 +84,7 @@ import {
 import {
   claimConversationInSessionWith,
   type ClaimConversationOutcome,
+  type ClaimConversationInSessionDeps,
 } from '@/lib/agent-sessions/claim-conversation-in-session';
 
 export { isCodeExecutionEnabled };
@@ -281,26 +282,43 @@ export async function withSessionListingLock<T>(sessionId: string, fn: () => Pro
 }
 
 /**
- * Create a conversation BORN INTO a session. Decision logic lives in the pure
- * module (`create-conversation-in-session.ts`) — this is only its production
- * wiring: the squat-guarded repository creator for page threads, the
- * ownership-guarded resolver for global ones, both carrying the binding
- * INSIDE their INSERT (no `conversations.sessionId` UPDATE exists anywhere —
- * rebinding is unrepresentable, per invariant 1).
- *
- * Throws `ConversationUnavailableError` (message `conversation_unavailable`)
- * when the id cannot be claimed WITH this binding — foreign owner, legacy
- * message-owner conflict, or an existing row whose binding disagrees.
- *
- * Wrapped in the SAME per-session listing lock `closeConversationInSession`/
- * `reopenConversationInSession` take — see `withSessionListingLock`'s own
- * doc for why that's a dedicated-pool advisory lock, never `db.transaction`.
- * Without this serialization at all, a create racing a reopen could both
- * read the cap's count before either writes, and both succeed — two
- * operations each individually under `MAX_SESSION_CONVERSATIONS`, together
- * over it (caught in review — the lock previously only coordinated
- * close/reopen against each other, not against create).
+ * The claim primitive's deps, shared verbatim by both wirings below —
+ * `createConversationInSession` needs the exact same row/agent/session/cap
+ * facts `claimConversationInSession` does (it composes on top of the same
+ * primitive), so this is built once rather than duplicated at both call
+ * sites (review finding — simplify pass: the two closures had drifted into
+ * an exact copy of each other).
  */
+function buildClaimDeps(): ClaimConversationInSessionDeps {
+  return {
+    // Same "ACTIVE, open-listing" predicate create/close/reopen all share —
+    // `countOpenConversations` is just this dep under the name those pure
+    // modules use.
+    countActiveConversations: sessionListingReadDeps().countOpenConversations,
+    findConversation: async (conversationId) => {
+      const row = await conversationRepository.getConversation(conversationId);
+      if (!row) return null;
+      return {
+        userId: row.userId,
+        type: row.type,
+        contextId: row.contextId,
+        sessionId: row.sessionId,
+        isActive: row.isActive,
+      };
+    },
+    findAgentDriveId: async (agentPageId) => {
+      const agent = await conversationRepository.getAiAgent(agentPageId);
+      return agent?.driveId ?? null;
+    },
+    findSession: async (sessionId) => {
+      const row = await findSessionRecord(sessionId);
+      return row ? { driveId: row.driveId, endedAt: row.endedAt } : null;
+    },
+    claimConversation: ({ conversationId, userId, sessionId }) =>
+      conversationRepository.claimConversation(conversationId, userId, sessionId),
+  };
+}
+
 /**
  * Claim a NEVER-BOUND conversation into a session — the wiring for
  * `claim-conversation-in-session.ts`'s pure decision. Same
@@ -312,40 +330,32 @@ export async function claimConversationInSession(input: {
   userId: string;
   sessionId: string;
 }): Promise<ClaimConversationOutcome> {
-  return withSessionListingLock(input.sessionId, () =>
-    claimConversationInSessionWith(
-      {
-        // Same "ACTIVE, open-listing" predicate create/close/reopen all
-        // share — `countOpenConversations` is just this dep under the name
-        // those pure modules use.
-        countActiveConversations: sessionListingReadDeps().countOpenConversations,
-        findConversation: async (conversationId) => {
-          const row = await conversationRepository.getConversation(conversationId);
-          if (!row) return null;
-          return {
-            userId: row.userId,
-            type: row.type,
-            contextId: row.contextId,
-            sessionId: row.sessionId,
-            isActive: row.isActive,
-          };
-        },
-        findAgentDriveId: async (agentPageId) => {
-          const agent = await conversationRepository.getAiAgent(agentPageId);
-          return agent?.driveId ?? null;
-        },
-        findSession: async (sessionId) => {
-          const row = await findSessionRecord(sessionId);
-          return row ? { driveId: row.driveId, endedAt: row.endedAt } : null;
-        },
-        claimConversation: ({ conversationId, userId, sessionId }) =>
-          conversationRepository.claimConversation(conversationId, userId, sessionId),
-      },
-      input,
-    ),
-  );
+  return withSessionListingLock(input.sessionId, () => claimConversationInSessionWith(buildClaimDeps(), input));
 }
 
+/**
+ * Create a conversation and land it in a session. Decision logic lives in the
+ * pure module (`create-conversation-in-session.ts`) — this is only its
+ * production wiring: the squat-guarded repository creator for page threads
+ * and the ownership-guarded resolver for global ones (both session-agnostic
+ * inserts), composed with `buildClaimDeps()` above so the binding itself
+ * goes through the exact same guarded UPDATE `claimConversationInSession`
+ * uses — the ONE place `conversations.sessionId` is ever written.
+ *
+ * Throws `ConversationUnavailableError` (message `conversation_unavailable`)
+ * when the id cannot be claimed WITH this binding — foreign owner, legacy
+ * message-owner conflict, or an existing row whose binding disagrees.
+ *
+ * Wrapped in the SAME per-session listing lock `closeConversationInSession`/
+ * `reopenConversationInSession`/`claimConversationInSession` take — see
+ * `withSessionListingLock`'s own doc for why that's a dedicated-pool advisory
+ * lock, never `db.transaction`. Without this serialization at all, a create
+ * racing a reopen (or a claim) could both read the cap's count before either
+ * writes, and both succeed — two operations each individually under
+ * `MAX_SESSION_CONVERSATIONS`, together over it (caught in review — the lock
+ * previously only coordinated close/reopen against each other, not against
+ * create).
+ */
 export async function createConversationInSession(input: {
   conversationId: string;
   userId: string;
@@ -358,6 +368,7 @@ export async function createConversationInSession(input: {
   return withSessionListingLock(input.sessionId, () =>
     createConversationInSessionWith(
       {
+        ...buildClaimDeps(),
         createPageConversation: ({ conversationId, userId, agentPageId, title }) =>
           conversationRepository.createConversation(conversationId, userId, agentPageId, {
             title: title ?? undefined,
@@ -367,28 +378,6 @@ export async function createConversationInSession(input: {
             title: title ?? undefined,
           });
         },
-        countActiveConversations: sessionListingReadDeps().countOpenConversations,
-        findConversation: async (conversationId) => {
-          const row = await conversationRepository.getConversation(conversationId);
-          if (!row) return null;
-          return {
-            userId: row.userId,
-            type: row.type,
-            contextId: row.contextId,
-            sessionId: row.sessionId,
-            isActive: row.isActive,
-          };
-        },
-        findAgentDriveId: async (agentPageId) => {
-          const agent = await conversationRepository.getAiAgent(agentPageId);
-          return agent?.driveId ?? null;
-        },
-        findSession: async (sessionId) => {
-          const row = await findSessionRecord(sessionId);
-          return row ? { driveId: row.driveId, endedAt: row.endedAt } : null;
-        },
-        claimConversation: ({ conversationId, userId, sessionId }) =>
-          conversationRepository.claimConversation(conversationId, userId, sessionId),
       },
       input,
     ),

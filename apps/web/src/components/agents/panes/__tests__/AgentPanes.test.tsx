@@ -1678,6 +1678,54 @@ describe('AgentPanes', () => {
       );
     });
 
+    // review finding — chatgpt-codex-connector (PR review on this branch):
+    // the SAME unbound History row clicked twice rapidly in one pane can
+    // have the FIRST request land the actual claim, go stale, and see
+    // "nothing shows it yet" while the SECOND (now-current) request for the
+    // identical conversationId is still in flight and about to assign it.
+    // Without deferring the first request's cleanup decision the same way
+    // reopen does above, its cleanup DELETE could close the listing right
+    // after the second request already decided nothing needed cleaning up —
+    // leaving the pane displaying a conversation the session lists as
+    // closed. Pins that this can no longer happen: no cleanup DELETE ever
+    // fires, and the pane correctly lands on the claimed conversation.
+    it('coordinates two rapid claims of the SAME unbound conversation on one pane — the stale one defers, the current one lands cleanly with no cleanup DELETE', async () => {
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url === '/api/ai/page-agents/agent-1/conversations') {
+          return conversationsFixture([{ id: 'conv-double-claim', title: 'Double claim', sessionId: null }]);
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      let resolveFirstClaim!: (value: unknown) => void;
+      let resolveSecondClaim!: (value: unknown) => void;
+      mockPost
+        .mockReturnValueOnce(new Promise((resolve) => (resolveFirstClaim = resolve)))
+        .mockReturnValueOnce(new Promise((resolve) => (resolveSecondClaim = resolve)));
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('tab', { name: /history/i }));
+      await user.click(await screen.findByRole('button', { name: 'select-conv-double-claim' })); // claim #1, pending
+      await user.click(await screen.findByRole('button', { name: 'select-conv-double-claim' })); // claim #2, pending, supersedes #1
+
+      // Claim #1 (stale, actually transitioned the listing server-side)
+      // resolves FIRST, while #2 is still pending — must defer its cleanup
+      // decision rather than closing the listing #2 is about to use.
+      resolveFirstClaim({ ok: true, alreadyInSession: false });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(mockDel).not.toHaveBeenCalled();
+
+      // Claim #2 (current, a no-op idempotent hit of #1's own transition)
+      // resolves — lands the pane, and #1's deferred cleanup marker is now
+      // moot since something (this pane) shows it.
+      resolveSecondClaim({ ok: true, alreadyInSession: true });
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-double-claim'));
+      expect(mockDel).not.toHaveBeenCalled();
+    });
+
     // review finding — chatgpt-codex-connector on PR #2299 (round 8): a
     // reopen can commit server-side and then have its OWN response delayed
     // long enough for the SAME conversation to be deleted from History
