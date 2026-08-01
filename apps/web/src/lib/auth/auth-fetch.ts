@@ -63,6 +63,10 @@ class AuthFetch {
 
   // Timeout for bearer token retrieval (IPC/Keychain) to prevent hung requests on cold start
   private readonly TOKEN_RETRIEVAL_TIMEOUT_MS = 3000;
+  // Bounds the bearer-refresh POST below (refreshBearerSession) — a true network stall (e.g.
+  // iOS cold-launch before the network stack is up) must not hang this indefinitely, same
+  // hazard the Keychain reads in this class are already guarded against.
+  private readonly REFRESH_FETCH_TIMEOUT_MS = 8000;
 
   // Platform storage abstraction for cross-platform auth
   private storage: PlatformStorage | null = null;
@@ -619,17 +623,34 @@ class AuthFetch {
         ? '/api/auth/mobile/refresh'
         : '/api/auth/device/refresh';
 
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          deviceToken: session.deviceToken,
-          deviceId: info.deviceId,
-          platform: storage.platform,
-          userAgent: info.userAgent,
-          appVersion: info.appVersion,
-        }),
-      });
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), this.REFRESH_FETCH_TIMEOUT_MS);
+      let response: Response;
+
+      try {
+        response = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            deviceToken: session.deviceToken,
+            deviceId: info.deviceId,
+            platform: storage.platform,
+            userAgent: info.userAgent,
+            appVersion: info.appVersion,
+          }),
+          signal: controller.signal,
+        });
+      } catch (error) {
+        if (error instanceof Error && error.name === 'AbortError') {
+          this.logger.warn(`${storage.platform}: Refresh fetch timed out after ${this.REFRESH_FETCH_TIMEOUT_MS}ms`);
+          // Transient network stall, not proof the device token is dead — retryable, same as
+          // the 429/5xx branch below.
+          return { success: false, shouldLogout: false };
+        }
+        throw error;
+      } finally {
+        clearTimeout(timeout);
+      }
 
       if (response.ok) {
         const data = await response.json();

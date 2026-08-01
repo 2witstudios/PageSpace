@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { StrictMode } from 'react';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { useSigninRecovery, DEVICE_TOKEN_TIMEOUT_MS } from '../useSigninRecovery';
+import {
+  useSigninRecovery,
+  DEVICE_TOKEN_TIMEOUT_MS,
+  CHECK_ME_TIMEOUT_MS,
+  RECOVERY_FAILSAFE_TIMEOUT_MS,
+} from '../useSigninRecovery';
 
 // Shell-level coverage for the recovery effect. The DECISION branches live in
 // signin-recovery.test.ts; here we assert the effects are wired to the right actions AND to the
@@ -316,5 +321,73 @@ describe('useSigninRecovery', () => {
     // Under StrictMode the effect is set up, torn down, then set up again on mount. The
     // second run must complete rather than being stranded by a latched guard.
     await waitFor(() => expect(result.current.recovering).toBe(false));
+  });
+
+  // ── Round 2: raw fetch() calls in this chain had NO timeout at all ───────────────────────
+  it('never hangs if the check-me fetch never resolves (network stall regression)', async () => {
+    // Reproduces a true network stall (no rejection, no resolution — e.g. iOS cold-launch
+    // before the network stack is up). Mimics real fetch()'s AbortController contract: the
+    // request promise only settles when the signal fires.
+    vi.useFakeTimers();
+    try {
+      fetchWithAuth.mockImplementation(
+        (_url: string, options?: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            options?.signal?.addEventListener('abort', () => {
+              const err = new Error('The operation was aborted');
+              err.name = 'AbortError';
+              reject(err);
+            });
+          }),
+      );
+      getStoredSession.mockResolvedValue(null); // no device token → terminal show-form
+
+      const { result } = renderHook(() => useSigninRecovery('/dashboard', true));
+
+      expect(result.current.recovering).toBe(true);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CHECK_ME_TIMEOUT_MS);
+      });
+
+      expect(result.current.recovering).toBe(false);
+      expect(replace).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('control: a fast check-me success is unaffected by the new timeout', async () => {
+    mockMe(true);
+
+    const { result } = renderHook(() => useSigninRecovery('/dashboard', true));
+
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/dashboard'));
+    expect(result.current.recovering).toBe(true); // still recovering through the nav
+  });
+
+  it('the failsafe timer flips recovering to false even if a hang bypasses every individual guard', async () => {
+    // hasDeviceToken and checkMeAuthenticated each carry their own timeout, but this proves
+    // the failsafe is a true backstop: fetchWithAuth here never settles and never observes the
+    // abort signal, simulating a hang neither of the two dedicated guards catches. Only the
+    // unconditional failsafe timer can save the page in that case.
+    vi.useFakeTimers();
+    try {
+      getStoredSession.mockReturnValue(new Promise(() => {}));
+      fetchWithAuth.mockReturnValue(new Promise(() => {}));
+
+      const { result } = renderHook(() => useSigninRecovery('/dashboard', true));
+
+      expect(result.current.recovering).toBe(true);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(RECOVERY_FAILSAFE_TIMEOUT_MS);
+      });
+
+      expect(result.current.recovering).toBe(false);
+      expect(replace).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
