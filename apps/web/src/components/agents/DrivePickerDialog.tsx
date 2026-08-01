@@ -39,10 +39,14 @@ export default function DrivePickerDialog({
     >
       <CommandInput placeholder="Search drives…" autoFocus />
       <CommandList>
-        <CommandEmpty>No drives yet.</CommandEmpty>
+        <CommandEmpty>No drives found.</CommandEmpty>
         <CommandGroup>
           {drives.map((drive) => (
-            <CommandItem key={drive.id} value={drive.name} onSelect={() => onPick(drive.id, drive.name)}>
+            <CommandItem
+              key={drive.id}
+              value={`${drive.id}-${drive.name}`}
+              onSelect={() => onPick(drive.id, drive.name)}
+            >
               <Folder className="size-3.5" aria-hidden="true" />
               <span className="truncate">{drive.name}</span>
             </CommandItem>

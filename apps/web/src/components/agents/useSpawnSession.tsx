@@ -217,6 +217,7 @@ function SpawnSessionPalette({
         >
           <input
             autoFocus
+            aria-label="Session name"
             value={name}
             onChange={(event) => setName(event.target.value)}
             onKeyDown={(event) => {

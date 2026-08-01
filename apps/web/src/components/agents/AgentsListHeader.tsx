@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Plus } from 'lucide-react';
+import { useSWRConfig } from 'swr';
 
 import { Button } from '@/components/ui/button';
 import CreateDriveDialog from '@/components/layout/left-sidebar/CreateDriveDialog';
@@ -37,7 +38,14 @@ export default function AgentsListHeader({ driveId }: { driveId?: string }) {
 
   const [createDriveOpen, setCreateDriveOpen] = useState(false);
   const { agentsByDrive } = usePageAgents(undefined, { enabled: canSpawn });
-  const { openSpawn, paletteElement } = useSpawnSession(agentsByDrive);
+  const { mutate } = useSWRConfig();
+  const { openSpawn, paletteElement } = useSpawnSession(agentsByDrive, () => {
+    // Broad match: the sidebar's sessions key is drive-scoped or global
+    // depending on ITS OWN route, and this header doesn't know which is
+    // mounted alongside it — without this, a session spawned from here only
+    // shows up in the sidebar after its 20s poll.
+    void mutate((key) => typeof key === 'string' && key.startsWith('/api/agent-sessions'));
+  });
   const openQuickCreate = useUIStore((state) => state.openQuickCreate);
 
   // Which button opened the picker — decides what happens once a drive is
