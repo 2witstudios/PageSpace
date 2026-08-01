@@ -23,14 +23,22 @@ import {
   ConversationHistoryDeletedError,
 } from '../resolve-or-create-conversation';
 
-const makeDb = (selectResult: object[], insertResult: object[] = []) => ({
-  select: vi.fn().mockReturnValue({
-    from: vi.fn().mockReturnValue({
-      where: vi.fn().mockReturnValue({
-        limit: vi.fn().mockResolvedValue(selectResult),
+// The real query chain is `.select().from().where().for('update').limit()` —
+// row-locked so a caller wrapping this in an explicit transaction can
+// serialize against a concurrent History-delete (see resolve-or-create-
+// conversation.ts's own doc on the `.for('update')` calls).
+const selectChain = (result: object[]) => ({
+  from: vi.fn().mockReturnValue({
+    where: vi.fn().mockReturnValue({
+      for: vi.fn().mockReturnValue({
+        limit: vi.fn().mockResolvedValue(result),
       }),
     }),
   }),
+});
+
+const makeDb = (selectResult: object[], insertResult: object[] = []) => ({
+  select: vi.fn().mockReturnValue(selectChain(selectResult)),
   insert: vi.fn().mockReturnValue({
     values: vi.fn().mockReturnValue({
       onConflictDoNothing: vi.fn().mockReturnValue({
@@ -61,13 +69,7 @@ describe('resolveOrCreateConversation', () => {
   it('given existing conversation owned by a different user, throws ConversationOwnershipError', async () => {
     const otherUserConv = { ...CONV, userId: 'user2' };
     const db = {
-      select: vi.fn().mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([otherUserConv]),
-          }),
-        }),
-      }),
+      select: vi.fn().mockReturnValue(selectChain([otherUserConv])),
       insert: vi.fn(),
     };
     await expect(
@@ -108,17 +110,9 @@ describe('resolveOrCreateConversation', () => {
     const db = {
       select: vi.fn()
         // First call: no existing row (triggers insert path)
-        .mockReturnValueOnce({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
-          }),
-        })
+        .mockReturnValueOnce(selectChain([]))
         // Second call: fallback select finds the winner
-        .mockReturnValueOnce({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([winner]) }),
-          }),
-        }),
+        .mockReturnValueOnce(selectChain([winner])),
       insert: vi.fn().mockReturnValue({
         values: vi.fn().mockReturnValue({
           onConflictDoNothing: vi.fn().mockReturnValue({
@@ -144,16 +138,8 @@ describe('resolveOrCreateConversation', () => {
     const deletedWinner = { ...CONV, isActive: false };
     const db = {
       select: vi.fn()
-        .mockReturnValueOnce({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([]) }),
-          }),
-        })
-        .mockReturnValueOnce({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([deletedWinner]) }),
-          }),
-        }),
+        .mockReturnValueOnce(selectChain([]))
+        .mockReturnValueOnce(selectChain([deletedWinner])),
       insert: vi.fn().mockReturnValue({
         values: vi.fn().mockReturnValue({
           onConflictDoNothing: vi.fn().mockReturnValue({

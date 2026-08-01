@@ -86,6 +86,17 @@ export async function resolveOrCreateConversation(
     throw new ConversationOwnershipError();
   }
 
+  // `FOR UPDATE` — a no-op standalone (each statement is its own implicit
+  // transaction), but when the caller wraps this call in an explicit
+  // `db.transaction()` alongside the first message's persist, it locks the
+  // row for the transaction's duration: a concurrent History-delete's
+  // `UPDATE conversations SET isActive = false ...` on the SAME row blocks
+  // until this transaction commits (or, if the delete's UPDATE landed
+  // first, this SELECT blocks until IT commits and then correctly re-reads
+  // isActive: false). Without this, the isActive check and the message
+  // insert are two independent statements with an unguarded gap between
+  // them — exactly the race this exists to close (review finding —
+  // chatgpt-codex-connector and coderabbitai on PR #2299).
   const [existing] = await db
     .select()
     .from(conversations)
@@ -93,6 +104,7 @@ export async function resolveOrCreateConversation(
       eq(conversations.id, conversationId),
       eq(conversations.isActive, true),
     ))
+    .for('update')
     .limit(1);
 
   if (existing) {
@@ -120,11 +132,13 @@ export async function resolveOrCreateConversation(
 
   if (created) return { conversation: created, isNew: true };
 
-  // A concurrent insert won the race — select the winner.
+  // A concurrent insert won the race — select the winner. Locked for the same
+  // reason as the initial SELECT above.
   const [winner] = await db
     .select()
     .from(conversations)
     .where(eq(conversations.id, conversationId))
+    .for('update')
     .limit(1);
 
   if (!winner) throw new Error(`Failed to resolve conversation ${conversationId}`);

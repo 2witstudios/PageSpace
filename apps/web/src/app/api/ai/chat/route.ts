@@ -43,6 +43,20 @@ import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPP
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+
+/**
+ * The conversation was still active at the ownership check far above, but a
+ * concurrent History-delete committed sometime in the (long, I/O-heavy) gap
+ * between that check and the user-message persist below. Thrown from inside
+ * the short, tightly-scoped transaction that re-verifies immediately
+ * adjacent to the write — see that call site's own comment.
+ */
+class ConversationHistoryDeletedError extends Error {
+  constructor() {
+    super('Conversation has been deleted from history');
+    this.name = 'ConversationHistoryDeletedError';
+  }
+}
 // canUserViewPage stays user-level here: it gates mention-notification RECIPIENTS
 // (other users), not the requesting principal.
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
@@ -94,6 +108,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, ne } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { chatMessages, pages, drives } from '@pagespace/db/schema/core';
+import { conversations } from '@pagespace/db/schema/conversations';
 import { userProfiles } from '@pagespace/db/schema/members';
 import { createId, isCuid } from '@paralleldrive/cuid2';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -703,17 +718,54 @@ export async function POST(request: Request) {
 
         loggers.ai.debug('AI Chat API: Saving user message immediately', { id: messageId, contentLength: messageContent.length });
 
-        await saveMessageToDatabase({
-          messageId,
-          pageId: chatId,
-          conversationId,
-          userId,
-          role: 'user',
-          content: messageContent,
-          toolCalls: undefined,
-          toolResults: undefined,
-          uiMessage: userMessage,
-        });
+        if (existingConversation) {
+          // Atomic re-check immediately adjacent to the write: `existingConversation`
+          // was read (and validated active) far above, but the credit-gate check,
+          // @mention processing, and command resolution in between all do their own
+          // unrelated I/O — plenty of room for a concurrent History-delete to commit
+          // in that gap. A `SELECT ... FOR UPDATE` + the insert in ONE short
+          // transaction (not wrapping any of the intervening work, which must never
+          // run inside an open transaction) closes that window rather than trusting
+          // the stale earlier read (review finding — chatgpt-codex-connector on PR
+          // #2299). Gated on `existingConversation`: a brand-new conversation has no
+          // row to race against yet (or, per the eager-create call above, may have
+          // none at all — that failure is explicitly tolerated/non-fatal there, and
+          // this check must not turn it into a hard rejection).
+          await db.transaction(async (tx) => {
+            const [row] = await tx
+              .select({ isActive: conversations.isActive })
+              .from(conversations)
+              .where(eq(conversations.id, conversationId!))
+              .for('update')
+              .limit(1);
+            if (!row?.isActive) throw new ConversationHistoryDeletedError();
+
+            await saveMessageToDatabase({
+              messageId,
+              pageId: chatId!,
+              conversationId: conversationId!,
+              userId: userId!,
+              role: 'user',
+              content: messageContent,
+              toolCalls: undefined,
+              toolResults: undefined,
+              uiMessage: userMessage,
+              dbClient: tx,
+            });
+          });
+        } else {
+          await saveMessageToDatabase({
+            messageId,
+            pageId: chatId,
+            conversationId,
+            userId,
+            role: 'user',
+            content: messageContent,
+            toolCalls: undefined,
+            toolResults: undefined,
+            uiMessage: userMessage,
+          });
+        }
 
         // Fire-and-forget: title derivation must never fail or delay the chat
         // response, matching how createConversation above is treated as
@@ -762,6 +814,9 @@ export async function POST(request: Request) {
             .catch((err) => loggers.ai.error('AI Chat: Failed to expand mentions', err as Error));
         }
       } catch (error) {
+        if (error instanceof ConversationHistoryDeletedError) {
+          return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+        }
         loggers.ai.error('AI Chat API: Failed to save user message', error as Error);
         return NextResponse.json({
           error: 'Failed to save message to database',

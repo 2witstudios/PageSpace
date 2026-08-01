@@ -100,8 +100,19 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 
-vi.mock('@pagespace/db/db', () => ({
-  db: {
+// Read dynamically (not closure-captured) by the `for('update').limit()` mock
+// below, so a test can simulate a concurrent History-delete committing
+// between the route's early ownership check and its late, lock-guarded
+// re-check — flip false, call POST, flip back in the next test's beforeEach.
+const mockConversationActiveAtLockTime = vi.hoisted(() => ({ current: true }));
+
+vi.mock('@pagespace/db/db', () => {
+  // Reused inside `transaction()`'s callback too — `tx` needs the identical
+  // shape as `db` since `saveMessageToDatabase`'s `dbClient` override (and
+  // the route's own locked active-conversation SELECT, run immediately
+  // before the first message's persist) run against whichever one the
+  // caller passed in.
+  const makeDbLike = () => ({
     select: vi.fn(() => ({
       from: vi.fn(() => ({
         where: vi.fn(() => ({
@@ -111,22 +122,39 @@ vi.mock('@pagespace/db/db', () => ({
           ) => Promise.resolve([mockDbRow]).then(resolve, reject),
           orderBy: vi.fn().mockResolvedValue([]),
           limit: vi.fn().mockResolvedValue([{ displayName: 'Profile User', drivePrompt: null }]),
+          // The route's atomic active-conversation re-check — active by
+          // default so the happy-path tests below don't each need their
+          // own override.
+          for: vi.fn(() => ({
+            limit: vi.fn(() => Promise.resolve([{ isActive: mockConversationActiveAtLockTime.current }])),
+          })),
         })),
       })),
     })),
     // Server Stream Durability epic PR 2: assistant placeholder row insert at stream start.
     insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue(undefined) })),
-  },
-  // startGenerationExclusive's advisory lock: always free, so takeover+lifecycle-create run
-  // exactly as before. Its own retry/degrade behavior is covered by
-  // start-generation-exclusive.test.ts — this file only verifies this route wires it in.
-  getAdvisoryLockPool: vi.fn(() => ({
-    connect: vi.fn(async () => ({
-      query: vi.fn().mockResolvedValue({ rows: [{ acquired: true }] }),
-      release: vi.fn(),
+  });
+
+  const dbLike = makeDbLike();
+  // A transaction runs its callback against a FRESH db-like object, same as
+  // a real transaction's `tx` is a distinct client from `db`.
+  const transaction = vi.fn(async (callback: (tx: ReturnType<typeof makeDbLike>) => Promise<unknown>) => {
+    return callback(makeDbLike());
+  });
+
+  return {
+    db: { ...dbLike, transaction },
+    // startGenerationExclusive's advisory lock: always free, so takeover+lifecycle-create run
+    // exactly as before. Its own retry/degrade behavior is covered by
+    // start-generation-exclusive.test.ts — this file only verifies this route wires it in.
+    getAdvisoryLockPool: vi.fn(() => ({
+      connect: vi.fn(async () => ({
+        query: vi.fn().mockResolvedValue({ rows: [{ acquired: true }] }),
+        release: vi.fn(),
+      })),
     })),
-  })),
-}));
+  };
+});
 
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn(), ne: vi.fn(), and: vi.fn() }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'id' } }));
@@ -134,6 +162,9 @@ vi.mock('@pagespace/db/schema/core', () => ({
   chatMessages: { pageId: 'pageId', conversationId: 'conversationId', isActive: 'isActive', createdAt: 'createdAt' },
   pages: { id: 'id' },
   drives: { id: 'id', drivePrompt: 'drivePrompt' },
+}));
+vi.mock('@pagespace/db/schema/conversations', () => ({
+  conversations: { id: 'id', isActive: 'isActive' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
   userProfiles: { userId: 'userId', displayName: 'displayName' },
@@ -387,6 +418,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
     mockGetConversation.mockResolvedValue(null);
     mockHasConflictingMessageOwner.mockResolvedValue(false);
     mockTakeOverConversationStreams.mockResolvedValue({ aborted: [], reconciled: [] });
+    mockConversationActiveAtLockTime.current = true;
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
     mockCreateStreamLifecycle.mockResolvedValue({
       pushPart: mockLifecyclePushPart,
@@ -559,6 +591,26 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
       expect(response.status).not.toBe(404);
       expect(mockCreateStreamLifecycle).toHaveBeenCalled();
+    });
+
+    // The race the isActive: false check above cannot catch on its own: the
+    // conversation looks active at the EARLY ownership check (this test's
+    // mockGetConversation), but a concurrent History-delete commits sometime
+    // in the credit-gate/mention/command-resolution work that follows —
+    // before saveMessageToDatabase runs. The atomic, lock-guarded re-check
+    // immediately adjacent to that write (not the early snapshot) is what
+    // must catch this (review finding — chatgpt-codex-connector and
+    // coderabbitai on PR #2299).
+    it('given the conversation looked active at the early check but a concurrent History-delete committed before the message write, should 404 and never invoke the lifecycle', async () => {
+      mockGetConversation.mockResolvedValue({
+        id: CONV_ID, userId: 'user-1', isShared: false, contextId: 'page-1', isActive: true,
+      });
+      mockConversationActiveAtLockTime.current = false;
+
+      const response = await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(response.status).toBe(404);
+      expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
     });
   });
 

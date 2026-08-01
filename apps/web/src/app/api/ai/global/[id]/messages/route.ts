@@ -514,15 +514,34 @@ export async function POST(
 
         loggers.api.debug('Global Assistant Chat API: Saving user message immediately', { id: messageId, contentLength: messageContent.length });
         
-        await saveGlobalAssistantMessageToDatabase({
-          messageId,
-          conversationId,
-          userId,
-          role: 'user',
-          content: messageContent,
-          toolCalls: undefined,
-          toolResults: undefined,
-          uiMessage: userMessage, // Pass UIMessage to preserve part ordering
+        // Atomic re-check immediately adjacent to the write: `resolveOrCreateConversation`
+        // resolved this conversation as active well above, but the credit-gate check,
+        // @mention processing, and command resolution in between all do their own
+        // unrelated I/O — plenty of room for a concurrent History-delete to commit in
+        // that gap. A `SELECT ... FOR UPDATE` + the insert in ONE short transaction (not
+        // wrapping any of the intervening work, which must never run inside an open
+        // transaction) closes that window rather than trusting the stale earlier read
+        // (review finding — chatgpt-codex-connector and coderabbitai on PR #2299).
+        await db.transaction(async (tx) => {
+          const [row] = await tx
+            .select({ isActive: conversations.isActive })
+            .from(conversations)
+            .where(eq(conversations.id, conversationId))
+            .for('update')
+            .limit(1);
+          if (!row?.isActive) throw new ConversationHistoryDeletedError();
+
+          await saveGlobalAssistantMessageToDatabase({
+            messageId,
+            conversationId,
+            userId,
+            role: 'user',
+            content: messageContent,
+            toolCalls: undefined,
+            toolResults: undefined,
+            uiMessage: userMessage, // Pass UIMessage to preserve part ordering
+            dbClient: tx,
+          });
         });
 
         auditRequest(request, { eventType: 'data.write', userId, resourceType: 'global_chat_message', resourceId: conversationId, details: {
@@ -553,6 +572,9 @@ export async function POST(
         
         loggers.api.debug('Global Assistant Chat API: User message saved to database', {});
       } catch (error) {
+        if (error instanceof ConversationHistoryDeletedError) {
+          return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+        }
         loggers.api.error('Global Assistant Chat API: Failed to save user message', error as Error);
         return NextResponse.json({
           error: 'Failed to save message to database',

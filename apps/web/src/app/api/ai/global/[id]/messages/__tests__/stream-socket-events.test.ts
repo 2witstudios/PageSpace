@@ -94,37 +94,74 @@ const mockConversation = {
 const mockUserProfile = { displayName: 'Display User' };
 const mockAuthUser = { name: 'Auth User' };
 
+// Read dynamically (not closure-captured) by the `for('update').limit()` mock
+// below, so a test can simulate a concurrent History-delete committing
+// between resolveOrCreateConversation's earlier resolve and the route's
+// late, lock-guarded re-check — flip false, call POST, reset in beforeEach.
+const mockConversationActiveAtLockTime = vi.hoisted(() => ({ current: true }));
+
 vi.mock('@pagespace/db/db', () => {
-  const select = vi.fn(() => ({
-    from: vi.fn((table: unknown) => {
-      const tableLabel = table as { __label?: string } | undefined;
-      const isUsers = tableLabel?.__label === 'users';
-      return {
-        where: vi.fn(() => ({
-          then: <T>(
-            resolve?: ((value: unknown[]) => T | PromiseLike<T>) | null,
-            reject?: ((reason: unknown) => T | PromiseLike<T>) | null,
-          ) => Promise.resolve([mockConversation]).then(resolve, reject),
-          orderBy: vi.fn().mockResolvedValue([]),
-          limit: vi.fn().mockResolvedValue(isUsers ? [mockAuthUser] : [mockUserProfile]),
+  // Reused inside `transaction()`'s callback too — `tx` needs the identical
+  // shape as `db` since `saveGlobalAssistantMessageToDatabase`'s `dbClient`
+  // override (and the route's own locked SELECT) run against whichever one
+  // the caller passed in.
+  const makeDbLike = () => {
+    const select = vi.fn(() => ({
+      from: vi.fn((table: unknown) => {
+        const tableLabel = table as { __label?: string } | undefined;
+        const isUsers = tableLabel?.__label === 'users';
+        const isConversations = tableLabel?.__label === 'conversations';
+        return {
+          where: vi.fn(() => ({
+            then: <T>(
+              resolve?: ((value: unknown[]) => T | PromiseLike<T>) | null,
+              reject?: ((reason: unknown) => T | PromiseLike<T>) | null,
+            ) => Promise.resolve([mockConversation]).then(resolve, reject),
+            orderBy: vi.fn().mockResolvedValue([]),
+            limit: vi.fn().mockResolvedValue(isUsers ? [mockAuthUser] : [mockUserProfile]),
+            // The route's atomic active-conversation re-check
+            // (`.where(...).for('update').limit(1)`, run inside a
+            // transaction right before the first message's persist) —
+            // active by default so the happy-path tests below don't each
+            // need their own override.
+            for: vi.fn(() => ({
+              limit: vi.fn(() =>
+                Promise.resolve(
+                  isConversations ? [{ isActive: mockConversationActiveAtLockTime.current }] : [mockConversation],
+                ),
+              ),
+            })),
+          })),
+        };
+      }),
+    }));
+
+    const insert = vi.fn(() => ({
+      values: vi.fn(() => ({
+        onConflictDoUpdate: vi.fn(() => ({
+          returning: vi.fn().mockResolvedValue([{ id: 'msg-1' }]),
         })),
-      };
-    }),
-  }));
-
-  const insert = vi.fn(() => ({
-    values: vi.fn(() => ({
-      onConflictDoUpdate: vi.fn(() => ({
-        returning: vi.fn().mockResolvedValue([{ id: 'msg-1' }]),
       })),
-    })),
-  }));
+    }));
 
-  const update = vi.fn(() => ({
-    set: vi.fn(() => ({
-      where: vi.fn().mockResolvedValue(undefined),
-    })),
-  }));
+    const update = vi.fn(() => ({
+      set: vi.fn(() => ({
+        where: vi.fn().mockResolvedValue(undefined),
+      })),
+    }));
+
+    return { select, insert, update };
+  };
+
+  const dbLike = makeDbLike();
+  // A transaction runs its callback against a FRESH db-like object (its own
+  // mock-call history), same as a real transaction's `tx` is a distinct
+  // client from `db` — tests asserting call counts on the outer `db` mock
+  // (e.g. `db.update`) stay accurate; assertions that need calls made
+  // *inside* a transaction read from this.
+  const transaction = vi.fn(async (callback: (tx: ReturnType<typeof makeDbLike>) => Promise<unknown>) => {
+    return callback(makeDbLike());
+  });
 
   // startGenerationExclusive's advisory lock: always free, so takeover+lifecycle-create run
   // exactly as before. Its own retry/degrade behavior is covered by
@@ -137,7 +174,7 @@ vi.mock('@pagespace/db/db', () => {
   }));
 
   return {
-    db: { select, insert, update },
+    db: { ...dbLike, transaction },
     getAdvisoryLockPool,
   };
 });
@@ -160,6 +197,7 @@ vi.mock('../resolve-or-create-conversation', () => ({
     isNew: false,
   }),
   ConversationOwnershipError: class ConversationOwnershipError extends Error {},
+  ConversationHistoryDeletedError: class ConversationHistoryDeletedError extends Error {},
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -171,7 +209,7 @@ vi.mock('@pagespace/db/schema/auth', () => ({
 }));
 
 vi.mock('@pagespace/db/schema/conversations', () => ({
-  conversations: { id: 'id', userId: 'userId', isActive: 'isActive', lastMessageAt: 'lastMessageAt', updatedAt: 'updatedAt', title: 'title' },
+  conversations: { __label: 'conversations', id: 'id', userId: 'userId', isActive: 'isActive', lastMessageAt: 'lastMessageAt', updatedAt: 'updatedAt', title: 'title' },
   messages: { conversationId: 'conversationId', isActive: 'isActive', createdAt: 'createdAt', id: 'id' },
 }));
 
@@ -416,6 +454,7 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
     vi.clearAllMocks();
     captured.createUIMessageStreamOptions = {};
     captured.streamTextOptions = {};
+    mockConversationActiveAtLockTime.current = true;
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
     mockCreateStreamLifecycle.mockResolvedValue({
       pushPart: mockLifecyclePushPart,
@@ -470,6 +509,26 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
       );
       expect(mockTakeOverConversationStreams.mock.invocationCallOrder[0])
         .toBeLessThan(mockCreateStreamLifecycle.mock.invocationCallOrder[0]);
+    });
+  });
+
+  // resolveOrCreateConversation resolved this conversation as active (the
+  // mocked `resolve-or-create-conversation` module always returns
+  // isActive: true), but the credit-gate check, @mention processing, and
+  // command resolution that follow all do their own unrelated I/O — plenty
+  // of room for a concurrent History-delete to commit before
+  // saveGlobalAssistantMessageToDatabase runs. The atomic, lock-guarded
+  // re-check immediately adjacent to that write is what must catch this,
+  // not the earlier resolve (review finding — chatgpt-codex-connector and
+  // coderabbitai on PR #2299).
+  describe('atomic re-check before the first message write', () => {
+    it('given a concurrent History-delete committed after resolution but before the write, should 404 and never invoke the lifecycle', async () => {
+      mockConversationActiveAtLockTime.current = false;
+
+      const response = await POST(makeRequest(), makeContext());
+
+      expect(response.status).toBe(404);
+      expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
     });
   });
 
