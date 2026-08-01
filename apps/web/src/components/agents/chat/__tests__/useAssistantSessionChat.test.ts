@@ -176,3 +176,40 @@ describe('useAssistantSessionChat — contextRef', () => {
     );
   });
 });
+
+describe('useAssistantSessionChat — ask_user answering', () => {
+  // The bug this covers: SessionChat (the global assistant in a session pane, agentPageId
+  // null) never wired useAnswerAskUser/AskUserAnswerProvider in, so an ask_user card there
+  // was permanently non-interactive regardless of the tool part's own state.
+  it('given a pending ask_user on the last assistant message, marks it answerable and submitting it re-invokes the chat via addToolResult', async () => {
+    const { conversationId } = ids('ask-user');
+    const generation = conversationMessagesActions.startLoad(conversationId);
+    conversationMessagesActions.applyLoad(conversationId, generation, [
+      {
+        id: 'm-ask-1',
+        role: 'assistant',
+        parts: [
+          { type: 'tool-ask_user', toolCallId: 'tc-1', state: 'input-available', input: { questions: [] } },
+        ],
+      } as unknown as UIMessage,
+    ]);
+
+    const { result } = renderHook(() => useAssistantSessionChat({ conversationId, driveId: null }));
+
+    await waitFor(() =>
+      expect(result.current.askUserAnswering.answerableToolCallIds.has('tc-1')).toBe(true),
+    );
+
+    await act(async () => {
+      result.current.askUserAnswering.submitAnswers('tc-1', { answers: [] });
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(chat.instance.addToolResult).toHaveBeenCalledTimes(1));
+    const [callArgs] = chat.instance.addToolResult.mock.calls[0] as [{ toolCallId: string; tool: string }];
+    expect(callArgs.toolCallId).toBe('tc-1');
+    expect(callArgs.tool).toBe('ask_user');
+  });
+});

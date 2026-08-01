@@ -38,6 +38,7 @@ import {
   useConversationSendHandoff,
   HANDOFF_REFUSED_MESSAGE,
   useChatErrorCause,
+  useAnswerAskUser,
   buildChatConfig,
   buildGlobalChatRequestBody,
 } from '@/lib/ai/shared';
@@ -110,7 +111,7 @@ export function useAssistantSessionChat({
     });
   }, [transport, conversationId]);
 
-  const { sendMessage, status, error, clearError, regenerate, setMessages, stop } = useChat(
+  const { sendMessage, status, error, clearError, regenerate, setMessages, stop, addToolResult } = useChat(
     chatConfig ?? {},
   );
   const isStreaming = status === 'submitted' || status === 'streaming';
@@ -165,12 +166,53 @@ export function useAssistantSessionChat({
   const currentProvider = useAssistantSettingsStore((state) => state.currentProvider);
   const currentModel = useAssistantSettingsStore((state) => state.currentModel);
 
+  // Shared by handleSend and the ask_user answer path (submitting an answer
+  // re-invokes the chat with the same per-request body a fresh send would use).
+  const buildBody = useCallback(() => {
+    const contextRef: ContextRef = driveId ? { routeType: 'drive', driveId } : buildContextRef(pathname, drives);
+    return buildGlobalChatRequestBody({
+      conversationId,
+      isReadOnly: !writeMode,
+      webSearchEnabled,
+      imageGenEnabled,
+      showPageTree,
+      contextRef,
+      selectedProvider: currentProvider,
+      selectedModel: currentModel,
+    });
+  }, [
+    conversationId,
+    driveId,
+    pathname,
+    drives,
+    writeMode,
+    webSearchEnabled,
+    imageGenEnabled,
+    showPageTree,
+    currentProvider,
+    currentModel,
+  ]);
+
+  // renderedMessages (selector output), not useChat's raw `messages`: "answerable" is
+  // decided by whether the ask_user part sits on the conversation's LAST message, and
+  // remote edits/deletes/messages update the store, not useChat's local array.
+  // isConversationBusy replaces status==='ready' — see selectAnswerableAskUserToolCallIds.
+  const askUserAnswering = useAnswerAskUser({
+    conversationId,
+    renderedMessages,
+    isConversationBusy: displayIsStreaming,
+    setMessages,
+    addToolResult,
+    wrapSend,
+    buildBody,
+    prepareSend,
+  });
+
   const handleSend = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
       if (!trimmed || !conversationId) return false;
 
-      const contextRef: ContextRef = driveId ? { routeType: 'drive', driveId } : buildContextRef(pathname, drives);
       if (!(await prepareSend(conversationId))) {
         toast.error(HANDOFF_REFUSED_MESSAGE);
         return false;
@@ -180,41 +222,13 @@ export function useAssistantSessionChat({
       conversationMessagesActions.addOptimisticSend(conversationId, userMessage);
 
       rollbackOptimisticSendOnFailure(
-        () =>
-          wrapSend(() =>
-            sendMessage(userMessage, {
-              body: buildGlobalChatRequestBody({
-                conversationId,
-                isReadOnly: !writeMode,
-                webSearchEnabled,
-                imageGenEnabled,
-                showPageTree,
-                contextRef,
-                selectedProvider: currentProvider,
-                selectedModel: currentModel,
-              }),
-            }),
-          ),
+        () => wrapSend(() => sendMessage(userMessage, { body: buildBody() })),
         conversationId,
         userMessage.id,
       );
       return true;
     },
-    [
-      conversationId,
-      driveId,
-      pathname,
-      drives,
-      prepareSend,
-      wrapSend,
-      sendMessage,
-      writeMode,
-      webSearchEnabled,
-      imageGenEnabled,
-      showPageTree,
-      currentProvider,
-      currentModel,
-    ],
+    [conversationId, prepareSend, wrapSend, sendMessage, buildBody],
   );
 
   const handleStop = useStopStream({
@@ -287,5 +301,6 @@ export function useAssistantSessionChat({
     hasMoreOlder,
     errorCause,
     dismissError,
+    askUserAnswering,
   };
 }

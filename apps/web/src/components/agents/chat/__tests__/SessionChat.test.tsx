@@ -98,6 +98,7 @@ function baseChatState(overrides: Record<string, unknown> = {}) {
     hasMoreOlder: false,
     errorCause: null,
     dismissError: vi.fn(),
+    askUserAnswering: { answerableToolCallIds: new Set<string>(), submitAnswers: vi.fn() },
     ...overrides,
   };
 }

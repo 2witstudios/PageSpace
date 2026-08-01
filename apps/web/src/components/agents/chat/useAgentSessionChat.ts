@@ -34,9 +34,11 @@ import {
   useConversationSendHandoff,
   HANDOFF_REFUSED_MESSAGE,
   useChatErrorCause,
+  useAnswerAskUser,
   buildChatConfig,
   type AIErrorCause,
 } from '@/lib/ai/shared';
+import type { UseAnswerAskUserResult } from '@/lib/ai/shared/hooks/useAnswerAskUser';
 import { buildContextRef } from '@/lib/ai/shared/buildContextRef';
 import { buildSessionChatRequestBody } from '@/lib/agents/build-session-chat-request';
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
@@ -87,6 +89,7 @@ export interface UseAgentSessionChatReturn {
   hasMoreOlder: boolean;
   errorCause: AIErrorCause | null;
   dismissError: () => void;
+  askUserAnswering: UseAnswerAskUserResult;
 }
 
 export function useAgentSessionChat({
@@ -114,7 +117,7 @@ export function useAgentSessionChat({
     });
   }, [transport, conversationId]);
 
-  const { sendMessage, status, error, clearError, regenerate, setMessages, stop } = useChat(
+  const { sendMessage, status, error, clearError, regenerate, setMessages, stop, addToolResult } = useChat(
     chatConfig ?? {},
   );
   const isStreaming = status === 'submitted' || status === 'streaming';
@@ -169,12 +172,57 @@ export function useAgentSessionChat({
   const imageGenEnabled = useAssistantSettingsStore((state) => state.imageGenEnabled);
   const writeMode = useAssistantSettingsStore((state) => state.writeMode);
 
+  // Shared by handleSend and the ask_user answer path (submitting an answer
+  // re-invokes the chat with the same per-request body a fresh send would use).
+  const buildBody = useCallback(
+    () =>
+      buildSessionChatRequestBody({
+        agentId: agent.id,
+        conversationId,
+        isReadOnly: !writeMode,
+        webSearchEnabled,
+        imageGenEnabled,
+        provider: agent.aiProvider,
+        model: agent.aiModel,
+        systemPrompt: agent.systemPrompt,
+        enabledTools: agent.enabledTools,
+        contextRef: buildContextRef(pathname, drives),
+      }),
+    [
+      agent.id,
+      agent.aiProvider,
+      agent.aiModel,
+      agent.systemPrompt,
+      agent.enabledTools,
+      conversationId,
+      writeMode,
+      webSearchEnabled,
+      imageGenEnabled,
+      pathname,
+      drives,
+    ],
+  );
+
+  // renderedMessages (selector output), not useChat's raw `messages`: "answerable" is
+  // decided by whether the ask_user part sits on the conversation's LAST message, and
+  // remote edits/deletes/messages update the store, not useChat's local array.
+  // isConversationBusy replaces status==='ready' — see selectAnswerableAskUserToolCallIds.
+  const askUserAnswering = useAnswerAskUser({
+    conversationId,
+    renderedMessages,
+    isConversationBusy: displayIsStreaming,
+    setMessages,
+    addToolResult,
+    wrapSend,
+    buildBody,
+    prepareSend,
+  });
+
   const handleSend = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
       if (!trimmed || !conversationId) return false;
 
-      const contextRef = buildContextRef(pathname, drives);
       if (!(await prepareSend(conversationId))) {
         toast.error(HANDOFF_REFUSED_MESSAGE);
         return false;
@@ -184,44 +232,13 @@ export function useAgentSessionChat({
       conversationMessagesActions.addOptimisticSend(conversationId, userMessage);
 
       rollbackOptimisticSendOnFailure(
-        () =>
-          wrapSend(() =>
-            sendMessage(userMessage, {
-              body: buildSessionChatRequestBody({
-                agentId: agent.id,
-                conversationId,
-                isReadOnly: !writeMode,
-                webSearchEnabled,
-                imageGenEnabled,
-                provider: agent.aiProvider,
-                model: agent.aiModel,
-                systemPrompt: agent.systemPrompt,
-                enabledTools: agent.enabledTools,
-                contextRef,
-              }),
-            }),
-          ),
+        () => wrapSend(() => sendMessage(userMessage, { body: buildBody() })),
         conversationId,
         userMessage.id,
       );
       return true;
     },
-    [
-      conversationId,
-      pathname,
-      drives,
-      prepareSend,
-      wrapSend,
-      sendMessage,
-      agent.id,
-      agent.aiProvider,
-      agent.aiModel,
-      agent.systemPrompt,
-      agent.enabledTools,
-      writeMode,
-      webSearchEnabled,
-      imageGenEnabled,
-    ],
+    [conversationId, prepareSend, wrapSend, sendMessage, buildBody],
   );
 
   const handleStop = useStopStream({
@@ -292,5 +309,6 @@ export function useAgentSessionChat({
     hasMoreOlder,
     errorCause,
     dismissError,
+    askUserAnswering,
   };
 }
