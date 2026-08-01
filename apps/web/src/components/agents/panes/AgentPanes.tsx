@@ -103,6 +103,18 @@ export interface AgentPanesProps {
    * the full renderer, the console with the compact one. Layout is identical.
    */
   chatContext?: 'page' | 'console';
+  /**
+   * The conversation the HOSTING AI_CHAT page's own header is currently showing, when
+   * this is that page's own embedded grid — the one pane bound to exactly this
+   * conversation is displaying the same thing the page's own selector/Chat/History/
+   * Settings chrome already identifies, so its pane bar drops to a plain label instead.
+   * Deliberately keyed by CONVERSATION, not agent: a split pane the user pointed at the
+   * same agent but a DIFFERENT conversation (via the picker) is still a distinct thing
+   * the page's own header isn't showing — it keeps its full selector/tab-strip, since
+   * that's its only in-grid way to be managed. Undefined for the console, which has no
+   * single hosting page.
+   */
+  hostConversationId?: string | null;
   /** Read-only viewers get history but no send/edit/delete/retry in any chat pane. */
   isReadOnly?: boolean;
 }
@@ -136,6 +148,7 @@ export default function AgentPanes({
   onSessionEnded,
   onConversationClosed,
   chatContext = 'console',
+  hostConversationId,
   isReadOnly = false,
 }: AgentPanesProps) {
   const workspace = useAgentWorkspaceStore((state) => state.workspaces[sessionId]);
@@ -1197,6 +1210,7 @@ export default function AgentPanes({
           driveId={driveId}
           sessionId={sessionId}
           chatContext={chatContext}
+          hostConversationId={hostConversationId}
           isReadOnly={isReadOnly}
           onSelectAgent={(nextAgentPageId) => handleSwitchAgent(pane.id, pane.scope!.agentPageId, nextAgentPageId)}
           onSelectPane={() => selectPane(sessionId, pane.id)}
@@ -1323,6 +1337,7 @@ function ChatPane({
   driveId,
   sessionId,
   chatContext,
+  hostConversationId,
   isReadOnly,
   onSelectAgent,
   onSelectPane,
@@ -1351,6 +1366,8 @@ function ChatPane({
   driveId: string | null;
   sessionId: string;
   chatContext?: 'page' | 'console';
+  /** The hosting page's own current conversation — see `AgentPanesProps.hostConversationId`'s own doc. */
+  hostConversationId?: string | null;
   isReadOnly: boolean;
   onSelectAgent: (agentPageId: string | null) => void;
   onSelectPane: () => void;
@@ -1475,25 +1492,40 @@ function ChatPane({
       <PaneBar
         isActive={isActive}
         identity={
-          <div className="flex min-w-0 flex-1 items-center gap-0.5">
-            <AISelector
-              selectedAgent={scope.agentPageId === null ? null : agent}
-              onSelectAgent={(next) => onSelectAgent(next?.id ?? null)}
-              driveId={driveId ?? undefined}
-              agents={pickableAgents}
-              agentsLoading={agentsLoading}
-              disabled={disabledAgentSwitch}
-              className="h-6 min-w-0 flex-1 justify-start gap-1 px-1.5 py-0 text-xs font-medium"
-            />
-            <PaneChatTabStrip
-              activeTab={activeTab}
-              onSelectTab={setActiveTab}
-              // The Assistant (agentPageId null) has no page, so no Settings —
-              // every other pane's agent does.
-              showSettings={scope.agentPageId !== null}
-              agentTitle={agent?.title ?? 'Agent'}
-            />
-          </div>
+          conversationId !== null && conversationId === hostConversationId ? (
+            // This pane is showing the SAME conversation the hosting AI_CHAT
+            // page's own header already identifies (Chat/History/Settings
+            // pills, agent name) — a second selector + tab-strip here would
+            // just be duplicate chrome for the identical thing. Matched by
+            // CONVERSATION, not agent: a split pane pointed at the same
+            // agent but a DIFFERENT conversation is still something the
+            // page's own header isn't showing, so it keeps its full
+            // selector/tab-strip below. Drop to the same plain,
+            // non-interactive label the other pane kinds (terminal, page,
+            // picker) already use; split/close (below, unaffected) is still
+            // this pane bar's job.
+            <PaneSessionIdentity name={agent?.title ?? 'Agent'} />
+          ) : (
+            <div className="flex min-w-0 flex-1 items-center gap-0.5">
+              <AISelector
+                selectedAgent={scope.agentPageId === null ? null : agent}
+                onSelectAgent={(next) => onSelectAgent(next?.id ?? null)}
+                driveId={driveId ?? undefined}
+                agents={pickableAgents}
+                agentsLoading={agentsLoading}
+                disabled={disabledAgentSwitch}
+                className="h-6 min-w-0 flex-1 justify-start gap-1 px-1.5 py-0 text-xs font-medium"
+              />
+              <PaneChatTabStrip
+                activeTab={activeTab}
+                onSelectTab={setActiveTab}
+                // The Assistant (agentPageId null) has no page, so no Settings —
+                // every other pane's agent does.
+                showSettings={scope.agentPageId !== null}
+                agentTitle={agent?.title ?? 'Agent'}
+              />
+            </div>
+          )
         }
         actions={
           <>

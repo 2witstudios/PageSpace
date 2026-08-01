@@ -146,7 +146,7 @@ export function SessionChatView({
         </div>
       )}
 
-      <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+      <div className="min-h-0 min-w-0 flex-1 overflow-hidden flex flex-col">
         {showLoading ? (
           <div data-testid="session-chat-loading" className="flex h-full items-center justify-center">
             <Loader2 className="size-4 animate-spin text-muted-foreground" />

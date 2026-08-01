@@ -506,6 +506,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
                 name: 'Conversation',
               }}
               chatContext="page"
+              hostConversationId={current.conversationId}
               isReadOnly={isReadOnly}
               onSessionEnded={() => void handleCreateNew()}
               onConversationClosed={handleConversationClosed}
