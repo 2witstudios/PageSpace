@@ -3,6 +3,7 @@ import { createElement, type ReactNode } from 'react';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { SWRConfig } from 'swr';
 import { useAgentConfig } from '../useAgentConfig';
+import type { AgentConfig } from '../../chat-types';
 
 vi.mock('@/lib/auth/auth-fetch', () => ({ fetchWithAuth: vi.fn() }));
 
@@ -103,6 +104,42 @@ describe('useAgentConfig', () => {
 
     await waitFor(() => expect(r1.current.config?.systemPrompt).toBe('config-for-1'));
     await waitFor(() => expect(r2.current.config?.systemPrompt).toBe('config-for-2'));
+  });
+
+  // review finding — chatgpt-codex-connector on PR #2299, round 22:
+  // PageAgentSettingsTab's onSubmit used to build its cache update from a
+  // `config` value closed over when the save STARTED — two sibling saves
+  // for different fields could each publish a snapshot missing the
+  // other's meanwhile-arrived change. setConfig now also accepts an
+  // updater, applied against whatever the cache actually holds when SWR's
+  // own mutate runs it, not a stale closure.
+  it('setConfig accepts an updater function that merges against the LIVE cache value, not a stale closure', async () => {
+    mockFetchWithAuth.mockResolvedValue({
+      ok: true,
+      json: async () => ({ systemPrompt: 'original', enabledTools: [], availableTools: [], aiProvider: 'openai' }),
+    });
+
+    const { result } = renderHook(() => useAgentConfig('agent-1'), { wrapper });
+    await waitFor(() => expect(result.current.config).not.toBeNull());
+
+    // Simulates two "sibling saves" of DIFFERENT fields, each an updater
+    // over whatever is live at apply time rather than a value closed over
+    // from before either save started.
+    act(() => {
+      result.current.setConfig((current) => ({ ...current, systemPrompt: 'saved-by-a' }) as AgentConfig);
+    });
+    act(() => {
+      result.current.setConfig((current) => ({ ...current, aiProvider: 'anthropic' }) as AgentConfig);
+    });
+
+    // Both merges applied — the second updater saw the first's change via
+    // the live cache, not a stale closure that would have reverted it.
+    expect(result.current.config).toEqual({
+      systemPrompt: 'saved-by-a',
+      enabledTools: [],
+      availableTools: [],
+      aiProvider: 'anthropic',
+    });
   });
 
   // The global assistant has no page — a pane hosting it must still be able

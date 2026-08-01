@@ -29,7 +29,22 @@ function agentConfigKey(pageId: string | null): string | null {
 
 interface UseAgentConfigResult {
   config: AgentConfig | null;
-  setConfig: (next: AgentConfig) => void;
+  /**
+   * Accepts a plain value OR an updater `(current) => next` — the updater
+   * form reads the LIVE SWR cache value at the moment it actually runs,
+   * not whatever `config` a caller's closure captured when it was created.
+   * Two mounted consumers of the SAME pageId saving DIFFERENT fields
+   * concurrently each hold their own stale closure of `config` from
+   * before either save started; whichever finishes last spreading that
+   * closure into a plain value here would publish a snapshot missing the
+   * other's meanwhile-arrived change, making it disappear from the shared
+   * cache (and every mounted consumer) even though both sparse PATCHes
+   * persisted correctly server-side (review finding — chatgpt-codex-
+   * connector on PR #2299, round 22 — see PageAgentSettingsTab's onSubmit).
+   * (Matches SWR's own MutatorCallback signature — `undefined`, not
+   * `null`, for "no value yet", since it's passed straight through.)
+   */
+  setConfig: (next: AgentConfig | ((current: AgentConfig | undefined) => AgentConfig)) => void;
 }
 
 export function useAgentConfig(pageId: string | null): UseAgentConfigResult {
@@ -46,6 +61,9 @@ export function useAgentConfig(pageId: string | null): UseAgentConfigResult {
   return {
     config: data ?? null,
     setConfig: (next) => {
+      // SWR's own mutate natively accepts either shape — passed straight
+      // through so the updater form runs against whatever the cache
+      // actually holds when it executes.
       void mutate(next, { revalidate: false });
     },
   };

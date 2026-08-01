@@ -49,7 +49,9 @@ interface PageAgentSettingsTabProps {
   pageId: string;
   driveId: string;
   config: AgentConfig | null;
-  onConfigUpdate: (config: AgentConfig) => void;
+  /** Accepts a plain value OR an updater `(current) => next` — see onSubmit
+   * below for why the updater form matters (round 22). */
+  onConfigUpdate: (config: AgentConfig | ((current: AgentConfig | undefined) => AgentConfig)) => void;
   selectedProvider: string;
   selectedModel: string;
   onProviderChange: (provider: string) => void;
@@ -381,15 +383,20 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
 
       await patch(`/api/pages/${pageId}/agent-config`, requestData);
 
-      // The LOCAL optimistic cache update is display-only (never sent to
-      // the server above), so merging with the freshest config here is
-      // safe — this just makes sure THIS instance's own edits are visible
-      // immediately without waiting on a revalidation round trip.
-      const updatedConfig = {
-        ...config,
-        ...dirtyPatch,
-        ...(providerOrModelTouched && { aiProvider: resolvedProvider, aiModel: resolvedModel }),
-      } as AgentConfig;
+      // Updater form — merges against whatever the SHARED SWR cache
+      // actually holds at the moment this runs, not the `config` this
+      // closure captured when onSubmit was created. Two surfaces saving
+      // DIFFERENT fields concurrently each hold their OWN stale closure
+      // from before either save started; whichever finishes last spreading
+      // that closure as a plain value would publish a snapshot missing the
+      // other's meanwhile-arrived change, making it disappear from every
+      // mounted consumer even though both sparse PATCHes above persisted
+      // correctly server-side (review finding — chatgpt-codex-connector on
+      // PR #2299, round 22).
+      const patchThisSave = dirtyPatch;
+      const providerModelPatch = providerOrModelTouched
+        ? { aiProvider: resolvedProvider, aiModel: resolvedModel }
+        : {};
       // This save's own values should always become this instance's new
       // clean baseline, even though the form is (still, momentarily) dirty
       // when the reset effect runs — the dirty-guard above only exists to
@@ -405,7 +412,11 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       // chatgpt-codex-connector on PR #2299, round 19).
       providerTouchedRef.current = false;
       modelTouchedRef.current = false;
-      onConfigUpdate(updatedConfig);
+      onConfigUpdate((current) => ({
+        ...current,
+        ...patchThisSave,
+        ...providerModelPatch,
+      } as AgentConfig));
       toast.success('Agent configuration saved successfully');
     } catch (error) {
       console.error('Error saving agent configuration:', error);
