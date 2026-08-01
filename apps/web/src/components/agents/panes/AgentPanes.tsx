@@ -145,6 +145,24 @@ export default function AgentPanes({
   const replaceConversation = useAgentWorkspaceStore((state) => state.replaceConversation);
   const forgetWorkspace = useAgentWorkspaceStore((state) => state.forgetWorkspace);
 
+  // The latest "assign this pane to conversation X" request per pane —
+  // bumped by every such request (a History pick, an agent mint) so an
+  // OLDER one's async completion (a slow reopen, a slow mint) can detect
+  // it's been superseded and skip applying its now-stale result. A pane id
+  // is reused across a pane's whole lifetime (split/close mint new ids, but
+  // WITHIN one pane's life the id is stable), so a plain per-paneId counter
+  // is enough — no cleanup needed, a closed pane's entry is simply never
+  // read again (review finding — chatgpt-codex-connector on PR #2299: two
+  // rapid History picks, or a History pick raced by an agent switch, could
+  // resolve out of order and let network timing pick the visible
+  // transcript).
+  const paneAssignTokens = useRef(new Map<string, number>());
+  const beginPaneAssign = useCallback((paneId: string) => {
+    const token = (paneAssignTokens.current.get(paneId) ?? 0) + 1;
+    paneAssignTokens.current.set(paneId, token);
+    return () => paneAssignTokens.current.get(paneId) === token;
+  }, []);
+
   // The picker's agent list. A drive session offers only that drive's agents;
   // a global-assistant session (driveId null) has no home drive to filter by,
   // so it offers every agent the caller can access, across all their drives —
@@ -559,6 +577,14 @@ export default function AgentPanes({
 
   const handlePickAgent = useCallback(
     async (paneId: string, agentPageId: string | null) => {
+      // Also supersedes any pending `handlePickHistoryConversation` call for
+      // this pane — a slow reopen resolving after the user has since minted
+      // a different agent into this same pane must not overwrite it (review
+      // finding — chatgpt-codex-connector on PR #2299). This mint has its
+      // OWN, separate staleness guard below (`paneStillLoading`); bumping
+      // the shared token here just extends that same protection to the
+      // OTHER call path.
+      beginPaneAssign(paneId);
       const conversationId = createId();
       // Bind first, render after: the pane goes to `loading` (kind set, target
       // null) while the mint is in flight — never a speculative surface.
@@ -616,7 +642,7 @@ export default function AgentPanes({
         }
       }
     },
-    [assignPane, resetPane, sessionId, paneStillLoading, cleanupOrphanedConversation, recordMintedConversation],
+    [assignPane, resetPane, sessionId, paneStillLoading, cleanupOrphanedConversation, recordMintedConversation, beginPaneAssign],
   );
 
   /**
@@ -646,6 +672,7 @@ export default function AgentPanes({
       agentPageId: string | null,
       conversation: { id: string; title: string | null; sessionId: string | null },
     ): Promise<boolean> => {
+      const isCurrent = beginPaneAssign(paneId);
       if (conversation.sessionId === sessionId) {
         try {
           await post(
@@ -653,17 +680,24 @@ export default function AgentPanes({
             {},
           );
         } catch (error) {
+          // A newer pick (or agent switch) on this pane already superseded
+          // this one — its own outcome, success or failure, is no longer
+          // this pane's concern, and surfacing an error toast for a request
+          // the user has already moved past would be confusing.
+          if (!isCurrent()) return false;
           console.error('Failed to reopen conversation:', error);
           toast.error('Could not reopen this conversation', {
             description: error instanceof Error ? error.message : 'Please try again.',
           });
           return false;
         }
+        if (!isCurrent()) return false;
         // Instant-freshness nudge, same as every other listing-changing
         // action here — the sidebar's own open list otherwise lags until its
         // next poll.
         void mutate(isAgentSessionsKey);
       }
+      if (!isCurrent()) return false;
       // Already showing in another pane in THIS grid — focus it rather than
       // mounting a second, independently interactive surface for the same
       // transcript (review finding — chatgpt-codex-connector on PR #2299;
@@ -695,7 +729,7 @@ export default function AgentPanes({
       });
       return true;
     },
-    [sessionId, assignPane, workspace, selectPane],
+    [sessionId, assignPane, workspace, selectPane, beginPaneAssign],
   );
 
   /**
@@ -711,8 +745,16 @@ export default function AgentPanes({
    */
   const handleHistoryDeleteConversation = useCallback(
     (deletedConversationId: string) => {
-      if (!workspace) return;
-      const affectedPanes = panesOf(workspace).filter(
+      // Read fresh at call time, not the `workspace` this callback closed
+      // over — this always runs after the DELETE's own async round trip,
+      // during which the user could have already reassigned an affected
+      // pane to something else. Resetting based on the STALE pre-DELETE
+      // snapshot would discard that newer selection even though the pane
+      // no longer shows the deleted conversation at all (review finding —
+      // chatgpt-codex-connector on PR #2299).
+      const liveWorkspace = useAgentWorkspaceStore.getState().workspaces[sessionId];
+      if (!liveWorkspace) return;
+      const affectedPanes = panesOf(liveWorkspace).filter(
         (p) => p.scope?.kind === 'chat' && p.scope.targetId === deletedConversationId,
       );
       for (const pane of affectedPanes) {
@@ -722,7 +764,7 @@ export default function AgentPanes({
         void mutate(isAgentSessionsKey);
       }
     },
-    [workspace, sessionId, resetPane],
+    [sessionId, resetPane],
   );
 
   // The pane bar selector's switch — focus-or-mint, decided by the pure

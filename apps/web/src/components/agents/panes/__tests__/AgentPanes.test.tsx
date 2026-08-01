@@ -1060,6 +1060,48 @@ describe('AgentPanes', () => {
       expect(screen.queryByTestId('pane-chat')).not.toBeInTheDocument();
     });
 
+    // review finding — chatgpt-codex-connector on PR #2299: a slow reopen's
+    // completion, arriving after the user has already picked something else
+    // on the SAME pane, must not overwrite that newer choice.
+    it('ignores a stale reopen completion superseded by a second pick on the same pane', async () => {
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url === '/api/ai/page-agents/agent-1/conversations') {
+          return conversationsFixture([
+            { id: 'conv-slow', title: 'Slow chat', sessionId: 'ses-1' },
+            { id: 'conv-fast', title: 'Fast chat', sessionId: null },
+          ]);
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      let resolveSlowReopen!: (value: unknown) => void;
+      mockPost.mockReturnValue(new Promise((resolve) => (resolveSlowReopen = resolve)));
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('tab', { name: /history/i }));
+      // Starts the slow reopen — still pending, so the pane stays on History
+      // (per the previous fix) rather than following it to Chat.
+      await user.click(await screen.findByRole('button', { name: 'select-conv-slow' }));
+      expect(screen.getByTestId('pane-history-tab')).toBeInTheDocument();
+
+      // A second pick on the SAME pane, before the first resolves — no
+      // reopen needed (unbound), so it lands immediately.
+      await user.click(await screen.findByRole('button', { name: 'select-conv-fast' }));
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-fast'));
+
+      // NOW the stale reopen resolves — must be ignored.
+      resolveSlowReopen({});
+      await waitFor(() => {
+        const pane = useAgentWorkspaceStore
+          .getState()
+          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+          .find((p) => p.id === paneId);
+        expect(pane?.scope?.targetId).toBe('conv-fast');
+      });
+    });
+
     // review finding — chatgpt-codex-connector on PR #2299: History-delete
     // deactivates the CANONICAL row, not just the deleting pane's own
     // listing — every pane showing that id (in this grid), whichever pane's
@@ -1151,6 +1193,75 @@ describe('AgentPanes', () => {
         .workspaces['ses-1'].columns.flatMap((c) => c.panes)
         .find((p) => p.id === secondPaneId);
       expect(secondPaneAfter?.scope?.targetId).toBe('conv-doomed');
+    });
+
+    // review finding — chatgpt-codex-connector on PR #2299: reading the
+    // workspace SNAPSHOT captured when the callback was created (rather than
+    // fresh at completion time) meant a pane reassigned WHILE the DELETE was
+    // in flight still got reset based on its old, no-longer-current binding.
+    it('does not reset a pane that was reassigned to something else while the History delete was in flight', async () => {
+      let resolveDelete!: () => void;
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url === '/api/ai/page-agents/agent-1/conversations') {
+          return conversationsFixture([{ id: 'conv-doomed', title: 'Doomed chat', sessionId: null }]);
+        }
+        if (url === '/api/ai/page-agents/agent-1/conversations/conv-doomed') {
+          return new Promise((resolve) => (resolveDelete = () => resolve({ ok: true })));
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
+      const secondPaneId = useAgentWorkspaceStore
+        .getState()
+        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+        .find((p) => p.id !== firstPaneId)!.id;
+      act(() =>
+        useAgentWorkspaceStore.getState().assignPane('ses-1', secondPaneId, {
+          kind: 'chat',
+          name: 'Doomed chat',
+          targetId: 'conv-doomed',
+          agentPageId: 'agent-1',
+        }),
+      );
+
+      const user = userEvent.setup();
+      const historyTabs = await screen.findAllByRole('tab', { name: /history/i });
+      await user.click(historyTabs[0]);
+      await user.click(await screen.findByRole('button', { name: 'delete-conv-doomed' }));
+      await waitFor(() =>
+        expect(mockFetchWithAuth).toHaveBeenCalledWith(
+          '/api/ai/page-agents/agent-1/conversations/conv-doomed',
+          expect.objectContaining({ method: 'DELETE' }),
+        ),
+      );
+
+      // The user reassigns the SECOND pane to something else while the
+      // DELETE is still pending.
+      act(() =>
+        useAgentWorkspaceStore.getState().assignPane('ses-1', secondPaneId, {
+          kind: 'chat',
+          name: 'Something else',
+          targetId: 'conv-something-else',
+          agentPageId: 'agent-1',
+        }),
+      );
+
+      // NOW the delete resolves — must not clobber the newer assignment.
+      // No `affectedPanes` remain (the pane no longer shows conv-doomed),
+      // so nothing else to await on directly — poll the pane's own scope
+      // instead, giving the delete's `.then()` chain time to run and
+      // confirming it stays put once it has.
+      resolveDelete();
+      await waitFor(() => {
+        const secondPaneAfter = useAgentWorkspaceStore
+          .getState()
+          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+          .find((p) => p.id === secondPaneId);
+        expect(secondPaneAfter?.scope?.targetId).toBe('conv-something-else');
+      });
     });
 
     // review finding — coderabbitai on PR #2299: `showSettings` hides the tab

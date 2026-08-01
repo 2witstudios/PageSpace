@@ -439,12 +439,18 @@ describe('conversationRepository.softDeleteConversation', () => {
     // vice versa (a second review finding on the same fix: chatgpt-codex-
     // connector on PR #2296).
     expect(mockDb.transaction).toHaveBeenCalledTimes(1);
-    // Two separate UPDATEs: chat_messages (unchanged, pre-existing behavior)
-    // THEN conversations — same order the fix was added in, verified via the
-    // table argument each db.update() call received.
+    // Two separate UPDATEs: conversations FIRST, then chat_messages — the
+    // canonical row is locked before the message sweep, or a concurrent
+    // send's own FOR UPDATE re-check (apps/web/src/app/api/ai/chat/route.ts)
+    // could acquire that lock in the window between them, observe
+    // isActive: true, and commit a new active message a moment before this
+    // transaction tombstones the conversation (review finding — chatgpt-
+    // codex-connector on PR #2299, filed after the original chatMessages-
+    // then-conversations order shipped on PR #2296). Verified via the table
+    // argument each db.update() call received.
     expect(mockDb.update).toHaveBeenCalledTimes(2);
-    expect(mockDb.update).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: 'chatMessages.id' }));
-    expect(mockDb.update).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: 'conversations.id' }));
+    expect(mockDb.update).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: 'conversations.id' }));
+    expect(mockDb.update).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: 'chatMessages.id' }));
     expect(setMock).toHaveBeenNthCalledWith(1, { isActive: false });
     expect(setMock).toHaveBeenNthCalledWith(2, { isActive: false });
     expect(mockInvalidateCompaction).toHaveBeenCalledWith('conv_deleted', { source: 'page', pageId: 'agent_1' });
