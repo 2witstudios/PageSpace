@@ -10,21 +10,6 @@ export class ConversationOwnershipError extends Error {
 }
 
 /**
- * The conversation exists but its session binding disagrees with the one the
- * caller asked for. A thread is BORN into its session (set at creation,
- * permanent — contract invariant 1); satisfying this request would be a
- * rebind, so it is refused rather than performed. Distinct from
- * {@link ConversationOwnershipError} because the caller may well OWN the
- * thread — the refusal is about the binding, not the owner.
- */
-export class ConversationBindingConflictError extends Error {
-  constructor() {
-    super('Conversation is already bound to a different session');
-    this.name = 'ConversationBindingConflictError';
-  }
-}
-
-/**
  * The id resolves to a row, but it has been history-deleted
  * (`isActive: false`) — reachable via the concurrent-insert fallback below:
  * the initial SELECT filters `isActive: true` (so a history-deleted row
@@ -71,13 +56,6 @@ export async function resolveOrCreateConversation(
   conversationId: string,
   db: Db = defaultDb,
   opts?: {
-    /**
-     * Bind the conversation to this session AT CREATION (the only moment a
-     * binding may be written — invariant 1). For an already-existing row the
-     * binding must MATCH (an idempotent retry), or the resolve is refused
-     * with {@link ConversationBindingConflictError} — never rebound.
-     */
-    sessionId?: string;
     /** Display label for the new row (spawned workers are labeled at birth). Ignored for an existing row. */
     title?: string;
   },
@@ -110,13 +88,13 @@ export async function resolveOrCreateConversation(
   if (existing) {
     if (existing.userId !== userId) throw new ConversationOwnershipError();
     if (existing.type !== 'global') throw new ConversationOwnershipError();
-    if (opts?.sessionId !== undefined && existing.sessionId !== opts.sessionId) {
-      throw new ConversationBindingConflictError();
-    }
     return { conversation: existing, isNew: false };
   }
 
   // Idempotent insert: ON CONFLICT DO NOTHING handles concurrent first-writes.
+  // Always session-agnostic — this never writes `sessionId` (there is no
+  // param for it). A conversation that needs a session gets one afterward,
+  // via `claimConversationInSession` (see `claim-conversation-in-session.ts`).
   const [created] = await db
     .insert(conversations)
     .values({
@@ -124,7 +102,7 @@ export async function resolveOrCreateConversation(
       userId,
       type: 'global',
       isActive: true,
-      sessionId: opts?.sessionId ?? null,
+      sessionId: null,
       title: opts?.title ?? null,
     })
     .onConflictDoNothing()
@@ -144,10 +122,5 @@ export async function resolveOrCreateConversation(
   if (!winner) throw new Error(`Failed to resolve conversation ${conversationId}`);
   if (!winner.isActive) throw new ConversationHistoryDeletedError();
   if (winner.userId !== userId) throw new ConversationOwnershipError();
-  if (opts?.sessionId !== undefined && winner.sessionId !== opts.sessionId) {
-    // The racing insert won without our binding — same refusal as any other
-    // existing-row mismatch.
-    throw new ConversationBindingConflictError();
-  }
   return { conversation: winner, isNew: true };
 }

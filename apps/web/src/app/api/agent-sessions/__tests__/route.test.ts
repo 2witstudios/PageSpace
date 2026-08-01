@@ -14,10 +14,12 @@ const {
   mockEndSession,
   mockSpawnSession,
   mockGetAiAgent,
+  mockGetConversation,
   mockCanPrincipalViewPage,
   mockProvisionSessionSandbox,
   mockSpawnShell,
   mockFindSessionRecord,
+  mockClaimConversationInSession,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
   mockAuditRequest: vi.fn(),
@@ -31,10 +33,12 @@ const {
   mockEndSession: vi.fn(),
   mockSpawnSession: vi.fn(),
   mockGetAiAgent: vi.fn(),
+  mockGetConversation: vi.fn(),
   mockCanPrincipalViewPage: vi.fn(),
   mockProvisionSessionSandbox: vi.fn(),
   mockSpawnShell: vi.fn(),
   mockFindSessionRecord: vi.fn(),
+  mockClaimConversationInSession: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -43,7 +47,10 @@ vi.mock('@/lib/auth', () => ({
   canPrincipalViewPage: (...args: unknown[]) => mockCanPrincipalViewPage(...args),
 }));
 vi.mock('@/lib/repositories/conversation-repository', () => ({
-  conversationRepository: { getAiAgent: (...args: unknown[]) => mockGetAiAgent(...args) },
+  conversationRepository: {
+    getAiAgent: (...args: unknown[]) => mockGetAiAgent(...args),
+    getConversation: (...args: unknown[]) => mockGetConversation(...args),
+  },
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: (...args: unknown[]) => mockAuditRequest(...args),
@@ -63,6 +70,7 @@ vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
   toAgentSessionDTO: (row: { id: string }) => ({ sessionId: row.id, dto: true }),
   provisionSessionSandbox: (...args: unknown[]) => mockProvisionSessionSandbox(...args),
   findSessionRecord: (...args: unknown[]) => mockFindSessionRecord(...args),
+  claimConversationInSession: (...args: unknown[]) => mockClaimConversationInSession(...args),
 }));
 vi.mock('@/lib/agent-sessions/session-shells-runtime', () => ({
   listShellsBulk: (...args: unknown[]) => mockListShellsBulk(...args),
@@ -218,9 +226,8 @@ describe('POST /api/agent-sessions — spawn', () => {
     expect(mockCreateConversationInSession).toHaveBeenCalledWith(
       expect.objectContaining({ agentPageId: 'agent-1', sessionId: 'ses-new', userId: 'user-1' }),
     );
-    // Spawn is instant and free: nothing here may provision. There is no
-    // provision mock to assert against because the route does not import one —
-    // the absence is structural.
+    // Spawn is instant and free: nothing here may provision a sandbox.
+    expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
   });
 
   it('spawns a GLOBAL-ASSISTANT session from the both-null shape, auto-naming it "Global Assistant"', async () => {
@@ -396,6 +403,156 @@ describe("POST /api/agent-sessions — firstThing: 'shell'", () => {
     const response = await spawn({ driveId: 'drive-1', firstThing: 'shell' });
     expect(response.status).toBe(201);
     expect(mockFindSessionRecord).toHaveBeenCalledWith('ses-new');
+  });
+});
+
+describe("POST /api/agent-sessions — firstThing: 'claim'", () => {
+  const spawn = (body: unknown) =>
+    POST(
+      new Request('http://localhost/api/agent-sessions', {
+        method: 'POST',
+        body: JSON.stringify(body),
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+  const UNBOUND_PAGE_CONVERSATION = {
+    id: 'conv-1',
+    userId: 'user-1',
+    type: 'page',
+    contextId: 'agent-1',
+    sessionId: null,
+    isActive: true,
+  };
+
+  const UNBOUND_GLOBAL_CONVERSATION = {
+    id: 'conv-1',
+    userId: 'user-1',
+    type: 'global',
+    contextId: null,
+    sessionId: null,
+    isActive: true,
+  };
+
+  beforeEach(() => {
+    mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+    mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-new' } });
+    mockEndSession.mockResolvedValue({ ok: true, spriteTornDown: false });
+    mockCountActiveSessionsForOwner.mockResolvedValue(0);
+    mockListSessions.mockResolvedValue([]);
+    mockGetAiAgent.mockResolvedValue({ id: 'agent-1', title: 'Agent', type: 'AI_CHAT', driveId: 'drive-1' });
+    mockCanPrincipalViewPage.mockResolvedValue(true);
+    mockGetConversation.mockResolvedValue(UNBOUND_PAGE_CONVERSATION);
+    mockClaimConversationInSession.mockResolvedValue('claimed');
+  });
+
+  it('spawns a session and claims the existing conversation — createConversationInSession is never called', async () => {
+    const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
+    expect(response.status).toBe(201);
+    const body = await response.json();
+    expect(body).toEqual({ session: { sessionId: 'ses-new', dto: true }, conversationId: 'conv-1' });
+    expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: 'drive-1', name: 'Agent' });
+    expect(mockClaimConversationInSession).toHaveBeenCalledWith({
+      conversationId: 'conv-1',
+      userId: 'user-1',
+      sessionId: 'ses-new',
+    });
+    expect(mockCreateConversationInSession).not.toHaveBeenCalled();
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ details: expect.objectContaining({ op: 'spawn_session', claimed: true }) }),
+    );
+  });
+
+  it("derives the drive from the claimed conversation's own agent for a type:'page' row", async () => {
+    const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
+    expect(response.status).toBe(201);
+    expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ driveId: 'drive-1' }));
+  });
+
+  it('refuses a body driveId that disagrees with the claimed page conversation\'s own agent drive', async () => {
+    const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1', driveId: 'drive-other' });
+    expect(response.status).toBe(400);
+    expect(mockSpawnSession).not.toHaveBeenCalled();
+  });
+
+  it('accepts a body driveId for a type:\'global\' claimed conversation, spawning a drive-scoped session', async () => {
+    mockGetConversation.mockResolvedValue(UNBOUND_GLOBAL_CONVERSATION);
+    const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1', driveId: 'drive-1' });
+    expect(response.status).toBe(201);
+    expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ driveId: 'drive-1' }));
+    expect(mockGetAiAgent).not.toHaveBeenCalled();
+  });
+
+  it('omitted driveId for a type:\'global\' claimed conversation spawns a GLOBAL session', async () => {
+    mockGetConversation.mockResolvedValue(UNBOUND_GLOBAL_CONVERSATION);
+    const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
+    expect(response.status).toBe(201);
+    expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ driveId: null }));
+  });
+
+  it('400s when conversationId is missing', async () => {
+    const response = await spawn({ firstThing: 'claim' });
+    expect(response.status).toBe(400);
+    expect(mockSpawnSession).not.toHaveBeenCalled();
+  });
+
+  it('400s when combined with an agentPageId — the agent is derived from the row, never the request', async () => {
+    const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1', agentPageId: 'agent-1' });
+    expect(response.status).toBe(400);
+    expect(mockSpawnSession).not.toHaveBeenCalled();
+  });
+
+  it('404s a conversation that is missing, foreign-owned, or inactive — uniform "not found"', async () => {
+    mockGetConversation.mockResolvedValue(null);
+    const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
+    expect(response.status).toBe(404);
+    expect(mockSpawnSession).not.toHaveBeenCalled();
+  });
+
+  it('409s a conversation already bound to a session', async () => {
+    mockGetConversation.mockResolvedValue({ ...UNBOUND_PAGE_CONVERSATION, sessionId: 'ses-other' });
+    const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
+    expect(response.status).toBe(409);
+    expect(mockSpawnSession).not.toHaveBeenCalled();
+  });
+
+  it('403s + audits when the caller cannot view the agent page — owning the conversation is not permission to use the agent', async () => {
+    mockCanPrincipalViewPage.mockResolvedValue(false);
+    const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
+    expect(response.status).toBe(403);
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'authz.access.denied' }),
+    );
+  });
+
+  it('given the claim loses a race after the preflight (not_found), ENDS the just-minted session and responds 409 — same conflict, same status the preflight itself would give it, not a server fault', async () => {
+    mockClaimConversationInSession.mockResolvedValue('not_found');
+    const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
+    expect(response.status).toBe(409);
+    expect(mockEndSession).toHaveBeenCalledWith('ses-new');
+  });
+
+  it('given claim fails for a truly unexpected outcome, ENDS the session and responds 502', async () => {
+    mockClaimConversationInSession.mockResolvedValue('session_ended');
+    const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
+    expect(response.status).toBe(502);
+    expect(mockEndSession).toHaveBeenCalledWith('ses-new');
+  });
+
+  it('given a cross-drive denial from claim, ENDS the session and responds 400', async () => {
+    mockClaimConversationInSession.mockResolvedValue('cross_drive_denied');
+    const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
+    expect(response.status).toBe(400);
+    expect(mockEndSession).toHaveBeenCalledWith('ses-new');
+  });
+
+  it('an idempotent already_in_session claim outcome still succeeds', async () => {
+    mockClaimConversationInSession.mockResolvedValue('already_in_session');
+    const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
+    expect(response.status).toBe(201);
+    expect(mockEndSession).not.toHaveBeenCalled();
   });
 });
 

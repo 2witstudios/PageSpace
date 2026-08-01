@@ -24,6 +24,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createId } from '@paralleldrive/cuid2';
 import {
   checkAccessForSubject,
+  claimConversationInSession,
   countActiveSessionsForOwner,
   createConversationInSession,
   endSession,
@@ -56,6 +57,33 @@ function nextUniqueSessionName(base: string, existingNames: readonly string[]): 
   let index = 2;
   while (taken.has(`${base} ${index}`)) index += 1;
   return `${base} ${index}`;
+}
+
+/**
+ * The `canPrincipalViewPage` gate every agent-permission check in this route
+ * shares — same denial shape, same audit payload, whether the agent came
+ * from the ordinary mint path's `agentPageId` or a claim's own conversation
+ * row. Factored out because this exact check→audit→403 sequence appeared
+ * verbatim at two call sites in this file (review finding — reuse pass).
+ * Returns the ready 403 response on denial, or `null` when the caller may
+ * proceed.
+ */
+async function denyIfCannotViewAgent(
+  request: Request,
+  auth: Parameters<typeof canPrincipalViewPage>[0],
+  agentPageId: string,
+): Promise<NextResponse | null> {
+  const canView = await canPrincipalViewPage(auth, agentPageId);
+  if (canView) return null;
+  auditRequest(request, {
+    eventType: 'authz.access.denied',
+    userId: auth.userId,
+    resourceType: 'page_agent_conversation',
+    resourceId: agentPageId,
+    details: { reason: 'no_view_permission', method: 'POST', route: 'agent-sessions' },
+    riskScore: 0.5,
+  });
+  return NextResponse.json({ error: 'Insufficient permissions to use this agent' }, { status: 403 });
 }
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -144,11 +172,22 @@ export async function GET(request: Request) {
  * one: the session's first thing is a shell instead, reusing the exact
  * sandbox-provisioning + shell-spawn logic the shells route uses
  * (`provisionSessionSandbox` + `spawnShell`) rather than reimplementing it.
+ *
+ * `firstThing: 'claim', conversationId` swaps it again for claiming an
+ * EXISTING, never-session-bound conversation the caller owns as the
+ * session's first thing, instead of minting a brand-new one —
+ * `claimConversationInSession` (`claim-conversation-in-session.ts`), the
+ * ONE place `conversations.sessionId` is ever written. `driveId`/`agentPageId`
+ * are derived from the claimed row itself (a `type: 'page'` row's own agent;
+ * a `type: 'global'` row takes the caller's `driveId`, same three-shape
+ * ambiguity as the ordinary mint path below) — a caller-supplied
+ * `agentPageId` alongside `firstThing: 'claim'` is refused outright.
+ *
  * Omitted/anything else behaves exactly as before — the conversation path.
  *
- * Only one shape is refused: an `agentPageId` without a `driveId` is
- * unresolvable (which drive's agent?) — UNLESS `firstThing: 'shell'`, whose
- * first thing needs no agent at all.
+ * Only one shape is refused outright: an `agentPageId` without a `driveId` is
+ * unresolvable (which drive's agent?) — UNLESS `firstThing: 'shell'` or
+ * `'claim'`, neither of which take an `agentPageId` from the caller at all.
  *
  * A blank/omitted `name` is not left null: it is auto-derived from the spawn
  * target (the agent's title, "Shell", or "Global Assistant") and made unique
@@ -167,24 +206,49 @@ export async function POST(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
 
-  let body: { driveId?: unknown; agentPageId?: unknown; name?: unknown; firstThing?: unknown } = {};
+  let body: {
+    driveId?: unknown;
+    agentPageId?: unknown;
+    name?: unknown;
+    firstThing?: unknown;
+    conversationId?: unknown;
+  } = {};
   try {
     body = await request.json();
   } catch {
     // Body is required — a spawn names its drive and agent.
   }
-  const driveId = typeof body.driveId === 'string' && body.driveId.length > 0 ? body.driveId : null;
+  let driveId = typeof body.driveId === 'string' && body.driveId.length > 0 ? body.driveId : null;
   const agentPageId =
     typeof body.agentPageId === 'string' && body.agentPageId.length > 0 ? body.agentPageId : null;
   const rawName = typeof body.name === 'string' ? body.name.trim() : '';
   const wantsShellFirst = body.firstThing === 'shell';
+  const wantsClaim = body.firstThing === 'claim';
+  const claimConversationId =
+    typeof body.conversationId === 'string' && body.conversationId.length > 0 ? body.conversationId : null;
 
-  if (!wantsShellFirst && driveId === null && agentPageId !== null) {
+  if (wantsClaim && claimConversationId === null) {
+    return NextResponse.json(
+      { error: 'A claim needs the conversation to claim' },
+      { status: 400 },
+    );
+  }
+  if (wantsClaim && agentPageId !== null) {
+    // The agent is a property of the CLAIMED ROW, not the request — derived
+    // below from the conversation itself, never taken from the caller.
+    return NextResponse.json(
+      { error: 'An agent cannot be supplied when claiming an existing conversation' },
+      { status: 400 },
+    );
+  }
+
+  if (!wantsShellFirst && !wantsClaim && driveId === null && agentPageId !== null) {
     // The only truly unresolvable shape: an agent without its drive. Every
     // other combination is valid — both-present (drive session with that
     // agent), drive-only (drive session, assistant-first), and both-null
-    // (global-assistant session). A shell-first spawn needs no agent, so it
-    // is exempt from this check entirely.
+    // (global-assistant session). A shell-first spawn needs no agent, and a
+    // claim's agent (if any) is derived from the claimed row, so both are
+    // exempt from this check entirely.
     return NextResponse.json(
       { error: 'An agent needs its drive to start a session' },
       { status: 400 },
@@ -195,6 +259,62 @@ export async function POST(request: Request) {
   // blank `name` derives from (see below). Captured here rather than
   // re-fetched, since the lookup already happened for validation.
   let agentTitle: string | null = null;
+  // The claimed conversation's own title/type, for name derivation below —
+  // only ever set on the `wantsClaim` path.
+  let claimTitle: string | null = null;
+  let claimIsGlobal = false;
+
+  if (wantsClaim) {
+    // conversationId is non-null here (validated above); TS can't see that
+    // through the closure, so re-derive a narrowed local.
+    const conversationId = claimConversationId as string;
+    const row = await conversationRepository.getConversation(conversationId);
+    if (!row || row.userId !== auth.userId || !row.isActive) {
+      // Uniform "not found" whether the id never existed, belongs to someone
+      // else, or was history-deleted — an id-guessing caller learns nothing.
+      return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+    }
+    if (row.sessionId !== null) {
+      return NextResponse.json(
+        { error: 'That conversation already belongs to a session' },
+        { status: 409 },
+      );
+    }
+    claimTitle = row.title;
+
+    if (row.type === 'page') {
+      if (!row.contextId) {
+        return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+      }
+      const agent = await conversationRepository.getAiAgent(row.contextId);
+      if (!agent) {
+        return NextResponse.json({ error: 'AI agent not found' }, { status: 404 });
+      }
+      // The drive is DERIVED from the agent, never taken from the body — a
+      // caller-supplied drive that disagrees is refused rather than
+      // silently overridden.
+      if (driveId !== null && driveId !== agent.driveId) {
+        return NextResponse.json(
+          { error: "That conversation's agent belongs to a different drive" },
+          { status: 400 },
+        );
+      }
+      driveId = agent.driveId;
+      const denied = await denyIfCannotViewAgent(request, auth, row.contextId);
+      if (denied) return denied;
+      agentTitle = agent.title;
+    } else if (row.type === 'global') {
+      claimIsGlobal = true;
+      // driveId stays whatever the caller (the surface's own drive context)
+      // sent — the same three-shape ambiguity the ordinary mint path already
+      // documents: a global thread may legitimately open in a drive-scoped
+      // or a global session, and only the caller knows which.
+    } else {
+      // 'client' (API-managed) rows have no in-app viewer and can't be
+      // claimed — same policy `resolveNavigationTarget` already applies.
+      return NextResponse.json({ error: 'That conversation is not available' }, { status: 409 });
+    }
+  }
 
   if (agentPageId !== null && driveId !== null) {
     // The same checks the conversation routes make, BEFORE any row is minted
@@ -212,21 +332,8 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     }
-    const canView = await canPrincipalViewPage(auth, agentPageId);
-    if (!canView) {
-      auditRequest(request, {
-        eventType: 'authz.access.denied',
-        userId: auth.userId,
-        resourceType: 'page_agent_conversation',
-        resourceId: agentPageId,
-        details: { reason: 'no_view_permission', method: 'POST', route: 'agent-sessions' },
-        riskScore: 0.5,
-      });
-      return NextResponse.json(
-        { error: 'Insufficient permissions to use this agent' },
-        { status: 403 },
-      );
-    }
+    const denied = await denyIfCannotViewAgent(request, auth, agentPageId);
+    if (denied) return denied;
     agentTitle = agent.title;
   }
 
@@ -273,7 +380,17 @@ export async function POST(request: Request) {
   if (rawName.length > 0) {
     name = rawName.slice(0, MAX_SESSION_NAME_LENGTH);
   } else {
-    const baseLabel = wantsShellFirst ? 'Shell' : agentPageId !== null ? (agentTitle ?? 'Agent') : 'Global Assistant';
+    const baseLabel = wantsShellFirst
+      ? 'Shell'
+      : wantsClaim
+        // A page claim with no title anywhere must fall back to 'Agent', not
+        // 'Global Assistant' — that terminal fallback is for the GLOBAL
+        // claim case only (review finding — CodeRabbit: a titleless page
+        // claim was misnaming a drive-scoped session "Global Assistant").
+        ? (claimTitle?.trim() || (claimIsGlobal ? 'Global Assistant' : (agentTitle ?? 'Agent')))
+        : agentPageId !== null
+          ? (agentTitle ?? 'Agent')
+          : 'Global Assistant';
     const existingSessions = await listSessions({ ownerId: auth.userId });
     const existingNames = existingSessions.map((session) => session.name);
     name = nextUniqueSessionName(baseLabel, existingNames).slice(0, MAX_SESSION_NAME_LENGTH);
@@ -348,6 +465,68 @@ export async function POST(request: Request) {
         shellId: shellSpawned.shell.shellId,
         shellName: shellSpawned.shell.name,
       },
+      { status: 201 },
+    );
+  }
+
+  if (wantsClaim) {
+    // The first thing is an EXISTING conversation, not a new one — claim it
+    // into the just-spawned session instead of minting a fresh row. Response
+    // shape is deliberately identical to the ordinary mint path below, so
+    // the client has one success handler for both.
+    const conversationId = claimConversationId as string;
+    const outcome = await claimConversationInSession({
+      conversationId,
+      userId: auth.userId,
+      sessionId: spawned.session.id,
+    });
+    if (outcome !== 'claimed' && outcome !== 'already_in_session') {
+      // The session row exists but its first (claimed) conversation failed:
+      // end it rather than leave an empty workspace the model says cannot
+      // exist. `session_full`/`session_ended` are unreachable by
+      // construction (a session that was just spawned has zero
+      // conversations and cannot yet be ended) — folded into the generic
+      // refusal rather than special-cased.
+      await endSession(spawned.session.id).catch(() => {});
+      if (outcome === 'cross_drive_denied') {
+        loggers.api.error(
+          'Agent session spawn: claim of first conversation failed (cross-drive)',
+          undefined,
+          { sessionId: spawned.session.id, conversationId },
+        );
+        return NextResponse.json({ error: 'That conversation is not available' }, { status: 400 });
+      }
+      if (outcome === 'not_found') {
+        // The preflight above already refused every non-racy cause of
+        // `not_found` (missing, foreign, inactive, already bound elsewhere)
+        // with its own 409/404 — reaching it HERE means the identical
+        // condition changed underneath us in the gap between that read and
+        // this atomic claim (most likely: another request claimed it first).
+        // Same conflict, same status the preflight gives it — not a server
+        // fault, so not 502.
+        return NextResponse.json(
+          { error: 'That conversation is no longer available to claim' },
+          { status: 409 },
+        );
+      }
+      loggers.api.error(
+        'Agent session spawn: claim of first conversation failed',
+        undefined,
+        { sessionId: spawned.session.id, conversationId, outcome },
+      );
+      return NextResponse.json({ error: 'Could not start a session' }, { status: 502 });
+    }
+
+    auditRequest(request, {
+      eventType: 'data.write',
+      userId: auth.userId,
+      resourceType: 'agent_session',
+      resourceId: spawned.session.id,
+      details: { op: 'spawn_session', claimed: true, driveId, conversationId },
+    });
+
+    return NextResponse.json(
+      { session: toAgentSessionDTO(spawned.session), conversationId },
       { status: 201 },
     );
   }

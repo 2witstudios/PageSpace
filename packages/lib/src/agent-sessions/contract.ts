@@ -11,9 +11,13 @@
  *    a drive-level workspace with its own id (`agent_sessions.id`): it owns the
  *    one sandbox, its id is the Sprite-key fold, and it hosts MANY
  *    conversations (with any of the drive's agents, or the global assistant)
- *    plus any number of shells. `conversations.sessionId` is the binding — set
- *    at creation, permanent, and nullable (a plain chat has no session). A
- *    conversation-derived id must never become a session address again: the
+ *    plus any number of shells. `conversations.sessionId` is the binding —
+ *    nullable (a plain chat has no session) and write-once: set either at
+ *    creation, or later by exactly one guarded claim of the caller's own
+ *    still-unbound row (`apps/web/src/lib/agent-sessions/claim-conversation-in-session.ts`).
+ *    It never re-points an already-bound row — a thread moving to another
+ *    session is a fork, never a rebind. A conversation-derived id must never
+ *    become a session address again: the
  *    first cut had `sessionId ≡ conversationId`, which forced one environment
  *    per chat thread and made it structurally impossible for two conversations
  *    to share a working context. The old "which id?" worry inverts cleanly:
