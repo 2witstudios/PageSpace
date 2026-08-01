@@ -350,42 +350,45 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       const providerOrModelTouched = providerTouchedRef.current || modelTouchedRef.current;
       const resolvedProvider = providerOrModelTouched ? selectedProvider : (config?.aiProvider || selectedProvider);
       const resolvedModel = providerOrModelTouched ? selectedModel : (config?.aiModel || selectedModel);
-      // Every OTHER field: only what THIS instance's form actually has a
-      // pending edit for (react-hook-form's own dirtyFields) should
-      // override the freshest config. This surface's reset effect above
-      // deliberately keeps its old form snapshot while dirty, so anything
-      // NOT edited here can be stale relative to a sibling's own save of
-      // that same field — submitting the whole form regardless would
-      // silently revert it (review finding — chatgpt-codex-connector on
-      // PR #2299, round 20).
-      const mergedFields = {
-        systemPrompt: dirtyFields.systemPrompt ? data.systemPrompt : (config?.systemPrompt ?? data.systemPrompt),
-        enabledTools: dirtyFields.enabledTools ? data.enabledTools : (config?.enabledTools ?? data.enabledTools),
-        includeDrivePrompt: dirtyFields.includeDrivePrompt
-          ? data.includeDrivePrompt
-          : (config?.includeDrivePrompt ?? data.includeDrivePrompt),
-        agentDefinition: dirtyFields.agentDefinition ? data.agentDefinition : (config?.agentDefinition ?? data.agentDefinition),
-        visibleToGlobalAssistant: dirtyFields.visibleToGlobalAssistant
-          ? data.visibleToGlobalAssistant
-          : (config?.visibleToGlobalAssistant ?? data.visibleToGlobalAssistant),
-        includePageTree: dirtyFields.includePageTree ? data.includePageTree : (config?.includePageTree ?? data.includePageTree),
-        pageTreeScope: dirtyFields.pageTreeScope ? data.pageTreeScope : (config?.pageTreeScope ?? data.pageTreeScope),
-        toolExposureMode: dirtyFields.toolExposureMode ? data.toolExposureMode : (config?.toolExposureMode ?? data.toolExposureMode),
-        sandboxEnabled: dirtyFields.sandboxEnabled ? data.sandboxEnabled : (config?.sandboxEnabled ?? data.sandboxEnabled),
-      };
+      // Every OTHER field: send ONLY what THIS instance's form actually has
+      // a pending edit for (react-hook-form's own dirtyFields) — a SPARSE
+      // PATCH, omitting untouched fields entirely rather than merging in a
+      // value copied from this instance's own (possibly already-stale)
+      // config snapshot. The route already applies each field only `if
+      // (field !== undefined)`, so an omitted field is left untouched
+      // server-side. Round 20's "merge from local config" still raced: two
+      // surfaces saving different fields close enough together that
+      // neither's SWR update had reached the other yet would both submit
+      // the SAME stale snapshot for their own "unedited" fields, and
+      // whichever PATCH landed second would stomp the first's just-saved
+      // change. Never sending a field this instance didn't touch removes
+      // that race entirely (review finding — chatgpt-codex-connector on
+      // PR #2299, round 21).
+      const dirtyPatch: Partial<FormData> = {};
+      if (dirtyFields.systemPrompt) dirtyPatch.systemPrompt = data.systemPrompt;
+      if (dirtyFields.enabledTools) dirtyPatch.enabledTools = data.enabledTools;
+      if (dirtyFields.includeDrivePrompt) dirtyPatch.includeDrivePrompt = data.includeDrivePrompt;
+      if (dirtyFields.agentDefinition) dirtyPatch.agentDefinition = data.agentDefinition;
+      if (dirtyFields.visibleToGlobalAssistant) dirtyPatch.visibleToGlobalAssistant = data.visibleToGlobalAssistant;
+      if (dirtyFields.includePageTree) dirtyPatch.includePageTree = data.includePageTree;
+      if (dirtyFields.pageTreeScope) dirtyPatch.pageTreeScope = data.pageTreeScope;
+      if (dirtyFields.toolExposureMode) dirtyPatch.toolExposureMode = data.toolExposureMode;
+      if (dirtyFields.sandboxEnabled) dirtyPatch.sandboxEnabled = data.sandboxEnabled;
       const requestData = {
-        ...mergedFields,
-        aiProvider: resolvedProvider,
-        aiModel: resolvedModel,
+        ...dirtyPatch,
+        ...(providerOrModelTouched && { aiProvider: resolvedProvider, aiModel: resolvedModel }),
       };
 
       await patch(`/api/pages/${pageId}/agent-config`, requestData);
 
+      // The LOCAL optimistic cache update is display-only (never sent to
+      // the server above), so merging with the freshest config here is
+      // safe — this just makes sure THIS instance's own edits are visible
+      // immediately without waiting on a revalidation round trip.
       const updatedConfig = {
         ...config,
-        ...mergedFields,
-        aiProvider: resolvedProvider,
-        aiModel: resolvedModel,
+        ...dirtyPatch,
+        ...(providerOrModelTouched && { aiProvider: resolvedProvider, aiModel: resolvedModel }),
       } as AgentConfig;
       // This save's own values should always become this instance's new
       // clean baseline, even though the form is (still, momentarily) dirty
@@ -468,12 +471,17 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
     [config, sandboxEnabled]
   );
 
+  // shouldDirty: true — without it, dirtyFields.enabledTools stays false
+  // even though the displayed selection changed, so onSubmit's dirty-only
+  // merge below would silently discard the bulk selection and resubmit
+  // the stale config value instead (review finding — chatgpt-codex-
+  // connector on PR #2299, round 21).
   const handleSelectAllTools = () => {
-    setValue('enabledTools', visibleTools.map(tool => tool.name));
+    setValue('enabledTools', visibleTools.map(tool => tool.name), { shouldDirty: true });
   };
 
   const handleDeselectAllTools = () => {
-    setValue('enabledTools', []);
+    setValue('enabledTools', [], { shouldDirty: true });
   };
 
   // Register with useEditingStore while dirty so SWR doesn't revalidate this
