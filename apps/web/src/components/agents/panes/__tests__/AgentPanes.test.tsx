@@ -75,8 +75,24 @@ vi.mock('../../shell/Shell', () => ({
 // react-hook-form for the latter — exercising it for real here would test
 // a different component's own test file's job).
 vi.mock('@/components/ai/page-agents', () => ({
-  PageAgentHistoryTab: ({ conversations }: { conversations: Array<{ id: string }> }) => (
-    <div data-testid="pane-history-tab">{conversations.length} conversations</div>
+  PageAgentHistoryTab: ({
+    conversations,
+    onSelectConversation,
+    onDeleteConversation,
+  }: {
+    conversations: Array<{ id: string; title: string | null; sessionId: string | null }>;
+    onSelectConversation: (id: string) => void;
+    onDeleteConversation: (id: string) => void;
+  }) => (
+    <div data-testid="pane-history-tab">
+      {conversations.length} conversations
+      {conversations.map((c) => (
+        <div key={c.id}>
+          <button onClick={() => onSelectConversation(c.id)}>select-{c.id}</button>
+          <button onClick={() => onDeleteConversation(c.id)}>delete-{c.id}</button>
+        </div>
+      ))}
+    </div>
   ),
   PageAgentSettingsTab: ({ pageId, config }: { pageId: string; config: unknown }) => (
     <div data-testid="pane-settings-tab" data-page-id={pageId} data-has-config={String(config !== null)} />
@@ -952,6 +968,168 @@ describe('AgentPanes', () => {
 
       expect(await screen.findByTestId('pane-chat')).toBeInTheDocument();
       expect(screen.queryByTestId('pane-history-tab')).not.toBeInTheDocument();
+    });
+
+    const conversationsFixture = (entries: Array<{ id: string; title: string; sessionId: string | null }>) =>
+      jsonOk({
+        conversations: entries.map((e) => ({
+          id: e.id,
+          title: e.title,
+          preview: '',
+          createdAt: new Date('2026-01-01').toISOString(),
+          updatedAt: new Date('2026-01-01').toISOString(),
+          messageCount: 1,
+          sessionId: e.sessionId,
+          lastMessage: { role: 'user', timestamp: new Date('2026-01-01').toISOString() },
+        })),
+      });
+
+    // review finding — chatgpt-codex-connector on PR #2299: picking a History
+    // entry already open in another pane bypassed the store's deduplicating
+    // openConversation path, mounting a second independently interactive
+    // surface for the same transcript.
+    it('focuses an existing pane instead of duplicating it when the picked History conversation is already open elsewhere', async () => {
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url === '/api/ai/page-agents/agent-1/conversations') {
+          return conversationsFixture([{ id: 'conv-other', title: 'Other chat', sessionId: null }]);
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
+      const secondPaneId = useAgentWorkspaceStore
+        .getState()
+        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+        .find((p) => p.id !== firstPaneId)!.id;
+      act(() =>
+        useAgentWorkspaceStore.getState().assignPane('ses-1', secondPaneId, {
+          kind: 'chat',
+          name: 'Other chat',
+          targetId: 'conv-other',
+          agentPageId: 'agent-1',
+        }),
+      );
+
+      const user = userEvent.setup();
+      // Pane bar and its pane's body are siblings under the same `group/pane`
+      // container — locate the pane bar whose OWN pane currently renders
+      // conv-1 (the first pane), rather than assuming DOM/array order lines
+      // up with pane creation order.
+      const bars = screen.getAllByTestId('pane-bar');
+      const firstPaneBar = bars.find((bar) =>
+        within(bar.parentElement as HTMLElement).queryByTestId('pane-chat')?.textContent === 'conv-1',
+      )!;
+      await user.click(within(firstPaneBar).getByRole('tab', { name: /history/i }));
+      await user.click(await screen.findByRole('button', { name: 'select-conv-other' }));
+
+      await waitFor(() =>
+        expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].activePaneId).toBe(secondPaneId),
+      );
+      // The first pane's own binding is untouched — no duplicate was created there.
+      const firstPaneAfter = useAgentWorkspaceStore
+        .getState()
+        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+        .find((p) => p.id === firstPaneId);
+      expect(firstPaneAfter?.scope?.targetId).toBe('conv-1');
+    });
+
+    // review finding — chatgpt-codex-connector on PR #2299: switching to Chat
+    // immediately (fire-and-forget) after starting an async reopen showed the
+    // OLD pane content as if a failed pick had succeeded.
+    it('stays on the History tab when reopening a same-session conversation fails, rather than following the failed pick to Chat', async () => {
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url === '/api/ai/page-agents/agent-1/conversations') {
+          return conversationsFixture([{ id: 'conv-closed', title: 'Closed chat', sessionId: 'ses-1' }]);
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      mockPost.mockRejectedValue(new Error('session full'));
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole('tab', { name: /history/i }));
+      await user.click(await screen.findByRole('button', { name: 'select-conv-closed' }));
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-closed/reopen', {}),
+      );
+      expect(screen.getByTestId('pane-history-tab')).toBeInTheDocument();
+      expect(screen.queryByTestId('pane-chat')).not.toBeInTheDocument();
+    });
+
+    // review finding — chatgpt-codex-connector on PR #2299: History-delete
+    // deactivates the CANONICAL row, not just the deleting pane's own
+    // listing — every pane showing that id (in this grid), whichever pane's
+    // History tab the delete came from, must be reset rather than left
+    // pointing at a transcript that now 404s on send.
+    it("resets every pane showing a conversation deleted from another pane's History tab back to the picker", async () => {
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url === '/api/ai/page-agents/agent-1/conversations') {
+          return conversationsFixture([{ id: 'conv-doomed', title: 'Doomed chat', sessionId: null }]);
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
+      const secondPaneId = useAgentWorkspaceStore
+        .getState()
+        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+        .find((p) => p.id !== firstPaneId)!.id;
+      act(() =>
+        useAgentWorkspaceStore.getState().assignPane('ses-1', secondPaneId, {
+          kind: 'chat',
+          name: 'Doomed chat',
+          targetId: 'conv-doomed',
+          agentPageId: 'agent-1',
+        }),
+      );
+
+      const user = userEvent.setup();
+      const historyTabs = await screen.findAllByRole('tab', { name: /history/i });
+      await user.click(historyTabs[0]);
+      await user.click(await screen.findByRole('button', { name: 'delete-conv-doomed' }));
+
+      await waitFor(() => {
+        const secondPaneAfter = useAgentWorkspaceStore
+          .getState()
+          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+          .find((p) => p.id === secondPaneId);
+        expect(secondPaneAfter?.scope).toBeNull();
+      });
+    });
+
+    // review finding — chatgpt-codex-connector on PR #2299: PageAgentSettingsTab
+    // registers submitForm before its own config-loaded check returns, and its
+    // form defaults contain an empty prompt/tool list — clicking Save before
+    // agentConfig arrives would PATCH those defaults over the agent's real
+    // config.
+    it('disables the Save button until the agent config has finished loading', async () => {
+      let resolveConfig!: () => void;
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (url === '/api/pages/agent-1/agent-config') {
+          return new Promise((resolve) => {
+            resolveConfig = () => resolve(jsonOk({ systemPrompt: '', enabledTools: [], availableTools: [] }));
+          });
+        }
+        return jsonOk(defaultFetchRoute(url));
+      });
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+
+      const settingsTab = await screen.findByRole('tab', { name: /researcher settings/i });
+      await userEvent.click(settingsTab);
+      await screen.findByTestId('pane-settings-tab');
+
+      const saveButton = screen.getByRole('button', { name: /save/i });
+      expect(saveButton).toBeDisabled();
+
+      resolveConfig();
+      await waitFor(() => expect(saveButton).not.toBeDisabled());
     });
 
     it("is disabled until THIS session's entry appears in the switch decision's own data", async () => {

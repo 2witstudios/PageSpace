@@ -626,10 +626,26 @@ export default function AgentPanes({
    * DIFFERENT session, is never subject to this session's cap/listing at
    * all — no server call needed, straight to `assignPane` (the same client-
    * only mechanism `openConversation`/`handleSwitchAgent`'s focus branch
-   * already use to point a pane at an existing conversationId).
+   * already use to point a pane at an existing conversationId). Verified
+   * against the sandbox/tool-execution layer too (review question —
+   * chatgpt-codex-connector on PR #2299): tool calls resolve their sandbox
+   * from the CONVERSATION ROW's own persisted `sessionId`
+   * (`findSessionForConversation`, a fresh DB read keyed only on
+   * `conversationId`), never from which pane grid happens to display it —
+   * so a foreign-session or unbound conversation opened here can never
+   * execute tools against the wrong session's sandbox.
+   *
+   * Returns whether the pick actually landed — `false` on a failed reopen,
+   * so the caller (the pane's own tab-switch) can stay on History rather
+   * than following a pick that never happened (review finding —
+   * chatgpt-codex-connector on PR #2299).
    */
   const handlePickHistoryConversation = useCallback(
-    async (paneId: string, agentPageId: string | null, conversation: { id: string; title: string | null; sessionId: string | null }) => {
+    async (
+      paneId: string,
+      agentPageId: string | null,
+      conversation: { id: string; title: string | null; sessionId: string | null },
+    ): Promise<boolean> => {
       if (conversation.sessionId === sessionId) {
         try {
           await post(
@@ -641,12 +657,35 @@ export default function AgentPanes({
           toast.error('Could not reopen this conversation', {
             description: error instanceof Error ? error.message : 'Please try again.',
           });
-          return;
+          return false;
         }
         // Instant-freshness nudge, same as every other listing-changing
         // action here — the sidebar's own open list otherwise lags until its
         // next poll.
         void mutate(isAgentSessionsKey);
+      }
+      // Already showing in another pane in THIS grid — focus it rather than
+      // mounting a second, independently interactive surface for the same
+      // transcript (review finding — chatgpt-codex-connector on PR #2299;
+      // the same dedup `openConversation`'s own focus branch enforces
+      // elsewhere, applied here since this path assigns directly rather
+      // than going through that store action).
+      const existingPane = workspace
+        ? panesOf(workspace).find(
+            (p) => p.id !== paneId && p.scope?.kind === 'chat' && p.scope.targetId === conversation.id,
+          )
+        : undefined;
+      if (existingPane) {
+        // Deferred: the click that triggered this pick originated INSIDE
+        // paneId's own DOM subtree, and `ChatPane`'s outer `group/pane` div
+        // still has its own bubble-phase `onClick={onSelectPane}` — a plain
+        // synchronous `selectPane` here would run before that handler and
+        // get immediately clobbered back to paneId once bubbling reaches it
+        // (caught in testing: `activePaneId` kept reverting to the pane the
+        // pick was made FROM). A macrotask runs after the entire bubble
+        // phase has finished, so this is the call that actually wins.
+        setTimeout(() => selectPane(sessionId, existingPane.id), 0);
+        return true;
       }
       assignPane(sessionId, paneId, {
         kind: 'chat',
@@ -654,8 +693,36 @@ export default function AgentPanes({
         targetId: conversation.id,
         agentPageId,
       });
+      return true;
     },
-    [sessionId, assignPane],
+    [sessionId, assignPane, workspace, selectPane],
+  );
+
+  /**
+   * A pane's History tab deleting a conversation (`softDeleteConversation`
+   * deactivates the CANONICAL row, not just this pane's own listing) —
+   * every pane in THIS grid still pointing at that id, whichever pane's
+   * History tab the delete came from, is left showing a dead transcript:
+   * switching it back to Chat would render nothing sendable (the row now
+   * 404s per the send-route's own isActive guard) with no obvious way out.
+   * Reset each one to the picker — the simplest, safe recovery; the user
+   * explicitly picks what's next rather than a guessed replacement (review
+   * finding — chatgpt-codex-connector on PR #2299).
+   */
+  const handleHistoryDeleteConversation = useCallback(
+    (deletedConversationId: string) => {
+      if (!workspace) return;
+      const affectedPanes = panesOf(workspace).filter(
+        (p) => p.scope?.kind === 'chat' && p.scope.targetId === deletedConversationId,
+      );
+      for (const pane of affectedPanes) {
+        resetPane(sessionId, pane.id);
+      }
+      if (affectedPanes.length > 0) {
+        void mutate(isAgentSessionsKey);
+      }
+    },
+    [workspace, sessionId, resetPane],
   );
 
   // The pane bar selector's switch — focus-or-mint, decided by the pure
@@ -765,8 +832,9 @@ export default function AgentPanes({
           onClose={() => handleClosePane(pane.id)}
           onCreateNewFromHistory={() => void handlePickAgent(pane.id, pane.scope!.agentPageId)}
           onPickHistoryConversation={(conversation) =>
-            void handlePickHistoryConversation(pane.id, pane.scope!.agentPageId, conversation)
+            handlePickHistoryConversation(pane.id, pane.scope!.agentPageId, conversation)
           }
+          onHistoryDeleteConversation={handleHistoryDeleteConversation}
         />
       );
     }
@@ -886,6 +954,7 @@ function ChatPane({
   onClose,
   onCreateNewFromHistory,
   onPickHistoryConversation,
+  onHistoryDeleteConversation,
 }: {
   /** Always `kind: 'chat'` at the call site — `PaneScope` isn't a discriminated union, so this stays the full type. */
   scope: PaneScope;
@@ -912,7 +981,10 @@ function ChatPane({
   onSplitDown: () => void;
   onClose: () => void;
   onCreateNewFromHistory: () => void;
-  onPickHistoryConversation: (conversation: { id: string; title: string | null; sessionId: string | null }) => void;
+  /** Resolves to whether the pick actually landed — false on a failed reopen. */
+  onPickHistoryConversation: (conversation: { id: string; title: string | null; sessionId: string | null }) => Promise<boolean>;
+  /** A History delete's canonical-row deactivation reaches every pane showing that id, not just this one — the container resets each affected pane. */
+  onHistoryDeleteConversation: (conversationId: string) => void;
 }) {
   const { user } = useAuth();
   const { agent } = useResolvedAgent(scope.agentPageId);
@@ -973,10 +1045,19 @@ function ChatPane({
   );
 
   const handleSelectHistoryConversation = useCallback(
-    (id: string) => {
+    async (id: string) => {
       const picked = conversations.find((c) => c.id === id);
-      onPickHistoryConversation({ id, title: picked?.title ?? null, sessionId: picked?.sessionId ?? null });
-      setActiveTab('chat');
+      // Only follow the pick to Chat once it actually landed — a failed
+      // reopen (session full, deleted, access changed) leaves the pane
+      // untouched, and switching tabs anyway would show the OLD pane
+      // content as if the pick had succeeded (review finding —
+      // chatgpt-codex-connector on PR #2299).
+      const landed = await onPickHistoryConversation({
+        id,
+        title: picked?.title ?? null,
+        sessionId: picked?.sessionId ?? null,
+      });
+      if (landed) setActiveTab('chat');
     },
     [conversations, onPickHistoryConversation],
   );
@@ -1026,7 +1107,13 @@ function ChatPane({
                   e.stopPropagation();
                   settingsRef.current?.submitForm();
                 }}
-                disabled={isSettingsSaving}
+                // `PageAgentSettingsTab` registers `submitForm` before its own
+                // config-loaded check returns, and its form defaults contain
+                // an EMPTY prompt/tool list — clicking Save before agentConfig
+                // arrives would PATCH those defaults over the agent's real
+                // config (review finding — chatgpt-codex-connector on PR
+                // #2299).
+                disabled={isSettingsSaving || agentConfig === null}
                 className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
               >
                 {isSettingsSaving ? <Loader2 className="size-3 animate-spin" aria-hidden="true" /> : <Save className="size-3" aria-hidden="true" />}
@@ -1064,7 +1151,10 @@ function ChatPane({
             currentConversationId={conversationId}
             onSelectConversation={handleSelectHistoryConversation}
             onCreateNew={handleCreateNewFromHistory}
-            onDeleteConversation={(id) => void deleteConversation(id)}
+            onDeleteConversation={(id) => {
+              void deleteConversation(id);
+              onHistoryDeleteConversation(id);
+            }}
             onToggleShare={toggleConversationShare}
             isLoading={conversationsLoading}
           />
