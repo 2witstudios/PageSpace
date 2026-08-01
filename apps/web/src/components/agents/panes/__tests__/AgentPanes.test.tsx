@@ -1165,6 +1165,51 @@ describe('AgentPanes', () => {
       expect(await screen.findByRole('button', { name: /Researcher/ })).toBeInTheDocument();
     });
 
+    describe('hostConversationId — the hosting AI_CHAT page drops duplicate chrome for its own pane only', () => {
+      it('drops to a plain label (no selector, no tab strip) when this pane IS the host conversation, keeping split/close', async () => {
+        renderPanes({ hostConversationId: 'conv-1' });
+        await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+
+        expect(screen.queryByRole('button', { name: /Researcher/ })).not.toBeInTheDocument();
+        expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+        expect(screen.getByLabelText('Split right')).toBeInTheDocument();
+        expect(screen.getByLabelText('Close pane')).toBeInTheDocument();
+      });
+
+      // Review finding: matching by AGENT instead of CONVERSATION would also
+      // collapse a split pane the user deliberately pointed at a SECOND,
+      // distinct conversation of the same agent — silently stripping its
+      // only in-grid way to be retargeted (AISelector) or to reach its own
+      // History/Settings (PaneChatTabStrip), even though the page's own
+      // header isn't showing that conversation. Matching by conversation id
+      // instead keeps that pane fully functional.
+      it('keeps its own selector + tab strip for a split pane on a DIFFERENT conversation of the SAME agent as the host', async () => {
+        renderPanes({ hostConversationId: 'conv-1' });
+        await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+
+        const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+        act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
+        const secondPaneId = useAgentWorkspaceStore
+          .getState()
+          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+          .find((p) => p.id !== firstPaneId)!.id;
+        act(() =>
+          useAgentWorkspaceStore.getState().assignPane('ses-1', secondPaneId, {
+            kind: 'chat',
+            name: 'Other conversation',
+            targetId: 'conv-other',
+            agentPageId: 'agent-1',
+          }),
+        );
+
+        await waitFor(() => expect(screen.getAllByTestId('pane-chat')).toHaveLength(2));
+        // Exactly one match each — the FIRST (host) pane stays a plain label;
+        // only the SECOND (different conversation) pane still has these.
+        expect(screen.getByRole('button', { name: /Researcher/ })).toBeInTheDocument();
+        expect(screen.getByRole('tablist')).toBeInTheDocument();
+      });
+    });
+
     it("has a Settings tab for the pane's agent, which switches the pane body to the settings form", async () => {
       renderPanes();
       await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());

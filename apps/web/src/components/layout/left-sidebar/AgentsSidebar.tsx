@@ -2,19 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { Bot, ChevronDown, ChevronRight, Folder, History, Loader2, Plus, Search, SquareTerminal, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Folder, History, Loader2, Plus, Search, SquareTerminal, X } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR, { useSWRConfig } from 'swr';
 
 import EndSessionDialog from '@/components/agents/EndSessionDialog';
+import { useSpawnSession } from '@/components/agents/useSpawnSession';
 import { Input } from '@/components/ui/input';
-import {
-  CommandDialog,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from '@/components/ui/command';
 import { cn, isElectron } from '@/lib/utils';
 import type { SidebarProps } from './index';
 import DriveSwitcher from '@/components/layout/navbar/DriveSwitcher';
@@ -353,97 +347,23 @@ function SessionList({
     [groups, hasSearch],
   );
 
-  const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
-  const selectSession = useAgentSurfaceStore((state) => state.selectSession);
-  const [spawnTarget, setSpawnTarget] = useState<{ driveId: string | null; driveName: string | null } | null>(null);
-  // Set once a target (agent/shell/assistant) is picked in the palette's first
-  // step — its presence is what swaps the dialog to the naming step. Null
-  // driveId + kind 'assistant' is the only shape the Assistant group's "+"
-  // ever produces (it skips the picker entirely, see handleNewSession).
-  const [spawnPick, setSpawnPick] = useState<SpawnPick | null>(null);
-  const [spawning, setSpawning] = useState(false);
   const [createDriveOpen, setCreateDriveOpen] = useState(false);
-
-  const spawn = useCallback(
-    async (input: { driveId: string | null; agentPageId: string | null; kind: SpawnKind; name: string }) => {
-      if (spawning) return;
-      setSpawning(true);
-      try {
-        if (input.kind === 'shell') {
-          const created = await post<{ session: { sessionId: string }; shellId: string; shellName: string }>(
-            '/api/agent-sessions',
-            { driveId: input.driveId, firstThing: 'shell', name: input.name },
-          );
-          setSpawnTarget(null);
-          setSpawnPick(null);
-          onChanged();
-          // useAgentSurfaceStore has no shell concept — land by selecting the
-          // session there, then placing the pane directly on the workspace
-          // store, mirroring AgentPanes.tsx's handleReattachShell. The shell
-          // is named independently server-side (spawnShell, no name passed) —
-          // use its own name, not the session label, so the pane title
-          // matches the shell row shown in the sidebar.
-          selectSession(created.session.sessionId);
-          useAgentWorkspaceStore.getState().openConversation(created.session.sessionId, {
-            kind: 'terminal',
-            name: created.shellName,
-            targetId: created.shellId,
-            agentPageId: null,
-          });
-          return;
-        }
-        const created = await post<{ session: { sessionId: string }; conversationId: string }>(
-          '/api/agent-sessions',
-          { driveId: input.driveId, agentPageId: input.agentPageId, name: input.name },
-        );
-        setSpawnTarget(null);
-        setSpawnPick(null);
-        onChanged();
-        // Land the user IN the new session's first conversation — no empty
-        // state is ever visible.
-        selectConversation({
-          sessionId: created.session.sessionId,
-          conversationId: created.conversationId,
-          agentId: input.agentPageId,
-        });
-      } catch (error) {
-        console.error('Failed to start a session:', error);
-        toast.error('Could not start a session', {
-          description: error instanceof Error ? error.message : 'Please try again.',
-        });
-      } finally {
-        setSpawning(false);
-      }
-    },
-    [spawning, onChanged, selectConversation, selectSession],
-  );
+  const { openSpawn, openAssistantSpawn, paletteElement } = useSpawnSession(agentsByDrive, onChanged);
 
   // Sessions are always deliberately named now — both groups open the same
   // naming step. The ASSISTANT group has nothing to pick (the assistant IS
   // the counterpart), so it skips straight to naming; a DRIVE group's "+"
   // opens the picker first so the naming step's placeholder can reflect
   // whichever agent/shell was chosen.
-  const handleNewSession = useCallback((groupDriveId: string, groupDriveName: string | null) => {
-    if (groupDriveId === ASSISTANT_GROUP_KEY) {
-      setSpawnTarget({ driveId: null, driveName: null });
-      setSpawnPick({ kind: 'assistant', agentPageId: null, label: 'Global Assistant' });
-      return;
-    }
-    setSpawnTarget({ driveId: groupDriveId, driveName: groupDriveName });
-    setSpawnPick(null);
-  }, []);
-
-  const handleSubmitName = useCallback(
-    (name: string) => {
-      if (!spawnTarget || !spawnPick) return;
-      void spawn({ driveId: spawnTarget.driveId, agentPageId: spawnPick.agentPageId, kind: spawnPick.kind, name });
+  const handleNewSession = useCallback(
+    (groupDriveId: string, groupDriveName: string | null) => {
+      if (groupDriveId === ASSISTANT_GROUP_KEY) {
+        openAssistantSpawn();
+        return;
+      }
+      openSpawn(groupDriveId, groupDriveName);
     },
-    [spawn, spawnTarget, spawnPick],
-  );
-
-  const paletteAgents = useMemo(
-    () => (spawnTarget ? (agentsByDrive.find((entry) => entry.driveId === spawnTarget.driveId)?.agents ?? []) : []),
-    [agentsByDrive, spawnTarget],
+    [openSpawn, openAssistantSpawn],
   );
 
   return (
@@ -480,20 +400,7 @@ function SessionList({
         </div>
       ))}
       {notice}
-      <SpawnSessionPalette
-        open={spawnTarget !== null}
-        driveName={spawnTarget?.driveName ?? null}
-        agents={paletteAgents}
-        pick={spawnPick}
-        spawning={spawning}
-        onOpenChange={(open) => {
-          if (open) return;
-          setSpawnTarget(null);
-          setSpawnPick(null);
-        }}
-        onPickTarget={setSpawnPick}
-        onSubmitName={handleSubmitName}
-      />
+      {paletteElement}
       {!driveId && <CreateDriveDialog isOpen={createDriveOpen} setIsOpen={setCreateDriveOpen} />}
     </div>
   );
@@ -1095,129 +1002,5 @@ function PaneRow({
         </div>
       )}
     </div>
-  );
-}
-
-type SpawnKind = 'agent' | 'shell' | 'assistant';
-
-/** What the palette's first step picked — drives the naming step's placeholder and spawn() call. */
-interface SpawnPick {
-  kind: SpawnKind;
-  agentPageId: string | null;
-  /** The sensible default: the agent's title, "Shell", or "Global Assistant". */
-  label: string;
-}
-
-/**
- * The spawn palette for a new session, Raycast-style: search or arrow-key to
- * a target and hit Enter — the same keyboard-first pattern `QuickCreatePalette`
- * established for page creation, reused here so a future mouseless-navigation
- * pass has one command-palette idiom to build on, not two. Two steps: pick a
- * target (an agent, Shell, or Global Assistant — the ASSISTANT group's own
- * "+" skips straight here since it has nothing else to choose), then name the
- * session. Naming is always the last step, even for a one-click assistant
- * spawn, so every session gets a deliberate name.
- */
-function SpawnSessionPalette({
-  open,
-  driveName,
-  agents,
-  pick,
-  spawning,
-  onOpenChange,
-  onPickTarget,
-  onSubmitName,
-}: {
-  open: boolean;
-  driveName: string | null;
-  agents: DriveWithAgents['agents'];
-  pick: SpawnPick | null;
-  spawning: boolean;
-  onOpenChange: (open: boolean) => void;
-  onPickTarget: (pick: SpawnPick) => void;
-  onSubmitName: (name: string) => void;
-}) {
-  const [name, setName] = useState('');
-
-  // Blank by default every time a new naming step starts — a stale typed
-  // value from resolving one spawn must never prefill the next.
-  useEffect(() => {
-    if (open) setName('');
-  }, [open, pick]);
-
-  return (
-    <CommandDialog
-      open={open}
-      onOpenChange={onOpenChange}
-      title={pick ? 'Name your session' : 'New session'}
-      description={
-        pick
-          ? `Leave blank to use "${pick.label}"`
-          : driveName
-            ? `Choose an agent to start a session with in ${driveName}`
-            : 'Choose an agent to start a session with'
-      }
-      showCloseButton={false}
-      className="max-w-[420px]"
-    >
-      {pick ? (
-        <form
-          className="p-3"
-          onSubmit={(event) => {
-            event.preventDefault();
-            onSubmitName(name);
-          }}
-        >
-          <input
-            autoFocus
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key !== 'Enter') return;
-              event.preventDefault();
-              onSubmitName(name);
-            }}
-            placeholder={pick.label}
-            disabled={spawning}
-            className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-hidden placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
-          />
-        </form>
-      ) : (
-        <>
-          <CommandInput placeholder="Search agents…" autoFocus />
-          <CommandList>
-            <CommandGroup>
-              <CommandItem
-                value="assistant-Global Assistant"
-                disabled={spawning}
-                onSelect={() => onPickTarget({ kind: 'assistant', agentPageId: null, label: 'Global Assistant' })}
-              >
-                <Bot className="size-3.5" aria-hidden="true" />
-                <span className="truncate">Global Assistant</span>
-              </CommandItem>
-              {agents.map((agent) => (
-                <CommandItem
-                  key={agent.id}
-                  value={`${agent.id}-${agent.title ?? 'Agent'}`}
-                  disabled={spawning}
-                  onSelect={() => onPickTarget({ kind: 'agent', agentPageId: agent.id, label: agent.title ?? 'Agent' })}
-                >
-                  <Bot className="size-3.5" aria-hidden="true" />
-                  <span className="truncate">{agent.title ?? 'Agent'}</span>
-                </CommandItem>
-              ))}
-              <CommandItem
-                value="shell-Shell"
-                disabled={spawning}
-                onSelect={() => onPickTarget({ kind: 'shell', agentPageId: null, label: 'Shell' })}
-              >
-                <SquareTerminal className="size-3.5" aria-hidden="true" />
-                <span className="truncate">Shell</span>
-              </CommandItem>
-            </CommandGroup>
-          </CommandList>
-        </>
-      )}
-    </CommandDialog>
   );
 }
