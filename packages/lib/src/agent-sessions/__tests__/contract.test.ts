@@ -14,6 +14,9 @@ import {
   SHELL_AGENT_TYPES,
   PANE_KINDS,
   paneScopeSchema,
+  persistedPaneStateSchema,
+  persistedColumnStateSchema,
+  persistedWorkspaceStateSchema,
   shellReadPayloadSchema,
   shellSendPayloadSchema,
   MAX_SHELLS_PER_READ,
@@ -318,5 +321,75 @@ describe('paneScopeSchema', () => {
     expect(
       paneScopeSchema.safeParse({ kind: 'pagespace', name: 'x', targetId: 'c1', agentPageId: null }).success,
     ).toBe(false);
+  });
+});
+
+const chatScope = (targetId: string, agentPageId: string | null = null) =>
+  paneScopeSchema.parse({ kind: 'chat', name: 'Conversation', targetId, agentPageId });
+
+describe('persistedPaneStateSchema', () => {
+  it('should default tabs to an empty array — a terminal/page/picker pane never tabs', () => {
+    const parsed = persistedPaneStateSchema.parse({ id: 'pane-1', scope: null });
+    expect(parsed.tabs).toEqual([]);
+  });
+
+  it('should carry every open tab, including the active one', () => {
+    const active = chatScope('conv-1', 'agent-a');
+    const background = chatScope('conv-2', 'agent-b');
+    const parsed = persistedPaneStateSchema.parse({ id: 'pane-1', scope: active, tabs: [active, background] });
+    expect(parsed.tabs).toEqual([active, background]);
+    expect(parsed.scope).toEqual(active);
+  });
+
+  it('should reject a tab that fails paneScopeSchema — no half-shaped tab crosses the boundary', () => {
+    const result = persistedPaneStateSchema.safeParse({
+      id: 'pane-1',
+      scope: null,
+      tabs: [{ kind: 'chat', name: 'x', targetId: '', agentPageId: null }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('should reject an empty pane id', () => {
+    expect(persistedPaneStateSchema.safeParse({ id: '', scope: null }).success).toBe(false);
+  });
+});
+
+describe('persistedColumnStateSchema', () => {
+  it('should require at least one pane — a column is never empty', () => {
+    expect(persistedColumnStateSchema.safeParse({ id: 'col-1', panes: [] }).success).toBe(false);
+  });
+
+  it('should parse a column with panes', () => {
+    const parsed = persistedColumnStateSchema.parse({
+      id: 'col-1',
+      panes: [{ id: 'pane-1', scope: null, tabs: [] }],
+    });
+    expect(parsed.panes).toHaveLength(1);
+  });
+});
+
+describe('persistedWorkspaceStateSchema', () => {
+  const workspace = {
+    id: 'ses-1',
+    columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: chatScope('conv-1'), tabs: [chatScope('conv-1')] }] }],
+    activePaneId: 'pane-1',
+    pendingPickerPaneId: null,
+  };
+
+  it('given a well-formed grid, should parse', () => {
+    expect(persistedWorkspaceStateSchema.parse(workspace)).toEqual(workspace);
+  });
+
+  it('should require at least one column — a grid is never empty', () => {
+    expect(persistedWorkspaceStateSchema.safeParse({ ...workspace, columns: [] }).success).toBe(false);
+  });
+
+  it('should allow a null pendingPickerPaneId', () => {
+    expect(persistedWorkspaceStateSchema.parse(workspace).pendingPickerPaneId).toBeNull();
+  });
+
+  it('should reject an empty activePaneId', () => {
+    expect(persistedWorkspaceStateSchema.safeParse({ ...workspace, activePaneId: '' }).success).toBe(false);
   });
 });

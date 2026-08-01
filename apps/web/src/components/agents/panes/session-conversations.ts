@@ -1,15 +1,18 @@
 /**
  * One of a session's OPEN (not-yet-closed) conversation listings — the shape
- * shared by the pane bar's two independent pure decisions:
+ * shared by the pane bar's pure decisions:
  *
- * - `select-pane-agent.ts`'s SWITCH decision (`pu/pane-agent-selector`) —
- *   which of the session's agents already has a thread, to focus rather than
- *   mint a duplicate.
- * - `close-pane.ts`'s CLOSE decision — telling "the only pane left showing
- *   this conversation" apart from "the session's only OPEN conversation".
+ * - `select-pane-agent.ts`'s SWITCH decision — which of THIS PANE's own tabs
+ *   already has a thread for the picked agent, to focus rather than mint a
+ *   duplicate.
+ * - `open-pane-tab.ts`'s "+" decision — the same focus-or-mint question, for
+ *   deliberately opening a new tab instead of replacing the active one.
+ * - `close-pane-tab.ts`'s CLOSE decision — telling "the only pane left
+ *   showing this conversation" apart from "the session's only OPEN
+ *   conversation".
  *
- * Both branches declared this independently before they met; hoisted here so
- * there is one declaration instead of two structurally-identical ones.
+ * These branches declared this independently before they met; hoisted here
+ * so there is one declaration instead of several structurally-identical ones.
  */
 export interface SessionConversationSummary {
   conversationId: string;
@@ -46,6 +49,20 @@ export function mostRecentlyActive<T extends { lastMessageAt: string | null }>(l
     const candidateAt = candidate.lastMessageAt ? Date.parse(candidate.lastMessageAt) : -Infinity;
     return candidateAt > latestAt ? candidate : latest;
   });
+}
+
+/**
+ * The most-recently-active listing among `listings` for `agentPageId`, or
+ * `undefined` when none is open — the focus-or-mint question `select-pane-
+ * agent.ts` and `open-pane-tab.ts` both ask, differing only in what they do
+ * with a `mint` answer (replace the active tab vs. append a new one).
+ */
+export function findOpenForAgent<T extends { agentPageId: string | null; lastMessageAt: string | null }>(
+  listings: readonly T[],
+  agentPageId: string | null,
+): T | undefined {
+  const matches = listings.filter((listing) => listing.agentPageId === agentPageId);
+  return matches.length === 0 ? undefined : mostRecentlyActive(matches);
 }
 
 /**

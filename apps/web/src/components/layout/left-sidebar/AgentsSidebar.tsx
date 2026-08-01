@@ -30,19 +30,37 @@ import { canManageDrive } from '@/hooks/usePermissions';
 import { usePageAgents, type DriveWithAgents } from '@/hooks/page-agents/usePageAgents';
 import { useAgentSurfaceStore, SHEET_BREAKPOINT_QUERY } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
+import { panesOf, type PaneState } from '@/stores/agent-workspace/pane-reducer';
 import { fetchWithAuth, post, del, ApiRequestError } from '@/lib/auth/auth-fetch';
+import type { PersistedWorkspaceState } from '@pagespace/lib/agent-sessions/contract';
 import { buildSessionGroups, ASSISTANT_GROUP_KEY } from './session-groups';
 import { RowMenu, type RowMenuItem } from './RowMenu';
 import { agentSessionsKey } from '@/components/agents/panes/session-conversations';
 
 /**
- * The Agents console's left sidebar: **Drive → Session → conversations.**
+ * The Agents console's left sidebar: **Drive → Session → Pane → tabs.**
  *
  * A SESSION is the tree's second level — a drive-level workspace that owns one
- * sandbox and hosts conversations (with any of the drive's agents) plus shells.
- * Agents are NOT a tree level: they are what you pick when spawning a session
- * or a pane. And PANES are never listed here — layout is centre-view state
- * (the old sidebar's `WorkspaceLeaves` pattern is deliberately not restored).
+ * sandbox. Agents are NOT a tree level: they are what you pick when spawning
+ * a session or a pane.
+ *
+ * PANES ARE listed here now — a reversal of this file's earlier stance (the
+ * old sidebar's `WorkspaceLeaves` pattern was deliberately not restored, back
+ * when a pane was purely local, ephemeral browser state with nothing
+ * server-durable to show). Panes are now server-persisted
+ * (`agent_sessions.workspaceState`, synced by `useWorkspaceServerSync`), so a
+ * session's expansion shows one row per PANE (labelled by its active tab's
+ * agent), with that pane's OTHER open tabs nested underneath as a switchable
+ * sub-list — this is what actually fixes "switching a pane's agent spawns a
+ * new sidebar item instead of updating the one I was looking at": the pane's
+ * OWN row now updates in place, and a deliberate second tab (via the pane
+ * header's "+") is what legitimately earns a new nested row, not an
+ * accidental one.
+ *
+ * `session.workspace` is `null` for a session never opened under this
+ * feature (or opened only by an older client) — that session's expansion
+ * falls back to the flat `session.conversations` list this sidebar always
+ * rendered, unchanged.
  *
  * Two modes, one component:
  * - **Drive-scoped** (`driveId` present): that drive's sessions.
@@ -149,6 +167,8 @@ interface SessionListEntry {
   sandboxStatus: 'none' | 'starting' | 'running' | 'ended';
   conversations: SessionConversationEntry[];
   shells: Array<{ shellId: string; name: string }>;
+  /** The saved pane grid — `null` for a session never opened under `useWorkspaceServerSync`. */
+  workspace: PersistedWorkspaceState | null;
 }
 
 type SessionsCacheData = { sessions: SessionListEntry[] } | undefined;
@@ -608,6 +628,23 @@ function SessionRow({
     [selectConversation, session.sessionId],
   );
 
+  /**
+   * A pane (or one of its tabs) addresses a conversation by id/agent alone —
+   * resolve it against the session's own conversation listing for a real
+   * title when one is open, so a pane/tab row's label matches
+   * `conversationLabel`'s exactly. `title` plays no role in `openConversation`
+   * itself (only `conversationId`/`agentPageId` do); this is purely for display.
+   */
+  const conversationEntryForTarget = useCallback(
+    (targetId: string, agentPageId: string | null): SessionConversationEntry =>
+      session.conversations.find((c) => c.conversationId === targetId) ?? {
+        conversationId: targetId,
+        title: null,
+        agentPageId,
+      },
+    [session.conversations],
+  );
+
   const openShell = useCallback(
     (shell: { shellId: string; name: string }) => {
       selectSession(session.sessionId);
@@ -623,10 +660,23 @@ function SessionRow({
 
   const openSession = useCallback(() => {
     // Selecting a SESSION opens its most recent conversation — the row is a
-    // workspace, and a workspace opens on its work, not on a placeholder. A
-    // shell-first session has no conversations at all, so fall back to its
-    // first shell rather than leave the click a no-op.
+    // workspace, and a workspace opens on its work, not on a placeholder.
+    // With a saved grid, that's the ACTIVE pane's own active tab (falling
+    // back to its first chat pane if the active one isn't a chat at all —
+    // a terminal, say). A shell-first session has no conversations at all,
+    // so fall back to its first shell rather than leave the click a no-op.
     setExpanded(true);
+    if (session.workspace) {
+      const panes = panesOf(session.workspace);
+      const activePane = panes.find((p) => p.id === session.workspace!.activePaneId);
+      const chatPane =
+        (activePane?.scope?.kind === 'chat' && activePane.scope.targetId ? activePane : undefined) ??
+        panes.find((p) => p.scope?.kind === 'chat' && p.scope.targetId !== null);
+      if (chatPane?.scope?.kind === 'chat' && chatPane.scope.targetId) {
+        openConversation(conversationEntryForTarget(chatPane.scope.targetId, chatPane.scope.agentPageId));
+        return;
+      }
+    }
     const first = session.conversations[0];
     if (first) {
       openConversation(first);
@@ -634,7 +684,7 @@ function SessionRow({
     }
     const firstShell = session.shells[0];
     if (firstShell) openShell(firstShell);
-  }, [openConversation, openShell, session.conversations, session.shells]);
+  }, [openConversation, openShell, conversationEntryForTarget, session.workspace, session.conversations, session.shells]);
 
   const endSession = useCallback(async () => {
     setEnding(true);
@@ -783,6 +833,21 @@ function SessionRow({
     [],
   );
 
+  // Only chat panes address a conversation — a terminal/page/still-unbound
+  // pane has nothing to show here (shells get their own section below,
+  // unchanged). `null` when this session has no saved grid yet, so the
+  // render falls back to the flat `session.conversations` list.
+  const chatPanes = useMemo(
+    () =>
+      session.workspace
+        ? panesOf(session.workspace).filter(
+            (pane): pane is PaneState & { scope: { kind: 'chat'; targetId: string } } =>
+              pane.scope?.kind === 'chat' && pane.scope.targetId !== null,
+          )
+        : null,
+    [session.workspace],
+  );
+
   return (
     <div>
       <RowMenu
@@ -832,32 +897,44 @@ function SessionRow({
 
       {expanded && (
         <div className="ml-4 space-y-0.5 border-l border-border pl-1.5">
-          {session.conversations.map((conversation) => (
-            <RowMenu
-              key={conversation.conversationId}
-              items={[
-                {
-                  label: 'Close',
-                  icon: X,
-                  onSelect: () => void closeConversation(conversation.conversationId),
-                  destructive: true,
-                },
-              ]}
-              menuLabel="Conversation actions"
-              className={cn(
-                'gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground',
-                selectedConversationId === conversation.conversationId && 'bg-accent text-foreground',
-              )}
-            >
-              <button
-                type="button"
-                className="flex min-w-0 flex-1 items-center text-left"
-                onClick={() => openConversation(conversation)}
-              >
-                <span className="truncate">{conversationLabel(conversation)}</span>
-              </button>
-            </RowMenu>
-          ))}
+          {chatPanes
+            ? chatPanes.map((pane) => (
+                <PaneRow
+                  key={pane.id}
+                  pane={pane}
+                  conversationEntryForTarget={conversationEntryForTarget}
+                  conversationLabel={conversationLabel}
+                  selectedConversationId={selectedConversationId}
+                  onOpenConversation={openConversation}
+                  onCloseConversation={closeConversation}
+                />
+              ))
+            : session.conversations.map((conversation) => (
+                <RowMenu
+                  key={conversation.conversationId}
+                  items={[
+                    {
+                      label: 'Close',
+                      icon: X,
+                      onSelect: () => void closeConversation(conversation.conversationId),
+                      destructive: true,
+                    },
+                  ]}
+                  menuLabel="Conversation actions"
+                  className={cn(
+                    'gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground',
+                    selectedConversationId === conversation.conversationId && 'bg-accent text-foreground',
+                  )}
+                >
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-1 items-center text-left"
+                    onClick={() => openConversation(conversation)}
+                  >
+                    <span className="truncate">{conversationLabel(conversation)}</span>
+                  </button>
+                </RowMenu>
+              ))}
           {session.shells.map((shell) => (
             <button
               key={shell.shellId}
@@ -869,7 +946,7 @@ function SessionRow({
               <span className="truncate">{shell.name}</span>
             </button>
           ))}
-          {session.conversations.length === 0 && (
+          {(chatPanes ?? session.conversations).length === 0 && (
             <div className="px-2 py-1 text-xs text-muted-foreground">No conversations</div>
           )}
 
@@ -921,6 +998,100 @@ function SessionRow({
               ))}
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One PANE's row: labeled by its active tab, updating in place on an agent
+ * switch instead of a sibling row appearing — the actual fix for "changing
+ * the agent in a pane spawns a new sidebar item." When the pane holds more
+ * than one open tab (the "+" chip's deliberate doing), they nest underneath
+ * as their own switchable, closeable rows — the formalized, intentional
+ * version of what used to be an accidental side effect of switching agents.
+ */
+function PaneRow({
+  pane,
+  conversationEntryForTarget,
+  conversationLabel,
+  selectedConversationId,
+  onOpenConversation,
+  onCloseConversation,
+}: {
+  pane: PaneState & { scope: { kind: 'chat'; targetId: string; agentPageId: string | null } };
+  conversationEntryForTarget: (targetId: string, agentPageId: string | null) => SessionConversationEntry;
+  conversationLabel: (conversation: SessionConversationEntry) => string;
+  selectedConversationId: string | null;
+  onOpenConversation: (conversation: SessionConversationEntry) => void;
+  onCloseConversation: (conversationId: string) => void | Promise<void>;
+}) {
+  const activeEntry = conversationEntryForTarget(pane.scope.targetId, pane.scope.agentPageId);
+  // Only worth a nested strip once there's something to switch BETWEEN —
+  // mirrors `PaneConversationTabStrip`'s own `tabs.length > 1` threshold in
+  // the pane header itself, so the two surfaces agree on what counts as
+  // "this pane has tabs" for display purposes.
+  const backgroundTabs = pane.tabs.filter((tab) => tab.targetId !== null && tab.targetId !== pane.scope.targetId);
+
+  return (
+    <div>
+      <RowMenu
+        items={[
+          {
+            label: 'Close',
+            icon: X,
+            onSelect: () => void onCloseConversation(pane.scope.targetId),
+            destructive: true,
+          },
+        ]}
+        menuLabel="Conversation actions"
+        className={cn(
+          'gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground',
+          selectedConversationId === pane.scope.targetId && 'bg-accent text-foreground',
+        )}
+      >
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center text-left"
+          onClick={() => onOpenConversation(activeEntry)}
+        >
+          <span className="truncate">{conversationLabel(activeEntry)}</span>
+        </button>
+      </RowMenu>
+
+      {backgroundTabs.length > 0 && (
+        <div className="ml-4 space-y-0.5 border-l border-border pl-1.5">
+          {backgroundTabs.map((tab) => {
+            const targetId = tab.targetId as string;
+            const entry = conversationEntryForTarget(targetId, tab.agentPageId);
+            return (
+              <RowMenu
+                key={targetId}
+                items={[
+                  {
+                    label: 'Close',
+                    icon: X,
+                    onSelect: () => void onCloseConversation(targetId),
+                    destructive: true,
+                  },
+                ]}
+                menuLabel="Tab actions"
+                className={cn(
+                  'gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground',
+                  selectedConversationId === targetId && 'bg-accent text-foreground',
+                )}
+              >
+                <button
+                  type="button"
+                  className="flex min-w-0 flex-1 items-center text-left"
+                  onClick={() => onOpenConversation(entry)}
+                >
+                  <span className="truncate">{conversationLabel(entry)}</span>
+                </button>
+              </RowMenu>
+            );
+          })}
         </div>
       )}
     </div>

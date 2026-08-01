@@ -131,6 +131,8 @@ interface SessionFixture {
   sandboxStatus: 'none' | 'starting' | 'running' | 'ended';
   conversations: { conversationId: string; title: string | null; agentPageId: string | null }[];
   shells: { shellId: string; name: string }[];
+  /** Omitted (undefined) in most fixtures — the sidebar reads that as "fall back to the flat conversation list above." */
+  workspace?: unknown;
 }
 
 const SESSION: SessionFixture = {
@@ -256,16 +258,129 @@ describe('AgentsSidebar', () => {
     expect(screen.getByLabelText('New session')).toBeDefined();
   });
 
-  test('never lists panes — the second level is conversations', async () => {
+  test('falls back to a flat conversation list when the session has no saved pane grid', async () => {
+    // SESSION carries no `workspace` — a session never opened under
+    // `useWorkspaceServerSync` (or opened only by an older client).
     const user = userEvent.setup();
     renderSidebar();
 
     await user.click(await screen.findByLabelText(/expand api refactor/i));
 
-    // Conversations, yes; anything pane-shaped, no.
     expect(screen.getByText('Researcher — First chat')).toBeDefined();
-    expect(screen.queryByText(/pane/i)).toBeNull();
     expect(screen.queryByText(/split/i)).toBeNull();
+  });
+
+  describe('a session with a saved pane grid', () => {
+    const workspaceFixture = {
+      id: 'ses-1',
+      columns: [
+        {
+          id: 'col-1',
+          panes: [
+            {
+              id: 'pane-1',
+              scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' },
+              tabs: [
+                { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' },
+                { kind: 'chat', name: 'Conversation', targetId: 'conv-2', agentPageId: 'agent-1' },
+              ],
+            },
+          ],
+        },
+      ],
+      activePaneId: 'pane-1',
+      pendingPickerPaneId: null,
+    };
+
+    test('groups conversations by PANE — one row per pane, labeled by its ACTIVE tab', async () => {
+      respondWithSessions([{ ...SESSION, workspace: workspaceFixture }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+
+      // One row for the pane (its active tab, conv-1) — not two sibling rows
+      // for conv-1 and conv-2, even though the session has both open. The
+      // second (background) tab nests underneath instead.
+      expect(screen.getByText('Researcher — First chat')).toBeDefined();
+      expect(screen.getByText('Researcher — Second chat')).toBeDefined();
+    });
+
+    test('clicking the pane row selects its active tab', async () => {
+      respondWithSessions([{ ...SESSION, workspace: workspaceFixture }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      await user.click(await screen.findByText('Researcher — First chat'));
+
+      expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
+      expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-1');
+      expect(mockPush).not.toHaveBeenCalled();
+    });
+
+    test('clicking a nested background tab selects IT, not the pane\'s active tab', async () => {
+      respondWithSessions([{ ...SESSION, workspace: workspaceFixture }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      await user.click(await screen.findByText('Researcher — Second chat'));
+
+      expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
+      expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-2');
+    });
+
+    test('a pane with only ONE tab shows no nested strip at all', async () => {
+      const singleTabWorkspace = {
+        ...workspaceFixture,
+        columns: [
+          {
+            id: 'col-1',
+            panes: [
+              {
+                id: 'pane-1',
+                scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' },
+                tabs: [{ kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' }],
+              },
+            ],
+          },
+        ],
+      };
+      respondWithSessions([{ ...SESSION, workspace: singleTabWorkspace }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+
+      expect(screen.getByText('Researcher — First chat')).toBeDefined();
+      expect(screen.queryByText('Researcher — Second chat')).toBeNull();
+    });
+
+    test('selecting a session with a saved grid opens the ACTIVE pane\'s active tab', async () => {
+      respondWithSessions([{ ...SESSION, workspace: workspaceFixture }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByText('api refactor'));
+
+      expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-1');
+    });
+
+    test('closing a pane row\'s "Close" menu item closes its active tab\'s listing', async () => {
+      respondWithSessions([{ ...SESSION, workspace: workspaceFixture }]);
+      mockDel.mockResolvedValue(undefined);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
+      await user.click(await screen.findByText('Close'));
+
+      await waitFor(() =>
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'),
+      );
+    });
   });
 
   describe('selection', () => {

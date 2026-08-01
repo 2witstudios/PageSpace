@@ -1716,6 +1716,13 @@
       "when": 1785475688355,
       "tag": "0244_known_ultron",
       "breakpoints": true
+    },
+    {
+      "idx": 245,
+      "version": "7",
+      "when": 1785606094748,
+      "tag": "0245_low_kid_colt",
+      "breakpoints": true
     }
   ]
 }

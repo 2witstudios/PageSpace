@@ -108,6 +108,40 @@ export const paneScopeSchema = z.object({
 
 export type PaneScope = z.infer<typeof paneScopeSchema>;
 
+/**
+ * A session's server-persisted pane grid — columns, panes, and each pane's
+ * open conversation tabs. This is the ONE declaration both the DB column's
+ * `$type` (`packages/db/schema/agent-sessions.ts`'s `PersistedWorkspaceState`,
+ * a structural mirror only — `packages/db` cannot import `@pagespace/lib`)
+ * and every API route's body validator use; parse with this, never trust an
+ * `as` cast.
+ *
+ * `PersistedPaneState.tabs` holds every open conversation tab for that pane,
+ * INCLUDING the currently active one when `scope.kind === 'chat'` — `scope`
+ * is which tab is active, `tabs` is the full ordered set. Empty for a
+ * terminal/page pane or an unbound picker, since only chat panes tab.
+ */
+export const persistedPaneStateSchema = z.object({
+  id: z.string().min(1),
+  scope: paneScopeSchema.nullable(),
+  tabs: z.array(paneScopeSchema).default([]),
+});
+export type PersistedPaneState = z.infer<typeof persistedPaneStateSchema>;
+
+export const persistedColumnStateSchema = z.object({
+  id: z.string().min(1),
+  panes: z.array(persistedPaneStateSchema).min(1),
+});
+export type PersistedColumnState = z.infer<typeof persistedColumnStateSchema>;
+
+export const persistedWorkspaceStateSchema = z.object({
+  id: z.string().min(1),
+  columns: z.array(persistedColumnStateSchema).min(1),
+  activePaneId: z.string().min(1),
+  pendingPickerPaneId: z.string().nullable(),
+});
+export type PersistedWorkspaceState = z.infer<typeof persistedWorkspaceStateSchema>;
+
 /** Wire timestamps are ISO-8601 strings; `Date` never crosses the boundary. */
 const isoTimestamp = z.string().datetime();
 

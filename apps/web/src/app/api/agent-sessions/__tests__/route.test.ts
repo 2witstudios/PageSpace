@@ -7,6 +7,7 @@ const {
   mockListSessions,
   mockListShellsBulk,
   mockListSessionConversationsBulk,
+  mockGetSessionWorkspacesBulk,
   mockCountActiveSessionsForOwner,
   mockCheckAccessForSubject,
   mockCreateConversationInSession,
@@ -23,6 +24,7 @@ const {
   mockListSessions: vi.fn(),
   mockListShellsBulk: vi.fn(),
   mockListSessionConversationsBulk: vi.fn(),
+  mockGetSessionWorkspacesBulk: vi.fn(),
   mockCountActiveSessionsForOwner: vi.fn(),
   mockCheckAccessForSubject: vi.fn(),
   mockCreateConversationInSession: vi.fn(),
@@ -66,6 +68,9 @@ vi.mock('@/lib/agent-sessions/session-shells-runtime', () => ({
   listShellsBulk: (...args: unknown[]) => mockListShellsBulk(...args),
   spawnShell: (...args: unknown[]) => mockSpawnShell(...args),
 }));
+vi.mock('@/lib/agent-sessions/session-workspace-runtime', () => ({
+  getSessionWorkspacesBulk: (...args: unknown[]) => mockGetSessionWorkspacesBulk(...args),
+}));
 
 import { GET, POST } from '../route';
 
@@ -106,6 +111,7 @@ beforeEach(() => {
   mockListSessions.mockResolvedValue([SESSION_DTO]);
   mockListShellsBulk.mockResolvedValue(new Map([['ses-1', [SHELL_DTO]]]));
   mockListSessionConversationsBulk.mockResolvedValue(new Map([['ses-1', [CONVERSATION_ENTRY]]]));
+  mockGetSessionWorkspacesBulk.mockResolvedValue(new Map());
   mockCountActiveSessionsForOwner.mockResolvedValue(0);
 });
 
@@ -114,13 +120,27 @@ describe('GET /api/agent-sessions', () => {
     const response = await GET(new Request('http://localhost/api/agent-sessions'));
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
-      sessions: [{ ...SESSION_DTO, shells: [SHELL_DTO], conversations: [CONVERSATION_ENTRY] }],
+      sessions: [{ ...SESSION_DTO, shells: [SHELL_DTO], conversations: [CONVERSATION_ENTRY], workspace: null }],
     });
     expect(mockListSessions).toHaveBeenCalledWith({ ownerId: 'user-1' });
-    // ONE bulk call each, however many sessions — the poll must not be 1+2N.
+    // ONE bulk call each, however many sessions — the poll must not be 1+3N.
     expect(mockListSessionConversationsBulk).toHaveBeenCalledTimes(1);
     expect(mockListSessionConversationsBulk).toHaveBeenCalledWith(['ses-1']);
     expect(mockListShellsBulk).toHaveBeenCalledWith(['ses-1']);
+    expect(mockGetSessionWorkspacesBulk).toHaveBeenCalledWith(['ses-1']);
+  });
+
+  it("given a session with a saved pane grid, should attach it as `workspace`", async () => {
+    const workspace = {
+      id: 'ses-1',
+      columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null, tabs: [] }] }],
+      activePaneId: 'pane-1',
+      pendingPickerPaneId: null,
+    };
+    mockGetSessionWorkspacesBulk.mockResolvedValue(new Map([['ses-1', workspace]]));
+    const response = await GET(new Request('http://localhost/api/agent-sessions'));
+    const body = await response.json();
+    expect(body.sessions[0].workspace).toEqual(workspace);
   });
 
   it('given ?driveId=, should narrow WHERE but never WHOSE (ownerId still rides the filter)', async () => {
