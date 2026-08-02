@@ -24,7 +24,7 @@ import { canManageDrive } from '@/hooks/usePermissions';
 import { usePageAgents, type DriveWithAgents } from '@/hooks/page-agents/usePageAgents';
 import { useAgentSurfaceStore, SHEET_BREAKPOINT_QUERY } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
-import { panesOf, type PaneState } from '@/stores/agent-workspace/pane-reducer';
+import { panesOf, isLastPane, type PaneState } from '@/stores/agent-workspace/pane-reducer';
 import { fetchWithAuth, del, ApiRequestError } from '@/lib/auth/auth-fetch';
 import type { PersistedWorkspaceState } from '@pagespace/lib/agent-sessions/contract';
 import { buildSessionGroups, ASSISTANT_GROUP_KEY } from './session-groups';
@@ -462,6 +462,7 @@ function SessionRow({
   const selectSession = useAgentSurfaceStore((state) => state.selectSession);
   const forgetWorkspace = useAgentWorkspaceStore((state) => state.forgetWorkspace);
   const resetPane = useAgentWorkspaceStore((state) => state.resetPane);
+  const assignPane = useAgentWorkspaceStore((state) => state.assignPane);
   const [expanded, setExpanded] = useState(false);
   const [confirmingEnd, setConfirmingEnd] = useState(false);
   const [ending, setEnding] = useState(false);
@@ -617,7 +618,28 @@ function SessionRow({
         await del(
           `/api/agent-sessions/${encodeURIComponent(session.sessionId)}/conversations/${encodeURIComponent(conversationId)}`,
         );
-        resetPane(session.sessionId, paneId);
+        // The grid never empties (contract invariant 3): if this was the
+        // grid's ONLY pane, prefer rebinding it to another open listing over
+        // leaving it on an empty picker — the same grid-last rebind
+        // `decideClosePane` gives the pane grid's own close control (review
+        // finding — chatgpt-codex-connector on PR #2308). Read the LIVE grid
+        // again (not the snapshot above) — the DELETE's own round trip is
+        // exactly the window a concurrent split/close could land in.
+        const liveWorkspaceNow = useAgentWorkspaceStore.getState().workspaces[session.sessionId];
+        const rebindTarget =
+          liveWorkspaceNow && isLastPane(liveWorkspaceNow, paneId)
+            ? session.conversations.find((c) => c.conversationId !== conversationId)
+            : undefined;
+        if (rebindTarget) {
+          assignPane(session.sessionId, paneId, {
+            kind: 'chat',
+            name: 'Conversation',
+            targetId: rebindTarget.conversationId,
+            agentPageId: rebindTarget.agentPageId,
+          });
+        } else {
+          resetPane(session.sessionId, paneId);
+        }
         onChanged();
       } catch (error) {
         if (error instanceof ApiRequestError && error.status === 409) {
@@ -630,7 +652,7 @@ function SessionRow({
         });
       }
     },
-    [session.sessionId, resetPane, onChanged],
+    [session.sessionId, session.conversations, resetPane, assignPane, onChanged],
   );
 
   const conversationLabel = useCallback(

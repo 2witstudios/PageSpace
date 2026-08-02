@@ -421,6 +421,41 @@ describe('AgentPanes', () => {
       ).toHaveLength(1);
     });
 
+    it("resets the grid-last pane to its picker — not a stale no-op — when the DELETE succeeds despite the client's OWN snapshot showing nothing to rebind to", async () => {
+      // The client's own listing snapshot shows conv-1 as the ONLY open
+      // conversation (nothing to rebind to) — `decideClosePane` still
+      // attempts the real DELETE rather than pre-guessing end-session (the
+      // server is the authority), and here it SUCCEEDS: the server must
+      // have known about another open listing this stale client snapshot
+      // didn't. `closePane` refuses to remove a grid's only pane (the
+      // never-empty invariant), so blindly calling it here would silently
+      // no-op and leave this pane's scope pointed at the conversation that
+      // just closed, forever — it must reset to the picker instead (review
+      // finding — coderabbitai on PR #2308).
+      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+      mockDel.mockResolvedValue(undefined);
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
+      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+
+      const user = userEvent.setup();
+      await user.click(screen.getByLabelText('Close pane'));
+
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'));
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+      await waitFor(() => {
+        const pane = useAgentWorkspaceStore
+          .getState()
+          .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+          .find((p) => p.id === paneId);
+        expect(pane?.scope).toBeNull();
+      });
+      // Still exactly one pane (the grid never empties) — just unbound now.
+      expect(
+        useAgentWorkspaceStore.getState().workspaces['ses-1'].columns.flatMap((c) => c.panes),
+      ).toHaveLength(1);
+    });
+
     it("falls back to the EndSessionDialog when the server says this was the session's last open listing (409)", async () => {
       mockSessionConversations([
         { conversationId: 'conv-1', agentPageId: 'agent-1' },
@@ -2566,6 +2601,12 @@ describe('AgentPanes', () => {
           sessionId: 'ses-1',
         }),
       );
+      // Wait for the mint to fully land (closeReplacedConversation, if it
+      // were going to run, runs as part of settling this) before asserting
+      // the negative — otherwise the assertion can pass on timing alone,
+      // before the async cleanup path would have had a chance to call `del`
+      // (review finding — coderabbitai on PR #2308).
+      await waitFor(() => expect(screen.getAllByTestId('pane-chat')[0]).toHaveTextContent('new-id-1'));
       // The SECOND pane still shows conv-1 — never closed.
       expect(mockDel).not.toHaveBeenCalled();
       const secondPaneAfter = useAgentWorkspaceStore
@@ -2682,6 +2723,51 @@ describe('AgentPanes', () => {
       );
 
       expect(await screen.findByRole('button', { name: /Researcher/ })).toBeDisabled();
+    });
+
+    it('also disables the "+" chip while the pane\'s chat is streaming — replacing it would yank a still-arriving response out from under itself', async () => {
+      // Same guard the selector above gets, applied to the "+" chip: clicking
+      // it replaces the pane's content and closes the outgoing conversation,
+      // which for a live stream means abandoning a response (and any
+      // in-flight tool work) that's still arriving, with no way back to it
+      // (review finding — chatgpt-codex-connector on PR #2308).
+      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+      usePendingStreamsStore.getState().addStream({
+        messageId: 'msg-1',
+        pageId: 'agent-1',
+        conversationId: 'conv-1',
+        isOwn: true,
+        triggeredBy: { userId: 'user-1', displayName: 'You' },
+      });
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      await waitFor(() =>
+        expect(mockFetchWithAuth).toHaveBeenCalledWith(expect.stringContaining('/api/agent-sessions?driveId=drive-1')),
+      );
+
+      expect(await screen.findByRole('button', { name: 'Start a new conversation' })).toBeDisabled();
+    });
+
+    it('does NOT disable the "+" chip merely because a mint is already in flight for this pane — a second click is a supported, harmless race', async () => {
+      // Unlike the stream guard above, a mid-mint pane must stay clickable:
+      // `handlePickAgent`'s own token/counter bookkeeping is what makes two
+      // overlapping mints for the same pane land safely, and this button
+      // must not pre-empt that by disabling itself on `surface === 'loading'`
+      // (review finding follow-up — over-guarding this identically to the
+      // agent selector's `disabledAgentSwitch` broke the existing
+      // "click New Conversation twice" race-condition coverage).
+      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+      mockPost.mockReturnValue(new Promise(() => {})); // never resolves — pane stays 'loading'
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Start a new conversation' })).not.toBeDisabled());
+      const user = userEvent.setup();
+      await user.click(screen.getByRole('button', { name: 'Start a new conversation' }));
+
+      await waitFor(() =>
+        expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].scope?.targetId).toBeNull(),
+      );
+      expect(screen.getByRole('button', { name: 'Start a new conversation' })).not.toBeDisabled();
     });
   });
 });

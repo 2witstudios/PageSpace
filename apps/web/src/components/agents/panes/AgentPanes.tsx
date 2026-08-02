@@ -548,7 +548,26 @@ export default function AgentPanes({
             agentPageId: rebindAgentPageId,
           });
         } else {
-          closePane(sessionId, paneId);
+          // `rebindTo === null` here means either this pane isn't the grid's
+          // last one (closePane is the right, ordinary layout removal), OR
+          // it IS the last one and `decideClosePane`'s own client-side
+          // snapshot found no other listing to rebind to — but the DELETE
+          // just succeeded anyway (the server, not this stale snapshot, is
+          // the authority on "last listing"), so another listing must exist
+          // server-side that this client didn't know about. `closePane`
+          // REFUSES to remove a grid's only pane (the never-empty
+          // invariant), so calling it here would silently no-op and leave
+          // this pane's scope pointed at the conversation that just closed,
+          // forever. Check fresh, live state (not the closure's own
+          // `workspace`) since a split/close could have landed while this
+          // DELETE was in flight (review finding — coderabbitai on
+          // PR #2308).
+          const liveWorkspaceNow = useAgentWorkspaceStore.getState().workspaces[sessionId];
+          if (liveWorkspaceNow && isLastPane(liveWorkspaceNow, paneId)) {
+            resetPane(sessionId, paneId);
+          } else {
+            closePane(sessionId, paneId);
+          }
         }
         // Only tell the host to recover if THIS pane still shows the
         // conversation that closed — a user reassignment of this exact pane
@@ -564,7 +583,7 @@ export default function AgentPanes({
       // open `/api/agent-sessions**` poll without waiting on its interval.
       void mutate(isAgentSessionsKey);
     },
-    [sessionId, paneStillShows, beginEndSessionConfirm, replaceConversation, closePane, onConversationClosed, recordClosedConversation],
+    [sessionId, paneStillShows, beginEndSessionConfirm, replaceConversation, closePane, resetPane, onConversationClosed, recordClosedConversation],
   );
 
   const handleClosePane = useCallback(
@@ -1602,6 +1621,23 @@ function ChatPane({
   // own data doesn't know this session yet: none of these have anything
   // safe to switch against.
   const disabledAgentSwitch = surface.surface === 'loading' || activeStream !== undefined || !conversationsReady;
+  // The "+" chip's own `disabled` prop — its pre-existing `!conversationsReady`
+  // gate (unrelated to streams; kept as-is) plus the stream guard below.
+  const disabledNewConversation = activeStream !== undefined || !conversationsReady;
+  // `handleCreateNewFromHistory`'s OWN internal guard is narrower still: just
+  // the stream check, deliberately NOT `conversationsReady` — that flag only
+  // matters for a decision this action never makes (whether an agent already
+  // has a thread, to focus instead of mint); History's whole point is
+  // "start fresh regardless," so gating it on the switch-decision's own
+  // readiness would block a working action for an unrelated reason. Also
+  // deliberately NOT mid-mint: a second mint racing an in-flight one is a
+  // supported, harmless double-click race (`handlePickAgent`'s own
+  // token/counter bookkeeping exists precisely to let it land safely).
+  // Blocking a live stream IS required either way — replacing the pane would
+  // yank a still-arriving response (and any in-flight tool work) out from
+  // under itself, with no way back (review finding — chatgpt-codex-connector
+  // on PR #2308).
+  const blockedByActiveStream = activeStream !== undefined;
 
   const [activeTab, setActiveTab] = useState<PaneChatTab>('chat');
 
@@ -1695,6 +1731,13 @@ function ChatPane({
   );
 
   const handleCreateNewFromHistory = useCallback(async () => {
+    // Blocks only on an active stream (see `blockedByActiveStream`'s own
+    // doc) — History's "New Conversation" button reaches this exact same
+    // action but has no button-level guard of its own, so it's checked here
+    // once instead of threading a new prop through the shared
+    // `PageAgentHistoryTab` (review finding — chatgpt-codex-connector on
+    // PR #2308).
+    if (blockedByActiveStream) return;
     // Only follow to Chat once the mint actually landed — same discipline
     // as handleSelectHistoryConversation above. A failed create (session
     // full, permission changed, network drop) now restores this pane's
@@ -1704,7 +1747,7 @@ function ChatPane({
     // connector on PR #2299, round 13).
     const landed = await onCreateNewFromHistory();
     if (landed) setActiveTab('chat');
-  }, [onCreateNewFromHistory]);
+  }, [blockedByActiveStream, onCreateNewFromHistory]);
 
   return (
     <div
@@ -1779,7 +1822,7 @@ function ChatPane({
               type="button"
               aria-label="Start a new conversation"
               title="Start a new conversation"
-              disabled={!conversationsReady}
+              disabled={disabledNewConversation}
               onClick={(e) => {
                 e.stopPropagation();
                 void handleCreateNewFromHistory();

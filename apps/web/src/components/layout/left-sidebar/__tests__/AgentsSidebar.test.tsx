@@ -342,6 +342,46 @@ describe('AgentsSidebar', () => {
       });
     });
 
+    test("closing the grid's ONLY pane rebinds it to another open listing instead of leaving it on an empty picker", async () => {
+      // conv-2 is a real open listing elsewhere in the SESSION (per
+      // `SESSION.conversations`) with no pane of its own — the grid never
+      // empties (contract invariant 3), so closing this pane's own
+      // conversation should repoint it at that other listing rather than
+      // vanishing to a blank picker, the same grid-last rebind the pane
+      // grid's own close control already gets from `decideClosePane` (review
+      // finding — chatgpt-codex-connector on PR #2308).
+      const singlePaneWorkspace = {
+        id: 'ses-1',
+        columns: [
+          {
+            id: 'col-1',
+            panes: [{ id: 'pane-1', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: 'agent-1' } }],
+          },
+        ],
+        activePaneId: 'pane-1',
+        pendingPickerPaneId: null,
+      };
+      act(() => {
+        useAgentWorkspaceStore.getState().hydrateWorkspace('ses-1', singlePaneWorkspace as WorkspaceState);
+      });
+      respondWithSessions([{ ...SESSION, workspace: singlePaneWorkspace }]);
+      mockDel.mockResolvedValue(undefined);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      fireEvent.contextMenu(await screen.findByText('Researcher — First chat'));
+      await user.click(await screen.findByText('Close'));
+
+      await waitFor(() =>
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'),
+      );
+      await waitFor(() => {
+        const pane = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0];
+        expect(pane.scope?.targetId).toBe('conv-2');
+      });
+    });
+
     test('closing a pane whose conversation is also open in ANOTHER pane resets it locally only — never DELETEs the shared listing', async () => {
       const sharedWorkspace = {
         id: 'ses-1',
