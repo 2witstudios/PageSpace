@@ -142,9 +142,12 @@ const SETTINGS_ITEMS: AgentSettingsMenuItem[] = [
   },
 ];
 
-const SETTINGS_TITLES: Record<AgentSettingsCategory, string> = Object.fromEntries(
-  SETTINGS_ITEMS.map(({ key, title }) => [key, title]),
-) as Record<AgentSettingsCategory, string>;
+const SETTINGS_TITLES: Record<AgentSettingsCategory, string> = {
+  behavior: 'Behavior',
+  access: 'Access',
+  tools: 'Tools',
+  integrations: 'Integrations',
+};
 
 const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettingsTabProps>(({
   pageId,
@@ -165,6 +168,21 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   const mountId = useId();
   const [isSaving, setIsSaving] = useState(false);
   const [category, setCategory] = useState<AgentSettingsCategory | null>(null);
+  const settingsMenuRef = useRef<HTMLDivElement>(null);
+  const categoryHeadingRef = useRef<HTMLHeadingElement>(null);
+  const isInitialCategoryRender = useRef(true);
+
+  useEffect(() => {
+    if (isInitialCategoryRender.current) {
+      isInitialCategoryRender.current = false;
+      return;
+    }
+    if (category === null) {
+      settingsMenuRef.current?.focus();
+    } else {
+      categoryHeadingRef.current?.focus();
+    }
+  }, [category]);
   // Shared across every mounted Settings surface for this agent (keyed by
   // driveId in SWR's cache) — see useAgentMembership for why a per-instance
   // useState here previously let two Settings surfaces for the same agent
@@ -550,7 +568,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
     <div className="mx-auto w-full max-w-2xl p-4">
       <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col space-y-6">
         {category === null ? (
-          <AgentSettingsMenu items={SETTINGS_ITEMS} selectCategory={setCategory} />
+          <AgentSettingsMenu ref={settingsMenuRef} items={SETTINGS_ITEMS} selectCategory={setCategory} />
         ) : (
           <>
             <div className="space-y-2">
@@ -564,7 +582,9 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
                 <ChevronLeft className="mr-1 h-4 w-4" />
                 Agent Settings
               </Button>
-              <h2 className="text-xl font-semibold">{SETTINGS_TITLES[category]}</h2>
+              <h2 ref={categoryHeadingRef} tabIndex={-1} className="text-xl font-semibold outline-none">
+                {SETTINGS_TITLES[category]}
+              </h2>
             </div>
 
             {category === 'behavior' && (

@@ -200,7 +200,7 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
   };
 
   return (
-    <Card className="mt-4">
+    <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-lg">
           <Plug2 className="h-4 w-4" />
