@@ -62,8 +62,20 @@ interface AgentWorkspaceState {
    * in the first chat pane — never over a TERMINAL (a running PTY loses its
    * only surface; there is no reattach UI). With every pane a terminal, split
    * the active pane right.
+   *
+   * `options.liveConversationIds`, when supplied, additionally protects a
+   * chat pane whose target is NOT in that set — e.g. a conversation the user
+   * closed out of this session (`closedInSessionAt`) — from being silently
+   * evicted by an unrelated later selection (issue #2295); it falls through
+   * to the split fallback instead, exactly like a terminal/dirty pane does.
+   * Omitted (any caller that hasn't learned the live set yet), behavior is
+   * unchanged — this guard is strictly additive.
    */
-  openConversation(sessionId: string, scope: PaneScope): void;
+  openConversation(
+    sessionId: string,
+    scope: PaneScope,
+    options?: { liveConversationIds?: ReadonlySet<string> },
+  ): void;
   /**
    * Make a PAGE visible in the session's grid — the page-pane sibling of
    * `openConversation`, sharing its focus-or-replace-or-split policy (with
@@ -183,7 +195,7 @@ function focusOrAssignScope(
   set: (fn: (state: AgentWorkspaceState) => Partial<AgentWorkspaceState>) => void,
   sessionId: string,
   scope: PaneScope,
-  options?: { excludeTargetId?: string },
+  options?: { excludeTargetId?: string; liveConversationIds?: ReadonlySet<string> },
 ) {
   const state = useAgentWorkspaceStore.getState();
   const workspace = state.workspaces[sessionId];
@@ -208,11 +220,22 @@ function focusOrAssignScope(
   // a pane with unsaved edits (`isPaneDirty`), and — when the caller passed
   // `excludeTargetId` — the pane already showing THAT target (the
   // `open_page_pane` tool's own invoking conversation must never be evicted
-  // by its own tool call; it should get a split beside it instead).
+  // by its own tool call; it should get a split beside it instead). Also
+  // excluded when the caller passed `liveConversationIds` (only
+  // `openConversation` ever does): a CHAT pane whose target is not in that
+  // live set — a conversation closed out of this session — must never be
+  // silently overwritten by an unrelated later selection (issue #2295).
+  // Scoped to `kind === 'chat'` deliberately: a page pane is a different
+  // domain concept already governed by `isPaneDirty`/`excludeTargetId`, and
+  // `openPage` never supplies this option, so its call sites are unaffected.
   const isReplaceable = (pane: PaneState) =>
     (pane.scope === null || (pane.scope.kind !== 'terminal' && pane.scope.targetId !== null)) &&
     !isPaneDirty(pane) &&
-    (options?.excludeTargetId === undefined || pane.scope?.targetId !== options.excludeTargetId);
+    (options?.excludeTargetId === undefined || pane.scope?.targetId !== options.excludeTargetId) &&
+    (options?.liveConversationIds === undefined ||
+      pane.scope?.kind !== 'chat' ||
+      pane.scope.targetId === null ||
+      options.liveConversationIds.has(pane.scope.targetId));
   const replaceable = active && isReplaceable(active) ? active : panes.find(isReplaceable);
   if (replaceable) {
     state.assignPane(sessionId, replaceable.id, scope);
@@ -250,7 +273,7 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
           };
         }),
 
-      openConversation: (sessionId, scope) => focusOrAssignScope(set, sessionId, scope),
+      openConversation: (sessionId, scope, options) => focusOrAssignScope(set, sessionId, scope, options),
 
       openPage: (sessionId, scope, options) => focusOrAssignScope(set, sessionId, scope, options),
 

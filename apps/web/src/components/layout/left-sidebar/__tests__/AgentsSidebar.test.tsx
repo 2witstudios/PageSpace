@@ -685,6 +685,59 @@ describe('AgentsSidebar', () => {
         agentPageId: null,
       });
     });
+
+    // issue #2295 (adversarial review, PR #2307): `openShell` calls the
+    // store's `openConversation` directly — a second, independent path into
+    // the same eviction-prone `isReplaceable` heuristic the main fix
+    // protects, reachable without ever touching AgentPanes.tsx's seeding
+    // effect. A pane already showing a conversation absent from THIS
+    // session's own live listing (closed-in-session) must not be silently
+    // overwritten just because the user reattached an unrelated shell.
+    test('reattaching a shell does not evict a pane showing a conversation closed out of the session', async () => {
+      const existingGrid = {
+        id: 'ses-1',
+        columns: [
+          {
+            id: 'col-1',
+            panes: [
+              {
+                id: 'pane-1',
+                scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-closed', agentPageId: 'agent-1' },
+                tabs: [{ kind: 'chat', name: 'Conversation', targetId: 'conv-closed', agentPageId: 'agent-1' }],
+              },
+            ],
+          },
+        ],
+        activePaneId: 'pane-1',
+        pendingPickerPaneId: null,
+      };
+      act(() => {
+        useAgentWorkspaceStore.getState().hydrateWorkspace('ses-1', existingGrid as WorkspaceState);
+      });
+      // `conv-closed` is deliberately absent from `conversations` — this
+      // session's own live listing — simulating it having been closed out
+      // of the session while its pane is still bound to it.
+      respondWithSessions([
+        { ...SESSION, conversations: [], shells: [{ shellId: 'shell-a', name: 'shell-1' }], workspace: existingGrid },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      await user.click(await screen.findByText('shell-1'));
+
+      const panes = useAgentWorkspaceStore.getState().workspaces['ses-1']!.columns.flatMap((c) => c.panes);
+      // Protected: the original pane still shows conv-closed, untouched.
+      expect(panes.find((p) => p.id === 'pane-1')?.scope?.targetId).toBe('conv-closed');
+      // The shell opened in a NEW pane instead of evicting it.
+      expect(panes.find((p) => p.scope?.kind === 'terminal')?.scope).toEqual({
+        kind: 'terminal',
+        name: 'shell-1',
+        targetId: 'shell-a',
+        agentPageId: null,
+      });
+      expect(panes).toHaveLength(2);
+    });
   });
 
   describe('new session', () => {

@@ -276,6 +276,40 @@ describe('openConversation — selection means SHOW it (review M1)', () => {
     expect(panes.find((p) => p.id === inFlightPane.id)?.scope?.targetId).toBeNull();
     expect(panes.find((p) => p.scope?.targetId === 'conv-2')).toBeDefined();
   });
+
+  it('never evicts a pane showing a conversation closed-in-session — absent from liveConversationIds', () => {
+    store().openConversation('ses-1', conv('conv-1'));
+    const closedPane = panesOf(grid())[0];
+
+    store().openConversation('ses-1', conv('conv-2'), { liveConversationIds: new Set(['conv-2']) });
+
+    const panes = panesOf(grid());
+    expect(panes).toHaveLength(2);
+    expect(panes.find((p) => p.id === closedPane.id)?.scope?.targetId).toBe('conv-1');
+    expect(panes.find((p) => p.scope?.targetId === 'conv-2')).toBeDefined();
+  });
+
+  it('still evicts a pane whose conversation IS in liveConversationIds', () => {
+    store().openConversation('ses-1', conv('conv-1'));
+    const paneId = panesOf(grid())[0].id;
+
+    store().openConversation('ses-1', conv('conv-2'), { liveConversationIds: new Set(['conv-1', 'conv-2']) });
+
+    expect(panesOf(grid())).toHaveLength(1);
+    expect(panesOf(grid())[0].id).toBe(paneId);
+    expect(panesOf(grid())[0].scope?.targetId).toBe('conv-2');
+  });
+
+  it('omitting liveConversationIds preserves today\'s eviction behavior — strictly additive/opt-in', () => {
+    store().openConversation('ses-1', conv('conv-1'));
+    const paneId = panesOf(grid())[0].id;
+
+    store().openConversation('ses-1', conv('conv-2'));
+
+    expect(panesOf(grid())).toHaveLength(1);
+    expect(panesOf(grid())[0].id).toBe(paneId);
+    expect(panesOf(grid())[0].scope?.targetId).toBe('conv-2');
+  });
 });
 
 describe('openPage — the page-pane sibling of openConversation', () => {
