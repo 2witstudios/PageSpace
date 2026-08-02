@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useId, useState, useMemo, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
@@ -92,6 +92,7 @@ const getEffectiveAllowed = (grant: SafeGrant, tools: ProviderTool[]): Set<strin
     : new Set(grant.allowedTools);
 
 export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPanelProps) {
+  const instanceId = useId();
   const { grants, isLoading: loadingGrants, error: grantsError, mutate: mutateGrants } = useAgentGrants(pageId);
   const { connections: userConnections, isLoading: loadingUser, error: userError } = useUserConnections();
   const { connections: driveConnections, isLoading: loadingDrive, error: driveError } = useDriveConnections(driveId);
@@ -271,11 +272,11 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
                   {grant && (
                     <div className="border-t px-3 py-3 space-y-3 bg-muted/30">
                       <div className="flex items-center justify-between">
-                        <Label htmlFor={`readonly-${grant.id}`} className="text-xs">
+                        <Label htmlFor={`readonly-${instanceId}-${grant.id}`} className="text-xs">
                           Read-only mode
                         </Label>
                         <Switch
-                          id={`readonly-${grant.id}`}
+                          id={`readonly-${instanceId}-${grant.id}`}
                           checked={grant.readOnly}
                           disabled={updatingGrant === grant.id}
                           onCheckedChange={(readOnly) => handleUpdateGrant(grant, { readOnly })}
@@ -360,7 +361,7 @@ export function AgentIntegrationsPanel({ pageId, driveId }: AgentIntegrationsPan
                                       {CATEGORY_LABELS[category]}
                                     </p>
                                     {toolsInCategory.map((tool) => {
-                                      const id = `tool-${grant.id}-${tool.id}`;
+                                      const id = `tool-${instanceId}-${grant.id}-${tool.id}`;
                                       return (
                                         <div
                                           key={tool.id}
