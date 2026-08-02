@@ -47,7 +47,6 @@ import {
   PageAgentHistoryTab,
   type PageAgentSettingsTabRef,
 } from '@/components/ai/page-agents';
-import { AgentIntegrationsPanel } from '@/components/ai/page-agents/AgentIntegrationsPanel';
 import { PageWebhooksDialog } from '@/components/shared/PageWebhooksDialog';
 import { useProviderSettings } from '@/lib/ai/shared/hooks/useProviderSettings';
 import { useConversations } from '@/lib/ai/shared/hooks/useConversations';
@@ -575,9 +574,6 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
             isProviderConfigured={isProviderConfigured}
             onSavingChange={setIsSettingsSaving}
           />
-          <div className="px-4 pb-4">
-            <AgentIntegrationsPanel pageId={page.id} driveId={page.driveId} />
-          </div>
         </TabsContent>
       </Tabs>
 

@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Loader2, Bot, FolderTree, Shield, Copy, Check, Code2, Wrench, TerminalSquare } from 'lucide-react';
+import { Loader2, Bot, FolderTree, Shield, Copy, Check, Code2, Wrench, TerminalSquare, Cable, ChevronLeft } from 'lucide-react';
 import { toast } from 'sonner';
 import { useForm, useFormState, Controller } from 'react-hook-form';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -18,6 +18,12 @@ import { AgentDrivesCard } from './AgentDrivesCard';
 import { SANDBOX_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useAgentMembership } from '@/lib/ai/shared/hooks/useAgentMembership';
+import { AgentIntegrationsPanel } from './AgentIntegrationsPanel';
+import {
+  AgentSettingsMenu,
+  type AgentSettingsCategory,
+  type AgentSettingsMenuItem,
+} from './AgentSettingsMenu';
 
 interface AgentConfig {
   systemPrompt: string;
@@ -109,6 +115,37 @@ interface FormData {
   sandboxEnabled: boolean;
 }
 
+const SETTINGS_ITEMS: AgentSettingsMenuItem[] = [
+  {
+    key: 'behavior',
+    title: 'Behavior',
+    description: 'Model, instructions, identity, and workspace context',
+    icon: Bot,
+  },
+  {
+    key: 'access',
+    title: 'Access',
+    description: 'Drive membership and workspace access',
+    icon: Shield,
+  },
+  {
+    key: 'tools',
+    title: 'Tools',
+    description: 'Sandbox, default tools, and tool exposure',
+    icon: Wrench,
+  },
+  {
+    key: 'integrations',
+    title: 'Integrations',
+    description: 'External services available to this agent',
+    icon: Cable,
+  },
+];
+
+const SETTINGS_TITLES: Record<AgentSettingsCategory, string> = Object.fromEntries(
+  SETTINGS_ITEMS.map(({ key, title }) => [key, title]),
+) as Record<AgentSettingsCategory, string>;
+
 const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettingsTabProps>(({
   pageId,
   driveId,
@@ -127,6 +164,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   // useEditingStore registration below, round 20).
   const mountId = useId();
   const [isSaving, setIsSaving] = useState(false);
+  const [category, setCategory] = useState<AgentSettingsCategory | null>(null);
   // Shared across every mounted Settings surface for this agent (keyed by
   // driveId in SWR's cache) — see useAgentMembership for why a per-instance
   // useState here previously let two Settings surfaces for the same agent
@@ -509,8 +547,28 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   }
 
   return (
-    <div className="p-4">
+    <div className="mx-auto w-full max-w-2xl p-4">
       <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col space-y-6">
+        {category === null ? (
+          <AgentSettingsMenu items={SETTINGS_ITEMS} selectCategory={setCategory} />
+        ) : (
+          <>
+            <div className="space-y-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="-ml-2"
+                onClick={() => setCategory(null)}
+              >
+                <ChevronLeft className="mr-1 h-4 w-4" />
+                Agent Settings
+              </Button>
+              <h2 className="text-xl font-semibold">{SETTINGS_TITLES[category]}</h2>
+            </div>
+
+            {category === 'behavior' && (
+              <>
         {/* API Model ID */}
         <ApiModelIdCard pageId={pageId} />
 
@@ -610,8 +668,11 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
             <CardTitle className="text-lg">System Prompt</CardTitle>
           </CardHeader>
           <CardContent>
-            <label className="text-sm font-medium mb-2 block">Custom Instructions</label>
+            <label htmlFor={`${mountId}-system-prompt`} className="text-sm font-medium mb-2 block">
+              Custom Instructions
+            </label>
             <Textarea
+              id={`${mountId}-system-prompt`}
               {...register('systemPrompt')}
               placeholder="Define your AI agent's behavior, personality, and instructions here..."
               className="min-h-[200px] resize-none w-full"
@@ -729,7 +790,11 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
             </CardContent>
           )}
         </Card>
+              </>
+            )}
 
+            {category === 'access' && (
+              <>
         {/* Drive Membership */}
         <Card>
           <CardHeader>
@@ -808,7 +873,11 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
 
         {/* Drives this agent can access */}
         <AgentDrivesCard agentPageId={pageId} />
+              </>
+            )}
 
+            {category === 'tools' && (
+              <>
         {/* Sandbox — successor to the old Machine Access card, minus the
             machine topology: there is nothing to pick, because the sandbox
             belongs to the conversation's SESSION and is provisioned
@@ -871,45 +940,47 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
             <p className="text-sm text-muted-foreground mb-4">
               The agent&apos;s default toolset. The Tools menu in the chat composer is the live control at runtime — it can enable or disable any tool per session.
             </p>
-            <ScrollArea className="h-48">
-              <Controller
-                name="enabledTools"
-                control={control}
-                render={({ field: { value = [], onChange } }) => {
-                  const toolRow = (tool: { name: string; description: string }) => (
-                    <div key={tool.name} className="flex items-start space-x-3 p-2 rounded-lg hover:bg-muted/50">
-                      <Checkbox
-                        id={tool.name}
-                        checked={value.includes(tool.name)}
-                        onCheckedChange={(checked) => {
-                          const newValue = checked
-                            ? [...value, tool.name]
-                            : value.filter(t => t !== tool.name);
-                          onChange(newValue);
-                        }}
-                        className="mt-1"
-                      />
-                      <div className="flex-1">
-                        <label
-                          htmlFor={tool.name}
-                          className="text-sm font-medium cursor-pointer"
-                        >
-                          {tool.name}
-                        </label>
-                        <p className="text-xs text-muted-foreground">
-                          {tool.description}
-                        </p>
+            {visibleTools.length === 0 ? (
+              <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+                No tools are available for this agent.
+              </p>
+            ) : (
+              <ScrollArea className="h-48">
+                <Controller
+                  name="enabledTools"
+                  control={control}
+                  render={({ field: { value = [], onChange } }) => {
+                    const toolRow = (tool: { name: string; description: string }) => (
+                      <div key={tool.name} className="flex items-start space-x-3 rounded-lg p-2 hover:bg-muted/50">
+                        <Checkbox
+                          id={`${mountId}-${tool.name}`}
+                          checked={value.includes(tool.name)}
+                          onCheckedChange={(checked) => {
+                            const newValue = checked
+                              ? [...value, tool.name]
+                              : value.filter(t => t !== tool.name);
+                            onChange(newValue);
+                          }}
+                          className="mt-1"
+                        />
+                        <div className="flex-1">
+                          <label
+                            htmlFor={`${mountId}-${tool.name}`}
+                            className="cursor-pointer text-sm font-medium"
+                          >
+                            {tool.name}
+                          </label>
+                          <p className="text-xs text-muted-foreground">
+                            {tool.description}
+                          </p>
+                        </div>
                       </div>
-                    </div>
-                  );
-                  return (
-                    <div className="space-y-3">
-                      {visibleTools.map(toolRow)}
-                    </div>
-                  );
-                }}
-              />
-            </ScrollArea>
+                    );
+                    return <div className="space-y-3">{visibleTools.map(toolRow)}</div>;
+                  }}
+                />
+              </ScrollArea>
+            )}
             <p className="text-xs text-muted-foreground mt-2">
               Selected {enabledTools.length} of {visibleTools.length} tools
             </p>
@@ -960,7 +1031,14 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
             </p>
           </CardContent>
         </Card>
+              </>
+            )}
 
+            {category === 'integrations' && (
+              <AgentIntegrationsPanel pageId={pageId} driveId={driveId} />
+            )}
+          </>
+        )}
       </form>
     </div>
   );
