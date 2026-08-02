@@ -98,17 +98,17 @@ export default function AgentsListHeader({ driveId }: { driveId?: string }) {
       <h2 className="text-sm font-semibold text-foreground">Agents</h2>
       <div className="flex items-center gap-2">
         <Button variant="outline" size="sm" onClick={() => setCreateDriveOpen(true)}>
-          <Plus className="h-4 w-4 mr-1" />
-          New Drive
+          <Plus className="h-4 w-4" />
+          <span className="hidden sm:inline ml-1">New Drive</span>
         </Button>
         <Button variant="outline" size="sm" onClick={handleNewAgent}>
-          <Plus className="h-4 w-4 mr-1" />
-          New Agent
+          <Plus className="h-4 w-4" />
+          <span className="hidden sm:inline ml-1">New Agent</span>
         </Button>
         {canSpawn && (
           <Button size="sm" onClick={handleNewSession}>
-            <Plus className="h-4 w-4 mr-1" />
-            New Session
+            <Plus className="h-4 w-4" />
+            <span className="hidden sm:inline ml-1">New Session</span>
           </Button>
         )}
       </div>
