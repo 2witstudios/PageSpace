@@ -70,11 +70,13 @@ describe('PageAgentSettingsTab navigation', () => {
 
     expect(screen.getByRole('heading', { name: 'Behavior' })).toBeInTheDocument();
     expect(screen.getByText('System Prompt')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Behavior' })).toHaveFocus();
 
     await user.click(screen.getByRole('button', { name: /agent settings/i }));
 
     expect(screen.getByRole('button', { name: /integrations/i })).toBeInTheDocument();
     expect(screen.queryByText('System Prompt')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /behavior/i })).toHaveFocus();
   });
 
   it('given two pane settings surfaces, should keep their selected subpages independent', async () => {

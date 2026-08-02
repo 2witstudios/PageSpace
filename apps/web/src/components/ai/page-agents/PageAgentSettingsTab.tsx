@@ -178,7 +178,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       return;
     }
     if (category === null) {
-      settingsMenuRef.current?.focus();
+      settingsMenuRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
     } else {
       categoryHeadingRef.current?.focus();
     }

@@ -20,7 +20,7 @@ interface AgentSettingsMenuProps {
 export const AgentSettingsMenu = forwardRef<HTMLDivElement, AgentSettingsMenuProps>(
   ({ items, selectCategory }, ref) => {
     return (
-      <div ref={ref} tabIndex={-1} className="overflow-hidden rounded-lg border bg-card outline-none">
+      <div ref={ref} className="overflow-hidden rounded-lg border bg-card">
         {items.map(({ key, title, description, icon: Icon }, index) => (
           <button
             key={key}
