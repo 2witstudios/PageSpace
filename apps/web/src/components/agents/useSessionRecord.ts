@@ -23,6 +23,7 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 export interface SessionRecordSummary {
   driveId: string | null;
+  name: string;
 }
 
 async function sessionFetcher(url: string): Promise<{ session: SessionRecordSummary | null }> {
