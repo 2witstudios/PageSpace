@@ -430,7 +430,7 @@ describe('persistence', () => {
           'ses-corrupt': { id: 'ses-corrupt', columns: [], activePaneId: '', pendingPickerPaneId: null },
           'ses-1': {
             id: 'ses-1',
-            columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: scope(), tabs: [scope()] }] }],
+            columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: scope() }] }],
             activePaneId: 'pane-1',
             pendingPickerPaneId: null,
           },
@@ -454,7 +454,7 @@ describe('hydrateWorkspace', () => {
 
     const saved = {
       id: 'ses-1',
-      columns: [{ id: 'col-x', panes: [{ id: 'pane-x', scope: scope('Restored'), tabs: [scope('Restored')] }] }],
+      columns: [{ id: 'col-x', panes: [{ id: 'pane-x', scope: scope('Restored') }] }],
       activePaneId: 'pane-x',
       pendingPickerPaneId: null,
     };
@@ -469,7 +469,7 @@ describe('hydrateWorkspace', () => {
 
     const wrongSession = {
       id: 'ses-OTHER',
-      columns: [{ id: 'col-x', panes: [{ id: 'pane-x', scope: scope('Restored'), tabs: [scope('Restored')] }] }],
+      columns: [{ id: 'col-x', panes: [{ id: 'pane-x', scope: scope('Restored') }] }],
       activePaneId: 'pane-x',
       pendingPickerPaneId: null,
     };
@@ -486,8 +486,8 @@ describe('hydrateWorkspace', () => {
     const saved = {
       id: 'ses-1',
       columns: [
-        { id: 'col-x', panes: [{ id: 'pane-x', scope: scope('Restored'), tabs: [scope('Restored')] }] },
-        { id: 'col-y', panes: [{ id: 'pane-y', scope: scope('Also restored'), tabs: [scope('Also restored')] }] },
+        { id: 'col-x', panes: [{ id: 'pane-x', scope: scope('Restored') }] },
+        { id: 'col-y', panes: [{ id: 'pane-y', scope: scope('Also restored') }] },
       ],
       activePaneId: 'ghost',
       pendingPickerPaneId: null,
@@ -497,50 +497,5 @@ describe('hydrateWorkspace', () => {
     expect(grid().activePaneId).toBe('pane-x');
     // Nothing else about the grid was touched.
     expect(grid().columns).toEqual(saved.columns);
-  });
-});
-
-describe('tab actions', () => {
-  const agent2 = (): PaneScope => ({ kind: 'chat', name: 'Agent 2', targetId: 'conv-2', agentPageId: 'agent-2' });
-
-  it('replaceTab replaces the tab matching oldTargetId and activates the new scope', () => {
-    store().ensureWorkspace('ses-1', scope());
-    const paneId = grid().activePaneId;
-    store().replaceTab('ses-1', paneId, 'conv-1', agent2());
-    expect(panesOf(grid())[0].scope).toEqual(agent2());
-    expect(panesOf(grid())[0].tabs).toEqual([agent2()]);
-  });
-
-  it('openTab appends a new tab and activates it, keeping the existing tab open', () => {
-    store().ensureWorkspace('ses-1', scope());
-    const paneId = grid().activePaneId;
-    store().openTab('ses-1', paneId, agent2());
-    expect(panesOf(grid())[0].tabs).toEqual([scope(), agent2()]);
-    expect(panesOf(grid())[0].scope).toEqual(agent2());
-  });
-
-  it('switchTab activates an already-open tab without changing the tab list', () => {
-    store().ensureWorkspace('ses-1', scope());
-    const paneId = grid().activePaneId;
-    store().openTab('ses-1', paneId, agent2());
-    store().switchTab('ses-1', paneId, 'conv-1');
-    expect(panesOf(grid())[0].scope).toEqual(scope());
-    expect(panesOf(grid())[0].tabs).toEqual([scope(), agent2()]);
-  });
-
-  it('closeTab removes a tab and activates a neighbor', () => {
-    store().ensureWorkspace('ses-1', scope());
-    const paneId = grid().activePaneId;
-    store().openTab('ses-1', paneId, agent2());
-    store().closeTab('ses-1', paneId, 'conv-2');
-    expect(panesOf(grid())[0].tabs).toEqual([scope()]);
-    expect(panesOf(grid())[0].scope).toEqual(scope());
-  });
-
-  it('a transition aimed at a grid that is gone no-ops rather than throwing', () => {
-    expect(() => store().replaceTab('ses-ghost', 'pane-1', null, scope())).not.toThrow();
-    expect(() => store().openTab('ses-ghost', 'pane-1', scope())).not.toThrow();
-    expect(() => store().switchTab('ses-ghost', 'pane-1', 'conv-1')).not.toThrow();
-    expect(() => store().closeTab('ses-ghost', 'pane-1', 'conv-1')).not.toThrow();
   });
 });

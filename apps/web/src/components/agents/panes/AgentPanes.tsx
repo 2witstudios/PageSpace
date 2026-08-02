@@ -40,7 +40,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createId } from '@paralleldrive/cuid2';
-import { History, Loader2, MessageSquare, Plus, Save, Settings, X } from 'lucide-react';
+import { History, Loader2, MessageSquare, Plus, Save, Settings } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR, { mutate } from 'swr';
 import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
@@ -48,7 +48,7 @@ import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { fetchWithAuth, post, del, ApiRequestError } from '@/lib/auth/auth-fetch';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { useWorkspaceServerSync } from '@/stores/agent-workspace/useWorkspaceServerSync';
-import { panesOf, tabsOf, isLastPane, paneShowing, type PaneState } from '@/stores/agent-workspace/pane-reducer';
+import { panesOf, isLastPane, paneShowing, type PaneState } from '@/stores/agent-workspace/pane-reducer';
 import { usePageAgents } from '@/hooks/page-agents/usePageAgents';
 import { useAuth } from '@/hooks/useAuth';
 import { useConversationActiveStream } from '@/hooks/useActiveStream';
@@ -57,12 +57,6 @@ import { useConversations } from '@/lib/ai/shared/hooks/useConversations';
 import { useAgentConfig } from '@/lib/ai/shared/hooks/useAgentConfig';
 import { useProviderSettings } from '@/lib/ai/shared/hooks/useProviderSettings';
 import { PageAgentHistoryTab, PageAgentSettingsTab, type PageAgentSettingsTabRef } from '@/components/ai/page-agents';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import EndSessionDialog from '../EndSessionDialog';
 import { useResolvedAgent } from '../useResolvedAgent';
@@ -71,8 +65,7 @@ import PaneBar, { PaneSessionIdentity, PaneSplitCloseActions } from './PaneBar';
 import PanePicker, { type PickableAgent, type ReattachableShell } from './PanePicker';
 import { resolvePaneSurface, type PaneSurface } from './pane-surface';
 import { selectPaneAgent } from './select-pane-agent';
-import { decideOpenTab } from './open-pane-tab';
-import { decideCloseTab } from './close-pane-tab';
+import { decideClosePane } from './close-pane';
 import {
   agentSessionsKey,
   isAgentSessionsKey,
@@ -82,25 +75,6 @@ import {
 import PaneChat from './PaneChat';
 import PagePaneView from './PagePaneView';
 import Shell from '../shell/Shell';
-
-/**
- * This pane's own open tabs, joined against the session-wide listing only
- * for `lastMessageAt` (a pane's `PaneScope[]` tabs carry no timestamp of
- * their own) — the shape `selectPaneAgent`/`decideOpenTab` both take.
- */
-function paneTabSummaries(
-  pane: PaneState | undefined,
-  sessionConversations: readonly SessionConversationSummary[],
-): SessionConversationSummary[] {
-  if (!pane) return [];
-  return pane.tabs
-    .filter((tab): tab is PaneScope & { targetId: string } => tab.targetId !== null)
-    .map((tab) => ({
-      conversationId: tab.targetId,
-      agentPageId: tab.agentPageId,
-      lastMessageAt: sessionConversations.find((c) => c.conversationId === tab.targetId)?.lastMessageAt ?? null,
-    }));
-}
 
 export interface AgentPanesProps {
   /** The session this grid belongs to (`agent_sessions.id`). */
@@ -155,13 +129,11 @@ async function shellsFetcher(url: string): Promise<{ shells: ReattachableShell[]
 /**
  * The same bulk listing the sidebar polls (`AgentsSidebar`) — SWR dedupes an
  * identical key, so mounting both costs one request, not two. Shared by
- * every pane-bar pure decision: the switch decision (`selectPaneAgent`,
- * which agent already has a thread — this pane's own tabs first, then the
- * session-wide search), the "+" decision (`decideOpenTab`, same search), and
- * the tab-close decision (`decideCloseTab`, which needs it to tell "shown as
- * a tab in another pane" apart from "the session's only OPEN conversation" —
- * the never-empty guard's client-side mirror; the server enforces the real
- * invariant regardless).
+ * every pane pure decision: the switch decision (`selectPaneAgent`, which
+ * agent already has a thread elsewhere in the session) and the close decision
+ * (`decideClosePane`, which needs it to tell "shown in another pane" apart
+ * from "the session's only OPEN conversation" — the never-empty guard's
+ * client-side mirror; the server enforces the real invariant regardless).
  */
 async function sessionConversationsFetcher(url: string): Promise<{ sessions: SessionListEntry[] }> {
   const response = await fetchWithAuth(url);
@@ -188,10 +160,7 @@ export default function AgentPanes({
   const assignPane = useAgentWorkspaceStore((state) => state.assignPane);
   const resetPane = useAgentWorkspaceStore((state) => state.resetPane);
   const forgetWorkspace = useAgentWorkspaceStore((state) => state.forgetWorkspace);
-  const replaceTab = useAgentWorkspaceStore((state) => state.replaceTab);
-  const openTab = useAgentWorkspaceStore((state) => state.openTab);
-  const switchTab = useAgentWorkspaceStore((state) => state.switchTab);
-  const closeTab = useAgentWorkspaceStore((state) => state.closeTab);
+  const replaceConversation = useAgentWorkspaceStore((state) => state.replaceConversation);
 
   // Layout AND tabs are server-persisted now — debounced, not per-transition
   // (see the hook's own file header for why that distinction matters).
@@ -399,7 +368,7 @@ export default function AgentPanes({
     },
     [mutateSessionConversations, sessionId],
   );
-  // `decideCloseTab` must not treat "not yet loaded" the same as "loaded and
+  // `decideClosePane` must not treat "not yet loaded" the same as "loaded and
   // empty" — a close must never act on an unverified fact, so it gets `null`
   // until the fetch actually resolves. Gated on `sessionKnownToConversationsCache`
   // (THIS session's own entry having appeared), not merely `sessionsData`
@@ -524,58 +493,32 @@ export default function AgentPanes({
     [sessionId],
   );
 
-  /** Is `conversationId` still one of `paneId`'s own open tabs, right now? */
-  const paneStillHasTab = useCallback(
+  /**
+   * Is `paneId` STILL the pane bound to `conversationId`, right now? Checking
+   * mere existence isn't enough: a slow DELETE can resolve after the user has
+   * already repurposed this exact pane slot (switched its agent, minted a
+   * new conversation into it) — the pane id still exists, but applying a
+   * close/rebind meant for the OLD binding would destroy the user's newer
+   * one.
+   */
+  const paneStillShows = useCallback(
     (paneId: string, conversationId: string) => {
       const current = useAgentWorkspaceStore.getState().workspaces[sessionId];
       const pane = current ? panesOf(current).find((p) => p.id === paneId) : undefined;
-      return !!pane?.tabs.some((tab) => tab.targetId === conversationId);
+      return pane?.scope?.kind === 'chat' && pane.scope.targetId === conversationId;
     },
     [sessionId],
   );
 
-  /** Every open chat tab in the grid, flattened for `decideCloseTab`'s "shown in another pane" check. */
-  const allOpenTabs = useCallback((): { paneId: string; targetId: string }[] => {
-    const current = useAgentWorkspaceStore.getState().workspaces[sessionId];
-    if (!current) return [];
-    return tabsOf(current)
-      .filter((entry): entry is { paneId: string; tab: PaneScope & { targetId: string } } => entry.tab.targetId !== null)
-      .map((entry) => ({ paneId: entry.paneId, targetId: entry.tab.targetId }));
-  }, [sessionId]);
-
   /**
-   * Close ONE tab (`conversationId`) that belongs to `paneId` — the tab
-   * chip's own "x", and (looped over each of a pane's tabs) `handleClosePane`
-   * below, for BOTH the grid-last and non-grid-last case: whether the pane
-   * itself can be removed afterward is a layout question `handleClosePane`
-   * owns, but "does closing this tab's listing turn out to be the session's
-   * LAST one" is always the same server-authoritative question, regardless
-   * of pane count. `decideCloseTab` decides the SERVER action (nothing, a
-   * local-only removal, or the real DELETE); this wraps that with the
-   * DELETE itself, its 409 falling back to the confirmed end-session flow,
-   * and the local tab-list update once it succeeds.
-   *
-   * Returns whether THIS call opened the end-session confirm — the caller's
-   * signal that the pane's fate is now that dialog's business, not a plain
-   * layout removal (NOT used by the pane-bar selector's replace path, which
-   * has its own `closeReplacedConversation`: by the time ITS cleanup DELETE
-   * resolves the tab has already been locally replaced, so `paneStillHasTab`
-   * would always read false for it).
+   * Close conversation `conversationId`'s listing (the session-scoped
+   * DELETE) — silent on success, since closing a listing never touches
+   * history. `rebindTo`/`rebindAgentPageId` set means this pane was the
+   * grid's last, so the grid never empties: it repoints at that other open
+   * conversation instead of vanishing.
    */
-  const closeTabListing = useCallback(
-    async (paneId: string, conversationId: string): Promise<boolean> => {
-      const decision = decideCloseTab({
-        allTabs: allOpenTabs(),
-        paneId,
-        conversationId,
-        activeConversations: closeDecisionListing,
-      });
-      if (decision.action === 'noop') return false;
-      if (decision.action === 'close-tab') {
-        if (paneStillHasTab(paneId, conversationId)) closeTab(sessionId, paneId, conversationId);
-        return false;
-      }
-
+  const closeConversationListing = useCallback(
+    async (paneId: string, conversationId: string, rebindTo: string | null, rebindAgentPageId: string | null) => {
       try {
         await del(
           `/api/agent-sessions/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(conversationId)}`,
@@ -585,135 +528,113 @@ export default function AgentPanes({
           // The session's LAST open listing — the server is the authority on
           // the never-empty invariant, so fall back to the same confirmed
           // end-session flow every other last-pane close uses.
-          if (!paneStillHasTab(paneId, conversationId)) return false;
+          if (!paneStillShows(paneId, conversationId)) return;
           beginEndSessionConfirm(paneId);
-          return true;
+          return;
         }
         console.error('Failed to close this conversation:', error);
         toast.error('Could not close this conversation', {
           description: error instanceof Error ? error.message : 'Please try again.',
         });
-        return false;
+        return;
       }
 
-      if (paneStillHasTab(paneId, conversationId)) {
-        closeTab(sessionId, paneId, conversationId);
-        // Tell the host what this pane shows NOW, so it can follow along if
-        // its own "current conversation" tracking pointed at the one that
-        // just closed — same contract `onConversationClosed` always
-        // carried, just sourced from this pane's own remaining tabs instead
-        // of a cross-pane rebind.
-        const liveWorkspace = useAgentWorkspaceStore.getState().workspaces[sessionId];
-        const liveScope = liveWorkspace ? (panesOf(liveWorkspace).find((p) => p.id === paneId)?.scope ?? null) : null;
-        onConversationClosed?.({
-          conversationId,
-          next: liveScope?.kind === 'chat' ? liveScope.targetId : null,
-          nextAgentPageId: liveScope?.kind === 'chat' ? liveScope.agentPageId : null,
-        });
+      if (paneStillShows(paneId, conversationId)) {
+        if (rebindTo !== null) {
+          replaceConversation(sessionId, conversationId, {
+            kind: 'chat',
+            name: 'Conversation',
+            targetId: rebindTo,
+            agentPageId: rebindAgentPageId,
+          });
+        } else {
+          closePane(sessionId, paneId);
+        }
+        // Only tell the host to recover if THIS pane still shows the
+        // conversation that closed — a user reassignment of this exact pane
+        // while the DELETE was in flight is already caught by
+        // `paneStillShows` above.
+        onConversationClosed?.({ conversationId, next: rebindTo, nextAgentPageId: rebindAgentPageId });
       }
+      // The DELETE succeeded — this is true regardless of whether THIS pane
+      // still shows it, so remove it from the local switch-decision cache
+      // unconditionally (see `recordClosedConversation`'s own doc).
       recordClosedConversation(conversationId);
+      // Instant sidebar freshness — the closed listing's row leaves every
+      // open `/api/agent-sessions**` poll without waiting on its interval.
       void mutate(isAgentSessionsKey);
-      return false;
     },
-    [sessionId, allOpenTabs, closeDecisionListing, paneStillHasTab, closeTab, beginEndSessionConfirm, onConversationClosed, recordClosedConversation],
-  );
-
-  /** A tab chip's own close control. */
-  const handleCloseTab = useCallback(
-    (paneId: string, conversationId: string) => {
-      void closeTabListing(paneId, conversationId);
-    },
-    [closeTabListing],
+    [sessionId, paneStillShows, beginEndSessionConfirm, replaceConversation, closePane, onConversationClosed, recordClosedConversation],
   );
 
   const handleClosePane = useCallback(
     (paneId: string) => {
       if (!workspace) return;
       const pane = panesOf(workspace).find((p) => p.id === paneId);
-      if (!pane) return;
-      const isGridLast = isLastPane(workspace, paneId);
-      const tabTargetIds = pane.tabs.map((tab) => tab.targetId).filter((id): id is string => id !== null);
+      const decision = decideClosePane({
+        panes: panesOf(workspace),
+        paneId,
+        activeConversations: closeDecisionListing,
+      });
 
-      if (tabTargetIds.length === 0) {
-        // Nothing of its own to close (picker, terminal, mid-mint chat).
-        if (isGridLast) {
-          beginEndSessionConfirm(paneId);
-          return;
-        }
-        beginPaneAssign(paneId);
-        closeTerminalShell(pane.scope ?? null);
-        closePane(sessionId, paneId);
+      if (decision.action === 'noop') return;
+
+      if (decision.action === 'end-session') {
+        // Emptying the session ends it — ask first, same as the sidebar's
+        // identical act, and don't touch the grid until the user confirms.
+        // Deliberately no beginPaneAssign here: the user can still CANCEL
+        // this dialog, in which case nothing about this pane actually
+        // changes, and bumping the token regardless would invalidate a
+        // pending mint/reopen for a close that never happened. If the user
+        // DOES confirm, confirmEndSession tears down the whole workspace via
+        // forgetWorkspace — at that point the existing paneStillLoading
+        // shape-check already correctly detects this pane is gone, with no
+        // token needed.
+        beginEndSessionConfirm(paneId);
         return;
       }
 
-      // Peek every tab's decision BEFORE committing to anything. A close
-      // that turns out to be a no-op for EVERY tab (the session-
-      // conversations listing hasn't resolved yet, so nothing here can be
-      // verified) must not invalidate a pending mint/reopen for this pane —
-      // bumping the assignment token unconditionally here was exactly the
-      // round-10/23 regression: a stale close attempt that never actually
-      // altered anything left a genuinely in-flight mint's own completion
-      // treating itself as superseded, discarding its result and leaving
-      // the pane stuck spinning forever for a close that never happened.
-      const allTabs = allOpenTabs();
-      const tabDecisions = tabTargetIds.map((conversationId) =>
-        decideCloseTab({ allTabs, paneId, conversationId, activeConversations: closeDecisionListing }),
-      );
-      if (tabDecisions.every((decision) => decision.action === 'noop')) return;
-
+      // Only reachable once a decision ACTUALLY commits to altering this
+      // pane below — supersede any pending mint/reopen for it here, not
+      // before the noop/end-session checks above (round-23 regression: a
+      // stale close attempt that never actually altered anything must not
+      // invalidate a genuinely in-flight mint for this pane, leaving it
+      // stuck spinning forever for a close that never happened).
       beginPaneAssign(paneId);
-      closeTerminalShell(pane.scope ?? null);
 
-      // Never pre-guess end-session from the client's own (possibly stale)
-      // snapshot — attempt each tab's own scoped close exactly like its
-      // chip's own "x" (409 on the session's true last listing falls back
-      // to the confirm dialog regardless of how many OTHER, non-chat panes
-      // happen to be open — a terminal doesn't hold a conversation slot, so
-      // it can't rescue a session down to its last thread; an unresolved
-      // listing is a no-op, same "don't act on an unverified fact"
-      // discipline `closeTabListing` already applies).
-      if (isGridLast) {
-        // The grid never empties, so there is nothing further to remove —
-        // once every tab settles, the pane is left on its own remaining
-        // tabs or the picker (closeTabListing's own local closeTab already
-        // handles that), unless one of them opened the confirm dialog.
-        for (const conversationId of tabTargetIds) {
-          void closeTabListing(paneId, conversationId);
-        }
+      if (decision.action === 'close-pane') {
+        closePane(sessionId, paneId);
+        closeTerminalShell(pane?.scope ?? null);
         return;
       }
 
-      // Not grid-last: once every tab has settled with NONE of them opening
-      // the end-session confirm, the pane itself leaves the grid — UNLESS
-      // it was reassigned to something outside this exact set while its
-      // tabs were closing (the pane bar's own selector, a fresh mint), in
-      // which case the user has already moved this pane on to something
-      // else and removing it now would destroy that newer binding instead
-      // of the one that was actually being closed.
-      void Promise.all(tabTargetIds.map((conversationId) => closeTabListing(paneId, conversationId))).then(
-        (openedEndSessionConfirm) => {
-          if (openedEndSessionConfirm.some(Boolean)) return;
-          const liveWorkspace = useAgentWorkspaceStore.getState().workspaces[sessionId];
-          const livePane = liveWorkspace ? panesOf(liveWorkspace).find((p) => p.id === paneId) : undefined;
-          const reassigned =
-            livePane?.scope?.kind === 'chat' &&
-            livePane.scope.targetId !== null &&
-            !tabTargetIds.includes(livePane.scope.targetId);
-          if (reassigned) return;
-          closePane(sessionId, paneId);
-        },
-      );
+      if (decision.action === 'rebind-pane') {
+        // This pane addressed no conversation of its own (a terminal, a
+        // picker, a still-minting chat) — nothing to DELETE, just a repoint.
+        // Still close whatever WAS live here (e.g. a terminal's shell),
+        // exactly as an ordinary close of it would.
+        closeTerminalShell(pane?.scope ?? null);
+        assignPane(sessionId, paneId, {
+          kind: 'chat',
+          name: 'Conversation',
+          targetId: decision.conversationId,
+          agentPageId: decision.agentPageId,
+        });
+        return;
+      }
+
+      void closeConversationListing(paneId, decision.conversationId, decision.rebindTo, decision.rebindAgentPageId);
     },
     [
       workspace,
       closePane,
       sessionId,
       closeTerminalShell,
+      closeDecisionListing,
+      closeConversationListing,
+      assignPane,
       beginEndSessionConfirm,
       beginPaneAssign,
-      closeTabListing,
-      allOpenTabs,
-      closeDecisionListing,
     ],
   );
 
@@ -761,13 +682,14 @@ export default function AgentPanes({
   }, [pendingEndClose, sessionId, forgetWorkspace, closeTerminalShell, onSessionEnded]);
 
   // Shared by cleanupOrphanedConversation's own post-DELETE recheck below and
-  // handlePickHistoryConversation's rollback decision. Checks every pane's
-  // TABS, not just its active scope — a background tab is still a real,
-  // reachable surface for this conversation, not just its active binding.
+  // handlePickHistoryConversation's rollback decision.
   const isConversationShownSomewhere = useCallback(
     (conversationId: string) => {
       const liveWorkspace = useAgentWorkspaceStore.getState().workspaces[sessionId];
-      return !!liveWorkspace && panesOf(liveWorkspace).some((p) => p.tabs.some((tab) => tab.targetId === conversationId));
+      return (
+        !!liveWorkspace &&
+        panesOf(liveWorkspace).some((p) => p.scope?.kind === 'chat' && p.scope.targetId === conversationId)
+      );
     },
     [sessionId],
   );
@@ -817,25 +739,27 @@ export default function AgentPanes({
   );
 
   /**
-   * After a switch-driven mint (`mode: 'replace'`) lands, close the tab it
-   * replaced — the actual fix for panes silently accumulating stray sidebar
-   * rows: switching an agent now closes the outgoing conversation's listing
-   * (unless another pane still shows it, or it's already gone), instead of
-   * leaving it open forever. Runs only AFTER the mint succeeds; a failed
-   * mint never touches the prior conversation. The 409 case is unreachable
-   * in the ordinary run: this always mints the replacement FIRST, so the
-   * session has at least that one open by the time this DELETE runs — the
-   * old conversation can never be the server's last listing.
+   * After a switch or a "+" mint replaces what a pane shows, close the
+   * conversation it replaced — the fix for panes silently accumulating stray
+   * sidebar rows: switching an agent (or starting a new conversation)
+   * closes the outgoing conversation's listing (unless another pane still
+   * shows it, or it's already gone), instead of leaving it open forever. Runs
+   * only AFTER the replacement lands; a failed mint never touches the prior
+   * conversation. The 409 case is unreachable in the ordinary run: this
+   * always mints/assigns the replacement FIRST, so the session has at least
+   * that one open by the time this DELETE runs — the old conversation can
+   * never be the server's last listing.
    */
   const closeReplacedConversation = useCallback(
     async (paneId: string, oldConversationId: string, newConversationId: string, newAgentPageId: string | null) => {
-      const decision = decideCloseTab({
-        allTabs: allOpenTabs(),
-        paneId,
-        conversationId: oldConversationId,
-        activeConversations: closeDecisionListing,
-      });
-      if (decision.action !== 'close-conversation') return;
+      // Shown in ANOTHER pane — nothing to close, that pane still needs it.
+      if (isConversationShownSomewhere(oldConversationId)) return;
+      // Never act on an unverified fact: an unresolved listing, or one that
+      // has already resolved without this conversation in it (closed
+      // elsewhere in the meantime), means there is nothing left here to
+      // DELETE.
+      if (closeDecisionListing === null) return;
+      if (!closeDecisionListing.some((c) => c.conversationId === oldConversationId)) return;
       try {
         await del(
           `/api/agent-sessions/${encodeURIComponent(sessionId)}/conversations/${encodeURIComponent(oldConversationId)}`,
@@ -855,16 +779,11 @@ export default function AgentPanes({
       recordClosedConversation(oldConversationId);
       void mutate(isAgentSessionsKey);
     },
-    [sessionId, allOpenTabs, closeDecisionListing, onConversationClosed, recordClosedConversation],
+    [sessionId, isConversationShownSomewhere, closeDecisionListing, onConversationClosed, recordClosedConversation],
   );
 
   const handlePickAgent = useCallback(
-    async (
-      paneId: string,
-      agentPageId: string | null,
-      options?: { mode?: 'replace' | 'append' },
-    ): Promise<boolean> => {
-      const mode = options?.mode ?? 'replace';
+    async (paneId: string, agentPageId: string | null): Promise<boolean> => {
       // Also supersedes any pending `handlePickHistoryConversation` call for
       // this pane — a slow reopen resolving after the user has since minted
       // a different agent into this same pane must not overwrite it (review
@@ -957,18 +876,13 @@ export default function AgentPanes({
           return false;
         }
         const newScope: PaneScope = { kind: 'chat', name: 'New conversation', targetId: conversationId, agentPageId };
-        if (mode === 'replace') {
-          // `priorScopeConversationId`, not "whatever the pane's scope is
-          // right now" — the loading assign above already overwrote it, so
-          // only the id captured BEFORE this mint sequence began still
-          // names the tab actually being replaced (see `replaceTab`'s own
-          // docblock).
-          replaceTab(sessionId, paneId, priorScopeConversationId, newScope);
-          if (priorScopeConversationId !== null) {
-            void closeReplacedConversation(paneId, priorScopeConversationId, conversationId, agentPageId);
-          }
-        } else {
-          openTab(sessionId, paneId, newScope);
+        // `priorScopeConversationId`, not "whatever the pane's scope is right
+        // now" — the loading assign above already overwrote it, so only the
+        // id captured BEFORE this mint sequence began still names the
+        // conversation actually being replaced.
+        assignPane(sessionId, paneId, newScope);
+        if (priorScopeConversationId !== null) {
+          void closeReplacedConversation(paneId, priorScopeConversationId, conversationId, agentPageId);
         }
         // Local optimistic update for THIS component's own switch/close
         // decisions (instant, no network)...
@@ -978,7 +892,7 @@ export default function AgentPanes({
         // key the local update above can't reach — it also re-fetches THIS
         // component's own key, which just confirms the optimistic patch above
         // moments later rather than conflicting with it. Without the
-        // revalidate, `decideCloseTab`'s `activeConversations` (a 20s poll)
+        // revalidate, `decideClosePane`'s `activeConversations` (a 20s poll)
         // can still lack this brand-new row elsewhere — closing this exact
         // pane before the next poll then reads it as "not in the open
         // listing" and takes the pure layout-close path instead of the
@@ -1016,8 +930,6 @@ export default function AgentPanes({
     },
     [
       assignPane,
-      replaceTab,
-      openTab,
       resetPane,
       sessionId,
       paneStillLoading,
@@ -1329,15 +1241,13 @@ export default function AgentPanes({
 
   /**
    * A pane's History tab deleting a conversation (`softDeleteConversation`
-   * deactivates the CANONICAL row, not just this pane's own listing) —
-   * every pane in THIS grid still holding that id AS A TAB, whichever
-   * pane's History tab the delete came from, is left with a dead transcript:
-   * switching to it would render nothing sendable (the row now 404s per the
-   * send-route's own isActive guard) with no obvious way out. Closes just
-   * that ONE tab in each affected pane (`closeTab` falls back to a
-   * remaining tab, or the picker if it had none) — the multi-tab-aware
-   * successor to unconditionally resetting the whole pane, which used to be
-   * the only option when a pane held at most one conversation.
+   * deactivates the CANONICAL row) — every pane in THIS grid still showing
+   * that id, whichever pane's History tab the delete came from, is left with
+   * a dead transcript: staying on it would render nothing sendable (the row
+   * now 404s per the send-route's own isActive guard) with no obvious way
+   * out. Reset each affected pane to the picker — the simplest, safe
+   * recovery; the user explicitly picks what's next rather than a guessed
+   * replacement.
    */
   const handleHistoryDeleteConversation = useCallback(
     (deletedConversationId: string) => {
@@ -1364,49 +1274,45 @@ export default function AgentPanes({
       // Read fresh at call time, not the `workspace` this callback closed
       // over — this always runs after the DELETE's own async round trip,
       // during which the user could have already reassigned an affected
-      // pane to something else. Closing based on the STALE pre-DELETE
+      // pane to something else. Resetting based on the STALE pre-DELETE
       // snapshot would discard that newer selection even though the pane
       // no longer shows the deleted conversation at all (review finding —
       // chatgpt-codex-connector on PR #2299).
       const liveWorkspace = useAgentWorkspaceStore.getState().workspaces[sessionId];
       if (!liveWorkspace) return;
-      const affectedPanes = panesOf(liveWorkspace).filter((p) => p.tabs.some((tab) => tab.targetId === deletedConversationId));
+      const affectedPanes = panesOf(liveWorkspace).filter(
+        (p) => p.scope?.kind === 'chat' && p.scope.targetId === deletedConversationId,
+      );
       for (const pane of affectedPanes) {
-        closeTab(sessionId, pane.id, deletedConversationId);
+        resetPane(sessionId, pane.id);
       }
     },
-    [sessionId, closeTab],
+    [sessionId, resetPane],
   );
 
-  // The pane bar selector's switch — a three-way decision (see
-  // select-pane-agent.ts): already a tab HERE (switch-tab, local, no
-  // network), already open elsewhere in the session (focus-existing — reuse
-  // that conversation as THIS pane's active tab, no mint needed), or
-  // neither (mint). Confirmed: no cross-pane dedup — reusing an elsewhere-
-  // open conversation never jumps focus to the OTHER pane showing it, it
-  // shows up here too. Either way, replacing the active tab closes the
-  // OUTGOING conversation's listing (via `closeReplacedConversation`,
-  // shared with the mint path) — the actual fix for the reported bug:
-  // switching used to leave the old conversation open forever, which is
-  // what accumulated as stray sidebar rows.
+  // The pane bar selector's switch — a two-way decision (see
+  // select-pane-agent.ts): already open elsewhere in the session
+  // (focus-existing — reuse that conversation as THIS pane's content, no
+  // mint needed), or not (mint). Confirmed: no cross-pane dedup — reusing an
+  // elsewhere-open conversation never jumps focus to the OTHER pane showing
+  // it, it shows up here too. Either way, replacing this pane's content
+  // closes the OUTGOING conversation's listing (via
+  // `closeReplacedConversation`, shared with the mint path) — the fix for
+  // panes silently accumulating stray sidebar rows: switching used to leave
+  // the old conversation open forever.
   const handleSwitchAgent = useCallback(
     (paneId: string, currentAgentPageId: string | null, nextAgentPageId: string | null) => {
       if (!workspace) return;
       const pane = panesOf(workspace).find((p) => p.id === paneId);
       const decision = selectPaneAgent({
-        paneTabs: paneTabSummaries(pane, sessionConversations),
         sessionConversations,
         selectedAgentPageId: nextAgentPageId,
         currentAgentPageId,
       });
       if (decision.action === 'noop') return;
-      if (decision.action === 'switch-tab') {
-        switchTab(sessionId, paneId, decision.conversationId);
-        return;
-      }
       if (decision.action === 'focus-existing') {
         const oldTargetId = pane?.scope?.kind === 'chat' ? pane.scope.targetId : null;
-        replaceTab(sessionId, paneId, oldTargetId, {
+        assignPane(sessionId, paneId, {
           kind: 'chat',
           name: 'Conversation',
           targetId: decision.conversationId,
@@ -1417,39 +1323,9 @@ export default function AgentPanes({
         }
         return;
       }
-      void handlePickAgent(paneId, nextAgentPageId, { mode: 'replace' });
+      void handlePickAgent(paneId, nextAgentPageId);
     },
-    [workspace, sessionConversations, sessionId, switchTab, replaceTab, closeReplacedConversation, handlePickAgent],
-  );
-
-  /**
-   * The "+" chip's pick — a deliberate NEW tab, never a replacement.
-   * `decideOpenTab` asks the same reuse-before-mint question
-   * `handleSwitchAgent` does; both non-mint outcomes append-or-activate
-   * (`switchTab`/`openTab`), never touching the pane's current active tab —
-   * the one thing that's different from the switch decision's `mint`, which
-   * replaces it.
-   */
-  const handleOpenTab = useCallback(
-    (paneId: string, agentPageId: string | null) => {
-      if (!workspace) return;
-      const pane = panesOf(workspace).find((p) => p.id === paneId);
-      const decision = decideOpenTab({
-        paneTabs: paneTabSummaries(pane, sessionConversations),
-        sessionConversations,
-        selectedAgentPageId: agentPageId,
-      });
-      if (decision.action === 'focus') {
-        switchTab(sessionId, paneId, decision.conversationId);
-        return;
-      }
-      if (decision.action === 'focus-existing') {
-        openTab(sessionId, paneId, { kind: 'chat', name: 'Conversation', targetId: decision.conversationId, agentPageId });
-        return;
-      }
-      void handlePickAgent(paneId, agentPageId, { mode: 'append' });
-    },
-    [workspace, sessionConversations, sessionId, switchTab, openTab, handlePickAgent],
+    [workspace, sessionConversations, sessionId, assignPane, closeReplacedConversation, handlePickAgent],
   );
 
   const handlePickShell = useCallback(
@@ -1525,7 +1401,6 @@ export default function AgentPanes({
       return (
         <ChatPane
           scope={pane.scope}
-          tabs={pane.tabs}
           surface={surface}
           isActive={isActive}
           canSplit={canSplit}
@@ -1538,19 +1413,15 @@ export default function AgentPanes({
           hostConversationId={hostConversationId}
           isReadOnly={isReadOnly}
           onSelectAgent={(nextAgentPageId) => handleSwitchAgent(pane.id, pane.scope!.agentPageId, nextAgentPageId)}
-          onSelectTab={(targetId) => switchTab(sessionId, pane.id, targetId)}
-          onOpenTab={(agentPageId) => handleOpenTab(pane.id, agentPageId)}
-          onCloseTab={(targetId) => handleCloseTab(pane.id, targetId)}
           onSelectPane={() => selectPane(sessionId, pane.id)}
           onSplitRight={() => splitRight(sessionId, pane.id)}
           onSplitDown={() => splitDown(sessionId, pane.id)}
           onClose={() => handleClosePane(pane.id)}
-          // Starting a NEW conversation for the same agent from History is a
-          // distinct thread alongside whatever this pane is already showing,
-          // not a replacement of it — `'append'`, matching the "+" tab
-          // gesture's semantics rather than `handlePickAgent`'s replace
-          // default (review finding).
-          onCreateNewFromHistory={() => handlePickAgent(pane.id, pane.scope!.agentPageId, { mode: 'append' })}
+          // The "+" chip and History's own "New Conversation" button are now
+          // the identical call — both start a fresh conversation with this
+          // pane's current agent, replacing what's showing (still reachable
+          // afterward via History, unless nothing else shows it).
+          onCreateNewFromHistory={() => handlePickAgent(pane.id, pane.scope!.agentPageId)}
           onPickHistoryConversation={(conversation) =>
             handlePickHistoryConversation(pane.id, pane.scope!.agentPageId, conversation)
           }
@@ -1661,7 +1532,6 @@ type PaneChatTab = 'chat' | 'history' | 'settings';
  */
 function ChatPane({
   scope,
-  tabs,
   surface,
   isActive,
   canSplit,
@@ -1674,9 +1544,6 @@ function ChatPane({
   hostConversationId,
   isReadOnly,
   onSelectAgent,
-  onSelectTab,
-  onOpenTab,
-  onCloseTab,
   onSelectPane,
   onSplitRight,
   onSplitDown,
@@ -1687,8 +1554,6 @@ function ChatPane({
 }: {
   /** Always `kind: 'chat'` at the call site — `PaneScope` isn't a discriminated union, so this stays the full type. */
   scope: PaneScope;
-  /** This pane's own open tabs, INCLUDING `scope` itself — the header's tab strip. */
-  tabs: PaneScope[];
   surface: PaneSurface;
   isActive: boolean;
   canSplit: boolean;
@@ -1709,17 +1574,16 @@ function ChatPane({
   hostConversationId?: string | null;
   isReadOnly: boolean;
   onSelectAgent: (agentPageId: string | null) => void;
-  /** Activate an already-open tab — local only, no network. */
-  onSelectTab: (targetId: string) => void;
-  /** The "+" chip — a deliberate new tab, never a replacement. */
-  onOpenTab: (agentPageId: string | null) => void;
-  /** A tab chip's own close control. */
-  onCloseTab: (targetId: string) => void;
   onSelectPane: () => void;
   onSplitRight: () => void;
   onSplitDown: () => void;
   onClose: () => void;
-  /** Resolves to whether the mint actually landed — false on a failed create. */
+  /**
+   * Starts a new conversation with this pane's current agent, replacing
+   * whatever it shows — the "+" chip's action, and identically what
+   * History's own "New Conversation" button triggers. Resolves to whether it
+   * actually landed — false on a failed create.
+   */
   onCreateNewFromHistory: () => Promise<boolean>;
   /** Resolves to whether the pick actually landed — false on a failed reopen. */
   onPickHistoryConversation: (conversation: { id: string; title: string | null; sessionId: string | null; isOwner: boolean }) => Promise<boolean>;
@@ -1861,50 +1725,31 @@ function ChatPane({
             // CONVERSATION, not agent: a split pane pointed at the same
             // agent but a DIFFERENT conversation is still something the
             // page's own header isn't showing, so it keeps its full
-            // selector/tab-strip below. Drop to the same plain,
-            // non-interactive label the other pane kinds (terminal, page,
-            // picker) already use; split/close (below, unaffected) is still
-            // this pane bar's job. (This also drops the conversation
-            // tab-strip below for this one pane — a background tab isn't
-            // something the host page's header shows either, and the "+"
-            // chip in `actions` still works regardless, unaffected by this
-            // branch.)
+            // selector below. Drop to the same plain, non-interactive label
+            // the other pane kinds (terminal, page, picker) already use;
+            // split/close (below, unaffected) is still this pane bar's job.
+            // The "+" chip in `actions` still works regardless, unaffected
+            // by this branch.
             <PaneSessionIdentity name={agent?.title ?? 'Agent'} />
           ) : (
-            <div className="flex min-w-0 flex-1 flex-col">
-              <div className="flex min-w-0 flex-1 items-center gap-0.5">
-                <AISelector
-                  selectedAgent={scope.agentPageId === null ? null : agent}
-                  onSelectAgent={(next) => onSelectAgent(next?.id ?? null)}
-                  driveId={driveId ?? undefined}
-                  agents={pickableAgents}
-                  agentsLoading={agentsLoading}
-                  disabled={disabledAgentSwitch}
-                  className="h-6 min-w-0 flex-1 justify-start gap-1 px-1.5 py-0 text-xs font-medium"
-                />
-                <PaneChatTabStrip
-                  activeTab={activeTab}
-                  onSelectTab={setActiveTab}
-                  // The Assistant (agentPageId null) has no page, so no Settings —
-                  // every other pane's agent does.
-                  showSettings={scope.agentPageId !== null}
-                  agentTitle={agent?.title ?? 'Agent'}
-                />
-              </div>
-              {/* Only once there's something to switch BETWEEN — a single-tab
-                  pane costs zero extra height. This row is the "tabbable
-                  panes" affordance: which of this pane's own open
-                  conversations is showing, distinct from the AISelector above
-                  (which agent) and PaneChatTabStrip (which VIEW of it). */}
-              {tabs.length > 1 && (
-                <PaneConversationTabStrip
-                  tabs={tabs}
-                  activeTargetId={scope.targetId}
-                  pickableAgents={pickableAgents}
-                  onSelectTab={onSelectTab}
-                  onCloseTab={onCloseTab}
-                />
-              )}
+            <div className="flex min-w-0 flex-1 items-center gap-0.5">
+              <AISelector
+                selectedAgent={scope.agentPageId === null ? null : agent}
+                onSelectAgent={(next) => onSelectAgent(next?.id ?? null)}
+                driveId={driveId ?? undefined}
+                agents={pickableAgents}
+                agentsLoading={agentsLoading}
+                disabled={disabledAgentSwitch}
+                className="h-6 min-w-0 flex-1 justify-start gap-1 px-1.5 py-0 text-xs font-medium"
+              />
+              <PaneChatTabStrip
+                activeTab={activeTab}
+                onSelectTab={setActiveTab}
+                // The Assistant (agentPageId null) has no page, so no Settings —
+                // every other pane's agent does.
+                showSettings={scope.agentPageId !== null}
+                agentTitle={agent?.title ?? 'Agent'}
+              />
             </div>
           )
         }
@@ -1930,12 +1775,19 @@ function ChatPane({
                 Save
               </button>
             )}
-            <PaneOpenTabMenu
-              pickableAgents={pickableAgents}
-              agentsLoading={agentsLoading}
+            <button
+              type="button"
+              aria-label="Start a new conversation"
+              title="Start a new conversation"
               disabled={!conversationsReady}
-              onPick={onOpenTab}
-            />
+              onClick={(e) => {
+                e.stopPropagation();
+                void handleCreateNewFromHistory();
+              }}
+              className="flex shrink-0 items-center justify-center rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            >
+              <Plus className="size-3.5" aria-hidden="true" />
+            </button>
             <PaneSplitCloseActions
               canSplit={canSplit}
               canClose
@@ -2055,128 +1907,3 @@ function PaneChatTabStrip({
   );
 }
 
-/** An agent's display name for a tab chip's label — the same "Global Assistant" fallback `AgentsSidebar`'s `conversationLabel` uses. */
-function paneTabAgentName(agentPageId: string | null, pickableAgents: PickableAgent[]): string {
-  if (agentPageId === null) return 'Global Assistant';
-  return pickableAgents.find((agent) => agent.id === agentPageId)?.title ?? 'Agent';
-}
-
-/**
- * The pane header's second row — one chip per open conversation tab, only
- * rendered once there are 2+ (a single-tab pane costs zero extra height).
- * This IS the "tabbable panes" UI the pane-agent-switch bug fix formalizes:
- * before this, the only way to see more than one open conversation in a
- * pane was to notice a stray sidebar row: now it's a first-class strip.
- */
-function PaneConversationTabStrip({
-  tabs,
-  activeTargetId,
-  pickableAgents,
-  onSelectTab,
-  onCloseTab,
-}: {
-  tabs: PaneScope[];
-  activeTargetId: string | null;
-  pickableAgents: PickableAgent[];
-  onSelectTab: (targetId: string) => void;
-  onCloseTab: (targetId: string) => void;
-}) {
-  return (
-    <div role="tablist" aria-label="Open conversations" className="flex min-w-0 items-center gap-0.5 overflow-x-auto pt-0.5">
-      {tabs.map((tab) => {
-        if (tab.targetId === null) return null;
-        const targetId = tab.targetId;
-        const isActive = targetId === activeTargetId;
-        const label = paneTabAgentName(tab.agentPageId, pickableAgents);
-        return (
-          <div
-            key={targetId}
-            role="tab"
-            aria-selected={isActive}
-            className={cn(
-              'group/tab flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px]',
-              isActive ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/60',
-            )}
-          >
-            <button
-              type="button"
-              title={label}
-              aria-label={`Switch to ${label}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onSelectTab(targetId);
-              }}
-              className="max-w-[8rem] truncate"
-            >
-              {label}
-            </button>
-            <button
-              type="button"
-              aria-label={`Close ${label} tab`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onCloseTab(targetId);
-              }}
-              className="opacity-0 group-hover/tab:opacity-100 group-focus-within/tab:opacity-100 touch:opacity-100 hover:text-destructive"
-            >
-              <X className="size-2.5" aria-hidden="true" />
-            </button>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-/**
- * The "+" chip: opens a new tab in this pane, alongside whatever is already
- * active — never a replacement (that's the AISelector dropdown's job).
- * Deliberately its own small menu rather than a second `AISelector`
- * instance: that component always renders the CURRENTLY selected agent as
- * its trigger label, with no icon-only trigger mode — wrong shape for a
- * control whose entire point is "add", not "show what's active".
- */
-function PaneOpenTabMenu({
-  pickableAgents,
-  agentsLoading,
-  disabled,
-  onPick,
-}: {
-  pickableAgents: PickableAgent[];
-  agentsLoading: boolean;
-  disabled: boolean;
-  onPick: (agentPageId: string | null) => void;
-}) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label="Open a new tab"
-          title="Open a new tab"
-          disabled={disabled}
-          onClick={(e) => e.stopPropagation()}
-          className="flex shrink-0 items-center justify-center rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-        >
-          <Plus className="size-3.5" aria-hidden="true" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-[220px]" onClick={(e) => e.stopPropagation()}>
-        <DropdownMenuItem onSelect={() => onPick(null)}>Global Assistant</DropdownMenuItem>
-        {agentsLoading ? (
-          <div className="flex items-center justify-center py-3 text-xs text-muted-foreground">
-            <Loader2 className="mr-2 size-3.5 animate-spin" aria-hidden="true" />
-            Loading agents…
-          </div>
-        ) : (
-          pickableAgents.map((agent) => (
-            <DropdownMenuItem key={agent.id} onSelect={() => onPick(agent.id)}>
-              <span className="truncate">{agent.title}</span>
-              {agent.driveName && <span className="ml-auto shrink-0 truncate text-xs text-muted-foreground">{agent.driveName}</span>}
-            </DropdownMenuItem>
-          ))
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}

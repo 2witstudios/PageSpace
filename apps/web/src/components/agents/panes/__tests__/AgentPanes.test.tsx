@@ -112,7 +112,7 @@ const jsonOk = (body: unknown) => ({ ok: true, json: async () => body });
 /**
  * The default routing every test starts from: empty shells, an empty
  * session-conversations list (both `selectPaneAgent`'s switch-decision data
- * AND `decideCloseTab`'s close-decision data), and `useResolvedAgent`'s two
+ * AND `decideClosePane`'s close-decision data), and `useResolvedAgent`'s two
  * lookups per fixture agent (id/title come from `mockUsePageAgents` above). A
  * test that cares about a specific route layers its own `mockImplementation`
  * on top, falling back to this for every other URL.
@@ -394,12 +394,12 @@ describe('AgentPanes', () => {
       );
     });
 
-    it('settles the grid-last pane on its own picker (never borrows another OPEN listing that has no pane here) once its sole tab closes', async () => {
+    it('rebinds the grid-last pane onto another OPEN listing that has no pane here, instead of falling back to the picker or ending the session', async () => {
       // conv-2 is a real open listing elsewhere in the SESSION with no pane
-      // of its own in THIS grid — per-pane tabs mean this pane never
-      // reaches for it (the old cross-pane "rebind" rescue is gone by
-      // design: an emptied pane falls back to its OWN remaining tabs, or
-      // the picker, never another pane's business).
+      // of its own in THIS grid (e.g. a background worker minted it, or
+      // another tab is showing it) — the grid-never-empties rule means
+      // closing this pane's own conversation repoints it at that other
+      // listing rather than vanishing to a blank picker.
       mockSessionConversations([
         { conversationId: 'conv-1', agentPageId: 'agent-1' },
         { conversationId: 'conv-2', agentPageId: 'agent-2', lastMessageAt: '2026-01-15T00:00:00.000Z' },
@@ -413,8 +413,9 @@ describe('AgentPanes', () => {
 
       await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'));
       expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
-      // The grid never emptied — still exactly one pane, now the picker.
-      await waitFor(() => expect(screen.getByTestId('pane-picker')).toBeInTheDocument());
+      // The grid never emptied — still exactly one pane, now repointed at
+      // the other session's other open listing instead of the picker.
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-2'));
       expect(
         useAgentWorkspaceStore.getState().workspaces['ses-1'].columns.flatMap((c) => c.panes),
       ).toHaveLength(1);
@@ -586,14 +587,13 @@ describe('AgentPanes', () => {
       expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeUndefined();
     });
 
-    it('asks to end the session for a lone TERMINAL pane, even with a real open listing elsewhere that has no pane here', async () => {
+    it('rebinds a lone TERMINAL pane onto another real open listing that has no pane here, instead of asking to end the session', async () => {
       // conv-2 is a real open listing with NO pane anywhere in this grid
-      // (e.g. a background worker minted it). Per-pane tabs mean a
-      // terminal — which never had a conversation slot of its own to begin
-      // with — has nothing to fall back to either: the old cross-pane
-      // "rebind" rescue is gone by design, so the grid's only pane closing
-      // always means "end the session?", regardless of what else the
-      // session happens to have open with no pane showing it.
+      // (e.g. a background worker minted it). A terminal addresses no
+      // conversation of its own, so there is nothing here to DELETE — but
+      // the grid-never-empties rule still applies: with another open
+      // listing available, this pane repoints at it (killing the shell it
+      // was showing) rather than asking to end the session.
       mockSessionConversations([
         { conversationId: 'conv-1', agentPageId: 'agent-1' },
         { conversationId: 'conv-2', agentPageId: 'agent-2', lastMessageAt: '2026-01-15T00:00:00.000Z' },
@@ -612,11 +612,14 @@ describe('AgentPanes', () => {
       const user = userEvent.setup();
       await user.click(screen.getByLabelText('Close pane'));
 
-      // The confirm dialog opens — the terminal's own shell isn't killed
-      // yet (that's `confirmEndSession`'s job, only once actually confirmed,
-      // same as any other grid-last close).
-      expect(await screen.findByRole('alertdialog')).toBeInTheDocument();
-      expect(mockDel).not.toHaveBeenCalled();
+      // No confirm dialog — the grid still has an open listing to fall back
+      // to. The terminal's own shell is killed as part of the rebind (the
+      // conversation DELETE route is never called — there was no
+      // conversation of its own to close).
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-2'));
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+      expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/shells/shell-9');
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1');
       expect(
         useAgentWorkspaceStore.getState().workspaces['ses-1'].columns.flatMap((c) => c.panes),
       ).toHaveLength(1);
@@ -667,7 +670,7 @@ describe('AgentPanes', () => {
     // round-10 fix bumped the closing pane's assignment token BEFORE
     // deciding what the close actually does — including when the decision
     // turns out to be a no-op (the grid-last pane's session-conversation
-    // listing hasn't resolved yet, so decideCloseTab can't safely act).
+    // listing hasn't resolved yet, so decideClosePane can't safely act).
     // Invalidating a pending mint's token for a close that never actually
     // happened left the mint's own completion treating itself as
     // superseded, discarding its result without ever moving the pane out
@@ -2466,8 +2469,9 @@ describe('AgentPanes', () => {
       // therefore a fresh mint every time, not a free rewind — that's what
       // keeps the session's open-listing set (and the sidebar) matching
       // what's actually visible, instead of accumulating every agent ever
-      // visited. (Keeping several agents' conversations alive at once is
-      // the "+" tab strip's job — see the tab-strip describe block.)
+      // visited. Pane tabs (keeping several agents' conversations alive at
+      // once behind one pane) were tried and removed — see pane-reducer.ts's
+      // own header comment; a pane holds exactly one conversation now.
       mockPost.mockResolvedValue({});
       mockDel.mockResolvedValue(undefined);
       mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
@@ -2496,56 +2500,79 @@ describe('AgentPanes', () => {
       await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/new-id-1'));
     });
 
-    it('opening a second tab via "+" lets switching between them stay free thereafter — never re-mints, never re-closes', async () => {
-      // The formalized alternative to the free-rewind behavior removed
-      // above: deliberately opening a NEW tab (rather than plain
-      // AISelector switching) keeps BOTH conversations alive, and flipping
-      // between a pane's own already-open tabs is always a local
-      // `switchTab` — no network, no matter how many times you go back and
-      // forth.
+    it('clicking "+" starts a new conversation with the pane\'s CURRENT agent, replacing what it shows — no agent picker', async () => {
+      // Pane tabs are gone: the "+" chip no longer opens a dropdown to add a
+      // tab. It is now the literal same operation as History's own "New
+      // Conversation" button (`onCreateNewFromHistory`/`handlePickAgent`) —
+      // mint fresh with THIS pane's own agent and replace what's showing.
+      mockPost.mockResolvedValue({});
+      mockDel.mockResolvedValue(undefined);
+      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
+
+      const user = userEvent.setup();
+      await user.click(screen.getByRole('button', { name: 'Start a new conversation' }));
+
+      // No agent picker/dropdown ever opens — nothing to choose, so no
+      // "Writer" option is ever offered here.
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+      expect(screen.queryByRole('menuitem', { name: /Writer/ })).not.toBeInTheDocument();
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-1/conversations', {
+          conversationId: 'new-id-1',
+          sessionId: 'ses-1',
+        }),
+      );
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('new-id-1'));
+      // The replaced conversation (conv-1) closed — the same
+      // closeReplacedConversation cleanup an AISelector switch triggers.
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/conversations/conv-1'));
+    });
+
+    it('clicking "+" does not close the replaced conversation when another pane still shows it', async () => {
+      // closeReplacedConversation's "don't leak a stray open listing" rule
+      // has an exception baked in: if the outgoing conversation is still
+      // visibly shown in ANOTHER pane, closing it here would rip it out from
+      // under that pane.
       mockPost.mockResolvedValue({});
       mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
       renderPanes();
-      const user = userEvent.setup();
-
-      await user.click(await screen.findByRole('button', { name: 'Open a new tab' }));
-      await user.click(await screen.findByText('Writer'));
-      await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
-      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('new-id-1'));
-      // The original tab (conv-1) is untouched — "+" never closes anything.
-      expect(mockDel).not.toHaveBeenCalled();
-
-      // Now switch back and forth via the AISelector — both conversations
-      // are genuinely open tabs of this SAME pane, so `selectPaneAgent`
-      // finds each one as its OWN tab (switch-tab, not focus-existing) and
-      // never touches the network again. Exact-string queries for the
-      // AISelector trigger itself — the tab strip's own chips carry a
-      // "Switch to X" aria-label specifically so they never collide with it.
-      const aiSelectorTrigger = () => screen.getByRole('button', { name: 'Writer' });
-      await waitFor(() => expect(aiSelectorTrigger()).not.toBeDisabled());
-      await user.click(aiSelectorTrigger());
-      await user.click(await screen.findByRole('menuitem', { name: /Researcher/ }));
-      await waitFor(() =>
-        expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].scope).toMatchObject({
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toHaveTextContent('conv-1'));
+      const firstPaneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', firstPaneId));
+      const secondPaneId = useAgentWorkspaceStore
+        .getState()
+        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+        .find((p) => p.id !== firstPaneId)!.id;
+      act(() =>
+        useAgentWorkspaceStore.getState().assignPane('ses-1', secondPaneId, {
+          kind: 'chat',
+          name: 'Conversation',
           targetId: 'conv-1',
+          agentPageId: 'agent-1',
         }),
       );
+      await waitFor(() => expect(screen.getAllByTestId('pane-chat')).toHaveLength(2));
 
-      const aiSelectorTriggerNow = () => screen.getByRole('button', { name: 'Researcher' });
-      await waitFor(() => expect(aiSelectorTriggerNow()).not.toBeDisabled());
-      await user.click(aiSelectorTriggerNow());
-      await user.click(await screen.findByRole('menuitem', { name: /Writer/ }));
+      const user = userEvent.setup();
+      const newConversationButtons = screen.getAllByRole('button', { name: 'Start a new conversation' });
+      await user.click(newConversationButtons[0]);
+
       await waitFor(() =>
-        expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].scope).toMatchObject({
-          targetId: 'new-id-1',
-          agentPageId: 'agent-2',
+        expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-1/conversations', {
+          conversationId: 'new-id-1',
+          sessionId: 'ses-1',
         }),
       );
-
-      // Exactly the one mint from opening the tab — every switch after that
-      // was free, and nothing was ever closed.
-      expect(mockPost).toHaveBeenCalledTimes(1);
+      // The SECOND pane still shows conv-1 — never closed.
       expect(mockDel).not.toHaveBeenCalled();
+      const secondPaneAfter = useAgentWorkspaceStore
+        .getState()
+        .workspaces['ses-1'].columns.flatMap((c) => c.panes)
+        .find((p) => p.id === secondPaneId);
+      expect(secondPaneAfter?.scope?.targetId).toBe('conv-1');
     });
 
     it("records a closed conversation's removal locally, so another pane's selector mints fresh instead of silently reopening it", async () => {

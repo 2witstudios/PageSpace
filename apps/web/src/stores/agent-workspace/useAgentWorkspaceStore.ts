@@ -15,10 +15,6 @@ import {
   isLastPane,
   resetPane as resetPaneIn,
   selectPane as selectPaneIn,
-  replaceTab as replaceTabIn,
-  openTab as openTabIn,
-  switchTab as switchTabIn,
-  closeTab as closeTabIn,
   type PaneState,
   type WorkspaceState,
 } from './pane-reducer';
@@ -122,14 +118,6 @@ interface AgentWorkspaceState {
    * reference.
    */
   hydrateWorkspace(sessionId: string, workspace: WorkspaceState): void;
-  /** Replace a pane's active tab with `newScope`, closing out whichever tab addressed `oldTargetId` (`null` = nothing to replace, just append-or-dedupe). */
-  replaceTab(sessionId: string, paneId: string, oldTargetId: string | null, newScope: PaneScope): void;
-  /** Append `newScope` as a new tab (dedupe-and-activate if already open) — the "+" chip. */
-  openTab(sessionId: string, paneId: string, newScope: PaneScope): void;
-  /** Activate an already-open tab; the tab list is unchanged, and the new active scope is persisted by the debounced sync. */
-  switchTab(sessionId: string, paneId: string, targetId: string): void;
-  /** Remove a tab; activates a neighbor, or reverts to the picker if it was the last one. */
-  closeTab(sessionId: string, paneId: string, targetId: string): void;
 }
 
 /**
@@ -356,18 +344,6 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
             : { ...workspace, activePaneId: panes[0].id };
           return { workspaces: { ...state.workspaces, [sessionId]: normalized } };
         }),
-
-      replaceTab: (sessionId, paneId, oldTargetId, newScope) =>
-        set((state) => updateWorkspace(state, sessionId, (w) => replaceTabIn(w, paneId, oldTargetId, newScope)) ?? {}),
-
-      openTab: (sessionId, paneId, newScope) =>
-        set((state) => updateWorkspace(state, sessionId, (w) => openTabIn(w, paneId, newScope)) ?? {}),
-
-      switchTab: (sessionId, paneId, targetId) =>
-        set((state) => updateWorkspace(state, sessionId, (w) => switchTabIn(w, paneId, targetId)) ?? {}),
-
-      closeTab: (sessionId, paneId, targetId) =>
-        set((state) => updateWorkspace(state, sessionId, (w) => closeTabIn(w, paneId, targetId)) ?? {}),
     }),
     {
       name: 'agent-workspace-storage',

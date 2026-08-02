@@ -56,7 +56,6 @@ const workspace: PersistedWorkspaceState = {
         {
           id: 'pane-1',
           scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: null },
-          tabs: [{ kind: 'chat', name: 'Conversation', targetId: 'conv-1', agentPageId: null }],
         },
       ],
     },

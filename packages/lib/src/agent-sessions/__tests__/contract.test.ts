@@ -328,38 +328,18 @@ const chatScope = (targetId: string, agentPageId: string | null = null) =>
   paneScopeSchema.parse({ kind: 'chat', name: 'Conversation', targetId, agentPageId });
 
 describe('persistedPaneStateSchema', () => {
-  it('should default tabs to an empty array — a terminal/page/picker pane never tabs', () => {
-    const parsed = persistedPaneStateSchema.parse({ id: 'pane-1', scope: null });
-    expect(parsed.tabs).toEqual([]);
-  });
-
-  it('given a pre-tabs chat pane (scope set, tabs missing entirely), should backfill tabs from scope', () => {
+  it('should parse a pane with just an id and a scope', () => {
     const active = chatScope('conv-1', 'agent-a');
     const parsed = persistedPaneStateSchema.parse({ id: 'pane-1', scope: active });
-    expect(parsed.tabs).toEqual([active]);
+    expect(parsed).toEqual({ id: 'pane-1', scope: active });
   });
 
-  it('given a chat pane with an explicit empty tabs array, should still backfill from scope', () => {
-    const active = chatScope('conv-1', 'agent-a');
-    const parsed = persistedPaneStateSchema.parse({ id: 'pane-1', scope: active, tabs: [] });
-    expect(parsed.tabs).toEqual([active]);
-  });
-
-  it('should carry every open tab, including the active one', () => {
+  it('given a grid saved before pane tabs were removed (a tabs array on the pane), should parse it and drop tabs from the result', () => {
     const active = chatScope('conv-1', 'agent-a');
     const background = chatScope('conv-2', 'agent-b');
     const parsed = persistedPaneStateSchema.parse({ id: 'pane-1', scope: active, tabs: [active, background] });
-    expect(parsed.tabs).toEqual([active, background]);
-    expect(parsed.scope).toEqual(active);
-  });
-
-  it('should reject a tab that fails paneScopeSchema — no half-shaped tab crosses the boundary', () => {
-    const result = persistedPaneStateSchema.safeParse({
-      id: 'pane-1',
-      scope: null,
-      tabs: [{ kind: 'chat', name: 'x', targetId: '', agentPageId: null }],
-    });
-    expect(result.success).toBe(false);
+    expect(parsed).toEqual({ id: 'pane-1', scope: active });
+    expect(parsed).not.toHaveProperty('tabs');
   });
 
   it('should reject an empty pane id', () => {
@@ -375,7 +355,7 @@ describe('persistedColumnStateSchema', () => {
   it('should parse a column with panes', () => {
     const parsed = persistedColumnStateSchema.parse({
       id: 'col-1',
-      panes: [{ id: 'pane-1', scope: null, tabs: [] }],
+      panes: [{ id: 'pane-1', scope: null }],
     });
     expect(parsed.panes).toHaveLength(1);
   });
@@ -384,7 +364,7 @@ describe('persistedColumnStateSchema', () => {
 describe('persistedWorkspaceStateSchema', () => {
   const workspace = {
     id: 'ses-1',
-    columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: chatScope('conv-1'), tabs: [chatScope('conv-1')] }] }],
+    columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: chatScope('conv-1') }] }],
     activePaneId: 'pane-1',
     pendingPickerPaneId: null,
   };
