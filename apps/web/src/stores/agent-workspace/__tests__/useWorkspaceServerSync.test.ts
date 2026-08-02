@@ -59,7 +59,7 @@ describe('hydration', () => {
     store().ensureWorkspace('ses-1', scope());
     const saved = {
       id: 'ses-1',
-      columns: [{ id: 'col-x', panes: [{ id: 'pane-x', scope: scope('conv-saved'), tabs: [scope('conv-saved')] }] }],
+      columns: [{ id: 'col-x', panes: [{ id: 'pane-x', scope: scope('conv-saved') }] }],
       activePaneId: 'pane-x',
       pendingPickerPaneId: null,
     };
@@ -92,7 +92,7 @@ describe('hydration', () => {
 
     const saved = {
       id: 'ses-1',
-      columns: [{ id: 'col-x', panes: [{ id: 'pane-x', scope: scope('conv-saved'), tabs: [scope('conv-saved')] }] }],
+      columns: [{ id: 'col-x', panes: [{ id: 'pane-x', scope: scope('conv-saved') }] }],
       activePaneId: 'pane-x',
       pendingPickerPaneId: null,
     };
@@ -228,7 +228,7 @@ describe('debounced save', () => {
     store().ensureWorkspace('ses-1', scope());
     const saved = {
       id: 'ses-1',
-      columns: [{ id: 'col-x', panes: [{ id: 'pane-x', scope: scope('conv-saved'), tabs: [scope('conv-saved')] }] }],
+      columns: [{ id: 'col-x', panes: [{ id: 'pane-x', scope: scope('conv-saved') }] }],
       activePaneId: 'pane-x',
       pendingPickerPaneId: null,
     };

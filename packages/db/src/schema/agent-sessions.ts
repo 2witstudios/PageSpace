@@ -22,7 +22,6 @@ type PersistedPaneScope = {
 type PersistedPaneState = {
   id: string;
   scope: PersistedPaneScope | null;
-  tabs: PersistedPaneScope[];
 };
 type PersistedWorkspaceState = {
   id: string;
@@ -100,16 +99,15 @@ export const agentSessions = pgTable('agent_sessions', {
   name: text('name'),
 
   /**
-   * The session's pane grid — columns, panes, and each pane's open
-   * conversation tabs — serialized as one unit and written only via the
-   * client's debounced sync (`PUT /api/agent-sessions/{id}/workspace`).
-   * NULL = never saved (a session born before this shipped, or one the user
-   * has never opened in a browser that persisted it yet); the client falls
-   * back to a fresh single-pane default. This is a layout/addressing
-   * concern only — no pane or tab is ever queried by its internal fields,
-   * which is why it is one jsonb blob rather than child tables (the
-   * `agent_session_shells` pattern is for rows that need independent
-   * server-side addressing; panes and tabs don't).
+   * The session's pane grid — columns and each pane's own binding —
+   * serialized as one unit and written only via the client's debounced sync
+   * (`PUT /api/agent-sessions/{id}/workspace`). NULL = never saved (a session
+   * born before this shipped, or one the user has never opened in a browser
+   * that persisted it yet); the client falls back to a fresh single-pane
+   * default. This is a layout/addressing concern only — no pane is ever
+   * queried by its internal fields, which is why it is one jsonb blob rather
+   * than child tables (the `agent_session_shells` pattern is for rows that
+   * need independent server-side addressing; panes don't).
    */
   workspaceState: jsonb('workspaceState').$type<PersistedWorkspaceState>(),
 

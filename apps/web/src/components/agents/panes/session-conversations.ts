@@ -1,15 +1,12 @@
 /**
  * One of a session's OPEN (not-yet-closed) conversation listings — the shape
- * shared by the pane bar's pure decisions:
+ * shared by the pane grid's pure decisions:
  *
- * - `select-pane-agent.ts`'s SWITCH decision — which of THIS PANE's own tabs
- *   already has a thread for the picked agent, to focus rather than mint a
- *   duplicate.
- * - `open-pane-tab.ts`'s "+" decision — the same focus-or-mint question, for
- *   deliberately opening a new tab instead of replacing the active one.
- * - `close-pane-tab.ts`'s CLOSE decision — telling "the only pane left
- *   showing this conversation" apart from "the session's only OPEN
- *   conversation".
+ * - `select-pane-agent.ts`'s SWITCH decision — whether the picked agent
+ *   already has a thread open elsewhere in the session, to focus rather than
+ *   mint a duplicate.
+ * - `close-pane.ts`'s CLOSE decision — telling "another pane still shows
+ *   this conversation" apart from "the session's only OPEN conversation".
  *
  * These branches declared this independently before they met; hoisted here
  * so there is one declaration instead of several structurally-identical ones.
@@ -53,9 +50,8 @@ export function mostRecentlyActive<T extends { lastMessageAt: string | null }>(l
 
 /**
  * The most-recently-active listing among `listings` for `agentPageId`, or
- * `undefined` when none is open — the focus-or-mint question `select-pane-
- * agent.ts` and `open-pane-tab.ts` both ask, differing only in what they do
- * with a `mint` answer (replace the active tab vs. append a new one).
+ * `undefined` when none is open — the focus-or-mint question
+ * `select-pane-agent.ts` asks before deciding to mint a fresh conversation.
  */
 export function findOpenForAgent<T extends { agentPageId: string | null; lastMessageAt: string | null }>(
   listings: readonly T[],

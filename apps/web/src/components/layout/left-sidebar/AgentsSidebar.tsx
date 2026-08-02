@@ -24,15 +24,14 @@ import { canManageDrive } from '@/hooks/usePermissions';
 import { usePageAgents, type DriveWithAgents } from '@/hooks/page-agents/usePageAgents';
 import { useAgentSurfaceStore, SHEET_BREAKPOINT_QUERY } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
-import { panesOf, type PaneState } from '@/stores/agent-workspace/pane-reducer';
-import { decideCloseTab } from '@/components/agents/panes/close-pane-tab';
+import { panesOf, isLastPane, type PaneState } from '@/stores/agent-workspace/pane-reducer';
 import { fetchWithAuth, del, ApiRequestError } from '@/lib/auth/auth-fetch';
 import type { PersistedWorkspaceState } from '@pagespace/lib/agent-sessions/contract';
 import { buildSessionGroups, ASSISTANT_GROUP_KEY } from './session-groups';
 import { RowMenu, type RowMenuItem } from './RowMenu';
 
 /**
- * The Agents console's left sidebar: **Drive → Session → Pane → tabs.**
+ * The Agents console's left sidebar: **Drive → Session → Pane.**
  *
  * A SESSION is the tree's second level — a drive-level workspace that owns one
  * sandbox. Agents are NOT a tree level: they are what you pick when spawning
@@ -43,13 +42,10 @@ import { RowMenu, type RowMenuItem } from './RowMenu';
  * when a pane was purely local, ephemeral browser state with nothing
  * server-durable to show). Panes are now server-persisted
  * (`agent_sessions.workspaceState`, synced by `useWorkspaceServerSync`), so a
- * session's expansion shows one row per PANE (labelled by its active tab's
- * agent), with that pane's OTHER open tabs nested underneath as a switchable
- * sub-list — this is what actually fixes "switching a pane's agent spawns a
- * new sidebar item instead of updating the one I was looking at": the pane's
- * OWN row now updates in place, and a deliberate second tab (via the pane
- * header's "+") is what legitimately earns a new nested row, not an
- * accidental one.
+ * session's expansion shows one row per PANE, labelled by its own
+ * conversation — this is what actually fixes "switching a pane's agent
+ * spawns a new sidebar item instead of updating the one I was looking at":
+ * the pane's OWN row now updates in place.
  *
  * `session.workspace` is `null` for a session never opened under this
  * feature (or opened only by an older client) — that session's expansion
@@ -465,8 +461,8 @@ function SessionRow({
   const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
   const selectSession = useAgentSurfaceStore((state) => state.selectSession);
   const forgetWorkspace = useAgentWorkspaceStore((state) => state.forgetWorkspace);
-  const switchTab = useAgentWorkspaceStore((state) => state.switchTab);
-  const closeTab = useAgentWorkspaceStore((state) => state.closeTab);
+  const resetPane = useAgentWorkspaceStore((state) => state.resetPane);
+  const assignPane = useAgentWorkspaceStore((state) => state.assignPane);
   const [expanded, setExpanded] = useState(false);
   const [confirmingEnd, setConfirmingEnd] = useState(false);
   const [ending, setEnding] = useState(false);
@@ -596,63 +592,54 @@ function SessionRow({
     [onChanged, session.sessionId],
   );
 
-  // A specific pane's tab, clicked from the sidebar — routed through the
-  // SAME pane-local `switchTab` the header's tab strip uses, not the
-  // session-wide `openConversation`/`focusOrAssignScope` path. That path
-  // resolves "already showing" via `paneShowing`, which only checks a pane's
-  // ACTIVE scope, never its background tabs — a background tab clicked here
-  // would go unrecognized and get reassigned into a (possibly different)
-  // pane instead of simply activating the existing tab (review finding).
-  const switchPaneTab = useCallback(
-    (paneId: string, targetId: string) => {
-      switchTab(session.sessionId, paneId, targetId);
-    },
-    [switchTab, session.sessionId],
-  );
-
-  // Closing a pane's tab from the sidebar — routed through the same
-  // `decideCloseTab` decision `AgentPanes.tsx`'s own tab-close control uses,
-  // instead of a raw DELETE: a tab shown in another pane too must only be
-  // removed from THIS pane locally, never close the shared server listing
-  // out from under that other pane, and either way the local workspace store
-  // needs the tab removed so this row stops rendering it (review finding).
-  const closePaneTab = useCallback(
+  // Closing a pane's own conversation from the sidebar — a real DELETE
+  // (session-scoped listing), unless another pane in this same grid is ALSO
+  // showing it, in which case there is nothing server-side to do; either
+  // way this pane itself unbinds back to the picker (`resetPane`), the same
+  // recovery a History delete or a failed mint already uses.
+  const closePaneConversation = useCallback(
     async (paneId: string, conversationId: string) => {
-      // Read the LIVE grid, not the `session.workspace` prop — that's an
-      // SWR snapshot (polled every 20s, otherwise only as fresh as the last
-      // `onChanged()`), so a tab opened in another pane moments ago could be
-      // invisible to it. `AgentPanes.tsx`'s own close control reads the
-      // store the same way, for the same reason: the "shown elsewhere"
-      // check this decision makes is only trustworthy against current state
-      // (review finding).
+      // Read the LIVE grid, not the `session.workspace` prop — that's an SWR
+      // snapshot (polled every 20s, otherwise only as fresh as the last
+      // `onChanged()`), so a second pane opened on this same conversation
+      // moments ago could be invisible to it (review finding, carried over
+      // from this row's own tab-era close control).
       const liveWorkspace = useAgentWorkspaceStore.getState().workspaces[session.sessionId];
-      const allTabs = liveWorkspace
-        ? panesOf(liveWorkspace).flatMap((pane) =>
-            pane.tabs
-              .filter((tab): tab is typeof tab & { targetId: string } => tab.targetId !== null)
-              .map((tab) => ({ paneId: pane.id, targetId: tab.targetId })),
+      const shownElsewhere = liveWorkspace
+        ? panesOf(liveWorkspace).some(
+            (p) => p.id !== paneId && p.scope?.kind === 'chat' && p.scope.targetId === conversationId,
           )
-        : [];
-      const decision = decideCloseTab({
-        allTabs,
-        paneId,
-        conversationId,
-        activeConversations: session.conversations.map((c) => ({
-          conversationId: c.conversationId,
-          agentPageId: c.agentPageId,
-          lastMessageAt: null,
-        })),
-      });
-      if (decision.action === 'noop') return;
-      if (decision.action === 'close-tab') {
-        closeTab(session.sessionId, paneId, conversationId);
+        : false;
+      if (shownElsewhere) {
+        resetPane(session.sessionId, paneId);
         return;
       }
       try {
         await del(
           `/api/agent-sessions/${encodeURIComponent(session.sessionId)}/conversations/${encodeURIComponent(conversationId)}`,
         );
-        closeTab(session.sessionId, paneId, conversationId);
+        // The grid never empties (contract invariant 3): if this was the
+        // grid's ONLY pane, prefer rebinding it to another open listing over
+        // leaving it on an empty picker — the same grid-last rebind
+        // `decideClosePane` gives the pane grid's own close control (review
+        // finding — chatgpt-codex-connector on PR #2308). Read the LIVE grid
+        // again (not the snapshot above) — the DELETE's own round trip is
+        // exactly the window a concurrent split/close could land in.
+        const liveWorkspaceNow = useAgentWorkspaceStore.getState().workspaces[session.sessionId];
+        const rebindTarget =
+          liveWorkspaceNow && isLastPane(liveWorkspaceNow, paneId)
+            ? session.conversations.find((c) => c.conversationId !== conversationId)
+            : undefined;
+        if (rebindTarget) {
+          assignPane(session.sessionId, paneId, {
+            kind: 'chat',
+            name: 'Conversation',
+            targetId: rebindTarget.conversationId,
+            agentPageId: rebindTarget.agentPageId,
+          });
+        } else {
+          resetPane(session.sessionId, paneId);
+        }
         onChanged();
       } catch (error) {
         if (error instanceof ApiRequestError && error.status === 409) {
@@ -665,7 +652,7 @@ function SessionRow({
         });
       }
     },
-    [session.workspace, session.conversations, session.sessionId, closeTab, onChanged],
+    [session.sessionId, session.conversations, resetPane, assignPane, onChanged],
   );
 
   const conversationLabel = useCallback(
@@ -764,8 +751,7 @@ function SessionRow({
                   conversationLabel={conversationLabel}
                   selectedConversationId={selectedConversationId}
                   onOpenConversation={openConversation}
-                  onSwitchTab={switchPaneTab}
-                  onCloseTab={closePaneTab}
+                  onClose={closePaneConversation}
                 />
               ))
             : session.conversations.map((conversation) => (
@@ -815,12 +801,9 @@ function SessionRow({
 }
 
 /**
- * One PANE's row: labeled by its active tab, updating in place on an agent
- * switch instead of a sibling row appearing — the actual fix for "changing
- * the agent in a pane spawns a new sidebar item." When the pane holds more
- * than one open tab (the "+" chip's deliberate doing), they nest underneath
- * as their own switchable, closeable rows — the formalized, intentional
- * version of what used to be an accidental side effect of switching agents.
+ * One PANE's row: labeled by its own conversation, updating in place on an
+ * agent switch instead of a sibling row appearing — the fix for "changing
+ * the agent in a pane spawns a new sidebar item."
  */
 function PaneRow({
   pane,
@@ -828,91 +811,40 @@ function PaneRow({
   conversationLabel,
   selectedConversationId,
   onOpenConversation,
-  onSwitchTab,
-  onCloseTab,
+  onClose,
 }: {
   pane: PaneState & { scope: { kind: 'chat'; targetId: string; agentPageId: string | null } };
   conversationEntryForTarget: (targetId: string, agentPageId: string | null) => SessionConversationEntry;
   conversationLabel: (conversation: SessionConversationEntry) => string;
   selectedConversationId: string | null;
   onOpenConversation: (conversation: SessionConversationEntry) => void;
-  onSwitchTab: (paneId: string, targetId: string) => void;
-  onCloseTab: (paneId: string, conversationId: string) => void | Promise<void>;
+  onClose: (paneId: string, conversationId: string) => void | Promise<void>;
 }) {
   const activeEntry = conversationEntryForTarget(pane.scope.targetId, pane.scope.agentPageId);
-  // Only worth a nested strip once there's something to switch BETWEEN —
-  // mirrors `PaneConversationTabStrip`'s own `tabs.length > 1` threshold in
-  // the pane header itself, so the two surfaces agree on what counts as
-  // "this pane has tabs" for display purposes.
-  const backgroundTabs = pane.tabs.filter((tab) => tab.targetId !== null && tab.targetId !== pane.scope.targetId);
 
   return (
-    <div>
-      <RowMenu
-        items={[
-          {
-            label: 'Close',
-            icon: X,
-            onSelect: () => void onCloseTab(pane.id, pane.scope.targetId),
-            destructive: true,
-          },
-        ]}
-        menuLabel="Conversation actions"
-        className={cn(
-          'gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground',
-          selectedConversationId === pane.scope.targetId && 'bg-accent text-foreground',
-        )}
-      >
-        <button
-          type="button"
-          className="flex min-w-0 flex-1 items-center text-left"
-          onClick={() => onOpenConversation(activeEntry)}
-        >
-          <span className="truncate">{conversationLabel(activeEntry)}</span>
-        </button>
-      </RowMenu>
-
-      {backgroundTabs.length > 0 && (
-        <div className="ml-4 space-y-0.5 border-l border-border pl-1.5">
-          {backgroundTabs.map((tab) => {
-            const targetId = tab.targetId as string;
-            const entry = conversationEntryForTarget(targetId, tab.agentPageId);
-            return (
-              <RowMenu
-                key={targetId}
-                items={[
-                  {
-                    label: 'Close',
-                    icon: X,
-                    onSelect: () => void onCloseTab(pane.id, targetId),
-                    destructive: true,
-                  },
-                ]}
-                menuLabel="Tab actions"
-                className={cn(
-                  'gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground',
-                  selectedConversationId === targetId && 'bg-accent text-foreground',
-                )}
-              >
-                <button
-                  type="button"
-                  className="flex min-w-0 flex-1 items-center text-left"
-                  onClick={() => {
-                    // Activate the tab in ITS pane first, then let selection
-                    // follow — in that order, `AgentPanes`' own mount effect
-                    // sees the pane already showing this target and no-ops,
-                    // instead of racing this switch with a fresh reassignment.
-                    onSwitchTab(pane.id, targetId);
-                    onOpenConversation(entry);
-                  }}
-                >
-                  <span className="truncate">{conversationLabel(entry)}</span>
-                </button>
-              </RowMenu>
-            );
-          })}
-        </div>
+    <RowMenu
+      items={[
+        {
+          label: 'Close',
+          icon: X,
+          onSelect: () => void onClose(pane.id, pane.scope.targetId),
+          destructive: true,
+        },
+      ]}
+      menuLabel="Conversation actions"
+      className={cn(
+        'gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground',
+        selectedConversationId === pane.scope.targetId && 'bg-accent text-foreground',
       )}
-    </div>
+    >
+      <button
+        type="button"
+        className="flex min-w-0 flex-1 items-center text-left"
+        onClick={() => onOpenConversation(activeEntry)}
+      >
+        <span className="truncate">{conversationLabel(activeEntry)}</span>
+      </button>
+    </RowMenu>
   );
 }

@@ -1,0 +1,134 @@
+import 'dotenv/config';
+import { getMigrationDb } from '@pagespace/db/db';
+import { agentSessions } from '@pagespace/db/schema/agent-sessions';
+import { conversations } from '@pagespace/db/schema/conversations';
+import { and, eq, isNull, sql } from '@pagespace/db/operators';
+
+/**
+ * One-shot cleanup for the pane-tabs removal: a pane used to be able to hold
+ * several open conversations behind a switchable strip (`tabs: PaneScope[]`).
+ * The runtime schema (`persistedPaneStateSchema`) now silently drops that
+ * array on parse — by design, for the shape — but the BACKGROUND
+ * conversations it used to name were never closed server-side. Left alone,
+ * they keep counting against `MAX_SESSION_CONVERSATIONS` forever with no
+ * pane pointing at them (review finding — chatgpt-codex-connector on
+ * PR #2308).
+ *
+ * Safe by construction: a pane only ever had `tabs.length > 1` while its
+ * ACTIVE tab (`scope`) was also one of those tabs, so the session always has
+ * at least that one conversation open — closing only the OTHER (background)
+ * tabs here can never trip the never-empty-session invariant
+ * `closeConversationInSession` enforces for a live close. Idempotent: a
+ * session already re-saved under the new tabs-less shape (or one that never
+ * had a multi-tab pane) has nothing for this script to find.
+ */
+
+export interface RawPaneScope {
+  targetId: string | null;
+}
+export interface RawPane {
+  scope: RawPaneScope | null;
+  tabs?: RawPaneScope[];
+}
+export interface RawColumn {
+  panes: RawPane[];
+}
+export interface RawWorkspaceState {
+  columns: RawColumn[];
+}
+
+/**
+ * Pure planner: every background-tab targetId across a raw (pre-migration)
+ * workspace's panes, excluding any id that's the active `scope` of ANY pane
+ * in the workspace — not just the pane the tab itself belongs to. A tabs-era
+ * conversation could be legitimately open live in two panes at once (one
+ * pane's active scope, another pane's own background tab); collecting the
+ * active-scope exclusion set workspace-wide first is what keeps this script
+ * from closing a conversation another pane is still actively showing. Kept
+ * side-effect-free so the "which ids to touch" logic is unit-testable
+ * without a database.
+ */
+export function findOrphanedBackgroundTabIds(workspace: RawWorkspaceState | null | undefined): Set<string> {
+  const orphanTargetIds = new Set<string>();
+  if (!workspace?.columns) return orphanTargetIds;
+
+  const activeTargetIds = new Set<string>();
+  for (const column of workspace.columns) {
+    for (const pane of column.panes ?? []) {
+      if (pane.scope?.targetId) activeTargetIds.add(pane.scope.targetId);
+    }
+  }
+
+  for (const column of workspace.columns) {
+    for (const pane of column.panes ?? []) {
+      if (!Array.isArray(pane.tabs) || pane.tabs.length <= 1) continue;
+      for (const tab of pane.tabs) {
+        if (tab.targetId && !activeTargetIds.has(tab.targetId)) orphanTargetIds.add(tab.targetId);
+      }
+    }
+  }
+  return orphanTargetIds;
+}
+
+export async function runBackfill(): Promise<{ sessionsWithOrphans: number; closed: number; alreadyClosed: number }> {
+  const db = getMigrationDb();
+  const rows = await db
+    .select({ id: agentSessions.id, workspaceState: agentSessions.workspaceState })
+    .from(agentSessions)
+    .where(sql`${agentSessions.workspaceState} IS NOT NULL`);
+
+  let sessionsWithOrphans = 0;
+  let closed = 0;
+  let alreadyClosed = 0;
+
+  for (const row of rows) {
+    // Re-read this session's own state right before acting on it, not the
+    // bulk snapshot from the `select` above -- a user could resave their
+    // workspace (e.g. reopen this exact conversation into an active pane)
+    // in the gap between that initial scan and this row's turn in the loop
+    // (review finding -- coderabbitai on PR #2308).
+    const [freshRow] = await db
+      .select({ workspaceState: agentSessions.workspaceState })
+      .from(agentSessions)
+      .where(eq(agentSessions.id, row.id));
+    const orphanTargetIds = findOrphanedBackgroundTabIds(freshRow?.workspaceState as unknown as RawWorkspaceState | null);
+    if (orphanTargetIds.size === 0) continue;
+
+    sessionsWithOrphans++;
+    console.log(`  session ${row.id}: ${orphanTargetIds.size} orphaned background tab(s)`);
+
+    for (const conversationId of orphanTargetIds) {
+      // Scoped to THIS session — a conversation the client believed was a
+      // background tab here but has since moved (a fork, or reopened
+      // elsewhere) is not this script's business to touch.
+      const updated = await db
+        .update(conversations)
+        .set({ closedInSessionAt: new Date() })
+        .where(
+          and(
+            eq(conversations.id, conversationId),
+            eq(conversations.sessionId, row.id),
+            isNull(conversations.closedInSessionAt),
+          ),
+        )
+        .returning({ id: conversations.id });
+      if (updated.length > 0) closed++;
+      else alreadyClosed++;
+    }
+  }
+
+  console.log(
+    `\nDone. ${sessionsWithOrphans} session(s) had orphaned background tabs; ${closed} conversation(s) closed, ${alreadyClosed} already closed/moved.`,
+  );
+  return { sessionsWithOrphans, closed, alreadyClosed };
+}
+
+// Only run when invoked directly (not when imported by tests).
+if (import.meta.main) {
+  runBackfill()
+    .then(() => process.exit(0))
+    .catch((error) => {
+      console.error('Backfill failed:', error);
+      process.exit(1);
+    });
+}

@@ -25,10 +25,10 @@ import type { WorkspaceState } from './pane-reducer';
  * storage held (or `undefined`/garbage on a cold or foreign key). Returns
  * only the grids that pass validation, keyed by session id — using the
  * PARSED result, not the raw input: a grid written by a browser from before
- * `tabs` existed on `PaneState` is otherwise structurally valid (the schema
- * defaults a missing `tabs` to `[]`) but the raw object still lacks the key
- * entirely, which would hand the store a `PaneState` a later `pane.tabs.length`
- * read crashes on. Parsing once here backfills it for every caller downstream.
+ * pane tabs were removed still carries a `tabs` array on each pane in the raw
+ * object, which `persistedPaneStateSchema` accepts but strips on parse. Using
+ * the parsed result here is what keeps that stale field from ever reaching
+ * the store.
  */
 export function validatePersistedWorkspaces(persisted: unknown): Record<string, WorkspaceState> {
   if (persisted === null || typeof persisted !== 'object') return {};
