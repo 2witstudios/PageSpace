@@ -1621,23 +1621,22 @@ function ChatPane({
   // own data doesn't know this session yet: none of these have anything
   // safe to switch against.
   const disabledAgentSwitch = surface.surface === 'loading' || activeStream !== undefined || !conversationsReady;
-  // The "+" chip's own `disabled` prop — its pre-existing `!conversationsReady`
-  // gate (unrelated to streams; kept as-is) plus the stream guard below.
-  const disabledNewConversation = activeStream !== undefined || !conversationsReady;
-  // `handleCreateNewFromHistory`'s OWN internal guard is narrower still: just
-  // the stream check, deliberately NOT `conversationsReady` — that flag only
-  // matters for a decision this action never makes (whether an agent already
-  // has a thread, to focus instead of mint); History's whole point is
-  // "start fresh regardless," so gating it on the switch-decision's own
-  // readiness would block a working action for an unrelated reason. Also
-  // deliberately NOT mid-mint: a second mint racing an in-flight one is a
-  // supported, harmless double-click race (`handlePickAgent`'s own
-  // token/counter bookkeeping exists precisely to let it land safely).
-  // Blocking a live stream IS required either way — replacing the pane would
-  // yank a still-arriving response (and any in-flight tool work) out from
-  // under itself, with no way back (review finding — chatgpt-codex-connector
-  // on PR #2308).
+  // `handleCreateNewFromHistory`'s OWN internal guard — just the stream
+  // check, deliberately NOT `conversationsReady`: that flag only matters for
+  // a decision this action never makes (whether an agent already has a
+  // thread, to focus instead of mint); History's whole point is "start fresh
+  // regardless," so gating it on the switch-decision's own readiness would
+  // block a working action for an unrelated reason. Also deliberately NOT
+  // mid-mint: a second mint racing an in-flight one is a supported, harmless
+  // double-click race (`handlePickAgent`'s own token/counter bookkeeping
+  // exists precisely to let it land safely). Blocking a live stream IS
+  // required either way — replacing the pane would yank a still-arriving
+  // response (and any in-flight tool work) out from under itself, with no
+  // way back (review finding — chatgpt-codex-connector on PR #2308).
   const blockedByActiveStream = activeStream !== undefined;
+  // The "+" chip's own `disabled` prop: the stream guard above, plus its
+  // pre-existing `!conversationsReady` gate (unrelated to streams, kept as-is).
+  const disabledNewConversation = blockedByActiveStream || !conversationsReady;
 
   const [activeTab, setActiveTab] = useState<PaneChatTab>('chat');
 
