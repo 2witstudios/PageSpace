@@ -92,11 +92,21 @@ describe('findOrphanedBackgroundTabIds', () => {
   });
 });
 
-/** Chainable select stub resolving to `rows` on `.where()`. */
-function stubSelect(rows: unknown[]) {
+/**
+ * Chainable select stub covering BOTH calls `runBackfill` makes: the initial
+ * bulk scan (`.where(sql\`...\`)`, a string in our mocked `sql` operator) and
+ * the per-row fresh re-read (`.where(eq(agentSessions.id, id))`, an object
+ * from our mocked `eq`) — `freshById` lets a test simulate the row's state
+ * having changed between the two.
+ */
+function stubSelect(bulkRows: unknown[], freshById: Record<string, unknown> = {}) {
   const stub: Record<string, unknown> = {};
   stub.from = () => stub;
-  stub.where = () => Promise.resolve(rows);
+  stub.where = (predicate: unknown) => {
+    if (typeof predicate === 'string') return Promise.resolve(bulkRows);
+    const { value: id } = predicate as { value: string };
+    return Promise.resolve(id in freshById ? [freshById[id]] : []);
+  };
   return stub;
 }
 
@@ -115,18 +125,17 @@ function stubUpdate(alreadyClosed: Set<string>) {
 
 describe('runBackfill', () => {
   it('closes every orphaned background tab exactly once, skips already-migrated sessions, and reports accurate counts', async () => {
-    mockSelect.mockReturnValue(
-      stubSelect([
-        {
-          id: 'ses-1',
-          workspaceState: {
-            columns: [{ panes: [{ scope: scope('conv-1'), tabs: [scope('conv-1'), scope('conv-2'), scope('conv-3')] }] }],
-          },
-        },
-        // Already migrated (or never had tabs) — nothing to do here.
-        { id: 'ses-2', workspaceState: { columns: [{ panes: [{ scope: scope('conv-9') }] }] } },
-      ]),
-    );
+    const ses1 = {
+      id: 'ses-1',
+      workspaceState: {
+        columns: [{ panes: [{ scope: scope('conv-1'), tabs: [scope('conv-1'), scope('conv-2'), scope('conv-3')] }] }],
+      },
+    };
+    // Already migrated (or never had tabs) — nothing to do here.
+    const ses2 = { id: 'ses-2', workspaceState: { columns: [{ panes: [{ scope: scope('conv-9') }] }] } };
+    // Fresh re-read (per row, right before acting) sees the SAME state here —
+    // this test is about the steady-state behavior, not the race itself.
+    mockSelect.mockReturnValue(stubSelect([ses1, ses2], { 'ses-1': ses1, 'ses-2': ses2 }));
     mockUpdate.mockReturnValue({
       set: () => ({ where: (predicate: unknown) => ({ returning: () => stubUpdate(new Set(['conv-3']))(predicate as never) }) }),
     });
@@ -140,13 +149,45 @@ describe('runBackfill', () => {
   });
 
   it('given no sessions with orphaned tabs, closes nothing', async () => {
-    mockSelect.mockReturnValue(
-      stubSelect([{ id: 'ses-1', workspaceState: { columns: [{ panes: [{ scope: scope('conv-1') }] }] } }]),
-    );
+    const ses1 = { id: 'ses-1', workspaceState: { columns: [{ panes: [{ scope: scope('conv-1') }] }] } };
+    mockSelect.mockReturnValue(stubSelect([ses1], { 'ses-1': ses1 }));
     mockUpdate.mockClear();
 
     const result = await runBackfill();
 
+    expect(result).toEqual({ sessionsWithOrphans: 0, closed: 0, alreadyClosed: 0 });
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("re-reads a session's CURRENT state right before acting, so a resave between the initial scan and this row's turn is respected (review finding — coderabbitai on PR #2308)", async () => {
+    const staleSes1 = {
+      id: 'ses-1',
+      workspaceState: {
+        columns: [{ panes: [{ scope: scope('conv-1'), tabs: [scope('conv-1'), scope('conv-2')] }] }],
+      },
+    };
+    // Between the bulk scan and this row's turn, the user reopened conv-2
+    // into its own pane — the fresh re-read reflects that resave.
+    const freshSes1 = {
+      id: 'ses-1',
+      workspaceState: {
+        columns: [
+          {
+            panes: [
+              { scope: scope('conv-1'), tabs: [scope('conv-1'), scope('conv-2')] },
+              { scope: scope('conv-2') },
+            ],
+          },
+        ],
+      },
+    };
+    mockSelect.mockReturnValue(stubSelect([staleSes1], { 'ses-1': freshSes1 }));
+    mockUpdate.mockClear();
+
+    const result = await runBackfill();
+
+    // Had the script acted on the STALE bulk snapshot, conv-2 (a genuine
+    // orphan there) would have been closed despite now being live elsewhere.
     expect(result).toEqual({ sessionsWithOrphans: 0, closed: 0, alreadyClosed: 0 });
     expect(mockUpdate).not.toHaveBeenCalled();
   });

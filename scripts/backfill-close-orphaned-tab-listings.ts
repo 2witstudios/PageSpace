@@ -82,7 +82,16 @@ export async function runBackfill(): Promise<{ sessionsWithOrphans: number; clos
   let alreadyClosed = 0;
 
   for (const row of rows) {
-    const orphanTargetIds = findOrphanedBackgroundTabIds(row.workspaceState as unknown as RawWorkspaceState | null);
+    // Re-read this session's own state right before acting on it, not the
+    // bulk snapshot from the `select` above -- a user could resave their
+    // workspace (e.g. reopen this exact conversation into an active pane)
+    // in the gap between that initial scan and this row's turn in the loop
+    // (review finding -- coderabbitai on PR #2308).
+    const [freshRow] = await db
+      .select({ workspaceState: agentSessions.workspaceState })
+      .from(agentSessions)
+      .where(eq(agentSessions.id, row.id));
+    const orphanTargetIds = findOrphanedBackgroundTabIds(freshRow?.workspaceState as unknown as RawWorkspaceState | null);
     if (orphanTargetIds.size === 0) continue;
 
     sessionsWithOrphans++;
