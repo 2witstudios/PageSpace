@@ -65,6 +65,20 @@ describe('findOrphanedBackgroundTabIds', () => {
     expect(findOrphanedBackgroundTabIds(workspace)).toEqual(new Set(['conv-9']));
   });
 
+  it("never closes a conversation that is a background tab in one pane but ANOTHER pane's own active scope", () => {
+    const workspace: RawWorkspaceState = {
+      columns: [
+        {
+          panes: [
+            { scope: scope('conv-3'), tabs: [scope('conv-2'), scope('conv-3')] },
+            { scope: scope('conv-2'), tabs: [scope('conv-2')] },
+          ],
+        },
+      ],
+    };
+    expect(findOrphanedBackgroundTabIds(workspace)).toEqual(new Set());
+  });
+
   it('given a still-loading active scope (targetId null), never mistakes it for an orphan', () => {
     const workspace: RawWorkspaceState = {
       columns: [{ panes: [{ scope: scope(null), tabs: [scope(null), scope('conv-2')] }] }],

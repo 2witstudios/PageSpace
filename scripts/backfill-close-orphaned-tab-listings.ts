@@ -39,19 +39,31 @@ export interface RawWorkspaceState {
 
 /**
  * Pure planner: every background-tab targetId across a raw (pre-migration)
- * workspace's panes — a tab that isn't the pane's own active `scope`. Kept
+ * workspace's panes, excluding any id that's the active `scope` of ANY pane
+ * in the workspace — not just the pane the tab itself belongs to. A tabs-era
+ * conversation could be legitimately open live in two panes at once (one
+ * pane's active scope, another pane's own background tab); collecting the
+ * active-scope exclusion set workspace-wide first is what keeps this script
+ * from closing a conversation another pane is still actively showing. Kept
  * side-effect-free so the "which ids to touch" logic is unit-testable
  * without a database.
  */
 export function findOrphanedBackgroundTabIds(workspace: RawWorkspaceState | null | undefined): Set<string> {
   const orphanTargetIds = new Set<string>();
   if (!workspace?.columns) return orphanTargetIds;
+
+  const activeTargetIds = new Set<string>();
+  for (const column of workspace.columns) {
+    for (const pane of column.panes ?? []) {
+      if (pane.scope?.targetId) activeTargetIds.add(pane.scope.targetId);
+    }
+  }
+
   for (const column of workspace.columns) {
     for (const pane of column.panes ?? []) {
       if (!Array.isArray(pane.tabs) || pane.tabs.length <= 1) continue;
-      const activeTargetId = pane.scope?.targetId ?? null;
       for (const tab of pane.tabs) {
-        if (tab.targetId && tab.targetId !== activeTargetId) orphanTargetIds.add(tab.targetId);
+        if (tab.targetId && !activeTargetIds.has(tab.targetId)) orphanTargetIds.add(tab.targetId);
       }
     }
   }
