@@ -22,23 +22,44 @@ import { and, eq, isNull, sql } from '@pagespace/db/operators';
  * session already re-saved under the new tabs-less shape (or one that never
  * had a multi-tab pane) has nothing for this script to find.
  */
-const db = getMigrationDb();
 
-interface RawPaneScope {
+export interface RawPaneScope {
   targetId: string | null;
 }
-interface RawPane {
+export interface RawPane {
   scope: RawPaneScope | null;
   tabs?: RawPaneScope[];
 }
-interface RawColumn {
+export interface RawColumn {
   panes: RawPane[];
 }
-interface RawWorkspaceState {
+export interface RawWorkspaceState {
   columns: RawColumn[];
 }
 
-async function main(): Promise<void> {
+/**
+ * Pure planner: every background-tab targetId across a raw (pre-migration)
+ * workspace's panes — a tab that isn't the pane's own active `scope`. Kept
+ * side-effect-free so the "which ids to touch" logic is unit-testable
+ * without a database.
+ */
+export function findOrphanedBackgroundTabIds(workspace: RawWorkspaceState | null | undefined): Set<string> {
+  const orphanTargetIds = new Set<string>();
+  if (!workspace?.columns) return orphanTargetIds;
+  for (const column of workspace.columns) {
+    for (const pane of column.panes ?? []) {
+      if (!Array.isArray(pane.tabs) || pane.tabs.length <= 1) continue;
+      const activeTargetId = pane.scope?.targetId ?? null;
+      for (const tab of pane.tabs) {
+        if (tab.targetId && tab.targetId !== activeTargetId) orphanTargetIds.add(tab.targetId);
+      }
+    }
+  }
+  return orphanTargetIds;
+}
+
+export async function runBackfill(): Promise<{ sessionsWithOrphans: number; closed: number; alreadyClosed: number }> {
+  const db = getMigrationDb();
   const rows = await db
     .select({ id: agentSessions.id, workspaceState: agentSessions.workspaceState })
     .from(agentSessions)
@@ -49,19 +70,7 @@ async function main(): Promise<void> {
   let alreadyClosed = 0;
 
   for (const row of rows) {
-    const workspace = row.workspaceState as unknown as RawWorkspaceState | null;
-    if (!workspace?.columns) continue;
-
-    const orphanTargetIds = new Set<string>();
-    for (const column of workspace.columns) {
-      for (const pane of column.panes ?? []) {
-        if (!Array.isArray(pane.tabs) || pane.tabs.length <= 1) continue;
-        const activeTargetId = pane.scope?.targetId ?? null;
-        for (const tab of pane.tabs) {
-          if (tab.targetId && tab.targetId !== activeTargetId) orphanTargetIds.add(tab.targetId);
-        }
-      }
-    }
+    const orphanTargetIds = findOrphanedBackgroundTabIds(row.workspaceState as unknown as RawWorkspaceState | null);
     if (orphanTargetIds.size === 0) continue;
 
     sessionsWithOrphans++;
@@ -90,11 +99,15 @@ async function main(): Promise<void> {
   console.log(
     `\nDone. ${sessionsWithOrphans} session(s) had orphaned background tabs; ${closed} conversation(s) closed, ${alreadyClosed} already closed/moved.`,
   );
+  return { sessionsWithOrphans, closed, alreadyClosed };
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch((error) => {
-    console.error('Backfill failed:', error);
-    process.exit(1);
-  });
+// Only run when invoked directly (not when imported by tests).
+if (import.meta.main) {
+  runBackfill()
+    .then(() => process.exit(0))
+    .catch((error) => {
+      console.error('Backfill failed:', error);
+      process.exit(1);
+    });
+}
