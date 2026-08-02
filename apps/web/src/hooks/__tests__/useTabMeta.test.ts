@@ -66,6 +66,22 @@ describe('useTabMeta - Agents tab', () => {
     const { result } = renderHook(() => useTabMeta(tab), { wrapper });
 
     expect(result.current.title).toBe('Agents');
+    expect(result.current.isLoading).toBe(true);
+  });
+
+  it('shows a generic "Session" fallback when the session resolves but has no name, instead of reading as unselected', async () => {
+    // An empty name is a supported, non-error wire value (AgentsSidebar falls
+    // back to 'Session' for the same case) - it must not collapse into the
+    // same "Agents" title as "no session selected".
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url === '/api/agent-sessions/sess-1') return jsonResponse({ session: { sessionId: 'sess-1', driveId: 'drive-1', name: '' } });
+      throw new Error(`unexpected url ${url}`);
+    });
+    const tab = createTab({ path: '/dashboard/agents', search: 'session=sess-1' });
+
+    const { result } = renderHook(() => useTabMeta(tab), { wrapper });
+
+    await waitFor(() => expect(result.current.title).toBe('Session'));
   });
 
   it('falls back to the static "Agents" title when the session doesn\'t resolve (e.g. access denied)', async () => {

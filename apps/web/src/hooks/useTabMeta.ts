@@ -75,7 +75,7 @@ export function useTabMeta(tab: Tab): UseTabMetaResult {
   // ever viewed in the tab).
   const isAgentsTab = parsed.type === 'dashboard-agents' || parsed.type === 'drive-agents';
   const agentsSessionId = isAgentsTab ? parseAgentSelection(tab.search).sessionId : null;
-  const { data: agentsSessionData } = useSessionRecord(agentsSessionId);
+  const { data: agentsSessionData, isLoading: isAgentsSessionLoading } = useSessionRecord(agentsSessionId);
 
   // Check if tab already has cached metadata for a page, channel, or public-page
   const isPageType = parsed.type === 'page' || parsed.type === 'channel' || parsed.type === 'public-page';
@@ -136,10 +136,23 @@ export function useTabMeta(tab: Tab): UseTabMetaResult {
   // of the generic "Agents" label. No session selected (list view) falls
   // through to the static meta below, unchanged.
   if (isAgentsTab && agentsSessionId) {
+    const agentsSession = agentsSessionData?.session;
+    if (agentsSession) {
+      // `name || 'Session'` matches AgentsSidebar's own fallback for a
+      // session with no label (a supported, non-error state) - an empty
+      // name must not read the same as "nothing resolved yet".
+      return {
+        title: agentsSession.name || 'Session',
+        iconName: 'Bot',
+        isLoading: false,
+      };
+    }
+    // Still resolving, or the session doesn't exist / access was denied -
+    // show the static list-view title rather than a "Loading..." flicker.
     return {
-      title: agentsSessionData?.session?.name || staticMeta?.title || 'Agents',
+      title: staticMeta?.title ?? 'Agents',
       iconName: 'Bot',
-      isLoading: false,
+      isLoading: isAgentsSessionLoading,
     };
   }
 
