@@ -504,14 +504,22 @@ function SessionRow({
   const openShell = useCallback(
     (shell: { shellId: string; name: string }) => {
       selectSession(session.sessionId);
-      useAgentWorkspaceStore.getState().openConversation(session.sessionId, {
-        kind: 'terminal',
-        name: shell.name,
-        targetId: shell.shellId,
-        agentPageId: null,
-      });
+      // `session.conversations` is this row's own already-resolved live
+      // listing (the row couldn't exist here otherwise) — protects a chat
+      // pane showing a conversation closed out of the session from being
+      // silently evicted by an unrelated shell reattach (issue #2295).
+      useAgentWorkspaceStore.getState().openConversation(
+        session.sessionId,
+        {
+          kind: 'terminal',
+          name: shell.name,
+          targetId: shell.shellId,
+          agentPageId: null,
+        },
+        { liveConversationIds: new Set(session.conversations.map((c) => c.conversationId)) },
+      );
     },
-    [selectSession, session.sessionId],
+    [selectSession, session.sessionId, session.conversations],
   );
 
   const openSession = useCallback(() => {
