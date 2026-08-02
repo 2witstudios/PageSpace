@@ -173,10 +173,6 @@ vi.mock('@/components/ai/page-agents', () => ({
   ),
 }));
 
-vi.mock('@/components/ai/page-agents/AgentIntegrationsPanel', () => ({
-  AgentIntegrationsPanel: () => <div data-testid="agent-integrations-panel" />,
-}));
-
 vi.mock('@/components/shared/PageWebhooksDialog', () => ({
   PageWebhooksDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="webhooks-dialog" /> : null),
 }));
@@ -355,7 +351,6 @@ describe('AgentPageView', () => {
 
     expect(await screen.findByText('Save Settings')).toBeInTheDocument();
     expect(screen.getByTestId('page-agent-settings-tab')).toBeInTheDocument();
-    expect(screen.getByTestId('agent-integrations-panel')).toBeInTheDocument();
   });
 
   it('loads the agent config so the Settings tab has data, not an eternal spinner', async () => {

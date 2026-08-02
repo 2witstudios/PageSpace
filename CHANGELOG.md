@@ -174,6 +174,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **Agent settings are now a compact menu instead of one long scrolling form** — opening an
+  agent's settings (from the full agent page or from a pane) now shows a short list of categories
+  — Behavior, Access, Tools, and Integrations — instead of every option stacked on one
+  continuously scrolling page, and no longer shows an empty scrollable region when an agent has no
+  tools available. The full page and pane surfaces now share the same navigation, and
+  Integrations — previously only reachable from the full page — is available from panes too.
+  Unsaved edits are preserved when moving between the category menu and a configuration subpage,
+  and each pane tracks its own navigation state independently.
 - **Every Terminal agent session now runs in its own isolated sandbox** — previously only a
   *branch* session got a separate Sprite, while machine- and project-scoped sessions shared the
   owning Machine's single Sprite, so two agents spawned at the same location collapsed onto one
