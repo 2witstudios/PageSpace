@@ -142,13 +142,6 @@ const SETTINGS_ITEMS: AgentSettingsMenuItem[] = [
   },
 ];
 
-const SETTINGS_TITLES: Record<AgentSettingsCategory, string> = {
-  behavior: 'Behavior',
-  access: 'Access',
-  tools: 'Tools',
-  integrations: 'Integrations',
-};
-
 const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettingsTabProps>(({
   pageId,
   driveId,
@@ -169,8 +162,14 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   const [isSaving, setIsSaving] = useState(false);
   const [category, setCategory] = useState<AgentSettingsCategory | null>(null);
   const settingsMenuRef = useRef<HTMLDivElement>(null);
-  const categoryHeadingRef = useRef<HTMLHeadingElement>(null);
   const isInitialCategoryRender = useRef(true);
+
+  // The category heading only ever mounts as the result of a deliberate
+  // navigation-in (category starts null, so it's never present on first
+  // render) — a mount-time callback ref is enough to focus it. Returning to
+  // the menu is the ambiguous case (AgentSettingsMenu also mounts on first
+  // render), so that transition still needs the guarded effect below.
+  const focusOnMount = useCallback((el: HTMLElement | null) => el?.focus(), []);
 
   useEffect(() => {
     if (isInitialCategoryRender.current) {
@@ -179,8 +178,6 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
     }
     if (category === null) {
       settingsMenuRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
-    } else {
-      categoryHeadingRef.current?.focus();
     }
   }, [category]);
   // Shared across every mounted Settings surface for this agent (keyed by
@@ -582,8 +579,8 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
                 <ChevronLeft className="mr-1 h-4 w-4" />
                 Agent Settings
               </Button>
-              <h2 ref={categoryHeadingRef} tabIndex={-1} className="text-xl font-semibold outline-none">
-                {SETTINGS_TITLES[category]}
+              <h2 ref={focusOnMount} tabIndex={-1} className="text-xl font-semibold outline-none">
+                {SETTINGS_ITEMS.find((item) => item.key === category)?.title}
               </h2>
             </div>
 
