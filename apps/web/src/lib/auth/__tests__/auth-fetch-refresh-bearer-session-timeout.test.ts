@@ -32,6 +32,18 @@ type RefreshInternals = {
   refreshBearerSession: () => Promise<{ success: boolean; shouldLogout: boolean }>;
 };
 
+// Mirrors real fetch()'s AbortController contract: the returned promise only settles once the
+// passed signal actually fires, never on its own.
+function rejectOnAbort<T>(signal: AbortSignal | undefined): Promise<T> {
+  return new Promise((_resolve, reject) => {
+    signal?.addEventListener('abort', () => {
+      const err = new Error('The operation was aborted');
+      err.name = 'AbortError';
+      reject(err);
+    });
+  });
+}
+
 describe('refreshBearerSession: getStoredSession timeout', () => {
   let originalFetch: typeof global.fetch;
   let mockFetch: ReturnType<typeof vi.fn>;
@@ -87,5 +99,108 @@ describe('refreshBearerSession: getStoredSession timeout', () => {
 
     expect(result).toEqual({ success: false, shouldLogout: true });
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
+// Round 2: the getStoredSession read above is timeout-guarded, but the refresh POST itself
+// (the actual network call this whole chain exists to make) had no timeout at all — a true
+// network stall here left the AuthFetch singleton's isRefreshing/refreshPromise permanently
+// set, wedging auth for the whole app session, not just this page load.
+describe('refreshBearerSession: refresh fetch timeout', () => {
+  let originalFetch: typeof global.fetch;
+  let mockFetch: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    originalFetch = global.fetch;
+    mockFetch = vi.fn();
+    global.fetch = mockFetch;
+    getStoredSession.mockReset();
+    getStoredSession.mockResolvedValue({ deviceToken: 'dt_valid' });
+    // vi.restoreAllMocks() in the sibling describe's afterEach wipes this mock's
+    // mockResolvedValue (set only once, at module scope) along with everything else — reapply
+    // it here so this describe doesn't depend on run order relative to the other one.
+    getDeviceInfo.mockReset();
+    getDeviceInfo.mockResolvedValue({ deviceId: 'device-1', userAgent: 'ua', appVersion: '1.0.0' });
+
+    delete (globalThis as typeof globalThis & { [key: symbol]: unknown })[
+      Symbol.for('pagespace.authfetch.singleton')
+    ];
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    global.fetch = originalFetch;
+  });
+
+  it('never hangs if the refresh fetch never resolves, and does NOT force a logout', async () => {
+    vi.useFakeTimers();
+    try {
+      mockFetch.mockImplementation((_url: string, options?: { signal?: AbortSignal }) =>
+        rejectOnAbort(options?.signal),
+      );
+
+      const { AuthFetch } = await import('../auth-fetch');
+      const authFetch = new AuthFetch() as unknown as RefreshInternals;
+
+      const resultPromise = authFetch.refreshBearerSession();
+
+      await vi.advanceTimersByTimeAsync(8000);
+
+      const result = await resultPromise;
+
+      // Transient network stall is retryable, not proof the device token is dead — must not
+      // force a logout of what may still be a perfectly valid session.
+      expect(result).toEqual({ success: false, shouldLogout: false });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never hangs if the response body stalls after ok headers arrive (P1: timeout must stay armed through response.json())', async () => {
+    // fetch() resolves as soon as headers arrive, before the body is fully read — a server
+    // that flushes headers then stalls mid-body would otherwise hang here with no timeout
+    // protection if the abort controller were cleared right after the fetch() await, since
+    // response.json() runs afterward, outside that guard.
+    vi.useFakeTimers();
+    try {
+      mockFetch.mockImplementation((_url: string, options?: { signal?: AbortSignal }) =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => rejectOnAbort(options?.signal),
+        }),
+      );
+
+      const { AuthFetch } = await import('../auth-fetch');
+      const authFetch = new AuthFetch() as unknown as RefreshInternals;
+
+      const resultPromise = authFetch.refreshBearerSession();
+
+      await vi.advanceTimersByTimeAsync(8000);
+
+      const result = await resultPromise;
+
+      expect(result).toEqual({ success: false, shouldLogout: false });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('control: a fast successful refresh is unaffected by the new timeout', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ sessionToken: 'st_new', csrfToken: 'csrf_new', deviceToken: 'dt_new' }),
+    });
+
+    const { AuthFetch } = await import('../auth-fetch');
+    const authFetch = new AuthFetch() as unknown as RefreshInternals;
+
+    const result = await authFetch.refreshBearerSession();
+
+    expect(result).toEqual({ success: true, shouldLogout: false });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 });

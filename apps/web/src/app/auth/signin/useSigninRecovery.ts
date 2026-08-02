@@ -14,6 +14,24 @@ const DEFAULT_NEXT = '/dashboard';
 // can assert against it directly instead of a hardcoded duplicate that could silently drift.
 export const DEVICE_TOKEN_TIMEOUT_MS = 3000;
 
+// Bounds checkMeAuthenticated's fetchWithAuth call — long enough to cover a legitimate
+// refresh-and-retry cycle happening inside that same call, short enough to bound the loading
+// screen against a true network stall (no rejection, no resolution).
+export const CHECK_ME_TIMEOUT_MS = 8000;
+
+// Backstop for the whole recovery driver — longer than the worst-case BOUNDED chain, so it
+// never fires while a legitimate (merely slow, not hung) recovery is still in flight. On the
+// bearer platforms (iOS/Android) this is sequential: hasDeviceToken, then checkMeAuthenticated,
+// then (if needed) refreshBearerSession's own two-stage timeout in AuthFetch (its Keychain
+// read, then its refresh POST) — roughly 22s at today's per-step timeouts (DEVICE_TOKEN_TIMEOUT_MS,
+// CHECK_ME_TIMEOUT_MS, and AuthFetch's TOKEN_RETRIEVAL_TIMEOUT_MS + REFRESH_FETCH_TIMEOUT_MS,
+// summed by hand here since the AuthFetch constants are private and this value can't reference
+// them directly — re-check this sum if any of those change). Guards against a hang anywhere in
+// the chain we haven't found or bounded yet — notably the web and desktop device-token refresh
+// paths, which remain unbounded (deferred follow-up) — without misfiring mid-chain on the
+// platform this recovery flow exists for.
+export const RECOVERY_FAILSAFE_TIMEOUT_MS = 25000;
+
 /**
  * Whether a device token exists to recover an expired session from — read from PLATFORM storage
  * (D1): desktop reads safeStorage over IPC (window.electron.auth) via DesktopStorage, web reads
@@ -52,12 +70,21 @@ async function hasDeviceToken(): Promise<boolean> {
  * the form. A raw `fetch` would have skipped both.
  */
 async function checkMeAuthenticated(): Promise<boolean> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), CHECK_ME_TIMEOUT_MS);
+
   try {
-    const response = await fetchWithAuth('/api/auth/me', { credentials: 'include' });
+    const response = await fetchWithAuth('/api/auth/me', {
+      credentials: 'include',
+      signal: controller.signal,
+    });
     return response.ok;
   } catch {
-    // Network error — treat as unauthenticated and fall through to the device-token path.
+    // Network error (including an abort on timeout) — treat as unauthenticated and fall
+    // through to the device-token path.
     return false;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -101,6 +128,22 @@ export function useSigninRecovery(
 
     let cancelled = false;
 
+    // Unconditional backstop: whatever hangs anywhere in the chain below, the loading screen
+    // cannot outlive this timer. Cleared on every terminal path (show-form, redirect, the
+    // fail-open catch, and unmount) so it never fires after a normal completion.
+    //
+    // Also marks the run cancelled, same as unmount: an unbounded step still pending when the
+    // failsafe fires (e.g. the web/desktop device-token refresh paths, which have no timeout
+    // of their own yet) must not be allowed to act on the page later — without this, a refresh
+    // that eventually resolves `redirect` after the form is already showing would yank the
+    // user away from it with no warning.
+    const failsafeTimer = setTimeout(() => {
+      if (!cancelled) {
+        cancelled = true;
+        setRecovering(false);
+      }
+    }, RECOVERY_FAILSAFE_TIMEOUT_MS);
+
     const run = async () => {
       const observed: SigninRecoveryInput = {
         // Read fresh from the store rather than subscribing: this effect runs once and must
@@ -121,11 +164,13 @@ export function useSigninRecovery(
 
         switch (action.type) {
           case 'show-form':
+            clearTimeout(failsafeTimer);
             if (!cancelled) setRecovering(false);
             return;
 
           case 'redirect':
             // Keep `recovering` true through the navigation so the form never flashes.
+            clearTimeout(failsafeTimer);
             router.replace(nextPath ?? DEFAULT_NEXT);
             return;
 
@@ -148,11 +193,13 @@ export function useSigninRecovery(
     // result today, but their types make no never-throw guarantee, and neither does a dynamic
     // import inside them.
     void run().catch(() => {
+      clearTimeout(failsafeTimer);
       if (!cancelled) setRecovering(false);
     });
 
     return () => {
       cancelled = true;
+      clearTimeout(failsafeTimer);
     };
     // Starts once, when `ready` flips true; `nextPath` is fully resolved by then and stable
     // thereafter (browserPath is set a single time), so it is intentionally not a dependency.
