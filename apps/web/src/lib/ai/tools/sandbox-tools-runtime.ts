@@ -184,11 +184,17 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
       }
 
       // The conversation's WORKING CONTEXT, through conversations.sessionId.
-      // A thread with no session gets a denial, never a lazily-minted
-      // environment — per-conversation minting is exactly the conflation the
-      // session model removed, and it is what made panes unable to share a
-      // sandbox. Every conversation in one session resolves this same row,
-      // whose own id folds the ONE Sprite key.
+      // A page conversation with no session gets a denial, never a
+      // lazily-minted environment — per-conversation minting is exactly the
+      // conflation the session model removed, and it is what made panes
+      // unable to share a sandbox. A GLOBAL conversation is the one
+      // exception: `resolveOrProvisionSession` auto-provisions it a real,
+      // ordinary, shareable session (see its own doc). Every conversation in
+      // one session resolves this same row, whose own id folds the ONE
+      // Sprite key (review finding — CodeRabbit: this comment used to read
+      // as a blanket invariant the auto-provisioning below it visibly
+      // contradicts, which is exactly the kind of drift that gets the new
+      // behavior "fixed" back out by a future reader trusting the comment).
       const resolved = await resolveOrProvisionSession(conversationId, input.userId);
       if (!resolved.ok) {
         if (!resolved.attempted) return { ok: false, reason: 'no_session' };

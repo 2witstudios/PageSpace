@@ -22,6 +22,7 @@ import { withAdvisoryLock } from '@pagespace/db/advisory-lock';
 import { and, count, eq, inArray, isNull, isNotNull, sql } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkAgentSessionConcurrency } from '@pagespace/lib/services/sandbox/quota';
 import {
   refreshSessionStorageMeasurement,
@@ -561,11 +562,41 @@ export async function ensureGlobalSandboxSession(
     return { ok: false, reason: spawned.reason === 'session_limit_reached' ? 'session_limit_reached' : 'spawn_failed' };
   }
 
-  const claimed = await claimConversationInSession({
-    conversationId,
-    userId,
-    sessionId: spawned.session.id,
-  });
+  // Cleanup shared by both the "claim lost" and "claim threw" paths below —
+  // the freshly spawned session would otherwise sit empty forever, which the
+  // session model treats as an invariant violation (mirrors the same cleanup
+  // the spawn route itself does when its own first-conversation creation
+  // fails). Fail-open (never lets a cleanup fault surface as THIS call's own
+  // error) but logged — a silently swallowed failure here would leave the
+  // scratch session live, counting against MAX_ACTIVE_SESSIONS_PER_OWNER and
+  // accruing cost, with no signal anywhere (review finding — CodeRabbit).
+  const endScratchSession = (cause: string) =>
+    endSession(spawned.session.id).catch((error) => {
+      loggers.api.warn(`Failed to end scratch session after ${cause}`, {
+        sessionId: spawned.session.id,
+        conversationId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+
+  let claimed: ClaimConversationOutcome;
+  try {
+    claimed = await claimConversationInSession({
+      conversationId,
+      userId,
+      sessionId: spawned.session.id,
+    });
+  } catch (error) {
+    // `claimConversationInSession` can THROW (the advisory lock exhausting
+    // its retries, a DB connection fault) rather than resolving a normal
+    // outcome — a path that skipped this cleanup entirely before, leaking
+    // the scratch session on every such failure (review finding —
+    // chatgpt-codex-connector). Clean up, then propagate the original error
+    // — this is a genuine infra fault, not a normal "no session" business
+    // outcome this function's own result union is meant to describe.
+    await endScratchSession('a claim exception');
+    throw error;
+  }
   if (claimed === 'claimed' || claimed === 'already_in_session') return { ok: true, session: spawned.session };
 
   // The claim lost a race — most likely a CONCURRENT call for the same
@@ -576,12 +607,7 @@ export async function ensureGlobalSandboxSession(
   // losing call would spuriously deny a conversation that, by the time this
   // line runs, genuinely has a session. Only a conversation deleted out
   // from under both calls resolves to nothing here.
-  //
-  // The freshly spawned session would otherwise sit empty forever, which
-  // the session model treats as an invariant violation (mirrors the same
-  // cleanup the spawn route itself does when its own first-conversation
-  // creation fails) — so it's torn down either way.
-  await endSession(spawned.session.id).catch(() => {});
+  await endScratchSession('a lost conversation claim');
   const winner = await findSessionForConversation(conversationId);
   return winner ? { ok: true, session: winner } : { ok: false, reason: 'no_session' };
 }
