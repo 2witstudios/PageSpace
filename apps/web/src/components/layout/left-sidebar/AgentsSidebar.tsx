@@ -24,7 +24,9 @@ import { canManageDrive } from '@/hooks/usePermissions';
 import { usePageAgents, type DriveWithAgents } from '@/hooks/page-agents/usePageAgents';
 import { useAgentSurfaceStore, SHEET_BREAKPOINT_QUERY } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
+import { adoptServerWorkspaceAsHydrated } from '@/stores/agent-workspace/useWorkspaceServerSync';
 import { panesOf, isLastPane, type PaneState } from '@/stores/agent-workspace/pane-reducer';
+import { useEditingStore } from '@/stores/useEditingStore';
 import { fetchWithAuth, del, ApiRequestError } from '@/lib/auth/auth-fetch';
 import type { PersistedWorkspaceState } from '@pagespace/lib/agent-sessions/contract';
 import {
@@ -508,12 +510,21 @@ function SessionRow({
   // A row action can target a session that is NOT currently displayed — for
   // it, `AgentPanes` (and the `useWorkspaceServerSync` it mounts) is not
   // rendered, so the local store may have never seen its grid. Seat this
-  // row's own server-listing snapshot first, never overwriting a grid the
-  // store already holds (which is always at least as fresh). Returns
-  // whatever the store holds afterwards.
+  // row's own server-listing snapshot first. Never overwrite a grid the
+  // store already holds: it isn't necessarily fresher (zustand `persist`
+  // rehydrates every session's grid from localStorage at page load, which
+  // another tab or device may have since moved past — see `closePagePane`'s
+  // stale-row guard), but clobbering it here could just as easily destroy a
+  // NEWER local grid. Returns whatever the store holds afterwards.
   const ensureLocalWorkspace = useCallback(() => {
     if (!useAgentWorkspaceStore.getState().workspaces[session.sessionId] && session.workspace) {
       hydrateWorkspace(session.sessionId, session.workspace);
+      // The snapshot IS server state (this row was rendered from the
+      // listing), so it counts as this page load's hydration — without
+      // this, the sync hook's own mount-time GET lands server-wins one
+      // round-trip after the click and silently drops the very mutation
+      // the click makes (the pane focus, a freshly opened shell pane).
+      adoptServerWorkspaceAsHydrated(session.sessionId);
     }
     return useAgentWorkspaceStore.getState().workspaces[session.sessionId];
   }, [hydrateWorkspace, session.sessionId, session.workspace]);
@@ -834,7 +845,16 @@ function SessionRow({
         setConfirmingEnd(true);
         return;
       }
-      closePane(session.sessionId, paneId);
+      // Anything but 'closed' means the LOCAL grid didn't know this pane —
+      // the row (rendered from the server listing) and the store (possibly
+      // a stale localStorage rehydrate another tab has moved past) diverge.
+      // PUTting the local grid wholesale from here would clobber the
+      // server's newer layout with an unrelated one AND leave the clicked
+      // pane alive; refresh the listing instead and let it reconcile.
+      if (closePane(session.sessionId, paneId) !== 'closed') {
+        void mutate(isAgentSessionsKey);
+        return;
+      }
       const updated = useAgentWorkspaceStore.getState().workspaces[session.sessionId];
       if (!updated) return;
       // Persist the close directly: `useWorkspaceServerSync` only observes
@@ -842,7 +862,11 @@ function SessionRow({
       // would otherwise reach Zustand/localStorage only and be resurrected
       // by server-wins hydration the next time that session opens. When the
       // session IS the displayed one, the sync hook debounce-PUTs the same
-      // grid — an idempotent duplicate, not a conflict.
+      // grid — an idempotent duplicate, not a conflict. Registered with
+      // `useEditingStore` for the PUT's duration, same as the sync hook's
+      // own `performSave` — the repo's refresh-protection rule.
+      const editingId = `sidebar-pane-close:${session.sessionId}:${paneId}`;
+      useEditingStore.getState().startEditing(editingId, 'other', { componentName: 'sidebar-pane-close' });
       try {
         const response = await fetchWithAuth(
           `/api/agent-sessions/${encodeURIComponent(session.sessionId)}/workspace`,
@@ -857,13 +881,20 @@ function SessionRow({
         // without waiting for the next poll.
         void mutate(isAgentSessionsKey);
       } catch (error) {
+        // The close already landed locally; a failed PUT leaves the pane
+        // alive on the server (and every other device), silently diverging
+        // until hydration resurrects it. Restore the row's own snapshot so
+        // what the user sees matches what is actually durable, then say so.
+        if (session.workspace) hydrateWorkspace(session.sessionId, session.workspace);
         console.error('Failed to close this pane:', error);
         toast.error('Could not close this pane', {
           description: error instanceof Error ? error.message : 'Please try again.',
         });
+      } finally {
+        useEditingStore.getState().endEditing(editingId);
       }
     },
-    [ensureLocalWorkspace, closePane, mutate, session.sessionId],
+    [ensureLocalWorkspace, closePane, hydrateWorkspace, mutate, session.sessionId, session.workspace],
   );
 
   return (

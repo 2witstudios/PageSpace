@@ -44,6 +44,20 @@ export function __resetHydratedSessionsForTests(): void {
   hydratedSessionsThisPageLoad.clear();
 }
 
+/**
+ * The sidebar seats a session's grid from the server LISTING snapshot before
+ * acting on a row (`ensureLocalWorkspace`). That snapshot IS server state —
+ * so it counts as this page load's hydration. Without this, the hook's own
+ * mount-time GET lands server-wins one round-trip AFTER the row click's
+ * mutation (a pane focus, a freshly opened shell pane) and silently drops
+ * it — the reference latch rightly treats the hydrated grid as "nothing new
+ * to save", but the mutation it replaced is gone with it. Only call with a
+ * grid that genuinely came from the server, never a locally built one.
+ */
+export function adoptServerWorkspaceAsHydrated(sessionId: string): void {
+  hydratedSessionsThisPageLoad.add(sessionId);
+}
+
 export function useWorkspaceServerSync(
   sessionId: string,
   options?: { enabled?: boolean; debounceMs?: number },
@@ -145,8 +159,17 @@ export function useWorkspaceServerSync(
         if (!json?.workspace) return;
         const parsed = persistedWorkspaceStateSchema.safeParse(json.workspace);
         if (!parsed.success) return;
-        justHydratedRef.current = parsed.data;
+        const before = useAgentWorkspaceStore.getState().workspaces[sessionId];
         hydrateWorkspace(sessionId, parsed.data);
+        const stored = useAgentWorkspaceStore.getState().workspaces[sessionId];
+        // Latch what the store ACTUALLY holds, not `parsed.data`:
+        // `hydrateWorkspace` normalizes a dangling `activePaneId` into a
+        // NEW object, and latching the pre-normalization value would miss
+        // and debounce-PUT the server's own grid straight back — harmless
+        // but exactly the duplicate save this latch exists to prevent. A
+        // no-op hydration (id mismatch) stores nothing new: latch nothing,
+        // or a later unrelated effect run could wrongly skip a real save.
+        if (stored !== before) justHydratedRef.current = stored;
       })
       .catch(() => {});
 
