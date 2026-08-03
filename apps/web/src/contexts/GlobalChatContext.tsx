@@ -245,7 +245,6 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     // are bookkeeping only — the surfaces re-seed the transport at the actions that
     // need it (retry, ask_user answers).
     ...buildConversationCacheHandlers({
-      getActiveConversationId: () => currentConversationIdRef.current,
       reloadConversation: loadGlobalConversationMessages,
       refreshSnapshot: (conversationId) => refreshConversationSnapshot(null, conversationId),
     }),

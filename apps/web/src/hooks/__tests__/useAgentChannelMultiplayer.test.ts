@@ -138,6 +138,13 @@ describe('useAgentChannelMultiplayer', () => {
       ...overrides,
     });
 
+    // Dispatch is entry-gated (hasEntry): a rendering surface always loads or
+    // seeds its conversation on mount, so the tests seed what a mounted pane
+    // would have.
+    beforeEach(() => {
+      useConversationMessagesStore.getState().seedConversation('conv-active');
+    });
+
     it('given OUR OWN stream finalizes for the active conversation, the synthesized assistant message should be committed to the conversation cache', () => {
       pendingStreams.current = new Map([[ 'msg-done', streamFixture({}) ]]);
 
@@ -206,10 +213,10 @@ describe('useAgentChannelMultiplayer', () => {
       ]);
     });
 
-    it('given a stream finalizes for a DIFFERENT conversation, nothing should be committed to the active conversation', () => {
+    it('given a stream finalizes for an UNCACHED conversation, nothing should be committed anywhere (no surface renders it; its eventual loader fetches the DB truth)', () => {
       pendingStreams.current = new Map([[ 'msg-stale', streamFixture({
         messageId: 'msg-stale',
-        conversationId: 'conv-different',
+        conversationId: 'conv-uncached',
       }) ]]);
 
       renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
@@ -219,7 +226,31 @@ describe('useAgentChannelMultiplayer', () => {
       });
 
       expect(cacheMessages('conv-active')).toEqual([]);
-      expect(cacheMessages('conv-different')).toEqual([]);
+      expect(cacheMessages('conv-uncached')).toEqual([]);
+    });
+
+    // THE pane multiplayer fix: dispatch is by the EVENT's conversation, so a
+    // completion for a CACHED sibling conversation (another pane on this same
+    // channel) commits into that sibling — the old single-active-conversation
+    // gate silently dropped it, vanishing the reply in the sibling pane.
+    it("given a stream finalizes for a CACHED sibling conversation (another pane), it should commit into the SIBLING's cache entry", () => {
+      useConversationMessagesStore.getState().seedConversation('conv-sibling-pane');
+      pendingStreams.current = new Map([[ 'msg-sibling', streamFixture({
+        messageId: 'msg-sibling',
+        conversationId: 'conv-sibling-pane',
+        isOwn: false,
+      }) ]]);
+
+      renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
+
+      act(() => {
+        capturedChannel.options?.onStreamComplete?.('msg-sibling');
+      });
+
+      expect(cacheMessages('conv-active')).toEqual([]);
+      expect(cacheMessages('conv-sibling-pane')).toEqual([
+        { id: 'msg-sibling', role: 'assistant', parts: [{ type: 'text', text: 'final response text' }], status: 'complete' },
+      ]);
     });
 
     it('given a completion with NO usable store entry for the active conversation (joinFailed / zero parts), should reload via the RAW cache loader — never the surface loadConversation, which also sets identity and pushes the URL', () => {
@@ -324,6 +355,11 @@ describe('useAgentChannelMultiplayer', () => {
       triggeredBy: { userId: 'other', displayName: 'Other', browserSessionId: 'sess-x' },
     });
 
+    // Same entry-gated dispatch as completions: seed what a mounted pane would have.
+    beforeEach(() => {
+      useConversationMessagesStore.getState().seedConversation('conv-active');
+    });
+
     it('given onUserMessage fires for the active agent conversation, should append the message to its cache entry', () => {
       renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
 
@@ -334,14 +370,31 @@ describe('useAgentChannelMultiplayer', () => {
       expect(cacheMessages('conv-active')).toEqual([remoteUser]);
     });
 
-    it('given onUserMessage fires for a different conversationId, should not write the active cache entry', () => {
+    it('given onUserMessage fires for an UNCACHED conversationId, should write nothing anywhere', () => {
       renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
 
       act(() => {
-        capturedChannel.options?.onUserMessage?.(remoteUser, payloadFor('conv-different'));
+        capturedChannel.options?.onUserMessage?.(remoteUser, payloadFor('conv-uncached'));
       });
 
       expect(cacheMessages('conv-active')).toEqual([]);
+      expect(cacheMessages('conv-uncached')).toEqual([]);
+    });
+
+    // The pane multiplayer gap this PR closes for non-completion events too: a
+    // collaborator's message in a CACHED sibling conversation (another pane on
+    // this channel) must land in that sibling's entry, not be dropped for not
+    // being "the" active conversation.
+    it("given onUserMessage fires for a CACHED sibling conversation, should append to the SIBLING's cache entry", () => {
+      useConversationMessagesStore.getState().seedConversation('conv-sibling-pane');
+      renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
+
+      act(() => {
+        capturedChannel.options?.onUserMessage?.(remoteUser, payloadFor('conv-sibling-pane'));
+      });
+
+      expect(cacheMessages('conv-active')).toEqual([]);
+      expect(cacheMessages('conv-sibling-pane')).toEqual([remoteUser]);
     });
 
     it('given onUserMessage fires twice for the same id (co-mounted surfaces both deliver), the append should be idempotent', () => {

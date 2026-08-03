@@ -58,24 +58,20 @@ export function useAgentChannelMultiplayer({
 
   usePageSocketRoom(channelId);
 
-  // Stable ref so the hook's callbacks see the latest conversation id without
-  // re-binding the socket subscription on every render.
-  const agentConversationIdRef = useRef(agentConversationId);
-  agentConversationIdRef.current = agentConversationId;
-
   // NO STOP-SLOT CLAIM PROTOCOL (PR 5A, leaf 5.5.7) — every surface READS
   // `useConversationActiveStream(agentId, conversationId)`, and a read cannot be declined.
 
   // The shared socket-events → cache protocol (see buildConversationCacheHandlers):
   // remote user/edit/delete writes, and the completion commit with own-send
-  // promotion + background snapshot heal. Cache reloads here use the RAW loaders
-  // keyed by the channel (agent page id) — never the surface's loadConversation,
-  // which also sets identity and pushes the URL; a completion for the conversation
-  // already on screen must not do either.
+  // promotion + background snapshot heal. Events dispatch on THEIR OWN
+  // conversation id (any cached conversation on this channel), so panes showing
+  // sibling conversations receive them too. Cache reloads here use the RAW
+  // loaders keyed by the channel (agent page id) — never the surface's
+  // loadConversation, which also sets identity and pushes the URL; a completion
+  // for a conversation already on screen must not do either.
   const cacheHandlers = useMemo(
     () =>
       buildConversationCacheHandlers({
-        getActiveConversationId: () => agentConversationIdRef.current,
         reloadConversation: (conversationId) => {
           if (channelId) void loadAgentConversationMessages(channelId, conversationId);
         },

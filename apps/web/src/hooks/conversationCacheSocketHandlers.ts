@@ -6,8 +6,6 @@ import { shouldReloadOnComountComplete } from '@/lib/ai/streams/shouldReloadOnCo
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
 
 export interface ConversationCacheHandlerDeps {
-  /** The conversation currently on screen — read at event time (a ref-backed getter, never a stale closure). */
-  getActiveConversationId: () => string | null;
   /**
    * Generation-guarded cache reload for a conversation whose completion left no
    * usable store entry (SSE join failed / zero parts) — the reply IS durably
@@ -28,6 +26,18 @@ export interface ConversationCacheHandlerDeps {
  * handlers: it additionally dual-writes into its useChat transport, which
  * neither of these subscribers can reach.
  *
+ * DISPATCH IS BY THE EVENT'S CONVERSATION, not a subscriber-supplied "active"
+ * one. A single active-conversation gate assumed each subscriber watches one
+ * conversation — panes broke that: several conversations on one channel are
+ * on screen at once, none of them the subscriber's "active" one, and every
+ * event for them was silently dropped (replies vanishing on completion,
+ * collaborator messages/edits/deletes never appearing). An event now applies
+ * to whichever conversation it names, gated only on that conversation having
+ * a real cache entry (`hasEntry`): every rendering surface loads or seeds its
+ * conversation on mount, so cached ⇔ some surface can render it — and a
+ * conversation nobody has cached needs no cache write (the DB row is the
+ * truth its eventual loader will fetch).
+ *
  * The user/edit/delete handlers fire only for a REMOTE tab's action
  * (useChannelStreamSocket drops own-tab events via isOwnStream before
  * invoking) — the local user's own edit/delete/send is written by the
@@ -36,37 +46,32 @@ export interface ConversationCacheHandlerDeps {
  * same event twice is harmless by construction.
  */
 export const buildConversationCacheHandlers = ({
-  getActiveConversationId,
   reloadConversation,
   refreshSnapshot,
 }: ConversationCacheHandlerDeps) => ({
   onUserMessage: (message: UIMessage, payload: { conversationId: string }) => {
-    const conversationId = getActiveConversationId();
-    if (payload.conversationId !== conversationId || !conversationId) return;
-    conversationMessagesActions.applyRemoteUserMessage(conversationId, message);
+    if (!conversationMessagesActions.hasEntry(payload.conversationId)) return;
+    conversationMessagesActions.applyRemoteUserMessage(payload.conversationId, message);
   },
 
   onMessageEdited: (payload: { messageId: string; conversationId: string; parts: UIMessage['parts']; editedAt: string }) => {
-    const conversationId = getActiveConversationId();
-    if (payload.conversationId !== conversationId || !conversationId) return;
+    if (!conversationMessagesActions.hasEntry(payload.conversationId)) return;
     const editPayload: MessageEditPayload = {
       messageId: payload.messageId,
       parts: payload.parts,
       editedAt: new Date(payload.editedAt),
     };
-    conversationMessagesActions.applyEdit(conversationId, editPayload);
+    conversationMessagesActions.applyEdit(payload.conversationId, editPayload);
   },
 
   onMessageDeleted: (payload: { messageId: string; conversationId: string }) => {
-    const conversationId = getActiveConversationId();
-    if (payload.conversationId !== conversationId || !conversationId) return;
-    conversationMessagesActions.applyDelete(conversationId, payload.messageId);
+    if (!conversationMessagesActions.hasEntry(payload.conversationId)) return;
+    conversationMessagesActions.applyDelete(payload.conversationId, payload.messageId);
   },
 
   onStreamComplete: (messageId: string, completedConvId?: string, _info?: { joinFailed: boolean }, aborted?: boolean) => {
-    const conversationId = getActiveConversationId();
     const stream = getActiveStreamById(messageId);
-    if (stream && stream.parts.length > 0 && stream.conversationId === conversationId) {
+    if (stream && stream.parts.length > 0 && conversationMessagesActions.hasEntry(stream.conversationId)) {
       // COMMIT by id — upsert, never skip. An existing row under this id may be a
       // half-streamed includeStreaming placeholder that must be overwritten, and for
       // OWN streams the mirror removes the pending entry the instant status changes —
@@ -100,6 +105,9 @@ export const buildConversationCacheHandlers = ({
     // persisted — reload the conversation's cache entry rather than losing it.
     // Unless the sender's own onFinish already committed the final row
     // (buildOwnStreamCommitOnFinish) — then a reload only adds a loading flip.
+    const conversationCached = completedConvId
+      ? conversationMessagesActions.hasEntry(completedConvId)
+      : false;
     const cacheHasFinalMessage = completedConvId
       ? conversationMessagesActions
           .getEntry(completedConvId)
@@ -109,7 +117,7 @@ export const buildConversationCacheHandlers = ({
               (m as UIMessage & { status?: string }).status !== 'streaming',
           )
       : false;
-    if (shouldReloadOnComountComplete(stream, completedConvId, conversationId, cacheHasFinalMessage)) {
+    if (shouldReloadOnComountComplete(stream, completedConvId, conversationCached, cacheHasFinalMessage)) {
       void reloadConversation(completedConvId!);
     }
   },
