@@ -21,6 +21,7 @@
 
 const subscriberCounts = new Map<string, number>();
 
+/** Mark one more `useChannelStreamSocket` instance as subscribed to `channelId`. */
 export function registerChannelStreamSubscriber(channelId: string): void {
   subscriberCounts.set(channelId, (subscriberCounts.get(channelId) ?? 0) + 1);
 }
@@ -36,6 +37,7 @@ export function unregisterChannelStreamSubscriber(channelId: string): boolean {
   return true;
 }
 
+/** Test-only introspection: how many subscribers `channelId` currently has. */
 export function getChannelStreamSubscriberCount(channelId: string): number {
   return subscriberCounts.get(channelId) ?? 0;
 }
