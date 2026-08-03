@@ -47,6 +47,7 @@ import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { fetchWithAuth, post, del, ApiRequestError } from '@/lib/auth/auth-fetch';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
+import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useWorkspaceServerSync } from '@/stores/agent-workspace/useWorkspaceServerSync';
 import { panesOf, isLastPane, paneShowing, type PaneState } from '@/stores/agent-workspace/pane-reducer';
 import { usePageAgents } from '@/hooks/page-agents/usePageAgents';
@@ -937,6 +938,15 @@ export default function AgentPanes({
         // id captured BEFORE this mint sequence began still names the
         // conversation actually being replaced.
         assignPane(sessionId, paneId, newScope);
+        // Tell the surface's own selection about this swap — mirroring what
+        // `useSpawnSession` already does after spawning a session. Without
+        // this, `selectedConversationId` keeps naming the REPLACED
+        // conversation, and a later remount's seeding effect (this file,
+        // below) tries to re-open that stale id against a pane that no
+        // longer shows it — reverting the swap or, once the eviction guard
+        // treats this pane as protected, splitting a second pane open for it
+        // instead of recognizing the swap as already done (caught in review).
+        useAgentSurfaceStore.getState().selectConversation({ sessionId, conversationId, agentId: agentPageId });
         if (priorScopeConversationId !== null) {
           void closeReplacedConversation(paneId, priorScopeConversationId, conversationId, agentPageId);
         }
