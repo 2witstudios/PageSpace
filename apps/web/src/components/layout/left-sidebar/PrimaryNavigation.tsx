@@ -45,7 +45,7 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
     );
     const agentsTargetDriveId = driveId ?? null;
     const agentsMatchesDrive = agentSelection.driveId === agentsTargetDriveId;
-    const agentsBasePathForDrive = agentsBasePath(driveId);
+    const agentsBasePathForDrive = agentsBasePath(agentsTargetDriveId);
     const agentsHref = buildAgentSelectionUrl({
         driveId: agentsTargetDriveId,
         sessionId: agentsMatchesDrive ? agentSelection.sessionId : null,

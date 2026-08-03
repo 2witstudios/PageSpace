@@ -167,6 +167,7 @@ export default function AgentPanes({
   const forgetWorkspace = useAgentWorkspaceStore((state) => state.forgetWorkspace);
   const hydrateWorkspace = useAgentWorkspaceStore((state) => state.hydrateWorkspace);
   const replaceConversation = useAgentWorkspaceStore((state) => state.replaceConversation);
+  const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
 
   // Layout AND tabs are server-persisted now — debounced, not per-transition
   // (see the hook's own file header for why that distinction matters).
@@ -946,7 +947,7 @@ export default function AgentPanes({
         // longer shows it — reverting the swap or, once the eviction guard
         // treats this pane as protected, splitting a second pane open for it
         // instead of recognizing the swap as already done (caught in review).
-        useAgentSurfaceStore.getState().selectConversation({ sessionId, conversationId, agentId: agentPageId });
+        selectConversation({ sessionId, conversationId, agentId: agentPageId });
         if (priorScopeConversationId !== null) {
           void closeReplacedConversation(paneId, priorScopeConversationId, conversationId, agentPageId);
         }
@@ -1003,6 +1004,7 @@ export default function AgentPanes({
       closeReplacedConversation,
       recordMintedConversation,
       beginPaneAssign,
+      selectConversation,
     ],
   );
 
