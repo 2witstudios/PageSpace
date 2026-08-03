@@ -2,8 +2,7 @@ import { SANDBOX_TIMEOUT_MS, SANDBOX_MAX_OUTPUT_BYTES } from './execution-policy
 import { truncateToBytes } from './output-limit';
 import { SANDBOX_ROOT, resolveSandboxPath } from './sandbox-paths';
 import type { SandboxActorContext, SandboxRunDeps, BashToolResult } from './tool-runners';
-import type { ExecutableSandbox } from './sandbox-client/types';
-import { DENIAL_MESSAGES, reasonFromAcquire, safeLogWarn } from './tool-runners';
+import { DENIAL_MESSAGES, openSession, withMachineBilling } from './tool-runners';
 
 export interface GitSandboxRunDeps extends SandboxRunDeps {
   /** Fetches the user's GitHub OAuth access token from their integration connection. */
@@ -124,122 +123,84 @@ export async function runGitInSandbox({
     resolvedCwd = candidate;
   }
 
-  // Pre-fetch token BEFORE acquiring a sandbox slot — a missing token on a
-  // network-requiring command must not consume quota.
+  // Pre-fetch token BEFORE acquiring a sandbox slot or placing a billing
+  // hold — a missing token on a network-requiring command must not consume
+  // quota or money.
   const token =
     preResolvedToken !== undefined
       ? preResolvedToken
       : await deps.resolveGitHubToken(ctx.userId);
 
-  if (!deps.quota.acquireSlot({ userId: ctx.userId, tier: ctx.tier })) {
-    return {
-      success: false,
-      error: 'Too many concurrent runs. Wait for a run to finish and retry.',
-      reason: 'concurrency_limit',
-    };
-  }
-
-  // Held across the try/finally so the post-op storage measurement can reach the
-  // sandbox handle; null whenever the run never got one.
-  let measurable: ExecutableSandbox | null = null;
-  let measurableSessionId: string | null = null;
-  // Slot held — every exit path below must release it.
-  try {
-    const acquired = await deps.acquireSandbox({
-      tenantId: ctx.tenantId,
-      driveId: ctx.driveId,
-      userId: ctx.userId,
-      requestOrigin: ctx.requestOrigin,
-      agentPageId: ctx.agentPageId,
-      // The session address (the caller's session, resolved from its conversation) — what the session-anchored
-      // acquire implementation folds the Sprite key off.
-      conversationId: ctx.conversationId,
-    });
-    if (!acquired.ok) {
-      // Same narrowing the bash path does: a plan-ceiling refusal must not
-      // reach a git tool as a generic provisioning fault, or the agent retries
-      // a limit that only ending a session clears.
-      const reason = reasonFromAcquire(acquired);
-      return { success: false, error: DENIAL_MESSAGES[reason], reason };
+  // Routes through the SAME acquire (`openSession`) and metering
+  // (`withMachineBilling`) paths `runBashInSandbox`/`writeSandboxFile`/etc.
+  // use, rather than a hand-rolled copy — git/gh tools going years without a
+  // credit gate wired in was exactly a duplicated acquire path silently
+  // drifting from the canonical one (review finding, PR #2314 follow-up,
+  // issue #2315). `openSession` also gives acquisition failures the same
+  // AUTHZ-vs-infra-fault logging split the bash path already had, which this
+  // runner never had before.
+  return withMachineBilling<{
+    stdout: string;
+    stderr: string;
+    exitCode: number;
+    truncated: boolean;
+  }>(ctx, deps, async () => {
+    const session = await openSession(ctx, deps);
+    if (!session.ok) {
+      return { success: false, error: DENIAL_MESSAGES[session.reason], reason: session.reason };
     }
 
-    const sandbox = await deps.reconnect(acquired.sandboxId);
-    if (!sandbox) {
-      return { success: false, error: 'Could not provision a sandbox.', reason: 'provision_failed' };
-    }
-    // Held for the `finally`'s post-op measurement, which cannot see this
-    // block's scope.
-    measurable = sandbox;
-    measurableSessionId = acquired.sessionId;
-
-    const startedAt = deps.now();
-
-    let run: { exitCode: number; stdout: string; stderr: string };
     try {
-      run = await sandbox.runCommand({
-        cmd,
-        args,
-        cwd: resolvedCwd,
-        env: buildGitToolEnv({ baseEnv: deps.buildEnv(), token }),
-        timeoutMs: SANDBOX_TIMEOUT_MS,
-        maxBytes: SANDBOX_MAX_OUTPUT_BYTES,
-      });
-    } catch {
-      const durationMs = deps.now().getTime() - startedAt.getTime();
-      await safeAudit(deps, ctx, { cmd: `${cmd} ${args.join(' ')}`, exitCode: null, durationMs });
-      return { success: false, error: 'Command execution failed or timed out.', reason: 'execution_failed' };
-    }
+      const startedAt = deps.now();
 
-    const durationMs = deps.now().getTime() - startedAt.getTime();
-    // Injection seam (fail-open): screen untrusted git/gh stdout+stderr (fetched
-    // commit messages, file contents, PR bodies, etc.) BEFORE truncation, same as
-    // the bash runner. The screen owns its own fail-open behavior; never blocks.
-    const screenedStdout = deps.screenOutput ? await deps.screenOutput(run.stdout) : run.stdout;
-    const screenedStderr = deps.screenOutput ? await deps.screenOutput(run.stderr) : run.stderr;
-    const stdout = truncateToBytes({ text: screenedStdout, maxBytes: SANDBOX_MAX_OUTPUT_BYTES });
-    const stderr = truncateToBytes({ text: screenedStderr, maxBytes: SANDBOX_MAX_OUTPUT_BYTES });
-
-    await safeAudit(deps, ctx, {
-      cmd: `${cmd} ${args.join(' ')}`,
-      exitCode: run.exitCode,
-      durationMs,
-    });
-
-    return {
-      success: true,
-      stdout: stdout.text,
-      stderr: stderr.text,
-      exitCode: run.exitCode,
-      truncated: stdout.truncated || stderr.truncated,
-    };
-  } finally {
-    deps.quota.releaseSlot({ userId: ctx.userId });
-    // Same opportunistic measurement the bash path does, in the same `finally`
-    // and for the same reason: the bytes worth billing are the ones the command
-    // just wrote. It matters MORE here — `git_clone` is the largest writer in
-    // the system, and a session that only ever runs git tools would otherwise
-    // never be measured at all, billing its empty-disk baseline while the
-    // reconcile advanced its watermark over gigabytes of checkout.
-    //
-    // Throttled per session inside the supplier, never awaited, and its own
-    // failures are swallowed — a billing observation must not affect the tool
-    // result that already succeeded.
-    if (measurable && measurableSessionId !== null && deps.measureStorage) {
-      const sessionId = measurableSessionId;
-      void deps.measureStorage({ sandbox: measurable, sessionId }).catch((error) => {
-        // Logged, not swallowed. Best-effort must not mean invisible: if the
-        // measurement throws on EVERY git call — a bad exec adapter, a missing
-        // `du` — the largest writer in the system silently stops being measured,
-        // which is the bug this seam was just wired to fix, reappearing with no
-        // symptom at all. Same wrapper and same message as the bash path, which
-        // logs the identical failure.
-        safeLogWarn(deps.logger, 'Opportunistic storage measurement failed', {
-          sessionId,
-          error: error instanceof Error ? error.message : String(error),
+      let run: { exitCode: number; stdout: string; stderr: string };
+      try {
+        run = await session.sandbox.runCommand({
+          cmd,
+          args,
+          cwd: resolvedCwd,
+          env: buildGitToolEnv({ baseEnv: deps.buildEnv(), token }),
+          timeoutMs: SANDBOX_TIMEOUT_MS,
+          maxBytes: SANDBOX_MAX_OUTPUT_BYTES,
         });
+      } catch {
+        const durationMs = deps.now().getTime() - startedAt.getTime();
+        await safeAudit(deps, ctx, { cmd: `${cmd} ${args.join(' ')}`, exitCode: null, durationMs });
+        return { success: false, error: 'Command execution failed or timed out.', reason: 'execution_failed' };
+      }
+
+      const durationMs = deps.now().getTime() - startedAt.getTime();
+      // Injection seam (fail-open): screen untrusted git/gh stdout+stderr (fetched
+      // commit messages, file contents, PR bodies, etc.) BEFORE truncation, same as
+      // the bash runner. The screen owns its own fail-open behavior; never blocks.
+      const screenedStdout = deps.screenOutput ? await deps.screenOutput(run.stdout) : run.stdout;
+      const screenedStderr = deps.screenOutput ? await deps.screenOutput(run.stderr) : run.stderr;
+      const stdout = truncateToBytes({ text: screenedStdout, maxBytes: SANDBOX_MAX_OUTPUT_BYTES });
+      const stderr = truncateToBytes({ text: screenedStderr, maxBytes: SANDBOX_MAX_OUTPUT_BYTES });
+
+      await safeAudit(deps, ctx, {
+        cmd: `${cmd} ${args.join(' ')}`,
+        exitCode: run.exitCode,
+        durationMs,
       });
+
+      return {
+        success: true,
+        stdout: stdout.text,
+        stderr: stderr.text,
+        exitCode: run.exitCode,
+        truncated: stdout.truncated || stderr.truncated,
+      };
+    } finally {
+      // Releases the quota slot AND fires the same opportunistic, throttled
+      // storage measurement the bash path's `release()` does — the bytes
+      // worth billing are the ones the command just wrote, which matters
+      // MORE here: `git_clone` is the largest writer in the system, and a
+      // session that only ever runs git tools would otherwise never be
+      // measured at all.
+      session.release();
     }
-  }
+  });
 }
 
 async function safeAudit(

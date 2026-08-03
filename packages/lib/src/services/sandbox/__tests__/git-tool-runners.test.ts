@@ -5,7 +5,7 @@ import {
   GH_CONFIG_DIR,
   type GitSandboxRunDeps,
 } from '../git-tool-runners';
-import type { SandboxActorContext } from '../tool-runners';
+import type { SandboxActorContext, SandboxRunDeps } from '../tool-runners';
 import type { ExecutableSandbox, SandboxRunResult } from '../sandbox-client/types';
 import { SANDBOX_ROOT } from '../sandbox-paths';
 import { assert } from './riteway';
@@ -449,5 +449,129 @@ describe('opportunistic storage measurement', () => {
     await Promise.resolve();
 
     expect(measured).toMatchObject([{ sessionId: 'ws-1' }]);
+  });
+});
+
+/**
+ * Mirrors `tool-runners.test.ts`'s `makeBilling` — the same fake `billing`
+ * deps every other sandbox-op runner's billing tests use.
+ */
+function makeBilling(over: Partial<NonNullable<SandboxRunDeps['billing']>> = {}): {
+  billing: NonNullable<SandboxRunDeps['billing']>;
+  resolvePayerIdCalls: Array<{ driveId: string | null; ownerId: string }>;
+  gateCalls: Array<{ payerId: string }>;
+  trackUsageCalls: Array<{ payerId: string; holdId?: string; activeSeconds: number; pageId?: string; driveId?: string; sessionId?: string }>;
+  releaseHoldCalls: string[];
+} {
+  const resolvePayerIdCalls: Array<{ driveId: string | null; ownerId: string }> = [];
+  const gateCalls: Array<{ payerId: string }> = [];
+  const trackUsageCalls: Array<{ payerId: string; holdId?: string; activeSeconds: number; pageId?: string; driveId?: string; sessionId?: string }> = [];
+  const releaseHoldCalls: string[] = [];
+  const billing: NonNullable<SandboxRunDeps['billing']> = {
+    resolvePayerId: async (input) => {
+      resolvePayerIdCalls.push(input);
+      return input.ownerId;
+    },
+    gate: async (input) => {
+      gateCalls.push(input);
+      return { allowed: true, holdId: 'hold-1' };
+    },
+    trackUsage: async (input) => {
+      trackUsageCalls.push(input);
+    },
+    releaseHold: async (holdId) => {
+      releaseHoldCalls.push(holdId);
+    },
+    ...over,
+  };
+  return { billing, resolvePayerIdCalls, gateCalls, trackUsageCalls, releaseHoldCalls };
+}
+
+/** Mirrors `tool-runners.test.ts`'s `makeBillingSession` fake. */
+function makeBillingSession(
+  over: Partial<{ sessionId: string; driveId: string | null; ownerId: string }> = {},
+): NonNullable<SandboxRunDeps['resolveBillingSession']> {
+  return async (ctx) => ({
+    sessionId: over.sessionId ?? 'ws-1',
+    driveId: over.driveId !== undefined ? over.driveId : (ctx.driveId ?? null),
+    ownerId: over.ownerId ?? ctx.tenantId,
+  });
+}
+
+describe('runGitInSandbox — machine billing (issue #2315: git/gh tools were never gated)', () => {
+  it('places a hold BEFORE the sandbox is acquired, keyed to the payer resolved from the SESSION', async () => {
+    const { deps, slots } = makeDepsWithSpy();
+    const { billing, gateCalls } = makeBilling();
+    deps.billing = billing;
+    deps.resolveBillingSession = makeBillingSession({ ownerId: 'owner-42' });
+
+    await runGitInSandbox({ cmd: 'git', args: ['status'], ctx: makeCtx(), deps });
+
+    expect(gateCalls).toEqual([{ payerId: 'owner-42' }]);
+    // The gate ran before acquisition — proven by acquisition having happened
+    // at all (a denied gate, tested below, never reaches it).
+    expect(slots.acquired).toBe(1);
+  });
+
+  it('on a successful git run, settles EXACTLY one usage row via trackUsage with the real active-window seconds', async () => {
+    let now = NOW.getTime();
+    const { sandbox } = makeSandbox({
+      runCommand: async () => {
+        now += 3000; // the sandbox was "active" for 3s running this git command
+        return { exitCode: 0, stdout: 'ok', stderr: '' };
+      },
+    });
+    const { deps } = makeDeps({ reconnect: async () => sandbox, now: () => new Date(now) });
+    const { billing, trackUsageCalls, releaseHoldCalls } = makeBilling();
+    deps.billing = billing;
+    deps.resolveBillingSession = makeBillingSession({ ownerId: 'owner-42', driveId: 'd1', sessionId: 'ws-1' });
+
+    const result = await runGitInSandbox({ cmd: 'git', args: ['clone', 'https://github.com/a/b'], ctx: makeCtx(), deps });
+
+    expect(result).toMatchObject({ success: true });
+    expect(trackUsageCalls).toEqual([
+      { payerId: 'owner-42', holdId: 'hold-1', activeSeconds: 3, pageId: undefined, driveId: 'd1', sessionId: 'ws-1' },
+    ]);
+    expect(releaseHoldCalls).toEqual([]);
+  });
+
+  it('given the gate denies (insufficient credits), fails credit_exhausted, NEVER acquires a sandbox slot, and NEVER runs the git command — this is the exact gap issue #2315 closes', async () => {
+    const { deps, slots, runCommandCalls } = makeDepsWithSpy();
+    const { billing } = makeBilling({
+      gate: async () => ({ allowed: false, reason: 'insufficient_balance' }),
+    });
+    deps.billing = billing;
+    deps.resolveBillingSession = makeBillingSession();
+
+    const result = await runGitInSandbox({ cmd: 'git', args: ['clone', 'https://github.com/a/b'], ctx: makeCtx(), deps });
+
+    expect(result).toMatchObject({ success: false, reason: 'credit_exhausted' });
+    expect(slots.acquired).toBe(0);
+    expect(runCommandCalls).toHaveLength(0);
+  });
+
+  it('given a forced execution error, releases the hold and records NO usage row', async () => {
+    const { sandbox } = makeSandbox({
+      runCommand: async () => {
+        throw new Error('sandbox crashed');
+      },
+    });
+    const { deps } = makeDeps({ reconnect: async () => sandbox });
+    const { billing, trackUsageCalls, releaseHoldCalls } = makeBilling();
+    deps.billing = billing;
+    deps.resolveBillingSession = makeBillingSession();
+
+    const result = await runGitInSandbox({ cmd: 'git', args: ['fetch'], ctx: makeCtx(), deps });
+
+    expect(result).toMatchObject({ success: false, reason: 'execution_failed' });
+    expect(trackUsageCalls).toEqual([]);
+    expect(releaseHoldCalls).toEqual(['hold-1']);
+  });
+
+  it('given NO billing deps at all, runs unmetered exactly as before — an unmetered deployment is unaffected by this wiring', async () => {
+    const { deps, runCommandCalls } = makeDepsWithSpy();
+    const result = await runGitInSandbox({ cmd: 'git', args: ['status'], ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: true });
+    expect(runCommandCalls).toHaveLength(1);
   });
 });

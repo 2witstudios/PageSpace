@@ -492,7 +492,7 @@ const anomalyForExit = (exitCode: number): CodeExecutionAnomaly | undefined => {
   return exitCode === 137 ? 'timeout' : 'nonzero_exit';
 };
 
-type MeteredResult<S> =
+export type MeteredResult<S> =
   | ({ success: true } & S)
   | { success: false; error: string; reason: SandboxToolDenialReason };
 
@@ -506,8 +506,14 @@ type MeteredResult<S> =
  * there is nothing to charge (mirrors the voice STT recipe's `holdHandedOff`
  * safety net). Skipped entirely (no hold, no charge) when `deps.billing` is
  * unset — an unmetered deployment behaves exactly as before this seam existed.
+ *
+ * Exported so every sandbox tool-op runner (bash, write, read, edit, git/gh)
+ * shares this ONE metering path rather than a per-runner copy — git/gh's own
+ * runner going years without billing wired in was exactly a duplicated-acquire
+ * path silently drifting from this one (review finding, PR #2314 follow-up,
+ * issue #2315).
  */
-async function withMachineBilling<S>(
+export async function withMachineBilling<S>(
   ctx: SandboxActorContext,
   deps: SandboxRunDeps,
   run: () => Promise<MeteredResult<S>>,
@@ -570,8 +576,11 @@ async function withMachineBilling<S>(
  * `finally`, or a denial (with the slot already released). The kill-switch and
  * any op-specific policy (command / path) are checked by the caller BEFORE this,
  * so a policy-blocked op never reaches quota or provisioning.
+ *
+ * Exported for the same reason as `withMachineBilling`: every sandbox-op
+ * runner acquires through this ONE path, never a local copy.
  */
-async function openSession(
+export async function openSession(
   ctx: SandboxActorContext,
   deps: SandboxRunDeps,
 ): Promise<
