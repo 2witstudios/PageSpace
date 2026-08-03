@@ -23,12 +23,10 @@ export interface EndSessionDialogProps {
   onOpenChange(open: boolean): void;
   /** Display label, when the caller has one — "this session" otherwise (never an address). */
   sessionName?: string | null;
-  /** Disables both actions while the DELETE is in flight. */
-  isEnding: boolean;
   onConfirm(): void;
 }
 
-export default function EndSessionDialog({ open, onOpenChange, sessionName, isEnding, onConfirm }: EndSessionDialogProps) {
+export default function EndSessionDialog({ open, onOpenChange, sessionName, onConfirm }: EndSessionDialogProps) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
@@ -39,10 +37,8 @@ export default function EndSessionDialog({ open, onOpenChange, sessionName, isEn
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={isEnding}>Cancel</AlertDialogCancel>
-          <AlertDialogAction disabled={isEnding} onClick={onConfirm}>
-            End session
-          </AlertDialogAction>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={onConfirm}>End session</AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

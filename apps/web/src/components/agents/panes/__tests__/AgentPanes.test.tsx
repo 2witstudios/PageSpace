@@ -290,7 +290,7 @@ describe('AgentPanes', () => {
       expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     });
 
-    it('confirming DELETEs the session, THEN drops the grid and reports it ended', async () => {
+    it('confirming drops the grid instantly, DELETEs the session, and reports it ended', async () => {
       mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
       mockDel.mockImplementation(async (url: string) => {
         if (url === '/api/agent-sessions/ses-1/conversations/conv-1') throw new ApiRequestError('conflict', 409);
@@ -308,6 +308,108 @@ describe('AgentPanes', () => {
       await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1'));
       await waitFor(() => expect(onSessionEnded).toHaveBeenCalledTimes(1));
       expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeUndefined();
+    });
+
+    it('drops the grid instantly — before the sandbox-kill DELETE resolves, not after', async () => {
+      mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+      let resolveSessionDel!: (value: unknown) => void;
+      mockDel.mockImplementation((url: string) => {
+        if (url === '/api/agent-sessions/ses-1/conversations/conv-1') {
+          return Promise.reject(new ApiRequestError('conflict', 409));
+        }
+        return new Promise((resolve) => {
+          resolveSessionDel = resolve;
+        });
+      });
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      const user = userEvent.setup();
+      await user.click(screen.getByLabelText('Close pane'));
+      const dialog = await screen.findByRole('alertdialog');
+
+      await user.click(within(dialog).getByRole('button', { name: 'End session' }));
+
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1'));
+      // Still pending — the sandbox-kill DELETE has not resolved yet, but the
+      // grid is already gone.
+      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeUndefined();
+      expect(screen.queryByTestId('pane-chat')).not.toBeInTheDocument();
+
+      resolveSessionDel({ hadOtherOpenConversations: false });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    it("does not kill the peeked pane's own shell until the session-end DELETE actually resolves", async () => {
+      // A lone TERMINAL pane (no conversation of its own) — closing it is a
+      // direct `end-session` decision, no conversation-listing DELETE first.
+      // The session's own (empty) listing must be CONFIRMED-known, not merely
+      // absent, or the close decision can't verify there's nothing to rebind.
+      mockSessionConversations([]);
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+      act(() =>
+        useAgentWorkspaceStore
+          .getState()
+          .assignPane('ses-1', paneId, { kind: 'terminal', name: 'shell-1', targetId: 'shell-9', agentPageId: null }),
+      );
+      await waitFor(() => expect(screen.getByTestId('pane-shell')).toBeInTheDocument());
+
+      let resolveSessionDel!: (value: unknown) => void;
+      mockDel.mockImplementation((url: string) =>
+        url === '/api/agent-sessions/ses-1'
+          ? new Promise((resolve) => {
+              resolveSessionDel = resolve;
+            })
+          : Promise.resolve(undefined),
+      );
+      const user = userEvent.setup();
+      await user.click(screen.getByLabelText('Close pane'));
+      const dialog = await screen.findByRole('alertdialog');
+      await user.click(within(dialog).getByRole('button', { name: 'End session' }));
+
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1'));
+      // Still pending — the shell must not be touched before the session-end
+      // DELETE is known to have actually succeeded (review finding —
+      // chatgpt-codex-connector on PR #2318).
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/shells/shell-9');
+
+      resolveSessionDel({ hadOtherOpenConversations: false });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // Only now, confirmed, is the shell actually torn down.
+      expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/shells/shell-9');
+    });
+
+    it('never kills the shell at all if the session-end DELETE fails', async () => {
+      mockSessionConversations([]);
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+      act(() =>
+        useAgentWorkspaceStore
+          .getState()
+          .assignPane('ses-1', paneId, { kind: 'terminal', name: 'shell-1', targetId: 'shell-9', agentPageId: null }),
+      );
+      await waitFor(() => expect(screen.getByTestId('pane-shell')).toBeInTheDocument());
+
+      mockDel.mockImplementation((url: string) =>
+        url === '/api/agent-sessions/ses-1'
+          ? Promise.reject(new Error('sandbox teardown failed'))
+          : Promise.resolve(undefined),
+      );
+      const errorSpy = vi.spyOn(toast, 'error').mockImplementation(() => '');
+      const user = userEvent.setup();
+      await user.click(screen.getByLabelText('Close pane'));
+      const dialog = await screen.findByRole('alertdialog');
+      await user.click(within(dialog).getByRole('button', { name: 'End session' }));
+
+      await waitFor(() => expect(errorSpy).toHaveBeenCalled());
+      // Never touched — a failed session-end must never have killed the
+      // shell a restored terminal pane still claims to hold.
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/shells/shell-9');
+      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeDefined();
+      expect(screen.getByTestId('pane-shell')).toBeInTheDocument();
+      errorSpy.mockRestore();
     });
 
     it('warns (but still ends the session) when the server reports other open conversations existed', async () => {
@@ -336,7 +438,7 @@ describe('AgentPanes', () => {
       warnSpy.mockRestore();
     });
 
-    it('a failed DELETE leaves the grid exactly as it was — no rollback needed because nothing moved', async () => {
+    it('a failed DELETE rolls the grid back to exactly what it was', async () => {
       mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
       mockDel.mockImplementation(async (url: string) => {
         if (url === '/api/agent-sessions/ses-1/conversations/conv-1') throw new ApiRequestError('conflict', 409);
@@ -353,9 +455,11 @@ describe('AgentPanes', () => {
 
       await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1'));
       expect(onSessionEnded).not.toHaveBeenCalled();
-      // The session is still live locally — no second session gets minted
-      // because nothing here ever creates one.
-      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeDefined();
+      // The grid dropped optimistically the instant "End session" was
+      // confirmed, then the DELETE failed — `hydrateWorkspace` restores it
+      // from the pre-close snapshot rather than leaving it gone. No second
+      // session gets minted because nothing here ever creates one.
+      await waitFor(() => expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeDefined());
       expect(screen.getByTestId('pane-chat')).toBeInTheDocument();
     });
 

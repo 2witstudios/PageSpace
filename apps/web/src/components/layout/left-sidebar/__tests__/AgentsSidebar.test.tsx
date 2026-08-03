@@ -841,6 +841,76 @@ describe('AgentsSidebar', () => {
 
       expect(mockDel).not.toHaveBeenCalled();
     });
+
+    test('the grid, selection, and sidebar row drop instantly — before the sandbox-kill DELETE resolves, not after', async () => {
+      // The whole point: ending a session must not wait on the sandbox
+      // teardown this DELETE triggers server-side, which can take real
+      // seconds. Everything user-visible updates the moment the user
+      // confirms, not once the request comes back.
+      let resolveDel!: () => void;
+      mockDel.mockReturnValue(new Promise<void>((resolve) => (resolveDel = resolve)));
+      useAgentSurfaceStore.setState({
+        selectedSessionId: 'ses-1',
+        selectedConversationId: 'conv-1',
+        selectedAgentId: 'agent-1',
+      });
+      useAgentWorkspaceStore
+        .getState()
+        .ensureWorkspace('ses-1', { kind: 'chat', name: 'x', targetId: 'conv-1', agentPageId: 'agent-1' });
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      await user.click(screen.getByLabelText('End session'));
+      const dialog = await screen.findByRole('alertdialog');
+      await user.click(within(dialog).getByRole('button', { name: 'End session' }));
+
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1'));
+      // Still pending — nothing has resolved yet.
+      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeUndefined();
+      expect(useAgentSurfaceStore.getState().selectedSessionId).toBeNull();
+      expect(screen.queryByText('api refactor')).toBeNull();
+
+      resolveDel();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    test('a failed end-session restores the grid and selection, but does not yank the user back if they already navigated elsewhere', async () => {
+      // `selectSession` also pushes a URL — restoring a stale selection on a
+      // rare rollback must not silently override wherever the user has since
+      // navigated during this request's round trip.
+      let rejectDel!: (error: unknown) => void;
+      mockDel.mockReturnValue(new Promise((_resolve, reject) => (rejectDel = reject)));
+      useAgentSurfaceStore.setState({
+        selectedSessionId: 'ses-1',
+        selectedConversationId: 'conv-1',
+        selectedAgentId: 'agent-1',
+      });
+      useAgentWorkspaceStore
+        .getState()
+        .ensureWorkspace('ses-1', { kind: 'chat', name: 'x', targetId: 'conv-1', agentPageId: 'agent-1' });
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      await user.click(screen.getByLabelText('End session'));
+      const dialog = await screen.findByRole('alertdialog');
+      await user.click(within(dialog).getByRole('button', { name: 'End session' }));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1'));
+
+      // While that DELETE is still pending, the user navigates to a
+      // different session entirely.
+      useAgentSurfaceStore.getState().selectSession('ses-2');
+
+      rejectDel(new Error('boom'));
+      await waitFor(() => expect(mockToastError).toHaveBeenCalled());
+
+      // The grid is restored (nothing else could have touched it)...
+      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeDefined();
+      // ...but the user's own, later navigation stands — not clobbered back
+      // to the session whose end just failed.
+      expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-2');
+    });
   });
 
   describe('session row menu', () => {
