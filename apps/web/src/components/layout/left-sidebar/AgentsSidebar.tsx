@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { ChevronDown, ChevronRight, Folder, Plus, Search, SquareTerminal, X } from 'lucide-react';
 import { toast } from 'sonner';
-import useSWR from 'swr';
+import useSWR, { useSWRConfig } from 'swr';
 
 import EndSessionDialog from '@/components/agents/EndSessionDialog';
 import { useSpawnSession } from '@/components/agents/useSpawnSession';
@@ -27,6 +27,11 @@ import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspa
 import { panesOf, isLastPane, type PaneState } from '@/stores/agent-workspace/pane-reducer';
 import { fetchWithAuth, del, ApiRequestError } from '@/lib/auth/auth-fetch';
 import type { PersistedWorkspaceState } from '@pagespace/lib/agent-sessions/contract';
+import {
+  isAgentSessionsKey,
+  forgetSessionInCache,
+  forgetConversationInCache,
+} from '@/components/agents/panes/session-conversations';
 import { buildSessionGroups, ASSISTANT_GROUP_KEY } from './session-groups';
 import { RowMenu, type RowMenuItem } from './RowMenu';
 
@@ -364,12 +369,7 @@ function SessionList({
             />
           )}
           {group.sessions.map((session) => (
-            <SessionRow
-              key={session.sessionId}
-              session={session}
-              onChanged={onChanged}
-              agentNamesById={agentNamesById}
-            />
+            <SessionRow key={session.sessionId} session={session} agentNamesById={agentNamesById} />
           ))}
         </div>
       ))}
@@ -449,18 +449,22 @@ function SessionGroupHeader({
 /** One session: name + running dot, expanding to its conversations (never its panes). */
 function SessionRow({
   session,
-  onChanged,
   agentNamesById,
 }: {
   session: SessionListEntry;
-  onChanged: OnSessionsChanged;
   agentNamesById: Map<string, string>;
 }) {
+  // Bound to whatever `SWRConfig` provider wraps this tree (the app's default
+  // cache in production, an isolated one in tests) — NOT the bare top-level
+  // `mutate` import, which only ever targets SWR's default cache and would
+  // silently no-op under a custom provider.
+  const { mutate } = useSWRConfig();
   const selectedSessionId = useAgentSurfaceStore((state) => state.selectedSessionId);
   const selectedConversationId = useAgentSurfaceStore((state) => state.selectedConversationId);
   const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
   const selectSession = useAgentSurfaceStore((state) => state.selectSession);
   const forgetWorkspace = useAgentWorkspaceStore((state) => state.forgetWorkspace);
+  const hydrateWorkspace = useAgentWorkspaceStore((state) => state.hydrateWorkspace);
   const resetPane = useAgentWorkspaceStore((state) => state.resetPane);
   const assignPane = useAgentWorkspaceStore((state) => state.assignPane);
   const [expanded, setExpanded] = useState(false);
@@ -547,25 +551,38 @@ function SessionRow({
   }, [openConversation, openShell, conversationEntryForTarget, session.workspace, session.conversations, session.shells]);
 
   const endSession = useCallback(async () => {
+    // Snapshot for rollback, then assume success immediately — the row must
+    // not linger in the sidebar for however long the sandbox-kill round trip
+    // this DELETE triggers server-side actually takes.
+    const workspaceSnapshot = useAgentWorkspaceStore.getState().workspaces[session.sessionId] ?? null;
+    const wasSelected = selectedSessionId === session.sessionId;
     setEnding(true);
+    // The session leaves the sidebar; its conversations remain as history in
+    // each agent's list. Drop the local grid too — its panes pointed at a
+    // sandbox that no longer exists.
+    forgetWorkspace(session.sessionId);
+    if (wasSelected) selectSession(null);
+    setConfirmingEnd(false);
+    forgetSessionInCache(mutate, session.sessionId);
     try {
       await del(`/api/agent-sessions/${encodeURIComponent(session.sessionId)}`);
-      // The session leaves the sidebar; its conversations remain as history in
-      // each agent's list. Drop the local grid too — its panes pointed at a
-      // sandbox that no longer exists.
-      forgetWorkspace(session.sessionId);
-      if (selectedSessionId === session.sessionId) selectSession(null);
-      setConfirmingEnd(false);
-      onChanged();
     } catch (error) {
+      // The optimistic assumption was wrong — restore the grid and selection,
+      // and let a real revalidate (not a stale local patch) put the row back.
+      if (workspaceSnapshot) hydrateWorkspace(session.sessionId, workspaceSnapshot);
+      if (wasSelected) selectSession(session.sessionId);
+      void mutate(isAgentSessionsKey);
       console.error('Failed to end session:', error);
       toast.error('Could not end the session', {
         description: error instanceof Error ? error.message : 'Please try again.',
       });
+      return;
     } finally {
       setEnding(false);
     }
-  }, [forgetWorkspace, onChanged, selectSession, selectedSessionId, session.sessionId]);
+    // Confirmed — background reconcile only; the grid and sidebar are already right.
+    void mutate(isAgentSessionsKey);
+  }, [forgetWorkspace, hydrateWorkspace, mutate, selectSession, selectedSessionId, session.sessionId]);
 
   const closeConversation = useCallback(
     async (conversationId: string) => {
@@ -573,7 +590,6 @@ function SessionRow({
         await del(
           `/api/agent-sessions/${encodeURIComponent(session.sessionId)}/conversations/${encodeURIComponent(conversationId)}`,
         );
-        onChanged();
       } catch (error) {
         if (error instanceof ApiRequestError && error.status === 409) {
           // The session's LAST open listing — the server is the authority on
@@ -587,9 +603,17 @@ function SessionRow({
         toast.error('Could not close this conversation', {
           description: error instanceof Error ? error.message : 'Please try again.',
         });
+        return;
       }
+      // Instant sidebar freshness — a local cache patch instead of a full
+      // revalidate, so the row leaves the listing without a second, sequential
+      // network round trip on top of the DELETE that just resolved. A
+      // background reconcile still follows, same as every other mutating
+      // action here — it just no longer gates what the user sees.
+      forgetConversationInCache(mutate, session.sessionId, conversationId);
+      void mutate(isAgentSessionsKey);
     },
-    [onChanged, session.sessionId],
+    [mutate, session.sessionId],
   );
 
   // Closing a pane's own conversation from the sidebar — a real DELETE
@@ -600,10 +624,9 @@ function SessionRow({
   const closePaneConversation = useCallback(
     async (paneId: string, conversationId: string) => {
       // Read the LIVE grid, not the `session.workspace` prop — that's an SWR
-      // snapshot (polled every 20s, otherwise only as fresh as the last
-      // `onChanged()`), so a second pane opened on this same conversation
-      // moments ago could be invisible to it (review finding, carried over
-      // from this row's own tab-era close control).
+      // snapshot (polled every 20s), so a second pane opened on this same
+      // conversation moments ago could be invisible to it (review finding,
+      // carried over from this row's own tab-era close control).
       const liveWorkspace = useAgentWorkspaceStore.getState().workspaces[session.sessionId];
       const shownElsewhere = liveWorkspace
         ? panesOf(liveWorkspace).some(
@@ -640,7 +663,14 @@ function SessionRow({
         } else {
           resetPane(session.sessionId, paneId);
         }
-        onChanged();
+        // Instant sidebar freshness — a local cache patch instead of a full
+        // revalidate, so the row leaves the listing without a second,
+        // sequential network round trip on top of the DELETE that just
+        // resolved. A background reconcile still follows, same as every
+        // other mutating action here — it just no longer gates what the
+        // user sees.
+        forgetConversationInCache(mutate, session.sessionId, conversationId);
+        void mutate(isAgentSessionsKey);
       } catch (error) {
         if (error instanceof ApiRequestError && error.status === 409) {
           setConfirmingEnd(true);
@@ -652,7 +682,7 @@ function SessionRow({
         });
       }
     },
-    [session.sessionId, session.conversations, resetPane, assignPane, onChanged],
+    [mutate, session.sessionId, session.conversations, resetPane, assignPane],
   );
 
   const conversationLabel = useCallback(

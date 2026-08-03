@@ -1,3 +1,5 @@
+import type { ScopedMutator } from 'swr';
+
 /**
  * One of a session's OPEN (not-yet-closed) conversation listings — the shape
  * shared by the pane grid's pure decisions:
@@ -70,4 +72,50 @@ export function findOpenForAgent<T extends { agentPageId: string | null; lastMes
  */
 export function isAgentSessionsKey(key: unknown): boolean {
   return typeof key === 'string' && key.startsWith('/api/agent-sessions');
+}
+
+/**
+ * Drop `sessionId`'s row from every open `/api/agent-sessions**` SWR entry,
+ * locally, without waiting on revalidation — for a caller ending a session
+ * that has no local SWR binding of its own to this cache (the sidebar).
+ * `AgentPanes.tsx`'s equivalent (`recordSessionEnded`, keyed to its own
+ * hook-bound `mutate`) is separate but does the identical filter.
+ *
+ * Takes `mutate` as a parameter rather than importing the bare top-level one
+ * from `swr` — that top-level import only targets SWR's default cache, not a
+ * caller-specific `SWRConfig` provider (a custom-cache test harness, say).
+ * The caller supplies whatever `mutate` is actually bound to its own cache
+ * (`useSWRConfig()`'s, or a hook-bound one), so this keeps working regardless.
+ */
+export function forgetSessionInCache(mutate: ScopedMutator, sessionId: string): void {
+  void mutate(
+    isAgentSessionsKey,
+    (current: { sessions: SessionListEntry[] } | undefined) =>
+      current ? { ...current, sessions: current.sessions.filter((session) => session.sessionId !== sessionId) } : current,
+    { revalidate: false },
+  );
+}
+
+/**
+ * Drop one conversation listing from `sessionId`'s row, everywhere — the
+ * cross-file mirror of `AgentPanes.tsx`'s own `recordClosedConversation`,
+ * for a caller (the sidebar) with no local SWR binding of its own. See
+ * `forgetSessionInCache` for why `mutate` is a parameter, not an import.
+ */
+export function forgetConversationInCache(mutate: ScopedMutator, sessionId: string, conversationId: string): void {
+  void mutate(
+    isAgentSessionsKey,
+    (current: { sessions: SessionListEntry[] } | undefined) =>
+      current
+        ? {
+            ...current,
+            sessions: current.sessions.map((session) =>
+              session.sessionId === sessionId
+                ? { ...session, conversations: session.conversations.filter((c) => c.conversationId !== conversationId) }
+                : session,
+            ),
+          }
+        : current,
+    { revalidate: false },
+  );
 }

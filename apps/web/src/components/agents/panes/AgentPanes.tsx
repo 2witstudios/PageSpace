@@ -70,6 +70,7 @@ import { decideClosePane } from './close-pane';
 import {
   agentSessionsKey,
   isAgentSessionsKey,
+  forgetSessionInCache,
   type SessionConversationSummary,
   type SessionListEntry,
 } from './session-conversations';
@@ -161,6 +162,7 @@ export default function AgentPanes({
   const assignPane = useAgentWorkspaceStore((state) => state.assignPane);
   const resetPane = useAgentWorkspaceStore((state) => state.resetPane);
   const forgetWorkspace = useAgentWorkspaceStore((state) => state.forgetWorkspace);
+  const hydrateWorkspace = useAgentWorkspaceStore((state) => state.hydrateWorkspace);
   const replaceConversation = useAgentWorkspaceStore((state) => state.replaceConversation);
 
   // Layout AND tabs are server-persisted now — debounced, not per-transition
@@ -660,7 +662,20 @@ export default function AgentPanes({
 
   const confirmEndSession = useCallback(async () => {
     if (!pendingEndClose) return;
+    // Snapshot for rollback, then assume success immediately: the grid and
+    // sidebar row must not wait on the sandbox-kill round trip this DELETE
+    // triggers server-side — that's the whole point of this being optimistic.
+    // `forgetWorkspace` rather than `closePane` — this can fire with OTHER
+    // panes still in the grid (a terminal, say, when the closed listing was
+    // the session's last OPEN conversation rather than the grid's last pane),
+    // and ending the session tears down every one of them at once, not just
+    // the peeked pane's own.
+    const workspaceSnapshot = useAgentWorkspaceStore.getState().workspaces[sessionId] ?? null;
     setEndingSession(true);
+    forgetWorkspace(sessionId);
+    closeTerminalShell(pendingEndClose.scope);
+    setPendingEndClose(null);
+    forgetSessionInCache(mutate, sessionId);
     let hadOtherOpenConversations = false;
     try {
       const ended = await del<{ hadOtherOpenConversations?: boolean }>(
@@ -668,8 +683,11 @@ export default function AgentPanes({
       );
       hadOtherOpenConversations = ended?.hadOtherOpenConversations ?? false;
     } catch (error) {
-      // Nothing was mutated locally, so there is nothing to restore — the
-      // grid the user is looking at is still exactly the live session.
+      // The optimistic assumption was wrong — restore the grid, and let a
+      // real revalidate (not a stale local patch) put the session's row back,
+      // since the server is the authority on whether it's actually gone.
+      if (workspaceSnapshot) hydrateWorkspace(sessionId, workspaceSnapshot);
+      void mutate(isAgentSessionsKey);
       console.error('Failed to end session:', error);
       toast.error('Could not end the session', {
         description: error instanceof Error ? error.message : 'Please try again.',
@@ -677,17 +695,8 @@ export default function AgentPanes({
       setEndingSession(false);
       return;
     }
-    // Server-confirmed: NOW the grid comes down. `forgetWorkspace` rather
-    // than `closePane` — this can fire with OTHER panes still in the grid
-    // (a terminal, say, when the closed listing was the session's last OPEN
-    // conversation rather than the grid's last pane), and ending the session
-    // tears down every one of them at once, not just the peeked pane's own.
-    forgetWorkspace(sessionId);
-    closeTerminalShell(pendingEndClose.scope);
     setEndingSession(false);
-    setPendingEndClose(null);
-    // Same instant-freshness nudge as closeConversationListing — otherwise
-    // the now-dead session's row lingers in the sidebar until the next poll.
+    // Background reconcile only — the grid and sidebar are already right.
     void mutate(isAgentSessionsKey);
     if (hadOtherOpenConversations) {
       // Ending is unconditional by design — this can't be prevented client
@@ -699,7 +708,7 @@ export default function AgentPanes({
       toast.warning('This session had other open conversations, which were also ended.');
     }
     onSessionEnded?.();
-  }, [pendingEndClose, sessionId, forgetWorkspace, closeTerminalShell, onSessionEnded]);
+  }, [pendingEndClose, sessionId, forgetWorkspace, hydrateWorkspace, closeTerminalShell, onSessionEnded]);
 
   // Shared by cleanupOrphanedConversation's own post-DELETE recheck below and
   // handlePickHistoryConversation's rollback decision.
