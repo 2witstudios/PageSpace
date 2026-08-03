@@ -603,7 +603,23 @@ export async function ensureGlobalSandboxSession(
     // chatgpt-codex-connector). Re-resolve BEFORE tearing anything down: if
     // the conversation is now bound to the session we spawned, the claim
     // genuinely succeeded despite the thrown error — treat it as one.
-    const boundAfterThrow = await findSessionForConversation(conversationId);
+    //
+    // A single autocommit UPDATE's commit is durable and immediately visible
+    // to any other connection the instant it completes server-side — there
+    // is no PostgreSQL window where a commit has finished but the write is
+    // not yet visible elsewhere, and a connection that drops before that
+    // point aborts the (never-committed) statement outright. So one re-read
+    // is already conclusive under normal Postgres semantics. The brief
+    // retry below is pure defense-in-depth against exactly that claim being
+    // wrong in some deployment-specific way (a pooler, a replica read) that
+    // isn't visible from this file alone — cheap insurance given how
+    // unrecoverable a wrong "unclaimed" verdict is here (review finding,
+    // third pass — chatgpt-codex-connector).
+    let boundAfterThrow = await findSessionForConversation(conversationId);
+    if (!boundAfterThrow) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      boundAfterThrow = await findSessionForConversation(conversationId);
+    }
     if (boundAfterThrow?.id === spawned.session.id) {
       return { ok: true, session: spawned.session };
     }
