@@ -23,6 +23,13 @@ export type { ConversationCacheEntry, ConversationMessagesById };
 interface ConversationMessagesState {
   byConversationId: ConversationMessagesById;
   getEntry: (conversationId: string) => ConversationCacheEntry;
+  /**
+   * True when the conversation has a real cache entry — i.e. some surface has
+   * loaded/seeded/sent in it this session. `getEntry` cannot answer this (it
+   * returns a synthetic empty entry for never-seen ids); socket-event dispatch
+   * keys on this to route an event to any cached conversation, active or not.
+   */
+  hasEntry: (conversationId: string) => boolean;
   startLoad: (conversationId: string) => number;
   /** True while `generation` is still the newest `startLoad` result for `conversationId`. */
   isLoadCurrent: (conversationId: string, generation: number) => boolean;
@@ -94,6 +101,8 @@ export const useConversationMessagesStore = create<ConversationMessagesState>((s
   byConversationId: {},
 
   getEntry: (conversationId) => get().byConversationId[conversationId] ?? seedEmpty(),
+
+  hasEntry: (conversationId) => conversationId in get().byConversationId,
 
   startLoad: (conversationId) => {
     const { byConversationId, generation } = applyStartLoad(get().byConversationId, conversationId);

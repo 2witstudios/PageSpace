@@ -32,6 +32,9 @@ export const conversationMessagesActions = {
   /** Imperative snapshot read of a conversation's cache entry (defaults when never seen). */
   getEntry: (conversationId: string): ConversationCacheEntry =>
     useConversationMessagesStore.getState().getEntry(conversationId),
+  /** True when the conversation has a REAL cache entry (loaded/seeded/sent this session) — see the store docblock. */
+  hasEntry: (conversationId: string): boolean =>
+    useConversationMessagesStore.getState().hasEntry(conversationId),
   /** Marks a "load older" fetch in flight (epic leaf 6.6) — inline indicator, no generation change. */
   startLoadingOlder: (conversationId: string): void =>
     useConversationMessagesStore.getState().startLoadingOlder(conversationId),
