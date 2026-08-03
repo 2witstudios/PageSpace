@@ -288,6 +288,47 @@ describe('useAgentChannelMultiplayer', () => {
       expect(cacheMessages('conv-active').map((m) => m.id)).toEqual(['msg-empty']);
     });
 
+    // Codex P2 (PR #2320): a local Stop commits the partial as 'interrupted', but if the
+    // server-side abort failed or landed too late the generation ran on and persisted a
+    // COMPLETE reply. The clean completion contradicts the local row — it must reload the
+    // authoritative reply, not be suppressed by it.
+    it('given a locally-Stopped interrupted row but a NON-aborted completion event, should reload (the server outran the abort)', () => {
+      useConversationMessagesStore.getState().applyConfirmedMessage('conv-active', {
+        id: 'msg-empty',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'partial before Stop' }],
+        status: 'interrupted',
+      } as UIMessage);
+      pendingStreams.current = new Map();
+
+      renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
+
+      act(() => {
+        capturedChannel.options?.onStreamComplete?.('msg-empty', 'conv-active');
+      });
+
+      expect(mockLoadAgentConversationMessages).toHaveBeenCalledWith(AGENT.id, 'conv-active');
+    });
+
+    it('given a locally-Stopped interrupted row and an ABORTED completion event, should NOT reload (statuses agree)', () => {
+      useConversationMessagesStore.getState().applyConfirmedMessage('conv-active', {
+        id: 'msg-empty',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'partial before Stop' }],
+        status: 'interrupted',
+      } as UIMessage);
+      pendingStreams.current = new Map();
+
+      renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
+
+      act(() => {
+        capturedChannel.options?.onStreamComplete?.('msg-empty', 'conv-active', { joinFailed: true }, true);
+      });
+
+      expect(mockLoadAgentConversationMessages).not.toHaveBeenCalled();
+      expect(cacheMessages('conv-active').map((m) => m.id)).toEqual(['msg-empty']);
+    });
+
     it('given an OWN completion, should promote pending optimistic sends BEFORE the commit so the question renders above the reply (F1)', () => {
       useConversationMessagesStore.getState().addOptimisticSend('conv-active', {
         id: 'u-sent', role: 'user', parts: [{ type: 'text', text: 'my question' }],

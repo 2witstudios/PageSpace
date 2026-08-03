@@ -98,6 +98,36 @@ describe('useConversationMessagesStore', () => {
     expect(entry.messages).toEqual([msg('opt1')]);
   });
 
+  // Codex P2 (PR #2320): a snapshot is the LATEST page only. Replacing a
+  // paginated cache with it discarded every older loaded page while olderCursor
+  // still pointed below them — history vanished and the next load-older skipped
+  // the discarded range. The snapshot must merge onto the older pages instead.
+  it('given loaded older pages, applyServerSnapshot must preserve them in front of the overlapping snapshot and keep the pagination cursor', () => {
+    const { startLoad, applyLoad, applyOlderPage, beginServerSnapshot, applyServerSnapshot, getEntry } = useConversationMessagesStore.getState();
+    const gen = startLoad('c1');
+    applyLoad('c1', gen, [msg('c'), msg('d')], { hasMore: true, nextCursor: 'cur-c' });
+    applyOlderPage('c1', gen, [msg('a'), msg('b')], true, 'cur-a');
+    const token = beginServerSnapshot('c1');
+    applyServerSnapshot('c1', token, [msg('d'), msg('e')]);
+    const entry = getEntry('c1');
+    expect(entry.messages).toEqual([msg('a'), msg('b'), msg('c'), msg('d'), msg('e')]);
+    expect(entry.olderCursor).toBe('cur-a');
+    expect(entry.hasMoreOlder).toBe(true);
+  });
+
+  it('given a snapshot DISJOINT from the cache, applyServerSnapshot should replace the cache and reset pagination from the snapshot envelope', () => {
+    const { startLoad, applyLoad, applyOlderPage, beginServerSnapshot, applyServerSnapshot, getEntry } = useConversationMessagesStore.getState();
+    const gen = startLoad('c1');
+    applyLoad('c1', gen, [msg('a')], { hasMore: true, nextCursor: 'cur-a' });
+    applyOlderPage('c1', gen, [msg('z')], true, 'cur-z');
+    const token = beginServerSnapshot('c1');
+    applyServerSnapshot('c1', token, [msg('x'), msg('y')], { hasMore: false, nextCursor: null });
+    const entry = getEntry('c1');
+    expect(entry.messages).toEqual([msg('x'), msg('y')]);
+    expect(entry.olderCursor).toBeNull();
+    expect(entry.hasMoreOlder).toBe(false);
+  });
+
   it('given seedConversation for a freshly minted id, should mark the entry loaded-empty so no fetch is pending for it', () => {
     const { seedConversation, getEntry } = useConversationMessagesStore.getState();
     seedConversation('c-new');
