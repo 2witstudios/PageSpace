@@ -11,12 +11,16 @@ const {
   mockMeasureWarmSessionStorage,
   mockCheckSessionRuntimeGuardrail,
   mockRecordSessionActivity,
+  mockEnsureGlobalSandboxSession,
+  mockGetConversation,
 } = vi.hoisted(() => ({
   mockFindSessionForConversation: vi.fn(),
   mockProvisionSessionSandbox: vi.fn(),
   mockMeasureWarmSessionStorage: vi.fn(async () => {}),
   mockCheckSessionRuntimeGuardrail: vi.fn(),
   mockRecordSessionActivity: vi.fn(),
+  mockEnsureGlobalSandboxSession: vi.fn(),
+  mockGetConversation: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/db', () => ({ db: {} }));
@@ -28,6 +32,10 @@ vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
   // which is the property that matters — a billing observation must never delay
   // or fail a tool call.
   measureWarmSessionStorage: mockMeasureWarmSessionStorage,
+  ensureGlobalSandboxSession: mockEnsureGlobalSandboxSession,
+}));
+vi.mock('@/lib/repositories/conversation-repository', () => ({
+  conversationRepository: { getConversation: mockGetConversation },
 }));
 vi.mock('@pagespace/lib/services/sandbox/quota', () => ({
   acquireCodeExecutionSlot: vi.fn(() => true),
@@ -289,6 +297,11 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     mockCheckSessionRuntimeGuardrail.mockReturnValue({ allowed: true });
     mockFindSessionForConversation.mockResolvedValue(sessionRecord);
     mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' });
+    // Most tests in this block exercise a PAGE conversation (`baseInput` sets
+    // `agentPageId`) — page conversations never auto-provision, so the default
+    // here matches that and the global-only tests below override it.
+    mockGetConversation.mockResolvedValue({ type: 'page' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'no_session' });
   });
 
   it('should WIRE the activity-feed seam — an unwired optional dep is a silently dead feature', async () => {
@@ -354,13 +367,60 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     expect(mockRecordSessionActivity).not.toHaveBeenCalled();
   });
 
-  it('given a conversation with NO session, should DENY — never lazily mint a per-thread environment', async () => {
+  it('given a PAGE conversation with NO session, should DENY — page agents still require an explicit "New session" spawn', async () => {
     // Per-conversation minting is exactly the conflation the session model
-    // removed; it is what made panes unable to share a sandbox.
+    // removed; it is what made panes unable to share a sandbox. Page agents
+    // never auto-provision — only the global-assistant case below does.
     mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'page' });
     const deps = buildRealSandboxRunDeps();
     const result = await deps.acquireSandbox(baseInput());
     expect(result).toEqual({ ok: false, reason: 'no_session' });
+    expect(mockEnsureGlobalSandboxSession).not.toHaveBeenCalled();
+    expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
+    expect(mockRecordSessionActivity).not.toHaveBeenCalled();
+  });
+
+  it('given a GLOBAL conversation with NO session, should auto-provision one and proceed to provision its sandbox', async () => {
+    // The default Global Assistant chat is always minted session-less and
+    // nothing else ever claims it — restore the pre-refactor "own machine"
+    // parity by auto-provisioning a REAL session the first time it's needed,
+    // through the exact same spawn+claim primitive a manual "New session"
+    // spawn uses.
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'global' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: true, session: sessionRecord });
+    const deps = buildRealSandboxRunDeps();
+    const result = await deps.acquireSandbox(baseInput({ agentPageId: undefined }));
+    expect(mockEnsureGlobalSandboxSession).toHaveBeenCalledWith('conv-1', 'u1');
+    expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(sessionRecord, 'u1');
+    expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-1' });
+  });
+
+
+  it('given a GLOBAL conversation whose auto-provisioning was ATTEMPTED and failed (any reason), should DENY as provision_failed with that reason as the cause — never the plain no_session', async () => {
+    // Once an attempt was made, "no_session" alone would be misleading (it
+    // reads as "nothing was ever tried"); provision_failed/cause names WHY.
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'global' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
+    const deps = buildRealSandboxRunDeps();
+    const result = await deps.acquireSandbox(baseInput({ agentPageId: undefined }));
+    expect(result).toEqual({ ok: false, reason: 'provision_failed', cause: 'spawn_failed' });
+    expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
+    expect(mockRecordSessionActivity).not.toHaveBeenCalled();
+  });
+
+  it('given a GLOBAL conversation with NO session, and the owner is at their session cap, should DENY with the specific session_limit_reached cause', async () => {
+    // A distinct, actionable denial ("end an existing session first") —
+    // collapsing it into the generic no_session message would tell an agent
+    // at its owner's session cap to do something that can't help.
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'global' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'session_limit_reached' });
+    const deps = buildRealSandboxRunDeps();
+    const result = await deps.acquireSandbox(baseInput({ agentPageId: undefined }));
+    expect(result).toEqual({ ok: false, reason: 'provision_failed', cause: 'session_limit_reached' });
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
     expect(mockRecordSessionActivity).not.toHaveBeenCalled();
   });
@@ -515,8 +575,9 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
     expect(mockFindSessionForConversation).not.toHaveBeenCalled();
   });
 
-  it('given a conversation with no session yet, resolves null', async () => {
+  it('given a PAGE conversation with no session yet, resolves null (page agents never auto-provision)', async () => {
     mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'page' });
     const deps = buildRealSandboxRunDeps();
 
     const result = await deps.resolveBillingSession?.({
@@ -528,6 +589,83 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
     });
 
     expect(result).toBeNull();
+    expect(mockEnsureGlobalSandboxSession).not.toHaveBeenCalled();
+  });
+
+  it('given a GLOBAL conversation with no session yet, auto-provisions one and resolves ITS driveId/ownerId — closes the credit-gate bypass (review finding P1, PR #2314)', async () => {
+    // Before this fix, a session-less global conversation resolved null here
+    // (the old "nothing to bill, run() will just deny" assumption), but
+    // acquireSandbox's own auto-provisioning made run() actually SUCCEED —
+    // so a credit-exhausted user's first message executed completely
+    // unmetered. resolveBillingSession must see the SAME auto-provisioned
+    // session acquireSandbox is about to act on, not a stale "no session".
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'global' });
+    const provisioned = makeSessionRecord({ id: 'auto-ses-1', driveId: null, ownerId: 'u1' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: true, session: provisioned });
+    const deps = buildRealSandboxRunDeps();
+
+    const result = await deps.resolveBillingSession?.({
+      userId: 'u1',
+      tenantId: 'u1',
+      conversationId: 'conv-fresh-global',
+      actorEmail: 'u1@example.com',
+      tier: 'pro',
+    });
+
+    expect(result).toEqual({ sessionId: 'auto-ses-1', driveId: null, ownerId: 'u1' });
+    expect(mockEnsureGlobalSandboxSession).toHaveBeenCalledWith('conv-fresh-global', 'u1');
+  });
+
+  it('given a GLOBAL conversation whose auto-provisioning hits the session cap, fails CLOSED with { deny } rather than resolving null — a concurrent sibling\'s claim could still let acquireSandbox succeed moments later, executing unmetered (review finding — P1, PR #2314, second pass)', async () => {
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'global' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'session_limit_reached' });
+    const deps = buildRealSandboxRunDeps();
+
+    const result = await deps.resolveBillingSession?.({
+      userId: 'u1',
+      tenantId: 'u1',
+      conversationId: 'conv-fresh-global',
+      actorEmail: 'u1@example.com',
+      tier: 'pro',
+    });
+
+    expect(result).toEqual({ deny: 'session_limit_reached' });
+  });
+
+  it('given a GLOBAL conversation whose auto-provisioning fails with a transient spawn fault, ALSO fails CLOSED with { deny } — same reasoning as session_limit_reached: a retry (this call\'s own acquireSandbox, or a concurrent sibling) could still succeed after the transient fault clears (review finding — P1, PR #2314, third round)', async () => {
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'global' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
+    const deps = buildRealSandboxRunDeps();
+
+    const result = await deps.resolveBillingSession?.({
+      userId: 'u1',
+      tenantId: 'u1',
+      conversationId: 'conv-fresh-global',
+      actorEmail: 'u1@example.com',
+      tier: 'pro',
+    });
+
+    expect(result).toEqual({ deny: 'provision_failed' });
+  });
+
+  it('given a GLOBAL conversation whose auto-provisioning attempt lost a claim with no winner found (attempted, reason no_session), STILL fails CLOSED — attempted-and-failed is never treated as safely null, regardless of which of the three reasons it is', async () => {
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'global' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'no_session' });
+    const deps = buildRealSandboxRunDeps();
+
+    const result = await deps.resolveBillingSession?.({
+      userId: 'u1',
+      tenantId: 'u1',
+      conversationId: 'conv-fresh-global',
+      actorEmail: 'u1@example.com',
+      tier: 'pro',
+    });
+
+    expect(result).toEqual({ deny: 'provision_failed' });
   });
 });
 

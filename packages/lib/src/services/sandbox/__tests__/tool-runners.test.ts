@@ -1180,6 +1180,32 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
     expect(trackUsageCalls).toEqual([]);
   });
 
+  it('given resolveBillingSession returns { deny }, fails closed with that reason and NEVER calls acquireSandbox — an implementation that auto-provisions must not fall through to an unmetered run() on an unsafe failure (review finding — P1, PR #2314, second pass)', async () => {
+    // The unsafe alternative this replaces: treating a `session_limit_reached`
+    // (or any auto-provisioning failure) the same as a legacy "no session,
+    // ever" conversation and returning null — which lets run()'s own,
+    // INDEPENDENT resolution race a concurrent sibling's claim and succeed
+    // unmetered. `{ deny }` must short-circuit before acquireSandbox is ever
+    // reached, exactly like the credit-exhausted gate does.
+    let acquireCalls = 0;
+    const { billing, gateCalls, trackUsageCalls } = makeBilling();
+    const { deps } = makeDeps({
+      billing,
+      resolveBillingSession: async () => ({ deny: 'session_limit_reached' }),
+      acquireSandbox: async () => {
+        acquireCalls += 1;
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' };
+      },
+    });
+
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
+    expect(result).toMatchObject({ success: false, reason: 'session_limit_reached' });
+    expect(acquireCalls).toBe(0);
+    expect(gateCalls).toEqual([]);
+    expect(trackUsageCalls).toEqual([]);
+  });
+
   it('places a hold BEFORE the machine is acquired, keyed to the payer resolved from the SESSION', async () => {
     const { billing, gateCalls } = makeBilling();
     const { deps } = makeDeps({ billing, resolveBillingSession: makeBillingSession({ ownerId: 'owner-42' }) });

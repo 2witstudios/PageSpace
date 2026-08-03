@@ -250,17 +250,32 @@ export interface SandboxRunDeps {
    * a credit-exhausted payer is denied without ever waking a hibernating
    * sandbox — the same fail-fast property the old (surface-derived, ctx-only)
    * payer resolution had, now backed by a real (if cheap) session read instead
-   * of trusting client-influenceable context. `null` = the conversation has no
-   * session yet (a legacy pre-session thread): `withMachineBilling` skips
-   * gating entirely and calls straight through to `run()`, which surfaces the
-   * ordinary `no_session` denial via `openSession`. Required whenever
-   * `billing` is set; never called otherwise.
+   * of trusting client-influenceable context. Required whenever `billing` is
+   * set; never called otherwise.
+   *
+   * Three outcomes:
+   * - A session: gate against its payer as usual.
+   * - `null` = the conversation will NEVER have a session on its own (a
+   *   legacy pre-session thread, or one whose type never auto-provisions):
+   *   nothing to gate against, so `withMachineBilling` falls through
+   *   unmetered and lets `run()` surface the ordinary `no_session` denial.
+   * - `{ deny }` = an implementation that auto-provisions a session (a
+   *   Global Assistant conversation) attempted to and failed for a reason
+   *   that is NOT safely "this will just deny again" — e.g. the owner's
+   *   session cap was hit by a CONCURRENT call's spawn. Returning `null`
+   *   here would be unsafe: `run()`'s own resolution moments later can
+   *   still succeed if a racing sibling's claim lands in the interim
+   *   (executing against the sibling's session), while this call already
+   *   gave up on billing it — an unmetered execution. `{ deny }` fails the
+   *   whole call closed instead of gambling that the second, independent
+   *   resolution will agree with the first (review finding — P1, PR #2314,
+   *   second pass, chatgpt-codex-connector).
    */
-  resolveBillingSession?: (ctx: SandboxActorContext) => Promise<{
-    sessionId: string;
-    driveId: string | null;
-    ownerId: string;
-  } | null>;
+  resolveBillingSession?: (ctx: SandboxActorContext) => Promise<
+    | { sessionId: string; driveId: string | null; ownerId: string }
+    | { deny: SandboxToolDenialReason }
+    | null
+  >;
   /**
    * Optional opportunistic storage-measurement seam (Sprites Platform Alignment
    * 6-1): while this sprite is ALREADY awake for this real op, capture its used
@@ -508,10 +523,13 @@ async function withMachineBilling<S>(
   // drive/agent page — a session hosts MANY conversations, and its drive can
   // differ from the one the caller happens to be chatting from.
   //
-  // `null` = no session yet for this conversation (a legacy pre-session
-  // thread): nothing to gate against, so fall through unmetered and let
-  // `run()` surface the ordinary `no_session` denial via `openSession`.
+  // See the three-outcome contract on `resolveBillingSession` above: `null`
+  // is only safe when nothing could ever auto-provision here; `{ deny }`
+  // fails the call closed rather than falling through to `run()`, whose own
+  // independent resolution might still succeed against a session a
+  // concurrent sibling call bound in the interim.
   const billingSession = deps.resolveBillingSession ? await deps.resolveBillingSession(ctx) : null;
+  if (billingSession && 'deny' in billingSession) return fail(billingSession.deny);
   if (!billingSession) return run();
 
   const payerId = await billing.resolvePayerId({

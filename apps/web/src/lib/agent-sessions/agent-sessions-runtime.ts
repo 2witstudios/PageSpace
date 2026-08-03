@@ -22,6 +22,7 @@ import { withAdvisoryLock } from '@pagespace/db/advisory-lock';
 import { and, count, eq, inArray, isNull, isNotNull, sql } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkAgentSessionConcurrency } from '@pagespace/lib/services/sandbox/quota';
 import {
   refreshSessionStorageMeasurement,
@@ -521,6 +522,159 @@ export async function spawnSession(input: {
 /** Resolve a conversation's session — how a chat turn finds its working context. Null = a plain chat. */
 export async function findSessionForConversation(conversationId: string): Promise<AgentSessionRecord | null> {
   return (await getAgentSessionStore()).findByConversation(conversationId);
+}
+
+/**
+ * Every one of these is racy or retryable by nature (a session cap another
+ * concurrent call may have just filled, a transient spawn fault, a lost
+ * claim) — never a deterministic "this conversation can never have a
+ * session." Callers that gate on this (billing) must treat the whole set
+ * the same way, not narrow to whichever specific reason the last bug was
+ * about (two separate reviewer findings on PR #2314 were each a caller
+ * treating one of these as safely equivalent to "no session, ever").
+ */
+export type EnsureGlobalSandboxSessionFailureReason = 'session_limit_reached' | 'spawn_failed' | 'no_session';
+
+export type EnsureGlobalSandboxSessionResult =
+  | { ok: true; session: AgentSessionRecord }
+  | { ok: false; reason: EnsureGlobalSandboxSessionFailureReason };
+
+/**
+ * Auto-provision a workspace for a Global Assistant conversation that has
+ * never had one — the exact same primitive a manual "New session → Global
+ * Assistant" spawn uses (spawn, then claim), just triggered from the first
+ * sandbox tool call instead of the command palette. The caller
+ * (`sandbox-tools-runtime.ts`) is the one that decides this only applies to
+ * `type === 'global'` conversations; this function only knows how to mint
+ * and bind a session, not when that's appropriate.
+ */
+export async function ensureGlobalSandboxSession(
+  conversationId: string,
+  userId: string,
+): Promise<EnsureGlobalSandboxSessionResult> {
+  const spawned = await spawnSession({ userId, driveId: null });
+  if (!spawned.ok) {
+    // `session_limit_reached` is a distinct, actionable denial ("end an
+    // existing session first") the caller already knows how to surface —
+    // collapsing it into the generic no_session message would tell an agent
+    // sitting at its owner's session cap to do something that can't help
+    // ("start a new conversation").
+    return { ok: false, reason: spawned.reason === 'session_limit_reached' ? 'session_limit_reached' : 'spawn_failed' };
+  }
+
+  // Cleanup shared by both the "claim lost" and "claim threw" paths below —
+  // the freshly spawned session would otherwise sit empty forever, which the
+  // session model treats as an invariant violation (mirrors the same cleanup
+  // the spawn route itself does when its own first-conversation creation
+  // fails). Fail-open (never lets a cleanup fault surface as THIS call's own
+  // error) but logged — a silently swallowed failure here would leave the
+  // scratch session live, counting against MAX_ACTIVE_SESSIONS_PER_OWNER and
+  // accruing cost, with no signal anywhere (review finding — CodeRabbit).
+  const endScratchSession = (cause: string) =>
+    endSession(spawned.session.id).catch((error) => {
+      loggers.api.warn(`Failed to end scratch session after ${cause}`, {
+        sessionId: spawned.session.id,
+        conversationId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+
+  let claimed: ClaimConversationOutcome;
+  try {
+    claimed = await claimConversationInSession({
+      conversationId,
+      userId,
+      sessionId: spawned.session.id,
+    });
+  } catch (error) {
+    // `claimConversationInSession` can THROW (the advisory lock exhausting
+    // its retries, a DB connection fault) rather than resolving a normal
+    // outcome — a path that skipped this cleanup entirely before, leaking
+    // the scratch session on every such failure (review finding —
+    // chatgpt-codex-connector).
+    //
+    // The thrown error is AMBIGUOUS in a way `claimed === 'not_found'` below
+    // never is: the guarded UPDATE may have actually COMMITTED server-side
+    // with the connection dropping before this call ever saw the
+    // acknowledgment. Ending our scratch session on that outcome would be
+    // catastrophic, not just wasteful — bindings are write-once, so a
+    // conversation left pointing at a session we just ENDED can never be
+    // re-claimed into a replacement, ever (review finding, second pass —
+    // chatgpt-codex-connector). Re-resolve BEFORE tearing anything down: if
+    // the conversation is now bound to the session we spawned, the claim
+    // genuinely succeeded despite the thrown error — treat it as one.
+    //
+    // A single autocommit UPDATE's commit is durable and immediately visible
+    // to any other connection the instant it completes server-side — there
+    // is no PostgreSQL window where a commit has finished but the write is
+    // not yet visible elsewhere, and a connection that drops before that
+    // point aborts the (never-committed) statement outright. So one re-read
+    // is already conclusive under normal Postgres semantics. The brief
+    // retry below is pure defense-in-depth against exactly that claim being
+    // wrong in some deployment-specific way (a pooler, a replica read) that
+    // isn't visible from this file alone — cheap insurance given how
+    // unrecoverable a wrong "unclaimed" verdict is here (review finding,
+    // third pass — chatgpt-codex-connector).
+    //
+    // These re-reads are themselves NOT exception-safe by default: the same
+    // DB/connection fault that made the claim throw is plausibly still in
+    // effect. Distinguish "verification SUCCEEDED and found nothing" (safe
+    // to end — we have a real, current answer) from "verification itself
+    // FAILED" (unknown — treating that the same as "confirmed unclaimed"
+    // would let a compound failure (claim commits + verification ALSO
+    // fails) still end a session the conversation is genuinely bound to,
+    // reopening the exact stranding this whole catch block exists to
+    // prevent). On a failed verification, this leaves the scratch session
+    // alone rather than gambling on it — a stray, un-ended, sandbox-less
+    // session is a cheap, fully recoverable cost (visible in the sidebar,
+    // endable by hand); permanently stranding a conversation on a dead one
+    // is not (review findings — CodeRabbit and chatgpt-codex-connector,
+    // both independently, then a further round from chatgpt-codex-connector
+    // on the compound-failure case).
+    let boundAfterThrow: AgentSessionRecord | null = null;
+    let verificationFailed = false;
+    try {
+      boundAfterThrow = await findSessionForConversation(conversationId);
+      if (!boundAfterThrow) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        boundAfterThrow = await findSessionForConversation(conversationId);
+      }
+    } catch (lookupError) {
+      verificationFailed = true;
+      loggers.api.warn('Failed to re-resolve conversation binding after a claim exception', {
+        sessionId: spawned.session.id,
+        conversationId,
+        error: lookupError instanceof Error ? lookupError.message : String(lookupError),
+      });
+    }
+    if (boundAfterThrow?.id === spawned.session.id) {
+      return { ok: true, session: spawned.session };
+    }
+    if (verificationFailed) {
+      throw error;
+    }
+    // Verification SUCCEEDED and confirmed we are NOT bound to it — either
+    // truly unclaimed, or a concurrent sibling's claim won in the meantime.
+    // Either way our scratch session is safe to tear down; adopt the
+    // sibling's session if one is there, otherwise this really is the infra
+    // fault it looked like — propagate it.
+    await endScratchSession('a claim exception');
+    if (boundAfterThrow) return { ok: true, session: boundAfterThrow };
+    throw error;
+  }
+  if (claimed === 'claimed' || claimed === 'already_in_session') return { ok: true, session: spawned.session };
+
+  // The claim lost a race — most likely a CONCURRENT call for the same
+  // conversation (two sandbox tool calls in one turn, two tabs) won first
+  // and bound it to the session IT spawned. That winner's session is
+  // exactly as valid as the one this call would have minted, so re-resolve
+  // through the conversation rather than failing outright — otherwise the
+  // losing call would spuriously deny a conversation that, by the time this
+  // line runs, genuinely has a session. Only a conversation deleted out
+  // from under both calls resolves to nothing here.
+  await endScratchSession('a lost conversation claim');
+  const winner = await findSessionForConversation(conversationId);
+  return winner ? { ok: true, session: winner } : { ok: false, reason: 'no_session' };
 }
 
 export interface SessionConversationEntry {
