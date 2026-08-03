@@ -40,7 +40,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createId } from '@paralleldrive/cuid2';
-import { History, Loader2, MessageSquare, Plus, Save, Settings } from 'lucide-react';
+import { Check, History, Loader2, MessageSquare, Plus, Save, Settings } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR, { mutate } from 'swr';
 import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
@@ -1681,7 +1681,33 @@ function ChatPane({
     isProviderConfigured,
   } = useProviderSettings(scope.agentPageId ? { pageId: scope.agentPageId } : {});
   const [isSettingsSaving, setIsSettingsSaving] = useState(false);
+  const [isSettingsDirty, setIsSettingsDirty] = useState(false);
+  const [settingsJustSaved, setSettingsJustSaved] = useState(false);
+  const settingsSavedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settingsRef = useRef<PageAgentSettingsTabRef>(null);
+  // clean/dirty/saving/saved — same state machine as AgentPageView's Save
+  // Settings button, scaled down for this 30px pane bar. `agentConfig ===
+  // null` folds into "clean": PageAgentSettingsTab registers `submitForm`
+  // before its own config-loaded check returns, and its form defaults
+  // contain an EMPTY prompt/tool list, so this button must stay inert (not
+  // just "clean"-styled) until real config has loaded and been edited.
+  const settingsSaveState = agentConfig === null
+    ? 'clean'
+    : isSettingsSaving
+    ? 'saving'
+    : isSettingsDirty
+    ? 'dirty'
+    : settingsJustSaved
+    ? 'saved'
+    : 'clean';
+  const handleSettingsSaved = useCallback(() => {
+    if (settingsSavedTimeoutRef.current) clearTimeout(settingsSavedTimeoutRef.current);
+    setSettingsJustSaved(true);
+    settingsSavedTimeoutRef.current = setTimeout(() => setSettingsJustSaved(false), 1800);
+  }, []);
+  useEffect(() => () => {
+    if (settingsSavedTimeoutRef.current) clearTimeout(settingsSavedTimeoutRef.current);
+  }, []);
 
   const toggleConversationShare = useCallback(
     async (targetConversationId: string, isShared: boolean) => {
@@ -1804,17 +1830,32 @@ function ChatPane({
                   e.stopPropagation();
                   settingsRef.current?.submitForm();
                 }}
-                // `PageAgentSettingsTab` registers `submitForm` before its own
-                // config-loaded check returns, and its form defaults contain
-                // an EMPTY prompt/tool list — clicking Save before agentConfig
-                // arrives would PATCH those defaults over the agent's real
-                // config (review finding — chatgpt-codex-connector on PR
-                // #2299).
-                disabled={isSettingsSaving || agentConfig === null}
-                className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+                // Only clickable once there's something to save — also the
+                // guard against clicking before agentConfig arrives (see
+                // settingsSaveState above; review finding — chatgpt-codex-
+                // connector on PR #2299).
+                disabled={settingsSaveState !== 'dirty'}
+                className={cn(
+                  'flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium transition-colors disabled:pointer-events-none',
+                  settingsSaveState === 'clean' && 'text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50',
+                  settingsSaveState === 'dirty' && 'text-warning hover:bg-warning/10',
+                  settingsSaveState === 'saving' && 'text-warning',
+                  settingsSaveState === 'saved' && 'text-success',
+                )}
               >
-                {isSettingsSaving ? <Loader2 className="size-3 animate-spin" aria-hidden="true" /> : <Save className="size-3" aria-hidden="true" />}
-                Save
+                {settingsSaveState === 'saving' ? (
+                  <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+                ) : settingsSaveState === 'saved' ? (
+                  <Check className="size-3 animate-in zoom-in-50 fade-in-0 duration-200" aria-hidden="true" />
+                ) : (
+                  <span className="relative inline-flex">
+                    <Save className="size-3" aria-hidden="true" />
+                    {settingsSaveState === 'dirty' && (
+                      <span aria-hidden="true" className="absolute -right-0.5 -top-0.5 size-1 animate-pulse rounded-full bg-warning" />
+                    )}
+                  </span>
+                )}
+                {settingsSaveState === 'saved' ? 'Saved' : 'Save'}
               </button>
             )}
             <button
@@ -1892,6 +1933,8 @@ function ChatPane({
               onModelChange={setSelectedModel}
               isProviderConfigured={isProviderConfigured}
               onSavingChange={setIsSettingsSaving}
+              onDirtyChange={setIsSettingsDirty}
+              onSaved={handleSettingsSaved}
             />
           </div>
         ) : (

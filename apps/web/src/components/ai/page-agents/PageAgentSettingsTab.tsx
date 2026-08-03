@@ -58,6 +58,14 @@ interface PageAgentSettingsTabProps {
   onModelChange: (model: string) => void;
   isProviderConfigured: (provider: string) => boolean;
   onSavingChange?: (isSaving: boolean) => void;
+  /** Mirrors react-hook-form's `formState.isDirty` out to the host so its
+   * own Save button can show an unsaved-changes state — see AgentPageView
+   * and AgentPanes, which render the button outside this component. */
+  onDirtyChange?: (isDirty: boolean) => void;
+  /** Fires after a successful save instead of a toast — a toast can cover
+   * the very tabs/buttons the user needs to leave Settings with, so the
+   * host's Save button shows the confirmation inline instead. */
+  onSaved?: () => void;
 }
 
 function ApiModelIdCard({ pageId }: { pageId: string }) {
@@ -153,7 +161,9 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   onProviderChange,
   onModelChange,
   isProviderConfigured,
-  onSavingChange
+  onSavingChange,
+  onDirtyChange,
+  onSaved
 }, ref) => {
   // Stable per-MOUNT identifier — distinguishes this instance from another
   // Settings surface for the SAME agent mounted elsewhere (see the
@@ -450,7 +460,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       // overlapping sibling save has also had a chance to land (review
       // finding — chatgpt-codex-connector on PR #2299, round 23).
       onConfigRevalidate();
-      toast.success('Agent configuration saved successfully');
+      onSaved?.();
     } catch (error) {
       console.error('Error saving agent configuration:', error);
       toast.error('Failed to save configuration');
@@ -458,7 +468,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       setIsSaving(false);
       onSavingChange?.(false);
     }
-  }, [pageId, config, onConfigUpdate, onConfigRevalidate, selectedProvider, selectedModel, onSavingChange, dirtyFields]);
+  }, [pageId, config, onConfigUpdate, onConfigRevalidate, selectedProvider, selectedModel, onSavingChange, onSaved, dirtyFields]);
 
   const handleProviderSelectChange = useCallback(
     (provider: string) => {
@@ -482,6 +492,13 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
     },
     isSaving
   }), [handleSubmit, onSubmit, isSaving]);
+
+  // Mirror dirty state out to the host's own Save button (rendered outside
+  // this component — see AgentPageView/AgentPanes) so it can show an
+  // unsaved-changes state without polling the ref every render.
+  useEffect(() => {
+    onDirtyChange?.(formIsDirty);
+  }, [formIsDirty, onDirtyChange]);
 
   // Eagerly fetch models for the DISPLAYED provider (see displayedProvider
   // above) when it's Ollama or LM Studio — must match what's actually

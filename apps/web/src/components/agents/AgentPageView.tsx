@@ -30,6 +30,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import {
   AlertCircle,
+  Check,
   ExternalLink,
   History,
   Loader2,
@@ -40,6 +41,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { mutate } from 'swr';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
@@ -166,7 +168,28 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   // per-instance fetch.
   const { config: agentConfig, setConfig: setAgentConfig, revalidate: revalidateAgentConfig } = useAgentConfig(page.id);
   const [isSettingsSaving, setIsSettingsSaving] = useState(false);
+  const [isSettingsDirty, setIsSettingsDirty] = useState(false);
+  const [settingsJustSaved, setSettingsJustSaved] = useState(false);
+  const settingsSavedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const agentSettingsRef = useRef<PageAgentSettingsTabRef>(null);
+  // clean/dirty/saving/saved — drives the Save button's color, animation, and
+  // inline "Saved" confirmation, replacing the success toast that used to
+  // cover the Chat/History/Settings tabs and Webhooks button beside it.
+  const settingsSaveState = isSettingsSaving
+    ? 'saving'
+    : isSettingsDirty
+    ? 'dirty'
+    : settingsJustSaved
+    ? 'saved'
+    : 'clean';
+  const handleSettingsSaved = useCallback(() => {
+    if (settingsSavedTimeoutRef.current) clearTimeout(settingsSavedTimeoutRef.current);
+    setSettingsJustSaved(true);
+    settingsSavedTimeoutRef.current = setTimeout(() => setSettingsJustSaved(false), 1800);
+  }, []);
+  useEffect(() => () => {
+    if (settingsSavedTimeoutRef.current) clearTimeout(settingsSavedTimeoutRef.current);
+  }, []);
 
   const isReadOnly = usePermissionsCheck(page.id, user?.id);
 
@@ -454,18 +477,39 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
 
               {activeTab === 'settings' && (
                 <Button
+                  type="button"
+                  variant={settingsSaveState === 'clean' ? 'outline' : 'default'}
                   onClick={() => agentSettingsRef.current?.submitForm()}
-                  disabled={isSettingsSaving}
-                  className="min-w-[100px] sm:min-w-[120px]"
+                  disabled={settingsSaveState !== 'dirty'}
+                  className={cn(
+                    'min-w-[100px] transition-colors sm:min-w-[120px]',
+                    settingsSaveState === 'dirty' &&
+                      'border-warning/40 bg-warning/10 text-warning hover:bg-warning/15',
+                    settingsSaveState === 'saving' && 'border-warning/40 bg-warning/10 text-warning',
+                    settingsSaveState === 'saved' && 'border-success/40 bg-success/10 text-success hover:bg-success/10',
+                  )}
                 >
-                  {isSettingsSaving ? (
+                  {settingsSaveState === 'saving' ? (
                     <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      <Loader2 className="h-4 w-4 animate-spin sm:mr-2" />
                       <span className="hidden sm:inline">Saving...</span>
+                    </>
+                  ) : settingsSaveState === 'saved' ? (
+                    <>
+                      <Check className="h-4 w-4 animate-in zoom-in-50 fade-in-0 duration-200 sm:mr-2" />
+                      <span className="hidden sm:inline">Saved</span>
                     </>
                   ) : (
                     <>
-                      <Save className="h-4 w-4 sm:mr-2" />
+                      <span className="relative inline-flex sm:mr-2">
+                        <Save className="h-4 w-4" />
+                        {settingsSaveState === 'dirty' && (
+                          <span
+                            aria-hidden="true"
+                            className="absolute -right-0.5 -top-0.5 size-1.5 animate-pulse rounded-full bg-warning"
+                          />
+                        )}
+                      </span>
                       <span className="hidden sm:inline">Save Settings</span>
                     </>
                   )}
@@ -573,6 +617,8 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
             onModelChange={setSelectedModel}
             isProviderConfigured={isProviderConfigured}
             onSavingChange={setIsSettingsSaving}
+            onDirtyChange={setIsSettingsDirty}
+            onSaved={handleSettingsSaved}
           />
         </TabsContent>
       </Tabs>
