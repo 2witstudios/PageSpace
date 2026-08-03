@@ -111,7 +111,12 @@ export const refreshConversationSnapshot = async (
         limit: 50,
         includeStreaming: true,
       });
-      conversationMessagesActions.applyServerSnapshot(conversationId, token, result.messages);
+      conversationMessagesActions.applyServerSnapshot(
+        conversationId,
+        token,
+        result.messages,
+        result.pagination ?? undefined,
+      );
       return;
     }
     const res = await fetchWithAuth(
@@ -123,7 +128,9 @@ export const refreshConversationSnapshot = async (
     }
     const data = await res.json();
     const messages: UIMessage[] = Array.isArray(data) ? data : (data.messages ?? []);
-    conversationMessagesActions.applyServerSnapshot(conversationId, token, messages);
+    const pagination: { hasMore: boolean; nextCursor: string | null } | undefined =
+      Array.isArray(data) ? undefined : (data.pagination ?? undefined);
+    conversationMessagesActions.applyServerSnapshot(conversationId, token, messages, pagination);
   } catch (error) {
     console.warn('[conversationMessagesLoaders] snapshot refresh failed', conversationId, error);
   }

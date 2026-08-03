@@ -3,6 +3,7 @@ import { getActiveStreamById } from '@/hooks/useActiveStream';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
 import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
 import { shouldReloadOnComountComplete } from '@/lib/ai/streams/shouldReloadOnComountComplete';
+import { cacheHasConsistentFinalMessage } from '@/lib/ai/streams/cacheHasConsistentFinalMessage';
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
 
 export interface ConversationCacheHandlerDeps {
@@ -98,16 +99,17 @@ export const buildConversationCacheHandlers = ({
     }
     // No usable store entry (SSE join failed / zero parts): the message IS durably
     // persisted — reload the conversation's cache entry rather than losing it.
-    // Unless the sender's own onFinish already committed the final row
-    // (buildOwnStreamCommitOnFinish) — then a reload only adds a loading flip.
+    // Unless the sender's own onFinish already committed a final row whose status
+    // is CONSISTENT with this event (buildOwnStreamCommitOnFinish) — then a reload
+    // only adds a loading flip. A locally-Stopped 'interrupted' row does NOT
+    // suppress a non-aborted completion: the server may have outrun the abort and
+    // persisted the full reply — see cacheHasConsistentFinalMessage.
     const cacheHasFinalMessage = completedConvId
-      ? conversationMessagesActions
-          .getEntry(completedConvId)
-          .messages.some(
-            (m) =>
-              m.id === messageId &&
-              (m as UIMessage & { status?: string }).status !== 'streaming',
-          )
+      ? cacheHasConsistentFinalMessage(
+          conversationMessagesActions.getEntry(completedConvId).messages,
+          messageId,
+          aborted === true,
+        )
       : false;
     if (shouldReloadOnComountComplete(stream, completedConvId, conversationId, cacheHasFinalMessage)) {
       void reloadConversation(completedConvId!);

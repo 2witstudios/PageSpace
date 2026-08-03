@@ -89,9 +89,14 @@ export const conversationMessagesActions = {
   /** Capture the token a background snapshot must present at commit — call BEFORE the fetch. */
   beginServerSnapshot: (conversationId: string): number =>
     useConversationMessagesStore.getState().beginServerSnapshot(conversationId),
-  /** Silently commit an already-fetched server list as loaded truth; dropped if the token went stale. */
-  applyServerSnapshot: (conversationId: string, generationToken: number, messages: UIMessage[]): void =>
-    useConversationMessagesStore.getState().applyServerSnapshot(conversationId, generationToken, messages),
+  /** Silently commit an already-fetched server list as loaded truth; dropped if the token went stale. Merges onto older loaded pages — see mergeSnapshotTail. */
+  applyServerSnapshot: (
+    conversationId: string,
+    generationToken: number,
+    messages: UIMessage[],
+    pagination?: { hasMore: boolean; nextCursor: string | null },
+  ): void =>
+    useConversationMessagesStore.getState().applyServerSnapshot(conversationId, generationToken, messages, pagination),
   /** Mark a freshly-minted conversation loaded-empty (nothing to fetch for it). */
   seedConversation: (conversationId: string): void =>
     useConversationMessagesStore.getState().seedConversation(conversationId),
