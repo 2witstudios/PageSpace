@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { formatDistanceToNow } from 'date-fns';
 import { ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import useSWR from 'swr';
+import useSWR, { mutate } from 'swr';
 
 import { fetchWithAuth, post, ApiRequestError } from '@/lib/auth/auth-fetch';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils';
 import EmptyState from './EmptyState';
 import { resolveNavigationTarget, type ConversationKind, type ClaimableFallback } from './resolveNavigationTarget';
 import { classifySpawnRefusal } from './spawn-refusal';
+import { isAgentSessionsKey } from './panes/session-conversations';
 
 const PAGE_SIZE = 20;
 
@@ -147,6 +148,10 @@ export default function AgentsPastConversationsList({ driveId }: { driveId?: str
             '/api/agent-sessions',
             { firstThing: 'claim', conversationId: target.conversationId, driveId: target.driveId ?? undefined },
           );
+          // The sidebar (and any other pane) reads this same shared listing —
+          // without this, the freshly claimed session is invisible there until
+          // its own 20s poll happens to fire.
+          void mutate(isAgentSessionsKey);
           selectConversation({
             sessionId: created.session.sessionId,
             conversationId: created.conversationId,
