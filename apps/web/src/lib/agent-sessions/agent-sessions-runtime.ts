@@ -615,10 +615,29 @@ export async function ensureGlobalSandboxSession(
     // isn't visible from this file alone — cheap insurance given how
     // unrecoverable a wrong "unclaimed" verdict is here (review finding,
     // third pass — chatgpt-codex-connector).
-    let boundAfterThrow = await findSessionForConversation(conversationId);
-    if (!boundAfterThrow) {
-      await new Promise((resolve) => setTimeout(resolve, 250));
+    //
+    // These re-reads are themselves NOT exception-safe by default: the same
+    // DB/connection fault that made the claim throw is plausibly still in
+    // effect, and an unguarded throw here would propagate straight out of
+    // this function, skipping `endScratchSession` entirely — the exact leak
+    // this whole catch block exists to close (review findings — CodeRabbit
+    // and chatgpt-codex-connector, both independently, same commit). A
+    // failed lookup is treated as "still unresolved" and falls through to
+    // the existing safe-to-end-and-rethrow path below, never as proof the
+    // conversation is claimed.
+    let boundAfterThrow: AgentSessionRecord | null = null;
+    try {
       boundAfterThrow = await findSessionForConversation(conversationId);
+      if (!boundAfterThrow) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        boundAfterThrow = await findSessionForConversation(conversationId);
+      }
+    } catch (lookupError) {
+      loggers.api.warn('Failed to re-resolve conversation binding after a claim exception', {
+        sessionId: spawned.session.id,
+        conversationId,
+        error: lookupError instanceof Error ? lookupError.message : String(lookupError),
+      });
     }
     if (boundAfterThrow?.id === spawned.session.id) {
       return { ok: true, session: spawned.session };
