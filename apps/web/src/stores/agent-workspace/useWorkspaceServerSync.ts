@@ -56,10 +56,15 @@ export function useWorkspaceServerSync(
 
   const pendingRef = useRef<WorkspaceState | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Set right before a hydration write, so the debounce effect's next run
-  // (triggered by that very write) knows there is nothing NEW to persist —
-  // the server is already holding exactly what was just written.
-  const justHydratedRef = useRef(false);
+  // Set to the exact grid object right before a hydration write, so the
+  // debounce effect's next run (triggered by that very write) knows there is
+  // nothing NEW to persist — the server is already holding exactly what was
+  // just written. Compared by REFERENCE, not a boolean latch: a genuine
+  // mutation that lands between the hydration write and the effect run
+  // produces a different object and must still be saved, where a boolean
+  // would swallow it (and leave a stale pre-hydration grid in `pendingRef`
+  // for the unmount flush to resurrect).
+  const justHydratedRef = useRef<WorkspaceState | null>(null);
   // A purely local identifier for `useEditingStore` bookkeeping — `useId()`,
   // not the domain `createId()` (`@paralleldrive/cuid2`): this is never a
   // conversation/session id, and sharing that generator would (and in
@@ -93,8 +98,11 @@ export function useWorkspaceServerSync(
   // Debounced save on every observed change.
   useEffect(() => {
     if (!enabled || !workspace) return;
-    if (justHydratedRef.current) {
-      justHydratedRef.current = false;
+    if (justHydratedRef.current === workspace) {
+      justHydratedRef.current = null;
+      // Server-wins: hydration replaced whatever was pending, so the unmount
+      // flush must not PUT the pre-hydration grid back over it.
+      pendingRef.current = null;
       return;
     }
     pendingRef.current = workspace;
@@ -137,7 +145,7 @@ export function useWorkspaceServerSync(
         if (!json?.workspace) return;
         const parsed = persistedWorkspaceStateSchema.safeParse(json.workspace);
         if (!parsed.success) return;
-        justHydratedRef.current = true;
+        justHydratedRef.current = parsed.data;
         hydrateWorkspace(sessionId, parsed.data);
       })
       .catch(() => {});

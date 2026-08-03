@@ -310,6 +310,58 @@ describe('AgentsSidebar', () => {
       expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-2');
     });
 
+    test('lists a PAGE pane as its own row, labeled by the page title', async () => {
+      // A document/task page opened into the grid (picker or an agent's
+      // `open_page_pane`) is a persisted pane like any other — it must not
+      // be invisible in the sidebar while chat panes and shells are listed.
+      const withPagePane = {
+        ...workspaceFixture,
+        columns: [
+          {
+            id: 'col-1',
+            panes: [
+              ...workspaceFixture.columns[0].panes,
+              { id: 'pane-3', scope: { kind: 'page', name: 'Spec doc', targetId: 'page-1', agentPageId: null } },
+            ],
+          },
+        ],
+      };
+      respondWithSessions([{ ...SESSION, workspace: withPagePane }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+
+      expect(screen.getByText('Spec doc')).toBeDefined();
+    });
+
+    test('clicking a page pane row focuses the session and that pane in the grid', async () => {
+      const withPagePane = {
+        ...workspaceFixture,
+        columns: [
+          {
+            id: 'col-1',
+            panes: [
+              ...workspaceFixture.columns[0].panes,
+              { id: 'pane-3', scope: { kind: 'page', name: 'Spec doc', targetId: 'page-1', agentPageId: null } },
+            ],
+          },
+        ],
+      };
+      act(() => {
+        useAgentWorkspaceStore.getState().hydrateWorkspace('ses-1', withPagePane as WorkspaceState);
+      });
+      respondWithSessions([{ ...SESSION, workspace: withPagePane }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      await user.click(await screen.findByText('Spec doc'));
+
+      expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
+      expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].activePaneId).toBe('pane-3');
+    });
+
     test('selecting a session with a saved grid opens the ACTIVE pane\'s own conversation', async () => {
       respondWithSessions([{ ...SESSION, workspace: workspaceFixture }]);
       const user = userEvent.setup();

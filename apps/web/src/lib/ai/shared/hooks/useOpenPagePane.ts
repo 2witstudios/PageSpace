@@ -28,8 +28,11 @@ interface OpenPagePaneToolPart {
  * conversation's OWN pane must never be the one the tool call replaces — a
  * pane grid with only this one chat pane open would otherwise satisfy
  * `focusOrAssignScope`'s "replaceable" check and evict the very conversation
- * that just asked to show its work, which is backwards. The store instead
- * splits a new pane beside it.
+ * that just asked to show its work, which is backwards. `preferSplit` goes
+ * further, for every OTHER pane: an agent opening a page is adding a
+ * surface beside what the user is doing, never navigating the user's panes,
+ * so nothing bound is ever evicted — the store fills an unbound picker pane
+ * if one exists, and otherwise splits a new pane.
  */
 export function useOpenPagePane({
   sessionId,
@@ -93,7 +96,7 @@ export function useOpenPagePane({
           targetId: toolPart.output.pageId,
           agentPageId: null,
         },
-        { excludeTargetId: conversationId },
+        { excludeTargetId: conversationId, preferSplit: true },
       );
     }
   }, [sessionId, conversationId, messages]);

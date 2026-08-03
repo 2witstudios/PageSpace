@@ -400,19 +400,106 @@ describe('openPage — the page-pane sibling of openConversation', () => {
     expect(panes.find((p) => p.scope?.targetId === 'page-1')).toBeDefined();
   });
 
-  it('still replaces a DIFFERENT replaceable pane when excludeTargetId only protects the invoker', () => {
+  it('with preferSplit, never evicts ANY bound pane — the agent path splits beside the user\'s panes', () => {
+    // The shape from the bug report: agent in conv-1 opens a page while the
+    // user is looking at a different page pane. The old policy replaced that
+    // active pane; the agent path must add a surface, not navigate one.
     store().ensureWorkspace('ses-1', conv('conv-1'));
     const chatPane = panesOf(grid())[0];
     store().splitRight('ses-1', chatPane.id);
     const otherPane = panesOf(grid()).find((p) => p.id !== chatPane.id)!;
     store().assignPane('ses-1', otherPane.id, page('page-1'));
 
-    store().openPage('ses-1', page('page-2'), { excludeTargetId: 'conv-1' });
+    store().openPage('ses-1', page('page-2'), { excludeTargetId: 'conv-1', preferSplit: true });
+
+    const panes = panesOf(grid());
+    expect(panes).toHaveLength(3);
+    expect(panes.find((p) => p.id === chatPane.id)?.scope?.targetId).toBe('conv-1');
+    expect(panes.find((p) => p.id === otherPane.id)?.scope?.targetId).toBe('page-1');
+    expect(panes.find((p) => p.scope?.targetId === 'page-2')).toBeDefined();
+  });
+
+  it('with preferSplit, fills an unbound picker pane rather than splitting a fourth one', () => {
+    store().ensureWorkspace('ses-1', conv('conv-1'));
+    const chatPane = panesOf(grid())[0];
+    store().splitRight('ses-1', chatPane.id);
+    const pickerPane = panesOf(grid()).find((p) => p.id !== chatPane.id)!;
+    expect(pickerPane.scope).toBeNull();
+
+    store().openPage('ses-1', page('page-1'), { excludeTargetId: 'conv-1', preferSplit: true });
 
     const panes = panesOf(grid());
     expect(panes).toHaveLength(2);
-    expect(panes.find((p) => p.id === chatPane.id)?.scope?.targetId).toBe('conv-1');
-    expect(panes.find((p) => p.id === otherPane.id)?.scope?.targetId).toBe('page-2');
+    expect(panes.find((p) => p.id === pickerPane.id)?.scope?.targetId).toBe('page-1');
+  });
+
+  it('with preferSplit, still focuses the pane already showing the page instead of duplicating it', () => {
+    store().ensureWorkspace('ses-1', conv('conv-1'));
+    const chatPane = panesOf(grid())[0];
+    store().splitRight('ses-1', chatPane.id);
+    const pagePane = panesOf(grid()).find((p) => p.id !== chatPane.id)!;
+    store().assignPane('ses-1', pagePane.id, page('page-1'));
+    store().selectPane('ses-1', chatPane.id);
+
+    store().openPage('ses-1', page('page-1'), { excludeTargetId: 'conv-1', preferSplit: true });
+
+    expect(panesOf(grid())).toHaveLength(2);
+    expect(grid().activePaneId).toBe(pagePane.id);
+  });
+});
+
+describe('openConversation must not evict a page pane — the reload-seed shape', () => {
+  const page = (targetId: string, name = 'Doc'): PaneScope => ({
+    kind: 'page',
+    name,
+    targetId,
+    agentPageId: null,
+  });
+  const conv = (targetId: string, name = 'Thread'): PaneScope => ({
+    kind: 'chat',
+    name,
+    targetId,
+    agentPageId: 'agent-1',
+  });
+
+  it('with liveConversationIds supplied, a page pane splits rather than being replaced', () => {
+    // The refresh path: the persisted grid holds only an agent-opened page
+    // pane (its chat pane was replaced pre-fix, or closed); the mount-time
+    // seed re-asserts the URL-selected conversation. The page pane is a
+    // deliberate, persisted artifact — the seed must open BESIDE it, or an
+    // agent-opened page silently vanishes on every reload.
+    store().openPage('ses-1', page('page-1'));
+    const pagePane = panesOf(grid())[0];
+
+    store().openConversation('ses-1', conv('conv-1'), { liveConversationIds: new Set(['conv-1']) });
+
+    const panes = panesOf(grid());
+    expect(panes).toHaveLength(2);
+    expect(panes.find((p) => p.id === pagePane.id)?.scope?.targetId).toBe('page-1');
+    expect(panes.find((p) => p.scope?.targetId === 'conv-1')).toBeDefined();
+  });
+
+  it('with liveConversationIds supplied, an unbound picker pane is still fillable', () => {
+    store().openConversation('ses-1', conv('conv-1'));
+    store().splitRight('ses-1', panesOf(grid())[0].id);
+    const pickerPane = panesOf(grid()).find((p) => p.scope === null)!;
+
+    store().openConversation('ses-1', conv('conv-2'), { liveConversationIds: new Set(['conv-1', 'conv-2']) });
+
+    const panes = panesOf(grid());
+    expect(panes).toHaveLength(2);
+    expect(panes.find((p) => p.id === pickerPane.id)?.scope?.targetId).toBe('conv-2');
+  });
+
+  it('without liveConversationIds, a page pane remains replaceable — user selection behavior unchanged', () => {
+    store().openPage('ses-1', page('page-1'));
+    const paneId = panesOf(grid())[0].id;
+
+    store().openConversation('ses-1', conv('conv-1'));
+
+    expect(panesOf(grid())).toHaveLength(1);
+    expect(panesOf(grid())[0].id).toBe(paneId);
+    expect(panesOf(grid())[0].scope?.targetId).toBe('conv-1');
   });
 });
 

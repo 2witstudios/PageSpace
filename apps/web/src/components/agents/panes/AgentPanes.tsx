@@ -1586,7 +1586,7 @@ export default function AgentPanes({
           ) : surface.surface === 'page' ? (
             <PagePaneView pageId={surface.pageId} />
           ) : surface.surface === 'terminal' ? (
-            <Shell shellId={surface.shellId} name={pane.scope?.name} />
+            <Shell key={surface.shellId} shellId={surface.shellId} name={pane.scope?.name} />
           ) : null}
         </div>
       </div>

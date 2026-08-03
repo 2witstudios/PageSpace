@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { ChevronDown, ChevronRight, Folder, Plus, Search, SquareTerminal, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, FileText, Folder, Plus, Search, SquareTerminal, X } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR, { useSWRConfig } from 'swr';
 
@@ -470,6 +470,8 @@ function SessionRow({
   const hydrateWorkspace = useAgentWorkspaceStore((state) => state.hydrateWorkspace);
   const resetPane = useAgentWorkspaceStore((state) => state.resetPane);
   const assignPane = useAgentWorkspaceStore((state) => state.assignPane);
+  const selectPane = useAgentWorkspaceStore((state) => state.selectPane);
+  const closePane = useAgentWorkspaceStore((state) => state.closePane);
   const [expanded, setExpanded] = useState(false);
   const [confirmingEnd, setConfirmingEnd] = useState(false);
   const isSelected = selectedSessionId === session.sessionId;
@@ -542,6 +544,17 @@ function SessionRow({
         openConversation(conversationEntryForTarget(chatPane.scope.targetId, chatPane.scope.agentPageId));
         return;
       }
+      // No chat pane at all — a page-only grid still opens on its work:
+      // focus the active page pane (or the first one) rather than falling
+      // through and re-seeding a conversation over it.
+      const pagePane =
+        (activePane?.scope?.kind === 'page' && activePane.scope.targetId ? activePane : undefined) ??
+        panes.find((p) => p.scope?.kind === 'page' && p.scope.targetId !== null);
+      if (pagePane) {
+        selectSession(session.sessionId);
+        selectPane(session.sessionId, pagePane.id);
+        return;
+      }
     }
     const first = session.conversations[0];
     if (first) {
@@ -550,7 +563,7 @@ function SessionRow({
     }
     const firstShell = session.shells[0];
     if (firstShell) openShell(firstShell);
-  }, [openConversation, openShell, conversationEntryForTarget, session.workspace, session.conversations, session.shells]);
+  }, [openConversation, openShell, conversationEntryForTarget, selectSession, selectPane, session.sessionId, session.workspace, session.conversations, session.shells]);
 
   const endSession = useCallback(async () => {
     // Snapshot for rollback, then assume success immediately — the row must
@@ -744,10 +757,11 @@ function SessionRow({
     [],
   );
 
-  // Only chat panes address a conversation — a terminal/page/still-unbound
-  // pane has nothing to show here (shells get their own section below,
-  // unchanged). `null` when this session has no saved grid yet, so the
-  // render falls back to the flat `session.conversations` list.
+  // Only chat panes address a conversation — a terminal/still-unbound pane
+  // has nothing to show here (shells get their own section below,
+  // unchanged; page panes get their own rows via `pagePanes`). `null` when
+  // this session has no saved grid yet, so the render falls back to the
+  // flat `session.conversations` list.
   const chatPanes = useMemo(
     () =>
       session.workspace
@@ -757,6 +771,49 @@ function SessionRow({
           )
         : null,
     [session.workspace],
+  );
+
+  // Page panes are server-persisted workspace artifacts exactly like chat
+  // panes, so a session's expansion lists them too — a document or task
+  // page opened into the grid (by the picker or by an agent's
+  // `open_page_pane`) was invisible here before, unlike every other pane.
+  // Terminal panes are deliberately NOT listed from the grid: the
+  // `session.shells` section below already covers them, and a second row
+  // per shell would double-list.
+  const pagePanes = useMemo(
+    () =>
+      session.workspace
+        ? panesOf(session.workspace).filter(
+            (pane): pane is PaneState & { scope: { kind: 'page'; targetId: string; name: string } } =>
+              pane.scope?.kind === 'page' && pane.scope.targetId !== null,
+          )
+        : [],
+    [session.workspace],
+  );
+
+  const openPagePane = useCallback(
+    (paneId: string) => {
+      // A page pane has no conversation to select — focus the session and
+      // the existing pane in its grid directly.
+      selectSession(session.sessionId);
+      selectPane(session.sessionId, paneId);
+    },
+    [selectSession, selectPane, session.sessionId],
+  );
+
+  const closePagePane = useCallback(
+    (paneId: string) => {
+      const workspace = useAgentWorkspaceStore.getState().workspaces[session.sessionId];
+      // Closing the LAST pane empties the session, which ends it — route
+      // through the same confirm dialog the chat path's 409 raises rather
+      // than tearing the sandbox down from an innocuous-looking row action.
+      if (workspace && isLastPane(workspace, paneId)) {
+        setConfirmingEnd(true);
+        return;
+      }
+      closePane(session.sessionId, paneId);
+    },
+    [closePane, session.sessionId],
   );
 
   return (
@@ -845,6 +902,30 @@ function SessionRow({
                   </button>
                 </RowMenu>
               ))}
+          {pagePanes.map((pane) => (
+            <RowMenu
+              key={pane.id}
+              items={[
+                {
+                  label: 'Close',
+                  icon: X,
+                  onSelect: () => closePagePane(pane.id),
+                  destructive: true,
+                },
+              ]}
+              menuLabel="Page pane actions"
+              className="gap-1.5 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              <button
+                type="button"
+                className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+                onClick={() => openPagePane(pane.id)}
+              >
+                <FileText className="size-3 shrink-0" aria-hidden="true" />
+                <span className="truncate">{pane.scope.name}</span>
+              </button>
+            </RowMenu>
+          ))}
           {session.shells.map((shell) => (
             <button
               key={shell.shellId}
@@ -856,7 +937,7 @@ function SessionRow({
               <span className="truncate">{shell.name}</span>
             </button>
           ))}
-          {(chatPanes ?? session.conversations).length === 0 && (
+          {(chatPanes ?? session.conversations).length === 0 && pagePanes.length === 0 && (
             <div className="px-2 py-1 text-xs text-muted-foreground">No conversations</div>
           )}
         </div>

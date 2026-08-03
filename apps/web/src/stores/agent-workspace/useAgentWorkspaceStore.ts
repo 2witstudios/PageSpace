@@ -61,11 +61,13 @@ interface AgentWorkspaceState {
    *
    * `options.liveConversationIds`, when supplied, additionally protects a
    * chat pane whose target is NOT in that set — e.g. a conversation the user
-   * closed out of this session (`closedInSessionAt`) — from being silently
-   * evicted by an unrelated later selection (issue #2295); it falls through
-   * to the split fallback instead, exactly like a terminal/dirty pane does.
-   * Omitted (any caller that hasn't learned the live set yet), behavior is
-   * unchanged — this guard is strictly additive.
+   * closed out of this session (`closedInSessionAt`) — AND any page pane (a
+   * deliberate, persisted artifact; a reload's seed effect used to silently
+   * evict agent-opened pages this way) from an unrelated later selection
+   * (issue #2295); both fall through to the split fallback instead, exactly
+   * like a terminal/dirty pane does. Omitted (any caller that hasn't
+   * learned the live set yet), behavior is unchanged — this guard is
+   * strictly additive.
    */
   openConversation(
     sessionId: string,
@@ -82,8 +84,18 @@ interface AgentWorkspaceState {
    * conversation's own id, for the agent-driven `open_page_pane` path) is
    * never replaced either — both fall through to a split instead. Used by
    * the picker's "Pages" section and by `useOpenPagePane`'s resolution.
+   *
+   * `options.preferSplit` (the agent-driven path): an agent opening a page
+   * is ADDING a surface beside what the user is doing, not navigating —
+   * with it set, no bound pane is ever evicted; only an unbound picker pane
+   * may be filled, and otherwise the grid splits. Without it (a user pick),
+   * the replace policy is unchanged: the user asked to see the page HERE.
    */
-  openPage(sessionId: string, scope: PaneScope, options?: { excludeTargetId?: string }): void;
+  openPage(
+    sessionId: string,
+    scope: PaneScope,
+    options?: { excludeTargetId?: string; preferSplit?: boolean },
+  ): void;
   splitRight(sessionId: string, fromPaneId: string): void;
   splitDown(sessionId: string, fromPaneId: string): void;
   /**
@@ -183,7 +195,11 @@ function focusOrAssignScope(
   set: (fn: (state: AgentWorkspaceState) => Partial<AgentWorkspaceState>) => void,
   sessionId: string,
   scope: PaneScope,
-  options?: { excludeTargetId?: string; liveConversationIds?: ReadonlySet<string> },
+  options?: {
+    excludeTargetId?: string;
+    liveConversationIds?: ReadonlySet<string>;
+    preferSplit?: boolean;
+  },
 ) {
   const state = useAgentWorkspaceStore.getState();
   const workspace = state.workspaces[sessionId];
@@ -210,20 +226,25 @@ function focusOrAssignScope(
   // `open_page_pane` tool's own invoking conversation must never be evicted
   // by its own tool call; it should get a split beside it instead). Also
   // excluded when the caller passed `liveConversationIds` (only
-  // `openConversation` ever does): a CHAT pane whose target is not in that
-  // live set — a conversation closed out of this session — must never be
-  // silently overwritten by an unrelated later selection (issue #2295).
-  // Scoped to `kind === 'chat'` deliberately: a page pane is a different
-  // domain concept already governed by `isPaneDirty`/`excludeTargetId`, and
-  // `openPage` never supplies this option, so its call sites are unaffected.
+  // `openConversation` ever does, from the selection/mount-seed paths): a
+  // BOUND pane whose scope is not a live chat — a conversation closed out
+  // of this session (issue #2295), or a PAGE pane, a deliberate persisted
+  // artifact a conversation selection has no business evicting (a reload's
+  // seed effect used to eat agent-opened page panes this way) — must never
+  // be silently overwritten by an unrelated later selection; both fall
+  // through to the split fallback instead, exactly like a terminal. And
+  // excluded wholesale under `preferSplit` (the agent-driven `openPage`
+  // path): an agent adds a surface, it never navigates the user's panes,
+  // so only an unbound picker pane may be filled.
   const isReplaceable = (pane: PaneState) =>
     (pane.scope === null || (pane.scope.kind !== 'terminal' && pane.scope.targetId !== null)) &&
     !isPaneDirty(pane) &&
     (options?.excludeTargetId === undefined || pane.scope?.targetId !== options.excludeTargetId) &&
+    (options?.preferSplit !== true || pane.scope === null) &&
     (options?.liveConversationIds === undefined ||
-      pane.scope?.kind !== 'chat' ||
-      pane.scope.targetId === null ||
-      options.liveConversationIds.has(pane.scope.targetId));
+      pane.scope === null ||
+      (pane.scope.kind === 'chat' &&
+        (pane.scope.targetId === null || options.liveConversationIds.has(pane.scope.targetId))));
   const replaceable = active && isReplaceable(active) ? active : panes.find(isReplaceable);
   if (replaceable) {
     state.assignPane(sessionId, replaceable.id, scope);

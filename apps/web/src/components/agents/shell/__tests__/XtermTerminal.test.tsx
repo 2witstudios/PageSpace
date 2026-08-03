@@ -45,6 +45,9 @@ vi.mock('@xterm/addon-fit', () => ({
     dispose() {}
   },
 }));
+// The component statically imports xterm's stylesheet; there is nothing to
+// test in it and vitest shouldn't spend a PostCSS pass on it.
+vi.mock('@xterm/xterm/css/xterm.css', () => ({}));
 vi.mock('@/hooks/useXtermTheme', () => ({ useXtermTheme: () => ({}) }));
 /** Stable across calls (unlike a fresh `vi.fn()` per `getState()`) so tests can
  * assert on endEditing — the dead-shell leak fix needs it to see across events. */
