@@ -55,6 +55,7 @@ import {
   provisionSessionSandbox,
   measureWarmSessionStorage,
   ensureGlobalSandboxSession,
+  type AgentSessionRecord,
 } from '@/lib/agent-sessions/agent-sessions-runtime';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import type { ToolExecutionContext } from '../core/types';
@@ -106,6 +107,46 @@ function getSandboxClient(): Promise<ExecSandboxClient> {
   return sandboxClientPromise;
 }
 
+type ResolveOrProvisionResult =
+  | { ok: true; session: AgentSessionRecord }
+  | { ok: false; reason: 'session_limit_reached' | 'no_session' };
+
+/**
+ * Resolve a conversation's session, auto-provisioning one for a Global
+ * Assistant conversation that has never had one — the ONE place this
+ * decision is made, shared by `acquireSandbox` AND `resolveBillingSession`
+ * below. Billing MUST see the same session (or the same absence of one)
+ * `acquireSandbox` is about to act on: `resolveBillingSession` runs BEFORE
+ * the credit gate, and its old "no session ⇒ nothing to bill, `run()` will
+ * just deny" assumption broke the moment `acquireSandbox` stopped always
+ * denying a session-less global conversation — a separate resolution there
+ * would let a credit-exhausted caller's FIRST message auto-provision a
+ * session and execute completely unmetered (review finding — P1, PR #2314).
+ * Calling this same function from both call sites keeps them from ever
+ * disagreeing about whether a session exists.
+ */
+async function resolveOrProvisionSession(
+  conversationId: string,
+  userId: string,
+): Promise<ResolveOrProvisionResult> {
+  const existing = await findSessionForConversation(conversationId);
+  if (existing) return { ok: true, session: existing };
+
+  // The default Global Assistant conversation is always minted session-less
+  // (`resolveOrCreateConversation`) and nothing else ever claims it into
+  // one — unlike page agents, which still require an explicit "New session"
+  // spawn. Give it the same workspace that spawn would, automatically, the
+  // first time it actually needs a sandbox — a REAL session (visible,
+  // shareable with sibling panes exactly like any other), not a second
+  // sandbox-only mechanism.
+  const conversation = await conversationRepository.getConversation(conversationId);
+  if (conversation?.type !== 'global') return { ok: false, reason: 'no_session' };
+
+  const ensured = await ensureGlobalSandboxSession(conversationId, userId);
+  if (ensured.ok) return { ok: true, session: ensured.session };
+  return { ok: false, reason: ensured.reason === 'session_limit_reached' ? 'session_limit_reached' : 'no_session' };
+}
+
 /** Wire the real lib deps for the runners (session-anchored acquire + real Sprites driver). */
 export function buildRealSandboxRunDeps(): SandboxRunDeps {
   return {
@@ -127,28 +168,14 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
       // session model removed, and it is what made panes unable to share a
       // sandbox. Every conversation in one session resolves this same row,
       // whose own id folds the ONE Sprite key.
-      let row = await findSessionForConversation(conversationId);
-      if (!row) {
-        // The default Global Assistant conversation is always minted
-        // session-less (`resolveOrCreateConversation`) and nothing else ever
-        // claims it into one — unlike page agents, which still require an
-        // explicit "New session" spawn. Give it the same workspace that
-        // spawn would, automatically, the first time it actually needs a
-        // sandbox — a REAL session (visible, shareable with sibling panes
-        // exactly like any other), not a second sandbox-only mechanism.
-        const conversation = await conversationRepository.getConversation(conversationId);
-        if (conversation?.type === 'global') {
-          const ensured = await ensureGlobalSandboxSession(conversationId, input.userId);
-          if (ensured.ok) {
-            row = ensured.session;
-          } else if (ensured.reason === 'session_limit_reached') {
-            return { ok: false, reason: 'provision_failed', cause: 'session_limit_reached' };
-          }
+      const resolved = await resolveOrProvisionSession(conversationId, input.userId);
+      if (!resolved.ok) {
+        if (resolved.reason === 'session_limit_reached') {
+          return { ok: false, reason: 'provision_failed', cause: 'session_limit_reached' };
         }
-        if (!row) {
-          return { ok: false, reason: 'no_session' };
-        }
+        return { ok: false, reason: 'no_session' };
       }
+      const row = resolved.session;
 
       // The per-sandbox continuous-runtime backstop, keyed by the SESSION id —
       // one budget per workspace, however many threads work in it.
@@ -249,14 +276,20 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
     billing: defaultSandboxBillingDeps,
     // Cheap billing-attribution resolve (`withMachineBilling` calls this
     // BEFORE gating, so a credit-exhausted payer is denied without waking a
-    // hibernating sandbox): the same session row `acquireSandbox` above
-    // resolves via `conversations.sessionId`, read again here rather than
-    // threaded through the acquire result — this runs BEFORE the sandbox is
-    // provisioned, so there is nothing from `acquireSandbox` to thread yet.
+    // hibernating sandbox): goes through the SAME `resolveOrProvisionSession`
+    // `acquireSandbox` above uses, rather than a bare `findSessionForConversation`
+    // read, so a session-less global conversation is auto-provisioned HERE,
+    // before the credit gate — not down in `run()`, unmetered. Returning null
+    // for an unresolvable session (a page-agent conversation, a spawn fault)
+    // is still safe: `acquireSandbox` resolves through the identical function
+    // moments later and denies for the exact same reason, so `run()` never
+    // reaches a live sandbox on the "nothing to bill" path either.
     resolveBillingSession: async (ctx) => {
       if (!ctx.conversationId) return null;
-      const row = await findSessionForConversation(ctx.conversationId);
-      return row ? { sessionId: row.id, driveId: row.driveId, ownerId: row.ownerId } : null;
+      const resolved = await resolveOrProvisionSession(ctx.conversationId, ctx.userId);
+      if (!resolved.ok) return null;
+      const row = resolved.session;
+      return { sessionId: row.id, driveId: row.driveId, ownerId: row.ownerId };
     },
     // Sprites Platform Alignment 5-2: checkpoint the sandbox filesystem before
     // an agent bash batch runs (fail-open, at most once per turn — see

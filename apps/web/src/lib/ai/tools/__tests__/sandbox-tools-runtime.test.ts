@@ -572,14 +572,58 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
     expect(mockFindSessionForConversation).not.toHaveBeenCalled();
   });
 
-  it('given a conversation with no session yet, resolves null', async () => {
+  it('given a PAGE conversation with no session yet, resolves null (page agents never auto-provision)', async () => {
     mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'page' });
     const deps = buildRealSandboxRunDeps();
 
     const result = await deps.resolveBillingSession?.({
       userId: 'u1',
       tenantId: 'u1',
       conversationId: 'conv-legacy',
+      actorEmail: 'u1@example.com',
+      tier: 'pro',
+    });
+
+    expect(result).toBeNull();
+    expect(mockEnsureGlobalSandboxSession).not.toHaveBeenCalled();
+  });
+
+  it('given a GLOBAL conversation with no session yet, auto-provisions one and resolves ITS driveId/ownerId — closes the credit-gate bypass (review finding P1, PR #2314)', async () => {
+    // Before this fix, a session-less global conversation resolved null here
+    // (the old "nothing to bill, run() will just deny" assumption), but
+    // acquireSandbox's own auto-provisioning made run() actually SUCCEED —
+    // so a credit-exhausted user's first message executed completely
+    // unmetered. resolveBillingSession must see the SAME auto-provisioned
+    // session acquireSandbox is about to act on, not a stale "no session".
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'global' });
+    const provisioned = makeSessionRecord({ id: 'auto-ses-1', driveId: null, ownerId: 'u1' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: true, session: provisioned });
+    const deps = buildRealSandboxRunDeps();
+
+    const result = await deps.resolveBillingSession?.({
+      userId: 'u1',
+      tenantId: 'u1',
+      conversationId: 'conv-fresh-global',
+      actorEmail: 'u1@example.com',
+      tier: 'pro',
+    });
+
+    expect(result).toEqual({ sessionId: 'auto-ses-1', driveId: null, ownerId: 'u1' });
+    expect(mockEnsureGlobalSandboxSession).toHaveBeenCalledWith('conv-fresh-global', 'u1');
+  });
+
+  it('given a GLOBAL conversation whose auto-provisioning fails (e.g. session limit reached), resolves null — acquireSandbox denies the same way moments later, never reaching a live sandbox unmetered', async () => {
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'global' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'session_limit_reached' });
+    const deps = buildRealSandboxRunDeps();
+
+    const result = await deps.resolveBillingSession?.({
+      userId: 'u1',
+      tenantId: 'u1',
+      conversationId: 'conv-fresh-global',
       actorEmail: 'u1@example.com',
       tier: 'pro',
     });
