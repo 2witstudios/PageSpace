@@ -125,6 +125,7 @@ import {
   getChannelStreamSubscriberCount,
   resetChannelStreamSubscribers,
 } from '@/lib/ai/streams/channelStreamSubscribers';
+import { resetChannelRebootstrapSignal } from '@/lib/ai/streams/channelRebootstrapSignal';
 import type {
   AiStreamStartPayload,
   AiStreamCompletePayload,
@@ -208,6 +209,7 @@ describe('useChannelStreamSocket', () => {
     // Module state — a real reload clears it; a test file must too.
     resetConsumingChannels();
     resetChannelStreamSubscribers();
+    resetChannelRebootstrapSignal();
     mockConnectionStatus = 'disconnected';
     mockAuthUserId = LOCAL_USER_ID;
     mockConsumeStreamJoin.mockResolvedValue({ aborted: false });
@@ -1310,6 +1312,32 @@ describe('useChannelStreamSocket', () => {
       act(() => { mockSocket._trigger('access_revoked', { room: 'page-a', reason: 'permission_revoked' }); });
 
       expect(mockClearPageStreams).not.toHaveBeenCalled();
+    });
+
+    // Correctness-review finding (PR #2312): the abort loop released every controller's
+    // bootstrap claim but never removed the entries from `controllers` itself. A LATER
+    // real unmount (which can lag behind access_revoked by however long this component
+    // stays mounted showing a "you lost access" state) then read those stale entries as
+    // "was I actively consuming something," double-releasing an already-released claim
+    // and — worse — spuriously notifying a sibling to re-bootstrap a channel this user
+    // no longer has access to.
+    it('given access_revoked fires while a controller is active, a LATER real unmount should NOT double-release the claim or spuriously notify a sibling', async () => {
+      const first = renderHook(() => useChannelStreamSocket('page-a'));
+      const second = renderHook(() => useChannelStreamSocket('page-a'));
+
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+      act(() => { mockSocket._trigger('access_revoked', { room: 'page-a', reason: 'permission_revoked' }); });
+
+      vi.mocked(releaseBootstrapConsumer).mockClear();
+      const fetchCallsBeforeUnmount = mockFetchWithAuth.mock.calls.length;
+
+      first.unmount();
+      await act(async () => { await Promise.resolve(); });
+
+      expect(releaseBootstrapConsumer).not.toHaveBeenCalled();
+      expect(mockFetchWithAuth.mock.calls.length).toBe(fetchCallsBeforeUnmount);
+
+      second.unmount();
     });
   });
 
