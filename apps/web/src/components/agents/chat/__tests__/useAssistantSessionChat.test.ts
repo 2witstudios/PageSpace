@@ -15,7 +15,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
-import type { UIMessage } from 'ai';
+import type { ChatOnFinishCallback, UIMessage } from 'ai';
 
 const { mockFetchWithAuth } = vi.hoisted(() => ({
   mockFetchWithAuth: vi.fn(),
@@ -60,6 +60,7 @@ vi.mock('@ai-sdk/react', () => ({
 const loaders = vi.hoisted(() => ({
   loadGlobalConversationMessages: vi.fn(async () => {}),
   loadOlderGlobalConversationMessages: vi.fn(async () => {}),
+  refreshConversationSnapshot: vi.fn(async () => {}),
 }));
 vi.mock('@/hooks/conversationMessagesLoaders', () => loaders);
 
@@ -77,6 +78,7 @@ const activeStream = vi.hoisted(() => ({
 vi.mock('@/hooks/useActiveStream', () => ({
   useActiveStream: () => ({ streams: activeStream.remoteStreams }),
   useConversationActiveStream: () => undefined,
+  getActiveStreamById: () => undefined,
 }));
 
 const route = vi.hoisted(() => ({ pathname: '/dashboard/agents' }));
@@ -270,6 +272,68 @@ describe('useAssistantSessionChat — ask_user answering', () => {
     const { result } = renderHook(() => useAssistantSessionChat({ conversationId, driveId: null }));
 
     expect(result.current.askUserAnswering.answerableToolCallIds.has('tc-1')).toBe(false);
+  });
+});
+
+describe('useAssistantSessionChat — onFinish local commit', () => {
+  // THE pane regression: the streamed reply vanished the instant the stream completed,
+  // leaving only the sent user message (reopening from history showed it fine). The pane
+  // has no conversation-scoped channel subscriber — GlobalChatProvider's onStreamComplete
+  // is gated on the DASHBOARD's active conversation — so nothing ever committed the reply
+  // into the cache, and the mirror entry's falling-edge removal blanked the bubble.
+  // The chatConfig's onFinish must commit the finished reply locally.
+  it('given the own stream finishes, commits the reply into the cache so it survives the mirror release', async () => {
+    const { conversationId } = ids('own-finish-commit');
+    conversationMessagesActions.addOptimisticSend(conversationId, {
+      id: 'm-user-1',
+      role: 'user',
+      parts: [{ type: 'text', text: 'the question' }],
+    } as UIMessage);
+
+    const { result } = renderHook(() => useAssistantSessionChat({ conversationId, driveId: null }));
+
+    const config = chat.capturedConfigs.at(-1)!;
+    expect(typeof config.onFinish).toBe('function');
+    const onFinish = config.onFinish as ChatOnFinishCallback<UIMessage>;
+
+    const reply = {
+      id: 'm-assistant-1',
+      role: 'assistant',
+      parts: [{ type: 'text', text: 'the full reply' }],
+    } as UIMessage;
+    act(() => {
+      onFinish({ message: reply, messages: [reply], isAbort: false, isDisconnect: false, isError: false });
+    });
+
+    // Mirror entry gone (falling edge already ran / never existed) — the reply must STILL render.
+    expect(usePendingStreamsStore.getState().streams.size).toBe(0);
+    await waitFor(() => {
+      expect(result.current.messages.map((m) => m.id)).toEqual(['m-user-1', 'm-assistant-1']);
+    });
+    expect(loaders.refreshConversationSnapshot).toHaveBeenCalledWith(null, conversationId);
+  });
+
+  it('given the user Stops mid-stream, commits the partial reply with the interrupted badge', async () => {
+    const { conversationId } = ids('own-finish-abort');
+    conversationMessagesActions.seedConversation(conversationId);
+
+    const { result } = renderHook(() => useAssistantSessionChat({ conversationId, driveId: null }));
+
+    const onFinish = chat.capturedConfigs.at(-1)!.onFinish as ChatOnFinishCallback<UIMessage>;
+    const partial = {
+      id: 'm-assistant-1',
+      role: 'assistant',
+      parts: [{ type: 'text', text: 'partial…' }],
+    } as UIMessage;
+    act(() => {
+      onFinish({ message: partial, messages: [partial], isAbort: true, isDisconnect: false, isError: false });
+    });
+
+    await waitFor(() => {
+      const committed = result.current.messages.find((m) => m.id === 'm-assistant-1');
+      expect(committed).toBeDefined();
+      expect((committed as UIMessage & { status?: string }).status).toBe('interrupted');
+    });
   });
 });
 

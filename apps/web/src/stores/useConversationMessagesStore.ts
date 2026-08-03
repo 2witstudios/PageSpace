@@ -13,6 +13,7 @@ import { applyRemoteUserMessage } from '@/stores/conversationMessages/applyRemot
 import { applyConfirmedMessage } from '@/stores/conversationMessages/applyConfirmedMessage';
 import { promoteOptimisticSends } from '@/stores/conversationMessages/promoteOptimisticSends';
 import { replayPendingMutations } from '@/stores/conversationMessages/replayPendingMutations';
+import { mergeSnapshotTail } from '@/stores/conversationMessages/mergeSnapshotTail';
 import { seedEmpty, type ConversationCacheEntry, type ConversationMessagesById } from '@/stores/conversationMessages/seedEmpty';
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
 import { revertAskUserAnswer, type AskUserAnswerPayload, type AskUserAnswerRevertPayload } from '@/lib/ai/streams/applyAskUserAnswer';
@@ -22,6 +23,13 @@ export type { ConversationCacheEntry, ConversationMessagesById };
 interface ConversationMessagesState {
   byConversationId: ConversationMessagesById;
   getEntry: (conversationId: string) => ConversationCacheEntry;
+  /**
+   * True when the conversation has a real cache entry — i.e. some surface has
+   * loaded/seeded/sent in it this session. `getEntry` cannot answer this (it
+   * returns a synthetic empty entry for never-seen ids); socket-event dispatch
+   * keys on this to route an event to any cached conversation, active or not.
+   */
+  hasEntry: (conversationId: string) => boolean;
   startLoad: (conversationId: string) => number;
   /** True while `generation` is still the newest `startLoad` result for `conversationId`. */
   isLoadCurrent: (conversationId: string, generation: number) => boolean;
@@ -74,7 +82,13 @@ interface ConversationMessagesState {
    * current generation. Mutations recorded since the fetch began are replayed
    * onto the snapshot (they are newer than it).
    */
-  applyServerSnapshot: (conversationId: string, generationToken: number, messages: UIMessage[]) => void;
+  applyServerSnapshot: (
+    conversationId: string,
+    generationToken: number,
+    messages: UIMessage[],
+    /** The snapshot fetch's own envelope — applied only when the snapshot REPLACES the cache (no overlap), so pagination resets consistently with the replaced list. */
+    pagination?: { hasMore: boolean; nextCursor: string | null },
+  ) => void;
   /**
    * Marks a freshly-minted conversation as loaded-empty — createNewConversation
    * paths know the server has no rows for the id they just minted, so nothing
@@ -87,6 +101,8 @@ export const useConversationMessagesStore = create<ConversationMessagesState>((s
   byConversationId: {},
 
   getEntry: (conversationId) => get().byConversationId[conversationId] ?? seedEmpty(),
+
+  hasEntry: (conversationId) => conversationId in get().byConversationId,
 
   startLoad: (conversationId) => {
     const { byConversationId, generation } = applyStartLoad(get().byConversationId, conversationId);
@@ -175,7 +191,7 @@ export const useConversationMessagesStore = create<ConversationMessagesState>((s
   beginServerSnapshot: (conversationId) =>
     get().byConversationId[conversationId]?.loadGeneration ?? 0,
 
-  applyServerSnapshot: (conversationId, generationToken, messages) => {
+  applyServerSnapshot: (conversationId, generationToken, messages, pagination) => {
     set((state) => {
       // Stale-token drop (CR4): the generation moved since this snapshot's fetch
       // began — a loud load started, or a fresher snapshot already committed — so
@@ -183,18 +199,28 @@ export const useConversationMessagesStore = create<ConversationMessagesState>((s
       // (the newer commit cleared the pending queue).
       const currentGeneration = state.byConversationId[conversationId]?.loadGeneration ?? 0;
       if (currentGeneration !== generationToken) return state;
+      // A snapshot is the LATEST page only — merge it onto any older loaded pages
+      // instead of discarding them (mergeSnapshotTail's docblock; Codex P2, PR #2320).
+      // When it overlaps the cached window the older prefix is preserved and the
+      // existing olderCursor stays correct, so no envelope is applied; when it
+      // doesn't, the snapshot replaces the cache and its own envelope (if the
+      // caller had one) resets pagination consistently.
+      const cachedMessages = state.byConversationId[conversationId]?.messages ?? [];
+      const merged = mergeSnapshotTail(cachedMessages, messages);
       // The snapshot was FETCHED before this call (unlike startLoad's contract, where
       // the fetch starts after), so live mutations recorded while it was in flight are
       // NEWER than the snapshot — replay them onto it instead of letting the generation
       // bump clear them, or an older recovery snapshot resurrects a message another tab
-      // just deleted (CodeRabbit P2, PR #2098).
+      // just deleted (CodeRabbit P2, PR #2098). Replayed over the MERGED list so a
+      // delete/edit of a preserved older row is honored too.
       const pendingSinceFetch = state.byConversationId[conversationId]?.pendingMutationsSinceLoad ?? [];
       const { byConversationId, generation } = applyStartLoad(state.byConversationId, conversationId);
       return {
         byConversationId: applyLoad(byConversationId, {
           conversationId,
           generation,
-          messages: replayPendingMutations(messages, pendingSinceFetch),
+          messages: replayPendingMutations(merged.messages, pendingSinceFetch),
+          pagination: merged.overlapped ? undefined : pagination,
         }),
       };
     });

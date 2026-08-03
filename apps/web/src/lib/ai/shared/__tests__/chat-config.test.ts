@@ -64,6 +64,17 @@ describe('chat-config pure functions', () => {
       expect(a.experimental_throttle).toBe(b.experimental_throttle);
     });
 
+    it('given an onFinish handler, should pass it through', () => {
+      const onFinish = vi.fn();
+      const config = buildChatConfig({ id: GLOBAL_CHAT_ID, transport: mockTransport, onFinish });
+      expect(config.onFinish).toBe(onFinish);
+    });
+
+    it('given no onFinish handler, should omit the property entirely (not set undefined)', () => {
+      const config = buildChatConfig({ id: GLOBAL_CHAT_ID, transport: mockTransport });
+      expect(config).not.toHaveProperty('onFinish');
+    });
+
     it('given no explicit predicate, should wire sendAutomaticallyWhen to askUserAnswersComplete', () => {
       const config = buildChatConfig({ id: GLOBAL_CHAT_ID, transport: mockTransport });
       expect(typeof config.sendAutomaticallyWhen).toBe('function');

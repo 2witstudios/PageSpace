@@ -16,7 +16,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
-import type { UIMessage } from 'ai';
+import type { ChatOnFinishCallback, UIMessage } from 'ai';
 import type { AgentInfo } from '@/types/agent';
 
 const { mockFetchWithAuth } = vi.hoisted(() => ({
@@ -62,6 +62,7 @@ vi.mock('@ai-sdk/react', () => ({
 const loaders = vi.hoisted(() => ({
   loadAgentConversationMessages: vi.fn(async () => {}),
   loadOlderAgentConversationMessages: vi.fn(async () => {}),
+  refreshConversationSnapshot: vi.fn(async () => {}),
 }));
 vi.mock('@/hooks/conversationMessagesLoaders', () => loaders);
 
@@ -95,6 +96,7 @@ const activeStream = vi.hoisted(() => ({
 vi.mock('@/hooks/useActiveStream', () => ({
   useActiveStream: () => ({ streams: activeStream.remoteStreams }),
   useConversationActiveStream: () => undefined,
+  getActiveStreamById: () => undefined,
 }));
 
 vi.mock('next/navigation', () => ({
@@ -168,7 +170,7 @@ describe('useAgentSessionChat', () => {
 
     renderHook(() => useAgentSessionChat({ agent, conversationId }));
 
-    expect(chat.capturedConfigs.some((c) => c.id === `agent-session-chat:${conversationId}`)).toBe(
+    expect(chat.capturedConfigs.some((c) => c.id === `agent-session-chat:${agent.id}:${conversationId}`)).toBe(
       true,
     );
   });
@@ -364,5 +366,36 @@ describe('useAgentSessionChat', () => {
       expect(entry?.pageId).toBe(agent.id);
       expect(entry?.conversationId).toBe(conversationId);
     });
+  });
+
+  // Sibling of the mirror regression above, for the COMPLETION edge: the sender's own tab
+  // never joins its SSE multicast, so at chat:stream_complete its stream entry is already
+  // removed and the socket handler can only fall back to a full reload — a visible flash,
+  // and a vanished reply if that reload fails. The chatConfig's onFinish must commit the
+  // finished reply locally so neither the broadcast nor the reload is load-bearing.
+  it('given the own stream finishes, commits the reply into the cache via the chatConfig onFinish', async () => {
+    const { agent, conversationId } = ids('own-finish-commit');
+    conversationMessagesActions.addOptimisticSend(conversationId, {
+      id: 'm-user-1',
+      role: 'user',
+      parts: [{ type: 'text', text: 'the question' }],
+    } as UIMessage);
+
+    const { result } = renderHook(() => useAgentSessionChat({ agent, conversationId }));
+
+    const config = chat.capturedConfigs.at(-1)!;
+    expect(typeof config.onFinish).toBe('function');
+    const onFinish = config.onFinish as ChatOnFinishCallback<UIMessage>;
+
+    const reply = assistantMessage('m-assistant-1', 'the full reply');
+    act(() => {
+      onFinish({ message: reply, messages: [reply], isAbort: false, isDisconnect: false, isError: false });
+    });
+
+    expect(usePendingStreamsStore.getState().streams.size).toBe(0);
+    await waitFor(() => {
+      expect(result.current.messages.map((m) => m.id)).toEqual(['m-user-1', 'm-assistant-1']);
+    });
+    expect(loaders.refreshConversationSnapshot).toHaveBeenCalledWith(agent.id, conversationId);
   });
 });

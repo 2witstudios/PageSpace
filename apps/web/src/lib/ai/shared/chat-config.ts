@@ -13,7 +13,7 @@
  * @see vercel/ai packages/react/src/use-chat.ts — shouldRecreateChat checks id only
  */
 
-import type { DefaultChatTransport, UIMessage } from 'ai';
+import type { ChatOnFinishCallback, DefaultChatTransport, UIMessage } from 'ai';
 import { askUserAnswersComplete } from '@/lib/ai/shared/ask-user-client';
 
 /**
@@ -36,6 +36,13 @@ export interface ChatConfigParams {
   throttleMs?: number;
   /** Error handler. */
   onError?: (error: Error) => void;
+  /**
+   * Finished-response handler. useChat reads callbacks at Chat construction
+   * (same shouldRecreateChat caveat as `messages`), so this must close over
+   * only values stable for the Chat's life — safe when the surface's `id`
+   * embeds them (the pane hooks embed conversationId).
+   */
+  onFinish?: ChatOnFinishCallback<UIMessage>;
 }
 
 /**
@@ -53,6 +60,7 @@ export function buildChatConfig(params: ChatConfigParams): {
   transport: DefaultChatTransport<UIMessage>;
   experimental_throttle: number;
   onError: (error: Error) => void;
+  onFinish?: ChatOnFinishCallback<UIMessage>;
   sendAutomaticallyWhen: (options: { messages: UIMessage[] }) => boolean;
 } {
   return {
@@ -60,6 +68,8 @@ export function buildChatConfig(params: ChatConfigParams): {
     transport: params.transport,
     experimental_throttle: params.throttleMs ?? 100,
     onError: params.onError ?? defaultOnError,
+    // Omit rather than set undefined, same as the messages-prop convention.
+    ...(params.onFinish ? { onFinish: params.onFinish } : {}),
     // Auto-resume the agent once a pending ask_user question is answered.
     // See ask-user-client.ts for why this can't be the SDK's stock helper.
     sendAutomaticallyWhen: askUserAnswersComplete,
