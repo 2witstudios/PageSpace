@@ -939,15 +939,24 @@ export default function AgentPanes({
         // id captured BEFORE this mint sequence began still names the
         // conversation actually being replaced.
         assignPane(sessionId, paneId, newScope);
-        // Tell the surface's own selection about this swap — mirroring what
-        // `useSpawnSession` already does after spawning a session. Without
-        // this, `selectedConversationId` keeps naming the REPLACED
-        // conversation, and a later remount's seeding effect (this file,
-        // below) tries to re-open that stale id against a pane that no
+        // Tell the Agents CONSOLE's own selection about this swap —
+        // mirroring what `useSpawnSession` already does after spawning a
+        // session. Without this, `selectedConversationId` keeps naming the
+        // REPLACED conversation, and a later remount's seeding effect (this
+        // file, below) tries to re-open that stale id against a pane that no
         // longer shows it — reverting the swap or, once the eviction guard
         // treats this pane as protected, splitting a second pane open for it
         // instead of recognizing the swap as already done (caught in review).
-        selectConversation({ sessionId, conversationId, agentId: agentPageId });
+        // Scoped to `chatContext === 'console'`: this component is also
+        // embedded in a regular page's chat tab (`AgentPageView`, chatContext
+        // "page"), whose `initialConversation` is driven by its own local
+        // state, not this store — writing here unconditionally would both
+        // do nothing useful there AND push a `/dashboard/agents` URL via
+        // `history.pushState`, silently navigating a page-embedded chat's
+        // user away to the Agents console (caught in review).
+        if (chatContext === 'console') {
+          selectConversation({ sessionId, conversationId, agentId: agentPageId });
+        }
         if (priorScopeConversationId !== null) {
           void closeReplacedConversation(paneId, priorScopeConversationId, conversationId, agentPageId);
         }
@@ -1005,6 +1014,7 @@ export default function AgentPanes({
       recordMintedConversation,
       beginPaneAssign,
       selectConversation,
+      chatContext,
     ],
   );
 
