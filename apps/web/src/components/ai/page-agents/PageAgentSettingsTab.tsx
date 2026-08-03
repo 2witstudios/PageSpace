@@ -496,9 +496,19 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   // Mirror dirty state out to the host's own Save button (rendered outside
   // this component — see AgentPageView/AgentPanes) so it can show an
   // unsaved-changes state without polling the ref every render.
+  //
+  // `formIsDirty` alone misses a provider/model-only change: the AI
+  // Provider/Model Selects above aren't wired through react-hook-form
+  // (`handleProviderSelectChange`/`handleModelSelectChange` update parent-
+  // owned state and `providerTouchedRef`/`modelTouchedRef` instead — see
+  // those refs' own comment), so `dirtyFields`/`formIsDirty` never reflects
+  // them. Without `providerOrModelTouched` here too, a Save button gated on
+  // this callback would stay disabled for a provider/model-only change —
+  // making it unsavable unless the user also touched an unrelated field
+  // (review finding — chatgpt-codex-connector on this PR).
   useEffect(() => {
-    onDirtyChange?.(formIsDirty);
-  }, [formIsDirty, onDirtyChange]);
+    onDirtyChange?.(formIsDirty || providerOrModelTouched);
+  }, [formIsDirty, providerOrModelTouched, onDirtyChange]);
 
   // Eagerly fetch models for the DISPLAYED provider (see displayedProvider
   // above) when it's Ollama or LM Studio — must match what's actually
