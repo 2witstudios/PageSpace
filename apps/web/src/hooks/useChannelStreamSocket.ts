@@ -15,6 +15,11 @@ import {
   unregisterChannelStreamSubscriber,
 } from '@/lib/ai/streams/channelStreamSubscribers';
 import {
+  registerChannelRebootstrap,
+  unregisterChannelRebootstrap,
+  notifyRemainingChannelSubscribers,
+} from '@/lib/ai/streams/channelRebootstrapSignal';
+import {
   shouldRefreshOnReconnect,
   type ConnectionStatus,
 } from '@/lib/ai/streams/shouldRefreshOnReconnect';
@@ -211,6 +216,12 @@ export function useChannelStreamSocket(
     if (!socket || !channelId) return;
 
     registerChannelStreamSubscriber(channelId);
+    // Lets a sibling reclaim this instance's live consumption if it unmounts while
+    // holding one — see channelRebootstrapSignal.ts. Reads bootstrapRef.current at
+    // CALL time (not closed over now), so it always invokes THIS effect run's own
+    // runBootstrap once that's assigned below.
+    const rebootstrapSelf = () => bootstrapRef.current?.();
+    registerChannelRebootstrap(channelId, rebootstrapSelf);
 
     let cancelled = false;
     const localBrowserSessionId = getBrowserSessionId();
@@ -719,6 +730,12 @@ export function useChannelStreamSocket(
       socket.off('chat:conversation_deleted', handleConversationDeleted);
       socket.off('chat:global_conversation_added', handleGlobalConversationAdded);
       socket.off('access_revoked', handleAccessRevoked);
+      unregisterChannelRebootstrap(channelId, rebootstrapSelf);
+      // Did THIS instance hold the live claim for anything (startConsume is
+      // claim-gated — only one co-mounted instance per channel ever does)? If so,
+      // a surviving sibling's copy of that stream is about to freeze the moment we
+      // release the claim below unless something reclaims it.
+      const wasConsumingLiveStreams = controllers.size > 0;
       for (const [msgId, controller] of controllers.entries()) {
         controller.abort();
         releaseBootstrapConsumer(msgId);
@@ -731,6 +748,11 @@ export function useChannelStreamSocket(
       const wasLastSubscriber = unregisterChannelStreamSubscriber(channelId);
       if (wasLastSubscriber) {
         clearPageStreams(channelId);
+      } else if (wasConsumingLiveStreams) {
+        // A sibling remains and our claim(s) just released — nudge every remaining
+        // subscriber's bootstrap to reclaim consumption. Idempotent and safe even
+        // with multiple siblings (same pattern as the reconnect re-bootstrap below).
+        notifyRemainingChannelSubscribers(channelId);
       }
     };
   }, [socket, channelId]);
