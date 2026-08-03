@@ -76,10 +76,11 @@ export function isAgentSessionsKey(key: unknown): boolean {
 
 /**
  * Drop `sessionId`'s row from every open `/api/agent-sessions**` SWR entry,
- * locally, without waiting on revalidation — for a caller ending a session
- * that has no local SWR binding of its own to this cache (the sidebar).
- * `AgentPanes.tsx`'s equivalent (`recordSessionEnded`, keyed to its own
- * hook-bound `mutate`) is separate but does the identical filter.
+ * locally, without waiting on revalidation — used by both `AgentPanes.tsx`'s
+ * `confirmEndSession` and `AgentsSidebar.tsx`'s `endSession`, each passing
+ * its own scoped `mutate`, so ending a session drops its row everywhere the
+ * instant the client decides to end it, not after the sandbox-kill DELETE
+ * (or a follow-up revalidate) resolves.
  *
  * Takes `mutate` as a parameter rather than importing the bare top-level one
  * from `swr` — that top-level import only targets SWR's default cache, not a

@@ -569,8 +569,14 @@ function SessionRow({
     } catch (error) {
       // The optimistic assumption was wrong — restore the grid and selection,
       // and let a real revalidate (not a stale local patch) put the row back.
+      // Selection only, and only if NOTHING has claimed it since: `selectSession`
+      // also pushes a URL (`useAgentSurfaceStore`'s `commit`), so blindly
+      // restoring it here would yank the user back to this session even if
+      // they've since navigated elsewhere during this request's round trip.
       if (workspaceSnapshot) hydrateWorkspace(session.sessionId, workspaceSnapshot);
-      if (wasSelected) selectSession(session.sessionId);
+      if (wasSelected && useAgentSurfaceStore.getState().selectedSessionId === null) {
+        selectSession(session.sessionId);
+      }
       void mutate(isAgentSessionsKey);
       console.error('Failed to end session:', error);
       toast.error('Could not end the session', {
