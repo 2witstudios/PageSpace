@@ -70,7 +70,9 @@ import { decideClosePane } from './close-pane';
 import {
   agentSessionsKey,
   isAgentSessionsKey,
+  isSessionListingKey,
   forgetSessionInCache,
+  restoreSessionInCache,
   type SessionConversationSummary,
   type SessionListEntry,
 } from './session-conversations';
@@ -669,10 +671,27 @@ export default function AgentPanes({
     // the session's last OPEN conversation rather than the grid's last pane),
     // and ending the session tears down every one of them at once, not just
     // the peeked pane's own.
+    const { scope } = pendingEndClose;
     const workspaceSnapshot = useAgentWorkspaceStore.getState().workspaces[sessionId] ?? null;
+    const sessionEntrySnapshot = sessionsData?.sessions.find((s) => s.sessionId === sessionId) ?? null;
     forgetWorkspace(sessionId);
-    closeTerminalShell(pendingEndClose.scope);
     setPendingEndClose(null);
+    // The bare top-level `mutate` import, matching every other call site in
+    // this file — NOT `useSWRConfig()`'s scoped one, unlike `AgentsSidebar.tsx`.
+    // Switching this specific spot to the scoped mutator (which does correctly
+    // match `sessionsData`'s own cache) was tried and reverted: it makes
+    // `sessionKnownToConversationsCache` (this component's own conversations-
+    // cache-readiness flag) flip correctly mid-teardown, which re-triggers the
+    // mount-time seed effect (`sessionKnownToConversationsCache` is one of its
+    // deps) — and THAT effect has no guard against re-seeding a session whose
+    // workspace was just deliberately forgotten, so it recreates a fresh
+    // single-pane grid right behind this function's own optimistic drop. That
+    // effect's missing guard is a real, pre-existing bug, but a different one
+    // than this PR is about; fixing it here would conflate two unrelated
+    // changes. No production `SWRConfig` provider exists anywhere in this app
+    // (confirmed repo-wide), so the bare import already targets the one real
+    // cache in practice — this is deferred as a known follow-up, not a
+    // regression (review finding — chatgpt-codex-connector on PR #2318).
     forgetSessionInCache(mutate, sessionId);
     let hadOtherOpenConversations = false;
     try {
@@ -681,19 +700,31 @@ export default function AgentPanes({
       );
       hadOtherOpenConversations = ended?.hadOtherOpenConversations ?? false;
     } catch (error) {
-      // The optimistic assumption was wrong — restore the grid, and let a
-      // real revalidate (not a stale local patch) put the session's row back,
-      // since the server is the authority on whether it's actually gone.
+      // The optimistic assumption was wrong. Restore the grid and the
+      // session's row LOCALLY from the snapshots above — a real revalidate
+      // alone isn't enough: it rides the same network whose failure is
+      // plausibly why the DELETE itself failed, so it could easily fail too
+      // and leave the row missing indefinitely (review finding —
+      // chatgpt-codex-connector on PR #2318). A revalidate still follows for
+      // eventual reconciliation, but the restore itself doesn't depend on it.
       if (workspaceSnapshot) hydrateWorkspace(sessionId, workspaceSnapshot);
-      void mutate(isAgentSessionsKey);
+      if (sessionEntrySnapshot) restoreSessionInCache(mutate, sessionEntrySnapshot);
+      void mutate(isSessionListingKey);
       console.error('Failed to end session:', error);
       toast.error('Could not end the session', {
         description: error instanceof Error ? error.message : 'Please try again.',
       });
       return;
     }
+    // Only NOW — server-confirmed — is it safe to tear down the shell this
+    // pane pointed at. Doing this earlier, alongside the optimistic grid
+    // drop, would irreversibly kill a live shell before knowing the session
+    // actually ended; a failed DELETE's rollback would then restore a
+    // terminal pane pointed at a shell that no longer exists (review
+    // finding — chatgpt-codex-connector on PR #2318).
+    closeTerminalShell(scope);
     // Background reconcile only — the grid and sidebar are already right.
-    void mutate(isAgentSessionsKey);
+    void mutate(isSessionListingKey);
     if (hadOtherOpenConversations) {
       // Ending is unconditional by design — this can't be prevented client
       // side — but the confirm the user just clicked may have been shown
@@ -704,7 +735,7 @@ export default function AgentPanes({
       toast.warning('This session had other open conversations, which were also ended.');
     }
     onSessionEnded?.();
-  }, [pendingEndClose, sessionId, forgetWorkspace, hydrateWorkspace, closeTerminalShell, onSessionEnded]);
+  }, [pendingEndClose, sessionId, sessionsData, forgetWorkspace, hydrateWorkspace, closeTerminalShell, onSessionEnded]);
 
   // Shared by cleanupOrphanedConversation's own post-DELETE recheck below and
   // handlePickHistoryConversation's rollback decision.

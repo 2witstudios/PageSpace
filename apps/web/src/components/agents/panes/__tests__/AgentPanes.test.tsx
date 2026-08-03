@@ -339,6 +339,79 @@ describe('AgentPanes', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
+    it("does not kill the peeked pane's own shell until the session-end DELETE actually resolves", async () => {
+      // A lone TERMINAL pane (no conversation of its own) — closing it is a
+      // direct `end-session` decision, no conversation-listing DELETE first.
+      // The session's own (empty) listing must be CONFIRMED-known, not merely
+      // absent, or the close decision can't verify there's nothing to rebind.
+      mockSessionConversations([]);
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+      act(() =>
+        useAgentWorkspaceStore
+          .getState()
+          .assignPane('ses-1', paneId, { kind: 'terminal', name: 'shell-1', targetId: 'shell-9', agentPageId: null }),
+      );
+      await waitFor(() => expect(screen.getByTestId('pane-shell')).toBeInTheDocument());
+
+      let resolveSessionDel!: (value: unknown) => void;
+      mockDel.mockImplementation((url: string) =>
+        url === '/api/agent-sessions/ses-1'
+          ? new Promise((resolve) => {
+              resolveSessionDel = resolve;
+            })
+          : Promise.resolve(undefined),
+      );
+      const user = userEvent.setup();
+      await user.click(screen.getByLabelText('Close pane'));
+      const dialog = await screen.findByRole('alertdialog');
+      await user.click(within(dialog).getByRole('button', { name: 'End session' }));
+
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1'));
+      // Still pending — the shell must not be touched before the session-end
+      // DELETE is known to have actually succeeded (review finding —
+      // chatgpt-codex-connector on PR #2318).
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/shells/shell-9');
+
+      resolveSessionDel({ hadOtherOpenConversations: false });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // Only now, confirmed, is the shell actually torn down.
+      expect(mockDel).toHaveBeenCalledWith('/api/agent-sessions/ses-1/shells/shell-9');
+    });
+
+    it('never kills the shell at all if the session-end DELETE fails', async () => {
+      mockSessionConversations([]);
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+      act(() =>
+        useAgentWorkspaceStore
+          .getState()
+          .assignPane('ses-1', paneId, { kind: 'terminal', name: 'shell-1', targetId: 'shell-9', agentPageId: null }),
+      );
+      await waitFor(() => expect(screen.getByTestId('pane-shell')).toBeInTheDocument());
+
+      mockDel.mockImplementation((url: string) =>
+        url === '/api/agent-sessions/ses-1'
+          ? Promise.reject(new Error('sandbox teardown failed'))
+          : Promise.resolve(undefined),
+      );
+      const errorSpy = vi.spyOn(toast, 'error').mockImplementation(() => '');
+      const user = userEvent.setup();
+      await user.click(screen.getByLabelText('Close pane'));
+      const dialog = await screen.findByRole('alertdialog');
+      await user.click(within(dialog).getByRole('button', { name: 'End session' }));
+
+      await waitFor(() => expect(errorSpy).toHaveBeenCalled());
+      // Never touched — a failed session-end must never have killed the
+      // shell a restored terminal pane still claims to hold.
+      expect(mockDel).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/shells/shell-9');
+      expect(useAgentWorkspaceStore.getState().workspaces['ses-1']).toBeDefined();
+      expect(screen.getByTestId('pane-shell')).toBeInTheDocument();
+      errorSpy.mockRestore();
+    });
+
     it('warns (but still ends the session) when the server reports other open conversations existed', async () => {
       // Ending is unconditional by design and can't be prevented client
       // side — but THIS dialog's confirm was shown because the pane's own

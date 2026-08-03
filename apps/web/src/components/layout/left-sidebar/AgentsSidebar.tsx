@@ -29,8 +29,10 @@ import { fetchWithAuth, del, ApiRequestError } from '@/lib/auth/auth-fetch';
 import type { PersistedWorkspaceState } from '@pagespace/lib/agent-sessions/contract';
 import {
   isAgentSessionsKey,
+  isSessionListingKey,
   forgetSessionInCache,
   forgetConversationInCache,
+  restoreSessionInCache,
 } from '@/components/agents/panes/session-conversations';
 import { buildSessionGroups, ASSISTANT_GROUP_KEY } from './session-groups';
 import { RowMenu, type RowMenuItem } from './RowMenu';
@@ -461,6 +463,7 @@ function SessionRow({
   const { mutate } = useSWRConfig();
   const selectedSessionId = useAgentSurfaceStore((state) => state.selectedSessionId);
   const selectedConversationId = useAgentSurfaceStore((state) => state.selectedConversationId);
+  const selectedAgentId = useAgentSurfaceStore((state) => state.selectedAgentId);
   const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
   const selectSession = useAgentSurfaceStore((state) => state.selectSession);
   const forgetWorkspace = useAgentWorkspaceStore((state) => state.forgetWorkspace);
@@ -552,9 +555,13 @@ function SessionRow({
   const endSession = useCallback(async () => {
     // Snapshot for rollback, then assume success immediately — the row must
     // not linger in the sidebar for however long the sandbox-kill round trip
-    // this DELETE triggers server-side actually takes.
+    // this DELETE triggers server-side actually takes. `session` (the prop)
+    // IS this row's own current cache entry, so it doubles as the snapshot
+    // to restore on failure — no separate cache peek needed.
     const workspaceSnapshot = useAgentWorkspaceStore.getState().workspaces[session.sessionId] ?? null;
     const wasSelected = selectedSessionId === session.sessionId;
+    const previousConversationId = selectedConversationId;
+    const previousAgentId = selectedAgentId;
     // The session leaves the sidebar; its conversations remain as history in
     // each agent's list. Drop the local grid too — its panes pointed at a
     // sandbox that no longer exists.
@@ -565,17 +572,34 @@ function SessionRow({
     try {
       await del(`/api/agent-sessions/${encodeURIComponent(session.sessionId)}`);
     } catch (error) {
-      // The optimistic assumption was wrong — restore the grid and selection,
-      // and let a real revalidate (not a stale local patch) put the row back.
-      // Selection only, and only if NOTHING has claimed it since: `selectSession`
-      // also pushes a URL (`useAgentSurfaceStore`'s `commit`), so blindly
-      // restoring it here would yank the user back to this session even if
-      // they've since navigated elsewhere during this request's round trip.
+      // The optimistic assumption was wrong. Restore the grid and the
+      // session's row LOCALLY (from the snapshots above) — a real revalidate
+      // alone isn't enough: it rides the same network whose failure is
+      // plausibly why the DELETE itself failed, so it could easily fail too
+      // and leave the row missing indefinitely (review finding —
+      // chatgpt-codex-connector on PR #2318). A revalidate still follows for
+      // eventual reconciliation, but the restore itself doesn't depend on it.
+      //
+      // Selection restore, and only if NOTHING has claimed it since:
+      // `selectConversation`/`selectSession` also push a URL
+      // (`useAgentSurfaceStore`'s `commit`), so blindly restoring it here
+      // would yank the user back to this session even if they've since
+      // navigated elsewhere during this request's round trip. Restoring via
+      // `selectConversation` with the FULL previous trio, not `selectSession`
+      // alone — `selectSession` treats "was this the same session" against
+      // the NOW-cleared `null`, so it would drop the previously-selected
+      // conversation/agent even though nothing else claimed them (review
+      // finding — chatgpt-codex-connector on PR #2318).
       if (workspaceSnapshot) hydrateWorkspace(session.sessionId, workspaceSnapshot);
+      restoreSessionInCache(mutate, session);
       if (wasSelected && useAgentSurfaceStore.getState().selectedSessionId === null) {
-        selectSession(session.sessionId);
+        selectConversation({
+          sessionId: session.sessionId,
+          conversationId: previousConversationId,
+          agentId: previousAgentId,
+        });
       }
-      void mutate(isAgentSessionsKey);
+      void mutate(isSessionListingKey);
       console.error('Failed to end session:', error);
       toast.error('Could not end the session', {
         description: error instanceof Error ? error.message : 'Please try again.',
@@ -583,8 +607,18 @@ function SessionRow({
       return;
     }
     // Confirmed — background reconcile only; the grid and sidebar are already right.
-    void mutate(isAgentSessionsKey);
-  }, [forgetWorkspace, hydrateWorkspace, mutate, selectSession, selectedSessionId, session.sessionId]);
+    void mutate(isSessionListingKey);
+  }, [
+    forgetWorkspace,
+    hydrateWorkspace,
+    mutate,
+    selectConversation,
+    selectSession,
+    selectedAgentId,
+    selectedConversationId,
+    selectedSessionId,
+    session,
+  ]);
 
   const closeConversation = useCallback(
     async (conversationId: string) => {

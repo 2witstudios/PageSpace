@@ -69,14 +69,37 @@ export function findOpenForAgent<T extends { agentPageId: string | null; lastMes
  * (mint, close, end-session) revalidates through this so every consumer of
  * the shared listing (the sidebar, other panes, `AgentPageView`'s own
  * replacement mint) sees it before its own poll interval, not after.
+ *
+ * Deliberately broad — this is safe for a bare revalidate (no data, no
+ * updater): each matched key just refetches through its OWN registered
+ * fetcher, so a per-session sub-resource cached under this same prefix (the
+ * shells listing, the singular session record) refreshes correctly too. It
+ * is NOT safe to pair with a `{sessions: [...]}`-shaped updater — see
+ * `isSessionListingKey` for that narrower, updater-safe predicate.
  */
 export function isAgentSessionsKey(key: unknown): boolean {
   return typeof key === 'string' && key.startsWith('/api/agent-sessions');
 }
 
 /**
- * Drop `sessionId`'s row from every open `/api/agent-sessions**` SWR entry,
- * locally, without waiting on revalidation — used by both `AgentPanes.tsx`'s
+ * The two BULK session-listing keys specifically — `agentSessionsKey(null)`
+ * ('/api/agent-sessions') and any drive-scoped `agentSessionsKey(driveId)`
+ * ('/api/agent-sessions?driveId=...') — never a per-session sub-resource path
+ * like `/api/agent-sessions/{id}/shells` or the singular session record,
+ * which `isAgentSessionsKey`'s broader prefix match also catches. Those
+ * cache entries hold no `sessions` array at all, so an updater written
+ * against `{sessions: [...]}` (`forgetSessionInCache`,
+ * `forgetConversationInCache`) must only ever run against keys THIS
+ * predicate matches, or it throws on the mismatched shape (review finding —
+ * chatgpt-codex-connector on PR #2318).
+ */
+export function isSessionListingKey(key: unknown): boolean {
+  return typeof key === 'string' && (key === '/api/agent-sessions' || key.startsWith('/api/agent-sessions?'));
+}
+
+/**
+ * Drop `sessionId`'s row from every open session-listing SWR entry, locally,
+ * without waiting on revalidation — used by both `AgentPanes.tsx`'s
  * `confirmEndSession` and `AgentsSidebar.tsx`'s `endSession`, each passing
  * its own scoped `mutate`, so ending a session drops its row everywhere the
  * instant the client decides to end it, not after the sandbox-kill DELETE
@@ -90,9 +113,33 @@ export function isAgentSessionsKey(key: unknown): boolean {
  */
 export function forgetSessionInCache(mutate: ScopedMutator, sessionId: string): void {
   void mutate(
-    isAgentSessionsKey,
+    isSessionListingKey,
     (current: { sessions: SessionListEntry[] } | undefined) =>
       current ? { ...current, sessions: current.sessions.filter((session) => session.sessionId !== sessionId) } : current,
+    { revalidate: false },
+  );
+}
+
+/**
+ * The mirror of `forgetSessionInCache`: put a previously-removed session row
+ * back into every open session-listing SWR entry, locally — the rollback
+ * half of the optimistic pair. A real revalidate (`mutate(isSessionListingKey)`
+ * with no data) is NOT a substitute for this: if the network is down (the
+ * same reason the DELETE that triggered this rollback failed), the
+ * revalidate fails too and the row stays missing until a later successful
+ * poll — this restores it unconditionally, from the caller's own
+ * already-in-hand snapshot, independent of the network (review finding —
+ * chatgpt-codex-connector on PR #2318). Generic over the caller's own row
+ * shape (`AgentPanes.tsx`'s minimal one vs. `AgentsSidebar.tsx`'s richer
+ * one) — this only ever needs `sessionId` to place it back correctly.
+ */
+export function restoreSessionInCache<T extends { sessionId: string }>(mutate: ScopedMutator, entry: T): void {
+  void mutate(
+    isSessionListingKey,
+    (current: { sessions: T[] } | undefined) =>
+      current && !current.sessions.some((session) => session.sessionId === entry.sessionId)
+        ? { ...current, sessions: [...current.sessions, entry] }
+        : current,
     { revalidate: false },
   );
 }
@@ -105,7 +152,7 @@ export function forgetSessionInCache(mutate: ScopedMutator, sessionId: string): 
  */
 export function forgetConversationInCache(mutate: ScopedMutator, sessionId: string, conversationId: string): void {
   void mutate(
-    isAgentSessionsKey,
+    isSessionListingKey,
     (current: { sessions: SessionListEntry[] } | undefined) =>
       current
         ? {
