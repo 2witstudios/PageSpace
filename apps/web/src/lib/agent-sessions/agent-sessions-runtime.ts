@@ -618,14 +618,21 @@ export async function ensureGlobalSandboxSession(
     //
     // These re-reads are themselves NOT exception-safe by default: the same
     // DB/connection fault that made the claim throw is plausibly still in
-    // effect, and an unguarded throw here would propagate straight out of
-    // this function, skipping `endScratchSession` entirely — the exact leak
-    // this whole catch block exists to close (review findings — CodeRabbit
-    // and chatgpt-codex-connector, both independently, same commit). A
-    // failed lookup is treated as "still unresolved" and falls through to
-    // the existing safe-to-end-and-rethrow path below, never as proof the
-    // conversation is claimed.
+    // effect. Distinguish "verification SUCCEEDED and found nothing" (safe
+    // to end — we have a real, current answer) from "verification itself
+    // FAILED" (unknown — treating that the same as "confirmed unclaimed"
+    // would let a compound failure (claim commits + verification ALSO
+    // fails) still end a session the conversation is genuinely bound to,
+    // reopening the exact stranding this whole catch block exists to
+    // prevent). On a failed verification, this leaves the scratch session
+    // alone rather than gambling on it — a stray, un-ended, sandbox-less
+    // session is a cheap, fully recoverable cost (visible in the sidebar,
+    // endable by hand); permanently stranding a conversation on a dead one
+    // is not (review findings — CodeRabbit and chatgpt-codex-connector,
+    // both independently, then a further round from chatgpt-codex-connector
+    // on the compound-failure case).
     let boundAfterThrow: AgentSessionRecord | null = null;
+    let verificationFailed = false;
     try {
       boundAfterThrow = await findSessionForConversation(conversationId);
       if (!boundAfterThrow) {
@@ -633,6 +640,7 @@ export async function ensureGlobalSandboxSession(
         boundAfterThrow = await findSessionForConversation(conversationId);
       }
     } catch (lookupError) {
+      verificationFailed = true;
       loggers.api.warn('Failed to re-resolve conversation binding after a claim exception', {
         sessionId: spawned.session.id,
         conversationId,
@@ -642,10 +650,14 @@ export async function ensureGlobalSandboxSession(
     if (boundAfterThrow?.id === spawned.session.id) {
       return { ok: true, session: spawned.session };
     }
-    // Not bound to OUR session — either truly unclaimed, or a concurrent
-    // sibling's claim won in the meantime. Either way our scratch session
-    // is safe to tear down; adopt the sibling's session if one is there,
-    // otherwise this really is the infra fault it looked like — propagate it.
+    if (verificationFailed) {
+      throw error;
+    }
+    // Verification SUCCEEDED and confirmed we are NOT bound to it — either
+    // truly unclaimed, or a concurrent sibling's claim won in the meantime.
+    // Either way our scratch session is safe to tear down; adopt the
+    // sibling's session if one is there, otherwise this really is the infra
+    // fault it looked like — propagate it.
     await endScratchSession('a claim exception');
     if (boundAfterThrow) return { ok: true, session: boundAfterThrow };
     throw error;
