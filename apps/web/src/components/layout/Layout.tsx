@@ -26,7 +26,7 @@ import { useTabSync } from "@/hooks/useTabSync";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { useEditingStore } from "@/stores/useEditingStore";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   Sheet,
   SheetContent,
@@ -56,6 +56,16 @@ interface LayoutProps {
 
 function Layout({ children }: LayoutProps) {
   const { isLoading, isAuthenticated } = useAuth();
+  // Has THIS mount observed a successful auth check yet? Starts false on every fresh
+  // mount regardless of what isAuthenticated was optimistically restored to from
+  // localStorage — see shouldShowAuthLoadingScreen's doc comment. Mutated inline
+  // during render (not an effect): the very render where isLoading first resolves to
+  // false while authenticated is exactly the render that no longer needs the ref, so
+  // there is no one-tick lag to matter for.
+  const hasConfirmedAuthRef = useRef(false);
+  if (isAuthenticated && !isLoading) {
+    hasConfirmedAuthRef.current = true;
+  }
   const router = useRouter();
   const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
 
@@ -294,7 +304,14 @@ function Layout({ children }: LayoutProps) {
   // Gated on shouldShowAuthLoadingScreen (not a raw isLoading check) so a routine
   // background loadSession() recheck of an ALREADY-authenticated session doesn't
   // unmount this entire subtree — GlobalChatProvider included — down to a spinner.
-  if (shouldShowAuthLoadingScreen({ isLoading, hasHydrated, isAuthenticated })) {
+  if (
+    shouldShowAuthLoadingScreen({
+      isLoading,
+      hasHydrated,
+      isAuthenticated,
+      hasConfirmedAuthThisMount: hasConfirmedAuthRef.current,
+    })
+  ) {
     return (
       <div className="flex items-center justify-center h-screen">
         <div className="flex items-center gap-2">
