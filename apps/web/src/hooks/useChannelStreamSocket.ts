@@ -686,6 +686,13 @@ export function useChannelStreamSocket(
         controller.abort();
         releaseBootstrapConsumer(msgId);
       }
+      // Correctness-review finding: without this, a stale entry survives here (the
+      // aborted consumeStreamJoin's .then()/.catch() returns early on `cancelled`
+      // before reaching its own controllers.delete) and a LATER real unmount reads it
+      // as "was I actively consuming something" — double-releasing an already-released
+      // claim and spuriously notifying a sibling to re-bootstrap a channel this user no
+      // longer has access to.
+      controllers.clear();
       abortAllPolls();
       // Release every own-stream claim we handed out. This is the ONLY chance: `cancelled`
       // is latched on this effect closure, so every future runBootstrap — including the
