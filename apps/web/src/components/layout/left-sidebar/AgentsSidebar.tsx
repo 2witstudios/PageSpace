@@ -469,7 +469,6 @@ function SessionRow({
   const assignPane = useAgentWorkspaceStore((state) => state.assignPane);
   const [expanded, setExpanded] = useState(false);
   const [confirmingEnd, setConfirmingEnd] = useState(false);
-  const [ending, setEnding] = useState(false);
   const isSelected = selectedSessionId === session.sessionId;
   const isRunning = session.sandboxStatus === 'running' || session.sandboxStatus === 'starting';
 
@@ -556,7 +555,6 @@ function SessionRow({
     // this DELETE triggers server-side actually takes.
     const workspaceSnapshot = useAgentWorkspaceStore.getState().workspaces[session.sessionId] ?? null;
     const wasSelected = selectedSessionId === session.sessionId;
-    setEnding(true);
     // The session leaves the sidebar; its conversations remain as history in
     // each agent's list. Drop the local grid too — its panes pointed at a
     // sandbox that no longer exists.
@@ -583,8 +581,6 @@ function SessionRow({
         description: error instanceof Error ? error.message : 'Please try again.',
       });
       return;
-    } finally {
-      setEnding(false);
     }
     // Confirmed — background reconcile only; the grid and sidebar are already right.
     void mutate(isAgentSessionsKey);
@@ -772,7 +768,6 @@ function SessionRow({
         open={confirmingEnd}
         onOpenChange={setConfirmingEnd}
         sessionName={session.name}
-        isEnding={ending}
         onConfirm={() => void endSession()}
       />
 

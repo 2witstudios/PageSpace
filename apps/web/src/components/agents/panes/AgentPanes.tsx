@@ -441,7 +441,6 @@ export default function AgentPanes({
   // taken before any IO or mutation — so cancelling, or the DELETE failing,
   // leaves nothing to roll back.
   const [pendingEndClose, setPendingEndClose] = useState<{ paneId: string; scope: PaneScope | null } | null>(null);
-  const [endingSession, setEndingSession] = useState(false);
 
   const closeShell = useCallback(
     (shellId: string) => {
@@ -671,7 +670,6 @@ export default function AgentPanes({
     // and ending the session tears down every one of them at once, not just
     // the peeked pane's own.
     const workspaceSnapshot = useAgentWorkspaceStore.getState().workspaces[sessionId] ?? null;
-    setEndingSession(true);
     forgetWorkspace(sessionId);
     closeTerminalShell(pendingEndClose.scope);
     setPendingEndClose(null);
@@ -692,10 +690,8 @@ export default function AgentPanes({
       toast.error('Could not end the session', {
         description: error instanceof Error ? error.message : 'Please try again.',
       });
-      setEndingSession(false);
       return;
     }
-    setEndingSession(false);
     // Background reconcile only — the grid and sidebar are already right.
     void mutate(isAgentSessionsKey);
     if (hadOtherOpenConversations) {
@@ -1533,7 +1529,6 @@ export default function AgentPanes({
         onOpenChange={(open) => {
           if (!open) setPendingEndClose(null);
         }}
-        isEnding={endingSession}
         onConfirm={() => void confirmEndSession()}
       />
     </>
