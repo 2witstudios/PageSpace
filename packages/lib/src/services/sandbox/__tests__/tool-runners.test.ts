@@ -1256,64 +1256,6 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
     expect(acquireCalls).toBe(0);
   });
 
-  it('given the gate denies AND resolveBillingSession attached a cleanupIfDenied, awaits it before returning credit_exhausted — an auto-provisioned session this call itself just minted must not survive a same-turn credit denial (review finding — P2, PR #2314, fourth pass)', async () => {
-    const cleanupCalls: string[] = [];
-    const { billing } = makeBilling({
-      gate: async () => ({ allowed: false, reason: 'insufficient_balance' }),
-    });
-    const { deps } = makeDeps({
-      billing,
-      resolveBillingSession: async () => ({
-        sessionId: 'auto-ses-1',
-        driveId: null,
-        ownerId: 'owner-42',
-        cleanupIfDenied: async () => {
-          cleanupCalls.push('auto-ses-1');
-        },
-      }),
-    });
-
-    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
-
-    expect(result).toMatchObject({ success: false, reason: 'credit_exhausted' });
-    expect(cleanupCalls).toEqual(['auto-ses-1']);
-  });
-
-  it('given the gate denies and cleanupIfDenied itself throws, still fails credit_exhausted — a cleanup fault must never turn a credit denial into a different (or delayed) failure', async () => {
-    const { billing } = makeBilling({
-      gate: async () => ({ allowed: false, reason: 'insufficient_balance' }),
-    });
-    const { deps } = makeDeps({
-      billing,
-      resolveBillingSession: async () => ({
-        sessionId: 'auto-ses-1',
-        driveId: null,
-        ownerId: 'owner-42',
-        cleanupIfDenied: async () => {
-          throw new Error('cleanup exploded');
-        },
-      }),
-    });
-
-    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
-
-    expect(result).toMatchObject({ success: false, reason: 'credit_exhausted' });
-  });
-
-  it('given the gate denies and resolveBillingSession did NOT attach cleanupIfDenied (a pre-existing session, not one this call minted), fails credit_exhausted with no cleanup attempted', async () => {
-    const { billing } = makeBilling({
-      gate: async () => ({ allowed: false, reason: 'insufficient_balance' }),
-    });
-    const { deps } = makeDeps({
-      billing,
-      resolveBillingSession: makeBillingSession(),
-    });
-
-    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
-
-    expect(result).toMatchObject({ success: false, reason: 'credit_exhausted' });
-  });
-
   it('given a forced execution error, releases the hold and records NO usage row (no ledger row)', async () => {
     const sandbox = makeSandbox({
       runCommand: async () => {

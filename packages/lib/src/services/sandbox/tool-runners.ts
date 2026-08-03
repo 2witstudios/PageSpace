@@ -270,22 +270,9 @@ export interface SandboxRunDeps {
    *   whole call closed instead of gambling that the second, independent
    *   resolution will agree with the first (review finding — P1, PR #2314,
    *   second pass, chatgpt-codex-connector).
-   *
-   * The session-shaped outcome may carry an optional `cleanupIfDenied`: for
-   * an auto-provisioning implementation, THIS specific call may have just
-   * minted the session (as opposed to finding one that already existed).
-   * If the credit gate below denies the run, that freshly-minted session
-   * would otherwise sit permanently bound to the conversation with nothing
-   * ever having run in it — real resource/sidebar clutter for a call that
-   * was never going to be billed anyway, compounding across every repeat
-   * attempt from a credit-exhausted caller. `withMachineBilling` invokes
-   * this hook on a gate denial, never otherwise; omit it whenever the
-   * session predates this call (there is no such thing as "cleaning up"
-   * a session this call didn't create) (review finding — P2, PR #2314,
-   * fourth pass, chatgpt-codex-connector).
    */
   resolveBillingSession?: (ctx: SandboxActorContext) => Promise<
-    | { sessionId: string; driveId: string | null; ownerId: string; cleanupIfDenied?: () => Promise<void> }
+    | { sessionId: string; driveId: string | null; ownerId: string }
     | { deny: SandboxToolDenialReason }
     | null
   >;
@@ -550,17 +537,7 @@ async function withMachineBilling<S>(
     ownerId: billingSession.ownerId,
   });
   const gate = await billing.gate({ payerId });
-  if (!gate.allowed) {
-    // Awaited (not fire-and-forget): a request-scoped process can be
-    // suspended/torn down shortly after the response is sent, which would
-    // silently abandon an un-awaited cleanup. Best-effort regardless — a
-    // cleanup fault must never turn a credit denial into a different (or
-    // delayed) failure. Only present when THIS call's own
-    // `resolveBillingSession` just minted the session being gated — see
-    // the doc on `resolveBillingSession` above.
-    await billingSession.cleanupIfDenied?.().catch(() => {});
-    return fail('credit_exhausted');
-  }
+  if (!gate.allowed) return fail('credit_exhausted');
 
   const holdId = gate.holdId;
   const startedAt = deps.now().getTime();
