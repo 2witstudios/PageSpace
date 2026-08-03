@@ -536,7 +536,22 @@ export async function findSessionForConversation(conversationId: string): Promis
 export type EnsureGlobalSandboxSessionFailureReason = 'session_limit_reached' | 'spawn_failed' | 'no_session';
 
 export type EnsureGlobalSandboxSessionResult =
-  | { ok: true; session: AgentSessionRecord }
+  | {
+      ok: true;
+      session: AgentSessionRecord;
+      /**
+       * True only when THIS call minted `session` AND successfully claimed
+       * it itself — false when the session is one a CONCURRENT sibling call
+       * spawned and claimed first, which this call merely adopted after
+       * losing its own claim race. That distinction matters to callers
+       * deciding whether it's safe to tear the session back down for a
+       * reason specific to THIS call (e.g. its own credit gate denying) —
+       * a sibling's session may have its own, unrelated, still-in-flight
+       * use; only a session this exact call both created and bound is
+       * unambiguously ours to destroy.
+       */
+      selfClaimed: boolean;
+    }
   | { ok: false; reason: EnsureGlobalSandboxSessionFailureReason };
 
 /**
@@ -648,7 +663,9 @@ export async function ensureGlobalSandboxSession(
       });
     }
     if (boundAfterThrow?.id === spawned.session.id) {
-      return { ok: true, session: spawned.session };
+      // Bound to the session WE spawned — the claim genuinely was ours,
+      // ambiguity and all.
+      return { ok: true, session: spawned.session, selfClaimed: true };
     }
     if (verificationFailed) {
       throw error;
@@ -659,10 +676,14 @@ export async function ensureGlobalSandboxSession(
     // sibling's session if one is there, otherwise this really is the infra
     // fault it looked like — propagate it.
     await endScratchSession('a claim exception');
-    if (boundAfterThrow) return { ok: true, session: boundAfterThrow };
+    // Not ours — a concurrent sibling's own session, not one this call
+    // created or claimed.
+    if (boundAfterThrow) return { ok: true, session: boundAfterThrow, selfClaimed: false };
     throw error;
   }
-  if (claimed === 'claimed' || claimed === 'already_in_session') return { ok: true, session: spawned.session };
+  if (claimed === 'claimed' || claimed === 'already_in_session') {
+    return { ok: true, session: spawned.session, selfClaimed: true };
+  }
 
   // The claim lost a race — most likely a CONCURRENT call for the same
   // conversation (two sandbox tool calls in one turn, two tabs) won first
@@ -674,7 +695,8 @@ export async function ensureGlobalSandboxSession(
   // from under both calls resolves to nothing here.
   await endScratchSession('a lost conversation claim');
   const winner = await findSessionForConversation(conversationId);
-  return winner ? { ok: true, session: winner } : { ok: false, reason: 'no_session' };
+  // Adopted a sibling's session, not one this call created or claimed.
+  return winner ? { ok: true, session: winner, selfClaimed: false } : { ok: false, reason: 'no_session' };
 }
 
 export interface SessionConversationEntry {

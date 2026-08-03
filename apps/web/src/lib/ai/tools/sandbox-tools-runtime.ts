@@ -55,6 +55,7 @@ import {
   provisionSessionSandbox,
   measureWarmSessionStorage,
   ensureGlobalSandboxSession,
+  endSession,
   type AgentSessionRecord,
   type EnsureGlobalSandboxSessionFailureReason,
 } from '@/lib/agent-sessions/agent-sessions-runtime';
@@ -109,7 +110,20 @@ function getSandboxClient(): Promise<ExecSandboxClient> {
 }
 
 type ResolveOrProvisionResult =
-  | { ok: true; session: AgentSessionRecord }
+  | {
+      ok: true;
+      session: AgentSessionRecord;
+      /**
+       * True only when THIS call minted the session (as opposed to finding
+       * one that already existed) — the signal `resolveBillingSession`
+       * needs to know whether it's safe to tear this session back down if
+       * the credit gate denies moments later. Ending a session that already
+       * existed before this call (has other history, other conversations)
+       * would be destructive; ending one THIS call just created and bound
+       * only to gate-deny cleanup is not.
+       */
+      justProvisioned: boolean;
+    }
   /**
    * Nothing was ever attempted here — not a global conversation (or the
    * conversation doesn't exist). This is the ONLY failure shape safe to
@@ -151,7 +165,7 @@ async function resolveOrProvisionSession(
   userId: string,
 ): Promise<ResolveOrProvisionResult> {
   const existing = await findSessionForConversation(conversationId);
-  if (existing) return { ok: true, session: existing };
+  if (existing) return { ok: true, session: existing, justProvisioned: false };
 
   // The default Global Assistant conversation is always minted session-less
   // (`resolveOrCreateConversation`) and nothing else ever claims it into
@@ -164,7 +178,13 @@ async function resolveOrProvisionSession(
   if (conversation?.type !== 'global') return { ok: false, attempted: false };
 
   const ensured = await ensureGlobalSandboxSession(conversationId, userId);
-  if (ensured.ok) return { ok: true, session: ensured.session };
+  // `justProvisioned` mirrors `ensured.selfClaimed`, NOT a blanket `true`:
+  // when this call lost its own claim race and adopted a concurrent
+  // sibling's session instead, that session is the SIBLING'S to manage, not
+  // ours — a same-turn credit-deny cleanup must never tear down a session
+  // this call didn't itself create and claim, since the sibling may have
+  // its own unrelated, still-in-flight use for it.
+  if (ensured.ok) return { ok: true, session: ensured.session, justProvisioned: ensured.selfClaimed };
   return { ok: false, attempted: true, reason: ensured.reason };
 }
 
@@ -326,7 +346,22 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
       const resolved = await resolveOrProvisionSession(ctx.conversationId, ctx.userId);
       if (resolved.ok) {
         const row = resolved.session;
-        return { sessionId: row.id, driveId: row.driveId, ownerId: row.ownerId };
+        return {
+          sessionId: row.id,
+          driveId: row.driveId,
+          ownerId: row.ownerId,
+          // Only when THIS call itself minted+claimed the session (never
+          // for one that predates this call, or one adopted from a
+          // concurrent sibling's own claim — see `resolveOrProvisionSession`'s
+          // `justProvisioned` doc). A repeat credit-exhausted attempt from a
+          // fresh global conversation would otherwise leave a real, empty,
+          // permanently-bound session behind on every try — nothing ever
+          // ran in it, it was never going to be billed, and it just
+          // clutters the sidebar and eats into MAX_ACTIVE_SESSIONS_PER_OWNER
+          // (review finding — P2, PR #2314, fourth pass,
+          // chatgpt-codex-connector).
+          cleanupIfDenied: resolved.justProvisioned ? () => endSession(row.id).then(() => {}) : undefined,
+        };
       }
       if (!resolved.attempted) return null;
       return { deny: resolved.reason === 'session_limit_reached' ? 'session_limit_reached' : 'provision_failed' };
