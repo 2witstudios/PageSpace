@@ -562,6 +562,54 @@ describe('useAuthStore', () => {
       expect(useAuthStore.getState()._authPromise).toBeNull();
     });
 
+    // Correctness-review finding (PR #2312): a 401 that successfully refreshes issues a
+    // NESTED loadSession(true) retry (line ~493) from inside the ORIGINAL call's own
+    // try block. Because `return get().loadSession(true)` is inside try/finally, the
+    // ORIGINAL call's `finally` runs immediately after — synchronously, in the same
+    // continuation, before the retry's own fetch has even been issued — and it used to
+    // unconditionally set `isLoading: false` (only `_authPromise` was guarded against a
+    // newer request having taken over). That let `isLoading` go false while
+    // `isAuthenticated` was still whatever it was before this call (e.g. a stale
+    // persisted `true`) and the retry — the actual check — was still in flight. Any
+    // consumer gating on `isLoading` (Layout's shouldShowAuthLoadingScreen) would treat
+    // the session as "settled" based on nothing.
+    it("given a 401 triggers a successful token-refresh retry, should NOT clear isLoading before the retry's own fetch resolves", async () => {
+      useAuthStore.setState({ user: createMockUser(), isAuthenticated: true });
+
+      let resolveRetryFetch!: (value: Response) => void;
+      const retryFetch = new Promise<Response>((resolve) => {
+        resolveRetryFetch = resolve;
+      });
+      vi.mocked(global.fetch)
+        .mockResolvedValueOnce({ ok: false, status: 401 } as Response)
+        .mockImplementationOnce(() => retryFetch);
+
+      const { refreshAuthSession } = await import('@/lib/auth/auth-fetch');
+      vi.mocked(refreshAuthSession).mockResolvedValueOnce({ success: true, shouldLogout: false });
+
+      const loadPromise = useAuthStore.getState().loadSession();
+
+      // Wait until the retry's own fetch has actually been issued (the nested
+      // loadSession(true) call, and the original call's finally right after it, have
+      // both already run their synchronous continuation by this point) — without
+      // resolving that fetch yet.
+      await vi.waitFor(() => {
+        expect(global.fetch).toHaveBeenCalledTimes(2);
+      });
+
+      expect(useAuthStore.getState().isLoading).toBe(true);
+      expect(useAuthStore.getState().isAuthenticated).toBe(true);
+
+      resolveRetryFetch({
+        ok: true,
+        json: () => Promise.resolve(createMockUser()),
+      } as Response);
+      await loadPromise;
+
+      expect(useAuthStore.getState().isLoading).toBe(false);
+      expect(useAuthStore.getState()._authPromise).toBeNull();
+    });
+
     it('given network error, should record failed attempt', async () => {
       vi.mocked(global.fetch).mockRejectedValue(new Error('Network error'));
       const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});

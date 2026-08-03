@@ -111,9 +111,17 @@ export function useAssistantSessionChat({
     });
   }, [transport, conversationId]);
 
-  const { sendMessage, status, error, clearError, regenerate, setMessages, stop, addToolResult } = useChat(
-    chatConfig ?? {},
-  );
+  const {
+    messages: assistantChatMessages,
+    sendMessage,
+    status,
+    error,
+    clearError,
+    regenerate,
+    setMessages,
+    stop,
+    addToolResult,
+  } = useChat(chatConfig ?? {});
   const isStreaming = status === 'submitted' || status === 'streaming';
 
   // No channel socket mounted here: GlobalChatProvider wraps the whole Layout
@@ -146,7 +154,7 @@ export function useAssistantSessionChat({
   );
   const { getLatchedConversationId } = useOwnStreamMirror({
     status,
-    ownMessages: messages,
+    ownMessages: assistantChatMessages,
     pageId: channelId ?? '',
     conversationId,
     triggeredBy: mirrorTriggeredBy,

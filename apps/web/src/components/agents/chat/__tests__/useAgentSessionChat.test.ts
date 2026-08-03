@@ -37,14 +37,22 @@ const chat = vi.hoisted(() => ({
     clearError: vi.fn(),
     addToolResult: vi.fn(),
   },
+  // Mutable per-test override for useChat's own live return — distinct from
+  // the shared conversation cache, so a test can simulate a stream that is
+  // in-flight in useChat's local state but not yet (or never) mirrored into
+  // usePendingStreamsStore/the rendered cache.
+  state: {
+    messages: [] as UIMessage[],
+    status: 'ready' as 'ready' | 'submitted' | 'streaming' | 'error',
+  },
 }));
 
 vi.mock('@ai-sdk/react', () => ({
   useChat: vi.fn((config: Record<string, unknown> | undefined) => {
     if (config && typeof config.id === 'string') chat.capturedConfigs.push(config);
     return {
-      messages: [] as UIMessage[],
-      status: 'ready' as const,
+      messages: chat.state.messages,
+      status: chat.state.status,
       error: undefined,
       ...chat.instance,
     };
@@ -103,6 +111,7 @@ vi.mock('sonner', () => ({
 
 import { useConversationMessagesStore } from '@/stores/useConversationMessagesStore';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
+import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
 import { useAgentSessionChat } from '../useAgentSessionChat';
 
 function agentFixture(id: string): AgentInfo {
@@ -129,9 +138,12 @@ function ids(slug: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   chat.capturedConfigs.length = 0;
+  chat.state.messages = [];
+  chat.state.status = 'ready';
   multiplayer.calls.length = 0;
   activeStream.remoteStreams = [];
   useConversationMessagesStore.setState({ byConversationId: {} });
+  usePendingStreamsStore.setState({ streams: new Map() });
   mockFetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({}) });
 });
 
@@ -320,5 +332,37 @@ describe('useAgentSessionChat', () => {
     const { result } = renderHook(() => useAgentSessionChat({ agent, conversationId }));
 
     expect(result.current.askUserAnswering.answerableToolCallIds.has('tc-1')).toBe(false);
+  });
+
+  // Regression: the sender's own pane went blank mid-stream while other viewers saw the reply
+  // stream in fine. useOwnStreamMirror's `ownMessages` must be useChat's OWN live-growing
+  // `messages` array (its doc comment: "This chat's ENTIRE message array (useChat's local
+  // state) — not a pre-picked message") so it can copy the in-flight assistant reply into
+  // usePendingStreamsStore — the store every pane actually renders from. Feeding it the
+  // rendered/cache-derived array instead (what shadowed a `messages` binding of the same name
+  // here) leaves that store empty for the sender, so their own pane shows nothing until a later
+  // reload. This test mounts the hook with useChat mid-stream (status: 'streaming', an assistant
+  // reply as the last message) and asserts the mirror actually wrote that message into the store.
+  it('mirrors an in-progress own-stream assistant reply into usePendingStreamsStore, from useChat\'s own live messages', async () => {
+    const { agent, conversationId } = ids('own-stream-mirror');
+    chat.state.status = 'streaming';
+    chat.state.messages = [
+      { id: 'm-user-1', role: 'user', parts: [{ type: 'text', text: 'hello agent' }] } as UIMessage,
+      {
+        id: 'm-assistant-1',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'Partial reply in progress...' }],
+      } as UIMessage,
+    ];
+
+    renderHook(() => useAgentSessionChat({ agent, conversationId }));
+
+    await waitFor(() => {
+      const entry = usePendingStreamsStore.getState().streams.get('m-assistant-1');
+      expect(entry).toBeDefined();
+      expect(entry?.isOwn).toBe(true);
+      expect(entry?.pageId).toBe(agent.id);
+      expect(entry?.conversationId).toBe(conversationId);
+    });
   });
 });

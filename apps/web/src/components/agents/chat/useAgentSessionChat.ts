@@ -117,9 +117,17 @@ export function useAgentSessionChat({
     });
   }, [transport, conversationId]);
 
-  const { sendMessage, status, error, clearError, regenerate, setMessages, stop, addToolResult } = useChat(
-    chatConfig ?? {},
-  );
+  const {
+    messages: agentChatMessages,
+    sendMessage,
+    status,
+    error,
+    clearError,
+    regenerate,
+    setMessages,
+    stop,
+    addToolResult,
+  } = useChat(chatConfig ?? {});
   const isStreaming = status === 'submitted' || status === 'streaming';
 
   const loadConversation = useCallback(
@@ -155,7 +163,7 @@ export function useAgentSessionChat({
   );
   const { getLatchedConversationId } = useOwnStreamMirror({
     status,
-    ownMessages: messages,
+    ownMessages: agentChatMessages,
     pageId: agent.id,
     conversationId,
     triggeredBy: mirrorTriggeredBy,

@@ -121,6 +121,11 @@ import { useChannelStreamSocket } from '../useChannelStreamSocket';
 import { StreamJoinError } from '@/lib/ai/core/stream-join-client';
 import { releaseBootstrapConsumer } from '@/lib/ai/streams/bootstrapConsumerGuard';
 import { markChannelConsuming, resetConsumingChannels } from '@/lib/ai/streams/consumingChannels';
+import {
+  getChannelStreamSubscriberCount,
+  resetChannelStreamSubscribers,
+} from '@/lib/ai/streams/channelStreamSubscribers';
+import { resetChannelRebootstrapSignal } from '@/lib/ai/streams/channelRebootstrapSignal';
 import type {
   AiStreamStartPayload,
   AiStreamCompletePayload,
@@ -203,6 +208,8 @@ describe('useChannelStreamSocket', () => {
     mockSocket._reset();
     // Module state — a real reload clears it; a test file must too.
     resetConsumingChannels();
+    resetChannelStreamSubscribers();
+    resetChannelRebootstrapSignal();
     mockConnectionStatus = 'disconnected';
     mockAuthUserId = LOCAL_USER_ID;
     mockConsumeStreamJoin.mockResolvedValue({ aborted: false });
@@ -1306,6 +1313,32 @@ describe('useChannelStreamSocket', () => {
 
       expect(mockClearPageStreams).not.toHaveBeenCalled();
     });
+
+    // Correctness-review finding (PR #2312): the abort loop released every controller's
+    // bootstrap claim but never removed the entries from `controllers` itself. A LATER
+    // real unmount (which can lag behind access_revoked by however long this component
+    // stays mounted showing a "you lost access" state) then read those stale entries as
+    // "was I actively consuming something," double-releasing an already-released claim
+    // and — worse — spuriously notifying a sibling to re-bootstrap a channel this user
+    // no longer has access to.
+    it('given access_revoked fires while a controller is active, a LATER real unmount should NOT double-release the claim or spuriously notify a sibling', async () => {
+      const first = renderHook(() => useChannelStreamSocket('page-a'));
+      const second = renderHook(() => useChannelStreamSocket('page-a'));
+
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+      act(() => { mockSocket._trigger('access_revoked', { room: 'page-a', reason: 'permission_revoked' }); });
+
+      vi.mocked(releaseBootstrapConsumer).mockClear();
+      const fetchCallsBeforeUnmount = mockFetchWithAuth.mock.calls.length;
+
+      first.unmount();
+      await act(async () => { await Promise.resolve(); });
+
+      expect(releaseBootstrapConsumer).not.toHaveBeenCalled();
+      expect(mockFetchWithAuth.mock.calls.length).toBe(fetchCallsBeforeUnmount);
+
+      second.unmount();
+    });
   });
 
   describe('cleanup on unmount', () => {
@@ -1324,6 +1357,104 @@ describe('useChannelStreamSocket', () => {
       expect(mockClearPageStreams).toHaveBeenCalledWith('page-a');
       expect(mockSocket.off).toHaveBeenCalledWith('chat:stream_start', expect.any(Function));
       expect(mockSocket.off).toHaveBeenCalledWith('chat:stream_complete', expect.any(Function));
+    });
+  });
+
+  describe('clearPageStreams — multi-subscriber refcounting', () => {
+    // Regression: two panes can be open on the same agent channel at once (by design —
+    // select-pane-agent.ts). Before refcounting, EITHER pane's unmount wiped the WHOLE
+    // channel's streams out of usePendingStreamsStore, including a sibling pane's own
+    // still-mid-generation stream.
+    it('given two subscribers on the same channel, unmounting one should NOT clearPageStreams (a sibling is still subscribed)', () => {
+      const first = renderHook(() => useChannelStreamSocket('page-a'));
+      renderHook(() => useChannelStreamSocket('page-a'));
+      expect(getChannelStreamSubscriberCount('page-a')).toBe(2);
+
+      first.unmount();
+
+      expect(mockClearPageStreams).not.toHaveBeenCalled();
+      expect(getChannelStreamSubscriberCount('page-a')).toBe(1);
+    });
+
+    it('given two subscribers on the same channel, unmounting the LAST one should clearPageStreams', () => {
+      const first = renderHook(() => useChannelStreamSocket('page-a'));
+      const second = renderHook(() => useChannelStreamSocket('page-a'));
+
+      first.unmount();
+      mockClearPageStreams.mockClear();
+      second.unmount();
+
+      expect(mockClearPageStreams).toHaveBeenCalledWith('page-a');
+      expect(getChannelStreamSubscriberCount('page-a')).toBe(0);
+    });
+
+    it('given subscribers on two DIFFERENT channels, unmounting one should not affect the other channel\'s count or clear it', () => {
+      const onA = renderHook(() => useChannelStreamSocket('page-a'));
+      renderHook(() => useChannelStreamSocket('page-b'));
+
+      onA.unmount();
+
+      expect(mockClearPageStreams).toHaveBeenCalledWith('page-a');
+      expect(mockClearPageStreams).not.toHaveBeenCalledWith('page-b');
+      expect(getChannelStreamSubscriberCount('page-b')).toBe(1);
+    });
+  });
+
+  describe('sibling handoff on live-consumer unmount', () => {
+    // Review finding (chatgpt-codex-connector, PR #2312, P1): the refcount fix above
+    // stops the STORE from being wiped when a sibling remains, but does nothing about
+    // the actual live SSE connection — startConsume is claim-gated (bootstrapConsumerGuard),
+    // so only ONE co-mounted instance ever holds it per messageId. If THAT instance
+    // unmounts, its cleanup releases the claim but nothing tells a surviving sibling to
+    // reclaim consumption — the sibling's copy of the stream would silently stop
+    // receiving new tokens (frozen) until chat:stream_complete eventually arrives.
+    it('given the unmounting subscriber was actively consuming a live stream and a sibling remains, should trigger the sibling to re-bootstrap and reclaim consumption', async () => {
+      const first = renderHook(() => useChannelStreamSocket('page-a'));
+      const second = renderHook(() => useChannelStreamSocket('page-a'));
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      const fetchCallsBeforeUnmount = mockFetchWithAuth.mock.calls.length;
+
+      // Both instances observe the same live start (mock socket broadcasts to every
+      // registered handler); at least one instance now holds an active controller for
+      // msg-1, which is what should be handed off on unmount.
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+
+      first.unmount();
+      await act(async () => { await Promise.resolve(); });
+
+      expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(fetchCallsBeforeUnmount);
+      expect(mockFetchWithAuth).toHaveBeenLastCalledWith(
+        '/api/ai/chat/active-streams?channelId=page-a',
+        expect.anything(),
+      );
+
+      second.unmount();
+    });
+
+    it('given the unmounting subscriber had NO active streams, should NOT trigger a sibling re-bootstrap (nothing to hand off)', async () => {
+      const first = renderHook(() => useChannelStreamSocket('page-a'));
+      const second = renderHook(() => useChannelStreamSocket('page-a'));
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      const fetchCallsBeforeUnmount = mockFetchWithAuth.mock.calls.length;
+
+      first.unmount(); // never received chat:stream_start — controllers is empty
+      await act(async () => { await Promise.resolve(); });
+
+      expect(mockFetchWithAuth.mock.calls.length).toBe(fetchCallsBeforeUnmount);
+
+      second.unmount();
+    });
+
+    it('given the unmounting subscriber was the LAST subscriber (no sibling), should NOT attempt a handoff notify', () => {
+      const only = renderHook(() => useChannelStreamSocket('page-a'));
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+
+      // No sibling exists to notify — clearPageStreams fires (the existing
+      // last-subscriber path) and nothing should throw reaching for a nonexistent peer.
+      expect(() => only.unmount()).not.toThrow();
+      expect(mockClearPageStreams).toHaveBeenCalledWith('page-a');
     });
   });
 

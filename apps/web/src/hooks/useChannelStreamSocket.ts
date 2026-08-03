@@ -11,6 +11,15 @@ import { isOwnStream } from '@/lib/ai/streams/isOwnStream';
 import { shouldAttachStream } from '@/lib/ai/streams/shouldAttachStream';
 import { isChannelConsuming } from '@/lib/ai/streams/consumingChannels';
 import {
+  registerChannelStreamSubscriber,
+  unregisterChannelStreamSubscriber,
+} from '@/lib/ai/streams/channelStreamSubscribers';
+import {
+  registerChannelRebootstrap,
+  unregisterChannelRebootstrap,
+  notifyRemainingChannelSubscribers,
+} from '@/lib/ai/streams/channelRebootstrapSignal';
+import {
   shouldRefreshOnReconnect,
   type ConnectionStatus,
 } from '@/lib/ai/streams/shouldRefreshOnReconnect';
@@ -205,6 +214,14 @@ export function useChannelStreamSocket(
 
   useEffect(() => {
     if (!socket || !channelId) return;
+
+    registerChannelStreamSubscriber(channelId);
+    // Lets a sibling reclaim this instance's live consumption if it unmounts while
+    // holding one — see channelRebootstrapSignal.ts. Reads bootstrapRef.current at
+    // CALL time (not closed over now), so it always invokes THIS effect run's own
+    // runBootstrap once that's assigned below.
+    const rebootstrapSelf = () => bootstrapRef.current?.();
+    registerChannelRebootstrap(channelId, rebootstrapSelf);
 
     let cancelled = false;
     const localBrowserSessionId = getBrowserSessionId();
@@ -669,6 +686,13 @@ export function useChannelStreamSocket(
         controller.abort();
         releaseBootstrapConsumer(msgId);
       }
+      // Correctness-review finding: without this, a stale entry survives here (the
+      // aborted consumeStreamJoin's .then()/.catch() returns early on `cancelled`
+      // before reaching its own controllers.delete) and a LATER real unmount reads it
+      // as "was I actively consuming something" — double-releasing an already-released
+      // claim and spuriously notifying a sibling to re-bootstrap a channel this user no
+      // longer has access to.
+      controllers.clear();
       abortAllPolls();
       // Release every own-stream claim we handed out. This is the ONLY chance: `cancelled`
       // is latched on this effect closure, so every future runBootstrap — including the
@@ -713,12 +737,30 @@ export function useChannelStreamSocket(
       socket.off('chat:conversation_deleted', handleConversationDeleted);
       socket.off('chat:global_conversation_added', handleGlobalConversationAdded);
       socket.off('access_revoked', handleAccessRevoked);
+      unregisterChannelRebootstrap(channelId, rebootstrapSelf);
+      // Did THIS instance hold the live claim for anything (startConsume is
+      // claim-gated — only one co-mounted instance per channel ever does)? If so,
+      // a surviving sibling's copy of that stream is about to freeze the moment we
+      // release the claim below unless something reclaims it.
+      const wasConsumingLiveStreams = controllers.size > 0;
       for (const [msgId, controller] of controllers.entries()) {
         controller.abort();
         releaseBootstrapConsumer(msgId);
       }
       abortAllPolls();
-      clearPageStreams(channelId);
+      // Scoped to the LAST subscriber for this channel — agent panes routinely
+      // co-mount multiple independent instances on the same channelId (the same
+      // agent open in more than one pane), and clearing unconditionally here wiped
+      // a sibling pane's still-mid-generation stream out of the store.
+      const wasLastSubscriber = unregisterChannelStreamSubscriber(channelId);
+      if (wasLastSubscriber) {
+        clearPageStreams(channelId);
+      } else if (wasConsumingLiveStreams) {
+        // A sibling remains and our claim(s) just released — nudge every remaining
+        // subscriber's bootstrap to reclaim consumption. Idempotent and safe even
+        // with multiple siblings (same pattern as the reconnect re-bootstrap below).
+        notifyRemainingChannelSubscribers(channelId);
+      }
     };
   }, [socket, channelId]);
 
