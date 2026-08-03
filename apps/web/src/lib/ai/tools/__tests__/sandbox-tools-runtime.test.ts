@@ -11,12 +11,16 @@ const {
   mockMeasureWarmSessionStorage,
   mockCheckSessionRuntimeGuardrail,
   mockRecordSessionActivity,
+  mockEnsureGlobalSandboxSession,
+  mockGetConversation,
 } = vi.hoisted(() => ({
   mockFindSessionForConversation: vi.fn(),
   mockProvisionSessionSandbox: vi.fn(),
   mockMeasureWarmSessionStorage: vi.fn(async () => {}),
   mockCheckSessionRuntimeGuardrail: vi.fn(),
   mockRecordSessionActivity: vi.fn(),
+  mockEnsureGlobalSandboxSession: vi.fn(),
+  mockGetConversation: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/db', () => ({ db: {} }));
@@ -28,6 +32,10 @@ vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
   // which is the property that matters — a billing observation must never delay
   // or fail a tool call.
   measureWarmSessionStorage: mockMeasureWarmSessionStorage,
+  ensureGlobalSandboxSession: mockEnsureGlobalSandboxSession,
+}));
+vi.mock('@/lib/repositories/conversation-repository', () => ({
+  conversationRepository: { getConversation: mockGetConversation },
 }));
 vi.mock('@pagespace/lib/services/sandbox/quota', () => ({
   acquireCodeExecutionSlot: vi.fn(() => true),
@@ -289,6 +297,11 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     mockCheckSessionRuntimeGuardrail.mockReturnValue({ allowed: true });
     mockFindSessionForConversation.mockResolvedValue(sessionRecord);
     mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: false, sessionId: 'ws-1' });
+    // Most tests in this block exercise a PAGE conversation (`baseInput` sets
+    // `agentPageId`) — page conversations never auto-provision, so the default
+    // here matches that and the global-only tests below override it.
+    mockGetConversation.mockResolvedValue({ type: 'page' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue(null);
   });
 
   it('should WIRE the activity-feed seam — an unwired optional dep is a silently dead feature', async () => {
@@ -354,12 +367,42 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     expect(mockRecordSessionActivity).not.toHaveBeenCalled();
   });
 
-  it('given a conversation with NO session, should DENY — never lazily mint a per-thread environment', async () => {
+  it('given a PAGE conversation with NO session, should DENY — page agents still require an explicit "New session" spawn', async () => {
     // Per-conversation minting is exactly the conflation the session model
-    // removed; it is what made panes unable to share a sandbox.
+    // removed; it is what made panes unable to share a sandbox. Page agents
+    // never auto-provision — only the global-assistant case below does.
     mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'page' });
     const deps = buildRealSandboxRunDeps();
     const result = await deps.acquireSandbox(baseInput());
+    expect(result).toEqual({ ok: false, reason: 'no_session' });
+    expect(mockEnsureGlobalSandboxSession).not.toHaveBeenCalled();
+    expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
+    expect(mockRecordSessionActivity).not.toHaveBeenCalled();
+  });
+
+  it('given a GLOBAL conversation with NO session, should auto-provision one and proceed to provision its sandbox', async () => {
+    // The default Global Assistant chat is always minted session-less and
+    // nothing else ever claims it — restore the pre-refactor "own machine"
+    // parity by auto-provisioning a REAL session the first time it's needed,
+    // through the exact same spawn+claim primitive a manual "New session"
+    // spawn uses.
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'global' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue(sessionRecord);
+    const deps = buildRealSandboxRunDeps();
+    const result = await deps.acquireSandbox(baseInput({ agentPageId: undefined }));
+    expect(mockEnsureGlobalSandboxSession).toHaveBeenCalledWith('conv-1', 'u1');
+    expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(sessionRecord, 'u1');
+    expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-1' });
+  });
+
+  it('given a GLOBAL conversation with NO session, and auto-provisioning fails, should DENY with no_session', async () => {
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'global' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue(null);
+    const deps = buildRealSandboxRunDeps();
+    const result = await deps.acquireSandbox(baseInput({ agentPageId: undefined }));
     expect(result).toEqual({ ok: false, reason: 'no_session' });
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
     expect(mockRecordSessionActivity).not.toHaveBeenCalled();

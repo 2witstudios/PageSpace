@@ -54,7 +54,9 @@ import {
   findSessionForConversation,
   provisionSessionSandbox,
   measureWarmSessionStorage,
+  ensureGlobalSandboxSession,
 } from '@/lib/agent-sessions/agent-sessions-runtime';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import type { ToolExecutionContext } from '../core/types';
 import { notifyShellAgentActivity } from '@/lib/websocket/socket-utils';
 
@@ -125,9 +127,22 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
       // session model removed, and it is what made panes unable to share a
       // sandbox. Every conversation in one session resolves this same row,
       // whose own id folds the ONE Sprite key.
-      const row = await findSessionForConversation(conversationId);
+      let row = await findSessionForConversation(conversationId);
       if (!row) {
-        return { ok: false, reason: 'no_session' };
+        // The default Global Assistant conversation is always minted
+        // session-less (`resolveOrCreateConversation`) and nothing else ever
+        // claims it into one — unlike page agents, which still require an
+        // explicit "New session" spawn. Give it the same workspace that
+        // spawn would, automatically, the first time it actually needs a
+        // sandbox — a REAL session (visible, shareable with sibling panes
+        // exactly like any other), not a second sandbox-only mechanism.
+        const conversation = await conversationRepository.getConversation(conversationId);
+        if (conversation?.type === 'global') {
+          row = await ensureGlobalSandboxSession(conversationId, input.userId);
+        }
+        if (!row) {
+          return { ok: false, reason: 'no_session' };
+        }
       }
 
       // The per-sandbox continuous-runtime backstop, keyed by the SESSION id —

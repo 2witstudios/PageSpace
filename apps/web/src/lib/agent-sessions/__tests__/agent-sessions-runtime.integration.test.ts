@@ -30,6 +30,7 @@ import {
   claimConversationInSession,
   createConversationInSession,
   reopenConversationInSession,
+  ensureGlobalSandboxSession,
 } from '../agent-sessions-runtime';
 import { SessionFullError } from '../create-conversation-in-session';
 
@@ -326,4 +327,74 @@ describe('claim — real concurrency (the guarded UPDATE, not the advisory lock,
     expect(claimed.closedInSessionAt).toBeNull();
     expect(await openCountFor(newSession.id)).toBe(1);
   }, 20_000);
+});
+
+describe('ensureGlobalSandboxSession — auto-provisioning the default Global Assistant conversation', () => {
+  beforeAll(async () => {
+    try {
+      await db.select().from(pages).limit(1);
+      dbAvailable = true;
+    } catch {
+      dbAvailable = false;
+    }
+  });
+
+  it('mints a real, ordinary session (driveId null) and binds it to a never-claimed global conversation', async () => {
+    if (!dbAvailable) return;
+
+    const owner = await factories.createUser();
+    const conversationId = createId();
+    await db.insert(conversations).values({
+      id: conversationId,
+      userId: owner.id,
+      type: 'global',
+      contextId: null,
+      sessionId: null,
+      isActive: true,
+    });
+
+    const session = await ensureGlobalSandboxSession(conversationId, owner.id);
+
+    expect(session).not.toBeNull();
+    expect(session?.ownerId).toBe(owner.id);
+    expect(session?.driveId).toBeNull();
+
+    const [bound] = await db.select().from(conversations).where(eq(conversations.id, conversationId)).limit(1);
+    expect(bound.sessionId).toBe(session?.id);
+  });
+
+  it('given a conversation already bound elsewhere, returns null and ends the freshly spawned session rather than leaving it empty', async () => {
+    if (!dbAvailable) return;
+
+    const owner = await factories.createUser();
+    const [existingSession] = await db
+      .insert(agentSessions)
+      .values({ id: createId(), driveId: null, ownerId: owner.id })
+      .returning();
+
+    const conversationId = createId();
+    await db.insert(conversations).values({
+      id: conversationId,
+      userId: owner.id,
+      type: 'global',
+      contextId: null,
+      sessionId: existingSession.id,
+      isActive: true,
+    });
+
+    const result = await ensureGlobalSandboxSession(conversationId, owner.id);
+    expect(result).toBeNull();
+
+    // The bound conversation's own session is untouched...
+    const [stillBound] = await db.select().from(conversations).where(eq(conversations.id, conversationId)).limit(1);
+    expect(stillBound.sessionId).toBe(existingSession.id);
+
+    // ...and the session this call spawned to try the claim did not end up
+    // sitting empty forever — it was torn down again rather than orphaned.
+    const [liveSessions] = await db
+      .select({ n: count() })
+      .from(agentSessions)
+      .where(and(eq(agentSessions.ownerId, owner.id), isNull(agentSessions.endedAt)));
+    expect(liveSessions.n).toBe(1); // only `existingSession` remains live
+  });
 });

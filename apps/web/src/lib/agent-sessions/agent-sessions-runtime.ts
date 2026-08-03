@@ -523,6 +523,42 @@ export async function findSessionForConversation(conversationId: string): Promis
   return (await getAgentSessionStore()).findByConversation(conversationId);
 }
 
+/**
+ * Auto-provision a workspace for a Global Assistant conversation that has
+ * never had one — the exact same primitive a manual "New session → Global
+ * Assistant" spawn uses (spawn, then claim), just triggered from the first
+ * sandbox tool call instead of the command palette. The caller
+ * (`sandbox-tools-runtime.ts`) is the one that decides this only applies to
+ * `type === 'global'` conversations; this function only knows how to mint
+ * and bind a session, not when that's appropriate.
+ *
+ * Returns null on any failure (session limit reached, spawn fault, or a race
+ * that bound/deleted the conversation before the claim landed) — the caller
+ * treats that identically to "no session".
+ */
+export async function ensureGlobalSandboxSession(
+  conversationId: string,
+  userId: string,
+): Promise<AgentSessionRecord | null> {
+  const spawned = await spawnSession({ userId, driveId: null });
+  if (!spawned.ok) return null;
+
+  const claimed = await claimConversationInSession({
+    conversationId,
+    userId,
+    sessionId: spawned.session.id,
+  });
+  if (claimed === 'claimed' || claimed === 'already_in_session') return spawned.session;
+
+  // The claim lost a race (the conversation got bound elsewhere or deleted
+  // between the read above and now) — the freshly spawned session would
+  // otherwise sit empty forever, which the session model treats as an
+  // invariant violation (mirrors the same cleanup the spawn route itself
+  // does when its own first-conversation creation fails).
+  await endSession(spawned.session.id).catch(() => {});
+  return null;
+}
+
 export interface SessionConversationEntry {
   conversationId: string;
   title: string | null;
