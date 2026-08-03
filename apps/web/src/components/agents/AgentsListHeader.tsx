@@ -2,13 +2,20 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Plus } from 'lucide-react';
+import { Bot, HardDrive, Plus, SquareTerminal } from 'lucide-react';
 import { useSWRConfig } from 'swr';
 
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import CreateDriveDialog from '@/components/layout/left-sidebar/CreateDriveDialog';
 import { useAuth } from '@/hooks/useAuth';
 import { useDriveStore } from '@/hooks/useDrive';
+import { useMobile } from '@/hooks/useMobile';
 import { usePageAgents } from '@/hooks/page-agents/usePageAgents';
 import { useUIStore } from '@/stores/useUIStore';
 import { useSpawnSession } from './useSpawnSession';
@@ -31,6 +38,7 @@ import DrivePickerDialog from './DrivePickerDialog';
  */
 export default function AgentsListHeader({ driveId }: { driveId?: string }) {
   const router = useRouter();
+  const isMobile = useMobile();
   const { user, isLoading: authLoading } = useAuth();
   const canSpawn = user?.role === 'admin' && !authLoading;
   const drives = useDriveStore((state) => state.drives);
@@ -96,22 +104,48 @@ export default function AgentsListHeader({ driveId }: { driveId?: string }) {
   return (
     <div className="flex items-center justify-between border-b border-border px-4 py-3">
       <h2 className="text-sm font-semibold text-foreground">Agents</h2>
-      <div className="flex items-center gap-2">
-        <Button variant="outline" size="sm" aria-label="New Drive" onClick={() => setCreateDriveOpen(true)}>
-          <Plus className="h-4 w-4" />
-          <span className="hidden sm:inline ml-1">New Drive</span>
-        </Button>
-        <Button variant="outline" size="sm" aria-label="New Agent" onClick={handleNewAgent}>
-          <Plus className="h-4 w-4" />
-          <span className="hidden sm:inline ml-1">New Agent</span>
-        </Button>
-        {canSpawn && (
-          <Button size="sm" aria-label="New Session" onClick={handleNewSession}>
+      {isMobile ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="icon" aria-label="New…">
+              <Plus className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => setCreateDriveOpen(true)}>
+              <HardDrive className="mr-2 h-4 w-4" />
+              New Drive
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={handleNewAgent}>
+              <Bot className="mr-2 h-4 w-4" />
+              New Agent
+            </DropdownMenuItem>
+            {canSpawn && (
+              <DropdownMenuItem onClick={handleNewSession}>
+                <SquareTerminal className="mr-2 h-4 w-4" />
+                New Session
+              </DropdownMenuItem>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : (
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" aria-label="New Drive" onClick={() => setCreateDriveOpen(true)}>
             <Plus className="h-4 w-4" />
-            <span className="hidden sm:inline ml-1">New Session</span>
+            <span className="ml-1">New Drive</span>
           </Button>
-        )}
-      </div>
+          <Button variant="outline" size="sm" aria-label="New Agent" onClick={handleNewAgent}>
+            <Plus className="h-4 w-4" />
+            <span className="ml-1">New Agent</span>
+          </Button>
+          {canSpawn && (
+            <Button size="sm" aria-label="New Session" onClick={handleNewSession}>
+              <Plus className="h-4 w-4" />
+              <span className="ml-1">New Session</span>
+            </Button>
+          )}
+        </div>
+      )}
 
       <CreateDriveDialog isOpen={createDriveOpen} setIsOpen={setCreateDriveOpen} />
       {paletteElement}
