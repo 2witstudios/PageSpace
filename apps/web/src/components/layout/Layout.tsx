@@ -45,6 +45,7 @@ import {
   getRightSidebarSizeFromLayout,
   type ResizablePanelLayout,
 } from "@/components/layout/panel-layout";
+import { shouldShowAuthLoadingScreen } from "@/components/layout/shouldShowAuthLoadingScreen";
 
 const panelContainerClassName =
   "h-full w-full min-h-0 min-w-0 overflow-hidden @container";
@@ -289,8 +290,11 @@ function Layout({ children }: LayoutProps) {
     }
   }, []);
 
-  // Optimize loading checks - show UI earlier for better perceived performance
-  if (isLoading || !hasHydrated) {
+  // Optimize loading checks - show UI earlier for better perceived performance.
+  // Gated on shouldShowAuthLoadingScreen (not a raw isLoading check) so a routine
+  // background loadSession() recheck of an ALREADY-authenticated session doesn't
+  // unmount this entire subtree — GlobalChatProvider included — down to a spinner.
+  if (shouldShowAuthLoadingScreen({ isLoading, hasHydrated, isAuthenticated })) {
     return (
       <div className="flex items-center justify-center h-screen">
         <div className="flex items-center gap-2">
