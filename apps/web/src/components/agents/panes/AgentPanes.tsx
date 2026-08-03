@@ -55,6 +55,7 @@ import { useConversationActiveStream } from '@/hooks/useActiveStream';
 import { AISelector } from '@/components/ai/shared';
 import { useConversations } from '@/lib/ai/shared/hooks/useConversations';
 import { useAgentConfig } from '@/lib/ai/shared/hooks/useAgentConfig';
+import { useAgentSettingsSaveState } from '@/lib/ai/shared/hooks/useAgentSettingsSaveState';
 import { useProviderSettings } from '@/lib/ai/shared/hooks/useProviderSettings';
 import { PageAgentHistoryTab, PageAgentSettingsTab, type PageAgentSettingsTabRef } from '@/components/ai/page-agents';
 import { cn } from '@/lib/utils';
@@ -1680,34 +1681,19 @@ function ChatPane({
     setSelectedModel,
     isProviderConfigured,
   } = useProviderSettings(scope.agentPageId ? { pageId: scope.agentPageId } : {});
-  const [isSettingsSaving, setIsSettingsSaving] = useState(false);
-  const [isSettingsDirty, setIsSettingsDirty] = useState(false);
-  const [settingsJustSaved, setSettingsJustSaved] = useState(false);
-  const settingsSavedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const settingsRef = useRef<PageAgentSettingsTabRef>(null);
   // clean/dirty/saving/saved — same state machine as AgentPageView's Save
   // Settings button, scaled down for this 30px pane bar. `agentConfig ===
   // null` folds into "clean": PageAgentSettingsTab registers `submitForm`
   // before its own config-loaded check returns, and its form defaults
   // contain an EMPTY prompt/tool list, so this button must stay inert (not
   // just "clean"-styled) until real config has loaded and been edited.
-  const settingsSaveState = agentConfig === null
-    ? 'clean'
-    : isSettingsSaving
-    ? 'saving'
-    : isSettingsDirty
-    ? 'dirty'
-    : settingsJustSaved
-    ? 'saved'
-    : 'clean';
-  const handleSettingsSaved = useCallback(() => {
-    if (settingsSavedTimeoutRef.current) clearTimeout(settingsSavedTimeoutRef.current);
-    setSettingsJustSaved(true);
-    settingsSavedTimeoutRef.current = setTimeout(() => setSettingsJustSaved(false), 1800);
-  }, []);
-  useEffect(() => () => {
-    if (settingsSavedTimeoutRef.current) clearTimeout(settingsSavedTimeoutRef.current);
-  }, []);
+  const {
+    saveState: settingsSaveState,
+    setIsSaving: setIsSettingsSaving,
+    setIsDirty: setIsSettingsDirty,
+    handleSaved: handleSettingsSaved,
+  } = useAgentSettingsSaveState({ isConfigLoaded: agentConfig !== null });
+  const settingsRef = useRef<PageAgentSettingsTabRef>(null);
 
   const toggleConversationShare = useCallback(
     async (targetConversationId: string, isShared: boolean) => {
@@ -1835,6 +1821,11 @@ function ChatPane({
                 // settingsSaveState above; review finding — chatgpt-codex-
                 // connector on PR #2299).
                 disabled={settingsSaveState !== 'dirty'}
+                // The state change (Saving.../Saved) is now the ONLY save
+                // confirmation — there's no toast to announce it anymore,
+                // so screen readers need this to catch it.
+                aria-live="polite"
+                aria-atomic="true"
                 className={cn(
                   'flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium transition-colors disabled:pointer-events-none',
                   settingsSaveState === 'clean' && 'text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50',

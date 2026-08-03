@@ -51,6 +51,7 @@ import {
 } from '@/components/ai/page-agents';
 import { PageWebhooksDialog } from '@/components/shared/PageWebhooksDialog';
 import { useProviderSettings } from '@/lib/ai/shared/hooks/useProviderSettings';
+import { useAgentSettingsSaveState } from '@/lib/ai/shared/hooks/useAgentSettingsSaveState';
 import { useConversations } from '@/lib/ai/shared/hooks/useConversations';
 import { useAgentConfig } from '@/lib/ai/shared/hooks/useAgentConfig';
 import { buildAgentSelectionUrl } from '@/lib/agents/agent-selection';
@@ -167,29 +168,13 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   // agent's Settings tab (see `useAgentConfig`'s own doc), not a private
   // per-instance fetch.
   const { config: agentConfig, setConfig: setAgentConfig, revalidate: revalidateAgentConfig } = useAgentConfig(page.id);
-  const [isSettingsSaving, setIsSettingsSaving] = useState(false);
-  const [isSettingsDirty, setIsSettingsDirty] = useState(false);
-  const [settingsJustSaved, setSettingsJustSaved] = useState(false);
-  const settingsSavedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const {
+    saveState: settingsSaveState,
+    setIsSaving: setIsSettingsSaving,
+    setIsDirty: setIsSettingsDirty,
+    handleSaved: handleSettingsSaved,
+  } = useAgentSettingsSaveState();
   const agentSettingsRef = useRef<PageAgentSettingsTabRef>(null);
-  // clean/dirty/saving/saved — drives the Save button's color, animation, and
-  // inline "Saved" confirmation, replacing the success toast that used to
-  // cover the Chat/History/Settings tabs and Webhooks button beside it.
-  const settingsSaveState = isSettingsSaving
-    ? 'saving'
-    : isSettingsDirty
-    ? 'dirty'
-    : settingsJustSaved
-    ? 'saved'
-    : 'clean';
-  const handleSettingsSaved = useCallback(() => {
-    if (settingsSavedTimeoutRef.current) clearTimeout(settingsSavedTimeoutRef.current);
-    setSettingsJustSaved(true);
-    settingsSavedTimeoutRef.current = setTimeout(() => setSettingsJustSaved(false), 1800);
-  }, []);
-  useEffect(() => () => {
-    if (settingsSavedTimeoutRef.current) clearTimeout(settingsSavedTimeoutRef.current);
-  }, []);
 
   const isReadOnly = usePermissionsCheck(page.id, user?.id);
 
@@ -481,6 +466,11 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
                   variant={settingsSaveState === 'clean' ? 'outline' : 'default'}
                   onClick={() => agentSettingsRef.current?.submitForm()}
                   disabled={settingsSaveState !== 'dirty'}
+                  // The state change (Saving.../Saved) is now the ONLY save
+                  // confirmation — there's no toast to announce it anymore,
+                  // so screen readers need this to catch it.
+                  aria-live="polite"
+                  aria-atomic="true"
                   className={cn(
                     'min-w-[100px] transition-colors sm:min-w-[120px]',
                     settingsSaveState === 'dirty' &&
