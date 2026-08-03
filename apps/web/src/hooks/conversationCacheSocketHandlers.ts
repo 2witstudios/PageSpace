@@ -98,7 +98,18 @@ export const buildConversationCacheHandlers = ({
     }
     // No usable store entry (SSE join failed / zero parts): the message IS durably
     // persisted — reload the conversation's cache entry rather than losing it.
-    if (shouldReloadOnComountComplete(stream, completedConvId, conversationId)) {
+    // Unless the sender's own onFinish already committed the final row
+    // (buildOwnStreamCommitOnFinish) — then a reload only adds a loading flip.
+    const cacheHasFinalMessage = completedConvId
+      ? conversationMessagesActions
+          .getEntry(completedConvId)
+          .messages.some(
+            (m) =>
+              m.id === messageId &&
+              (m as UIMessage & { status?: string }).status !== 'streaming',
+          )
+      : false;
+    if (shouldReloadOnComountComplete(stream, completedConvId, conversationId, cacheHasFinalMessage)) {
       void reloadConversation(completedConvId!);
     }
   },

@@ -46,6 +46,7 @@ import { buildContextRef, type ContextRef } from '@/lib/ai/shared/buildContextRe
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimisticSendOnFailure';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
+import { buildOwnStreamCommitOnFinish } from '@/hooks/ownStreamCommit';
 import {
   loadGlobalConversationMessages,
   loadOlderGlobalConversationMessages,
@@ -108,6 +109,11 @@ export function useAssistantSessionChat({
         console.error('Assistant session chat error:', error);
         toast.error('Chat error. Please try again.');
       },
+      // Panes must not depend on the stream_complete broadcast to keep a
+      // finished reply: GlobalChatProvider's subscriber is gated on ITS active
+      // conversation, never this pane's, so without a local commit the reply
+      // vanishes when the mirror releases — see buildOwnStreamCommitOnFinish.
+      onFinish: buildOwnStreamCommitOnFinish({ conversationId, agentId: null }),
     });
   }, [transport, conversationId]);
 

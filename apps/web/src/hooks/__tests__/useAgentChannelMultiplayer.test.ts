@@ -237,6 +237,26 @@ describe('useAgentChannelMultiplayer', () => {
       expect(cacheMessages('conv-active')).toEqual([]);
     });
 
+    it('given the cache ALREADY holds the final row under the completed id (the sender\'s own onFinish commit landed first), should NOT reload — no loading flip for content the cache has', () => {
+      useConversationMessagesStore.getState().applyConfirmedMessage('conv-active', {
+        id: 'msg-empty',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'the full reply' }],
+        status: 'complete',
+      } as UIMessage);
+      // The sender's own entry is already removed at handler time (own tab never joins its SSE).
+      pendingStreams.current = new Map();
+
+      renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
+
+      act(() => {
+        capturedChannel.options?.onStreamComplete?.('msg-empty', 'conv-active');
+      });
+
+      expect(mockLoadAgentConversationMessages).not.toHaveBeenCalled();
+      expect(cacheMessages('conv-active').map((m) => m.id)).toEqual(['msg-empty']);
+    });
+
     it('given an OWN completion, should promote pending optimistic sends BEFORE the commit so the question renders above the reply (F1)', () => {
       useConversationMessagesStore.getState().addOptimisticSend('conv-active', {
         id: 'u-sent', role: 'user', parts: [{ type: 'text', text: 'my question' }],

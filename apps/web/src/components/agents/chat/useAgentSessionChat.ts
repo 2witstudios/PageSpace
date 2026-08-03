@@ -44,6 +44,7 @@ import { buildSessionChatRequestBody } from '@/lib/agents/build-session-chat-req
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimisticSendOnFailure';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
+import { buildOwnStreamCommitOnFinish } from '@/hooks/ownStreamCommit';
 import {
   loadAgentConversationMessages,
   loadOlderAgentConversationMessages,
@@ -114,8 +115,13 @@ export function useAgentSessionChat({
         console.error('Agent session chat error:', error);
         toast.error('Chat error. Please try again.');
       },
+      // The sender's own stream entry is already removed when this channel's
+      // onStreamComplete runs (own tab never joins its SSE), leaving only the
+      // full-reload fallback — commit locally instead so the finished reply
+      // never flashes out and survives a failed reload.
+      onFinish: buildOwnStreamCommitOnFinish({ conversationId, agentId: agent.id }),
     });
-  }, [transport, conversationId]);
+  }, [transport, conversationId, agent.id]);
 
   const {
     messages: agentChatMessages,
