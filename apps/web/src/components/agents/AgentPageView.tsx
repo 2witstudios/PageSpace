@@ -168,12 +168,16 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   // agent's Settings tab (see `useAgentConfig`'s own doc), not a private
   // per-instance fetch.
   const { config: agentConfig, setConfig: setAgentConfig, revalidate: revalidateAgentConfig } = useAgentConfig(page.id);
+  // `activeTab` can seed straight to 'settings' from a `?tab=settings` URL
+  // (see the effect above), so the Settings tab — and this Save button —
+  // can be visible before `agentConfig` has resolved. Same guard AgentPanes
+  // passes for the same reason (review finding — coderabbitai on this PR).
   const {
     saveState: settingsSaveState,
     setIsSaving: setIsSettingsSaving,
     setIsDirty: setIsSettingsDirty,
     handleSaved: handleSettingsSaved,
-  } = useAgentSettingsSaveState();
+  } = useAgentSettingsSaveState({ isConfigLoaded: agentConfig !== null });
   const agentSettingsRef = useRef<PageAgentSettingsTabRef>(null);
 
   const isReadOnly = usePermissionsCheck(page.id, user?.id);

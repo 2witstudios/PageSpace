@@ -567,15 +567,22 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   // isAnyEditing(), letting SWR revalidation and other editing-paused
   // background work resume while it still has unsaved edits (review
   // finding — chatgpt-codex-connector on PR #2299, round 20).
+  //
+  // `formIsDirty` alone misses a provider/model-only change (same gap as
+  // the `onDirtyChange` mirror above) — without `providerOrModelTouched`
+  // here too, an SWR revalidation or auth-refresh cycle is free to
+  // interrupt/clobber a pending provider/model selection this component
+  // never told useEditingStore about (review finding — coderabbitai on
+  // this PR).
   useEffect(() => {
     const componentId = `page-agent-settings-${pageId}-${mountId}`;
-    if (formIsDirty) {
+    if (formIsDirty || providerOrModelTouched) {
       useEditingStore.getState().startEditing(componentId, 'form', { pageId });
     } else {
       useEditingStore.getState().endEditing(componentId);
     }
     return () => { useEditingStore.getState().endEditing(componentId); };
-  }, [formIsDirty, pageId, mountId]);
+  }, [formIsDirty, providerOrModelTouched, pageId, mountId]);
 
   if (!config) {
     return (
