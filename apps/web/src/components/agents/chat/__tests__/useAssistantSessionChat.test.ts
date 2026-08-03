@@ -35,14 +35,22 @@ const chat = vi.hoisted(() => ({
     clearError: vi.fn(),
     addToolResult: vi.fn(),
   },
+  // Mutable per-test override for useChat's own live return — distinct from
+  // the shared conversation cache, so a test can simulate a stream that is
+  // in-flight in useChat's local state but not yet (or never) mirrored into
+  // usePendingStreamsStore/the rendered cache.
+  state: {
+    messages: [] as UIMessage[],
+    status: 'ready' as 'ready' | 'submitted' | 'streaming' | 'error',
+  },
 }));
 
 vi.mock('@ai-sdk/react', () => ({
   useChat: vi.fn((config: Record<string, unknown> | undefined) => {
     if (config && typeof config.id === 'string') chat.capturedConfigs.push(config);
     return {
-      messages: [] as UIMessage[],
-      status: 'ready' as const,
+      messages: chat.state.messages,
+      status: chat.state.status,
       error: undefined,
       ...chat.instance,
     };
@@ -93,6 +101,8 @@ vi.mock('@/contexts/GlobalChatContext', () => ({
 import { useDriveStore, type Drive } from '@/hooks/useDrive';
 import { useConversationMessagesStore } from '@/stores/useConversationMessagesStore';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
+import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
+import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { useAssistantSessionChat } from '../useAssistantSessionChat';
 
 function ids(slug: string) {
@@ -124,9 +134,12 @@ function sentBody() {
 beforeEach(() => {
   vi.clearAllMocks();
   chat.capturedConfigs.length = 0;
+  chat.state.messages = [];
+  chat.state.status = 'ready';
   route.pathname = '/dashboard/agents';
   activeStream.remoteStreams = [];
   useConversationMessagesStore.setState({ byConversationId: {} });
+  usePendingStreamsStore.setState({ streams: new Map() });
   useDriveStore.setState({ drives: [driveFixture('drive-1', 'Engineering')] });
   mockFetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({}) });
 });
@@ -257,5 +270,35 @@ describe('useAssistantSessionChat — ask_user answering', () => {
     const { result } = renderHook(() => useAssistantSessionChat({ conversationId, driveId: null }));
 
     expect(result.current.askUserAnswering.answerableToolCallIds.has('tc-1')).toBe(false);
+  });
+});
+
+describe('useAssistantSessionChat — own-stream mirror', () => {
+  // Regression, sibling of useAgentSessionChat.test.ts's: the sender's own pane went blank
+  // mid-stream while other viewers saw the reply stream in fine. useOwnStreamMirror's
+  // `ownMessages` must be useChat's OWN live-growing `messages` array, not the
+  // rendered/cache-derived array this hook also happens to bind under the name `messages` —
+  // feeding it the latter leaves usePendingStreamsStore empty for the sender.
+  it("mirrors an in-progress own-stream assistant reply into usePendingStreamsStore, from useChat's own live messages", async () => {
+    const { conversationId } = ids('own-stream-mirror');
+    chat.state.status = 'streaming';
+    chat.state.messages = [
+      { id: 'm-user-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] } as UIMessage,
+      {
+        id: 'm-assistant-1',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'Partial reply in progress...' }],
+      } as UIMessage,
+    ];
+
+    renderHook(() => useAssistantSessionChat({ conversationId, driveId: null }));
+
+    await waitFor(() => {
+      const entry = usePendingStreamsStore.getState().streams.get('m-assistant-1');
+      expect(entry).toBeDefined();
+      expect(entry?.isOwn).toBe(true);
+      expect(entry?.pageId).toBe(globalChannelId('user-1'));
+      expect(entry?.conversationId).toBe(conversationId);
+    });
   });
 });
