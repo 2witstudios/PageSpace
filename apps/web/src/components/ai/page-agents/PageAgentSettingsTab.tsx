@@ -460,6 +460,17 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       // overlapping sibling save has also had a chance to land (review
       // finding — chatgpt-codex-connector on PR #2299, round 23).
       onConfigRevalidate();
+      // Called directly here rather than relying solely on the
+      // onDirtyChange mirror effect below: that effect only re-fires once
+      // formIsDirty/providerOrModelTouched actually change value across a
+      // render, but formIsDirty only flips to false once the separate
+      // config-reset effect's reset() call takes effect — a LATER effect
+      // than this synchronous success path. Without this, a save with a
+      // real (non-provider/model) dirty field could render one frame with
+      // isSaving:false, justSaved:true, but the mirror effect's stale
+      // formIsDirty still true — flashing back to "dirty" before settling
+      // on "saved" (review finding — general-purpose adversarial review).
+      onDirtyChange?.(false);
       onSaved?.();
     } catch (error) {
       console.error('Error saving agent configuration:', error);
@@ -468,7 +479,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       setIsSaving(false);
       onSavingChange?.(false);
     }
-  }, [pageId, config, onConfigUpdate, onConfigRevalidate, selectedProvider, selectedModel, onSavingChange, onSaved, dirtyFields]);
+  }, [pageId, config, onConfigUpdate, onConfigRevalidate, selectedProvider, selectedModel, onSavingChange, onDirtyChange, onSaved, dirtyFields]);
 
   const handleProviderSelectChange = useCallback(
     (provider: string) => {

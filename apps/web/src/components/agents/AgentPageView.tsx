@@ -485,18 +485,25 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
                 >
                   {settingsSaveState === 'saving' ? (
                     <>
-                      <Loader2 className="h-4 w-4 animate-spin sm:mr-2" />
-                      <span className="hidden sm:inline">Saving...</span>
+                      <Loader2 className="h-4 w-4 animate-spin sm:mr-2" aria-hidden="true" />
+                      {/* sr-only below `sm` instead of `hidden` — a `hidden`
+                          span drops out of the a11y tree too, leaving this
+                          icon-only button with no accessible name at all on
+                          mobile (the icons above carry none of their own),
+                          which would make aria-live's announcement above
+                          silent exactly where the removed toast used to
+                          still work. */}
+                      <span className="sr-only sm:not-sr-only sm:inline">Saving...</span>
                     </>
                   ) : settingsSaveState === 'saved' ? (
                     <>
-                      <Check className="h-4 w-4 animate-in zoom-in-50 fade-in-0 duration-200 sm:mr-2" />
-                      <span className="hidden sm:inline">Saved</span>
+                      <Check className="h-4 w-4 animate-in zoom-in-50 fade-in-0 duration-200 sm:mr-2" aria-hidden="true" />
+                      <span className="sr-only sm:not-sr-only sm:inline">Saved</span>
                     </>
                   ) : (
                     <>
                       <span className="relative inline-flex sm:mr-2">
-                        <Save className="h-4 w-4" />
+                        <Save className="h-4 w-4" aria-hidden="true" />
                         {settingsSaveState === 'dirty' && (
                           <span
                             aria-hidden="true"
@@ -504,7 +511,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
                           />
                         )}
                       </span>
-                      <span className="hidden sm:inline">Save Settings</span>
+                      <span className="sr-only sm:not-sr-only sm:inline">Save Settings</span>
                     </>
                   )}
                 </Button>

@@ -152,8 +152,30 @@ vi.mock('@/lib/ai/shared/hooks/useAgentConfig', () => ({
 }));
 
 vi.mock('@/components/ai/page-agents', () => ({
-  PageAgentSettingsTab: ({ config }: { config: unknown }) => (
-    <div data-testid="page-agent-settings-tab" data-has-config={String(config !== null)} />
+  PageAgentSettingsTab: ({
+    config,
+    onDirtyChange,
+    onSaved,
+  }: {
+    config: unknown;
+    onDirtyChange?: (isDirty: boolean) => void;
+    onSaved?: () => void;
+  }) => (
+    <div data-testid="page-agent-settings-tab" data-has-config={String(config !== null)}>
+      <button onClick={() => onDirtyChange?.(true)}>mark-dirty</button>
+      {/* Named to avoid the substring "save" — it would otherwise collide
+          with `getByRole('button', { name: /save/i })` queries for the
+          host's real Save button. Mirrors the real component: a successful
+          save resets dirty around the same time onSaved fires. */}
+      <button
+        onClick={() => {
+          onDirtyChange?.(false);
+          onSaved?.();
+        }}
+      >
+        finish-config-update
+      </button>
+    </div>
   ),
   PageAgentHistoryTab: ({
     onSelectConversation,
@@ -351,6 +373,44 @@ describe('AgentPageView', () => {
 
     expect(await screen.findByText('Save Settings')).toBeInTheDocument();
     expect(screen.getByTestId('page-agent-settings-tab')).toBeInTheDocument();
+  });
+
+  it('disables Save Settings until PageAgentSettingsTab reports a dirty change', async () => {
+    mockUseAgentConfig.mockReturnValue({
+      config: { systemPrompt: '', enabledTools: [], availableTools: [] },
+      setConfig: vi.fn(),
+    });
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await userEvent.click(screen.getByRole('tab', { name: /settings/i }));
+    const saveButton = await screen.findByRole('button', { name: /save settings/i });
+    expect(saveButton).toBeDisabled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'mark-dirty' }));
+
+    expect(saveButton).not.toBeDisabled();
+  });
+
+  it('shows an inline "Saved" confirmation after a save, then reverts to disabled', async () => {
+    mockUseAgentConfig.mockReturnValue({
+      config: { systemPrompt: '', enabledTools: [], availableTools: [] },
+      setConfig: vi.fn(),
+    });
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await userEvent.click(screen.getByRole('tab', { name: /settings/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'mark-dirty' }));
+    const saveButton = screen.getByRole('button', { name: /save settings/i });
+    expect(saveButton).not.toBeDisabled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'finish-config-update' }));
+
+    expect(await screen.findByRole('button', { name: /saved/i })).toBeDisabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: /^save settings$/i })).toBeDisabled(), {
+      timeout: 3000,
+    });
   });
 
   it('loads the agent config so the Settings tab has data, not an eternal spinner', async () => {
