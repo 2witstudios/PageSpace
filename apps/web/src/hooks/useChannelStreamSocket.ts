@@ -11,6 +11,10 @@ import { isOwnStream } from '@/lib/ai/streams/isOwnStream';
 import { shouldAttachStream } from '@/lib/ai/streams/shouldAttachStream';
 import { isChannelConsuming } from '@/lib/ai/streams/consumingChannels';
 import {
+  registerChannelStreamSubscriber,
+  unregisterChannelStreamSubscriber,
+} from '@/lib/ai/streams/channelStreamSubscribers';
+import {
   shouldRefreshOnReconnect,
   type ConnectionStatus,
 } from '@/lib/ai/streams/shouldRefreshOnReconnect';
@@ -205,6 +209,8 @@ export function useChannelStreamSocket(
 
   useEffect(() => {
     if (!socket || !channelId) return;
+
+    registerChannelStreamSubscriber(channelId);
 
     let cancelled = false;
     const localBrowserSessionId = getBrowserSessionId();
@@ -718,7 +724,14 @@ export function useChannelStreamSocket(
         releaseBootstrapConsumer(msgId);
       }
       abortAllPolls();
-      clearPageStreams(channelId);
+      // Scoped to the LAST subscriber for this channel — agent panes routinely
+      // co-mount multiple independent instances on the same channelId (the same
+      // agent open in more than one pane), and clearing unconditionally here wiped
+      // a sibling pane's still-mid-generation stream out of the store.
+      const wasLastSubscriber = unregisterChannelStreamSubscriber(channelId);
+      if (wasLastSubscriber) {
+        clearPageStreams(channelId);
+      }
     };
   }, [socket, channelId]);
 

@@ -121,6 +121,10 @@ import { useChannelStreamSocket } from '../useChannelStreamSocket';
 import { StreamJoinError } from '@/lib/ai/core/stream-join-client';
 import { releaseBootstrapConsumer } from '@/lib/ai/streams/bootstrapConsumerGuard';
 import { markChannelConsuming, resetConsumingChannels } from '@/lib/ai/streams/consumingChannels';
+import {
+  getChannelStreamSubscriberCount,
+  resetChannelStreamSubscribers,
+} from '@/lib/ai/streams/channelStreamSubscribers';
 import type {
   AiStreamStartPayload,
   AiStreamCompletePayload,
@@ -203,6 +207,7 @@ describe('useChannelStreamSocket', () => {
     mockSocket._reset();
     // Module state — a real reload clears it; a test file must too.
     resetConsumingChannels();
+    resetChannelStreamSubscribers();
     mockConnectionStatus = 'disconnected';
     mockAuthUserId = LOCAL_USER_ID;
     mockConsumeStreamJoin.mockResolvedValue({ aborted: false });
@@ -1324,6 +1329,46 @@ describe('useChannelStreamSocket', () => {
       expect(mockClearPageStreams).toHaveBeenCalledWith('page-a');
       expect(mockSocket.off).toHaveBeenCalledWith('chat:stream_start', expect.any(Function));
       expect(mockSocket.off).toHaveBeenCalledWith('chat:stream_complete', expect.any(Function));
+    });
+  });
+
+  describe('clearPageStreams — multi-subscriber refcounting', () => {
+    // Regression: two panes can be open on the same agent channel at once (by design —
+    // select-pane-agent.ts). Before refcounting, EITHER pane's unmount wiped the WHOLE
+    // channel's streams out of usePendingStreamsStore, including a sibling pane's own
+    // still-mid-generation stream.
+    it('given two subscribers on the same channel, unmounting one should NOT clearPageStreams (a sibling is still subscribed)', () => {
+      const first = renderHook(() => useChannelStreamSocket('page-a'));
+      renderHook(() => useChannelStreamSocket('page-a'));
+      expect(getChannelStreamSubscriberCount('page-a')).toBe(2);
+
+      first.unmount();
+
+      expect(mockClearPageStreams).not.toHaveBeenCalled();
+      expect(getChannelStreamSubscriberCount('page-a')).toBe(1);
+    });
+
+    it('given two subscribers on the same channel, unmounting the LAST one should clearPageStreams', () => {
+      const first = renderHook(() => useChannelStreamSocket('page-a'));
+      const second = renderHook(() => useChannelStreamSocket('page-a'));
+
+      first.unmount();
+      mockClearPageStreams.mockClear();
+      second.unmount();
+
+      expect(mockClearPageStreams).toHaveBeenCalledWith('page-a');
+      expect(getChannelStreamSubscriberCount('page-a')).toBe(0);
+    });
+
+    it('given subscribers on two DIFFERENT channels, unmounting one should not affect the other channel\'s count or clear it', () => {
+      const onA = renderHook(() => useChannelStreamSocket('page-a'));
+      renderHook(() => useChannelStreamSocket('page-b'));
+
+      onA.unmount();
+
+      expect(mockClearPageStreams).toHaveBeenCalledWith('page-a');
+      expect(mockClearPageStreams).not.toHaveBeenCalledWith('page-b');
+      expect(getChannelStreamSubscriberCount('page-b')).toBe(1);
     });
   });
 
