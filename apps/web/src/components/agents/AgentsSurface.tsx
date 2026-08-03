@@ -10,7 +10,6 @@ import { panesOf } from '@/stores/agent-workspace/pane-reducer';
 import { useLatestRef } from '@/hooks/useLatestRef';
 import { useSessionRecord } from './useSessionRecord';
 import AgentPanes from './panes/AgentPanes';
-import EmptyState from './EmptyState';
 import AgentsPastConversationsList from './AgentsPastConversationsList';
 import AgentsListHeader from './AgentsListHeader';
 
@@ -155,17 +154,27 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
 
   return (
     <div className="flex h-full flex-col">
-      {selectedSessionId && selectedConversationId ? (
+      {selectedSessionId ? (
         sessionDriveResolved ? (
+          // A session selection alone mounts the grid — the conversation is
+          // the SEED, not a precondition. A session can be page- or
+          // terminal-only now (the sidebar's page rows select a session and
+          // focus a pane, with no conversation to name), and `AgentPanes`
+          // accepts a null `initialConversation` for exactly that: it
+          // renders the stored/hydrated grid and seeds nothing.
           <AgentPanes
             key={selectedSessionId}
             sessionId={selectedSessionId}
             driveId={sessionDriveId}
-            initialConversation={{
-              conversationId: selectedConversationId,
-              agentPageId: selectedAgentId,
-              name: 'Conversation',
-            }}
+            initialConversation={
+              selectedConversationId
+                ? {
+                    conversationId: selectedConversationId,
+                    agentPageId: selectedAgentId,
+                    name: 'Conversation',
+                  }
+                : null
+            }
             onSessionEnded={() => selectSession(null)}
             onConversationClosed={handleConversationClosed}
           />
@@ -174,15 +183,6 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
             <Loader2 className="size-4 animate-spin text-muted-foreground" aria-hidden="true" />
           </div>
         )
-      ) : selectedSessionId ? (
-        // A session is selected but its opening conversation has not resolved
-        // from the URL (a hand-trimmed link). The sidebar's session rows always
-        // write both, so this is the degenerate-deep-link case, not a step in
-        // the normal flow.
-        <EmptyState
-          title="Pick a conversation"
-          description="This session's conversations are listed under it in the sidebar."
-        />
       ) : (
         // Keyed by drive: this surface's own `driveId` prop CAN change on an
         // already-mounted instance (switching drives while staying on the

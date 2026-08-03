@@ -335,7 +335,12 @@ describe('AgentsSidebar', () => {
       expect(screen.getByText('Spec doc')).toBeDefined();
     });
 
-    test('clicking a page pane row focuses the session and that pane in the grid', async () => {
+    test('clicking a page pane row focuses the session and that pane, seating the grid from the row\'s own listing', async () => {
+      // Deliberately NO local grid: the session isn't the displayed one, so
+      // `AgentPanes`/`useWorkspaceServerSync` never hydrated it. The click
+      // must seat the row's own server-listing snapshot before focusing —
+      // `selectPane` no-ops on a session the store has never seen (review
+      // P1, chatgpt-codex-connector).
       const withPagePane = {
         ...workspaceFixture,
         columns: [
@@ -348,9 +353,6 @@ describe('AgentsSidebar', () => {
           },
         ],
       };
-      act(() => {
-        useAgentWorkspaceStore.getState().hydrateWorkspace('ses-1', withPagePane as WorkspaceState);
-      });
       respondWithSessions([{ ...SESSION, workspace: withPagePane }]);
       const user = userEvent.setup();
       renderSidebar();
@@ -360,6 +362,82 @@ describe('AgentsSidebar', () => {
 
       expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
       expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].activePaneId).toBe('pane-3');
+    });
+
+    test('closing a page pane row persists the close to the server — the sync hook only covers the displayed session (review P1)', async () => {
+      const withPagePane = {
+        ...workspaceFixture,
+        columns: [
+          {
+            id: 'col-1',
+            panes: [
+              ...workspaceFixture.columns[0].panes,
+              { id: 'pane-3', scope: { kind: 'page', name: 'Spec doc', targetId: 'page-1', agentPageId: null } },
+            ],
+          },
+        ],
+      };
+      respondWithSessions([{ ...SESSION, workspace: withPagePane }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      fireEvent.contextMenu(await screen.findByText('Spec doc'));
+      await user.click(await screen.findByText('Close'));
+
+      // The local grid dropped the pane…
+      await waitFor(() => {
+        const panes = useAgentWorkspaceStore
+          .getState()
+          .workspaces['ses-1'].columns.flatMap((c) => c.panes);
+        expect(panes.find((p) => p.scope?.targetId === 'page-1')).toBeUndefined();
+      });
+      // …and the close was PUT to the server, not left to a sync hook that
+      // isn't mounted for a non-displayed session.
+      await waitFor(() => {
+        const putCall = mockFetchWithAuth.mock.calls.find(
+          ([url, init]) =>
+            url === '/api/agent-sessions/ses-1/workspace' &&
+            (init as RequestInit | undefined)?.method === 'PUT',
+        );
+        expect(putCall).toBeDefined();
+        const body = JSON.parse((putCall![1] as RequestInit).body as string) as {
+          workspace: WorkspaceState;
+        };
+        const putPanes = body.workspace.columns.flatMap((c) => c.panes);
+        expect(putPanes.find((p) => p.scope?.targetId === 'page-1')).toBeUndefined();
+        expect(putPanes).toHaveLength(2);
+      });
+    });
+
+    test('closing the LAST pane via a page row asks to end the session instead of silently tearing it down', async () => {
+      const pageOnlyWorkspace = {
+        id: 'ses-1',
+        columns: [
+          {
+            id: 'col-1',
+            panes: [{ id: 'pane-1', scope: { kind: 'page', name: 'Spec doc', targetId: 'page-1', agentPageId: null } }],
+          },
+        ],
+        activePaneId: 'pane-1',
+        pendingPickerPaneId: null,
+      };
+      respondWithSessions([{ ...SESSION, conversations: [], workspace: pageOnlyWorkspace }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      fireEvent.contextMenu(await screen.findByText('Spec doc'));
+      await user.click(await screen.findByText('Close'));
+
+      // The end-session confirm opened; nothing was closed or PUT yet.
+      expect(await screen.findByText(/end session/i)).toBeDefined();
+      const putCall = mockFetchWithAuth.mock.calls.find(
+        ([url, init]) =>
+          url === '/api/agent-sessions/ses-1/workspace' &&
+          (init as RequestInit | undefined)?.method === 'PUT',
+      );
+      expect(putCall).toBeUndefined();
     });
 
     test('selecting a session with a saved grid opens the ACTIVE pane\'s own conversation', async () => {

@@ -37,7 +37,7 @@ vi.mock('../panes/AgentPanes', () => ({
   }: {
     sessionId: string;
     driveId: string | null;
-    initialConversation: { conversationId: string; agentPageId: string | null };
+    initialConversation: { conversationId: string; agentPageId: string | null } | null;
     onConversationClosed?: (event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => void;
   }) {
     // Captured ONCE, on this component's first render — models the closure a
@@ -48,13 +48,16 @@ vi.mock('../panes/AgentPanes', () => ({
     const staleOnConversationClosed = useRef(onConversationClosed).current;
     return (
       <div data-testid="agent-panes" data-drive-id={driveId ?? 'none'}>
-        {sessionId}/{initialConversation.conversationId}/{initialConversation.agentPageId ?? 'no-agent'}
+        {sessionId}/
+        {initialConversation
+          ? `${initialConversation.conversationId}/${initialConversation.agentPageId ?? 'no-agent'}`
+          : 'no-conversation'}
         <button
           type="button"
           data-testid="fire-conversation-closed-rebind"
           onClick={() =>
             onConversationClosed?.({
-              conversationId: initialConversation.conversationId,
+              conversationId: initialConversation?.conversationId ?? 'conv-none',
               next: 'conv-next',
               nextAgentPageId: 'agent-next',
             })
@@ -64,7 +67,7 @@ vi.mock('../panes/AgentPanes', () => ({
           type="button"
           data-testid="fire-conversation-closed-no-rebind"
           onClick={() =>
-            onConversationClosed?.({ conversationId: initialConversation.conversationId, next: null, nextAgentPageId: null })
+            onConversationClosed?.({ conversationId: initialConversation?.conversationId ?? 'conv-none', next: null, nextAgentPageId: null })
           }
         />
         <button
@@ -199,14 +202,15 @@ describe('AgentsSurface', () => {
     expect(screen.getByText('Select a session')).toBeDefined();
   });
 
-  test('a session with no conversation is the degenerate deep link, not the grid', () => {
-    // The sidebar always writes session AND conversation together; only a
-    // hand-trimmed URL lands here. It must render a prompt, never a
-    // speculative pane grid for a conversation that isn't named.
+  test('a session with no conversation still mounts the grid, with nothing to seed', () => {
+    // A session can be page- or terminal-only now: the sidebar's page rows
+    // select a session WITHOUT naming a conversation (there is none to
+    // name), and a hand-trimmed deep link does the same. The grid mounts
+    // and renders whatever the store/hydration holds; a null
+    // `initialConversation` seeds nothing.
     window.history.replaceState({}, '', '/dashboard/agents?session=ses-1');
     render(<AgentsSurface />);
-    expect(screen.getByText('Pick a conversation')).toBeDefined();
-    expect(screen.queryByTestId('agent-panes')).toBeNull();
+    expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/no-conversation');
   });
 
   test('renders the pane grid, keyed by the session, once a conversation is selected', () => {

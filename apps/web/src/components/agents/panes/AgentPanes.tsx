@@ -88,9 +88,12 @@ export interface AgentPanesProps {
   driveId: string | null;
   /**
    * The session's FIRST conversation, used once to seed the opening pane (a
-   * session is born with one — the grid never starts on a picker).
+   * session is born with one — the grid never starts on a picker). Null for
+   * a session-only selection (a page/terminal row in the sidebar, a
+   * conversation-less deep link): there is nothing to seed or assert, the
+   * grid renders whatever the store/hydration holds.
    */
-  initialConversation: { conversationId: string; agentPageId: string | null; name: string };
+  initialConversation: { conversationId: string; agentPageId: string | null; name: string } | null;
   /** Fired after the last pane closed and the session was ended — the host owns what renders next. */
   onSessionEnded?: () => void;
   /**
@@ -394,6 +397,10 @@ export default function AgentPanes({
   // session it focuses the pane already showing the thread, or opens it in a
   // non-terminal pane — the store owns that policy (`openConversation`).
   useEffect(() => {
+    // Session-only selection (no conversation named): nothing to seed or
+    // assert — the grid is whatever the store already holds or server
+    // hydration seats.
+    if (!initialConversation) return;
     const workspace = useAgentWorkspaceStore.getState().workspaces[sessionId];
     // A brand-new grid (`ensureWorkspace`'s fast path) or a target that's
     // already showing (`openConversation`'s own focus path) never reaches
@@ -438,7 +445,7 @@ export default function AgentPanes({
     // re-runs (on that flip), the closure it runs with already has the
     // matching, up-to-date value.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, initialConversation.conversationId, openConversation, sessionKnownToConversationsCache]);
+  }, [sessionId, initialConversation?.conversationId, openConversation, sessionKnownToConversationsCache]);
 
   // Ending the session: peeked, confirmed, and gated on the server (findings
   // 1 + 2). `pendingEndClose` carries the pane and its scope from the PEEK,
@@ -1478,10 +1485,20 @@ export default function AgentPanes({
   );
 
   if (!workspace) {
-    // The openConversation effect seeds the grid on the next tick.
+    // With a conversation to seed, the openConversation effect creates the
+    // grid on the next tick — the spinner is a single-frame state. A
+    // session-only selection has nothing to seed locally; until
+    // `useWorkspaceServerSync`'s hydration seats a saved grid (if one
+    // exists), point at the sidebar rather than spin forever.
     return (
       <div className="flex h-full items-center justify-center">
-        <Loader2 className="size-4 animate-spin text-muted-foreground" />
+        {initialConversation ? (
+          <Loader2 className="size-4 animate-spin text-muted-foreground" />
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            This session&apos;s conversations are listed under it in the sidebar.
+          </p>
+        )}
       </div>
     );
   }

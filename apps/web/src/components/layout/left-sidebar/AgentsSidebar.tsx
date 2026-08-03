@@ -505,8 +505,25 @@ function SessionRow({
     [session.conversations],
   );
 
+  // A row action can target a session that is NOT currently displayed — for
+  // it, `AgentPanes` (and the `useWorkspaceServerSync` it mounts) is not
+  // rendered, so the local store may have never seen its grid. Seat this
+  // row's own server-listing snapshot first, never overwriting a grid the
+  // store already holds (which is always at least as fresh). Returns
+  // whatever the store holds afterwards.
+  const ensureLocalWorkspace = useCallback(() => {
+    if (!useAgentWorkspaceStore.getState().workspaces[session.sessionId] && session.workspace) {
+      hydrateWorkspace(session.sessionId, session.workspace);
+    }
+    return useAgentWorkspaceStore.getState().workspaces[session.sessionId];
+  }, [hydrateWorkspace, session.sessionId, session.workspace]);
+
   const openShell = useCallback(
     (shell: { shellId: string; name: string }) => {
+      // Seat the saved grid first, so the shell opens INTO it — without
+      // this, a click on a non-displayed session's shell row would mint a
+      // fresh one-pane grid that server-wins hydration then overwrites.
+      ensureLocalWorkspace();
       selectSession(session.sessionId);
       // `session.conversations` is this row's own already-resolved live
       // listing (the row couldn't exist here otherwise) — protects a chat
@@ -523,7 +540,7 @@ function SessionRow({
         { liveConversationIds: new Set(session.conversations.map((c) => c.conversationId)) },
       );
     },
-    [selectSession, session.sessionId, session.conversations],
+    [ensureLocalWorkspace, selectSession, session.sessionId, session.conversations],
   );
 
   const openSession = useCallback(() => {
@@ -551,6 +568,7 @@ function SessionRow({
         (activePane?.scope?.kind === 'page' && activePane.scope.targetId ? activePane : undefined) ??
         panes.find((p) => p.scope?.kind === 'page' && p.scope.targetId !== null);
       if (pagePane) {
+        ensureLocalWorkspace();
         selectSession(session.sessionId);
         selectPane(session.sessionId, pagePane.id);
         return;
@@ -563,7 +581,7 @@ function SessionRow({
     }
     const firstShell = session.shells[0];
     if (firstShell) openShell(firstShell);
-  }, [openConversation, openShell, conversationEntryForTarget, selectSession, selectPane, session.sessionId, session.workspace, session.conversations, session.shells]);
+  }, [openConversation, openShell, conversationEntryForTarget, ensureLocalWorkspace, selectSession, selectPane, session.sessionId, session.workspace, session.conversations, session.shells]);
 
   const endSession = useCallback(async () => {
     // Snapshot for rollback, then assume success immediately — the row must
@@ -794,26 +812,58 @@ function SessionRow({
   const openPagePane = useCallback(
     (paneId: string) => {
       // A page pane has no conversation to select — focus the session and
-      // the existing pane in its grid directly.
+      // the existing pane in its grid. The grid must be seated locally
+      // BEFORE `selectPane`, which no-ops on a session the store has never
+      // seen (hydration normally runs inside the very `AgentPanes` this
+      // click is mounting).
+      ensureLocalWorkspace();
       selectSession(session.sessionId);
       selectPane(session.sessionId, paneId);
     },
-    [selectSession, selectPane, session.sessionId],
+    [ensureLocalWorkspace, selectSession, selectPane, session.sessionId],
   );
 
   const closePagePane = useCallback(
-    (paneId: string) => {
-      const workspace = useAgentWorkspaceStore.getState().workspaces[session.sessionId];
+    async (paneId: string) => {
+      const workspace = ensureLocalWorkspace();
+      if (!workspace) return;
       // Closing the LAST pane empties the session, which ends it — route
       // through the same confirm dialog the chat path's 409 raises rather
       // than tearing the sandbox down from an innocuous-looking row action.
-      if (workspace && isLastPane(workspace, paneId)) {
+      if (isLastPane(workspace, paneId)) {
         setConfirmingEnd(true);
         return;
       }
       closePane(session.sessionId, paneId);
+      const updated = useAgentWorkspaceStore.getState().workspaces[session.sessionId];
+      if (!updated) return;
+      // Persist the close directly: `useWorkspaceServerSync` only observes
+      // the session AgentPanes is displaying, so a close on any OTHER row
+      // would otherwise reach Zustand/localStorage only and be resurrected
+      // by server-wins hydration the next time that session opens. When the
+      // session IS the displayed one, the sync hook debounce-PUTs the same
+      // grid — an idempotent duplicate, not a conflict.
+      try {
+        const response = await fetchWithAuth(
+          `/api/agent-sessions/${encodeURIComponent(session.sessionId)}/workspace`,
+          {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ workspace: updated }),
+          },
+        );
+        if (!response.ok) throw new Error(`Failed to save the session layout (${response.status})`);
+        // Refresh the listing so this row's pane list reflects the close
+        // without waiting for the next poll.
+        void mutate(isAgentSessionsKey);
+      } catch (error) {
+        console.error('Failed to close this pane:', error);
+        toast.error('Could not close this pane', {
+          description: error instanceof Error ? error.message : 'Please try again.',
+        });
+      }
     },
-    [closePane, session.sessionId],
+    [ensureLocalWorkspace, closePane, mutate, session.sessionId],
   );
 
   return (
@@ -909,7 +959,7 @@ function SessionRow({
                 {
                   label: 'Close',
                   icon: X,
-                  onSelect: () => closePagePane(pane.id),
+                  onSelect: () => void closePagePane(pane.id),
                   destructive: true,
                 },
               ]}
