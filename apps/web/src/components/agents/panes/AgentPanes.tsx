@@ -840,6 +840,34 @@ export default function AgentPanes({
     [sessionId, isConversationShownSomewhere, closeDecisionListing, onConversationClosed, recordClosedConversation],
   );
 
+  // Keep the Agents CONSOLE's own selection in sync whenever a pane's
+  // conversation changes to something the console didn't already know about
+  // — mirroring what `useSpawnSession` already does after spawning a
+  // session. Every call site that reassigns a pane's `targetId` to a
+  // DIFFERENT conversation (a mint, or focusing one already open elsewhere)
+  // needs this: without it, `selectedConversationId` keeps naming whatever
+  // this pane USED to show, and a later remount's seeding effect tries to
+  // re-open that stale id against a pane that no longer shows it —
+  // reverting the swap or, once the eviction guard treats this pane as
+  // protected, splitting a second pane open for it instead of recognizing
+  // the swap as already done (caught in review). Centralized here, rather
+  // than inlined at each call site, so the `chatContext` gate below lives in
+  // exactly one place.
+  //
+  // Scoped to `chatContext === 'console'`: this component is also embedded
+  // in a regular page's chat tab (`AgentPageView`, chatContext "page"),
+  // whose `initialConversation` is driven by its own local state, not this
+  // store — syncing there would both do nothing useful AND push a
+  // `/dashboard/agents` URL via `history.pushState`, silently navigating a
+  // page-embedded chat's user away to the Agents console (caught in review).
+  const syncConsoleSelection = useCallback(
+    (conversationId: string, agentPageId: string | null) => {
+      if (chatContext !== 'console') return;
+      selectConversation({ sessionId, conversationId, agentId: agentPageId });
+    },
+    [chatContext, selectConversation, sessionId],
+  );
+
   const handlePickAgent = useCallback(
     async (paneId: string, agentPageId: string | null): Promise<boolean> => {
       // Also supersedes any pending `handlePickHistoryConversation` call for
@@ -939,24 +967,7 @@ export default function AgentPanes({
         // id captured BEFORE this mint sequence began still names the
         // conversation actually being replaced.
         assignPane(sessionId, paneId, newScope);
-        // Tell the Agents CONSOLE's own selection about this swap —
-        // mirroring what `useSpawnSession` already does after spawning a
-        // session. Without this, `selectedConversationId` keeps naming the
-        // REPLACED conversation, and a later remount's seeding effect (this
-        // file, below) tries to re-open that stale id against a pane that no
-        // longer shows it — reverting the swap or, once the eviction guard
-        // treats this pane as protected, splitting a second pane open for it
-        // instead of recognizing the swap as already done (caught in review).
-        // Scoped to `chatContext === 'console'`: this component is also
-        // embedded in a regular page's chat tab (`AgentPageView`, chatContext
-        // "page"), whose `initialConversation` is driven by its own local
-        // state, not this store — writing here unconditionally would both
-        // do nothing useful there AND push a `/dashboard/agents` URL via
-        // `history.pushState`, silently navigating a page-embedded chat's
-        // user away to the Agents console (caught in review).
-        if (chatContext === 'console') {
-          selectConversation({ sessionId, conversationId, agentId: agentPageId });
-        }
+        syncConsoleSelection(conversationId, agentPageId);
         if (priorScopeConversationId !== null) {
           void closeReplacedConversation(paneId, priorScopeConversationId, conversationId, agentPageId);
         }
@@ -1013,8 +1024,7 @@ export default function AgentPanes({
       closeReplacedConversation,
       recordMintedConversation,
       beginPaneAssign,
-      selectConversation,
-      chatContext,
+      syncConsoleSelection,
     ],
   );
 
@@ -1396,6 +1406,7 @@ export default function AgentPanes({
           targetId: decision.conversationId,
           agentPageId: nextAgentPageId,
         });
+        syncConsoleSelection(decision.conversationId, nextAgentPageId);
         if (oldTargetId !== null) {
           void closeReplacedConversation(paneId, oldTargetId, decision.conversationId, nextAgentPageId);
         }
@@ -1403,7 +1414,15 @@ export default function AgentPanes({
       }
       void handlePickAgent(paneId, nextAgentPageId);
     },
-    [workspace, sessionConversations, sessionId, assignPane, closeReplacedConversation, handlePickAgent],
+    [
+      workspace,
+      sessionConversations,
+      sessionId,
+      assignPane,
+      closeReplacedConversation,
+      handlePickAgent,
+      syncConsoleSelection,
+    ],
   );
 
   const handlePickShell = useCallback(

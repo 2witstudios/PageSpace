@@ -11,7 +11,7 @@ import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { useSidebarBadges } from "@/hooks/useSidebarBadges";
 import { useShallow } from "zustand/react/shallow";
 import { useAgentSurfaceStore } from "@/stores/agents/useAgentSurfaceStore";
-import { agentsBasePath, buildAgentSelectionUrl } from "@/lib/agents/agent-selection";
+import { EMPTY_AGENT_SELECTION, buildAgentSelectionUrl } from "@/lib/agents/agent-selection";
 
 interface PrimaryNavigationProps {
     driveId?: string;
@@ -35,22 +35,19 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
     // them on the way back in — derive the link's href from the live
     // selection instead, scoped to this nav's own drive so a different
     // drive's (or global vs. drive-scoped) session is never carried over.
+    const agentsSelectionDriveId = useAgentSurfaceStore((state) => state.driveId);
     const agentSelection = useAgentSurfaceStore(
         useShallow((state) => ({
-            driveId: state.driveId,
             sessionId: state.selectedSessionId,
             conversationId: state.selectedConversationId,
             agentId: state.selectedAgentId,
         }))
     );
     const agentsTargetDriveId = driveId ?? null;
-    const agentsMatchesDrive = agentSelection.driveId === agentsTargetDriveId;
-    const agentsBasePathForDrive = agentsBasePath(agentsTargetDriveId);
+    const agentsMatchesDrive = agentsSelectionDriveId === agentsTargetDriveId;
     const agentsHref = buildAgentSelectionUrl({
         driveId: agentsTargetDriveId,
-        sessionId: agentsMatchesDrive ? agentSelection.sessionId : null,
-        conversationId: agentsMatchesDrive ? agentSelection.conversationId : null,
-        agentId: agentsMatchesDrive ? agentSelection.agentId : null,
+        ...(agentsMatchesDrive ? agentSelection : EMPTY_AGENT_SELECTION),
     });
 
     const navigation = [
@@ -104,10 +101,6 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
             ? [{
                 name: "Agents",
                 href: agentsHref,
-                // The href above can carry a query string (the live selection);
-                // isActive must compare against the bare path, since
-                // usePathname() never includes the query string.
-                matchPath: agentsBasePathForDrive,
                 icon: Bot,
                 exact: false,
                 badge: 0,
@@ -124,7 +117,12 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
     return (
         <nav className="flex flex-col gap-0.5 mb-2">
             {navigation.map((item) => {
-                const matchPath = ("matchPath" in item ? item.matchPath : undefined) ?? item.href;
+                // The Agents entry's href can carry a query string (the live
+                // agent-session selection); isActive must compare against the
+                // bare path, since usePathname() never includes the query
+                // string. Every other item's href never has a "?", so this
+                // is a no-op for them.
+                const matchPath = item.href.split("?")[0];
                 const isActive = item.exact
                     ? pathname === matchPath
                     : pathname?.startsWith(matchPath);
