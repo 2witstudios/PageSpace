@@ -31,6 +31,7 @@ import {
   createConversationInSession,
   reopenConversationInSession,
   ensureGlobalSandboxSession,
+  MAX_ACTIVE_SESSIONS_PER_OWNER,
 } from '../agent-sessions-runtime';
 import { SessionFullError } from '../create-conversation-in-session';
 
@@ -353,17 +354,18 @@ describe('ensureGlobalSandboxSession — auto-provisioning the default Global As
       isActive: true,
     });
 
-    const session = await ensureGlobalSandboxSession(conversationId, owner.id);
+    const result = await ensureGlobalSandboxSession(conversationId, owner.id);
 
-    expect(session).not.toBeNull();
-    expect(session?.ownerId).toBe(owner.id);
-    expect(session?.driveId).toBeNull();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.session.ownerId).toBe(owner.id);
+    expect(result.session.driveId).toBeNull();
 
     const [bound] = await db.select().from(conversations).where(eq(conversations.id, conversationId)).limit(1);
-    expect(bound.sessionId).toBe(session?.id);
+    expect(bound.sessionId).toBe(result.session.id);
   });
 
-  it('given a conversation already bound elsewhere, returns null and ends the freshly spawned session rather than leaving it empty', async () => {
+  it('given a conversation already bound to an existing session, resolves to THAT session rather than failing — same code path a concurrent winner takes', async () => {
     if (!dbAvailable) return;
 
     const owner = await factories.createUser();
@@ -383,18 +385,88 @@ describe('ensureGlobalSandboxSession — auto-provisioning the default Global As
     });
 
     const result = await ensureGlobalSandboxSession(conversationId, owner.id);
-    expect(result).toBeNull();
 
-    // The bound conversation's own session is untouched...
-    const [stillBound] = await db.select().from(conversations).where(eq(conversations.id, conversationId)).limit(1);
-    expect(stillBound.sessionId).toBe(existingSession.id);
+    // The claim this call attempted lost (the conversation was already
+    // bound) — it re-resolves through the conversation instead of failing,
+    // so a caller sees the SAME outcome whether the binding happened just
+    // now (a concurrent winner) or long ago (a stale pre-check).
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.session.id).toBe(existingSession.id);
 
-    // ...and the session this call spawned to try the claim did not end up
-    // sitting empty forever — it was torn down again rather than orphaned.
+    // The scratch session this call spawned to attempt the claim did not
+    // end up sitting empty forever — it was torn down rather than orphaned.
     const [liveSessions] = await db
       .select({ n: count() })
       .from(agentSessions)
       .where(and(eq(agentSessions.ownerId, owner.id), isNull(agentSessions.endedAt)));
     expect(liveSessions.n).toBe(1); // only `existingSession` remains live
+  });
+
+  it('two concurrent calls for the SAME never-bound conversation converge on ONE session — the loser cleans up and adopts the winner\'s', async () => {
+    if (!dbAvailable) return;
+
+    const owner = await factories.createUser();
+    const conversationId = createId();
+    await db.insert(conversations).values({
+      id: conversationId,
+      userId: owner.id,
+      type: 'global',
+      contextId: null,
+      sessionId: null,
+      isActive: true,
+    });
+
+    const [a, b] = await Promise.all([
+      ensureGlobalSandboxSession(conversationId, owner.id),
+      ensureGlobalSandboxSession(conversationId, owner.id),
+    ]);
+
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+    // Both concurrent callers end up pointed at the SAME sandbox — the
+    // shared-workspace invariant a per-conversation sandbox would violate.
+    expect(a.session.id).toBe(b.session.id);
+
+    const [bound] = await db.select().from(conversations).where(eq(conversations.id, conversationId)).limit(1);
+    expect(bound.sessionId).toBe(a.session.id);
+
+    // Exactly one session survives — the loser's scratch spawn was torn down,
+    // not left as an orphaned, empty, permanently-billed workspace.
+    const [liveSessions] = await db
+      .select({ n: count() })
+      .from(agentSessions)
+      .where(and(eq(agentSessions.ownerId, owner.id), isNull(agentSessions.endedAt)));
+    expect(liveSessions.n).toBe(1);
+  });
+
+  it('given the owner is already at the active-session cap, fails with session_limit_reached rather than the generic no_session', async () => {
+    if (!dbAvailable) return;
+
+    const owner = await factories.createUser();
+    // Bulk-insert straight to the cap — bypasses spawnSession's own store
+    // logic (this test is about ensureGlobalSandboxSession's error mapping,
+    // not about the cap's own enforcement, which plan-spawn-session.test.ts
+    // already covers).
+    await db.insert(agentSessions).values(
+      Array.from({ length: MAX_ACTIVE_SESSIONS_PER_OWNER }, () => ({ id: createId(), driveId: null, ownerId: owner.id })),
+    );
+
+    const conversationId = createId();
+    await db.insert(conversations).values({
+      id: conversationId,
+      userId: owner.id,
+      type: 'global',
+      contextId: null,
+      sessionId: null,
+      isActive: true,
+    });
+
+    const result = await ensureGlobalSandboxSession(conversationId, owner.id);
+    expect(result).toEqual({ ok: false, reason: 'session_limit_reached' });
+
+    const [stillUnbound] = await db.select().from(conversations).where(eq(conversations.id, conversationId)).limit(1);
+    expect(stillUnbound.sessionId).toBeNull();
   });
 });

@@ -301,7 +301,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     // `agentPageId`) — page conversations never auto-provision, so the default
     // here matches that and the global-only tests below override it.
     mockGetConversation.mockResolvedValue({ type: 'page' });
-    mockEnsureGlobalSandboxSession.mockResolvedValue(null);
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'no_session' });
   });
 
   it('should WIRE the activity-feed seam — an unwired optional dep is a silently dead feature', async () => {
@@ -389,7 +389,7 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     // spawn uses.
     mockFindSessionForConversation.mockResolvedValue(null);
     mockGetConversation.mockResolvedValue({ type: 'global' });
-    mockEnsureGlobalSandboxSession.mockResolvedValue(sessionRecord);
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: true, session: sessionRecord });
     const deps = buildRealSandboxRunDeps();
     const result = await deps.acquireSandbox(baseInput({ agentPageId: undefined }));
     expect(mockEnsureGlobalSandboxSession).toHaveBeenCalledWith('conv-1', 'u1');
@@ -400,10 +400,24 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
   it('given a GLOBAL conversation with NO session, and auto-provisioning fails, should DENY with no_session', async () => {
     mockFindSessionForConversation.mockResolvedValue(null);
     mockGetConversation.mockResolvedValue({ type: 'global' });
-    mockEnsureGlobalSandboxSession.mockResolvedValue(null);
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'no_session' });
     const deps = buildRealSandboxRunDeps();
     const result = await deps.acquireSandbox(baseInput({ agentPageId: undefined }));
     expect(result).toEqual({ ok: false, reason: 'no_session' });
+    expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
+    expect(mockRecordSessionActivity).not.toHaveBeenCalled();
+  });
+
+  it('given a GLOBAL conversation with NO session, and the owner is at their session cap, should DENY with the specific session_limit_reached cause', async () => {
+    // A distinct, actionable denial ("end an existing session first") —
+    // collapsing it into the generic no_session message would tell an agent
+    // at its owner's session cap to do something that can't help.
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'global' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'session_limit_reached' });
+    const deps = buildRealSandboxRunDeps();
+    const result = await deps.acquireSandbox(baseInput({ agentPageId: undefined }));
+    expect(result).toEqual({ ok: false, reason: 'provision_failed', cause: 'session_limit_reached' });
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
     expect(mockRecordSessionActivity).not.toHaveBeenCalled();
   });

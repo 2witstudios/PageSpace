@@ -523,6 +523,12 @@ export async function findSessionForConversation(conversationId: string): Promis
   return (await getAgentSessionStore()).findByConversation(conversationId);
 }
 
+export type EnsureGlobalSandboxSessionResult =
+  | { ok: true; session: AgentSessionRecord }
+  /** The owner is already at `MAX_ACTIVE_SESSIONS_PER_OWNER` — actionable and distinct from a generic "no session" denial. */
+  | { ok: false; reason: 'session_limit_reached' }
+  | { ok: false; reason: 'spawn_failed' | 'no_session' };
+
 /**
  * Auto-provision a workspace for a Global Assistant conversation that has
  * never had one — the exact same primitive a manual "New session → Global
@@ -531,32 +537,44 @@ export async function findSessionForConversation(conversationId: string): Promis
  * (`sandbox-tools-runtime.ts`) is the one that decides this only applies to
  * `type === 'global'` conversations; this function only knows how to mint
  * and bind a session, not when that's appropriate.
- *
- * Returns null on any failure (session limit reached, spawn fault, or a race
- * that bound/deleted the conversation before the claim landed) — the caller
- * treats that identically to "no session".
  */
 export async function ensureGlobalSandboxSession(
   conversationId: string,
   userId: string,
-): Promise<AgentSessionRecord | null> {
+): Promise<EnsureGlobalSandboxSessionResult> {
   const spawned = await spawnSession({ userId, driveId: null });
-  if (!spawned.ok) return null;
+  if (!spawned.ok) {
+    // `session_limit_reached` is a distinct, actionable denial ("end an
+    // existing session first") the caller already knows how to surface —
+    // collapsing it into the generic no_session message would tell an agent
+    // sitting at its owner's session cap to do something that can't help
+    // ("start a new conversation").
+    return { ok: false, reason: spawned.reason === 'session_limit_reached' ? 'session_limit_reached' : 'spawn_failed' };
+  }
 
   const claimed = await claimConversationInSession({
     conversationId,
     userId,
     sessionId: spawned.session.id,
   });
-  if (claimed === 'claimed' || claimed === 'already_in_session') return spawned.session;
+  if (claimed === 'claimed' || claimed === 'already_in_session') return { ok: true, session: spawned.session };
 
-  // The claim lost a race (the conversation got bound elsewhere or deleted
-  // between the read above and now) — the freshly spawned session would
-  // otherwise sit empty forever, which the session model treats as an
-  // invariant violation (mirrors the same cleanup the spawn route itself
-  // does when its own first-conversation creation fails).
+  // The claim lost a race — most likely a CONCURRENT call for the same
+  // conversation (two sandbox tool calls in one turn, two tabs) won first
+  // and bound it to the session IT spawned. That winner's session is
+  // exactly as valid as the one this call would have minted, so re-resolve
+  // through the conversation rather than failing outright — otherwise the
+  // losing call would spuriously deny a conversation that, by the time this
+  // line runs, genuinely has a session. Only a conversation deleted out
+  // from under both calls resolves to nothing here.
+  //
+  // The freshly spawned session would otherwise sit empty forever, which
+  // the session model treats as an invariant violation (mirrors the same
+  // cleanup the spawn route itself does when its own first-conversation
+  // creation fails) — so it's torn down either way.
   await endSession(spawned.session.id).catch(() => {});
-  return null;
+  const winner = await findSessionForConversation(conversationId);
+  return winner ? { ok: true, session: winner } : { ok: false, reason: 'no_session' };
 }
 
 export interface SessionConversationEntry {

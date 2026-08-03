@@ -138,7 +138,12 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
         // exactly like any other), not a second sandbox-only mechanism.
         const conversation = await conversationRepository.getConversation(conversationId);
         if (conversation?.type === 'global') {
-          row = await ensureGlobalSandboxSession(conversationId, input.userId);
+          const ensured = await ensureGlobalSandboxSession(conversationId, input.userId);
+          if (ensured.ok) {
+            row = ensured.session;
+          } else if (ensured.reason === 'session_limit_reached') {
+            return { ok: false, reason: 'provision_failed', cause: 'session_limit_reached' };
+          }
         }
         if (!row) {
           return { ok: false, reason: 'no_session' };
