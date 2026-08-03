@@ -28,6 +28,15 @@ vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => {
   };
 });
 
+// Spies on the shared `/api/agent-sessions**` invalidation only — `useSWR`
+// and `SWRConfig` stay real so this component's own data fetching (via the
+// isolated per-test Map provider below) is unaffected.
+const mockMutate = vi.hoisted(() => vi.fn());
+vi.mock('swr', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('swr')>();
+  return { ...actual, mutate: (...args: unknown[]) => mockMutate(...args) };
+});
+
 const mockLoadConversation = vi.hoisted(() => vi.fn());
 vi.mock('@/contexts/GlobalChatContext', () => ({
   useGlobalChatConversation: () => ({ loadConversation: mockLoadConversation }),
@@ -40,6 +49,7 @@ vi.mock('sonner', () => ({ toast: { error: mockToastError, info: mockToastInfo }
 import AgentsPastConversationsList from '../AgentsPastConversationsList';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { ApiRequestError } from '@/lib/auth/auth-fetch';
+import { isAgentSessionsKey } from '../panes/session-conversations';
 
 interface Row {
   conversationId: string;
@@ -155,6 +165,29 @@ describe('AgentsPastConversationsList', () => {
     expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-page');
     expect(useAgentSurfaceStore.getState().selectedAgentId).toBe('agent-1');
     expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  test('a successful claim invalidates the shared sessions cache so the sidebar picks it up', async () => {
+    mockFetchWithAuth.mockResolvedValue(conversationsResponse([PAGE_ROW]));
+    mockPost.mockResolvedValue({ session: { sessionId: 'ses-new' }, conversationId: 'conv-page' });
+    renderList();
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByText('Page chat'));
+
+    await waitFor(() => expect(mockMutate).toHaveBeenCalledWith(isAgentSessionsKey));
+  });
+
+  test('a failed claim does NOT invalidate the shared sessions cache', async () => {
+    mockFetchWithAuth.mockResolvedValue(conversationsResponse([PAGE_ROW]));
+    mockPost.mockRejectedValue(new ApiRequestError('Forbidden', 403));
+    renderList();
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByText('Page chat'));
+
+    await waitFor(() => expect(mockPush).toHaveBeenCalled());
+    expect(mockMutate).not.toHaveBeenCalled();
   });
 
   test('a session-less global row claims with the surface\'s own (absent) drive scope', async () => {
