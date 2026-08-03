@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // with injected fakes and never touches the mocked defaults.
 const {
   mockFindSessionForConversation,
+  mockFindSessionRecord,
   mockProvisionSessionSandbox,
   mockMeasureWarmSessionStorage,
   mockCheckSessionRuntimeGuardrail,
@@ -16,6 +17,7 @@ const {
   mockEndSession,
 } = vi.hoisted(() => ({
   mockFindSessionForConversation: vi.fn(),
+  mockFindSessionRecord: vi.fn(),
   mockProvisionSessionSandbox: vi.fn(),
   mockMeasureWarmSessionStorage: vi.fn(async () => {}),
   mockCheckSessionRuntimeGuardrail: vi.fn(),
@@ -28,6 +30,7 @@ const {
 vi.mock('@pagespace/db/db', () => ({ db: {} }));
 vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
   findSessionForConversation: mockFindSessionForConversation,
+  findSessionRecord: mockFindSessionRecord,
   provisionSessionSandbox: mockProvisionSessionSandbox,
   // Opportunistic storage measurement rides this path fire-and-forget. Stubbed
   // so the module loads; the assertions below deliberately do not await it,
@@ -620,12 +623,13 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
     expect(mockEnsureGlobalSandboxSession).toHaveBeenCalledWith('conv-fresh-global', 'u1');
   });
 
-  it('given a GLOBAL conversation this call itself just minted (selfClaimed), attaches a cleanupIfDenied that ends that session — a repeat credit-exhausted attempt must not leave a real, empty, permanently-bound session behind (review finding — P2, PR #2314, fourth pass)', async () => {
+  it('given a GLOBAL conversation this call itself just minted (selfClaimed) and NOTHING has been provisioned in it since, attaches a cleanupIfDenied that ends that session — a repeat credit-exhausted attempt must not leave a real, empty, permanently-bound session behind (review finding — P2, PR #2314, fourth pass)', async () => {
     mockEndSession.mockClear();
     mockFindSessionForConversation.mockResolvedValue(null);
     mockGetConversation.mockResolvedValue({ type: 'global' });
-    const provisioned = makeSessionRecord({ id: 'auto-ses-2', driveId: null, ownerId: 'u1' });
+    const provisioned = makeSessionRecord({ id: 'auto-ses-2', driveId: null, ownerId: 'u1', sandboxId: null });
     mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: true, session: provisioned, selfClaimed: true });
+    mockFindSessionRecord.mockResolvedValue(makeSessionRecord({ id: 'auto-ses-2', sandboxId: null }));
     const deps = buildRealSandboxRunDeps();
 
     const result = await deps.resolveBillingSession?.({
@@ -637,10 +641,38 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
     });
 
     expect(result).toHaveProperty('cleanupIfDenied');
+    expect(mockEndSession).not.toHaveBeenCalled();
     const cleanupIfDenied = (result as { cleanupIfDenied?: () => Promise<void> })?.cleanupIfDenied;
     expect(typeof cleanupIfDenied).toBe('function');
     await cleanupIfDenied?.();
+    expect(mockFindSessionRecord).toHaveBeenCalledWith('auto-ses-2');
     expect(mockEndSession).toHaveBeenCalledWith('auto-ses-2');
+  });
+
+  it('given a GLOBAL conversation this call itself just minted, but a CONCURRENT sibling has since provisioned a sandbox in it, cleanupIfDenied does NOT end the session — that sibling may be actively, legitimately using it (review finding — P1, PR #2314, fifth pass)', async () => {
+    mockEndSession.mockClear();
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'global' });
+    const provisioned = makeSessionRecord({ id: 'auto-ses-3', driveId: null, ownerId: 'u1', sandboxId: null });
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: true, session: provisioned, selfClaimed: true });
+    // A fresh re-read shows a sandbox now exists — a sibling call won its
+    // own gate and started provisioning between our claim and our own
+    // gate's denial.
+    mockFindSessionRecord.mockResolvedValue(makeSessionRecord({ id: 'auto-ses-3', sandboxId: 'sbx-sibling-1' }));
+    const deps = buildRealSandboxRunDeps();
+
+    const result = await deps.resolveBillingSession?.({
+      userId: 'u1',
+      tenantId: 'u1',
+      conversationId: 'conv-fresh-global',
+      actorEmail: 'u1@example.com',
+      tier: 'pro',
+    });
+
+    const cleanupIfDenied = (result as { cleanupIfDenied?: () => Promise<void> })?.cleanupIfDenied;
+    await cleanupIfDenied?.();
+    expect(mockFindSessionRecord).toHaveBeenCalledWith('auto-ses-3');
+    expect(mockEndSession).not.toHaveBeenCalled();
   });
 
   it('given a GLOBAL conversation whose session was ADOPTED from a concurrent sibling (not selfClaimed), does NOT attach cleanupIfDenied — that session is the sibling\'s to manage, not ours to tear down on our own credit denial', async () => {
@@ -661,6 +693,7 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
 
     expect(result).toMatchObject({ sessionId: 'sibling-ses-1' });
     expect((result as { cleanupIfDenied?: unknown })?.cleanupIfDenied).toBeUndefined();
+    expect(mockEndSession).not.toHaveBeenCalled();
   });
 
   it('given a GLOBAL conversation whose auto-provisioning hits the session cap, fails CLOSED with { deny } rather than resolving null — a concurrent sibling\'s claim could still let acquireSandbox succeed moments later, executing unmetered (review finding — P1, PR #2314, second pass)', async () => {

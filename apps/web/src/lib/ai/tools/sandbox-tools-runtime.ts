@@ -52,6 +52,7 @@ import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { createSandboxTools, type ResolveSandboxContext, type SandboxGate } from './sandbox-tools';
 import {
   findSessionForConversation,
+  findSessionRecord,
   provisionSessionSandbox,
   measureWarmSessionStorage,
   ensureGlobalSandboxSession,
@@ -360,7 +361,29 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
           // clutters the sidebar and eats into MAX_ACTIVE_SESSIONS_PER_OWNER
           // (review finding — P2, PR #2314, fourth pass,
           // chatgpt-codex-connector).
-          cleanupIfDenied: resolved.justProvisioned ? () => endSession(row.id).then(() => {}) : undefined,
+          //
+          // `selfClaimed` only records who performed the ORIGINAL claim —
+          // once that claim commits, the binding is PUBLIC (any other tool
+          // call for this same conversation resolves the identical session
+          // via the ordinary `findSessionForConversation` path). A sibling
+          // call can legitimately start using it — win its OWN credit gate,
+          // provision a sandbox, run code — in the window between our claim
+          // landing and our OWN gate denying (e.g. a shared payer with just
+          // enough credit for one hold, not two racing ones). Blindly ending
+          // the session here would destroy that sibling's live, correctly-
+          // gated work. Re-check immediately before destroying: a session
+          // with a live `sandboxId` is doing real work for someone and must
+          // be left alone; only a still-empty one (nothing provisioned since
+          // we minted it) is unambiguously safe to end (review finding — P1,
+          // PR #2314, fifth pass, chatgpt-codex-connector).
+          cleanupIfDenied: resolved.justProvisioned
+            ? async () => {
+                const current = await findSessionRecord(row.id);
+                if (current && current.sandboxId === null) {
+                  await endSession(row.id);
+                }
+              }
+            : undefined,
         };
       }
       if (!resolved.attempted) return null;
