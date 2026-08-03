@@ -66,7 +66,17 @@ export class LayoutErrorBoundary extends Component<Props, State> {
 
   private clearCorruptedState = () => {
     try {
-      // Clear localStorage that might be corrupted
+      // Clear localStorage that might be corrupted. Deliberately NOT every
+      // persisted store this boundary wraps (there are more — see any
+      // `persist({ name: ... })` call under apps/web/src/stores and
+      // apps/web/src/hooks) — just the ones a prior crash-recovery
+      // investigation traced a bad reload to. USER_SPECIFIC_STORAGE_KEYS
+      // (clear-user-stores-core.ts) is a DIFFERENT list for a different
+      // trigger (sign-in identity switch) and isn't a drop-in replacement —
+      // it omits agent-workspace-storage/layout-storage entirely. A future
+      // corrupted store discovered here should be added explicitly; a
+      // shared "every persisted key" registry that both call sites draw
+      // from would be the deeper fix, not attempted in this pass.
       localStorage.removeItem('layout-storage');
       localStorage.removeItem('agent-workspace-storage');
       localStorage.removeItem('drive-storage');
