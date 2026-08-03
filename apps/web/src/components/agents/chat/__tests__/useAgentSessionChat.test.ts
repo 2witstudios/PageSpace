@@ -170,7 +170,7 @@ describe('useAgentSessionChat', () => {
 
     renderHook(() => useAgentSessionChat({ agent, conversationId }));
 
-    expect(chat.capturedConfigs.some((c) => c.id === `agent-session-chat:${conversationId}`)).toBe(
+    expect(chat.capturedConfigs.some((c) => c.id === `agent-session-chat:${agent.id}:${conversationId}`)).toBe(
       true,
     );
   });

@@ -25,9 +25,10 @@ import { planOwnStreamCommit } from '@/lib/ai/streams/planOwnStreamCommit';
  * transition atomic in selectRenderedMessages.
  *
  * useChat reads callbacks at Chat construction, so the closed-over ids must
- * be per-Chat-stable: callers' chat ids embed the conversationId
- * (`agent-session-chat:${conversationId}` / `assistant-session-chat:${conversationId}`),
- * forcing Chat recreation whenever it changes.
+ * be per-Chat-stable: callers' chat ids embed EVERY id this closes over
+ * (`agent-session-chat:${agentId}:${conversationId}` /
+ * `assistant-session-chat:${conversationId}`), forcing Chat recreation
+ * whenever either changes.
  */
 export const buildOwnStreamCommitOnFinish = (deps: {
   conversationId: string;
