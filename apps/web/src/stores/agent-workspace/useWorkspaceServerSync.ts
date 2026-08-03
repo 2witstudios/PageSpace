@@ -44,6 +44,20 @@ export function __resetHydratedSessionsForTests(): void {
   hydratedSessionsThisPageLoad.clear();
 }
 
+/**
+ * The sidebar seats a session's grid from the server LISTING snapshot before
+ * acting on a row (`ensureLocalWorkspace`). That snapshot IS server state —
+ * so it counts as this page load's hydration. Without this, the hook's own
+ * mount-time GET lands server-wins one round-trip AFTER the row click's
+ * mutation (a pane focus, a freshly opened shell pane) and silently drops
+ * it — the reference latch rightly treats the hydrated grid as "nothing new
+ * to save", but the mutation it replaced is gone with it. Only call with a
+ * grid that genuinely came from the server, never a locally built one.
+ */
+export function adoptServerWorkspaceAsHydrated(sessionId: string): void {
+  hydratedSessionsThisPageLoad.add(sessionId);
+}
+
 export function useWorkspaceServerSync(
   sessionId: string,
   options?: { enabled?: boolean; debounceMs?: number },
@@ -56,10 +70,15 @@ export function useWorkspaceServerSync(
 
   const pendingRef = useRef<WorkspaceState | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Set right before a hydration write, so the debounce effect's next run
-  // (triggered by that very write) knows there is nothing NEW to persist —
-  // the server is already holding exactly what was just written.
-  const justHydratedRef = useRef(false);
+  // Set to the exact grid object right before a hydration write, so the
+  // debounce effect's next run (triggered by that very write) knows there is
+  // nothing NEW to persist — the server is already holding exactly what was
+  // just written. Compared by REFERENCE, not a boolean latch: a genuine
+  // mutation that lands between the hydration write and the effect run
+  // produces a different object and must still be saved, where a boolean
+  // would swallow it (and leave a stale pre-hydration grid in `pendingRef`
+  // for the unmount flush to resurrect).
+  const justHydratedRef = useRef<WorkspaceState | null>(null);
   // A purely local identifier for `useEditingStore` bookkeeping — `useId()`,
   // not the domain `createId()` (`@paralleldrive/cuid2`): this is never a
   // conversation/session id, and sharing that generator would (and in
@@ -93,8 +112,11 @@ export function useWorkspaceServerSync(
   // Debounced save on every observed change.
   useEffect(() => {
     if (!enabled || !workspace) return;
-    if (justHydratedRef.current) {
-      justHydratedRef.current = false;
+    if (justHydratedRef.current === workspace) {
+      justHydratedRef.current = null;
+      // Server-wins: hydration replaced whatever was pending, so the unmount
+      // flush must not PUT the pre-hydration grid back over it.
+      pendingRef.current = null;
       return;
     }
     pendingRef.current = workspace;
@@ -137,8 +159,17 @@ export function useWorkspaceServerSync(
         if (!json?.workspace) return;
         const parsed = persistedWorkspaceStateSchema.safeParse(json.workspace);
         if (!parsed.success) return;
-        justHydratedRef.current = true;
+        const before = useAgentWorkspaceStore.getState().workspaces[sessionId];
         hydrateWorkspace(sessionId, parsed.data);
+        const stored = useAgentWorkspaceStore.getState().workspaces[sessionId];
+        // Latch what the store ACTUALLY holds, not `parsed.data`:
+        // `hydrateWorkspace` normalizes a dangling `activePaneId` into a
+        // NEW object, and latching the pre-normalization value would miss
+        // and debounce-PUT the server's own grid straight back — harmless
+        // but exactly the duplicate save this latch exists to prevent. A
+        // no-op hydration (id mismatch) stores nothing new: latch nothing,
+        // or a later unrelated effect run could wrongly skip a real save.
+        if (stored !== before) justHydratedRef.current = stored;
       })
       .catch(() => {});
 

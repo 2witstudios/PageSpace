@@ -16,6 +16,17 @@ svg.lucide {
   stroke-width: 1.5;
 }
 
+/* Backstop for xterm's containing blocks (the real sheet is imported by
+   XtermTerminal.tsx). xterm's selection/viewport/helper layers are
+   `position: absolute` against these two elements; if the vendor import is
+   ever lost again (it happened once, when its previous host component was
+   deleted), a text selection in one terminal pane paints its highlight into
+   whichever ancestor happens to be positioned — visually, a different pane. */
+.xterm,
+.xterm .xterm-screen {
+  position: relative;
+}
+
 /* ---------------------------------------------------------------------------
    Hover-revealed controls on touch devices.
 

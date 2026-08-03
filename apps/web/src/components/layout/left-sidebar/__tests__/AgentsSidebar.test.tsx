@@ -310,6 +310,222 @@ describe('AgentsSidebar', () => {
       expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-2');
     });
 
+    test('lists a PAGE pane as its own row, labeled by the page title', async () => {
+      // A document/task page opened into the grid (picker or an agent's
+      // `open_page_pane`) is a persisted pane like any other — it must not
+      // be invisible in the sidebar while chat panes and shells are listed.
+      const withPagePane = {
+        ...workspaceFixture,
+        columns: [
+          {
+            id: 'col-1',
+            panes: [
+              ...workspaceFixture.columns[0].panes,
+              { id: 'pane-3', scope: { kind: 'page', name: 'Spec doc', targetId: 'page-1', agentPageId: null } },
+            ],
+          },
+        ],
+      };
+      respondWithSessions([{ ...SESSION, workspace: withPagePane }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+
+      expect(screen.getByText('Spec doc')).toBeDefined();
+    });
+
+    test('clicking a page pane row focuses the session and that pane, seating the grid from the row\'s own listing', async () => {
+      // Deliberately NO local grid: the session isn't the displayed one, so
+      // `AgentPanes`/`useWorkspaceServerSync` never hydrated it. The click
+      // must seat the row's own server-listing snapshot before focusing —
+      // `selectPane` no-ops on a session the store has never seen (review
+      // P1, chatgpt-codex-connector).
+      const withPagePane = {
+        ...workspaceFixture,
+        columns: [
+          {
+            id: 'col-1',
+            panes: [
+              ...workspaceFixture.columns[0].panes,
+              { id: 'pane-3', scope: { kind: 'page', name: 'Spec doc', targetId: 'page-1', agentPageId: null } },
+            ],
+          },
+        ],
+      };
+      respondWithSessions([{ ...SESSION, workspace: withPagePane }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      await user.click(await screen.findByText('Spec doc'));
+
+      expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
+      expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].activePaneId).toBe('pane-3');
+    });
+
+    test('closing a page pane row persists the close to the server — the sync hook only covers the displayed session (review P1)', async () => {
+      const withPagePane = {
+        ...workspaceFixture,
+        columns: [
+          {
+            id: 'col-1',
+            panes: [
+              ...workspaceFixture.columns[0].panes,
+              { id: 'pane-3', scope: { kind: 'page', name: 'Spec doc', targetId: 'page-1', agentPageId: null } },
+            ],
+          },
+        ],
+      };
+      respondWithSessions([{ ...SESSION, workspace: withPagePane }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      fireEvent.contextMenu(await screen.findByText('Spec doc'));
+      await user.click(await screen.findByText('Close'));
+
+      // The local grid dropped the pane…
+      await waitFor(() => {
+        const panes = useAgentWorkspaceStore
+          .getState()
+          .workspaces['ses-1'].columns.flatMap((c) => c.panes);
+        expect(panes.find((p) => p.scope?.targetId === 'page-1')).toBeUndefined();
+      });
+      // …and the close was PUT to the server, not left to a sync hook that
+      // isn't mounted for a non-displayed session.
+      await waitFor(() => {
+        const putCall = mockFetchWithAuth.mock.calls.find(
+          ([url, init]) =>
+            url === '/api/agent-sessions/ses-1/workspace' &&
+            (init as RequestInit | undefined)?.method === 'PUT',
+        );
+        expect(putCall).toBeDefined();
+        const body = JSON.parse((putCall![1] as RequestInit).body as string) as {
+          workspace: WorkspaceState;
+        };
+        const putPanes = body.workspace.columns.flatMap((c) => c.panes);
+        expect(putPanes.find((p) => p.scope?.targetId === 'page-1')).toBeUndefined();
+        expect(putPanes).toHaveLength(2);
+      });
+    });
+
+    test('closing a row the local store no longer knows refreshes the listing instead of clobbering the server', async () => {
+      // The store holds a DIFFERENT grid for ses-1 with no page pane —
+      // zustand persist rehydrates every session's grid from localStorage
+      // at page load, and another tab/device may have moved past this
+      // row's snapshot. A wholesale PUT of that grid would overwrite the
+      // server's newer layout AND leave the clicked pane alive (review P2).
+      act(() => {
+        useAgentWorkspaceStore.getState().hydrateWorkspace('ses-1', {
+          id: 'ses-1',
+          columns: [
+            {
+              id: 'col-9',
+              panes: [{ id: 'pane-9', scope: { kind: 'chat', name: 'Conversation', targetId: 'conv-9', agentPageId: null } }],
+            },
+          ],
+          activePaneId: 'pane-9',
+          pendingPickerPaneId: null,
+        } as WorkspaceState);
+      });
+      const withPagePane = {
+        ...workspaceFixture,
+        columns: [
+          {
+            id: 'col-1',
+            panes: [
+              ...workspaceFixture.columns[0].panes,
+              { id: 'pane-3', scope: { kind: 'page', name: 'Spec doc', targetId: 'page-1', agentPageId: null } },
+            ],
+          },
+        ],
+      };
+      respondWithSessions([{ ...SESSION, workspace: withPagePane }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      fireEvent.contextMenu(await screen.findByText('Spec doc'));
+      await user.click(await screen.findByText('Close'));
+
+      await waitFor(() => {
+        // The listing was asked to refresh… (the GET listing call count grows)
+        expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(1);
+      });
+      // …but nothing was PUT, and the local grid is untouched.
+      const putCall = mockFetchWithAuth.mock.calls.find(
+        ([, init]) => (init as RequestInit | undefined)?.method === 'PUT',
+      );
+      expect(putCall).toBeUndefined();
+      expect(useAgentWorkspaceStore.getState().workspaces['ses-1'].activePaneId).toBe('pane-9');
+    });
+
+    test('a failed close-PUT restores the row snapshot locally and surfaces an error', async () => {
+      const withPagePane = {
+        ...workspaceFixture,
+        columns: [
+          {
+            id: 'col-1',
+            panes: [
+              ...workspaceFixture.columns[0].panes,
+              { id: 'pane-3', scope: { kind: 'page', name: 'Spec doc', targetId: 'page-1', agentPageId: null } },
+            ],
+          },
+        ],
+      };
+      mockFetchWithAuth.mockImplementation(async (...args: unknown[]) => {
+        const init = args[1] as RequestInit | undefined;
+        if (init?.method === 'PUT') return { ok: false, status: 500, json: async () => ({}) };
+        return { ok: true, json: async () => ({ sessions: [{ ...SESSION, workspace: withPagePane }] }) };
+      });
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      fireEvent.contextMenu(await screen.findByText('Spec doc'));
+      await user.click(await screen.findByText('Close'));
+
+      await waitFor(() => expect(mockToastError).toHaveBeenCalled());
+      // The close landed locally, the PUT failed — the local grid must be
+      // restored to the durable (server) state rather than silently
+      // diverging until hydration resurrects the pane (review P3).
+      const panes = useAgentWorkspaceStore
+        .getState()
+        .workspaces['ses-1'].columns.flatMap((c) => c.panes);
+      expect(panes.find((p) => p.scope?.targetId === 'page-1')).toBeDefined();
+    });
+
+    test('closing the LAST pane via a page row asks to end the session instead of silently tearing it down', async () => {
+      const pageOnlyWorkspace = {
+        id: 'ses-1',
+        columns: [
+          {
+            id: 'col-1',
+            panes: [{ id: 'pane-1', scope: { kind: 'page', name: 'Spec doc', targetId: 'page-1', agentPageId: null } }],
+          },
+        ],
+        activePaneId: 'pane-1',
+        pendingPickerPaneId: null,
+      };
+      respondWithSessions([{ ...SESSION, conversations: [], workspace: pageOnlyWorkspace }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText(/expand api refactor/i));
+      fireEvent.contextMenu(await screen.findByText('Spec doc'));
+      await user.click(await screen.findByText('Close'));
+
+      // The end-session confirm opened; nothing was closed or PUT yet.
+      expect(await screen.findByText(/end session/i)).toBeDefined();
+      const putCall = mockFetchWithAuth.mock.calls.find(
+        ([url, init]) =>
+          url === '/api/agent-sessions/ses-1/workspace' &&
+          (init as RequestInit | undefined)?.method === 'PUT',
+      );
+      expect(putCall).toBeUndefined();
+    });
+
     test('selecting a session with a saved grid opens the ACTIVE pane\'s own conversation', async () => {
       respondWithSessions([{ ...SESSION, workspace: workspaceFixture }]);
       const user = userEvent.setup();

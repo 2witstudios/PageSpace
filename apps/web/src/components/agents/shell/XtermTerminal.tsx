@@ -22,6 +22,15 @@
 import { useEffect, useRef } from 'react';
 import type { Socket } from 'socket.io-client';
 import type { Terminal as XtermTerminalInstance } from '@xterm/xterm';
+// Not cosmetic: xterm's overlay layers (selection, viewport, helper textarea,
+// char-measure) are positioned absolute and rely on this sheet making
+// `.xterm`/`.xterm-screen` their containing block. Without it the selection
+// highlight paints relative to the nearest positioned ANCESTOR — i.e. into a
+// different pane — and cell measurement/scrolling break. This import was lost
+// once already when its previous host (`MachineView`) was deleted; it lives
+// here now, beside the only `Terminal` construction site (a `position:
+// relative` backstop also exists in `globals.css`).
+import '@xterm/xterm/css/xterm.css';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useXtermTheme } from '@/hooks/useXtermTheme';
 import { getCssVar } from '@/lib/theme/css-color-resolution';
@@ -356,9 +365,10 @@ export default function XtermTerminal({ socket, shellId, initialInput, onInitial
           return !!el && el.offsetParent !== null && el.clientWidth > 0 && el.clientHeight > 0;
         };
 
-        const resize: { observer?: ResizeObserver } = {};
+        const resize: { observer?: ResizeObserver; raf?: number } = {};
         teardown = () => {
           resize.observer?.disconnect();
+          if (resize.raf !== undefined) cancelAnimationFrame(resize.raf);
           // The pending write is cancelled, but the prompt is NOT spent: this shell
           // may be going away only for a moment (StrictMode remounts it in
           // development; a tab switch remounts it later), and the agent it
@@ -397,11 +407,20 @@ export default function XtermTerminal({ socket, shellId, initialInput, onInitial
         if (socket.connected) handleSocketConnect();
 
         resize.observer = new ResizeObserver(() => {
-          // Skip while hidden (0×0) — avoids garbage fits and 0-wide resizes.
-          // Fires again with correct dims when the shell is re-shown.
-          if (!isVisible()) return;
-          fitAddon.fit();
-          socket.emit('shell:resize', { cols: terminal.cols, rows: terminal.rows, connectionId });
+          // Coalesce to one fit per frame: dragging a pane's ResizableHandle
+          // streams observations, and each fit() + shell:resize is real work
+          // for the renderer AND a PTY round-trip. The trailing frame always
+          // runs, so the final geometry is never skipped.
+          if (resize.raf !== undefined) return;
+          resize.raf = requestAnimationFrame(() => {
+            resize.raf = undefined;
+            // Skip while hidden (0×0) — avoids garbage fits and 0-wide
+            // resizes. Fires again with correct dims when the shell is
+            // re-shown.
+            if (!isVisible()) return;
+            fitAddon.fit();
+            socket.emit('shell:resize', { cols: terminal.cols, rows: terminal.rows, connectionId });
+          });
         });
         resize.observer.observe(containerRef.current!);
 

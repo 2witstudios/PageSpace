@@ -7,7 +7,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
-import { useWorkspaceServerSync, __resetHydratedSessionsForTests } from '../useWorkspaceServerSync';
+import {
+  useWorkspaceServerSync,
+  adoptServerWorkspaceAsHydrated,
+  __resetHydratedSessionsForTests,
+} from '../useWorkspaceServerSync';
 import { useAgentWorkspaceStore } from '../useAgentWorkspaceStore';
 
 vi.mock('@/lib/auth/auth-fetch', () => ({
@@ -146,6 +150,20 @@ describe('hydration', () => {
     await waitFor(() => expect(getCalls()).toHaveLength(2));
   });
 
+  it('a session adopted from a server listing snapshot is not re-fetched on mount', async () => {
+    // The sidebar seats a row's own listing snapshot (server state) before
+    // acting on it and marks it adopted — the hook's own GET would land
+    // server-wins one round-trip after the click and silently drop the
+    // click's mutation (review P2). Adopted = hydrated for this page load.
+    store().ensureWorkspace('ses-1', scope());
+    adoptServerWorkspaceAsHydrated('ses-1');
+
+    renderHook(() => useWorkspaceServerSync('ses-1'));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(getCalls()).toHaveLength(0);
+  });
+
   it('a hydration cancelled by unmount before it resolves is retried on the next mount', async () => {
     store().ensureWorkspace('ses-1', scope());
     let resolveFetch!: (value: unknown) => void;
@@ -249,6 +267,100 @@ describe('debounced save', () => {
 
     const putCalls = mockFetch.mock.calls.filter((c) => c[1]?.method === 'PUT');
     expect(putCalls).toHaveLength(0);
+  });
+});
+
+describe('the hydration latch is by reference, not a boolean', () => {
+  it('hydration clears a pending pre-hydration save — the unmount flush must not resurrect the overwritten grid', async () => {
+    // The stale-flush race: a mutation goes pending, THEN hydration lands
+    // and server-wins over it. A boolean latch left `pendingRef` holding the
+    // pre-hydration grid, so the unmount flush PUT stale local state back
+    // over what the server (and now the store) actually holds.
+    store().ensureWorkspace('ses-1', scope());
+    let resolveFetch!: (value: unknown) => void;
+    mockFetch.mockReturnValueOnce(new Promise((resolve) => { resolveFetch = resolve; }));
+
+    const { unmount } = renderHook(() => useWorkspaceServerSync('ses-1', { debounceMs: 60_000 }));
+
+    act(() => {
+      store().splitRight('ses-1', grid().activePaneId);
+    });
+
+    const saved = {
+      id: 'ses-1',
+      columns: [{ id: 'col-x', panes: [{ id: 'pane-x', scope: scope('conv-saved') }] }],
+      activePaneId: 'pane-x',
+      pendingPickerPaneId: null,
+    };
+    await act(async () => {
+      resolveFetch({ ok: true, json: () => Promise.resolve({ workspace: saved }) });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(grid()).toEqual(saved);
+
+    unmount();
+    await new Promise((r) => setTimeout(r, 0));
+
+    // The pre-hydration split was discarded by design (server wins on first
+    // load); nothing may PUT it back.
+    expect(mockFetch.mock.calls.filter((c) => c[1]?.method === 'PUT')).toHaveLength(0);
+  });
+
+  it('does not redundantly PUT when hydration had to normalize a dangling activePaneId', async () => {
+    // `hydrateWorkspace` normalizes a saved grid whose activePaneId names
+    // no real pane into a NEW object — the latch must track what the store
+    // actually holds, or the very next debounce tick PUTs the server's own
+    // grid straight back (review P3).
+    vi.useFakeTimers();
+    store().ensureWorkspace('ses-1', scope());
+    const saved = {
+      id: 'ses-1',
+      columns: [{ id: 'col-x', panes: [{ id: 'pane-x', scope: scope('conv-saved') }] }],
+      activePaneId: 'ghost',
+      pendingPickerPaneId: null,
+    };
+    mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ workspace: saved }) });
+
+    renderHook(() => useWorkspaceServerSync('ses-1', { debounceMs: 1000 }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(grid().activePaneId).toBe('pane-x');
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      await Promise.resolve();
+    });
+
+    expect(mockFetch.mock.calls.filter((c) => c[1]?.method === 'PUT')).toHaveLength(0);
+  });
+
+  it('a mutation AFTER hydration still saves — the skip is one-shot for exactly the hydrated grid', async () => {
+    store().ensureWorkspace('ses-1', scope());
+    const saved = {
+      id: 'ses-1',
+      columns: [{ id: 'col-x', panes: [{ id: 'pane-x', scope: scope('conv-saved') }] }],
+      activePaneId: 'pane-x',
+      pendingPickerPaneId: null,
+    };
+    mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ workspace: saved }) });
+
+    const { unmount } = renderHook(() => useWorkspaceServerSync('ses-1', { debounceMs: 60_000 }));
+    await waitFor(() => expect(grid()).toEqual(saved));
+
+    act(() => {
+      store().splitRight('ses-1', 'pane-x');
+    });
+    const latest = grid();
+
+    unmount();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const putCalls = mockFetch.mock.calls.filter((c) => c[1]?.method === 'PUT');
+    expect(putCalls).toHaveLength(1);
+    expect(JSON.parse(putCalls[0][1].body as string).workspace).toEqual(latest);
   });
 });
 
