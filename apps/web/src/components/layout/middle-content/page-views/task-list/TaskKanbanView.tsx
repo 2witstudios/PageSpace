@@ -508,13 +508,13 @@ export function TaskKanbanView({
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
-      <div className="flex gap-4 p-4 h-full overflow-x-auto">
+      <div className="flex gap-4 p-4 h-full overflow-x-auto @container">
         {statusOrder.map((status) => {
           const cfg = statusConfigMap[status];
           return (
           <div
             key={status}
-            className="flex-shrink-0 w-72 flex flex-col"
+            className="flex-shrink-0 w-72 @max-[500px]:w-60 flex flex-col"
           >
             <ColumnHeader
               status={status}
