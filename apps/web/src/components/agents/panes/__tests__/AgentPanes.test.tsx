@@ -97,8 +97,33 @@ vi.mock('@/components/ai/page-agents', () => ({
       ))}
     </div>
   ),
-  PageAgentSettingsTab: ({ pageId, config }: { pageId: string; config: unknown }) => (
-    <div data-testid="pane-settings-tab" data-page-id={pageId} data-has-config={String(config !== null)} />
+  PageAgentSettingsTab: ({
+    pageId,
+    config,
+    onDirtyChange,
+    onSaved,
+  }: {
+    pageId: string;
+    config: unknown;
+    onDirtyChange?: (isDirty: boolean) => void;
+    onSaved?: () => void;
+  }) => (
+    <div data-testid="pane-settings-tab" data-page-id={pageId} data-has-config={String(config !== null)}>
+      <button onClick={() => onDirtyChange?.(true)}>mark-dirty</button>
+      {/* Named to avoid the substring "save" — it would otherwise collide
+          with `getByRole('button', { name: /save/i })` queries for the
+          host's real Save button. */}
+      <button
+        onClick={() => {
+          // Mirrors the real component: a successful save resets the form
+          // (dirty -> false) around the same time onSaved fires.
+          onDirtyChange?.(false);
+          onSaved?.();
+        }}
+      >
+        finish-config-update
+      </button>
+    </div>
   ),
 }));
 
@@ -2361,8 +2386,11 @@ describe('AgentPanes', () => {
     // registers submitForm before its own config-loaded check returns, and its
     // form defaults contain an empty prompt/tool list — clicking Save before
     // agentConfig arrives would PATCH those defaults over the agent's real
-    // config.
-    it('disables the Save button until the agent config has finished loading', async () => {
+    // config. The Save button now stays disabled until there's actually
+    // something to save, which subsumes that original guard: it can't turn
+    // dirty before config has loaded, since the form has nothing of the
+    // user's to differ from yet.
+    it('disables the Save button until the agent config has loaded and the user has made an edit', async () => {
       let resolveConfig!: () => void;
       mockFetchWithAuth.mockImplementation(async (url: string) => {
         if (url === '/api/pages/agent-1/agent-config') {
@@ -2383,7 +2411,35 @@ describe('AgentPanes', () => {
       expect(saveButton).toBeDisabled();
 
       resolveConfig();
+      // Config has loaded, but nothing has been edited yet — the Save
+      // button only lights up once there's something to save.
+      await waitFor(() => expect(screen.getByTestId('pane-settings-tab')).toHaveAttribute('data-has-config', 'true'));
+      expect(saveButton).toBeDisabled();
+
+      await userEvent.click(screen.getByRole('button', { name: 'mark-dirty' }));
+
       await waitFor(() => expect(saveButton).not.toBeDisabled());
+    });
+
+    // A success toast used to cover the very tab strip/buttons a user needs
+    // to leave Settings with — the confirmation now shows on the Save
+    // button itself instead (no toast is asserted here; there's simply
+    // nothing left that would fire one).
+    it('shows an inline "Saved" confirmation on the Save button, then reverts to disabled', async () => {
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+
+      await userEvent.click(await screen.findByRole('tab', { name: /researcher settings/i }));
+      await screen.findByTestId('pane-settings-tab');
+
+      const saveButton = screen.getByRole('button', { name: /save/i });
+      await userEvent.click(screen.getByRole('button', { name: 'mark-dirty' }));
+      expect(saveButton).not.toBeDisabled();
+
+      await userEvent.click(screen.getByRole('button', { name: 'finish-config-update' }));
+
+      expect(await screen.findByRole('button', { name: /saved/i })).toBeDisabled();
+      await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled(), { timeout: 3000 });
     });
 
     it("is disabled until THIS session's entry appears in the switch decision's own data", async () => {

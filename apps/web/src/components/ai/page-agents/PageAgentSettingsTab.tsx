@@ -58,6 +58,14 @@ interface PageAgentSettingsTabProps {
   onModelChange: (model: string) => void;
   isProviderConfigured: (provider: string) => boolean;
   onSavingChange?: (isSaving: boolean) => void;
+  /** Mirrors react-hook-form's `formState.isDirty` out to the host so its
+   * own Save button can show an unsaved-changes state — see AgentPageView
+   * and AgentPanes, which render the button outside this component. */
+  onDirtyChange?: (isDirty: boolean) => void;
+  /** Fires after a successful save instead of a toast — a toast can cover
+   * the very tabs/buttons the user needs to leave Settings with, so the
+   * host's Save button shows the confirmation inline instead. */
+  onSaved?: () => void;
 }
 
 function ApiModelIdCard({ pageId }: { pageId: string }) {
@@ -153,7 +161,9 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   onProviderChange,
   onModelChange,
   isProviderConfigured,
-  onSavingChange
+  onSavingChange,
+  onDirtyChange,
+  onSaved
 }, ref) => {
   // Stable per-MOUNT identifier — distinguishes this instance from another
   // Settings surface for the SAME agent mounted elsewhere (see the
@@ -450,7 +460,18 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       // overlapping sibling save has also had a chance to land (review
       // finding — chatgpt-codex-connector on PR #2299, round 23).
       onConfigRevalidate();
-      toast.success('Agent configuration saved successfully');
+      // Called directly here rather than relying solely on the
+      // onDirtyChange mirror effect below: that effect only re-fires once
+      // formIsDirty/providerOrModelTouched actually change value across a
+      // render, but formIsDirty only flips to false once the separate
+      // config-reset effect's reset() call takes effect — a LATER effect
+      // than this synchronous success path. Without this, a save with a
+      // real (non-provider/model) dirty field could render one frame with
+      // isSaving:false, justSaved:true, but the mirror effect's stale
+      // formIsDirty still true — flashing back to "dirty" before settling
+      // on "saved" (review finding — general-purpose adversarial review).
+      onDirtyChange?.(false);
+      onSaved?.();
     } catch (error) {
       console.error('Error saving agent configuration:', error);
       toast.error('Failed to save configuration');
@@ -458,7 +479,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       setIsSaving(false);
       onSavingChange?.(false);
     }
-  }, [pageId, config, onConfigUpdate, onConfigRevalidate, selectedProvider, selectedModel, onSavingChange, dirtyFields]);
+  }, [pageId, config, onConfigUpdate, onConfigRevalidate, selectedProvider, selectedModel, onSavingChange, onDirtyChange, onSaved, dirtyFields]);
 
   const handleProviderSelectChange = useCallback(
     (provider: string) => {
@@ -482,6 +503,23 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
     },
     isSaving
   }), [handleSubmit, onSubmit, isSaving]);
+
+  // Mirror dirty state out to the host's own Save button (rendered outside
+  // this component — see AgentPageView/AgentPanes) so it can show an
+  // unsaved-changes state without polling the ref every render.
+  //
+  // `formIsDirty` alone misses a provider/model-only change: the AI
+  // Provider/Model Selects above aren't wired through react-hook-form
+  // (`handleProviderSelectChange`/`handleModelSelectChange` update parent-
+  // owned state and `providerTouchedRef`/`modelTouchedRef` instead — see
+  // those refs' own comment), so `dirtyFields`/`formIsDirty` never reflects
+  // them. Without `providerOrModelTouched` here too, a Save button gated on
+  // this callback would stay disabled for a provider/model-only change —
+  // making it unsavable unless the user also touched an unrelated field
+  // (review finding — chatgpt-codex-connector on this PR).
+  useEffect(() => {
+    onDirtyChange?.(formIsDirty || providerOrModelTouched);
+  }, [formIsDirty, providerOrModelTouched, onDirtyChange]);
 
   // Eagerly fetch models for the DISPLAYED provider (see displayedProvider
   // above) when it's Ollama or LM Studio — must match what's actually
@@ -540,15 +578,22 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   // isAnyEditing(), letting SWR revalidation and other editing-paused
   // background work resume while it still has unsaved edits (review
   // finding — chatgpt-codex-connector on PR #2299, round 20).
+  //
+  // `formIsDirty` alone misses a provider/model-only change (same gap as
+  // the `onDirtyChange` mirror above) — without `providerOrModelTouched`
+  // here too, an SWR revalidation or auth-refresh cycle is free to
+  // interrupt/clobber a pending provider/model selection this component
+  // never told useEditingStore about (review finding — coderabbitai on
+  // this PR).
   useEffect(() => {
     const componentId = `page-agent-settings-${pageId}-${mountId}`;
-    if (formIsDirty) {
+    if (formIsDirty || providerOrModelTouched) {
       useEditingStore.getState().startEditing(componentId, 'form', { pageId });
     } else {
       useEditingStore.getState().endEditing(componentId);
     }
     return () => { useEditingStore.getState().endEditing(componentId); };
-  }, [formIsDirty, pageId, mountId]);
+  }, [formIsDirty, providerOrModelTouched, pageId, mountId]);
 
   if (!config) {
     return (

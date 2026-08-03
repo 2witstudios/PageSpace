@@ -30,6 +30,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import {
   AlertCircle,
+  Check,
   ExternalLink,
   History,
   Loader2,
@@ -40,6 +41,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { mutate } from 'swr';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
@@ -49,6 +51,7 @@ import {
 } from '@/components/ai/page-agents';
 import { PageWebhooksDialog } from '@/components/shared/PageWebhooksDialog';
 import { useProviderSettings } from '@/lib/ai/shared/hooks/useProviderSettings';
+import { useAgentSettingsSaveState } from '@/lib/ai/shared/hooks/useAgentSettingsSaveState';
 import { useConversations } from '@/lib/ai/shared/hooks/useConversations';
 import { useAgentConfig } from '@/lib/ai/shared/hooks/useAgentConfig';
 import { buildAgentSelectionUrl } from '@/lib/agents/agent-selection';
@@ -165,7 +168,16 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   // agent's Settings tab (see `useAgentConfig`'s own doc), not a private
   // per-instance fetch.
   const { config: agentConfig, setConfig: setAgentConfig, revalidate: revalidateAgentConfig } = useAgentConfig(page.id);
-  const [isSettingsSaving, setIsSettingsSaving] = useState(false);
+  // `activeTab` can seed straight to 'settings' from a `?tab=settings` URL
+  // (see the effect above), so the Settings tab — and this Save button —
+  // can be visible before `agentConfig` has resolved. Same guard AgentPanes
+  // passes for the same reason (review finding — coderabbitai on this PR).
+  const {
+    saveState: settingsSaveState,
+    setIsSaving: setIsSettingsSaving,
+    setIsDirty: setIsSettingsDirty,
+    handleSaved: handleSettingsSaved,
+  } = useAgentSettingsSaveState({ isConfigLoaded: agentConfig !== null });
   const agentSettingsRef = useRef<PageAgentSettingsTabRef>(null);
 
   const isReadOnly = usePermissionsCheck(page.id, user?.id);
@@ -454,19 +466,52 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
 
               {activeTab === 'settings' && (
                 <Button
+                  type="button"
+                  variant={settingsSaveState === 'clean' ? 'outline' : 'default'}
                   onClick={() => agentSettingsRef.current?.submitForm()}
-                  disabled={isSettingsSaving}
-                  className="min-w-[100px] sm:min-w-[120px]"
+                  disabled={settingsSaveState !== 'dirty'}
+                  // The state change (Saving.../Saved) is now the ONLY save
+                  // confirmation — there's no toast to announce it anymore,
+                  // so screen readers need this to catch it.
+                  aria-live="polite"
+                  aria-atomic="true"
+                  className={cn(
+                    'min-w-[100px] transition-colors sm:min-w-[120px]',
+                    settingsSaveState === 'dirty' &&
+                      'border-warning/40 bg-warning/10 text-warning hover:bg-warning/15',
+                    settingsSaveState === 'saving' && 'border-warning/40 bg-warning/10 text-warning',
+                    settingsSaveState === 'saved' && 'border-success/40 bg-success/10 text-success hover:bg-success/10',
+                  )}
                 >
-                  {isSettingsSaving ? (
+                  {settingsSaveState === 'saving' ? (
                     <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      <span className="hidden sm:inline">Saving...</span>
+                      <Loader2 className="h-4 w-4 animate-spin sm:mr-2" aria-hidden="true" />
+                      {/* sr-only below `sm` instead of `hidden` — a `hidden`
+                          span drops out of the a11y tree too, leaving this
+                          icon-only button with no accessible name at all on
+                          mobile (the icons above carry none of their own),
+                          which would make aria-live's announcement above
+                          silent exactly where the removed toast used to
+                          still work. */}
+                      <span className="sr-only sm:not-sr-only sm:inline">Saving...</span>
+                    </>
+                  ) : settingsSaveState === 'saved' ? (
+                    <>
+                      <Check className="h-4 w-4 animate-in zoom-in-50 fade-in-0 duration-200 sm:mr-2" aria-hidden="true" />
+                      <span className="sr-only sm:not-sr-only sm:inline">Saved</span>
                     </>
                   ) : (
                     <>
-                      <Save className="h-4 w-4 sm:mr-2" />
-                      <span className="hidden sm:inline">Save Settings</span>
+                      <span className="relative inline-flex sm:mr-2">
+                        <Save className="h-4 w-4" aria-hidden="true" />
+                        {settingsSaveState === 'dirty' && (
+                          <span
+                            aria-hidden="true"
+                            className="absolute -right-0.5 -top-0.5 size-1.5 animate-pulse rounded-full bg-warning"
+                          />
+                        )}
+                      </span>
+                      <span className="sr-only sm:not-sr-only sm:inline">Save Settings</span>
                     </>
                   )}
                 </Button>
@@ -573,6 +618,8 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
             onModelChange={setSelectedModel}
             isProviderConfigured={isProviderConfigured}
             onSavingChange={setIsSettingsSaving}
+            onDirtyChange={setIsSettingsDirty}
+            onSaved={handleSettingsSaved}
           />
         </TabsContent>
       </Tabs>
