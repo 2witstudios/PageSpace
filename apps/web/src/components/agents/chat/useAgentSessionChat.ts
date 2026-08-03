@@ -109,7 +109,10 @@ export function useAgentSessionChat({
   const chatConfig = useMemo(() => {
     if (!transport) return null;
     return buildChatConfig({
-      id: `agent-session-chat:${conversationId}`,
+      // BOTH ids the onFinish commit closes over are embedded, so a change to
+      // either forces Chat recreation — the callback can never go stale
+      // (useChat reads callbacks at construction; see chat-config.ts).
+      id: `agent-session-chat:${agent.id}:${conversationId}`,
       transport,
       onError: (error: Error) => {
         console.error('Agent session chat error:', error);
