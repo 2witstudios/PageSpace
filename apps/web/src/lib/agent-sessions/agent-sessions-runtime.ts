@@ -591,10 +591,28 @@ export async function ensureGlobalSandboxSession(
     // its retries, a DB connection fault) rather than resolving a normal
     // outcome — a path that skipped this cleanup entirely before, leaking
     // the scratch session on every such failure (review finding —
-    // chatgpt-codex-connector). Clean up, then propagate the original error
-    // — this is a genuine infra fault, not a normal "no session" business
-    // outcome this function's own result union is meant to describe.
+    // chatgpt-codex-connector).
+    //
+    // The thrown error is AMBIGUOUS in a way `claimed === 'not_found'` below
+    // never is: the guarded UPDATE may have actually COMMITTED server-side
+    // with the connection dropping before this call ever saw the
+    // acknowledgment. Ending our scratch session on that outcome would be
+    // catastrophic, not just wasteful — bindings are write-once, so a
+    // conversation left pointing at a session we just ENDED can never be
+    // re-claimed into a replacement, ever (review finding, second pass —
+    // chatgpt-codex-connector). Re-resolve BEFORE tearing anything down: if
+    // the conversation is now bound to the session we spawned, the claim
+    // genuinely succeeded despite the thrown error — treat it as one.
+    const boundAfterThrow = await findSessionForConversation(conversationId);
+    if (boundAfterThrow?.id === spawned.session.id) {
+      return { ok: true, session: spawned.session };
+    }
+    // Not bound to OUR session — either truly unclaimed, or a concurrent
+    // sibling's claim won in the meantime. Either way our scratch session
+    // is safe to tear down; adopt the sibling's session if one is there,
+    // otherwise this really is the infra fault it looked like — propagate it.
     await endScratchSession('a claim exception');
+    if (boundAfterThrow) return { ok: true, session: boundAfterThrow };
     throw error;
   }
   if (claimed === 'claimed' || claimed === 'already_in_session') return { ok: true, session: spawned.session };
