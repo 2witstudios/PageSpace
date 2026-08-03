@@ -523,11 +523,20 @@ export async function findSessionForConversation(conversationId: string): Promis
   return (await getAgentSessionStore()).findByConversation(conversationId);
 }
 
+/**
+ * Every one of these is racy or retryable by nature (a session cap another
+ * concurrent call may have just filled, a transient spawn fault, a lost
+ * claim) — never a deterministic "this conversation can never have a
+ * session." Callers that gate on this (billing) must treat the whole set
+ * the same way, not narrow to whichever specific reason the last bug was
+ * about (two separate reviewer findings on PR #2314 were each a caller
+ * treating one of these as safely equivalent to "no session, ever").
+ */
+export type EnsureGlobalSandboxSessionFailureReason = 'session_limit_reached' | 'spawn_failed' | 'no_session';
+
 export type EnsureGlobalSandboxSessionResult =
   | { ok: true; session: AgentSessionRecord }
-  /** The owner is already at `MAX_ACTIVE_SESSIONS_PER_OWNER` — actionable and distinct from a generic "no session" denial. */
-  | { ok: false; reason: 'session_limit_reached' }
-  | { ok: false; reason: 'spawn_failed' | 'no_session' };
+  | { ok: false; reason: EnsureGlobalSandboxSessionFailureReason };
 
 /**
  * Auto-provision a workspace for a Global Assistant conversation that has

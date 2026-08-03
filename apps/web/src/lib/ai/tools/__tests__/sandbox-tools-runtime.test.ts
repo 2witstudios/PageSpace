@@ -397,13 +397,16 @@ describe('buildRealSandboxRunDeps.acquireSandbox (session-anchored)', () => {
     expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-1' });
   });
 
-  it('given a GLOBAL conversation with NO session, and auto-provisioning fails, should DENY with no_session', async () => {
+
+  it('given a GLOBAL conversation whose auto-provisioning was ATTEMPTED and failed (any reason), should DENY as provision_failed with that reason as the cause — never the plain no_session', async () => {
+    // Once an attempt was made, "no_session" alone would be misleading (it
+    // reads as "nothing was ever tried"); provision_failed/cause names WHY.
     mockFindSessionForConversation.mockResolvedValue(null);
     mockGetConversation.mockResolvedValue({ type: 'global' });
-    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'no_session' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
     const deps = buildRealSandboxRunDeps();
     const result = await deps.acquireSandbox(baseInput({ agentPageId: undefined }));
-    expect(result).toEqual({ ok: false, reason: 'no_session' });
+    expect(result).toEqual({ ok: false, reason: 'provision_failed', cause: 'spawn_failed' });
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
     expect(mockRecordSessionActivity).not.toHaveBeenCalled();
   });
@@ -631,7 +634,24 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
     expect(result).toEqual({ deny: 'session_limit_reached' });
   });
 
-  it('given a GLOBAL conversation whose auto-provisioning fails for a reason that will NEVER resolve (no_session), resolves null — safe to let acquireSandbox deny the same way, since no concurrent call could make it succeed', async () => {
+  it('given a GLOBAL conversation whose auto-provisioning fails with a transient spawn fault, ALSO fails CLOSED with { deny } — same reasoning as session_limit_reached: a retry (this call\'s own acquireSandbox, or a concurrent sibling) could still succeed after the transient fault clears (review finding — P1, PR #2314, third round)', async () => {
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'global' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
+    const deps = buildRealSandboxRunDeps();
+
+    const result = await deps.resolveBillingSession?.({
+      userId: 'u1',
+      tenantId: 'u1',
+      conversationId: 'conv-fresh-global',
+      actorEmail: 'u1@example.com',
+      tier: 'pro',
+    });
+
+    expect(result).toEqual({ deny: 'provision_failed' });
+  });
+
+  it('given a GLOBAL conversation whose auto-provisioning attempt lost a claim with no winner found (attempted, reason no_session), STILL fails CLOSED — attempted-and-failed is never treated as safely null, regardless of which of the three reasons it is', async () => {
     mockFindSessionForConversation.mockResolvedValue(null);
     mockGetConversation.mockResolvedValue({ type: 'global' });
     mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'no_session' });
@@ -645,7 +665,7 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
       tier: 'pro',
     });
 
-    expect(result).toBeNull();
+    expect(result).toEqual({ deny: 'provision_failed' });
   });
 });
 
