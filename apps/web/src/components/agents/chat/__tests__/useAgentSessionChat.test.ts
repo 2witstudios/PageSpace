@@ -16,7 +16,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
-import type { UIMessage } from 'ai';
+import type { ChatOnFinishCallback, UIMessage } from 'ai';
 import type { AgentInfo } from '@/types/agent';
 
 const { mockFetchWithAuth } = vi.hoisted(() => ({
@@ -385,13 +385,7 @@ describe('useAgentSessionChat', () => {
 
     const config = chat.capturedConfigs.at(-1)!;
     expect(typeof config.onFinish).toBe('function');
-    const onFinish = config.onFinish as (options: {
-      message: UIMessage;
-      messages: UIMessage[];
-      isAbort: boolean;
-      isDisconnect: boolean;
-      isError: boolean;
-    }) => void;
+    const onFinish = config.onFinish as ChatOnFinishCallback<UIMessage>;
 
     const reply = assistantMessage('m-assistant-1', 'the full reply');
     act(() => {

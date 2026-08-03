@@ -17,24 +17,24 @@ const makeInput = (overrides: Partial<PlanOwnStreamCommitInput> = {}): PlanOwnSt
 
 describe('planOwnStreamCommit', () => {
   it('given a clean finish with parts, should commit with status complete', () => {
-    const plan = planOwnStreamCommit(makeInput());
-    expect(plan).not.toBeNull();
-    expect(plan!.message.id).toBe('msg-1');
-    expect(plan!.message.parts).toEqual([{ type: 'text', text: 'the reply' }]);
-    expect((plan!.message as UIMessage & { status?: string }).status).toBe('complete');
+    const message = planOwnStreamCommit(makeInput());
+    expect(message).not.toBeNull();
+    expect(message!.id).toBe('msg-1');
+    expect(message!.parts).toEqual([{ type: 'text', text: 'the reply' }]);
+    expect((message as UIMessage & { status?: string }).status).toBe('complete');
   });
 
   it('given a local abort with partial parts, should commit with status interrupted', () => {
-    const plan = planOwnStreamCommit(makeInput({ isAbort: true }));
-    expect(plan).not.toBeNull();
-    expect((plan!.message as UIMessage & { status?: string }).status).toBe('interrupted');
+    const message = planOwnStreamCommit(makeInput({ isAbort: true }));
+    expect(message).not.toBeNull();
+    expect((message as UIMessage & { status?: string }).status).toBe('interrupted');
   });
 
   it('given an abort with zero parts, should not commit (reload path owns it)', () => {
-    const plan = planOwnStreamCommit(
+    const message = planOwnStreamCommit(
       makeInput({ isAbort: true, message: { id: 'msg-1', role: 'assistant', parts: [] } }),
     );
-    expect(plan).toBeNull();
+    expect(message).toBeNull();
   });
 
   it('given an error finish, should not commit (persistence not proven)', () => {
@@ -50,35 +50,35 @@ describe('planOwnStreamCommit', () => {
   });
 
   it('given a non-assistant message, should not commit', () => {
-    const plan = planOwnStreamCommit(
+    const message = planOwnStreamCommit(
       makeInput({
         message: { id: 'msg-1', role: 'user', parts: [{ type: 'text', text: 'hi' }] as UIMessage['parts'] },
       }),
     );
-    expect(plan).toBeNull();
+    expect(message).toBeNull();
   });
 
   it('given a clean finish with zero parts, should not commit', () => {
-    const plan = planOwnStreamCommit(makeInput({ message: { id: 'msg-1', role: 'assistant', parts: [] } }));
-    expect(plan).toBeNull();
+    const message = planOwnStreamCommit(makeInput({ message: { id: 'msg-1', role: 'assistant', parts: [] } }));
+    expect(message).toBeNull();
   });
 
   it('given a startedAt, should thread it into the committed message createdAt', () => {
-    const plan = planOwnStreamCommit(makeInput({ startedAt: '2026-08-03T12:00:00.000Z' }));
-    expect((plan!.message as UIMessage & { createdAt?: Date }).createdAt).toEqual(
+    const message = planOwnStreamCommit(makeInput({ startedAt: '2026-08-03T12:00:00.000Z' }));
+    expect((message as UIMessage & { createdAt?: Date }).createdAt).toEqual(
       new Date('2026-08-03T12:00:00.000Z'),
     );
   });
 
   it('given no startedAt, should omit createdAt entirely', () => {
-    const plan = planOwnStreamCommit(makeInput());
-    expect(plan!.message).not.toHaveProperty('createdAt');
+    const message = planOwnStreamCommit(makeInput());
+    expect(message).not.toHaveProperty('createdAt');
   });
 
   it('given the input parts array, should not share it with the committed message (purity)', () => {
     const parts = [{ type: 'text', text: 'the reply' }] as UIMessage['parts'];
-    const plan = planOwnStreamCommit(makeInput({ message: { id: 'msg-1', role: 'assistant', parts } }));
-    expect(plan!.message.parts).not.toBe(parts);
-    expect(plan!.message.parts).toEqual(parts);
+    const message = planOwnStreamCommit(makeInput({ message: { id: 'msg-1', role: 'assistant', parts } }));
+    expect(message!.parts).not.toBe(parts);
+    expect(message!.parts).toEqual(parts);
   });
 });

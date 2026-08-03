@@ -19,14 +19,19 @@ import type { UIMessage } from 'ai';
  *   row and must reload the authoritative reply.
  * - 'streaming' / absent → never final (an includeStreaming placeholder or a
  *   row of unknown provenance): let the reload fetch DB truth.
+ *
+ * Scans from the end — the completed message is almost always the newest row.
  */
 export const cacheHasConsistentFinalMessage = (
   messages: readonly UIMessage[],
   messageId: string,
   aborted: boolean,
-): boolean =>
-  messages.some((m) => {
-    if (m.id !== messageId) return false;
+): boolean => {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.id !== messageId) continue;
     const status = (m as UIMessage & { status?: string }).status;
     return status === 'complete' || (status === 'interrupted' && aborted);
-  });
+  }
+  return false;
+};
