@@ -68,6 +68,8 @@ export class LayoutErrorBoundary extends Component<Props, State> {
     try {
       // Clear localStorage that might be corrupted
       localStorage.removeItem('layout-storage');
+      localStorage.removeItem('agent-workspace-storage');
+      localStorage.removeItem('drive-storage');
       sessionStorage.clear();
 
       console.log('Cleared potentially corrupted state');
