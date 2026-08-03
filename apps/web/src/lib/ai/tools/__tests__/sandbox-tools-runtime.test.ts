@@ -614,10 +614,27 @@ describe('buildRealSandboxRunDeps.resolveBillingSession', () => {
     expect(mockEnsureGlobalSandboxSession).toHaveBeenCalledWith('conv-fresh-global', 'u1');
   });
 
-  it('given a GLOBAL conversation whose auto-provisioning fails (e.g. session limit reached), resolves null — acquireSandbox denies the same way moments later, never reaching a live sandbox unmetered', async () => {
+  it('given a GLOBAL conversation whose auto-provisioning hits the session cap, fails CLOSED with { deny } rather than resolving null — a concurrent sibling\'s claim could still let acquireSandbox succeed moments later, executing unmetered (review finding — P1, PR #2314, second pass)', async () => {
     mockFindSessionForConversation.mockResolvedValue(null);
     mockGetConversation.mockResolvedValue({ type: 'global' });
     mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'session_limit_reached' });
+    const deps = buildRealSandboxRunDeps();
+
+    const result = await deps.resolveBillingSession?.({
+      userId: 'u1',
+      tenantId: 'u1',
+      conversationId: 'conv-fresh-global',
+      actorEmail: 'u1@example.com',
+      tier: 'pro',
+    });
+
+    expect(result).toEqual({ deny: 'session_limit_reached' });
+  });
+
+  it('given a GLOBAL conversation whose auto-provisioning fails for a reason that will NEVER resolve (no_session), resolves null — safe to let acquireSandbox deny the same way, since no concurrent call could make it succeed', async () => {
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockGetConversation.mockResolvedValue({ type: 'global' });
+    mockEnsureGlobalSandboxSession.mockResolvedValue({ ok: false, reason: 'no_session' });
     const deps = buildRealSandboxRunDeps();
 
     const result = await deps.resolveBillingSession?.({

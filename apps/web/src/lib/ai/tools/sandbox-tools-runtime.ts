@@ -279,17 +279,28 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
     // hibernating sandbox): goes through the SAME `resolveOrProvisionSession`
     // `acquireSandbox` above uses, rather than a bare `findSessionForConversation`
     // read, so a session-less global conversation is auto-provisioned HERE,
-    // before the credit gate — not down in `run()`, unmetered. Returning null
-    // for an unresolvable session (a page-agent conversation, a spawn fault)
-    // is still safe: `acquireSandbox` resolves through the identical function
-    // moments later and denies for the exact same reason, so `run()` never
-    // reaches a live sandbox on the "nothing to bill" path either.
+    // before the credit gate — not down in `run()`, unmetered.
+    //
+    // `no_session` (never global, or global lookup found nothing) is safe to
+    // fall through as `null` — nothing could ever auto-provision here, so
+    // `acquireSandbox` will independently deny the exact same way.
+    // `session_limit_reached` is NOT safe to fall through: it's the outcome
+    // of THIS call's own spawn attempt racing a CONCURRENT sibling's, and by
+    // the time `acquireSandbox` runs moments later, that sibling's claim may
+    // have already landed — its own resolution would then find the
+    // sibling's session and succeed, executing unmetered against a session
+    // billing already gave up on. Fail the whole call closed instead of
+    // trusting the second, independent resolution to agree with the first
+    // (review finding — P1, PR #2314, second pass).
     resolveBillingSession: async (ctx) => {
       if (!ctx.conversationId) return null;
       const resolved = await resolveOrProvisionSession(ctx.conversationId, ctx.userId);
-      if (!resolved.ok) return null;
-      const row = resolved.session;
-      return { sessionId: row.id, driveId: row.driveId, ownerId: row.ownerId };
+      if (resolved.ok) {
+        const row = resolved.session;
+        return { sessionId: row.id, driveId: row.driveId, ownerId: row.ownerId };
+      }
+      if (resolved.reason === 'no_session') return null;
+      return { deny: 'session_limit_reached' };
     },
     // Sprites Platform Alignment 5-2: checkpoint the sandbox filesystem before
     // an agent bash batch runs (fail-open, at most once per turn — see
