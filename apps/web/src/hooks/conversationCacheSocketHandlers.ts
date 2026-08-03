@@ -1,6 +1,7 @@
 import type { UIMessage } from 'ai';
 import { getActiveStreamById } from '@/hooks/useActiveStream';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
+import { commitConfirmedReply } from '@/hooks/commitConfirmedReply';
 import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
 import { shouldReloadOnComountComplete } from '@/lib/ai/streams/shouldReloadOnComountComplete';
 import { cacheHasConsistentFinalMessage } from '@/lib/ai/streams/cacheHasConsistentFinalMessage';
@@ -73,54 +74,36 @@ export const buildConversationCacheHandlers = ({
   onStreamComplete: (messageId: string, completedConvId?: string, _info?: { joinFailed: boolean }, aborted?: boolean) => {
     const stream = getActiveStreamById(messageId);
     if (stream && stream.parts.length > 0 && conversationMessagesActions.hasEntry(stream.conversationId)) {
-      // COMMIT by id — upsert, never skip. An existing row under this id may be a
-      // half-streamed includeStreaming placeholder that must be overwritten, and for
-      // OWN streams the mirror removes the pending entry the instant status changes —
-      // without this commit the reply flashes to missing.
-      //
-      // F1: an OWN reply's commit proves the user rows that triggered it are
-      // persisted (the route persists the user message before generating) — promote
-      // them into confirmed messages FIRST, so the reply appends after them and the
-      // question can never render below the answer. A remote reply proves nothing
-      // about this tab's sends, so no promotion there (ordering is already right:
-      // an unconfirmed own send IS the newest content).
-      if (stream.isOwn) {
-        conversationMessagesActions.promoteOptimisticSends(stream.conversationId);
-      }
-      // epic leaf 6.8 (D ixpwr76xepu2x9v4pxgksyhz): badge a crash-reaped or Stopped
-      // stream as 'interrupted' the instant this tab hears about it, instead of only
-      // after the next reload — the persisted row already carries this status
-      // (message-utils.ts), this just stops a live-open tab from rendering stale.
-      conversationMessagesActions.applyConfirmedMessage(
+      // The shared F1/F6 commit protocol — see commitConfirmedReply. Without this
+      // commit the reply flashes to missing: for OWN streams the mirror removes the
+      // pending entry the instant status changes. epic leaf 6.8 (D
+      // ixpwr76xepu2x9v4pxgksyhz): the terminal status badges a crash-reaped or
+      // Stopped stream as 'interrupted' the instant this tab hears about it,
+      // instead of only after the next reload.
+      commitConfirmedReply(
         stream.conversationId,
         synthesizeAssistantMessage(messageId, stream.parts, stream.startedAt, aborted ? 'interrupted' : 'complete'),
+        { promoteOwnSends: stream.isOwn, refreshSnapshot },
       );
-      // F6: the socket broadcast can outrace the SSE multicast's final frames, so the
-      // committed parts may be truncated. The commit gives instant continuity; this
-      // background snapshot reconciles the authoritative DB row (best-effort,
-      // generation-safe, no loading-state flip).
-      void refreshSnapshot(stream.conversationId);
       return;
     }
     // No usable store entry (SSE join failed / zero parts): the message IS durably
     // persisted — reload the conversation's cache entry rather than losing it.
-    // Unless the sender's own onFinish already committed a final row whose status
-    // is CONSISTENT with this event (buildOwnStreamCommitOnFinish) — then a reload
-    // only adds a loading flip. A locally-Stopped 'interrupted' row does NOT
-    // suppress a non-aborted completion: the server may have outrun the abort and
+    // Only for a CACHED conversation (uncached ⇒ nothing renders it; its
+    // eventual loader fetches the DB truth), and unless the sender's own
+    // onFinish already committed a final row whose status is CONSISTENT with
+    // this event (buildOwnStreamCommitOnFinish) — then a reload only adds a
+    // loading flip. A locally-Stopped 'interrupted' row does NOT suppress a
+    // non-aborted completion: the server may have outrun the abort and
     // persisted the full reply — see cacheHasConsistentFinalMessage.
-    const conversationCached = completedConvId
-      ? conversationMessagesActions.hasEntry(completedConvId)
-      : false;
-    const cacheHasFinalMessage = completedConvId
-      ? cacheHasConsistentFinalMessage(
-          conversationMessagesActions.getEntry(completedConvId).messages,
-          messageId,
-          aborted === true,
-        )
-      : false;
-    if (shouldReloadOnComountComplete(stream, completedConvId, conversationCached, cacheHasFinalMessage)) {
-      void reloadConversation(completedConvId!);
+    if (!completedConvId || !conversationMessagesActions.hasEntry(completedConvId)) return;
+    const cacheHasFinalMessage = cacheHasConsistentFinalMessage(
+      conversationMessagesActions.getEntry(completedConvId).messages,
+      messageId,
+      aborted === true,
+    );
+    if (shouldReloadOnComountComplete(stream, cacheHasFinalMessage)) {
+      void reloadConversation(completedConvId);
     }
   },
 });

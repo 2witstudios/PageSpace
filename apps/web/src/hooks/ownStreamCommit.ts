@@ -1,6 +1,6 @@
 import type { ChatOnFinishCallback, UIMessage } from 'ai';
 import { getActiveStreamById } from '@/hooks/useActiveStream';
-import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
+import { commitConfirmedReply } from '@/hooks/commitConfirmedReply';
 import { refreshConversationSnapshot } from '@/hooks/conversationMessagesLoaders';
 import { planOwnStreamCommit } from '@/lib/ai/streams/planOwnStreamCommit';
 
@@ -12,15 +12,11 @@ import { planOwnStreamCommit } from '@/lib/ai/streams/planOwnStreamCommit';
  * the assistant pane has no conversation-scoped subscriber at all, and the
  * agent pane's own stream entry is already removed when its handler runs).
  *
- * Mirrors the socket commit's ordering exactly:
- * - F1: promote optimistic sends FIRST — an own reply proves the user rows
- *   that triggered it are persisted, and promoting first means the question
- *   can never render below the answer.
- * - Commit by id — upsert, never skip: an existing row under this id may be a
- *   half-streamed includeStreaming placeholder that must be overwritten.
- * - F6: background snapshot heal — the drained body is complete on a clean
- *   finish, but the DB row is authoritative for metadata (status refinement,
- *   createdAt); best-effort, generation-safe, no loading-state flip.
+ * What/whether to commit is decided by planOwnStreamCommit; HOW to commit is
+ * the shared commitConfirmedReply protocol (F1 promote-first ordering, F6
+ * snapshot heal) — the same code path the socket commit uses, so the two
+ * cannot drift. `promoteOwnSends` is unconditionally true here: onFinish only
+ * ever fires for this tab's own request.
  *
  * `onFinish` runs in the stream-teardown task, before React commits the
  * `ready` render's effects — so the mirror's pending-streams entry still
@@ -40,16 +36,17 @@ export const buildOwnStreamCommitOnFinish = (deps: {
 }): ChatOnFinishCallback<UIMessage> => {
   const { conversationId, agentId } = deps;
   return (options) => {
-    const plan = planOwnStreamCommit({
+    const message = planOwnStreamCommit({
       message: options.message,
       isAbort: options.isAbort,
       isDisconnect: options.isDisconnect,
       isError: options.isError,
       startedAt: getActiveStreamById(options.message.id)?.startedAt,
     });
-    if (!plan) return;
-    conversationMessagesActions.promoteOptimisticSends(conversationId);
-    conversationMessagesActions.applyConfirmedMessage(conversationId, plan.message);
-    void refreshConversationSnapshot(agentId, conversationId);
+    if (!message) return;
+    commitConfirmedReply(conversationId, message, {
+      promoteOwnSends: true,
+      refreshSnapshot: (id) => refreshConversationSnapshot(agentId, id),
+    });
   };
 };

@@ -3,6 +3,24 @@ import type { UIMessage } from 'ai';
 import { fetchAgentConversationMessages } from '@/lib/ai/shared/agent-conversations';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
 
+interface GlobalMessagesEnvelope {
+  messages: UIMessage[];
+  pagination?: { hasMore: boolean; nextCursor: string | null };
+}
+
+/**
+ * The ONE decoder for the global messages endpoint's response — either the
+ * modern `{ messages, pagination }` envelope or the legacy bare array (same
+ * dual shape `fetchAgentConversationMessages` handles for the agent endpoint).
+ */
+const parseGlobalMessagesEnvelope = (data: unknown): GlobalMessagesEnvelope =>
+  Array.isArray(data)
+    ? { messages: data as UIMessage[] }
+    : {
+        messages: (data as { messages?: UIMessage[] }).messages ?? [],
+        pagination: (data as GlobalMessagesEnvelope).pagination ?? undefined,
+      };
+
 /**
  * The shared cache load path (PR 5B) — the ONE way a conversation's DB
  * messages reach `useConversationMessagesStore`. Every load/refresh trigger
@@ -35,10 +53,9 @@ export const loadGlobalConversationMessages = async (conversationId: string): Pr
     }
     const data = await res.json();
     if (!conversationMessagesActions.isLoadCurrent(conversationId, generation)) return;
-    const messages: UIMessage[] = Array.isArray(data) ? data : (data.messages ?? []);
     // epic leaf 6.6: capture the pagination envelope (dropped entirely before this PR) so
     // "load older" has a cursor and knows whether there's anything left to fetch.
-    const pagination = Array.isArray(data) ? undefined : data.pagination;
+    const { messages, pagination } = parseGlobalMessagesEnvelope(data);
     conversationMessagesActions.applyLoad(conversationId, generation, messages, pagination);
   } catch (error) {
     console.warn('[conversationMessagesLoaders] global load failed', conversationId, error);
@@ -71,8 +88,7 @@ export const loadOlderGlobalConversationMessages = async (conversationId: string
       return;
     }
     const data = await res.json();
-    const messages: UIMessage[] = Array.isArray(data) ? data : (data.messages ?? []);
-    const pagination = Array.isArray(data) ? undefined : data.pagination;
+    const { messages, pagination } = parseGlobalMessagesEnvelope(data);
     conversationMessagesActions.applyOlderPage(
       conversationId,
       generation,
@@ -98,7 +114,28 @@ export const loadOlderGlobalConversationMessages = async (conversationId: string
  * reconciles the authoritative DB row shortly after. Best-effort: a failure
  * leaves the committed parts standing (warn, never a UI error).
  */
-export const refreshConversationSnapshot = async (
+// In-flight dedup: with event-conversation dispatch, co-mounted subscribers on the
+// same channel each fire the heal for one completion — identical fetches whose
+// second commit the CR4 token guard would drop anyway. Coalesce them instead of
+// paying the duplicate network round-trip. Keyed per (endpoint, conversation);
+// cleared on settle, so a heal AFTER this one still fetches fresh.
+const inFlightSnapshotRefreshes = new Map<string, Promise<void>>();
+
+export const refreshConversationSnapshot = (
+  agentId: string | null,
+  conversationId: string,
+): Promise<void> => {
+  const key = `${agentId ?? 'global'}:${conversationId}`;
+  const inFlight = inFlightSnapshotRefreshes.get(key);
+  if (inFlight) return inFlight;
+  const refresh = doRefreshConversationSnapshot(agentId, conversationId).finally(() => {
+    inFlightSnapshotRefreshes.delete(key);
+  });
+  inFlightSnapshotRefreshes.set(key, refresh);
+  return refresh;
+};
+
+const doRefreshConversationSnapshot = async (
   agentId: string | null,
   conversationId: string,
 ): Promise<void> => {
@@ -126,10 +163,7 @@ export const refreshConversationSnapshot = async (
       console.warn('[conversationMessagesLoaders] snapshot refresh failed', conversationId, res.status);
       return;
     }
-    const data = await res.json();
-    const messages: UIMessage[] = Array.isArray(data) ? data : (data.messages ?? []);
-    const pagination: { hasMore: boolean; nextCursor: string | null } | undefined =
-      Array.isArray(data) ? undefined : (data.pagination ?? undefined);
+    const { messages, pagination } = parseGlobalMessagesEnvelope(await res.json());
     conversationMessagesActions.applyServerSnapshot(conversationId, token, messages, pagination);
   } catch (error) {
     console.warn('[conversationMessagesLoaders] snapshot refresh failed', conversationId, error);

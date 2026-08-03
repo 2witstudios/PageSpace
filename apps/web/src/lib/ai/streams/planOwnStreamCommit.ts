@@ -14,13 +14,10 @@ export interface PlanOwnStreamCommitInput {
   startedAt: string | undefined;
 }
 
-export interface OwnStreamCommit {
-  message: UIMessage;
-}
-
 /**
  * Decides whether a finished own-chat request should be committed into the
- * conversation message cache, and builds the message to commit.
+ * conversation message cache, and builds the message to commit (null = no
+ * commit).
  *
  * WHY THIS EXISTS: the sender's live bubble is only a pending-streams mirror
  * entry, removed on the falling edge (planOwnStreamMirror). The completed
@@ -42,16 +39,14 @@ export interface OwnStreamCommit {
  *   reload path owns the zero-parts completion (same contract as
  *   shouldReloadOnComountComplete).
  */
-export const planOwnStreamCommit = (input: PlanOwnStreamCommitInput): OwnStreamCommit | null => {
+export const planOwnStreamCommit = (input: PlanOwnStreamCommitInput): UIMessage | null => {
   if (input.isDisconnect || input.isError) return null;
   if (input.message.role !== 'assistant') return null;
   if (input.message.parts.length === 0) return null;
-  return {
-    message: synthesizeAssistantMessage(
-      input.message.id,
-      input.message.parts,
-      input.startedAt,
-      input.isAbort ? 'interrupted' : 'complete',
-    ),
-  };
+  return synthesizeAssistantMessage(
+    input.message.id,
+    input.message.parts,
+    input.startedAt,
+    input.isAbort ? 'interrupted' : 'complete',
+  );
 };

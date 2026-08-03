@@ -15,7 +15,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
-import type { UIMessage } from 'ai';
+import type { ChatOnFinishCallback, UIMessage } from 'ai';
 
 const { mockFetchWithAuth } = vi.hoisted(() => ({
   mockFetchWithAuth: vi.fn(),
@@ -294,13 +294,7 @@ describe('useAssistantSessionChat — onFinish local commit', () => {
 
     const config = chat.capturedConfigs.at(-1)!;
     expect(typeof config.onFinish).toBe('function');
-    const onFinish = config.onFinish as (options: {
-      message: UIMessage;
-      messages: UIMessage[];
-      isAbort: boolean;
-      isDisconnect: boolean;
-      isError: boolean;
-    }) => void;
+    const onFinish = config.onFinish as ChatOnFinishCallback<UIMessage>;
 
     const reply = {
       id: 'm-assistant-1',
@@ -325,13 +319,7 @@ describe('useAssistantSessionChat — onFinish local commit', () => {
 
     const { result } = renderHook(() => useAssistantSessionChat({ conversationId, driveId: null }));
 
-    const onFinish = chat.capturedConfigs.at(-1)!.onFinish as (options: {
-      message: UIMessage;
-      messages: UIMessage[];
-      isAbort: boolean;
-      isDisconnect: boolean;
-      isError: boolean;
-    }) => void;
+    const onFinish = chat.capturedConfigs.at(-1)!.onFinish as ChatOnFinishCallback<UIMessage>;
     const partial = {
       id: 'm-assistant-1',
       role: 'assistant',
