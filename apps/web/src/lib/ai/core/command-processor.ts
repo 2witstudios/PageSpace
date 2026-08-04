@@ -82,6 +82,28 @@ export function isSoloBuiltinCommand(content: string, trigger: string): boolean 
   return withoutToken.trim().length === 0;
 }
 
+/**
+ * Same "solo" test as isSoloBuiltinCommand, but tolerates @mention tokens
+ * alongside the chip — for callers where reaching the message at all
+ * structurally requires a mention (e.g. a channel message triggers an agent
+ * response only via resolveMentionedAgents, which returns nothing unless the
+ * content contains at least one @mention token). Under isSoloBuiltinCommand's
+ * strict "exactly one token" rule, a mentioned agent's `/help` could never
+ * register as solo — the required @mention itself would always disqualify
+ * it. Still disallows any OTHER free text or a second command token.
+ */
+export function isSoloBuiltinCommandIgnoringMentions(content: string, trigger: string): boolean {
+  const { displayText, tokens } = parseMessageTokens(content);
+  const commandTokens = tokens.filter((t) => t.type === COMMAND_TOKEN_TYPE);
+  if (commandTokens.length !== 1 || commandTokens[0].id !== builtinCommandId(trigger)) return false;
+
+  let residual = displayText;
+  for (const token of [...tokens].sort((a, b) => b.start - a.start)) {
+    residual = residual.slice(0, token.start) + residual.slice(token.end);
+  }
+  return residual.trim().length === 0;
+}
+
 /** Why a command was skipped instead of injected (UX spec §7.2). */
 export type CommandSkipReason = 'page_trashed' | 'no_access' | 'not_found' | 'disabled';
 

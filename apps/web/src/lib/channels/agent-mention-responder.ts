@@ -15,7 +15,7 @@ import { processMentionsInMessage } from '@/lib/ai/core/mention-processor';
 import {
   buildCommandPromptSection,
   commandExecutionDataFromPlan,
-  isSoloBuiltinCommand,
+  isSoloBuiltinCommandIgnoringMentions,
   type CommandExecutionData,
 } from '@/lib/ai/core/command-processor';
 import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
@@ -559,11 +559,15 @@ export async function triggerMentionedAgentResponses(
       }
     }
 
-    // A mention whose content is nothing but the /help chip answers directly
-    // from code for every eligible agent — the answer is sender-scoped (the
-    // human's command list), not agent-scoped, so it's identical regardless
-    // of which agent replies. Skips askAgentExecute/generateText entirely.
-    const isSoloHelpMention = isSoloBuiltinCommand(params.content, 'help');
+    // A mention whose content is nothing but the /help chip (plus the
+    // @mention(s) that got it here at all — reaching this function already
+    // required at least one, see resolveMentionedAgents above, so the
+    // strict isSoloBuiltinCommand could never be satisfied here) answers
+    // directly from code for every eligible agent — the answer is
+    // sender-scoped (the human's command list), not agent-scoped, so it's
+    // identical regardless of which agent replies. Skips
+    // askAgentExecute/generateText entirely.
+    const isSoloHelpMention = isSoloBuiltinCommandIgnoringMentions(params.content, 'help');
 
     for (const agent of eligibleAgents) {
       try {

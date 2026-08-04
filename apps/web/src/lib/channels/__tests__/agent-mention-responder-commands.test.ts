@@ -63,12 +63,16 @@ vi.mock('@pagespace/lib/services/preview', () => ({
 vi.mock('@/lib/ai/core/command-resolver', () => ({
   planCommandExecutions: vi.fn(),
 }));
+vi.mock('@/lib/commands/help-answer', () => ({
+  loadHelpAnswerText: vi.fn(),
+}));
 
 import { db } from '@pagespace/db/db';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { executeAskAgent } from '@/lib/ai/tools/agent-communication-tools';
 import { channelTools } from '@/lib/ai/tools/channel-tools';
 import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
+import { loadHelpAnswerText } from '@/lib/commands/help-answer';
 import type { CommandExecutionPlan } from '@/lib/ai/core/command-processor';
 import { triggerMentionedAgentResponses } from '../agent-mention-responder';
 
@@ -76,6 +80,7 @@ const mockPagesFindMany = db.query.pages.findMany as unknown as Mock;
 const mockChannelMessagesFindMany = db.query.channelMessages.findMany as unknown as Mock;
 const mockCanUserViewPage = vi.mocked(canUserViewPage);
 const mockPlanCommandExecutions = vi.mocked(planCommandExecutions);
+const mockLoadHelpAnswerText = vi.mocked(loadHelpAnswerText);
 const mockAskAgentExecute = executeAskAgent as unknown as Mock;
 const mockSendChannelExecute = channelTools.send_channel_message.execute as unknown as Mock;
 
@@ -124,6 +129,7 @@ beforeEach(() => {
   mockAskAgentExecute.mockResolvedValue({ success: true, response: 'done' });
   mockSendChannelExecute.mockResolvedValue({ success: true });
   mockPlanCommandExecutions.mockResolvedValue([]);
+  mockLoadHelpAnswerText.mockResolvedValue('Here are the commands available to you:\n\n- **/help** (built-in) — List the commands.');
 });
 
 describe('triggerMentionedAgentResponses — universal commands', () => {
@@ -247,5 +253,59 @@ describe('triggerMentionedAgentResponses — universal commands', () => {
       { label: 'release-checklist', status: 'skipped', reason: 'disabled' },
       { label: 'help', status: 'used' },
     ]);
+  });
+});
+
+describe('triggerMentionedAgentResponses — solo /help mention', () => {
+  // A channel message can only reach this function via an @mention
+  // (resolveMentionedAgents returns nothing otherwise), so a solo /help
+  // mention's content always looks like "@Agent /help" — the mention is
+  // structurally unavoidable. This is exactly the shape
+  // isSoloBuiltinCommandIgnoringMentions exists for.
+  const soloHelpParams = {
+    ...baseParams,
+    content: '@[Helper](agent-1:page) /[help](builtin:help:command)',
+  };
+
+  it('answers from loadHelpAnswerText instead of calling the model', async () => {
+    await triggerMentionedAgentResponses(soloHelpParams);
+
+    expect(mockLoadHelpAnswerText).toHaveBeenCalledWith('user-1', null);
+    expect(mockAskAgentExecute).not.toHaveBeenCalled();
+    expect(mockSendChannelExecute).toHaveBeenCalledTimes(1);
+    const [sendInput] = mockSendChannelExecute.mock.calls[0] as [{ content: string }];
+    expect(sendInput.content).toBe('Here are the commands available to you:\n\n- **/help** (built-in) — List the commands.');
+  });
+
+  it('resolves the answer against the channel drive context', async () => {
+    await triggerMentionedAgentResponses({ ...soloHelpParams, driveId: 'drive-1' });
+    expect(mockLoadHelpAnswerText).toHaveBeenCalledWith('user-1', 'drive-1');
+  });
+
+  it('still carries the "used" command-execution pill', async () => {
+    // commandPlans/commandExecution are computed unconditionally from the
+    // real planCommandExecutions (mocked here), independent of the solo-help
+    // fast path — mirrors what resolveBuiltinInjection('help', ...) actually
+    // returns in production.
+    mockPlanCommandExecutions.mockResolvedValue([
+      { kind: 'inject', injection: { commandId: 'builtin:help', trigger: 'help', label: 'help', scope: 'builtin', description: 'List the commands available here and explain how to use them.', entryPage: null, children: [] } },
+    ]);
+
+    await triggerMentionedAgentResponses(soloHelpParams);
+
+    const sendOptions = mockSendChannelExecute.mock.calls[0][1] as {
+      experimental_context: { commandExecution?: unknown };
+    };
+    expect(sendOptions.experimental_context.commandExecution).toEqual([{ label: 'help', status: 'used' }]);
+  });
+
+  it('a chip combined with real text (not solo) still goes through the model, even alongside the mention', async () => {
+    await triggerMentionedAgentResponses({
+      ...soloHelpParams,
+      content: '@[Helper](agent-1:page) /[help](builtin:help:command) how do I use spreadsheets',
+    });
+
+    expect(mockLoadHelpAnswerText).not.toHaveBeenCalled();
+    expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
   });
 });

@@ -6,6 +6,7 @@ import {
   buildCommandSystemPrompt,
   commandExecutionDataFromPlan,
   isSoloBuiltinCommand,
+  isSoloBuiltinCommandIgnoringMentions,
   COMMAND_CONTENT_CHAR_LIMIT,
   type CommandExecutionPlan,
   type CommandInjection,
@@ -327,6 +328,64 @@ describe('isSoloBuiltinCommand', () => {
   it('is false for plain text with no chip at all', () => {
     expect(isSoloBuiltinCommand('/help', 'help')).toBe(false);
     expect(isSoloBuiltinCommand('', 'help')).toBe(false);
+  });
+
+  it('is false when an @mention accompanies the chip (use isSoloBuiltinCommandIgnoringMentions for that)', () => {
+    expect(
+      isSoloBuiltinCommand('@[Alice](user1:user) /[help](builtin:help:command)', 'help')
+    ).toBe(false);
+  });
+});
+
+describe('isSoloBuiltinCommandIgnoringMentions', () => {
+  it('is true for the bare chip with no other text', () => {
+    expect(isSoloBuiltinCommandIgnoringMentions('/[help](builtin:help:command)', 'help')).toBe(true);
+  });
+
+  it('is true for the chip alongside one @mention — the shape a channel /help mention always has (resolveMentionedAgents requires a mention to reach it at all)', () => {
+    expect(
+      isSoloBuiltinCommandIgnoringMentions('@[Agent](agent1:user) /[help](builtin:help:command)', 'help')
+    ).toBe(true);
+  });
+
+  it('is true regardless of chip/mention order or multiple mentions', () => {
+    expect(
+      isSoloBuiltinCommandIgnoringMentions('/[help](builtin:help:command) @[Agent](agent1:user)', 'help')
+    ).toBe(true);
+    expect(
+      isSoloBuiltinCommandIgnoringMentions(
+        '@[Agent](agent1:user) /[help](builtin:help:command) @[Bob](user2:user)',
+        'help'
+      )
+    ).toBe(true);
+  });
+
+  it('is false when real text accompanies the chip', () => {
+    expect(
+      isSoloBuiltinCommandIgnoringMentions(
+        '@[Agent](agent1:user) /[help](builtin:help:command) how do I use spreadsheets',
+        'help'
+      )
+    ).toBe(false);
+  });
+
+  it('is false for a different builtin trigger', () => {
+    expect(
+      isSoloBuiltinCommandIgnoringMentions('@[Agent](agent1:user) /[spreadsheets](builtin:spreadsheets:command)', 'help')
+    ).toBe(false);
+  });
+
+  it('is false when a second command chip is also present', () => {
+    expect(
+      isSoloBuiltinCommandIgnoringMentions(
+        `@[Agent](agent1:user) /[help](builtin:help:command) /[other](${CMD_ID}:command)`,
+        'help'
+      )
+    ).toBe(false);
+  });
+
+  it('is false for mentions with no command chip at all', () => {
+    expect(isSoloBuiltinCommandIgnoringMentions('@[Agent](agent1:user) help me', 'help')).toBe(false);
   });
 });
 
