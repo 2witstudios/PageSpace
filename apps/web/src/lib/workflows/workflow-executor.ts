@@ -4,7 +4,7 @@ import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { createId } from '@paralleldrive/cuid2';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import { DISPATCH_DEPENDENT_SESSION_TOOL_NAMES, filterToolsForDispatchCredentials, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier, SANDBOX_COMPUTE_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForDispatchCredentials, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier, SANDBOX_COMPUTE_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibility } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { spawnSession, createConversationInSession, endSession } from '@/lib/agent-sessions/agent-sessions-runtime';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
@@ -87,16 +87,6 @@ export interface WorkflowExecutionInput {
   timezone: string;
   /** Identifies the originating trigger so workflow_runs can be joined back to it. */
   source: WorkflowRunSource;
-  /**
-   * The AUTHENTICATED user whose live request this run executes inside — set
-   * only by the manual run route. The dispatch-dependent session tools
-   * (spawn/send_session) forward that request's cookie, so they are retained
-   * only when this identity matches `createdBy`, the owner of the run-scoped
-   * workspace those tools would act in (codex round 8: an admin manually
-   * running another creator's workflow would dispatch as themselves into a
-   * conversation the chat route rightly rejects as someone else's).
-   */
-  runnerUserId?: string;
   taskContext?: { taskItemId: string; triggerType: 'due_date' | 'completion' };
   /**
    * promptOverride replaces the prompt of legacy runs / ai steps (the webhook
@@ -611,39 +601,34 @@ async function runExecution(
     // compute AND the chat-only session family, which free-tier and
     // kill-switch-off runs keep) would answer `no_session` and never execute.
     //
-    // spawn_session/send_session additionally relay the caller's own
-    // credentials through the chat pipeline — they only function inside an
-    // authenticated USER request. Of every path into this executor, only a
-    // MANUAL run (`/api/workflows/[workflowId]/run`) is one; cron, task,
-    // calendar, and webhook fires carry no user cookie, so those runs strip
-    // the dispatch pair rather than mint worker conversations whose dispatch
-    // then refuses (codex round 7). And the manual runner must BE the
-    // workflow's creator: the run-scoped workspace below is owned by
-    // `createdBy`, so a different runner's cookie would dispatch into a
-    // conversation the chat route rejects as someone else's (codex round 8).
+    // spawn_session/send_session are stripped from EVERY workflow run —
+    // two structural mismatches, not a credential nuance (codex rounds 7, 8
+    // and 11): (1) dispatch relays a live browser request's cookie, which
+    // cron/task/calendar/webhook fires never have; (2) even a manual run
+    // executes against a RUN-SCOPED session that the `finally` below ends
+    // the moment the run finishes — a fire-and-forget worker dispatched
+    // without `wait: true` would outlive its own workspace, losing its
+    // Sprite mid-call or re-provisioning after cleanup already ran. A
+    // workflow run is a single bounded turn; it delegates by finishing, not
+    // by leaving detached workers behind.
     //
-    // A session is minted only when a survivor can DO something in a fresh
-    // run-scoped workspace: a compute tool, or the dispatch pair. When
-    // neither survived, the read/kill leftovers (list/read/kill_session,
-    // which could only ever report an empty just-born workspace) are
-    // stripped instead of spending a session row + owner cap slot on them.
-    // When one did: mint the same thing an interactive spawn would — a REAL
-    // session in the agent's drive plus a REAL conversation bound to it (the
-    // run's messages then land in that conversation, inspectable like any
-    // other; the session row itself is free — compute is provisioned lazily
-    // only if an eligible run calls a compute tool), released in `finally`
-    // when the run ends. A spawn refusal (owner at their session cap,
-    // transient fault) degrades to running WITHOUT the session-backed
+    // A session is minted only when a surviving COMPUTE tool can act in a
+    // fresh run-scoped workspace. When none survived, the chat-side
+    // leftovers (list/read/kill_session, which could only ever report an
+    // empty just-born workspace) are stripped instead of spending a session
+    // row + owner cap slot on them. When compute did survive: mint the same
+    // thing an interactive spawn would — a REAL session in the agent's
+    // drive plus a REAL conversation bound to it (the run's messages then
+    // land in that conversation, inspectable like any other), released in
+    // `finally` when the run ends. A spawn refusal (owner at their session
+    // cap, transient fault) degrades to running WITHOUT the session-backed
     // families rather than failing the workflow — the same posture as an
     // agent with the sandbox toggled off.
     let conversationId = `workflow-${input.workflowId}-${Date.now()}`;
-    const interactiveDispatch = input.source.table === 'manual' && input.runnerUserId === input.createdBy;
-    availableTools = filterToolsForDispatchCredentials(availableTools, interactiveDispatch) as ToolSet;
+    availableTools = filterToolsForDispatchCredentials(availableTools, false) as ToolSet;
     const sessionBackedToolsActive =
       workflowSandboxEnabled &&
-      Object.keys(availableTools).some(
-        (name) => SANDBOX_COMPUTE_TOOL_NAMES.has(name) || DISPATCH_DEPENDENT_SESSION_TOOL_NAMES.has(name),
-      );
+      Object.keys(availableTools).some((name) => SANDBOX_COMPUTE_TOOL_NAMES.has(name));
     if (!sessionBackedToolsActive) {
       availableTools = filterToolsForSandboxEnablement(availableTools, false) as ToolSet;
     }

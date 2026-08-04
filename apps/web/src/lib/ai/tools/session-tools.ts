@@ -227,15 +227,12 @@ export interface SessionToolsDeps {
   }) => Promise<SessionWorkspaceListing>;
   /** One session row's identity slice, or null. */
   findSession: (sessionId: string) => Promise<SessionToolRow | null>;
-  /** Live sessions counted against the owner's concurrency quota. */
-  countActiveSessions: (ownerId: string) => Promise<number>;
-  /** The owner's concurrency ceiling. */
-  concurrencyLimit: (ownerId: string) => Promise<number>;
   /**
    * ACTIVE conversations already living in the caller's session — what a spawn
-   * actually mints, and what `MAX_SESSION_CONVERSATIONS` bounds. A required
-   * dep, not optional: the sandbox-concurrency inputs above count VMs, which a
-   * worker spawn never creates, so without this the mint is unbounded.
+   * actually mints, and what `MAX_SESSION_CONVERSATIONS` bounds. The ONLY
+   * spawn quota (codex round 11): a worker spawn creates a conversation,
+   * never a sandbox, so the compute concurrency ceiling deliberately does
+   * not apply here — session minting itself is capped in `spawnAgentSession`.
    */
   countSessionConversations: (workspaceSessionId: string) => Promise<number>;
   /**
@@ -364,20 +361,12 @@ function truncateTranscriptMessage(content: string): string {
 }
 
 const SPAWN_DENIALS: Record<
-  'invalid_name' | 'missing_prompt' | 'depth_exceeded' | 'concurrency_exceeded' | 'session_full',
+  'invalid_name' | 'missing_prompt' | 'depth_exceeded' | 'session_full',
   string
 > = {
   invalid_name: 'The worker needs a usable display name (1–200 characters).',
   missing_prompt: 'A worker session must be spawned WITH work — pass a non-empty prompt.',
   depth_exceeded: `This conversation is already ${MAX_AGENT_DEPTH} agent-dispatches deep, and a chain may not go deeper. Do the work here, or report back to the agent at the top of the chain.`,
-  // Truthful about the remedy (issue #2262 finding 2): kill_session only aborts
-  // a WORKER's in-flight run in the caller's OWN session — it tears down no
-  // sandbox and frees no counted slot, so the old copy's advice to call it and
-  // retry accomplished nothing. Freeing a slot means ending a whole SESSION
-  // (its sandbox), which is a workspace-lifecycle action outside this tool
-  // family's own reach — there is no tool here to point the caller at.
-  concurrency_exceeded:
-    'You are at your concurrent sandbox limit — a different session of yours must end (its sandbox stopped) before another can start. This cannot be done from here; report the limit rather than retrying.',
   session_full: `This session already has ${MAX_SESSION_CONVERSATIONS} conversations, its maximum. Reuse an existing worker (send_session) instead of spawning another.`,
 };
 
@@ -535,23 +524,20 @@ export function createSessionTools(deps: SessionToolsDeps): {
 
         // The session-level cap (issue #2262 finding 2) counts what a spawn
         // actually mints — a conversation in THIS workspace — so it is read
-        // against the caller's own workspace, not the account-wide sandbox
-        // count above it. A caller whose conversation has no session yet
-        // reads as zero here; createWorkerSession refuses that case with its
-        // own truthful reason once the plan clears.
+        // against the caller's own workspace, not any account-wide sandbox
+        // count (a worker spawn never creates a sandbox; codex round 11). A
+        // caller whose conversation has no session yet reads as zero here;
+        // createWorkerSession refuses that case with its own truthful reason
+        // once the plan clears.
         const workspace = await deps.findOwnWorkspace(callerConversationId);
-        const [activeSessionCount, concurrencyLimit, sessionConversationCount] = await Promise.all([
-          deps.countActiveSessions(actor.userId),
-          deps.concurrencyLimit(actor.userId),
-          workspace ? deps.countSessionConversations(workspace.sessionId) : Promise.resolve(0),
-        ]);
+        const sessionConversationCount = workspace
+          ? await deps.countSessionConversations(workspace.sessionId)
+          : 0;
         const plan = planSpawnWorkerSession({
           name,
           prompt,
           agentId: agent ?? null,
           callerDepth: readDepth(context),
-          activeSessionCount,
-          concurrencyLimit,
           sessionConversationCount,
         });
         if (!plan.ok) {

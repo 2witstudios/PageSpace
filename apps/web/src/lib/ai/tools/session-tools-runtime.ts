@@ -22,10 +22,7 @@ import { db } from '@pagespace/db/db';
 import { and, count, eq, isNull, ne, desc } from '@pagespace/db/operators';
 import { chatMessages, pages } from '@pagespace/db/schema/core';
 import { conversations, messages as globalMessages } from '@pagespace/db/schema/conversations';
-import { users } from '@pagespace/db/schema/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
-import { getCodeExecutionConcurrencyLimit } from '@pagespace/lib/services/sandbox/quota';
-import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { deriveSandboxStatus } from '@pagespace/lib/services/agent-sessions/session-status';
 import {
@@ -473,29 +470,6 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
           ),
         );
       return row?.n ?? 0;
-    },
-
-    countActiveSessions: async (ownerId) => {
-      const store = await getAgentSessionStore();
-      // The SAME count the provisioner's ceiling uses, by calling the same
-      // function rather than restating its predicate. This used to re-derive it
-      // in JS with an extra `endedAt === null` clause, which undercounts: a
-      // session whose kill failed keeps its VM (and its bill) with `endedAt`
-      // set and `spriteTornDownAt` still null, so the teardown stays queued in
-      // the reclaim outbox. This pre-check would wave those through while the
-      // provisioner — counting them, correctly — refused every resulting spawn.
-      // Two counters enforcing one ceiling is a disagreement waiting to happen;
-      // there is now one.
-      return store.countLive(ownerId);
-    },
-
-    concurrencyLimit: async (ownerId) => {
-      const [row] = await db
-        .select({ subscriptionTier: users.subscriptionTier })
-        .from(users)
-        .where(eq(users.id, ownerId))
-        .limit(1);
-      return getCodeExecutionConcurrencyLimit(toSubscriptionTier(row?.subscriptionTier));
     },
 
     canUseAgent: async (userId, agentPageId) => {
