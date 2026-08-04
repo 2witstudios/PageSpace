@@ -176,10 +176,12 @@ export function AgentSandboxLaunchEmail({
                 Workflows — everything except the machine underneath it.
                 Sandbox access follows whoever pays for the workspace: in a
                 drive owned by a Pro account, every member with edit access
-                gets the sandbox, even members on Free themselves. Upgrade to Pro and the
-                sandbox turns on everywhere it already shows up in your
-                workspace, billed from the same credit balance as everything
-                else you do in PageSpace — no separate charge.
+                gets the sandbox in that drive&apos;s sessions, even members
+                on Free themselves. Your personal Global Assistant sessions
+                run on your own plan. Upgrade to Pro and the sandbox turns on
+                everywhere it already shows up in your workspace, billed from
+                the same credit balance as everything else you do in
+                PageSpace — no separate charge.
               </Text>
               <Text style={{ ...calloutText, marginTop: spacing.sm }}>
                 <Link href={pricingUrl} style={secondaryLink}>
