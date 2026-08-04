@@ -4,7 +4,7 @@ import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { createId } from '@paralleldrive/cuid2';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import { filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier, SANDBOX_COMPUTE_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier, SANDBOX_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibility } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { spawnSession, createConversationInSession, endSession } from '@/lib/agent-sessions/agent-sessions-runtime';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
@@ -579,24 +579,26 @@ async function runExecution(
       });
     }
 
-    // 6c. Session-backed sandbox execution (review #2326). The sandbox
-    // runner resolves a conversation's BOUND SESSION and refuses session-less
-    // page conversations — a synthetic `workflow-…` id has no conversation
-    // row at all, so every bash/file/git tool the gate above just admitted
-    // would answer `no_session` and never execute. When sandbox tools
-    // survived filtering, mint the same thing an interactive spawn would: a
-    // REAL session in the agent's drive plus a REAL conversation bound to
-    // it (the run's messages then land in that conversation, inspectable
-    // like any other), and release the compute in `finally` when the run
-    // ends. A spawn refusal (owner at their session cap, transient fault)
-    // degrades to running WITHOUT sandbox tools rather than failing the
+    // 6c. Session-backed execution (review #2326, two rounds). The session
+    // runtime resolves a conversation's BOUND SESSION and refuses session-less
+    // callers — a synthetic `workflow-…` id has no conversation row at all,
+    // so EVERY session-backed tool the gates above admitted (bash/file/git
+    // compute AND the chat-only spawn/send/read/kill_session family, which
+    // free-tier and kill-switch-off runs keep) would answer `no_session` and
+    // never execute. When ANY of them survived filtering, mint the same thing
+    // an interactive spawn would: a REAL session in the agent's drive plus a
+    // REAL conversation bound to it (the run's messages then land in that
+    // conversation, inspectable like any other; the session row itself is
+    // free — compute is provisioned lazily only if an eligible run calls a
+    // compute tool), and release it in `finally` when the run ends. A spawn
+    // refusal (owner at their session cap, transient fault) degrades to
+    // running WITHOUT the session-backed families rather than failing the
     // workflow — the same posture as an agent with the sandbox toggled off.
     let conversationId = `workflow-${input.workflowId}-${Date.now()}`;
-    const sandboxToolsActive =
+    const sessionBackedToolsActive =
       workflowSandboxEnabled &&
-      workflowSandboxTierEligible &&
-      Object.keys(availableTools).some((name) => SANDBOX_COMPUTE_TOOL_NAMES.has(name));
-    if (sandboxToolsActive) {
+      Object.keys(availableTools).some((name) => SANDBOX_TOOL_NAMES.has(name));
+    if (sessionBackedToolsActive) {
       const spawned = await spawnSession({
         userId: input.createdBy,
         driveId: agent.driveId ?? input.driveId,
@@ -616,16 +618,20 @@ async function runExecution(
           workflowSessionId = spawned.session.id;
         } catch (error) {
           await releaseWorkflowSession(spawned.session.id, input.workflowId);
-          availableTools = filterToolsForSandboxTier(availableTools, false) as ToolSet;
-          loggers.api.warn('Workflow executor: session conversation bind failed — running without sandbox tools', {
+          // No session ⇒ the WHOLE session-backed surface is unusable, the
+          // chat-only family included — the enablement filter (not the tier
+          // filter, which deliberately preserves chat-only session tools)
+          // strips all three families.
+          availableTools = filterToolsForSandboxEnablement(availableTools, false) as ToolSet;
+          loggers.api.warn('Workflow executor: session conversation bind failed — running without session-backed tools', {
             workflowId: input.workflowId,
             sessionId: spawned.session.id,
             error: error instanceof Error ? error.message : String(error),
           });
         }
       } else {
-        availableTools = filterToolsForSandboxTier(availableTools, false) as ToolSet;
-        loggers.api.warn('Workflow executor: session spawn refused — running without sandbox tools', {
+        availableTools = filterToolsForSandboxEnablement(availableTools, false) as ToolSet;
+        loggers.api.warn('Workflow executor: session spawn refused — running without session-backed tools', {
           workflowId: input.workflowId,
           reason: spawned.reason,
         });

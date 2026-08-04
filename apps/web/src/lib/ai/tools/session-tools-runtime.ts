@@ -30,6 +30,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { deriveSandboxStatus } from '@pagespace/lib/services/agent-sessions/session-status';
 import {
   createConversationInSession,
+  ensureGlobalSandboxSession,
   findSessionForConversation,
   provisionSessionSandbox,
   getAgentSessionStore,
@@ -382,6 +383,44 @@ async function readSessionTranscript(input: {
 // The wired deps
 // ---------------------------------------------------------------------------
 
+type CallerSessionResolution =
+  | { ok: true; session: NonNullable<Awaited<ReturnType<typeof findSessionForConversation>>> }
+  | { ok: false; reason: 'no_session' | 'session_limit_reached' };
+
+/**
+ * Resolve the SESSION a worker would join for a caller conversation — a
+ * worker works in its SPAWNER's workspace: same session, same sandbox, same
+ * filesystem; that shared context is the point of spawning one.
+ *
+ * No caller session ⇒ refusal, never a lazily-minted per-thread environment
+ * (the conflation the session model removed) — with the ONE exception the
+ * sandbox acquire path already carved out (`resolveOrProvisionSession` in
+ * sandbox-tools-runtime): a GLOBAL conversation is always minted session-less
+ * and nothing else ever claims it, so it gets the same spawn+claim its first
+ * sandbox tool call would trigger. Without this, a deployment where no
+ * sandbox tool exists to run that acquire path (compute kill-switch off)
+ * advertises spawn_session that can never succeed (review #2326).
+ *
+ * Exported for unit tests.
+ */
+export async function resolveCallerSessionForWorker(
+  callerConversationId: string,
+  ownerId: string,
+): Promise<CallerSessionResolution> {
+  const existing = await findSessionForConversation(callerConversationId);
+  if (existing) return { ok: true, session: existing };
+
+  const conversation = await conversationRepository.getConversation(callerConversationId);
+  if (conversation?.type !== 'global') return { ok: false, reason: 'no_session' };
+
+  const ensured = await ensureGlobalSandboxSession(callerConversationId, ownerId);
+  if (ensured.ok) return { ok: true, session: ensured.session };
+  return {
+    ok: false,
+    reason: ensured.reason === 'session_limit_reached' ? 'session_limit_reached' : 'no_session',
+  };
+}
+
 export function buildSessionToolsDeps(): SessionToolsDeps {
   return {
     findOwnWorkspace: async (conversationId) => {
@@ -469,14 +508,13 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
     },
 
     createWorkerSession: async ({ sessionId, callerConversationId, ownerId, agentPageId, name }) => {
-      // A worker works in its SPAWNER's workspace: same session, same sandbox,
-      // same filesystem — that shared context is the point of spawning one.
-      // No caller session ⇒ refusal, never a lazily-minted per-thread
-      // environment (the conflation the session model removed).
-      const callerSession = await findSessionForConversation(callerConversationId);
-      if (!callerSession) {
-        return { ok: false, reason: 'no_session', detail: 'This conversation has no session for a worker to join.' };
+      const resolved = await resolveCallerSessionForWorker(callerConversationId, ownerId);
+      if (!resolved.ok) {
+        return resolved.reason === 'session_limit_reached'
+          ? { ok: false, reason: 'session_limit_reached', detail: 'You are at your active-session limit — end an existing session first.' }
+          : { ok: false, reason: 'no_session', detail: 'This conversation has no session for a worker to join.' };
       }
+      const callerSession = resolved.session;
       try {
         await createConversationInSession({
           conversationId: sessionId,

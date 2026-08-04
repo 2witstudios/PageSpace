@@ -129,6 +129,7 @@ vi.mock('@/lib/ai/core/ai-tools', () => ({
     create_page: { name: 'create_page' },
     search_pages: { name: 'search_pages' },
     bash: { name: 'bash' },
+    spawn_session: { name: 'spawn_session' },
   },
 }));
 vi.mock('@/lib/ai/core/timestamp-utils', () => ({
@@ -386,6 +387,50 @@ describe('executeWorkflow', () => {
       const toolKeys = Object.keys(genCall.tools as object);
       expect(toolKeys).toContain('list_pages');
       expect(toolKeys).not.toContain('bash');
+    });
+
+    test('an ineligible payer keeps the chat-only session family, backed by a run-scoped session (review #2326)', async () => {
+      mockResolveSandboxToolEligibility.mockResolvedValue(false);
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'wf-ses-chat' } });
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'bash', 'spawn_session'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
+      const toolKeys = Object.keys(genCall.tools as object);
+      // Tier strips compute only — the chat-only session family survives and
+      // therefore needs the run-scoped session just as much as bash would:
+      // without one, every spawn_session call answers no_session.
+      expect(toolKeys).not.toContain('bash');
+      expect(toolKeys).toContain('spawn_session');
+      expect(mockSpawnSession).toHaveBeenCalledTimes(1);
+      expect(mockCreateConversationInSession).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: 'wf-ses-chat', agentPageId: mockAgent.id }),
+      );
+      expect(mockEndSession).toHaveBeenCalledWith('wf-ses-chat');
+    });
+
+    test('a spawn refusal strips the chat-only session family too — no session-backed tool survives without a session', async () => {
+      mockResolveSandboxToolEligibility.mockResolvedValue(false);
+      mockSpawnSession.mockResolvedValue({ ok: false, reason: 'session_limit_reached' });
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'spawn_session'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
+      const toolKeys = Object.keys(genCall.tools as object);
+      expect(toolKeys).toContain('list_pages');
+      expect(toolKeys).not.toContain('spawn_session');
+      expect(mockCreateConversationInSession).not.toHaveBeenCalled();
+      expect(mockEndSession).not.toHaveBeenCalled();
     });
 
     test('an agent with sandboxEnabled on and an eligible (Pro+) payer gets sandbox tools, backed by a run-scoped session', async () => {
