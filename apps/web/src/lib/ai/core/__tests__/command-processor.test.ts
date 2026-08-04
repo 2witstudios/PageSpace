@@ -5,6 +5,7 @@ import {
   buildCommandPromptSection,
   buildCommandSystemPrompt,
   commandExecutionDataFromPlan,
+  isSoloBuiltinCommand,
   COMMAND_CONTENT_CHAR_LIMIT,
   type CommandExecutionPlan,
   type CommandInjection,
@@ -285,6 +286,47 @@ describe('buildCommandPromptSection', () => {
     expect(section).toContain('was skipped because');
     expect(section).toContain('the /gone command');
     expect(section).toContain('the command no longer exists');
+  });
+});
+
+describe('isSoloBuiltinCommand', () => {
+  it('is true for the bare chip with no other text', () => {
+    expect(isSoloBuiltinCommand('/[help](builtin:help:command)', 'help')).toBe(true);
+  });
+
+  it('is true when the chip is surrounded only by whitespace', () => {
+    expect(isSoloBuiltinCommand('  /[help](builtin:help:command)  ', 'help')).toBe(true);
+  });
+
+  it('is false when real text accompanies the chip', () => {
+    expect(
+      isSoloBuiltinCommand('/[help](builtin:help:command) how do I use spreadsheets', 'help')
+    ).toBe(false);
+    expect(
+      isSoloBuiltinCommand('hey /[help](builtin:help:command)', 'help')
+    ).toBe(false);
+  });
+
+  it('is false for a different builtin trigger', () => {
+    expect(isSoloBuiltinCommand('/[spreadsheets](builtin:spreadsheets:command)', 'help')).toBe(false);
+  });
+
+  it('is false for a non-builtin (user/drive) command with the same trigger', () => {
+    expect(isSoloBuiltinCommand(`/[help](${CMD_ID}:command)`, 'help')).toBe(false);
+  });
+
+  it('is false when a second command chip is also present', () => {
+    expect(
+      isSoloBuiltinCommand(
+        `/[help](builtin:help:command) /[other](${CMD_ID}:command)`,
+        'help'
+      )
+    ).toBe(false);
+  });
+
+  it('is false for plain text with no chip at all', () => {
+    expect(isSoloBuiltinCommand('/help', 'help')).toBe(false);
+    expect(isSoloBuiltinCommand('', 'help')).toBe(false);
   });
 });
 

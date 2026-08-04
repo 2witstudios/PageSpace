@@ -41,9 +41,11 @@ import {
   buildCommandPromptSection,
   commandExecutionDataFromPlan,
   COMMAND_EXECUTION_PART_TYPE,
+  isSoloBuiltinCommand,
   type CommandExecutionPlan,
 } from '@/lib/ai/core/command-processor';
 import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
+import { respondWithGlobalHelpAnswer } from '@/lib/ai/core/help-responder';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildSystemPrompt, buildNonCoreToolNamesPrompt, TOOL_DISCOVERY_PROMPT } from '@/lib/ai/core/system-prompt';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
@@ -416,8 +418,17 @@ export async function POST(
         })
       : legacyLocationContext;
 
-    // Image security validation — validate file parts in the user message
     const userMessageForValidation = requestMessages[requestMessages.length - 1];
+
+    // A message that is nothing but the /help chip answers directly from code
+    // (see help-responder.ts) — no model call, so no credit hold is taken for
+    // it. Computed this early so it can gate the credit gate below. /help
+    // combined with other text is a real question and stays on the LLM path.
+    const isSoloHelpRequest =
+      userMessageForValidation?.role === 'user' &&
+      isSoloBuiltinCommand(extractMessageContent(userMessageForValidation), 'help');
+
+    // Image security validation — validate file parts in the user message
     if (userMessageForValidation?.role === 'user' && hasFileParts(userMessageForValidation)) {
       const imageValidation = validateUserMessageFileParts(userMessageForValidation);
       if (!imageValidation.valid) {
@@ -467,7 +478,10 @@ export async function POST(
       // to the metered default, which must still be gated.
       const { provider: gateProvider } = resolveProviderModel(
         selectedProvider, selectedModel, gateUser?.currentAiProvider, gateUser?.currentAiModel);
-      if (!isMeteringExempt(gateProvider)) {
+      // A solo /help never reaches streamText (see isSoloHelpRequest below), so
+      // it costs nothing — skip the gate entirely rather than take a hold that
+      // would need special-cased release on the short-circuit path.
+      if (!isMeteringExempt(gateProvider) && !isSoloHelpRequest) {
         const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
           estCostCents: estimateChatHoldCentsForModel(selectedModel),
           maxInFlight: MAX_CHAT_INFLIGHT,
@@ -639,6 +653,23 @@ export async function POST(
           loggers.api.error('Global Assistant Chat API: Failed to merge ask_user answer', error as Error);
         });
       }
+    }
+
+    // The user's /help message is already durably saved above (same generic
+    // update as any other message) — answer it directly from code and return
+    // before any of the provider/history/lifecycle machinery below runs. No
+    // streamText, no credit hold (skipped above), nothing to stop or
+    // reconnect to since the reply is already complete. (A brand-new
+    // conversation's realtime sidebar broadcast to other tabs, which normally
+    // happens much later in this route, does not fire on this path — the
+    // conversation is still visible on next load/refetch.)
+    if (isSoloHelpRequest) {
+      return await respondWithGlobalHelpAnswer({
+        userId,
+        driveId: locationContext?.currentDrive?.id ?? null,
+        conversationId,
+        originalMessages: requestMessages,
+      });
     }
 
     // Create AI provider using factory service

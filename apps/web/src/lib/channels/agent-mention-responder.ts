@@ -15,9 +15,11 @@ import { processMentionsInMessage } from '@/lib/ai/core/mention-processor';
 import {
   buildCommandPromptSection,
   commandExecutionDataFromPlan,
+  isSoloBuiltinCommand,
   type CommandExecutionData,
 } from '@/lib/ai/core/command-processor';
 import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
+import { loadHelpAnswerText } from '@/lib/commands/help-answer';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
@@ -557,63 +559,75 @@ export async function triggerMentionedAgentResponses(
       }
     }
 
+    // A mention whose content is nothing but the /help chip answers directly
+    // from code for every eligible agent — the answer is sender-scoped (the
+    // human's command list), not agent-scoped, so it's identical regardless
+    // of which agent replies. Skips askAgentExecute/generateText entirely.
+    const isSoloHelpMention = isSoloBuiltinCommand(params.content, 'help');
+
     for (const agent of eligibleAgents) {
       try {
         const mentionConversationId = `channel:${params.channelId}:agent:${agent.id}`;
 
-        const rawAskResult: unknown = await askAgentExecute(
-          {
-            agentPath: `/${agent.title}`,
-            agentId: agent.id,
-            question,
-            context: [
-              `You were mentioned in the channel "${params.channelTitle}".`,
-              'Respond directly to the latest request and use recent channel context when relevant.',
-              '',
-              'Recent channel transcript (oldest to newest):',
-              transcript,
-              ...(commandContext ? ['', commandContext] : []),
-            ].join('\n'),
-            conversationId: mentionConversationId,
-            ...(imageAttachments.length > 0 ? { imageAttachments } : {}),
-          },
-          {
-            toolCallId: `channel-mention-ask-${params.sourceMessageId}-${agent.id}`,
-            messages: [],
-            experimental_context: {
-              userId: params.userId,
+        let replyContent: string;
+        if (isSoloHelpMention) {
+          replyContent = await loadHelpAnswerText(params.userId, params.driveId ?? null);
+        } else {
+          const rawAskResult: unknown = await askAgentExecute(
+            {
+              agentPath: `/${agent.title}`,
+              agentId: agent.id,
+              question,
+              context: [
+                `You were mentioned in the channel "${params.channelTitle}".`,
+                'Respond directly to the latest request and use recent channel context when relevant.',
+                '',
+                'Recent channel transcript (oldest to newest):',
+                transcript,
+                ...(commandContext ? ['', commandContext] : []),
+              ].join('\n'),
               conversationId: mentionConversationId,
-              locationContext,
-              requestOrigin: 'user',
-              agentCallDepth: 0,
-            } as ToolExecutionContext,
+              ...(imageAttachments.length > 0 ? { imageAttachments } : {}),
+            },
+            {
+              toolCallId: `channel-mention-ask-${params.sourceMessageId}-${agent.id}`,
+              messages: [],
+              experimental_context: {
+                userId: params.userId,
+                conversationId: mentionConversationId,
+                locationContext,
+                requestOrigin: 'user',
+                agentCallDepth: 0,
+              } as ToolExecutionContext,
+            }
+          );
+
+          if (!isAskAgentResult(rawAskResult)) {
+            channelMentionLogger.error('Mentioned agent returned a malformed result; skipping', {
+              channelId: params.channelId,
+              agentId: agent.id,
+              receivedType: typeof rawAskResult,
+              receivedKeys:
+                rawAskResult && typeof rawAskResult === 'object'
+                  ? Object.keys(rawAskResult as Record<string, unknown>)
+                  : null,
+            });
+            continue;
           }
-        );
+          const askResult = rawAskResult;
 
-        if (!isAskAgentResult(rawAskResult)) {
-          channelMentionLogger.error('Mentioned agent returned a malformed result; skipping', {
-            channelId: params.channelId,
-            agentId: agent.id,
-            receivedType: typeof rawAskResult,
-            receivedKeys:
-              rawAskResult && typeof rawAskResult === 'object'
-                ? Object.keys(rawAskResult as Record<string, unknown>)
-                : null,
-          });
-          continue;
-        }
-        const askResult = rawAskResult;
+          if (!askResult.success || !askResult.response || !askResult.response.trim()) {
+            channelMentionLogger.warn('Mentioned agent returned no response', {
+              channelId: params.channelId,
+              agentId: agent.id,
+              error: askResult.error,
+            });
+            continue;
+          }
 
-        if (!askResult.success || !askResult.response || !askResult.response.trim()) {
-          channelMentionLogger.warn('Mentioned agent returned no response', {
-            channelId: params.channelId,
-            agentId: agent.id,
-            error: askResult.error,
-          });
-          continue;
+          replyContent = askResult.response.trim();
         }
 
-        const replyContent = askResult.response.trim();
         const trimmedParent = (params.parentId ?? '').trim();
         if (trimmedParent.length > 0) {
           // Thread-reply branch: route through the same transactional helper

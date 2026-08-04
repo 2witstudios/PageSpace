@@ -71,9 +71,11 @@ import {
   buildCommandPromptSection,
   commandExecutionDataFromPlan,
   COMMAND_EXECUTION_PART_TYPE,
+  isSoloBuiltinCommand,
   type CommandExecutionPlan,
 } from '@/lib/ai/core/command-processor';
 import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
+import { respondWithHelpAnswer } from '@/lib/ai/core/help-responder';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildSystemPrompt, buildPersonalizationPrompt } from '@/lib/ai/core/system-prompt';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
@@ -411,6 +413,14 @@ export async function POST(request: Request) {
       }
     }
 
+    // A message that is nothing but the /help chip answers directly from code
+    // (see help-responder.ts) — no model call, so no credit hold is taken for
+    // it. Computed this early so it can gate the credit gate below. /help
+    // combined with other text is a real question and stays on the LLM path.
+    const isSoloHelpRequest =
+      userMessageForValidation?.role === 'user' &&
+      isSoloBuiltinCommand(extractMessageContent(userMessageForValidation), 'help');
+
     // Check if user has permission to view and edit this AI chat page
     const maskedUserId = maskIdentifier(userId);
     const maskedChatId = maskIdentifier(chatId);
@@ -679,7 +689,10 @@ export async function POST(request: Request) {
     // the gate so no extra DB read is needed. Each stream guards against its own slice,
     // not the gross balance, preventing concurrent streams from collectively overshooting.
     let availableBalanceCents: number | null = null;
-    if (!isMeteringExempt(gateProvider)) {
+    // A solo /help never reaches streamText (see isSoloHelpRequest below), so
+    // it costs nothing — skip the gate entirely rather than take a hold that
+    // would need special-cased release on the short-circuit path.
+    if (!isMeteringExempt(gateProvider) && !isSoloHelpRequest) {
       const creditGate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier, {
         estCostCents: estimateChatHoldCentsForModel(selectedModel),
         maxInFlight: MAX_CHAT_INFLIGHT,
@@ -926,6 +939,21 @@ export async function POST(request: Request) {
           loggers.ai.error('AI Chat API: Failed to merge ask_user answer', error as Error);
         });
       }
+    }
+
+    // The user's /help message is already durably saved above (same generic
+    // transaction as any other message) — answer it directly from code and
+    // return before any of the provider/history/lifecycle machinery below
+    // runs. No streamText, no credit hold (skipped above), nothing to stop
+    // or reconnect to since the reply is already complete.
+    if (isSoloHelpRequest) {
+      return await respondWithHelpAnswer({
+        userId: userId!,
+        driveId: page.driveId,
+        pageId: chatId!,
+        conversationId: conversationId!,
+        originalMessages: messages,
+      });
     }
 
     // Get user's current AI provider settings (user was loaded above for the gate)

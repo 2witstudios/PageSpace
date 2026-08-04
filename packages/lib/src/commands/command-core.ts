@@ -178,6 +178,42 @@ export function buildHelpPromptSection(context: BuiltinPromptContext): string {
 }
 
 /**
+ * The /help answer: a direct, human-facing reply listing the sender's actual
+ * command list, for a message that is nothing but the /help chip (no other
+ * text). Unlike buildHelpPromptSection this is not a model instruction — it
+ * IS the answer, rendered as the assistant's message with no LLM round trip.
+ * Shares the same data shape, sanitization, and list cap as the prompt
+ * section so the two never disagree about what's "available."
+ */
+export function buildHelpAnswerText(context: BuiltinPromptContext): string {
+  const lines: string[] = [];
+
+  if (context.availableCommands.length === 0) {
+    lines.push(
+      'No commands are available here yet. You can create one from the "/" picker in the message box.'
+    );
+  } else {
+    lines.push('Here are the commands available to you:', '');
+    const listed = context.availableCommands.slice(0, HELP_COMMAND_LIST_LIMIT);
+    for (const command of listed) {
+      lines.push(
+        `- **/${command.trigger}** (${COMMAND_SCOPE_ADJECTIVES[command.scope]}) — ${clipDescription(command.description)}`
+      );
+    }
+    const omitted = context.availableCommands.length - listed.length;
+    if (omitted > 0) {
+      lines.push(
+        '',
+        `(${omitted} more command${omitted === 1 ? '' : 's'} not shown — type "/" in the message box to see the full list.)`
+      );
+    }
+    lines.push('', 'Type "/" in the message box to open the picker and insert a command.');
+  }
+
+  return lines.join('\n');
+}
+
+/**
  * Built-in command registry. Built-ins with a `buildPromptSection` get a
  * dynamic section injected at execution (phase 5); the rest inject their
  * static description. Entries with `kind: 'skill'` additionally have a
