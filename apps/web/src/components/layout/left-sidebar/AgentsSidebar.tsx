@@ -315,19 +315,30 @@ function SessionList({
   // Group by drive in global mode (roster ∪ session-implied drives, Assistant
   // first — see session-groups.ts for the ordering rule). In drive mode, the
   // drive's own sessions get an always-present implicit group (even with zero
-  // sessions, so its header's spawn affordance never disappears mid-load),
-  // plus a second "Global Assistant" group for the caller's global sessions
-  // (driveId null) — those aren't this drive's data, they're the user's, and
-  // the API now includes them in every drive-scoped listing (see
-  // agent-sessions-store.ts's `list()`).
+  // sessions, so its header's spawn affordance never disappears mid-load).
+  // A second "Global Assistant" group, ahead of it (same "Assistant first"
+  // rule as global mode), surfaces the caller's global sessions (driveId
+  // null) — those aren't this drive's data, they're the user's, and the API
+  // now includes them in every drive-scoped listing (see
+  // agent-sessions-store.ts's `list()`) — but ONLY when there's at least one:
+  // unlike global mode's Assistant group, this one has no `canSpawn`
+  // always-show escape hatch, because "Global Assistant" already names a
+  // different, unrelated affordance in drive mode: the new-session drive
+  // palette's own "Global Assistant" agent-picker entry
+  // (`useSpawnSession.tsx`'s `onPickTarget({ kind: 'assistant', ... label:
+  // 'Global Assistant' })`), which spawns a DRIVE-scoped session whose first
+  // conversation happens to be with the assistant agent — an
+  // always-rendered empty group here would sit right next to that and read
+  // as the same thing when it is not.
   const groups = useMemo(() => {
     if (driveId) {
       const ownSessions = filteredSessions.filter((session) => session.driveId === driveId);
       const assistantSessions = filteredSessions.filter((session) => session.driveId === null);
-      const result: DriveGroup<SessionListEntry>[] = [{ driveId, driveName: null, sessions: ownSessions }];
-      if (canSpawn || assistantSessions.length > 0) {
+      const result: DriveGroup<SessionListEntry>[] = [];
+      if (assistantSessions.length > 0) {
         result.push({ driveId: ASSISTANT_GROUP_KEY, driveName: 'Global Assistant', sessions: assistantSessions });
       }
+      result.push({ driveId, driveName: null, sessions: ownSessions });
       return result;
     }
     return buildSessionGroups(filteredSessions, { assistant: canSpawn, drives: roster });

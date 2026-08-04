@@ -1241,6 +1241,84 @@ describe('AgentsSidebar', () => {
     });
   });
 
+  describe('drive mode + the caller\'s global-assistant sessions (review #2325)', () => {
+    /**
+     * Three parents up, not the `global mode` describe's two: label span →
+     * header-row span → header-row div (`SessionGroupHeader`'s own root, which
+     * is enough to scope a click on its "+") → the actual GROUP div
+     * (`<div key={group.driveId}>`), which is what's needed here to also
+     * assert on sibling `SessionRow`s inside the same group.
+     */
+    const groupContainer = (headerText: string) =>
+      screen.getByText(headerText).parentElement?.parentElement?.parentElement as HTMLElement;
+
+    test('a null-driveId session renders under its own "Global Assistant" header, separate from the drive\'s own (headerless) sessions', async () => {
+      respondWithSessions([
+        SESSION,
+        {
+          ...SESSION,
+          sessionId: 'ses-g',
+          driveId: null,
+          name: 'assistant session',
+          conversations: [{ conversationId: 'conv-g', title: 'Thread', agentPageId: null }],
+        },
+      ]);
+      renderSidebar();
+
+      expect(await screen.findByText('api refactor')).toBeDefined();
+      expect(await screen.findByText('assistant session')).toBeDefined();
+      // The drive's own group stays headerless (unchanged from before this
+      // session type existed) — only the Assistant group gets a header.
+      expect(screen.queryAllByText('Global Assistant')).toHaveLength(1);
+      expect(within(groupContainer('Global Assistant')).getByText('assistant session')).toBeDefined();
+      expect(within(groupContainer('Global Assistant')).queryByText('api refactor')).toBeNull();
+    });
+
+    test('given only drive-scoped sessions, does NOT render an empty "Global Assistant" group — it would collide with the palette\'s unrelated "Global Assistant" agent-picker entry', async () => {
+      // Regression pin for the review round where this group rendered
+      // unconditionally (mirroring global mode's `canSpawn` escape hatch) and
+      // broke two unrelated pre-existing tests via a duplicate-text collision:
+      // the new-session palette's "Global Assistant" agent choice, and the
+      // "falls back to Global Assistant for a null agentPageId" conversation
+      // label. Both name the SAME agent-picker concept, not this session-scope
+      // group, so the group must earn its place on screen only when relevant.
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      expect(screen.queryByText('Global Assistant')).toBeNull();
+    });
+
+    test('spawning from the Assistant group posts driveId: null, distinct from the drive palette\'s own "Global Assistant" agent pick', async () => {
+      mockPost.mockResolvedValue({ session: { sessionId: 'ses-a' }, conversationId: 'conv-a' });
+      respondWithSessions([
+        SESSION,
+        {
+          ...SESSION,
+          sessionId: 'ses-g',
+          driveId: null,
+          name: 'assistant session',
+          conversations: [],
+        },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('assistant session');
+      await user.click(within(groupContainer('Global Assistant')).getByRole('button', { name: /^New session/i }));
+
+      const nameInput = await screen.findByPlaceholderText('Global Assistant');
+      await user.type(nameInput, '{Enter}');
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
+          driveId: null,
+          agentPageId: null,
+          name: '',
+        }),
+      );
+    });
+  });
+
   describe('global mode', () => {
     beforeEach(() => {
       mockUseParams.mockReturnValue({});
