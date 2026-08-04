@@ -331,7 +331,7 @@ export function revivedAgentSessionColumns(input: {
  * pin it rather than asserting "some recent timestamp".
  */
 export async function createDbAgentSessionStore(now: () => Date = () => new Date()): Promise<AgentSessionStore> {
-  const [{ db }, { eq, and, eqOrIsNull, isNotNull, isNull, sql, count, desc }, { agentSessions }, { machineSpriteReclaims }, { conversations }] =
+  const [{ db }, { eq, and, or, eqOrIsNull, isNotNull, isNull, sql, count, desc }, { agentSessions }, { machineSpriteReclaims }, { conversations }] =
     await Promise.all([
       import('@pagespace/db/db'),
       import('@pagespace/db/operators'),
@@ -403,10 +403,14 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
       const conditions = [];
       if (filter.ownerId !== undefined) conditions.push(eq(agentSessions.ownerId, filter.ownerId));
       if ('driveId' in filter) {
-        // driveId is a real column now — a session IS drive-scoped, and a
-        // global-assistant session (null driveId) never appears in a
-        // drive-scoped listing because NULL never equals the filter.
-        conditions.push(eq(agentSessions.driveId, filter.driveId));
+        // A drive-scoped listing also includes the caller's own
+        // global-assistant sessions (driveId IS NULL) — those aren't drive
+        // data, they're the user's, and every drive shows them the same way
+        // the dashboard sidebar does (see session-groups.ts's
+        // ASSISTANT_GROUP_KEY). The ownerId condition above already scopes
+        // this to the caller when supplied, so this can't surface another
+        // user's global sessions.
+        conditions.push(or(eq(agentSessions.driveId, filter.driveId), isNull(agentSessions.driveId))!);
       }
       if (conditions.length === 0) {
         // Unreachable through `AgentSessionListFilter`, which requires a

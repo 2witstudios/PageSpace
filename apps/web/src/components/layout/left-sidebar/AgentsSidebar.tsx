@@ -36,7 +36,7 @@ import {
   forgetConversationInCache,
   restoreSessionInCache,
 } from '@/components/agents/panes/session-conversations';
-import { buildSessionGroups, ASSISTANT_GROUP_KEY } from './session-groups';
+import { buildSessionGroups, ASSISTANT_GROUP_KEY, type DriveGroup } from './session-groups';
 import { RowMenu, type RowMenuItem } from './RowMenu';
 
 /**
@@ -313,11 +313,23 @@ function SessionList({
   });
 
   // Group by drive in global mode (roster ∪ session-implied drives, Assistant
-  // first — see session-groups.ts for the ordering rule); a single implicit
-  // group in drive mode, always present (even with zero sessions) so its
-  // header — and the header's spawn affordance — never disappears mid-load.
+  // first — see session-groups.ts for the ordering rule). In drive mode, the
+  // drive's own sessions get an always-present implicit group (even with zero
+  // sessions, so its header's spawn affordance never disappears mid-load),
+  // plus a second "Global Assistant" group for the caller's global sessions
+  // (driveId null) — those aren't this drive's data, they're the user's, and
+  // the API now includes them in every drive-scoped listing (see
+  // agent-sessions-store.ts's `list()`).
   const groups = useMemo(() => {
-    if (driveId) return [{ driveId, driveName: null, sessions: filteredSessions }];
+    if (driveId) {
+      const ownSessions = filteredSessions.filter((session) => session.driveId === driveId);
+      const assistantSessions = filteredSessions.filter((session) => session.driveId === null);
+      const result: DriveGroup<SessionListEntry>[] = [{ driveId, driveName: null, sessions: ownSessions }];
+      if (canSpawn || assistantSessions.length > 0) {
+        result.push({ driveId: ASSISTANT_GROUP_KEY, driveName: 'Global Assistant', sessions: assistantSessions });
+      }
+      return result;
+    }
     return buildSessionGroups(filteredSessions, { assistant: canSpawn, drives: roster });
   }, [driveId, filteredSessions, canSpawn, roster]);
 
@@ -361,7 +373,7 @@ function SessionList({
       )}
       {visibleGroups.map((group) => (
         <div key={group.driveId}>
-          {!driveId && (
+          {(!driveId || group.driveId !== driveId) && (
             <SessionGroupHeader
               label={group.driveName ?? group.driveId}
               newSessionLabel={`New session in ${group.driveName ?? 'this drive'}`}

@@ -559,6 +559,46 @@ describe('list bounds and ordering (review M3/M4)', () => {
   });
 });
 
+describe('list — driveId filter also includes the caller\'s own global sessions', () => {
+  it('includes a null-driveId (global-assistant) session for the same owner', async () => {
+    const globalSessionId = createId();
+    sessionIds.push(globalSessionId);
+    await db.insert(agentSessions).values({
+      id: globalSessionId,
+      ownerId,
+      driveId: null,
+      updatedAt: new Date(),
+    });
+
+    const listed = await store.list({ driveId, ownerId });
+    expect(listed.map((row) => row.id)).toContain(globalSessionId);
+  });
+
+  it('still excludes a null-driveId session belonging to a DIFFERENT owner', async () => {
+    const otherOwnerId = createId();
+    await db.insert(users).values({
+      id: otherOwnerId,
+      email: `agent-sessions-store-other-${otherOwnerId}@example.test`,
+      name: 'Other Owner',
+    });
+    const otherGlobalSessionId = createId();
+    await db.insert(agentSessions).values({
+      id: otherGlobalSessionId,
+      ownerId: otherOwnerId,
+      driveId: null,
+      updatedAt: new Date(),
+    });
+
+    try {
+      const listed = await store.list({ driveId, ownerId });
+      expect(listed.map((row) => row.id)).not.toContain(otherGlobalSessionId);
+    } finally {
+      await db.delete(agentSessions).where(eq(agentSessions.id, otherGlobalSessionId));
+      await db.delete(users).where(eq(users.id, otherOwnerId));
+    }
+  });
+});
+
 describe('createIfUnderLimit — the spawn ceiling made atomic (review #2261/2)', () => {
   it('given the owner is under the ceiling, should mint a session', async () => {
     const result = await store.createIfUnderLimit({
