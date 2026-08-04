@@ -39,3 +39,26 @@ export async function resolveSandboxToolEligibility(
   );
   return isSandboxAvailable(tier);
 }
+
+/**
+ * Conversation-aware variant — the BOUND SESSION's coordinates first (review
+ * #2326): provisioning and billing key on the session a conversation is bound
+ * to (its drive's owner, else the session's own owner), and a conversation
+ * can be hosted in a session whose payer differs from the calling surface —
+ * a page agent consulted inside a driveless Global session, or a Global
+ * Assistant merely visiting a drive. Only an UNBOUND conversation falls back
+ * to the surface's own coordinates (`fallbackDriveId` = the agent page's
+ * drive, or null for the global assistant, whose auto-spawned session the
+ * user pays for).
+ */
+export async function resolveSandboxToolEligibilityForConversation(
+  conversationId: string | undefined,
+  fallbackDriveId: string | null,
+  userId: string,
+): Promise<boolean> {
+  const { findSessionForConversation } = await import('@/lib/agent-sessions/agent-sessions-runtime');
+  const session = conversationId ? await findSessionForConversation(conversationId) : null;
+  return session
+    ? resolveSandboxToolEligibility(session.driveId, session.ownerId)
+    : resolveSandboxToolEligibility(fallbackDriveId, userId);
+}

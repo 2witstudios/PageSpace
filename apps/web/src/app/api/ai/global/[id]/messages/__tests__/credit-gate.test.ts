@@ -55,6 +55,7 @@ vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
 
 vi.mock('@/lib/ai/core/sandbox-tool-eligibility', () => ({
   resolveSandboxToolEligibility: vi.fn().mockResolvedValue(true),
+  resolveSandboxToolEligibilityForConversation: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('@/lib/ai/core/stream-lifecycle', () => ({

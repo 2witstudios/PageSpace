@@ -247,6 +247,7 @@ vi.mock('@/lib/ai/core/model-capabilities', () => ({
 // eligible.
 vi.mock('@/lib/ai/core/sandbox-tool-eligibility', () => ({
   resolveSandboxToolEligibility: vi.fn().mockResolvedValue(true),
+  resolveSandboxToolEligibilityForConversation: vi.fn().mockResolvedValue(true),
 }));
 
 // The resolver itself (and its suppression logic) is unit-tested in

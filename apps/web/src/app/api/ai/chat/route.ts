@@ -86,7 +86,7 @@ import {
   filterToolsForAgentAllowlist,
   filterToolsForSandboxEnablement,
 } from '@/lib/ai/core/tool-filtering';
-import { resolveSandboxToolEligibility } from '@/lib/ai/core/sandbox-tool-eligibility';
+import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
 import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/core/model-capabilities';
 import { getPageTreeContext } from '@/lib/ai/core/page-tree-context';
@@ -1088,8 +1088,11 @@ export async function POST(request: Request) {
     // sandboxEnabled first — most agents never touch the sandbox at all, so
     // this skips the payer-tier DB round trip for the common case.
     const sandboxEnabled = Boolean(page.sandboxEnabled);
+    // Bound-session first (review #2326): a page conversation hosted in a
+    // driveless Global session is paid for by the SESSION's owner, not the
+    // agent's drive owner — gate exposure on the payer provisioning will use.
     const sandboxTierEligible = sandboxEnabled
-      ? await resolveSandboxToolEligibility(page.driveId ?? null, userId)
+      ? await resolveSandboxToolEligibilityForConversation(conversationId, page.driveId ?? null, userId)
       : false;
     filteredTools = filterToolsForSandboxEnablement(
       filteredTools,

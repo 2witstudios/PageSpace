@@ -49,8 +49,7 @@ import { buildSystemPrompt, buildNonCoreToolNamesPrompt, TOOL_DISCOVERY_PROMPT }
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
 import { filterToolsForReadOnly, filterToolsForWebSearch, filterToolsForImageGen, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
-import { resolveSandboxToolEligibility } from '@/lib/ai/core/sandbox-tool-eligibility';
-import { findSessionForConversation } from '@/lib/agent-sessions/agent-sessions-runtime';
+import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
 import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree-context';
 import { getModelCapabilities, DEFAULT_IMAGE_MODEL } from '@/lib/ai/core/model-capabilities';
@@ -879,10 +878,11 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
     // a free-tier assistant advertised bash/git tools that always answer
     // tier_ineligible — and those git tool NAMES in `currentTools` then
     // suppressed the user's working GitHub OAuth integration tools.
-    const boundSession = await findSessionForConversation(conversation.id);
-    const sandboxTierEligible = boundSession
-      ? await resolveSandboxToolEligibility(boundSession.driveId, boundSession.ownerId)
-      : await resolveSandboxToolEligibility(null, userId);
+    const sandboxTierEligible = await resolveSandboxToolEligibilityForConversation(
+      conversation.id,
+      null,
+      userId,
+    );
 
     // Build agent awareness prompt - lists visible AI agents for consultation
     // `canDelegate` mirrors the session-tool gate below: spawn_session only

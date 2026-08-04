@@ -4,8 +4,9 @@ import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { createId } from '@paralleldrive/cuid2';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import { filterToolsForImageGen, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForImageGen, filterToolsForSandboxEnablement, SANDBOX_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibility } from '@/lib/ai/core/sandbox-tool-eligibility';
+import { spawnSession, createConversationInSession, endSession } from '@/lib/agent-sessions/agent-sessions-runtime';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
@@ -393,6 +394,10 @@ async function runExecution(
   startTime: number,
   exec: { prompt: string; agentPageId: string }
 ): Promise<WorkflowExecutionResult> {
+  // The run-scoped agent session backing this execution's sandbox tools, if
+  // one was minted (see step 6c). Declared outside the try so the `finally`
+  // can release its compute on EVERY exit, success or thrown.
+  let workflowSessionId: string | null = null;
   try {
     // 1. Load agent page
     const [agent] = await db
@@ -548,8 +553,60 @@ async function runExecution(
       });
     }
 
+    // 6c. Session-backed sandbox execution (review #2326). The sandbox
+    // runner resolves a conversation's BOUND SESSION and refuses session-less
+    // page conversations — a synthetic `workflow-…` id has no conversation
+    // row at all, so every bash/file/git tool the gate above just admitted
+    // would answer `no_session` and never execute. When sandbox tools
+    // survived filtering, mint the same thing an interactive spawn would: a
+    // REAL session in the agent's drive plus a REAL conversation bound to
+    // it (the run's messages then land in that conversation, inspectable
+    // like any other), and release the compute in `finally` when the run
+    // ends. A spawn refusal (owner at their session cap, transient fault)
+    // degrades to running WITHOUT sandbox tools rather than failing the
+    // workflow — the same posture as an agent with the sandbox toggled off.
+    let conversationId = `workflow-${input.workflowId}-${Date.now()}`;
+    const sandboxToolsActive =
+      workflowSandboxEnabled &&
+      workflowSandboxTierEligible &&
+      Object.keys(availableTools).some((name) => SANDBOX_TOOL_NAMES.has(name));
+    if (sandboxToolsActive) {
+      const spawned = await spawnSession({
+        userId: input.createdBy,
+        driveId: agent.driveId ?? input.driveId,
+        name: `Workflow: ${input.workflowName}`.slice(0, 100),
+      });
+      if (spawned.ok) {
+        const boundConversationId = createId();
+        try {
+          await createConversationInSession({
+            conversationId: boundConversationId,
+            userId: input.createdBy,
+            agentPageId: agent.id,
+            sessionId: spawned.session.id,
+            title: `Workflow: ${input.workflowName}`.slice(0, 100),
+          });
+          conversationId = boundConversationId;
+          workflowSessionId = spawned.session.id;
+        } catch (error) {
+          await endSession(spawned.session.id).catch(() => {});
+          availableTools = filterToolsForSandboxEnablement(availableTools, false) as ToolSet;
+          loggers.api.warn('Workflow executor: session conversation bind failed — running without sandbox tools', {
+            workflowId: input.workflowId,
+            sessionId: spawned.session.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      } else {
+        availableTools = filterToolsForSandboxEnablement(availableTools, false) as ToolSet;
+        loggers.api.warn('Workflow executor: session spawn refused — running without sandbox tools', {
+          workflowId: input.workflowId,
+          reason: spawned.reason,
+        });
+      }
+    }
+
     // 7. Build execution context
-    const conversationId = `workflow-${input.workflowId}-${Date.now()}`;
     const executionContext: ToolExecutionContext = {
       userId: input.createdBy,
       timezone: input.timezone,
@@ -693,6 +750,18 @@ async function runExecution(
       durationMs,
       error: errorMessage,
     };
+  } finally {
+    // Release the run-scoped session's compute on every exit. `endSession`
+    // tears the Sprite down (billing stops); the bound conversation and its
+    // messages persist as the run's inspectable record.
+    if (workflowSessionId) {
+      await endSession(workflowSessionId).catch((error) => {
+        loggers.api.warn('Workflow executor: failed to end run-scoped session', {
+          sessionId: workflowSessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
   }
 }
 

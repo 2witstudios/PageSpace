@@ -395,11 +395,12 @@ const defaultResolveDeps: ResolveSandboxActorContextDeps = {
  * default export (`resolveSandboxActorContext`) wires the real DB implementations;
  * pass fakes in tests.
  *
- * Discriminates by chatSource.type FIRST:
- *  - global: coordinates come from the conversation's BOUND SESSION (its
- *    driveId/ownerId — the payer provisioning will actually use), never the
- *    location drive; unbound = the user (the driveless auto-spawn's owner).
- *  - page / undefined chatSource: the agent page's drive; no driveId fails closed.
+ * BOUND SESSION first, for every chat source — its driveId/ownerId are the
+ * payer coordinates provisioning will actually use. Unbound conversations
+ * fall back by chatSource.type:
+ *  - global: the user (the driveless auto-spawn's payer-to-be).
+ *  - page / undefined chatSource: the agent page's drive (this path only
+ *    shapes the eventual no_session denial); no driveId fails closed.
  */
 export function createResolveSandboxActorContext(
   deps: ResolveSandboxActorContextDeps = defaultResolveDeps,
@@ -414,30 +415,31 @@ export function createResolveSandboxActorContext(
     const chatSourceType = context?.chatSource?.type;
 
     // Which drive/owner the sandbox will ACTUALLY charge and authorize
-    // against, by chat source:
+    // against: the conversation's BOUND SESSION first, for EVERY chat source
+    // (review #2326, two rounds) — provisioning and billing key on the bound
+    // session's own coordinates, so gating on anything else diverges:
     //
-    //  - GLOBAL: the conversation's BOUND SESSION, never the location drive
-    //    (review #2326): `resolveOrProvisionSession` auto-provisions an
-    //    unbound global conversation a DRIVELESS session (`driveId: null` in
-    //    `ensureGlobalSandboxSession`), so a free-tier user merely VISITING a
-    //    Pro-owned drive was gated eligible here and then denied at
-    //    provisioning — while a paid user visiting a free-owned drive was
-    //    denied a sandbox their own driveless session funds. A global
-    //    conversation already bound to a (possibly drive-scoped) session uses
-    //    that session's own coordinates, exactly as provisioning will.
-    //  - PAGE (or undefined chatSource): the agent page's drive — page
-    //    conversations only ever bind to sessions in their own drive (the
-    //    binding gate refuses a mismatch). No driveId fails closed; don't
+    //  - A GLOBAL conversation that is unbound gets a DRIVELESS session on
+    //    its first tool call (`ensureGlobalSandboxSession` spawns
+    //    `driveId: null`), so this user is the payer-to-be — never the
+    //    drive they happen to be visiting.
+    //  - A PAGE conversation can be hosted in a driveless Global session
+    //    too (`create-conversation-in-session.ts`: a global session may
+    //    host any accessible agent), where the payer is the SESSION's
+    //    owner, not the agent's drive owner. Only an UNBOUND page
+    //    conversation falls back to the agent/location drive — and that
+    //    path never reaches provisioning (`resolveOrProvisionSession`
+    //    denies session-less page conversations), so the fallback only
+    //    shapes the denial, never a grant. No driveId fails closed; don't
     //    assume global intent when the source type is absent.
+    const session = await deps.findSessionForConversation(conversationId);
     let driveId: string | undefined;
     let sessionOwnerId: string | undefined;
-    if (chatSourceType === 'global') {
-      const session = await deps.findSessionForConversation(conversationId);
-      driveId = session?.driveId ?? undefined;
-      // The bound session's own owner — the payer fallback when it has no
-      // drive. An unbound conversation gets a session OWNED BY THIS USER the
-      // moment a tool call provisions one, so the user is the payer-to-be.
-      sessionOwnerId = session?.ownerId ?? userId;
+    if (session) {
+      driveId = session.driveId ?? undefined;
+      sessionOwnerId = session.ownerId;
+    } else if (chatSourceType === 'global') {
+      sessionOwnerId = userId;
     } else {
       driveId =
         context?.locationContext?.currentDrive?.id ??

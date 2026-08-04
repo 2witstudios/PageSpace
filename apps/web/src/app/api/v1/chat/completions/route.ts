@@ -23,7 +23,7 @@ import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
 import { sanitizeMessagesForModel, saveMessageToDatabase, extractMessageContent, convertDbMessageToUIMessage, extractToolResults } from '@/lib/ai/core/message-utils';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForReadOnly, filterToolsForMcpScope, filterToolsForImageGen, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
-import { resolveSandboxToolEligibility } from '@/lib/ai/core/sandbox-tool-eligibility';
+import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { getModelCapabilities, hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { hasFileParts, validateUserMessageFileParts } from '@/lib/ai/core/validate-image-parts';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
@@ -295,8 +295,11 @@ export async function POST(request: Request): Promise<Response> {
       // most agents never touch the sandbox, so this skips the payer-tier
       // DB round trip for the common case.
       const sandboxEnabled = Boolean(page.sandboxEnabled);
+      // Bound-session first (review #2326) — same payer source as the chat
+      // route; an unbound (or auto-generated) conversation falls back to the
+      // agent page's drive.
       const sandboxTierEligible = sandboxEnabled
-        ? await resolveSandboxToolEligibility(page.driveId ?? null, authResult.userId)
+        ? await resolveSandboxToolEligibilityForConversation(incomingConversationId, page.driveId ?? null, authResult.userId)
         : false;
       filteredTools = filterToolsForSandboxEnablement(
         filteredTools,
@@ -328,8 +331,11 @@ export async function POST(request: Request): Promise<Response> {
       // most agents never touch the sandbox, so this skips the payer-tier
       // DB round trip for the common case.
       const sandboxEnabled = Boolean(page.sandboxEnabled);
+      // Bound-session first (review #2326) — same payer source as the chat
+      // route; an unbound (or auto-generated) conversation falls back to the
+      // agent page's drive.
       const sandboxTierEligible = sandboxEnabled
-        ? await resolveSandboxToolEligibility(page.driveId ?? null, authResult.userId)
+        ? await resolveSandboxToolEligibilityForConversation(incomingConversationId, page.driveId ?? null, authResult.userId)
         : false;
       filteredTools = filterToolsForSandboxEnablement(
         filteredTools,

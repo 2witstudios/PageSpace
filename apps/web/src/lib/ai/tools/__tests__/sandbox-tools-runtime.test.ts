@@ -249,6 +249,33 @@ describe('resolveSandboxActorContext', () => {
     });
   });
 
+  describe('given chatSource type "page" BOUND to a DRIVELESS Global session', () => {
+    it("pays as the session's owner, not the agent's drive owner (review #2326)", async () => {
+      // A global session may host any accessible agent
+      // (create-conversation-in-session.ts), and provisioning authorizes the
+      // SESSION's coordinates — deriving the payer from the agent/location
+      // drive here diverged from what provisioning would actually decide.
+      const context: ToolExecutionContext = {
+        ...basePageContext,
+        locationContext: { currentDrive: { id: 'd-agent', name: 'Agent Drive', slug: 'agent-drive' } },
+      };
+      const resolve = createResolveSandboxActorContext(
+        makeDeps({
+          findSessionForConversation: async () => ({ driveId: null, ownerId: 'session-owner' }),
+          findDrive: async () => {
+            throw new Error('must not consult a drive for a driveless bound session');
+          },
+        }),
+      );
+      const result = await resolve(context);
+      expect('error' in result).toBe(false);
+      if ('error' in result) return;
+      expect(result.driveId).toBeUndefined();
+      expect(result.tenantId).toBe('session-owner');
+      expect(result.ownerId).toBe('session-owner');
+    });
+  });
+
   describe('given chatSource type "global" BOUND to a drive-scoped session', () => {
     it("resolves the session's own drive and pays as its owner, regardless of location (review #2326)", async () => {
       const context: ToolExecutionContext = {
