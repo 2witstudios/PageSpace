@@ -17,6 +17,7 @@ const {
   mockUpdateSet,
   mockUpdateWhere,
   mockToolExecute,
+  mockResolveSandboxToolEligibility,
 } = vi.hoisted(() => ({
   mockSelectWhere: vi.fn(),
   mockSelectFrom: vi.fn(),
@@ -30,6 +31,11 @@ const {
   mockUpdateSet: vi.fn(),
   mockUpdateWhere: vi.fn(),
   mockToolExecute: vi.fn(),
+  mockResolveSandboxToolEligibility: vi.fn(),
+}));
+
+vi.mock('@/lib/ai/core/sandbox-tool-eligibility', () => ({
+  resolveSandboxToolEligibility: (...args: unknown[]) => mockResolveSandboxToolEligibility(...args),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -104,6 +110,7 @@ vi.mock('@/lib/ai/core/ai-tools', () => ({
     list_pages: { name: 'list_pages' },
     create_page: { name: 'create_page' },
     search_pages: { name: 'search_pages' },
+    bash: { name: 'bash' },
   },
 }));
 vi.mock('@/lib/ai/core/timestamp-utils', () => ({
@@ -200,6 +207,7 @@ describe('executeWorkflow', () => {
     vi.mocked(isProviderError).mockReturnValue(false);
     vi.mocked(createAIProvider).mockResolvedValue(mockProviderResult as never);
     mockResolvePageAgentIntegrationTools.mockResolvedValue({});
+    mockResolveSandboxToolEligibility.mockResolvedValue(true);
     vi.mocked(generateText).mockResolvedValue({
       text: 'Report complete',
       steps: [{ text: 'Report complete', toolCalls: [{}] }],
@@ -319,6 +327,59 @@ describe('executeWorkflow', () => {
     expect(toolKeys).toContain('list_pages');
     expect(toolKeys).toContain('create_page');
     expect(toolKeys).not.toContain('search_pages');
+  });
+
+  describe('sandbox tool gating (agent.sandboxEnabled + payer tier)', () => {
+    test('an agent with sandboxEnabled off never gets sandbox tools, even if enabledTools lists them', async () => {
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: false, enabledTools: ['list_pages', 'bash'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
+      const toolKeys = Object.keys(genCall.tools as object);
+      expect(toolKeys).toContain('list_pages');
+      expect(toolKeys).not.toContain('bash');
+      // Short-circuited before ever resolving payer tier — sandboxEnabled off
+      // is decisive on its own.
+      expect(mockResolveSandboxToolEligibility).not.toHaveBeenCalled();
+    });
+
+    test('an agent with sandboxEnabled on but an ineligible (free-tier) payer does not get sandbox tools', async () => {
+      mockResolveSandboxToolEligibility.mockResolvedValue(false);
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'bash'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      expect(mockResolveSandboxToolEligibility).toHaveBeenCalledWith('drive_abc', 'user_123');
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
+      const toolKeys = Object.keys(genCall.tools as object);
+      expect(toolKeys).toContain('list_pages');
+      expect(toolKeys).not.toContain('bash');
+    });
+
+    test('an agent with sandboxEnabled on and an eligible (Pro+) payer gets sandbox tools', async () => {
+      mockResolveSandboxToolEligibility.mockResolvedValue(true);
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'bash'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
+      const toolKeys = Object.keys(genCall.tools as object);
+      expect(toolKeys).toContain('list_pages');
+      expect(toolKeys).toContain('bash');
+    });
   });
 
   test('merges granted integration tools for workflow agents', async () => {
@@ -533,6 +594,7 @@ describe('executeWorkflow — explicit step chains', () => {
     vi.mocked(isProviderError).mockReturnValue(false);
     vi.mocked(createAIProvider).mockResolvedValue(mockProviderResult as never);
     mockResolvePageAgentIntegrationTools.mockResolvedValue({});
+    mockResolveSandboxToolEligibility.mockResolvedValue(true);
     vi.mocked(generateText).mockResolvedValue({
       text: 'AI step done',
       steps: [{ text: 'AI step done', toolCalls: [] }],

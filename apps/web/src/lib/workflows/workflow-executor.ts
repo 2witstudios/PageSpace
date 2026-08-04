@@ -4,7 +4,8 @@ import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { createId } from '@paralleldrive/cuid2';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import { filterToolsForImageGen } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForImageGen, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
+import { resolveSandboxToolEligibility } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
@@ -502,6 +503,23 @@ async function runExecution(
           )
         ) as ToolSet
       : {};
+
+    // 6b. The per-agent sandbox switch AND payer-tier eligibility — same gate
+    // interactive chat applies (chat/route.ts Step 3b). `enabledTools` alone
+    // cannot re-grant the sandbox families: an agent with sandboxEnabled off,
+    // or whose drive's payer isn't sandbox-eligible, must not get bash/git
+    // tools just because a workflow happens to list them. The real security
+    // boundary is still canRunCode (kill-switch + tier + drive role),
+    // re-checked at call time; this is agent configuration + UX, matching
+    // Step 3b's own reasoning.
+    const workflowSandboxEnabled = Boolean(agent.sandboxEnabled);
+    const workflowSandboxTierEligible = workflowSandboxEnabled
+      ? await resolveSandboxToolEligibility(agent.driveId ?? null, input.createdBy)
+      : false;
+    availableTools = filterToolsForSandboxEnablement(
+      availableTools,
+      workflowSandboxEnabled && workflowSandboxTierEligible,
+    ) as ToolSet;
 
     // Workflows execute the same page agent used in chat, so they should also
     // inherit integration grants such as GitHub/Notion tools.
