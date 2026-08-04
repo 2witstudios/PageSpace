@@ -160,6 +160,21 @@ export const SESSION_FAMILY_TOOL_NAMES: readonly string[] = [
 ];
 
 /**
+ * The DISPATCH-DEPENDENT subset of the session family: these two relay the
+ * caller's own credentials through the chat pipeline
+ * (`dispatchThroughChatPipeline` forwards cookie/CSRF from the live request),
+ * so they only function inside an authenticated USER request. Background
+ * surfaces with no user cookie (cron/webhook/calendar/task workflow fires)
+ * must strip them rather than advertise tools whose dispatch always refuses
+ * (review #2326). list/read/kill_session stay out of this set — they are
+ * direct DB/stream operations with no dispatch hop.
+ */
+export const DISPATCH_DEPENDENT_SESSION_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'spawn_session',
+  'send_session',
+]);
+
+/**
  * The WHOLE sandbox tool surface — the three families a `sandboxEnabled: false`
  * agent must not see: core execution (bash/files), the git+gh CLI toolkit, and
  * session/shell orchestration (whose entire point is the sandbox a session

@@ -4,7 +4,7 @@ import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { createId } from '@paralleldrive/cuid2';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import { filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier, SANDBOX_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
+import { DISPATCH_DEPENDENT_SESSION_TOOL_NAMES, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier, SANDBOX_COMPUTE_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibility } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { spawnSession, createConversationInSession, endSession } from '@/lib/agent-sessions/agent-sessions-runtime';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
@@ -579,25 +579,50 @@ async function runExecution(
       });
     }
 
-    // 6c. Session-backed execution (review #2326, two rounds). The session
+    // 6c. Session-backed execution (review #2326, three rounds). The session
     // runtime resolves a conversation's BOUND SESSION and refuses session-less
     // callers — a synthetic `workflow-…` id has no conversation row at all,
     // so EVERY session-backed tool the gates above admitted (bash/file/git
-    // compute AND the chat-only spawn/send/read/kill_session family, which
-    // free-tier and kill-switch-off runs keep) would answer `no_session` and
-    // never execute. When ANY of them survived filtering, mint the same thing
-    // an interactive spawn would: a REAL session in the agent's drive plus a
-    // REAL conversation bound to it (the run's messages then land in that
-    // conversation, inspectable like any other; the session row itself is
-    // free — compute is provisioned lazily only if an eligible run calls a
-    // compute tool), and release it in `finally` when the run ends. A spawn
-    // refusal (owner at their session cap, transient fault) degrades to
-    // running WITHOUT the session-backed families rather than failing the
-    // workflow — the same posture as an agent with the sandbox toggled off.
+    // compute AND the chat-only session family, which free-tier and
+    // kill-switch-off runs keep) would answer `no_session` and never execute.
+    //
+    // spawn_session/send_session additionally relay the caller's own
+    // credentials through the chat pipeline — they only function inside an
+    // authenticated USER request. Of every path into this executor, only a
+    // MANUAL run (`/api/workflows/[workflowId]/run`) is one; cron, task,
+    // calendar, and webhook fires carry no user cookie, so those runs strip
+    // the dispatch pair rather than mint worker conversations whose dispatch
+    // then refuses (codex round 7).
+    //
+    // A session is minted only when a survivor can DO something in a fresh
+    // run-scoped workspace: a compute tool, or the dispatch pair. When
+    // neither survived, the read/kill leftovers (list/read/kill_session,
+    // which could only ever report an empty just-born workspace) are
+    // stripped instead of spending a session row + owner cap slot on them.
+    // When one did: mint the same thing an interactive spawn would — a REAL
+    // session in the agent's drive plus a REAL conversation bound to it (the
+    // run's messages then land in that conversation, inspectable like any
+    // other; the session row itself is free — compute is provisioned lazily
+    // only if an eligible run calls a compute tool), released in `finally`
+    // when the run ends. A spawn refusal (owner at their session cap,
+    // transient fault) degrades to running WITHOUT the session-backed
+    // families rather than failing the workflow — the same posture as an
+    // agent with the sandbox toggled off.
     let conversationId = `workflow-${input.workflowId}-${Date.now()}`;
+    const interactiveDispatch = input.source.table === 'manual';
+    if (!interactiveDispatch) {
+      availableTools = Object.fromEntries(
+        Object.entries(availableTools).filter(([name]) => !DISPATCH_DEPENDENT_SESSION_TOOL_NAMES.has(name)),
+      ) as ToolSet;
+    }
     const sessionBackedToolsActive =
       workflowSandboxEnabled &&
-      Object.keys(availableTools).some((name) => SANDBOX_TOOL_NAMES.has(name));
+      Object.keys(availableTools).some(
+        (name) => SANDBOX_COMPUTE_TOOL_NAMES.has(name) || DISPATCH_DEPENDENT_SESSION_TOOL_NAMES.has(name),
+      );
+    if (!sessionBackedToolsActive) {
+      availableTools = filterToolsForSandboxEnablement(availableTools, false) as ToolSet;
+    }
     if (sessionBackedToolsActive) {
       const spawned = await spawnSession({
         userId: input.createdBy,

@@ -389,7 +389,7 @@ describe('executeWorkflow', () => {
       expect(toolKeys).not.toContain('bash');
     });
 
-    test('an ineligible payer keeps the chat-only session family, backed by a run-scoped session (review #2326)', async () => {
+    test('an ineligible payer keeps the chat-only session family on a MANUAL run, backed by a run-scoped session (review #2326)', async () => {
       mockResolveSandboxToolEligibility.mockResolvedValue(false);
       mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'wf-ses-chat' } });
       setupSelectChain(
@@ -397,7 +397,9 @@ describe('executeWorkflow', () => {
         [mockDrive],
       );
 
-      const result = await executeWorkflow(createInputFixture());
+      const result = await executeWorkflow(
+        createInputFixture({ source: { table: 'manual', id: null, triggerAt: null } }),
+      );
 
       expect(result.success).toBe(true);
       const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
@@ -422,7 +424,9 @@ describe('executeWorkflow', () => {
         [mockDrive],
       );
 
-      const result = await executeWorkflow(createInputFixture());
+      const result = await executeWorkflow(
+        createInputFixture({ source: { table: 'manual', id: null, triggerAt: null } }),
+      );
 
       expect(result.success).toBe(true);
       const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
@@ -431,6 +435,47 @@ describe('executeWorkflow', () => {
       expect(toolKeys).not.toContain('spawn_session');
       expect(mockCreateConversationInSession).not.toHaveBeenCalled();
       expect(mockEndSession).not.toHaveBeenCalled();
+    });
+
+    test('a NON-interactive fire (cron/webhook/task/calendar) strips the dispatch pair and mints no session for the leftovers (codex round 7)', async () => {
+      mockResolveSandboxToolEligibility.mockResolvedValue(false);
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'spawn_session'] }],
+        [mockDrive],
+      );
+
+      // Fixture default source is cron — no live user request, so
+      // spawn_session's chat-pipeline dispatch could never authenticate.
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
+      const toolKeys = Object.keys(genCall.tools as object);
+      expect(toolKeys).toContain('list_pages');
+      expect(toolKeys).not.toContain('spawn_session');
+      // Nothing left that could act in a fresh run-scoped workspace — no
+      // session row is spent on it.
+      expect(mockSpawnSession).not.toHaveBeenCalled();
+      expect(mockCreateConversationInSession).not.toHaveBeenCalled();
+    });
+
+    test('a NON-interactive compute-eligible run still gets its run-scoped session — bash needs no dispatch', async () => {
+      mockResolveSandboxToolEligibility.mockResolvedValue(true);
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'wf-ses-cron' } });
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'bash', 'spawn_session'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
+      const toolKeys = Object.keys(genCall.tools as object);
+      expect(toolKeys).toContain('bash');
+      expect(toolKeys).not.toContain('spawn_session');
+      expect(mockSpawnSession).toHaveBeenCalledTimes(1);
+      expect(mockEndSession).toHaveBeenCalledWith('wf-ses-cron');
     });
 
     test('an agent with sandboxEnabled on and an eligible (Pro+) payer gets sandbox tools, backed by a run-scoped session', async () => {
