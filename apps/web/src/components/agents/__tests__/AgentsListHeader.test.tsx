@@ -127,10 +127,11 @@ describe('AgentsListHeader', () => {
     expect(screen.queryByPlaceholderText('Search drives…')).toBeNull();
   });
 
-  test('picking Shell in a sandbox-ineligible drive shows an upgrade message instead of advancing to naming', async () => {
-    // The drive OWNER's tier (server-resolved on the same usePageAgents
-    // fetch), not the viewer's own — a free-tier viewer in a Pro-owned drive
-    // must NOT see this.
+  test('picking Shell in a sandbox-ineligible drive shows a capability-neutral message instead of advancing to naming', async () => {
+    // `sandboxEligible` is the ACTOR-AWARE server verdict (kill switch +
+    // payer tier + the requester's drive edit access), so the copy stays
+    // capability-neutral — "upgrade" would be wrong advice for a viewer in
+    // a Pro-owned drive or a kill-switch-off deployment (codex round 9).
     mockUsePageAgents.mockReturnValue({
       agentsByDrive: [{ ...AGENTS_BY_DRIVE[0], sandboxEligible: false }],
       isLoading: false,
@@ -142,13 +143,13 @@ describe('AgentsListHeader', () => {
 
     await user.click(screen.getByRole('button', { name: /New Session/ }));
     await screen.findByText('Choose an agent to start a session with in Alpha');
-    expect(screen.getByText('Upgrade to Pro')).toBeDefined();
+    expect(screen.getByText('Unavailable')).toBeDefined();
 
     await user.click(screen.getByText('Shell'));
 
     expect(mockToastError).toHaveBeenCalledWith(
-      'Upgrade to Pro to run a sandbox terminal',
-      expect.objectContaining({ description: expect.stringContaining('does not include the sandbox') }),
+      "Sandbox terminals aren't available here",
+      expect.objectContaining({ description: expect.stringContaining('Pro-plan workspace with edit access') }),
     );
     // Never advanced to the naming step.
     expect(screen.queryByText('Name your session')).toBeNull();

@@ -269,7 +269,11 @@ function ShellPickButton({
           {button}
         </span>
       </TooltipTrigger>
-      <TooltipContent>Upgrade to Pro to run a sandbox terminal</TooltipContent>
+      {/* Capability-neutral: `canRunSandbox` folds several denial causes
+          (payer tier, the requester's drive role, the deployment kill
+          switch) into one boolean, and "upgrade to Pro" is wrong advice for
+          all but the tier case (codex round 9). */}
+      <TooltipContent>Sandbox terminals aren&apos;t available in this session — they need a Pro-plan workspace with edit access</TooltipContent>
     </Tooltip>
   );
 }

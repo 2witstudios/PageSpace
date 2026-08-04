@@ -84,6 +84,7 @@ import {
   filterToolsForReadOnly,
   filterToolsForMcpScope,
   filterToolsForAgentAllowlist,
+  filterToolsForDispatchCredentials,
   filterToolsForSandboxEnablement,
   filterToolsForSandboxTier,
 } from '@/lib/ai/core/tool-filtering';
@@ -1099,6 +1100,11 @@ export async function POST(request: Request) {
     // The tier gate strips only the COMPUTE tools — a free payer keeps the
     // chat-only session family (sessions/chat are free on every plan).
     filteredTools = filterToolsForSandboxTier(filteredTools, sandboxTierEligible) as ToolSet;
+    // spawn_session/send_session dispatch by forwarding the caller's browser
+    // session cookie — an MCP-authenticated request (allowed on this route)
+    // has none, so its dispatch could only ever refuse (codex round 9; same
+    // posture as /api/v1 and non-interactive workflow runs).
+    filteredTools = filterToolsForDispatchCredentials(filteredTools, !isMCPAuthResult(authResult)) as ToolSet;
 
     // Step 4: webSearchEnabled is a runtime input toggle that overrides the allowlist.
     // If the user toggled web search on in the composer, they get web_search regardless of enabledTools.

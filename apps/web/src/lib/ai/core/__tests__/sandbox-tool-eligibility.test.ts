@@ -1,59 +1,72 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockFindFirst, mockEq, mockLookupDriveOwnerId } = vi.hoisted(() => ({
-  mockFindFirst: vi.fn(),
-  mockEq: vi.fn(),
-  mockLookupDriveOwnerId: vi.fn(),
+// ============================================================================
+// Exposure eligibility delegates to the CENTRALIZED actor-aware capability
+// (canRunCodeForSession → canRunCode: kill switch + payer tier + the
+// requester's drive edit access), with the bound session's coordinates when
+// the conversation has one (review #2326, codex round 9). These tests pin the
+// coordinate plumbing — the capability's own legs are tested where it lives.
+// ============================================================================
+
+const { mockCanRunCodeForSession, mockFindSessionForConversation } = vi.hoisted(() => ({
+  mockCanRunCodeForSession: vi.fn(),
+  mockFindSessionForConversation: vi.fn(),
 }));
 
-vi.mock('@pagespace/db/db', () => ({
-  db: {
-    query: { users: { findFirst: mockFindFirst } },
-  },
+vi.mock('@pagespace/lib/services/agent-sessions/agent-session-tenant', () => ({
+  canRunCodeForSession: mockCanRunCodeForSession,
 }));
-vi.mock('@pagespace/db/operators', () => ({ eq: mockEq }));
-vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'users.id', subscriptionTier: 'subscriptionTier' } }));
-// The drive→owner read lives in sandbox-payer and lazily imports its OWN db
-// module (a different resolved instance than this app's `@pagespace/db/db`
-// mock, so mocking the db here can never intercept it) — mock the seam itself.
-vi.mock('@pagespace/lib/billing/sandbox-payer', () => ({
-  lookupDriveOwnerId: mockLookupDriveOwnerId,
+vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
+  findSessionForConversation: mockFindSessionForConversation,
 }));
 
-import { resolveSandboxToolEligibility } from '../sandbox-tool-eligibility';
+import {
+  resolveSandboxToolEligibility,
+  resolveSandboxToolEligibilityForConversation,
+} from '../sandbox-tool-eligibility';
 
 describe('resolveSandboxToolEligibility', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('given a driveless (global) context, checks the given userId directly', async () => {
-    mockFindFirst.mockResolvedValue({ subscriptionTier: 'pro' });
-    const result = await resolveSandboxToolEligibility(null, 'user-1');
+  it('passes the requester as BOTH actor and (driveless-fallback) owner, with the surface drive', async () => {
+    mockCanRunCodeForSession.mockResolvedValue(true);
+    const result = await resolveSandboxToolEligibility('drive-1', 'actor-1');
     expect(result).toBe(true);
-    expect(mockLookupDriveOwnerId).not.toHaveBeenCalled();
-    expect(mockEq).toHaveBeenCalledWith('users.id', 'user-1');
+    expect(mockCanRunCodeForSession).toHaveBeenCalledWith({ userId: 'actor-1', driveId: 'drive-1', ownerId: 'actor-1' });
   });
 
-  it('given a drive-scoped context, checks the DRIVE OWNER, not the given userId', async () => {
-    mockLookupDriveOwnerId.mockResolvedValue('drive-owner');
-    mockFindFirst.mockResolvedValue({ subscriptionTier: 'pro' });
-    const result = await resolveSandboxToolEligibility('drive-1', 'free-tier-actor');
+  it('propagates a capability denial (viewer role, free payer, or kill switch — one gate, all legs)', async () => {
+    mockCanRunCodeForSession.mockResolvedValue(false);
+    await expect(resolveSandboxToolEligibility(null, 'actor-1')).resolves.toBe(false);
+  });
+});
+
+describe('resolveSandboxToolEligibilityForConversation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('a BOUND conversation authorizes the requester against the session coordinates, not the surface drive', async () => {
+    mockFindSessionForConversation.mockResolvedValue({ id: 'ses-1', driveId: 'session-drive', ownerId: 'session-owner' });
+    mockCanRunCodeForSession.mockResolvedValue(true);
+    const result = await resolveSandboxToolEligibilityForConversation('conv-1', 'surface-drive', 'actor-1');
     expect(result).toBe(true);
-    expect(mockLookupDriveOwnerId).toHaveBeenCalledWith('drive-1');
-    // The tier row consulted is the PAYER's (the drive owner), never the actor's.
-    expect(mockEq).toHaveBeenCalledWith('users.id', 'drive-owner');
+    expect(mockCanRunCodeForSession).toHaveBeenCalledWith({ userId: 'actor-1', driveId: 'session-drive', ownerId: 'session-owner' });
   });
 
-  it('given a free-tier payer, denies', async () => {
-    mockFindFirst.mockResolvedValue({ subscriptionTier: 'free' });
-    const result = await resolveSandboxToolEligibility(null, 'user-1');
-    expect(result).toBe(false);
+  it('an UNBOUND conversation falls back to the surface coordinates with the requester as owner', async () => {
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockCanRunCodeForSession.mockResolvedValue(true);
+    await resolveSandboxToolEligibilityForConversation('conv-2', 'surface-drive', 'actor-1');
+    expect(mockCanRunCodeForSession).toHaveBeenCalledWith({ userId: 'actor-1', driveId: 'surface-drive', ownerId: 'actor-1' });
   });
 
-  it('given no user row found, defaults to free and denies', async () => {
-    mockFindFirst.mockResolvedValue(undefined);
-    const result = await resolveSandboxToolEligibility(null, 'user-1');
-    expect(result).toBe(false);
+  it('no conversation id skips the session lookup entirely', async () => {
+    mockCanRunCodeForSession.mockResolvedValue(false);
+    await resolveSandboxToolEligibilityForConversation(undefined, null, 'actor-1');
+    expect(mockFindSessionForConversation).not.toHaveBeenCalled();
+    expect(mockCanRunCodeForSession).toHaveBeenCalledWith({ userId: 'actor-1', driveId: null, ownerId: 'actor-1' });
   });
 });

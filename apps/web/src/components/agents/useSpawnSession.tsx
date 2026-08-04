@@ -191,13 +191,15 @@ function SpawnSessionPalette({
   driveName: string | null;
   agents: DriveWithAgents['agents'];
   /**
-   * Whether this drive's owner (the payer) is on a tier that includes the
-   * sandbox. Unlike the in-session PanePicker's Shell button, this item
-   * stays keyboard-navigable and selectable when ineligible (cmdk's
-   * `disabled` removes an item from roving keyboard focus entirely, which
-   * would make a hover-only tooltip unreachable by keyboard) — instead it
-   * shows a persistent "Upgrade to Pro" label and redirects the pick to an
-   * upgrade message rather than advancing to the naming step.
+   * Whether the requester can actually run this drive's sandbox (the
+   * actor-aware server verdict: kill switch + the payer's tier + the
+   * requester's drive edit access). Unlike the in-session PanePicker's Shell
+   * button, this item stays keyboard-navigable and selectable when
+   * ineligible (cmdk's `disabled` removes an item from roving keyboard focus
+   * entirely, which would make a hover-only tooltip unreachable by keyboard)
+   * — instead it shows a persistent "Unavailable" label and redirects the
+   * pick to a capability-neutral message rather than advancing to the
+   * naming step.
    */
   canRunSandbox: boolean;
   pick: SpawnPick | null;
@@ -281,8 +283,13 @@ function SpawnSessionPalette({
                 disabled={spawning}
                 onSelect={() => {
                   if (!canRunSandbox) {
-                    toast.error('Upgrade to Pro to run a sandbox terminal', {
-                      description: 'This drive is on a plan that does not include the sandbox.',
+                    // Capability-neutral: `canRunSandbox` folds several denial
+                    // causes (payer tier, the requester's drive role, the
+                    // deployment kill switch) into one boolean, and "upgrade
+                    // to Pro" is wrong advice for all but the tier case
+                    // (codex round 9, same class as the PanePicker tooltip).
+                    toast.error('Sandbox terminals aren\'t available here', {
+                      description: 'They need a Pro-plan workspace with edit access.',
                     });
                     return;
                   }
@@ -292,7 +299,7 @@ function SpawnSessionPalette({
                 <SquareTerminal className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
                 <span className="truncate">Shell</span>
                 {!canRunSandbox && (
-                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">Upgrade to Pro</span>
+                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">Unavailable</span>
                 )}
               </CommandItem>
             </CommandGroup>

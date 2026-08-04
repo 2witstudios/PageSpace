@@ -145,7 +145,11 @@ describe('PanePicker', () => {
       expect(onPickShell).not.toHaveBeenCalled();
     });
 
-    it('shows an upgrade tooltip on the disabled Shell button', async () => {
+    it('shows a capability-neutral tooltip on the disabled Shell button', async () => {
+      // `canRunSandbox` folds several denial causes (payer tier, requester
+      // drive role, deployment kill switch) into one boolean, so the copy
+      // must not prescribe "upgrade" — wrong advice for all but the tier
+      // case (codex round 9).
       render(<PanePicker agents={agents} canRunSandbox={false} onPickAgent={vi.fn()} onPickShell={vi.fn()} />);
       const trigger = screen.getByTestId('pick-shell').closest('[tabindex]');
       expect(trigger).not.toBeNull();
@@ -154,7 +158,7 @@ describe('PanePicker', () => {
       // visually-hidden `role="tooltip"` copy for screen readers) — assert
       // on the accessible one specifically rather than a plain text query,
       // which would fail on the duplicate match.
-      expect(await screen.findByRole('tooltip', { name: /upgrade to pro/i })).toBeInTheDocument();
+      expect(await screen.findByRole('tooltip', { name: /aren't available in this session/i })).toBeInTheDocument();
     });
 
     it('does not steal autofocus onto a disabled Shell button', () => {
