@@ -519,6 +519,36 @@ const upsertEvent = async (
     }
   }
 
+  // Third fallback: attendee-based lookup. After the attendee dedup below links
+  // a Google event ID onto an event created by ANOTHER user, subsequent syncs
+  // won't find it via createdById. Check if the syncing user is an attendee on
+  // an event with this googleEventId.
+  if (!existingEvent) {
+    const attendeeLinked = await db
+      .select({
+        id: calendarEvents.id,
+        lastGoogleSync: calendarEvents.lastGoogleSync,
+        title: calendarEvents.title,
+        startAt: calendarEvents.startAt,
+        endAt: calendarEvents.endAt,
+        googleCalendarId: calendarEvents.googleCalendarId,
+      })
+      .from(eventAttendees)
+      .innerJoin(calendarEvents, eq(calendarEvents.id, eventAttendees.eventId))
+      .where(
+        and(
+          eq(eventAttendees.userId, userId),
+          eq(calendarEvents.googleEventId, googleEvent.id),
+          eq(calendarEvents.isTrashed, false)
+        )
+      )
+      .limit(1);
+
+    if (attendeeLinked.length > 0) {
+      existingEvent = attendeeLinked[0];
+    }
+  }
+
   // Handle cancelled/deleted events
   if (googleEvent.status === 'cancelled') {
     if (existingEvent) {

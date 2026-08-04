@@ -353,6 +353,72 @@ describe('syncGoogleCalendar', () => {
       expected: 1,
     });
   });
+
+  it('should not create a duplicate on second sync of the same attendee-linked event', async () => {
+    // After the first sync links the Google event to Noah's event,
+    // a second sync must find it via the attendee-based lookup, not create a copy.
+    mockGetValidAccessToken.mockResolvedValue({
+      success: true,
+      accessToken: 'valid-token',
+    });
+    mockFindFirst.mockResolvedValue({
+      status: 'active',
+      selectedCalendars: ['primary'],
+      syncCursor: null,
+      targetDriveId: null,
+      markAsReadOnly: false,
+      webhookChannels: null,
+      googleEmail: 'user@gmail.com',
+    });
+    mockListEvents.mockResolvedValue({
+      success: true,
+      data: {
+        events: [
+          {
+            id: 'google-evt-2',
+            status: 'confirmed',
+            summary: 'Standup',
+            start: { dateTime: '2025-01-01T09:00:00Z' },
+            end: { dateTime: '2025-01-01T09:30:00Z' },
+          },
+        ],
+        nextSyncToken: 'token-2',
+      },
+    });
+
+    const { db } = await import('@pagespace/db/db');
+    // createdById lookups return null (event was created by Noah)
+    (db.query.calendarEvents.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    // Attendee-based lookup (select) returns the already-linked event
+    mockSelectResolveValue = [{
+      id: 'noahs-event-2',
+      lastGoogleSync: new Date(),
+      title: 'Standup',
+      startAt: new Date('2025-01-01T09:00:00Z'),
+      endAt: new Date('2025-01-01T09:30:00Z'),
+      googleCalendarId: 'user@gmail.com',
+    }];
+
+    mockWatchCalendar.mockResolvedValue({ success: false, error: 'skip' });
+
+    const { syncGoogleCalendar } = await import('../sync-service');
+    const result = await syncGoogleCalendar('user-1');
+
+    assert({
+      given: 'second sync of attendee-linked event',
+      should: 'report success',
+      actual: result.success,
+      expected: true,
+    });
+
+    assert({
+      given: 'second sync of attendee-linked event',
+      should: 'count 0 created events',
+      actual: result.eventsCreated,
+      expected: 0,
+    });
+  });
 });
 
 describe('parseSyncCursors (tested via syncGoogleCalendar)', () => {
