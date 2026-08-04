@@ -46,6 +46,13 @@ const { mockTakeOverConversationStreams } = vi.hoisted(() => ({
 // The payer-tier sandbox tool filter (review #2326) hits the real DB through
 // resolveSandboxToolEligibility; a DB-backed lookup is out of scope for this
 // suite, so the payer is always eligible (the filter is a pass-through).
+// The bound-session lookup for payer-derived sandbox eligibility (review
+// #2326) hits the real DB through the agent-sessions runtime; this suite's
+// conversations are unbound, so the eligibility path takes the userId branch.
+vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
+  findSessionForConversation: vi.fn().mockResolvedValue(null),
+}));
+
 vi.mock('@/lib/ai/core/sandbox-tool-eligibility', () => ({
   resolveSandboxToolEligibility: vi.fn().mockResolvedValue(true),
 }));

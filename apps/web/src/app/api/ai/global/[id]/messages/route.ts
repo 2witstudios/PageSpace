@@ -50,6 +50,7 @@ import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-
 import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
 import { filterToolsForReadOnly, filterToolsForWebSearch, filterToolsForImageGen, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibility } from '@/lib/ai/core/sandbox-tool-eligibility';
+import { findSessionForConversation } from '@/lib/agent-sessions/agent-sessions-runtime';
 import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
 import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree-context';
 import { getModelCapabilities, DEFAULT_IMAGE_MODEL } from '@/lib/ai/core/model-capabilities';
@@ -865,18 +866,23 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
       (canUseAskUser({ role: auth.role }) ? `\n\n${ASK_USER_SECTION}` : '') +
       drivePromptSection;
 
-    // The PAYER's sandbox eligibility for this Global Assistant turn — the
-    // current drive's owner when the assistant is working in a drive, else
-    // the user themselves (review #2326: page chat, the OpenAI-compatible
-    // route and workflows all filter the sandbox families by payer tier, but
-    // this pipeline started from unfiltered pageSpaceTools, so a free-tier
-    // Global Assistant advertised bash/git tools that always answer
+    // The PAYER's sandbox eligibility for this Global Assistant turn —
+    // derived from the conversation's BOUND SESSION, never the location
+    // drive (review #2326, two rounds): an unbound global conversation gets
+    // a DRIVELESS session on its first tool call (`ensureGlobalSandboxSession`
+    // spawns `driveId: null` unconditionally), so this user is the payer
+    // regardless of which drive they happen to be visiting — keying on the
+    // location drive both advertised tools a free visitor's own session
+    // could never fund AND hid tools a paid visitor's driveless session
+    // funds fine. A conversation already bound to a session uses that
+    // session's own coordinates, exactly as provisioning will. Without this,
+    // a free-tier assistant advertised bash/git tools that always answer
     // tier_ineligible — and those git tool NAMES in `currentTools` then
-    // suppressed the user's working GitHub OAuth integration tools).
-    const sandboxTierEligible = await resolveSandboxToolEligibility(
-      locationContext?.currentDrive?.id ?? null,
-      userId,
-    );
+    // suppressed the user's working GitHub OAuth integration tools.
+    const boundSession = await findSessionForConversation(conversation.id);
+    const sandboxTierEligible = boundSession
+      ? await resolveSandboxToolEligibility(boundSession.driveId, boundSession.ownerId)
+      : await resolveSandboxToolEligibility(null, userId);
 
     // Build agent awareness prompt - lists visible AI agents for consultation
     // `canDelegate` mirrors the session-tool gate below: spawn_session only

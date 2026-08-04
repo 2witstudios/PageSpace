@@ -368,6 +368,10 @@ export interface ResolveSandboxActorContextDeps {
   findPageDriveId: (pageId: string) => Promise<string | undefined>;
   findUser: (userId: string) => Promise<{ subscriptionTier: string | null } | undefined>;
   getActorInfo: (userId: string) => Promise<{ actorEmail: string; actorDisplayName?: string }>;
+  /** The conversation's bound session (null = unbound) — the payer source for GLOBAL conversations. */
+  findSessionForConversation: (
+    conversationId: string,
+  ) => Promise<{ driveId: string | null; ownerId: string } | null>;
 }
 
 const defaultResolveDeps: ResolveSandboxActorContextDeps = {
@@ -383,6 +387,7 @@ const defaultResolveDeps: ResolveSandboxActorContextDeps = {
   findUser: (userId) =>
     db.query.users.findFirst({ where: eq(users.id, userId), columns: { subscriptionTier: true } }),
   getActorInfo,
+  findSessionForConversation,
 };
 
 /**
@@ -390,10 +395,11 @@ const defaultResolveDeps: ResolveSandboxActorContextDeps = {
  * default export (`resolveSandboxActorContext`) wires the real DB implementations;
  * pass fakes in tests.
  *
- * Discriminates by chatSource.type BEFORE checking driveId — three cases:
- *  - driveId present (page or global): look up drive.ownerId for tenantId.
- *  - page / undefined chatSource, no driveId: fail closed.
- *  - global, no driveId: tenantId = userId (user is their own isolation boundary).
+ * Discriminates by chatSource.type FIRST:
+ *  - global: coordinates come from the conversation's BOUND SESSION (its
+ *    driveId/ownerId — the payer provisioning will actually use), never the
+ *    location drive; unbound = the user (the driveless auto-spawn's owner).
+ *  - page / undefined chatSource: the agent page's drive; no driveId fails closed.
  */
 export function createResolveSandboxActorContext(
   deps: ResolveSandboxActorContextDeps = defaultResolveDeps,
@@ -406,18 +412,41 @@ export function createResolveSandboxActorContext(
 
     const turnId = stampTurnId(context);
     const chatSourceType = context?.chatSource?.type;
-    const driveId =
-      context?.locationContext?.currentDrive?.id ??
-      (
-        chatSourceType === 'page' && context?.chatSource?.agentPageId
-          ? await deps.findPageDriveId(context.chatSource.agentPageId)
-          : undefined
-      );
 
-    // Page AI (or undefined chatSource) with no driveId — fail closed. Don't
-    // assume global intent when the source type is absent.
-    if (chatSourceType !== 'global' && !driveId) {
-      return { error: 'Code execution requires an active drive.' };
+    // Which drive/owner the sandbox will ACTUALLY charge and authorize
+    // against, by chat source:
+    //
+    //  - GLOBAL: the conversation's BOUND SESSION, never the location drive
+    //    (review #2326): `resolveOrProvisionSession` auto-provisions an
+    //    unbound global conversation a DRIVELESS session (`driveId: null` in
+    //    `ensureGlobalSandboxSession`), so a free-tier user merely VISITING a
+    //    Pro-owned drive was gated eligible here and then denied at
+    //    provisioning — while a paid user visiting a free-owned drive was
+    //    denied a sandbox their own driveless session funds. A global
+    //    conversation already bound to a (possibly drive-scoped) session uses
+    //    that session's own coordinates, exactly as provisioning will.
+    //  - PAGE (or undefined chatSource): the agent page's drive — page
+    //    conversations only ever bind to sessions in their own drive (the
+    //    binding gate refuses a mismatch). No driveId fails closed; don't
+    //    assume global intent when the source type is absent.
+    let driveId: string | undefined;
+    let sessionOwnerId: string | undefined;
+    if (chatSourceType === 'global') {
+      const session = await deps.findSessionForConversation(conversationId);
+      driveId = session?.driveId ?? undefined;
+      // The bound session's own owner — the payer fallback when it has no
+      // drive. An unbound conversation gets a session OWNED BY THIS USER the
+      // moment a tool call provisions one, so the user is the payer-to-be.
+      sessionOwnerId = session?.ownerId ?? userId;
+    } else {
+      driveId =
+        context?.locationContext?.currentDrive?.id ??
+        (context?.chatSource?.agentPageId
+          ? await deps.findPageDriveId(context.chatSource.agentPageId)
+          : undefined);
+      if (!driveId) {
+        return { error: 'Code execution requires an active drive.' };
+      }
     }
 
     // `findDrive` only runs a real query when driveId is present (an
@@ -430,14 +459,14 @@ export function createResolveSandboxActorContext(
     if (driveId && !drive) return { error: 'Code execution requires an active drive.' };
 
     // The PAYER's tier, not the actor's (review #2326): the drive owner pays
-    // for a drive-scoped session, the user themselves for a driveless global
-    // one — the same drive-owner ?? actor rule `canRunCode`'s tier gate and
-    // billing already apply. Loading the ACTOR's tier here made every quota
-    // check (`isSandboxAvailable` + the concurrency ceiling) fail for a
-    // free-tier collaborator in a Pro-owned drive, despite `canRunCode`
-    // having just authorized them against the payer. Sequenced after the
-    // drive fetch because the payer's id IS the drive's owner.
-    const payerId = drive?.ownerId ?? userId;
+    // for a drive-scoped session, the session's own owner for a driveless
+    // global one — the same drive-owner ?? owner rule `canRunCode`'s tier
+    // gate and billing already apply. Loading the ACTOR's tier here made
+    // every quota check (`isSandboxAvailable` + the concurrency ceiling)
+    // fail for a free-tier collaborator in a Pro-owned drive, despite
+    // `canRunCode` having just authorized them against the payer. Sequenced
+    // after the drive fetch because the payer's id IS the drive's owner.
+    const payerId = drive?.ownerId ?? sessionOwnerId ?? userId;
     const payerRow = await deps.findUser(payerId);
 
     const base = {
@@ -453,28 +482,28 @@ export function createResolveSandboxActorContext(
       turnId,
     };
 
-    // driveId present for both page AI and global AI: tenantId is the drive's
-    // owning account. Both surfaces share identical resolution logic here.
-    // `ownerId: drive!.ownerId` reuses the SAME fetch above (no extra query) —
-    // it's the payer the call-time gate's tier-eligibility check resolves
-    // against, not the acting user.
+    // driveId present (a page agent's drive, or a global conversation bound
+    // to a drive-scoped session): tenantId is the drive's owning account.
+    // `ownerId` is the session's own owner where one is bound (global), else
+    // the drive owner — either way the payer the call-time gate's
+    // tier-eligibility check resolves against, never the acting user.
     if (driveId) {
-      return { ...base, tenantId: drive!.ownerId, driveId, ownerId: drive!.ownerId };
+      return { ...base, tenantId: drive!.ownerId, driveId, ownerId: sessionOwnerId ?? drive!.ownerId };
     }
 
-    // Global AI without a drive: user is their own isolation boundary.
-    // tenantId = userId keeps the session key and quota scopes user-owned.
-    // ownerId = userId too: a global session is owner-only by construction
-    // (decideAgentSessionAccess), so actor and owner coincide here.
-    return { ...base, tenantId: userId, ownerId: userId };
+    // Global AI with no (or a driveless) session: the session's owner is
+    // their own isolation boundary. tenantId keeps the session key and quota
+    // scopes user-owned; for the unbound case the payer-to-be is this user.
+    return { ...base, tenantId: sessionOwnerId ?? userId, ownerId: sessionOwnerId ?? userId };
   };
 }
 
 /**
- * Resolve the actor context from the chat tool context. The drive comes from the
- * active location; the tenant is the drive's owning account (the cloud tenant
- * boundary); the quota tier is the PAYER's subscription tier (drive owner, or
- * the acting user for a driveless global-assistant run).
+ * Resolve the actor context from the chat tool context. For page agents the
+ * drive is the page's own; for the Global Assistant the coordinates come from
+ * the conversation's bound session (else the driveless auto-spawn's owner —
+ * this user). The tenant is the drive's owning account (the cloud tenant
+ * boundary) and the quota tier is the PAYER's subscription tier.
  *
  * Global assistant context (chatSource.type === 'global') is a first-class path:
  * driveId may be absent and resolves with tenantId = userId.
