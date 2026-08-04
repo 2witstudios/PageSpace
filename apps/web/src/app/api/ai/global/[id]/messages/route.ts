@@ -885,16 +885,16 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
     );
 
     // Build agent awareness prompt - lists visible AI agents for consultation
-    // `canDelegate` mirrors the session-tool gate below: spawn_session only
-    // exists when code execution is enabled, and a prompt that names a tool the
-    // model does not have makes it attempt delegation that silently fails.
+    // `canDelegate` mirrors the session-tool gate: spawn_session registers
+    // regardless of the CODE_EXECUTION kill-switch (the chat-only session
+    // family is free conversation orchestration, see `buildPageSpaceTools`),
+    // but `filterToolsForReadOnly` strips it as a write tool — and a prompt
+    // that names a tool the model does not have makes it attempt delegation
+    // that silently fails. The payer-tier filter does NOT remove the
+    // chat-only session family (sessions are free on every plan), so tier is
+    // deliberately not weighed here.
     const agentAwarenessPrompt = await buildAgentAwarenessPrompt(userId, {
-      // BOTH gates, because the tool set applies both: registration is gated on
-      // CODE_EXECUTION_ENABLED, and `filterToolsForReadOnly` then strips
-      // spawn_session again as a write tool. The payer-tier filter does NOT
-      // remove the chat-only session family (sessions are free on every
-      // plan), so tier is deliberately not weighed here.
-      canDelegate: isCodeExecutionEnabled() && !readOnlyMode,
+      canDelegate: !readOnlyMode,
     });
 
     // Build page tree context if enabled

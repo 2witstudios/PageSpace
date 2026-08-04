@@ -133,10 +133,12 @@ const WEB_SEARCH_TOOLS = new Set(['web_search', 'web_fetch']);
 /**
  * The SESSION + SHELL families — the agent-session orchestration surface
  * (spawn/send/read/kill workers; spawn/send/read/kill PTY shells in the
- * caller's own session's sandbox). Registered alongside bash/git behind the
- * CODE_EXECUTION kill-switch in `buildPageSpaceTools`; the tools resolve the
- * caller's SESSION from its conversation at call time, so there is no
- * binding to gate registration on.
+ * caller's own session's sandbox). `buildPageSpaceTools` registers the
+ * chat-only session subfamily unconditionally (sessions are free on every
+ * plan and every deployment) and the shell subfamily alongside bash/git
+ * behind the CODE_EXECUTION kill-switch; the tools resolve the caller's
+ * SESSION from its conversation at call time, so there is no binding to
+ * gate registration on.
  *
  * Exported for the read-only DRIFT GUARD in this module's tests: every mutating
  * member must appear in `WRITE_TOOLS` (or a read-only agent could spawn a shell
