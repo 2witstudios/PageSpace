@@ -33,24 +33,18 @@ function buildHelpAnswerStream(
   originalMessages: UIMessage[],
   persist: (payload: AssistantPersistencePayload) => Promise<unknown>
 ): Response {
-  const parts: UIMessage['parts'] = [
-    {
-      type: COMMAND_EXECUTION_PART_TYPE,
-      id: `${messageId}-command-0`,
-      data: { label: 'help', status: 'used' },
-    },
-    { type: 'text', text: answerText },
-  ];
+  const commandPart = {
+    type: COMMAND_EXECUTION_PART_TYPE,
+    id: `${messageId}-command-0`,
+    data: { label: 'help', status: 'used' as const },
+  };
+  const parts: UIMessage['parts'] = [commandPart, { type: 'text', text: answerText }];
 
   const stream = createUIMessageStream({
     originalMessages,
     generateId: () => messageId,
     execute: async ({ writer }) => {
-      writer.write({
-        type: COMMAND_EXECUTION_PART_TYPE,
-        id: `${messageId}-command-0`,
-        data: { label: 'help', status: 'used' },
-      });
+      writer.write(commandPart);
       writer.write({ type: 'text-start', id: `${messageId}-text` });
       writer.write({ type: 'text-delta', id: `${messageId}-text`, delta: answerText });
       writer.write({ type: 'text-end', id: `${messageId}-text` });
