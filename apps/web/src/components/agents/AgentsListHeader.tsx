@@ -48,7 +48,7 @@ export default function AgentsListHeader({ driveId }: { driveId?: string }) {
   const [createDriveOpen, setCreateDriveOpen] = useState(false);
   const { agentsByDrive } = usePageAgents(undefined, { enabled: canSpawn });
   const { mutate } = useSWRConfig();
-  const { openSpawn, paletteElement } = useSpawnSession(agentsByDrive, () => {
+  const { openSpawn, openAssistantSpawn, paletteElement } = useSpawnSession(agentsByDrive, () => {
     // Broad match: the sidebar's sessions key is drive-scoped or global
     // depending on ITS OWN route, and this header doesn't know which is
     // mounted alongside it — without this, a session spawned from here only
@@ -88,6 +88,11 @@ export default function AgentsListHeader({ driveId }: { driveId?: string }) {
       return;
     }
     setPickerFor('agent');
+  };
+
+  const handleGlobalAssistantPicked = () => {
+    setPickerFor(null);
+    openAssistantSpawn();
   };
 
   const handleDrivePicked = (pickedDriveId: string, pickedDriveName: string) => {
@@ -154,6 +159,7 @@ export default function AgentsListHeader({ driveId }: { driveId?: string }) {
         open={pickerFor !== null}
         onOpenChange={(open) => !open && setPickerFor(null)}
         onPick={handleDrivePicked}
+        onPickGlobalAssistant={pickerFor === 'session' ? handleGlobalAssistantPicked : undefined}
       />
     </div>
   );
