@@ -16,7 +16,10 @@
  *   conversation resolved.
  * - Spawning a session is ONE act: pick an agent, and the server answers with
  *   the session AND its first conversation (a session is never empty).
- * - The admin gate is a DISABLED FETCH (null SWR key), not a hidden list.
+ * - The authentication gate is a DISABLED FETCH (null SWR key), not a hidden
+ *   list — sessions/chat/panes are open to every authenticated user, not
+ *   just admins; the default auth mock below is a plain non-admin user on
+ *   purpose, so every test in this file doubles as proof of that.
  */
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
@@ -53,7 +56,7 @@ interface PageAgentsResult {
   mutate: () => void;
 }
 
-// Spied, not merely stubbed: the `enabled` argument IS half the admin gate
+// Spied, not merely stubbed: the `enabled` argument IS half the auth gate
 // (the other half is the null sessions SWR key) — asserting only that nothing
 // renders would still pass if the gate were dropped, since the refusal notice
 // short-circuits the list anyway.
@@ -183,7 +186,10 @@ beforeEach(() => {
   // fixture here is 'ses-1' or 'ses-new') would otherwise see each other's
   // panes[0], since nothing else clears this store between tests.
   useAgentWorkspaceStore.setState({ workspaces: {} });
-  mockUseAuth.mockReturnValue({ user: { role: 'admin' }, isLoading: false });
+  // Deliberately a PLAIN, non-admin user: sessions/chat/panes are open to
+  // every authenticated user now, so every test in this file that relies on
+  // this default doubles as proof a non-admin gets full access too.
+  mockUseAuth.mockReturnValue({ user: { role: 'user' }, isLoading: false });
   mockUseParams.mockReturnValue({ driveId: 'drive-1' });
   mockUsePathname.mockReturnValue('/dashboard/drive-1/agents');
   mockUseBreakpoint.mockReturnValue(false);
@@ -192,18 +198,18 @@ beforeEach(() => {
 });
 
 describe('AgentsSidebar', () => {
-  test("lists the drive's sessions for an admin", async () => {
+  test("lists the drive's sessions for a non-admin authenticated user", async () => {
     renderSidebar();
     expect(await screen.findByText('api refactor')).toBeDefined();
     expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-sessions?driveId=drive-1');
   });
 
-  test('refuses a non-admin, and makes no request on their behalf', () => {
-    mockUseAuth.mockReturnValue({ user: { role: 'user' }, isLoading: false });
+  test('refuses when signed out, and makes no request on their behalf', () => {
+    mockUseAuth.mockReturnValue({ user: null, isLoading: false });
 
     renderSidebar();
 
-    expect(screen.getByText(/administrator privileges/i)).toBeDefined();
+    expect(screen.getByText(/sign in to view your sessions/i)).toBeDefined();
     expect(screen.queryByText('api refactor')).toBeNull();
     // The load-bearing half: neither fetch is ever made, rather than made and
     // discarded.
@@ -1316,19 +1322,19 @@ describe('AgentsSidebar', () => {
       expect(within(groupContainer('Alpha')).getByRole('button', { name: /^New session/i })).toBeDefined();
     });
 
-    test('shows no roster groups for a non-admin — refusal-only, not a dead spawn chooser', () => {
-      // The admin gate must cover the roster too: previously only the
+    test('shows no roster groups when signed out — refusal-only, not a dead spawn chooser', () => {
+      // The auth gate must cover the roster too: previously only the
       // Assistant group's visibility was tied to admin status, so a
-      // non-admin with drives in the persisted store would see every
-      // roster drive's header and its inline "+" alongside the refusal
-      // notice, opening onto an empty palette since usePageAgents is
-      // disabled for them.
-      mockUseAuth.mockReturnValue({ user: { role: 'user' }, isLoading: false });
+      // signed-out visitor with drives in the persisted store would see
+      // every roster drive's header and its inline "+" alongside the
+      // refusal notice, opening onto an empty palette since usePageAgents
+      // is disabled for them.
+      mockUseAuth.mockReturnValue({ user: null, isLoading: false });
       useDriveStore.setState({ drives: [driveFixture('drive-1', 'Alpha')] });
 
       renderSidebar();
 
-      expect(screen.getByText(/administrator privileges/i)).toBeDefined();
+      expect(screen.getByText(/sign in to view your sessions/i)).toBeDefined();
       expect(screen.queryByText('Alpha')).toBeNull();
       expect(screen.queryByText('Global Assistant')).toBeNull();
       expect(screen.queryByRole('button', { name: /^New session/i })).toBeNull();
@@ -1465,7 +1471,7 @@ describe('AgentsSidebar', () => {
       // helper directly pins the exact branch logic instead.
       const baseArgs = {
         authLoading: false,
-        isAdmin: true,
+        isAuthenticated: true,
         hasError: false,
         isLoading: false,
         isDataEmpty: false,
@@ -1473,6 +1479,23 @@ describe('AgentsSidebar', () => {
         emptyTitle: 'No sessions yet',
         onRetry: vi.fn(),
       };
+
+      test('given not authenticated, shows the sign-in notice regardless of other state', () => {
+        render(
+          <>
+            {resolveListNotice({
+              ...baseArgs,
+              isAuthenticated: false,
+              hasError: true,
+              isDataEmpty: true,
+              isResultEmpty: true,
+            })}
+          </>,
+        );
+
+        expect(screen.getByText(/sign in to view your sessions/i)).toBeDefined();
+        expect(screen.queryByText(/failed to load sessions/i)).toBeNull();
+      });
 
       test('a background refresh failure on cached sessions shows the no-match notice, not "Failed to load sessions"', () => {
         // Regression pin for the isDataEmpty/isResultEmpty split: hasError can

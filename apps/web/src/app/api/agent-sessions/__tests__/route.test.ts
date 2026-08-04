@@ -161,16 +161,11 @@ describe('GET /api/agent-sessions', () => {
     expect(mockListSessions).toHaveBeenCalledWith({ ownerId: 'user-1' });
   });
 
-  it('given a non-admin, should 403 WITHOUT enumerating anything, and audit the denial', async () => {
+  it('given a non-admin, should list THEIR OWN sessions same as an admin — sessions/chat/panes are open to every authenticated user, only the sandbox itself is tier-gated', async () => {
     mockAuthenticateRequest.mockResolvedValue(AUTH_NON_ADMIN);
     const response = await GET(new Request('http://localhost/api/agent-sessions'));
-    expect(response.status).toBe(403);
-    expect(mockListSessions).not.toHaveBeenCalled();
-    expect(mockListShellsBulk).not.toHaveBeenCalled();
-    expect(mockAuditRequest).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ eventType: 'authz.access.denied' }),
-    );
+    expect(response.status).toBe(200);
+    expect(mockListSessions).toHaveBeenCalledWith({ ownerId: 'user-2' });
   });
 
   it('given an auth failure, should return the auth error untouched', async () => {

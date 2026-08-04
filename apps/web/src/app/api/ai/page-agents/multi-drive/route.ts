@@ -3,10 +3,12 @@ import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds, getPri
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 import { db } from '@pagespace/db/db'
-import { eq, and } from '@pagespace/db/operators'
+import { eq, and, inArray } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
+import { users } from '@pagespace/db/schema/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { computeSandboxEligibilityByDrive } from './sandbox-eligibility-by-drive';
 
 interface AgentSummary {
   id: string;
@@ -62,6 +64,17 @@ export async function GET(request: Request) {
       }
     }
 
+    // Batch-fetch each accessible drive's OWNER tier, once for the whole
+    // request — a drive's sandbox eligibility is the PAYER's tier (the
+    // owner), not the requester's, same rule agent-sessions billing/quota
+    // already apply. Several drives commonly share one owner, so this is
+    // deduped by ownerId, not one query per drive.
+    const ownerIds = Array.from(new Set(accessibleDrives.map((d) => d.ownerId)));
+    const ownerRows = ownerIds.length
+      ? await db.select({ id: users.id, subscriptionTier: users.subscriptionTier }).from(users).where(inArray(users.id, ownerIds))
+      : [];
+    const sandboxEligibleByDrive = computeSandboxEligibilityByDrive(accessibleDrives, ownerRows);
+
     // Filter by MCP token scope (if scoped)
     const allowedDriveIds = getAllowedDriveIds(auth);
     const scopedDrives = allowedDriveIds.length > 0
@@ -75,6 +88,8 @@ export async function GET(request: Request) {
       driveSlug: string;
       agentCount: number;
       agents: AgentSummary[];
+      /** Whether THIS drive's owner (the payer) is on a tier that includes the sandbox. */
+      sandboxEligible: boolean;
     }[] = [];
     const allAccessibleAgents: AgentSummary[] = [];
 
@@ -153,7 +168,8 @@ export async function GET(request: Request) {
           driveName: drive.name,
           driveSlug: drive.slug,
           agentCount: accessibleAgentsInDrive.length,
-          agents: accessibleAgentsInDrive
+          agents: accessibleAgentsInDrive,
+          sandboxEligible: sandboxEligibleByDrive.get(drive.id) ?? false,
         });
       }
     }

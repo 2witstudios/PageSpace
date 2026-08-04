@@ -47,6 +47,7 @@ import {
   provisionSessionSandbox,
   toAgentSessionDTO,
 } from '@/lib/agent-sessions/agent-sessions-runtime';
+import { resolveSandboxToolEligibility } from '@/lib/ai/core/sandbox-tool-eligibility';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -89,7 +90,13 @@ export async function GET(request: Request, context: RouteContext) {
 
   const row = await findSessionRecord(sessionId);
   if (!row) return NextResponse.json({ session: null });
-  return NextResponse.json({ session: toAgentSessionDTO(row) });
+  // The session's own PAYER (drive owner, or the session's own owner when
+  // driveless) — not the requester — so a free-tier member of a Pro-owned
+  // drive still sees the sandbox as available. Client-side, `useAuth()` only
+  // knows the viewing user's own tier, which is the wrong axis; this is the
+  // one place that resolves the real answer.
+  const sandboxEligible = await resolveSandboxToolEligibility(row.driveId, row.ownerId);
+  return NextResponse.json({ session: toAgentSessionDTO(row), sandboxEligible });
 }
 
 const PROVISION_FAILURE_STATUS: Record<string, number> = {

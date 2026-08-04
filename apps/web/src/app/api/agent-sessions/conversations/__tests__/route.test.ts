@@ -3,13 +3,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const {
   mockAuthenticateRequest,
-  mockAuditRequest,
   mockListAllConversationsPaginated,
   mockGetBatchPagePermissions,
   mockResolveDriveMembership,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
-  mockAuditRequest: vi.fn(),
   mockListAllConversationsPaginated: vi.fn(),
   mockGetBatchPagePermissions: vi.fn(),
   mockResolveDriveMembership: vi.fn(),
@@ -18,9 +16,6 @@ const {
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: (...args: unknown[]) => mockAuthenticateRequest(...args),
   isAuthError: (result: unknown) => result != null && typeof result === 'object' && 'error' in result,
-}));
-vi.mock('@pagespace/lib/audit/audit-log', () => ({
-  auditRequest: (...args: unknown[]) => mockAuditRequest(...args),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { error: vi.fn() } },
@@ -130,14 +125,13 @@ describe('GET /api/agent-sessions/conversations', () => {
     );
   });
 
-  it('given a non-admin, 403s without enumerating anything, and audits the denial', async () => {
+  it('given a non-admin, lists THEIR OWN conversations same as an admin — this listing is open to every authenticated user', async () => {
     mockAuthenticateRequest.mockResolvedValue(AUTH_NON_ADMIN);
     const response = await GET(new Request('http://localhost/api/agent-sessions/conversations'));
-    expect(response.status).toBe(403);
-    expect(mockListAllConversationsPaginated).not.toHaveBeenCalled();
-    expect(mockAuditRequest).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ eventType: 'authz.access.denied' }),
+    expect(response.status).toBe(200);
+    expect(mockListAllConversationsPaginated).toHaveBeenCalledWith(
+      { ownerId: 'user-2', driveId: undefined },
+      { limit: 20, cursor: undefined },
     );
   });
 

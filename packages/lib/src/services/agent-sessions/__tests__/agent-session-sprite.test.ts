@@ -647,14 +647,14 @@ describe('ensureAgentSessionSandbox — refusals', () => {
       row: toSpriteRow(makeSessionRecord()),
       intent: 'ensure',
       actor,
-      deps: makeDeps({ store, host }, { authorize: async () => ({ ok: false, reason: 'app_admin_required' }) }),
+      deps: makeDeps({ store, host }, { authorize: async () => ({ ok: false, reason: 'tier_ineligible' }) }),
     });
 
     expect(result).toEqual({
       ok: false,
       reason: 'denied',
       denial: 'not_authorized',
-      detail: 'app_admin_required',
+      detail: 'tier_ineligible',
     });
     expect(host.calls.provision).toHaveLength(0);
   });

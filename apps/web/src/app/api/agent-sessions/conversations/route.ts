@@ -10,14 +10,13 @@
  * Prev/Next actually needs (Prev replays an already-fetched, SWR-cached page
  * rather than asking the server to go forward).
  *
- * Same admin gate as `/api/agent-sessions` (GET) — this is the same
- * admin-only-plus-CODE_EXECUTION surface, just listing conversations instead
- * of sessions.
+ * Open to every authenticated user, same as `/api/agent-sessions` (GET) —
+ * sessions/chat/panes are free; only the sandbox itself is tier-gated,
+ * further down the call chain, not at this listing level.
  */
 
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import { resolveDriveMembership } from '@pagespace/lib/services/agent-sessions/agent-session-tenant';
@@ -167,18 +166,6 @@ export async function GET(request: Request) {
 
   const url = new URL(request.url);
   const driveId = url.searchParams.get('driveId');
-
-  if (auth.role !== 'admin') {
-    auditRequest(request, {
-      eventType: 'authz.access.denied',
-      userId: auth.userId,
-      resourceType: driveId ? 'drive' : 'agent_sessions',
-      resourceId: driveId ?? undefined,
-      details: { reason: 'app_admin_required', method: 'GET', route: 'agent-sessions/conversations' },
-      riskScore: 0.5,
-    });
-    return NextResponse.json({ error: 'Agent sessions require administrator privileges' }, { status: 403 });
-  }
 
   const limit = parseBoundedIntParam(url.searchParams.get('limit'), {
     defaultValue: 20,

@@ -322,6 +322,7 @@ export async function ensureAgentSessionSandbox({
   const authorized = await deps.authorize({
     userId: actor.userId,
     driveId: row.driveId ?? undefined,
+    ownerId: row.ownerId,
     requestOrigin: 'user',
   });
 

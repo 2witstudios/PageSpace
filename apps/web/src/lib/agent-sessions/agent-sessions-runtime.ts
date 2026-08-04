@@ -195,7 +195,7 @@ export async function checkAccessForSubject(
     subject.driveId === null
       ? Promise.resolve(null)
       : deps.resolveDriveMembership({ userId: requesterId, driveId: subject.driveId }),
-    deps.canRunCode({ userId: requesterId, driveId: subject.driveId }),
+    deps.canRunCode({ userId: requesterId, driveId: subject.driveId, ownerId: subject.ownerId }),
   ]);
   return decideAgentSessionAccess({
     requesterId,

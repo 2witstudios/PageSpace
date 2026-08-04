@@ -3,10 +3,11 @@
  * Session) above what used to be a bare conversations list.
  *
  * The properties worth pinning:
- * - "New Session" mirrors `AgentsSidebar`'s own admin gate: sandboxes are
- *   admin-only everywhere else in this console, so a non-admin must not see
- *   this button here either, even though "New Drive"/"New Agent" (ordinary
- *   permission-gated actions, not admin-only) stay visible.
+ * - "New Session" mirrors `AgentsSidebar`'s own auth gate: sessions/chat/
+ *   panes are open to every authenticated user (only the sandbox itself is
+ *   tier-gated, elsewhere), so a signed-out visitor must not see this
+ *   button here — "New Drive"/"New Agent" (ordinary permission-gated
+ *   actions) stay visible regardless.
  * - Drive-scoped, "New Session"/"New Agent" act on the current drive
  *   directly. Global (no `driveId`), both go through a drive picker first —
  *   neither creation path has anywhere else to put the result.
@@ -23,11 +24,15 @@ vi.mock('next/navigation', () => ({
 const mockUseAuth = vi.fn();
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => mockUseAuth() }));
 
+const mockToastError = vi.hoisted(() => vi.fn());
+vi.mock('sonner', () => ({ toast: { error: (...args: unknown[]) => mockToastError(...args) } }));
+
 interface PageAgentsResult {
   agentsByDrive: {
     driveId: string;
     driveName: string;
     agentCount: number;
+    sandboxEligible: boolean;
     agents: { id: string; title: string | null; driveId: string }[];
   }[];
   isLoading: boolean;
@@ -40,6 +45,7 @@ const AGENTS_BY_DRIVE: PageAgentsResult['agentsByDrive'] = [
     driveId: 'drive-1',
     driveName: 'Alpha',
     agentCount: 1,
+    sandboxEligible: true,
     agents: [{ id: 'agent-1', title: 'Researcher', driveId: 'drive-1' }],
   },
 ];
@@ -74,13 +80,16 @@ const driveFixture = (id: string, name: string): Drive => ({
 beforeEach(() => {
   vi.clearAllMocks();
   mockUsePageAgents.mockReturnValue({ agentsByDrive: AGENTS_BY_DRIVE, isLoading: false, isError: false, mutate: vi.fn() });
-  mockUseAuth.mockReturnValue({ user: { role: 'admin' }, isLoading: false });
+  // Deliberately a PLAIN, non-admin user: sessions/chat/panes are open to
+  // every authenticated user now, so every test relying on this default
+  // doubles as proof a non-admin gets full access too.
+  mockUseAuth.mockReturnValue({ user: { role: 'user' }, isLoading: false });
   useDriveStore.setState({ drives: [driveFixture('drive-1', 'Alpha'), driveFixture('drive-2', 'Beta')] });
   useUIStore.setState({ quickCreateOpen: false, quickCreateParentOverride: undefined });
 });
 
 describe('AgentsListHeader', () => {
-  test('drive-scoped, admin: renders the title and all three CTAs', () => {
+  test('drive-scoped, non-admin authenticated user: renders the title and all three CTAs', () => {
     render(<AgentsListHeader driveId="drive-1" />);
 
     expect(screen.getByText('Agents')).toBeDefined();
@@ -89,16 +98,17 @@ describe('AgentsListHeader', () => {
     expect(screen.getByRole('button', { name: /New Session/ })).toBeDefined();
   });
 
-  test('non-admin: "New Session" is hidden, but "New Drive"/"New Agent" stay visible', () => {
-    mockUseAuth.mockReturnValue({ user: { role: 'user' }, isLoading: false });
+  test('signed out: "New Session" is hidden, but "New Drive"/"New Agent" stay visible', () => {
+    mockUseAuth.mockReturnValue({ user: null, isLoading: false });
 
     render(<AgentsListHeader driveId="drive-1" />);
 
     expect(screen.getByRole('button', { name: /New Drive/ })).toBeDefined();
     expect(screen.getByRole('button', { name: /New Agent/ })).toBeDefined();
     expect(screen.queryByRole('button', { name: /New Session/ })).toBeNull();
-    // The agent picker's roster is spawn-only data — a non-admin can't reach
-    // the palette that would use it, so the fetch is disabled entirely.
+    // The agent picker's roster is spawn-only data — a signed-out visitor
+    // can't reach the palette that would use it, so the fetch is disabled
+    // entirely.
     expect(mockUsePageAgents).toHaveBeenCalledWith(undefined, { enabled: false });
   });
 
@@ -115,6 +125,33 @@ describe('AgentsListHeader', () => {
     // (so it's queryable even while closed) — assert on the picker's actual
     // content instead, which IS gated on `open`.
     expect(screen.queryByPlaceholderText('Search drives…')).toBeNull();
+  });
+
+  test('picking Shell in a sandbox-ineligible drive shows an upgrade message instead of advancing to naming', async () => {
+    // The drive OWNER's tier (server-resolved on the same usePageAgents
+    // fetch), not the viewer's own — a free-tier viewer in a Pro-owned drive
+    // must NOT see this.
+    mockUsePageAgents.mockReturnValue({
+      agentsByDrive: [{ ...AGENTS_BY_DRIVE[0], sandboxEligible: false }],
+      isLoading: false,
+      isError: false,
+      mutate: vi.fn(),
+    });
+    const user = userEvent.setup();
+    render(<AgentsListHeader driveId="drive-1" />);
+
+    await user.click(screen.getByRole('button', { name: /New Session/ }));
+    await screen.findByText('Choose an agent to start a session with in Alpha');
+    expect(screen.getByText('Upgrade to Pro')).toBeDefined();
+
+    await user.click(screen.getByText('Shell'));
+
+    expect(mockToastError).toHaveBeenCalledWith(
+      'Upgrade to Pro to run a sandbox terminal',
+      expect.objectContaining({ description: expect.stringContaining('does not include the sandbox') }),
+    );
+    // Never advanced to the naming step.
+    expect(screen.queryByText('Name your session')).toBeNull();
   });
 
   test('drive-scoped: "New Agent" opens Quick Create scoped to the drive root', async () => {

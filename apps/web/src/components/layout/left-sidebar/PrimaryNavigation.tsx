@@ -23,10 +23,11 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
     const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
     const badges = useSidebarBadges();
     const { user } = useAuth();
-    // Agent sandboxes are an app-admin feature end to end (the session routes
-    // refuse a non-admin, and the surface mounts no session view for one), so a
-    // non-admin gets no nav entry rather than a destination that refuses them.
-    const isAdmin = user?.role === "admin";
+    // Sessions/chat/panes are open to every authenticated user — only the
+    // sandbox itself (real cloud compute) is tier-gated, server-side, and
+    // that gate lives on the terminal affordance inside a session, not on
+    // nav-item visibility.
+    const isAuthenticated = Boolean(user);
 
     // The Agents surface keeps its whole selection in the URL query string
     // (see useAgentSurfaceStore's "the URL is the state" design) and never
@@ -97,7 +98,7 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
         // Both hrefs are real views: the driveless one aggregates every
         // accessible drive's agents, the drive-scoped one shows just that
         // drive's. Neither redirects to the other.
-        ...(isAdmin
+        ...(isAuthenticated
             ? [{
                 name: "Agents",
                 href: agentsHref,

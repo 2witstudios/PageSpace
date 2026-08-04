@@ -86,6 +86,7 @@ import {
   filterToolsForAgentAllowlist,
   filterToolsForSandboxEnablement,
 } from '@/lib/ai/core/tool-filtering';
+import { resolveSandboxToolEligibility } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
 import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/core/model-capabilities';
 import { getPageTreeContext } from '@/lib/ai/core/page-tree-context';
@@ -1076,14 +1077,23 @@ export async function POST(request: Request) {
       agentEnabledTools
     ) as ToolSet;
 
-    // Step 3b: the per-agent sandbox switch. An agent with sandboxEnabled off
-    // never sees the sandbox families (bash/files, git+gh, sessions/shells) —
-    // independent of the allowlist, which cannot re-grant them. The env
-    // kill-switch and per-call canRunCode remain the security boundaries
-    // underneath; this is agent configuration.
+    // Step 3b: the per-agent sandbox switch AND the payer's tier eligibility.
+    // An agent with sandboxEnabled off never sees the sandbox families
+    // (bash/files, git+gh, sessions/shells) — independent of the allowlist,
+    // which cannot re-grant them. A free-tier payer doesn't either: showing
+    // tools that would hard-fail with tier_ineligible the moment they're
+    // called is a UX bug, not a security concern (the env kill-switch and
+    // per-call canRunCode remain the real security boundaries underneath;
+    // this is agent configuration + UX, not authz). Short-circuited on
+    // sandboxEnabled first — most agents never touch the sandbox at all, so
+    // this skips the payer-tier DB round trip for the common case.
+    const sandboxEnabled = Boolean(page.sandboxEnabled);
+    const sandboxTierEligible = sandboxEnabled
+      ? await resolveSandboxToolEligibility(page.driveId ?? null, userId)
+      : false;
     filteredTools = filterToolsForSandboxEnablement(
       filteredTools,
-      Boolean(page.sandboxEnabled)
+      sandboxEnabled && sandboxTierEligible
     ) as ToolSet;
 
     // Step 4: webSearchEnabled is a runtime input toggle that overrides the allowlist.

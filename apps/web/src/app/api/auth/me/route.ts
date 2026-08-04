@@ -2,6 +2,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { isExternalHttpUrl } from '@/lib/auth/google-avatar';
+import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 
 // Session (browser) and OAuth (CLI `pagespace login` identity confirmation,
 // ADR 0003) both resolve identity the same way; `mcp_*` tokens are scoped
@@ -44,5 +45,9 @@ export async function GET(req: Request) {
     image: safeImage,
     role: user.role,
     emailVerified: user.emailVerified,
+    // Coerced to the canonical vocabulary here (not left as the raw, untyped
+    // DB column) so every client consumer gets a value `isSandboxAvailable`
+    // and friends can trust directly, same as every server-side tier read.
+    subscriptionTier: toSubscriptionTier(user.subscriptionTier),
   });
 }

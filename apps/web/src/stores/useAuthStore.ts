@@ -4,6 +4,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { navigateInApp } from '@/lib/navigation/app-navigator';
 import { buildSigninRoute } from '@/lib/auth/resolve-signin-next';
+import type { SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 
 interface User {
   id: string;
@@ -12,6 +13,7 @@ interface User {
   image?: string | null;
   emailVerified?: Date | null;
   role?: 'user' | 'admin';
+  subscriptionTier?: SubscriptionTier;
 }
 
 interface AuthState {
@@ -414,7 +416,8 @@ export const useAuthStore = create<AuthState>()(
                 currentUser.name !== userData.name ||
                 currentUser.email !== userData.email ||
                 currentUser.image !== userData.image ||
-                currentUser.emailVerified !== userData.emailVerified;
+                currentUser.emailVerified !== userData.emailVerified ||
+                currentUser.subscriptionTier !== userData.subscriptionTier;
 
               if (hasChanged) {
                 // Data changed - update everything

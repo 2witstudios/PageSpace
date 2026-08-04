@@ -19,6 +19,7 @@
  */
 
 import type { SubscriptionTier } from '../subscription-utils';
+import { isSandboxAvailable } from '../../billing/sandbox-eligibility';
 
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
@@ -29,9 +30,10 @@ function envInt(name: string, fallback: number): number {
 
 // Concurrent runs permitted per user, by subscription tier. Per-process: each
 // replica enforces this independently, matching the upload-semaphore model.
-// Free stays effectively unreachable in practice (Machine pages are currently
-// admin-role gated, see apps/web/src/app/api/pages/route.ts) rather than
-// tier-gated, so its value is left low but non-zero.
+// Free's value is a pure concurrency ceiling, not an eligibility switch — the
+// REAL free-tier block is `isSandboxAvailable` below, checked as a defense-in-
+// depth backstop ahead of both concurrency checks in this file, in addition to
+// (not instead of) `can-run-code.ts`'s own tier-eligibility gate.
 const CONCURRENCY_LIMITS: Record<SubscriptionTier, number> = {
   free: envInt('CODE_EXEC_CONCURRENCY_FREE', 1),
   pro: envInt('CODE_EXEC_CONCURRENCY_PRO', 10),
@@ -52,6 +54,7 @@ export function canAcquireCodeExecutionSlot({
   userId: string;
   tier: SubscriptionTier;
 }): boolean {
+  if (!isSandboxAvailable(tier)) return false;
   return (activeByUser.get(userId) ?? 0) < CONCURRENCY_LIMITS[tier];
 }
 
@@ -81,7 +84,7 @@ export function resetCodeExecutionConcurrency(): void {
   activeByUser.clear();
 }
 
-export type QuotaDenialReason = 'concurrency_limit';
+export type QuotaDenialReason = 'concurrency_limit' | 'tier_ineligible';
 
 export type CodeExecutionQuotaDecision =
   | { allowed: true }
@@ -109,6 +112,12 @@ export async function checkCodeExecutionQuota({
   tier,
   deps = defaultDeps,
 }: CheckCodeExecutionQuotaInput): Promise<CodeExecutionQuotaDecision> {
+  // Defense in depth, ahead of (not instead of) can-run-code.ts's own
+  // tier-eligibility gate — checked explicitly, and BEFORE the concurrency
+  // slot check, so a free-tier denial is never mislabeled `concurrency_limit`.
+  if (!isSandboxAvailable(tier)) {
+    return { allowed: false, reason: 'tier_ineligible' };
+  }
   if (!deps.canAcquireSlot({ userId, tier })) {
     return { allowed: false, reason: 'concurrency_limit' };
   }
@@ -151,6 +160,13 @@ export async function checkAgentSessionConcurrency({
   countLiveAgentSessions,
   alreadyProvisioned = false,
 }: CheckAgentSessionConcurrencyInput): Promise<CodeExecutionQuotaDecision> {
+  // Defense in depth, ahead of (not instead of) can-run-code.ts's own
+  // tier-eligibility gate — checked FIRST, even ahead of `alreadyProvisioned`:
+  // a downgraded owner's already-live sandbox must not keep resuming just
+  // because it was allocated before the downgrade.
+  if (!isSandboxAvailable(tier)) {
+    return { allowed: false, reason: 'tier_ineligible' };
+  }
   if (alreadyProvisioned) return { allowed: true };
   const liveCount = await countLiveAgentSessions(ownerId);
   if (liveCount >= CONCURRENCY_LIMITS[tier]) {

@@ -447,13 +447,18 @@ export function createResolveSandboxActorContext(
 
     // driveId present for both page AI and global AI: tenantId is the drive's
     // owning account. Both surfaces share identical resolution logic here.
+    // `ownerId: drive!.ownerId` reuses the SAME fetch above (no extra query) —
+    // it's the payer the call-time gate's tier-eligibility check resolves
+    // against, not the acting user.
     if (driveId) {
-      return { ...base, tenantId: drive!.ownerId, driveId };
+      return { ...base, tenantId: drive!.ownerId, driveId, ownerId: drive!.ownerId };
     }
 
     // Global AI without a drive: user is their own isolation boundary.
     // tenantId = userId keeps the session key and quota scopes user-owned.
-    return { ...base, tenantId: userId };
+    // ownerId = userId too: a global session is owner-only by construction
+    // (decideAgentSessionAccess), so actor and owner coincide here.
+    return { ...base, tenantId: userId, ownerId: userId };
   };
 }
 
@@ -474,6 +479,7 @@ export const productionSandboxGate: SandboxGate = (ctx) =>
   gateSandboxToolCall({
     userId: ctx.userId,
     driveId: ctx.driveId,
+    ownerId: ctx.ownerId,
     tenantId: ctx.tenantId,
     requestOrigin: ctx.requestOrigin,
     agentPageId: ctx.agentPageId,

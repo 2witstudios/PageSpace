@@ -35,7 +35,7 @@ export interface AgentSessionAccessDeps {
     driveId: string;
   }) => Promise<DriveMembership | null>;
   /** The centralized `canRunCode` capability check, already reduced to a boolean by the caller's wiring. Must never throw (it is fail-closed by construction). */
-  canRunCode: (input: { userId: string; driveId: string | null }) => Promise<boolean>;
+  canRunCode: (input: { userId: string; driveId: string | null; ownerId: string }) => Promise<boolean>;
 }
 
 /**
@@ -67,7 +67,7 @@ export async function checkAgentSessionAccess({
     session.driveId === null
       ? Promise.resolve(null)
       : deps.resolveDriveMembership({ userId: requesterId, driveId: session.driveId }),
-    deps.canRunCode({ userId: requesterId, driveId: session.driveId }),
+    deps.canRunCode({ userId: requesterId, driveId: session.driveId, ownerId: session.ownerId }),
   ]);
 
   return decideAgentSessionAccess({ requesterId, session, driveMembership, canRunCode });
@@ -97,7 +97,7 @@ export async function checkAgentSessionEndAccess({
     session.driveId === null
       ? Promise.resolve(null)
       : deps.resolveDriveMembership({ userId: requesterId, driveId: session.driveId }),
-    deps.canRunCode({ userId: requesterId, driveId: session.driveId }),
+    deps.canRunCode({ userId: requesterId, driveId: session.driveId, ownerId: session.ownerId }),
   ]);
 
   return decideAgentSessionEndAccess({ requesterId, session, driveMembership, canRunCode });

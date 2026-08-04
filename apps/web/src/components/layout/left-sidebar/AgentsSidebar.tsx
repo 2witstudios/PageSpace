@@ -84,13 +84,14 @@ export default function AgentsSidebar({ className }: SidebarProps) {
   const canManage = canManageDrive(drive);
 
   const { user, isLoading: authLoading } = useAuth();
-  // Sandboxes are admin-only end to end, and this console is the surface for
-  // them — so a non-admin gets the refusal, not a list. The gate is a DISABLED
-  // SWR KEY rather than a render-time check: a surface that will refuse to show
-  // the list has no business fetching it either.
-  const isAdmin = user?.role === 'admin';
+  // Sessions/chat/panes are open to every authenticated user — only the
+  // sandbox itself (real cloud compute) is tier-gated, further down, on the
+  // terminal affordance inside a session. The fetch key is still gated on
+  // authentication (not a role): a surface with nothing to show while auth
+  // is still resolving has no business fetching yet either.
+  const isAuthenticated = Boolean(user);
 
-  const sessionsKey = isAdmin
+  const sessionsKey = isAuthenticated
     ? driveId
       ? `/api/agent-sessions?driveId=${encodeURIComponent(driveId)}`
       : '/api/agent-sessions'
@@ -108,7 +109,7 @@ export default function AgentsSidebar({ className }: SidebarProps) {
   });
 
   // The spawn chooser's agent list rides the same fetch both modes already use.
-  const { agentsByDrive } = usePageAgents(driveId, { enabled: isAdmin });
+  const { agentsByDrive } = usePageAgents(driveId, { enabled: isAuthenticated });
 
   useEffect(() => {
     setIsElectronMac(isElectron() && /Mac/.test(navigator.platform));
@@ -132,7 +133,7 @@ export default function AgentsSidebar({ className }: SidebarProps) {
           <div className="space-y-0.5">
             <SessionList
               authLoading={authLoading}
-              isAdmin={isAdmin}
+              isAuthenticated={isAuthenticated}
               driveId={driveId}
               drives={drives}
               sessions={data?.sessions ?? []}
@@ -179,10 +180,10 @@ async function sessionsFetcher(url: string): Promise<{ sessions: SessionListEntr
 
 /**
  * The one ordering-sensitive guard chain the list needs — auth-pending and
- * non-admin first, loading ahead of error (a Retry click must show loading, not
- * a rerun of the failure text), error ahead of empty (SWR's error path is
- * indistinguishable from empty unless checked first), and a background poll's
- * error never tears down a list the caller already has.
+ * unauthenticated first, loading ahead of error (a Retry click must show
+ * loading, not a rerun of the failure text), error ahead of empty (SWR's
+ * error path is indistinguishable from empty unless checked first), and a
+ * background poll's error never tears down a list the caller already has.
  *
  * `isDataEmpty` and `isResultEmpty` are deliberately separate: the error
  * branch must key off the raw fetch result (`isDataEmpty`) so a background
@@ -192,7 +193,7 @@ async function sessionsFetcher(url: string): Promise<{ sessions: SessionListEntr
  */
 export function resolveListNotice({
   authLoading,
-  isAdmin,
+  isAuthenticated,
   hasError,
   isLoading,
   isDataEmpty,
@@ -201,7 +202,7 @@ export function resolveListNotice({
   onRetry,
 }: {
   authLoading: boolean;
-  isAdmin: boolean;
+  isAuthenticated: boolean;
   hasError: boolean;
   isLoading: boolean;
   isDataEmpty: boolean;
@@ -210,7 +211,10 @@ export function resolveListNotice({
   onRetry: () => void;
 }): React.ReactNode {
   if (authLoading) return <SidebarLoading message="Loading…" />;
-  if (!isAdmin) return <SidebarNotice title="Agent sandboxes require administrator privileges" />;
+  // Sessions/chat/panes are open to every authenticated user now — this only
+  // fires for a genuinely signed-out edge case (e.g. mid-logout, an expired
+  // session), not a role restriction.
+  if (!isAuthenticated) return <SidebarNotice title="Sign in to view your sessions" />;
   if (isLoading) return <SidebarLoading message="Loading sessions…" />;
   if (hasError && isDataEmpty) {
     return (
@@ -229,7 +233,7 @@ export function resolveListNotice({
 
 function SessionList({
   authLoading,
-  isAdmin,
+  isAuthenticated,
   driveId,
   drives,
   sessions,
@@ -240,7 +244,7 @@ function SessionList({
   onChanged,
 }: {
   authLoading: boolean;
-  isAdmin: boolean;
+  isAuthenticated: boolean;
   driveId: string | undefined;
   drives: Drive[];
   sessions: SessionListEntry[];
@@ -254,7 +258,7 @@ function SessionList({
   const trimmedQuery = searchQuery.trim();
   const hasSearch = trimmedQuery.length > 0;
 
-  const canSpawn = isAdmin && !authLoading;
+  const canSpawn = isAuthenticated && !authLoading;
 
   // The roster — every drive the user can work in, whether or not it has a
   // live session — is the canonical drive-group source in global mode. Not
@@ -299,7 +303,7 @@ function SessionList({
 
   const notice = resolveListNotice({
     authLoading,
-    isAdmin,
+    isAuthenticated,
     hasError,
     isLoading,
     isDataEmpty: sessions.length === 0,

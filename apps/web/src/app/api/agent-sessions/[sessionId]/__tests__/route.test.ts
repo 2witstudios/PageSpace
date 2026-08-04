@@ -10,6 +10,7 @@ const {
   mockEndSession,
   mockFindSessionRecord,
   mockProvisionSessionSandbox,
+  mockResolveSandboxToolEligibility,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
   mockAuditRequest: vi.fn(),
@@ -19,6 +20,7 @@ const {
   mockEndSession: vi.fn(),
   mockFindSessionRecord: vi.fn(),
   mockProvisionSessionSandbox: vi.fn(),
+  mockResolveSandboxToolEligibility: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -39,6 +41,9 @@ vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
   findSessionRecord: (...args: unknown[]) => mockFindSessionRecord(...args),
   provisionSessionSandbox: (...args: unknown[]) => mockProvisionSessionSandbox(...args),
   toAgentSessionDTO: (row: { id: string }) => ({ sessionId: row.id, dto: true }),
+}));
+vi.mock('@/lib/ai/core/sandbox-tool-eligibility', () => ({
+  resolveSandboxToolEligibility: (...args: unknown[]) => mockResolveSandboxToolEligibility(...args),
 }));
 
 import { GET, POST, DELETE } from '../route';
@@ -61,13 +66,28 @@ beforeEach(() => {
   mockProvisionSessionSandbox.mockResolvedValue({ ok: true, sandboxId: 'sb-1', resumed: false });
   mockCountOpenConversationsForSession.mockResolvedValue(1);
   mockEndSession.mockResolvedValue({ ok: true, spriteTornDown: true });
+  mockResolveSandboxToolEligibility.mockResolvedValue(true);
 });
 
 describe('GET /api/agent-sessions/[sessionId]', () => {
-  it('given an accessible session, should return its DTO', async () => {
+  it('given an accessible session, should return its DTO plus the payer sandbox-eligibility verdict', async () => {
     const response = await get();
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ session: { sessionId: SESSION_ID, dto: true } });
+    expect(await response.json()).toEqual({
+      session: { sessionId: SESSION_ID, dto: true },
+      sandboxEligible: true,
+    });
+    // The SESSION's own owner, not the requester — ROW.ownerId, not AUTH_USER.userId.
+    expect(mockResolveSandboxToolEligibility).toHaveBeenCalledWith(ROW.driveId, ROW.ownerId);
+  });
+
+  it('given a free-tier payer, should report sandboxEligible: false', async () => {
+    mockResolveSandboxToolEligibility.mockResolvedValue(false);
+    const response = await get();
+    expect(await response.json()).toEqual({
+      session: { sessionId: SESSION_ID, dto: true },
+      sandboxEligible: false,
+    });
   });
 
   it('given a never-provisioned session (no row), should answer { session: null } with 200 — NOT 404', async () => {

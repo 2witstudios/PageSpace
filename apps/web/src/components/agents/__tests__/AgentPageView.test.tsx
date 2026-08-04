@@ -111,7 +111,13 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   post: vi.fn(),
 }));
 
-const authState = vi.hoisted(() => ({ current: { user: { id: 'user-1', role: 'admin' } } }));
+// Deliberately a PLAIN, non-admin user: sessions/chat/panes are open to
+// every authenticated user now, so every test relying on this default
+// doubles as proof a non-admin gets full access too. `user` is nullable —
+// some tests exercise the genuinely-signed-out case.
+const authState = vi.hoisted(() => ({
+  current: { user: { id: 'user-1', role: 'user' } as { id: string; role: string } | null },
+}));
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => authState.current }));
 
 vi.mock('@/lib/ai/shared/hooks/useProviderSettings', () => ({
@@ -229,7 +235,7 @@ beforeEach(() => {
   mockUseSWR.mockReturnValue({ data: undefined });
   mockUseAgentConfig.mockReturnValue({ config: null, setConfig: vi.fn() });
   resolvedConversation.current = { resolved: null, isLoading: true };
-  authState.current = { user: { id: 'user-1', role: 'admin' } };
+  authState.current = { user: { id: 'user-1', role: 'user' } };
   conversationsState.current = {
     conversations: [],
     isLoading: false,
@@ -298,16 +304,28 @@ describe('AgentPageView', () => {
     expect(screen.getByTestId('agent-panes')).toHaveAttribute('data-drive-id', '');
   });
 
-  it('a NON-session user gets the plain chat even for a session-bound conversation (review M2)', async () => {
-    // A shared session-bound thread can be a non-admin's most-recent
-    // conversation; a grid whose every affordance 403s — except the
-    // destructive last-pane-close — is worse than the chat they can use.
-    authState.current = { user: { id: 'user-2', role: 'user' } };
+  it('a signed-out visitor gets the plain chat even for a session-bound conversation (review M2)', async () => {
+    // A shared session-bound thread can be reached by a visitor whose auth
+    // hasn't resolved yet (or has none); a grid whose every affordance 403s
+    // — except the destructive last-pane-close — is worse than the chat
+    // they can actually use. Sessions/chat/panes are open to every
+    // AUTHENTICATED user now (not just admins), so this only still applies
+    // when there's no user at all.
+    authState.current = { user: null };
     resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
     render(<AgentPageView page={pageFixture()} />);
 
     await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
     expect(screen.queryByTestId('agent-panes')).not.toBeInTheDocument();
+  });
+
+  it('a non-admin authenticated user gets the real pane grid for a session-bound conversation', async () => {
+    authState.current = { user: { id: 'user-2', role: 'user' } };
+    resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+    expect(screen.queryByTestId('plain-chat')).not.toBeInTheDocument();
   });
 
   it('the grid receives the read-only verdict (review M2)', async () => {
@@ -454,8 +472,8 @@ describe('AgentPageView', () => {
     );
   });
 
-  it('hides the console cross-link from non-session users — the console would refuse them', async () => {
-    authState.current = { user: { id: 'user-2', role: 'user' } };
+  it('hides the console cross-link from a signed-out visitor — the console would refuse them', async () => {
+    authState.current = { user: null };
     resolveTo({ conversationId: 'conv-1', sessionId: null });
     render(<AgentPageView page={pageFixture()} />);
 

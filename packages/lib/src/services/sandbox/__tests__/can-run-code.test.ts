@@ -42,14 +42,17 @@ const agentViewOnlyPerms: PermissionLevel = {
 };
 
 // Fully-permissive deps; individual tests override the single field under test
-// so each test exercises exactly one denial path.
+// so each test exercises exactly one denial path. Tier defaults to 'pro' (so
+// the tier gate stays out of the way of tests exercising other gates), and
+// `lookupDriveOwnerId` defaults to null (payer falls back to the resolved
+// `ownerId`/`userId`), matching what most tests actually want to exercise.
 function makeDeps(overrides: Partial<CanRunCodeDeps> = {}): CanRunCodeDeps {
   return {
     getUserDrivePermissions: async () => adminPerms,
-    getUserRole: async () => 'admin',
+    lookupDriveOwnerId: async () => null,
+    getUserSubscriptionTier: async () => 'pro',
     getAgentAccessLevel: async () => agentEditPerms,
     isCodeExecutionEnabled: () => true,
-    getNodeEnv: () => 'test',
     ...overrides,
   };
 }
@@ -96,38 +99,62 @@ describe('canRunCode', () => {
     expect(result).toEqual({ ok: false, reason: 'insufficient_role' });
   });
 
-  it('given production and a non-admin app user, should deny even with drive admin access', async () => {
+  it('given a free-tier payer, should deny with tier_ineligible', async () => {
     const result = await canRunCode({
       userId: 'u1',
       driveId: 'd1',
-      deps: makeDeps({
-        getUserRole: async () => 'user',
-        getNodeEnv: () => 'production',
-      }),
+      deps: makeDeps({ getUserSubscriptionTier: async () => 'free' }),
     });
-    expect(result).toEqual({ ok: false, reason: 'app_admin_required' });
+    expect(result).toEqual({ ok: false, reason: 'tier_ineligible' });
   });
 
-  it('given production and an admin app user, should allow when drive authorization passes', async () => {
+  it('given a pro-tier payer, should allow', async () => {
     const result = await canRunCode({
       userId: 'u1',
       driveId: 'd1',
+      deps: makeDeps({ getUserSubscriptionTier: async () => 'pro' }),
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('given a free-tier ACTOR inside a drive owned by a pro-tier user, should allow — the PAYER (drive owner), not the actor, is checked', async () => {
+    const result = await canRunCode({
+      userId: 'free-actor',
+      driveId: 'd1',
       deps: makeDeps({
-        getUserRole: async () => 'admin',
-        getNodeEnv: () => 'production',
+        lookupDriveOwnerId: async () => 'pro-owner',
+        getUserSubscriptionTier: async (userId) => (userId === 'pro-owner' ? 'pro' : 'free'),
       }),
     });
     expect(result.ok).toBe(true);
   });
 
-  it('given development and a non-admin app user, should preserve the drive-role gate', async () => {
+  it('given a pro-tier ACTOR inside a drive owned by a free-tier user, should deny — the payer, not the actor, is checked', async () => {
     const result = await canRunCode({
-      userId: 'u1',
+      userId: 'pro-actor',
       driveId: 'd1',
       deps: makeDeps({
-        getUserRole: async () => 'user',
-        getNodeEnv: () => 'development',
+        lookupDriveOwnerId: async () => 'free-owner',
+        getUserSubscriptionTier: async (userId) => (userId === 'free-owner' ? 'free' : 'pro'),
       }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'tier_ineligible' });
+  });
+
+  it('given no driveId (global assistant) and a free-tier session owner, should deny with tier_ineligible', async () => {
+    const result = await canRunCode({
+      userId: 'u1',
+      ownerId: 'u1',
+      deps: makeDeps({ getUserSubscriptionTier: async () => 'free' }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'tier_ineligible' });
+  });
+
+  it('given no driveId (global assistant) and a pro-tier session owner, should allow', async () => {
+    const result = await canRunCode({
+      userId: 'u1',
+      ownerId: 'u1',
+      deps: makeDeps({ getUserSubscriptionTier: async () => 'pro' }),
     });
     expect(result.ok).toBe(true);
   });
@@ -194,22 +221,6 @@ describe('canRunCode', () => {
     expect(result).toEqual({ ok: false, reason: 'kill_switch_off' });
   });
 
-  it('given no driveId, production env, and admin user, should allow', async () => {
-    const result = await canRunCode({
-      userId: 'u1',
-      deps: makeDeps({ getNodeEnv: () => 'production', getUserRole: async () => 'admin' }),
-    });
-    expect(result.ok).toBe(true);
-  });
-
-  it('given no driveId, production env, and non-admin user, should deny with app_admin_required', async () => {
-    const result = await canRunCode({
-      userId: 'u1',
-      deps: makeDeps({ getNodeEnv: () => 'production', getUserRole: async () => 'user' }),
-    });
-    expect(result).toEqual({ ok: false, reason: 'app_admin_required' });
-  });
-
   it('given no driveId and agent requestOrigin, should deny — agent-origin always requires a drive context', async () => {
     const result = await canRunCode({
       userId: 'u1',
@@ -226,6 +237,19 @@ describe('canRunCode', () => {
       driveId: 'd1',
       deps: makeDeps({
         getUserDrivePermissions: async () => {
+          throw new Error('db down');
+        },
+      }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'error' });
+  });
+
+  it('given a tier lookup that throws, should fail closed without throwing', async () => {
+    const result = await canRunCode({
+      userId: 'u1',
+      driveId: 'd1',
+      deps: makeDeps({
+        getUserSubscriptionTier: async () => {
           throw new Error('db down');
         },
       }),

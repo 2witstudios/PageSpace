@@ -36,6 +36,8 @@ export interface DriveWithAgents {
   driveSlug: string;
   agentCount: number;
   agents: AgentSummary[];
+  /** Whether this drive's owner (the payer) is on a tier that includes the sandbox. */
+  sandboxEligible: boolean;
 }
 
 /**

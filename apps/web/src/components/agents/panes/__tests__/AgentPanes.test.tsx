@@ -1255,6 +1255,28 @@ describe('AgentPanes', () => {
       );
       await waitFor(() => expect(screen.getByTestId('pane-shell')).toHaveTextContent('shell-9'));
     });
+
+    it('disables the Shell pick when the session record reports the payer as sandbox-ineligible', async () => {
+      // The server-resolved answer (useSessionRecord's `sandboxEligible`),
+      // not the viewing user's own tier — a free-tier member of a Pro-owned
+      // drive would otherwise see this wrongly disabled.
+      mockFetchWithAuth.mockImplementation(async (url: string) =>
+        url === '/api/agent-sessions/ses-1'
+          ? jsonOk({ session: { driveId: 'drive-1', name: 'worker' }, sandboxEligible: false })
+          : jsonOk(defaultFetchRoute(url)),
+      );
+      renderPanes();
+      await waitFor(() => expect(screen.getByTestId('pane-chat')).toBeInTheDocument());
+      const paneId = useAgentWorkspaceStore.getState().workspaces['ses-1'].columns[0].panes[0].id;
+      act(() => useAgentWorkspaceStore.getState().splitRight('ses-1', paneId));
+
+      const shellButton = await screen.findByTestId('pick-shell');
+      await waitFor(() => expect(shellButton).toBeDisabled());
+
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      await user.click(shellButton);
+      expect(mockPost).not.toHaveBeenCalledWith('/api/agent-sessions/ses-1/shells', {});
+    });
   });
 
   describe('reattaching an existing shell (finding 3)', () => {

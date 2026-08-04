@@ -135,11 +135,22 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
     [agentsByDrive, spawnTarget],
   );
 
+  // Server-resolved per-drive: the drive OWNER's tier, not the requester's —
+  // same rule the in-session PanePicker's `canRunSandbox` follows. Defaults
+  // true while the drive group hasn't resolved yet (rides the same
+  // `usePageAgents` fetch as `paletteAgents`), so the picker doesn't flash
+  // disabled before that data loads.
+  const canRunSandbox = useMemo(
+    () => (spawnTarget ? (agentsByDrive.find((entry) => entry.driveId === spawnTarget.driveId)?.sandboxEligible ?? true) : true),
+    [agentsByDrive, spawnTarget],
+  );
+
   const paletteElement = (
     <SpawnSessionPalette
       open={spawnTarget !== null}
       driveName={spawnTarget?.driveName ?? null}
       agents={paletteAgents}
+      canRunSandbox={canRunSandbox}
       pick={spawnPick}
       spawning={spawning}
       onOpenChange={(open) => {
@@ -169,6 +180,7 @@ function SpawnSessionPalette({
   open,
   driveName,
   agents,
+  canRunSandbox,
   pick,
   spawning,
   onOpenChange,
@@ -178,6 +190,16 @@ function SpawnSessionPalette({
   open: boolean;
   driveName: string | null;
   agents: DriveWithAgents['agents'];
+  /**
+   * Whether this drive's owner (the payer) is on a tier that includes the
+   * sandbox. Unlike the in-session PanePicker's Shell button, this item
+   * stays keyboard-navigable and selectable when ineligible (cmdk's
+   * `disabled` removes an item from roving keyboard focus entirely, which
+   * would make a hover-only tooltip unreachable by keyboard) — instead it
+   * shows a persistent "Upgrade to Pro" label and redirects the pick to an
+   * upgrade message rather than advancing to the naming step.
+   */
+  canRunSandbox: boolean;
   pick: SpawnPick | null;
   spawning: boolean;
   onOpenChange: (open: boolean) => void;
@@ -257,10 +279,21 @@ function SpawnSessionPalette({
               <CommandItem
                 value="shell-Shell"
                 disabled={spawning}
-                onSelect={() => onPickTarget({ kind: 'shell', agentPageId: null, label: 'Shell' })}
+                onSelect={() => {
+                  if (!canRunSandbox) {
+                    toast.error('Upgrade to Pro to run a sandbox terminal', {
+                      description: 'This drive is on a plan that does not include the sandbox.',
+                    });
+                    return;
+                  }
+                  onPickTarget({ kind: 'shell', agentPageId: null, label: 'Shell' });
+                }}
               >
-                <SquareTerminal className="size-3.5" aria-hidden="true" />
+                <SquareTerminal className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
                 <span className="truncate">Shell</span>
+                {!canRunSandbox && (
+                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">Upgrade to Pro</span>
+                )}
               </CommandItem>
             </CommandGroup>
           </CommandList>

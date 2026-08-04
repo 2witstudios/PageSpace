@@ -78,9 +78,11 @@ export interface AgentPageViewProps {
 
 export default function AgentPageView({ page }: AgentPageViewProps) {
   const { user, isLoading: authLoading } = useAuth();
-  // The same gate every session surface uses — the server still decides
-  // (drive membership + code-execution) on every spawn.
-  const canUseSessions = user?.role === 'admin';
+  // Sessions/chat/panes are open to every authenticated user — the sandbox
+  // itself (real cloud compute) is what's tier-gated, server-side, on every
+  // spawn/tool-call; this just waits out the hydration window where `user`
+  // is still undefined/false before the auth check resolves.
+  const canUseSessions = Boolean(user);
 
   // A deep link from the Agents surface's past-conversations list
   // (`?conversationId=&sessionId=`) — one-time intent, not durable state like
@@ -533,11 +535,10 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
           </div>
         </div>
 
-        {/* Chat Tab — the pane grid for a session-bound conversation, ONLY for
-            users with the session capability: a non-admin can land on a shared
-            session-bound thread (review M2), and handing them a grid whose
-            every affordance 403s — except last-pane-close, which destroys the
-            session — is worse than the plain chat they can actually use. */}
+        {/* Chat Tab — the pane grid for a session-bound conversation. Every
+            authenticated user gets it (only the sandbox/terminal affordance
+            inside the grid is tier-gated); `canUseSessions` here just waits
+            out the hydration window before `user` resolves. */}
         <TabsContent value="chat" className="mt-0 flex min-h-0 flex-1 flex-col overflow-hidden">
           {current.sessionId && canUseSessions ? (
             <AgentPanes

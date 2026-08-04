@@ -241,6 +241,14 @@ vi.mock('@/lib/ai/core/model-capabilities', () => ({
   hasVisionCapability: vi.fn().mockReturnValue(true),
 }));
 
+// This suite is about GitHub-suppression given the sandbox toolkit IS
+// present — a real DB-backed payer-tier lookup is out of scope here (and
+// the `db` mock above has no `.query` shape for it), so the payer is always
+// eligible.
+vi.mock('@/lib/ai/core/sandbox-tool-eligibility', () => ({
+  resolveSandboxToolEligibility: vi.fn().mockResolvedValue(true),
+}));
+
 // The resolver itself (and its suppression logic) is unit-tested in
 // integration-tool-resolver.test.ts. This test only needs to observe what
 // the route passes as `currentTools`.

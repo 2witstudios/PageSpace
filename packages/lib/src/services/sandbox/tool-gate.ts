@@ -34,7 +34,7 @@ import { checkCodeExecutionQuota, type CodeExecutionQuotaDecision } from './quot
 
 export type SandboxToolGateDenialReason =
   | 'kill_switch_off'
-  | 'app_admin_required'
+  | 'tier_ineligible'
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
@@ -48,7 +48,7 @@ export type SandboxToolGateResult =
 /** Safe, model-facing messages. Mirrors the runner's denial copy for consistency. */
 const DENIAL_MESSAGES: Record<SandboxToolGateDenialReason, string> = {
   kill_switch_off: 'Code execution is disabled.',
-  app_admin_required: 'Code execution is currently limited to administrators.',
+  tier_ineligible: 'Running code requires a Pro plan or above.',
   no_drive_access: 'You do not have access to run code in this drive.',
   insufficient_role: 'Running code requires drive owner or admin access.',
   no_agent_access: 'This agent is not permitted to run code in this drive.',
@@ -90,6 +90,9 @@ const defaultDeps: SandboxToolGateDeps = {
 export interface SandboxToolGateInput {
   userId: string;
   driveId?: string;
+  /** The session's own owner — distinct from `userId` (the actor) — so the
+   *  tier-eligibility gate inside `canRunCode` resolves the PAYER correctly. */
+  ownerId?: string;
   tenantId?: string;
   requestOrigin?: 'user' | 'agent';
   agentPageId?: string;
@@ -100,6 +103,7 @@ export interface SandboxToolGateInput {
 export async function gateSandboxToolCall({
   userId,
   driveId,
+  ownerId,
   tenantId,
   requestOrigin,
   agentPageId,
@@ -111,7 +115,7 @@ export async function gateSandboxToolCall({
     // before any DB round-trip in authz or quota.
     if (!deps.isEnabled()) return deny('kill_switch_off');
 
-    const authorization = await deps.authorize({ userId, driveId, requestOrigin, agentPageId });
+    const authorization = await deps.authorize({ userId, driveId, ownerId, requestOrigin, agentPageId });
     if (!authorization.ok) {
       // canRunCode's reasons are a subset of the gate's; map the kill-switch
       // value through to the gate reason and pass the authz reasons straight.

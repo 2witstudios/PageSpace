@@ -29,18 +29,19 @@ import DrivePickerDialog from './DrivePickerDialog';
  * directly; on the global console (no `driveId`) they open a drive picker
  * first, since neither creation path has anywhere else to put the result.
  *
- * "New Session" is hidden for non-admins, mirroring `AgentsSidebar`'s own
- * `canSpawn` gate — sandboxes are admin-only everywhere else in this
- * console, and showing the button here would be the one place that UI
- * promise doesn't hold. "New Drive" and "New Agent" are ordinary
- * page/drive creation, open to anyone with the underlying permission, same
- * as `DrivesBrowser` and the Quick Create palette.
+ * "New Session" is open to every authenticated user, mirroring
+ * `AgentsSidebar`'s own `canSpawn` gate — sessions/chat/panes are free; only
+ * the sandbox itself (real cloud compute) is tier-gated, server-side, and
+ * that gate lives on the terminal affordance inside a session, not here.
+ * "New Drive" and "New Agent" are ordinary page/drive creation, open to
+ * anyone with the underlying permission, same as `DrivesBrowser` and the
+ * Quick Create palette.
  */
 export default function AgentsListHeader({ driveId }: { driveId?: string }) {
   const router = useRouter();
   const isMobile = useMobile();
   const { user, isLoading: authLoading } = useAuth();
-  const canSpawn = user?.role === 'admin' && !authLoading;
+  const canSpawn = Boolean(user) && !authLoading;
   const drives = useDriveStore((state) => state.drives);
   const driveName = driveId ? (drives.find((drive) => drive.id === driveId)?.name ?? null) : null;
 

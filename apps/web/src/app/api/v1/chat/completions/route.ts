@@ -23,6 +23,7 @@ import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
 import { sanitizeMessagesForModel, saveMessageToDatabase, extractMessageContent, convertDbMessageToUIMessage, extractToolResults } from '@/lib/ai/core/message-utils';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForReadOnly, filterToolsForMcpScope, filterToolsForImageGen, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
+import { resolveSandboxToolEligibility } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { getModelCapabilities, hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { hasFileParts, validateUserMessageFileParts } from '@/lib/ai/core/validate-image-parts';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
@@ -289,8 +290,18 @@ export async function POST(request: Request): Promise<Response> {
               Object.entries(baseTools).filter(([name]) => agentEnabledTools.includes(name)),
             ) as ToolSet)
           : (baseTools as ToolSet);
-      // The per-agent sandbox switch — same gate the chat route applies.
-      filteredTools = filterToolsForSandboxEnablement(filteredTools, Boolean(page.sandboxEnabled)) as ToolSet;
+      // The per-agent sandbox switch AND payer-tier eligibility — same gate
+      // the chat route applies. Short-circuited on sandboxEnabled first —
+      // most agents never touch the sandbox, so this skips the payer-tier
+      // DB round trip for the common case.
+      const sandboxEnabled = Boolean(page.sandboxEnabled);
+      const sandboxTierEligible = sandboxEnabled
+        ? await resolveSandboxToolEligibility(page.driveId ?? null, authResult.userId)
+        : false;
+      filteredTools = filterToolsForSandboxEnablement(
+        filteredTools,
+        sandboxEnabled && sandboxTierEligible,
+      ) as ToolSet;
       const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
       filteredTools = exposure.tools;
       toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
@@ -312,8 +323,18 @@ export async function POST(request: Request): Promise<Response> {
               Object.entries(baseTools).filter(([name]) => agentEnabledTools.includes(name)),
             ) as ToolSet)
           : (baseTools as ToolSet);
-      // The per-agent sandbox switch — same gate the chat route applies.
-      filteredTools = filterToolsForSandboxEnablement(filteredTools, Boolean(page.sandboxEnabled)) as ToolSet;
+      // The per-agent sandbox switch AND payer-tier eligibility — same gate
+      // the chat route applies. Short-circuited on sandboxEnabled first —
+      // most agents never touch the sandbox, so this skips the payer-tier
+      // DB round trip for the common case.
+      const sandboxEnabled = Boolean(page.sandboxEnabled);
+      const sandboxTierEligible = sandboxEnabled
+        ? await resolveSandboxToolEligibility(page.driveId ?? null, authResult.userId)
+        : false;
+      filteredTools = filterToolsForSandboxEnablement(
+        filteredTools,
+        sandboxEnabled && sandboxTierEligible,
+      ) as ToolSet;
       const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
       filteredTools = exposure.tools;
       toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;

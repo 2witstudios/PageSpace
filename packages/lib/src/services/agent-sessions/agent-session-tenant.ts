@@ -74,10 +74,12 @@ export async function resolveDriveMembership({
 export async function canRunCodeForSession({
   userId,
   driveId,
+  ownerId,
 }: {
   userId: string;
   driveId: string | null;
+  ownerId: string;
 }): Promise<boolean> {
-  const result = await canRunCode({ userId, driveId: driveId ?? undefined, requestOrigin: 'user' });
+  const result = await canRunCode({ userId, driveId: driveId ?? undefined, ownerId, requestOrigin: 'user' });
   return result.ok;
 }
