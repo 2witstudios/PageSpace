@@ -15,9 +15,11 @@ import { processMentionsInMessage } from '@/lib/ai/core/mention-processor';
 import {
   buildCommandPromptSection,
   commandExecutionDataFromPlan,
+  isSoloBuiltinCommandIgnoringMentions,
   type CommandExecutionData,
 } from '@/lib/ai/core/command-processor';
 import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
+import { loadHelpAnswerText } from '@/lib/commands/help-answer';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
@@ -508,21 +510,53 @@ export async function triggerMentionedAgentResponses(
       return;
     }
 
-    const recentMessages = await fetchRecentChannelMessages(params.channelId);
+    // A mention whose content is nothing but the /help chip (plus the
+    // @mention(s) that got it here at all — reaching this function already
+    // required at least one, see resolveMentionedAgents above, so the
+    // strict isSoloBuiltinCommand could never be satisfied here) answers
+    // directly from code for every eligible agent, below. Computed early
+    // (pure, no I/O) so everything below that exists only to build an
+    // askAgentExecute call — the channel transcript fetch/decrypt, image
+    // attachment resolution, command resolution's dynamic section — can
+    // skip entirely for this case; none of it is read on the solo-help path.
+    const isSoloHelpMention = isSoloBuiltinCommandIgnoringMentions(params.content, 'help');
 
-    // Decrypt PII at the edge (GDPR #965) so the agent transcript shows plaintext
-    // sender names (legacy plaintext passes through unchanged).
-    const contextMessages = await Promise.all(
-      [...recentMessages].reverse().map(async (m) => ({
-        ...m,
-        user: m.user ? { ...m.user, name: await decryptField(m.user.name) } : null,
-      })),
-    );
-    const transcript = buildChannelTranscript(contextMessages);
-    const question = toSingleLine(
-      convertMentionsToDisplayText(params.content),
-      MESSAGE_SNIPPET_LIMIT
-    );
+    let transcript = '';
+    let question = '';
+    let imageAttachments: ImageFilePart[] = [];
+    if (!isSoloHelpMention) {
+      const recentMessages = await fetchRecentChannelMessages(params.channelId);
+
+      // Decrypt PII at the edge (GDPR #965) so the agent transcript shows plaintext
+      // sender names (legacy plaintext passes through unchanged).
+      const contextMessages = await Promise.all(
+        [...recentMessages].reverse().map(async (m) => ({
+          ...m,
+          user: m.user ? { ...m.user, name: await decryptField(m.user.name) } : null,
+        })),
+      );
+      transcript = buildChannelTranscript(contextMessages);
+      question = toSingleLine(convertMentionsToDisplayText(params.content), MESSAGE_SNIPPET_LIMIT);
+
+      // Only worth resolving presigned URLs/access checks when at least one
+      // eligible agent can actually view images. Resolution failure (S3
+      // misconfigured, transient DB error) must degrade to text-only, not
+      // abort every mentioned agent's reply — this call sits ahead of the
+      // per-agent try/catch below, so an uncaught throw here would propagate
+      // to the function-level catch and silence the whole mention entirely.
+      if (eligibleAgents.some((agent) => agent.hasVision)) {
+        try {
+          imageAttachments = await resolveImageAttachmentsForContext(params.userId, contextMessages);
+        } catch (error) {
+          channelMentionLogger.error(
+            'Failed to resolve recent channel image attachments; continuing with text-only replies',
+            error instanceof Error ? error : undefined,
+            { channelId: params.channelId, sourceMessageId: params.sourceMessageId }
+          );
+        }
+      }
+    }
+
     const locationContext = buildLocationContext(params);
 
     // Universal Commands (UX spec §6): a chip is inert in a plain channel
@@ -531,89 +565,92 @@ export async function triggerMentionedAgentResponses(
     // Resolution degrades, never fails; a skipped command becomes a
     // one-line notice. Both the prompt injection and the persisted
     // execution-feedback pill carry every resolved command, in order.
-    const commandPlans = await planCommandExecutions(params.content, params.userId, {
-      driveId: params.driveId ?? null,
-    });
+    //
+    // Skipped entirely for a solo /help mention: planCommandExecutions would
+    // resolve /help's dynamic section (a DB read building the model-facing
+    // command list) only for commandContext, which this path never sends to
+    // a model — and the "used" pill it would also produce is exactly
+    // {label:'help', status:'used'} either way, since a builtin has no entry
+    // page for commandExecutionDataFromPlan to read.
+    const commandPlans = isSoloHelpMention
+      ? []
+      : await planCommandExecutions(params.content, params.userId, {
+          driveId: params.driveId ?? null,
+        });
     const commandContext = buildCommandPromptSection(commandPlans);
-    const commandExecution =
-      commandPlans.length > 0 ? commandPlans.map(commandExecutionDataFromPlan) : undefined;
+    const commandExecution = isSoloHelpMention
+      ? [{ label: 'help', status: 'used' as const }]
+      : commandPlans.length > 0
+        ? commandPlans.map(commandExecutionDataFromPlan)
+        : undefined;
 
-    // Only worth resolving presigned URLs/access checks when at least one
-    // eligible agent can actually view images. Resolution failure (S3
-    // misconfigured, transient DB error) must degrade to text-only, not
-    // abort every mentioned agent's reply — this call sits ahead of the
-    // per-agent try/catch below, so an uncaught throw here would propagate
-    // to the function-level catch and silence the whole mention entirely.
-    let imageAttachments: ImageFilePart[] = [];
-    if (eligibleAgents.some((agent) => agent.hasVision)) {
-      try {
-        imageAttachments = await resolveImageAttachmentsForContext(params.userId, contextMessages);
-      } catch (error) {
-        channelMentionLogger.error(
-          'Failed to resolve recent channel image attachments; continuing with text-only replies',
-          error instanceof Error ? error : undefined,
-          { channelId: params.channelId, sourceMessageId: params.sourceMessageId }
-        );
-      }
-    }
-
+    // isSoloHelpMention computed above (before command resolution). The
+    // answer itself is sender-scoped (the human's command list), not
+    // agent-scoped, so it's identical regardless of which agent replies —
+    // this skips askAgentExecute/generateText entirely for every one.
     for (const agent of eligibleAgents) {
       try {
         const mentionConversationId = `channel:${params.channelId}:agent:${agent.id}`;
 
-        const rawAskResult: unknown = await askAgentExecute(
-          {
-            agentPath: `/${agent.title}`,
-            agentId: agent.id,
-            question,
-            context: [
-              `You were mentioned in the channel "${params.channelTitle}".`,
-              'Respond directly to the latest request and use recent channel context when relevant.',
-              '',
-              'Recent channel transcript (oldest to newest):',
-              transcript,
-              ...(commandContext ? ['', commandContext] : []),
-            ].join('\n'),
-            conversationId: mentionConversationId,
-            ...(imageAttachments.length > 0 ? { imageAttachments } : {}),
-          },
-          {
-            toolCallId: `channel-mention-ask-${params.sourceMessageId}-${agent.id}`,
-            messages: [],
-            experimental_context: {
-              userId: params.userId,
+        let replyContent: string;
+        if (isSoloHelpMention) {
+          replyContent = await loadHelpAnswerText(params.userId, params.driveId ?? null);
+        } else {
+          const rawAskResult: unknown = await askAgentExecute(
+            {
+              agentPath: `/${agent.title}`,
+              agentId: agent.id,
+              question,
+              context: [
+                `You were mentioned in the channel "${params.channelTitle}".`,
+                'Respond directly to the latest request and use recent channel context when relevant.',
+                '',
+                'Recent channel transcript (oldest to newest):',
+                transcript,
+                ...(commandContext ? ['', commandContext] : []),
+              ].join('\n'),
               conversationId: mentionConversationId,
-              locationContext,
-              requestOrigin: 'user',
-              agentCallDepth: 0,
-            } as ToolExecutionContext,
+              ...(imageAttachments.length > 0 ? { imageAttachments } : {}),
+            },
+            {
+              toolCallId: `channel-mention-ask-${params.sourceMessageId}-${agent.id}`,
+              messages: [],
+              experimental_context: {
+                userId: params.userId,
+                conversationId: mentionConversationId,
+                locationContext,
+                requestOrigin: 'user',
+                agentCallDepth: 0,
+              } as ToolExecutionContext,
+            }
+          );
+
+          if (!isAskAgentResult(rawAskResult)) {
+            channelMentionLogger.error('Mentioned agent returned a malformed result; skipping', {
+              channelId: params.channelId,
+              agentId: agent.id,
+              receivedType: typeof rawAskResult,
+              receivedKeys:
+                rawAskResult && typeof rawAskResult === 'object'
+                  ? Object.keys(rawAskResult as Record<string, unknown>)
+                  : null,
+            });
+            continue;
           }
-        );
+          const askResult = rawAskResult;
 
-        if (!isAskAgentResult(rawAskResult)) {
-          channelMentionLogger.error('Mentioned agent returned a malformed result; skipping', {
-            channelId: params.channelId,
-            agentId: agent.id,
-            receivedType: typeof rawAskResult,
-            receivedKeys:
-              rawAskResult && typeof rawAskResult === 'object'
-                ? Object.keys(rawAskResult as Record<string, unknown>)
-                : null,
-          });
-          continue;
-        }
-        const askResult = rawAskResult;
+          if (!askResult.success || !askResult.response || !askResult.response.trim()) {
+            channelMentionLogger.warn('Mentioned agent returned no response', {
+              channelId: params.channelId,
+              agentId: agent.id,
+              error: askResult.error,
+            });
+            continue;
+          }
 
-        if (!askResult.success || !askResult.response || !askResult.response.trim()) {
-          channelMentionLogger.warn('Mentioned agent returned no response', {
-            channelId: params.channelId,
-            agentId: agent.id,
-            error: askResult.error,
-          });
-          continue;
+          replyContent = askResult.response.trim();
         }
 
-        const replyContent = askResult.response.trim();
         const trimmedParent = (params.parentId ?? '').trim();
         if (trimmedParent.length > 0) {
           // Thread-reply branch: route through the same transactional helper

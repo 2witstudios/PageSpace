@@ -41,9 +41,11 @@ import {
   buildCommandPromptSection,
   commandExecutionDataFromPlan,
   COMMAND_EXECUTION_PART_TYPE,
+  isSoloBuiltinCommand,
   type CommandExecutionPlan,
 } from '@/lib/ai/core/command-processor';
 import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
+import { respondWithHelpAnswer } from '@/lib/ai/core/help-responder';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildSystemPrompt, buildNonCoreToolNamesPrompt, TOOL_DISCOVERY_PROMPT } from '@/lib/ai/core/system-prompt';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
@@ -243,10 +245,27 @@ export async function GET(
     });
   } catch (error) {
     loggers.api.error('Error fetching messages:', error as Error);
-    return NextResponse.json({ 
-      error: 'Failed to fetch messages' 
+    return NextResponse.json({
+      error: 'Failed to fetch messages'
     }, { status: 500 });
   }
+}
+
+/**
+ * The display name that rides realtime broadcast `triggeredBy` payloads:
+ * the profile displayName if set, else the account name (decrypted at the
+ * edge — GDPR #965), else 'Someone'. Shared by the main generation flow and
+ * the solo-/help short-circuit so the two can't drift.
+ */
+async function resolveDisplayName(userId: string): Promise<string> {
+  const [authUserResult, profileResult] = await Promise.allSettled([
+    db.select({ name: users.name }).from(users).where(eq(users.id, userId)).limit(1),
+    db.select({ displayName: userProfiles.displayName }).from(userProfiles).where(eq(userProfiles.userId, userId)).limit(1),
+  ]);
+  const authUserNameRaw = authUserResult.status === 'fulfilled' ? authUserResult.value[0]?.name ?? null : null;
+  const authUserName = await decryptField(authUserNameRaw);
+  const profileDisplayName = profileResult.status === 'fulfilled' ? profileResult.value[0]?.displayName ?? null : null;
+  return profileDisplayName ?? authUserName ?? 'Someone';
 }
 
 export async function POST(
@@ -417,8 +436,22 @@ export async function POST(
         })
       : legacyLocationContext;
 
-    // Image security validation — validate file parts in the user message
     const userMessageForValidation = requestMessages[requestMessages.length - 1];
+
+    // Extracted once and reused below (isSoloHelpRequest here, and the
+    // user-message-save block further down) — extractMessageContent must run
+    // at most once per request. userMessageForValidation and the userMessage
+    // declared below are the same array element (requestMessages[requestMessages.length - 1]).
+    const userMessageContent =
+      userMessageForValidation?.role === 'user' ? extractMessageContent(userMessageForValidation) : '';
+
+    // A message that is nothing but the /help chip answers directly from code
+    // (see help-responder.ts) — no model call, so no credit hold is taken for
+    // it. Computed this early so it can gate the credit gate below. /help
+    // combined with other text is a real question and stays on the LLM path.
+    const isSoloHelpRequest = isSoloBuiltinCommand(userMessageContent, 'help');
+
+    // Image security validation — validate file parts in the user message
     if (userMessageForValidation?.role === 'user' && hasFileParts(userMessageForValidation)) {
       const imageValidation = validateUserMessageFileParts(userMessageForValidation);
       if (!imageValidation.valid) {
@@ -468,7 +501,10 @@ export async function POST(
       // to the metered default, which must still be gated.
       const { provider: gateProvider } = resolveProviderModel(
         selectedProvider, selectedModel, gateUser?.currentAiProvider, gateUser?.currentAiModel);
-      if (!isMeteringExempt(gateProvider)) {
+      // A solo /help never reaches streamText (see isSoloHelpRequest below), so
+      // it costs nothing — skip the gate entirely rather than take a hold that
+      // would need special-cased release on the short-circuit path.
+      if (!isMeteringExempt(gateProvider) && !isSoloHelpRequest) {
         const creditGate = await canConsumeAI(userId, (gateUser?.subscriptionTier ?? 'free') as SubscriptionTier, {
           estCostCents: estimateChatHoldCentsForModel(selectedModel),
           maxInFlight: MAX_CHAT_INFLIGHT,
@@ -511,7 +547,7 @@ export async function POST(
         // any future read) agrees with what was actually persisted — see the
         // equivalent comment in apps/web/src/app/api/ai/chat/route.ts.
         userMessage.id = messageId;
-        const messageContent = extractMessageContent(userMessage);
+        const messageContent = userMessageContent;
         
         // Process @mentions in the user message
         const processedMessage = processMentionsInMessage(messageContent);
@@ -533,16 +569,21 @@ export async function POST(
         // uses, so the picker and /help can't drift). The id is
         // client-supplied; the resolver membership-verifies it before any
         // drive commands are included. No drive → personal + built-ins only.
-        commandPlans = await planCommandExecutions(messageContent, userId, {
-          driveId: locationContext?.currentDrive?.id ?? null,
-        });
-        if (commandPlans.length > 0) {
-          commandSystemPrompt = buildCommandPromptSection(commandPlans);
-          for (const plan of commandPlans) {
-            loggers.api.info('Global Assistant Chat API: Command resolution', {
-              kind: plan.kind,
-              ...(plan.kind === 'skip' ? { reason: plan.reason } : {}),
-            });
+        //
+        // Skipped for a solo /help — see the equivalent comment in
+        // apps/web/src/app/api/ai/chat/route.ts.
+        if (!isSoloHelpRequest) {
+          commandPlans = await planCommandExecutions(messageContent, userId, {
+            driveId: locationContext?.currentDrive?.id ?? null,
+          });
+          if (commandPlans.length > 0) {
+            commandSystemPrompt = buildCommandPromptSection(commandPlans);
+            for (const plan of commandPlans) {
+              loggers.api.info('Global Assistant Chat API: Command resolution', {
+                kind: plan.kind,
+                ...(plan.kind === 'skip' ? { reason: plan.reason } : {}),
+              });
+            }
           }
         }
 
@@ -640,6 +681,58 @@ export async function POST(
           loggers.api.error('Global Assistant Chat API: Failed to merge ask_user answer', error as Error);
         });
       }
+    }
+
+    // The user's /help message is already durably saved above (same generic
+    // update as any other message) — answer it directly from code and return
+    // before any of the provider/history/lifecycle machinery below runs. No
+    // streamText, no credit hold (skipped above). It still takes the SAME
+    // per-conversation takeover and realtime broadcasts every other send
+    // gets (review finding — chatgpt-codex-connector, PR #2329): without
+    // them, a solo /help from a second tab wouldn't take over an in-flight
+    // generation on this conversation, and other open tabs would see
+    // neither side of the turn until a refetch.
+    if (isSoloHelpRequest) {
+      const helpChannelId = globalChannelId(userId);
+      const helpDisplayName = await resolveDisplayName(userId);
+
+      if (conversationIsNew) {
+        broadcastGlobalConversationAdded(helpChannelId, {
+          conversation: {
+            id: conversation.id,
+            title: resolvedConversationTitle,
+            type: conversation.type,
+            createdAt: conversation.createdAt.toISOString(),
+          },
+          triggeredBy: { userId, displayName: helpDisplayName, browserSessionId },
+        }).catch(() => {});
+      }
+      broadcastChatUserMessage({
+        message: userMessage,
+        pageId: helpChannelId,
+        conversationId,
+        triggeredBy: { userId, displayName: helpDisplayName, browserSessionId },
+      }).catch(() => {});
+
+      await startGenerationExclusive({
+        conversationId,
+        run: () => takeOverConversationStreams({ conversationId, channelId: helpChannelId }),
+      });
+
+      return await respondWithHelpAnswer({
+        senderId: userId,
+        driveId: locationContext?.currentDrive?.id ?? null,
+        originalMessages: requestMessages,
+        persist: (payload, messageId) =>
+          saveTerminalGlobalAssistantMessage({
+            messageId,
+            conversationId,
+            userId,
+            role: 'assistant',
+            status: 'complete',
+            ...payload,
+          }),
+      });
     }
 
     // Create AI provider using factory service
@@ -1186,24 +1279,7 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
     activeStreamId = streamId;
 
     const channelId = globalChannelId(userId);
-
-    const [authUserResult, profileResult] = await Promise.allSettled([
-      db
-        .select({ name: users.name })
-        .from(users)
-        .where(eq(users.id, userId))
-        .limit(1),
-      db
-        .select({ displayName: userProfiles.displayName })
-        .from(userProfiles)
-        .where(eq(userProfiles.userId, userId))
-        .limit(1),
-    ]);
-    // Decrypt PII at the edge (GDPR #965) so the sender display name is plaintext.
-    const authUserNameRaw = authUserResult.status === 'fulfilled' ? authUserResult.value[0]?.name ?? null : null;
-    const authUserName = await decryptField(authUserNameRaw);
-    const profileDisplayName = profileResult.status === 'fulfilled' ? profileResult.value[0]?.displayName ?? null : null;
-    const displayName = profileDisplayName ?? authUserName ?? 'Someone';
+    const displayName = await resolveDisplayName(userId);
 
     if (conversationIsNew) {
       broadcastGlobalConversationAdded(channelId, {

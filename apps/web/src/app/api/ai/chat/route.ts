@@ -71,9 +71,11 @@ import {
   buildCommandPromptSection,
   commandExecutionDataFromPlan,
   COMMAND_EXECUTION_PART_TYPE,
+  isSoloBuiltinCommand,
   type CommandExecutionPlan,
 } from '@/lib/ai/core/command-processor';
 import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
+import { respondWithHelpAnswer } from '@/lib/ai/core/help-responder';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildSystemPrompt, buildPersonalizationPrompt } from '@/lib/ai/core/system-prompt';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
@@ -414,6 +416,19 @@ export async function POST(request: Request) {
       }
     }
 
+    // Extracted once and reused below (isSoloHelpRequest here, and the
+    // user-message-save block further down) — extractMessageContent must run
+    // at most once per request. userMessageForValidation and the userMessage
+    // declared below are the same array element (messages[messages.length - 1]).
+    const userMessageContent =
+      userMessageForValidation?.role === 'user' ? extractMessageContent(userMessageForValidation) : '';
+
+    // A message that is nothing but the /help chip answers directly from code
+    // (see help-responder.ts) — no model call, so no credit hold is taken for
+    // it. Computed this early so it can gate the credit gate below. /help
+    // combined with other text is a real question and stays on the LLM path.
+    const isSoloHelpRequest = isSoloBuiltinCommand(userMessageContent, 'help');
+
     // Check if user has permission to view and edit this AI chat page
     const maskedUserId = maskIdentifier(userId);
     const maskedChatId = maskIdentifier(chatId);
@@ -682,7 +697,10 @@ export async function POST(request: Request) {
     // the gate so no extra DB read is needed. Each stream guards against its own slice,
     // not the gross balance, preventing concurrent streams from collectively overshooting.
     let availableBalanceCents: number | null = null;
-    if (!isMeteringExempt(gateProvider)) {
+    // A solo /help never reaches streamText (see isSoloHelpRequest below), so
+    // it costs nothing — skip the gate entirely rather than take a hold that
+    // would need special-cased release on the short-circuit path.
+    if (!isMeteringExempt(gateProvider) && !isSoloHelpRequest) {
       const creditGate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier, {
         estCostCents: estimateChatHoldCentsForModel(selectedModel),
         maxInFlight: MAX_CHAT_INFLIGHT,
@@ -724,7 +742,7 @@ export async function POST(request: Request) {
         // `messageId`, but still carrying the original (possibly rejected) id anywhere
         // `userMessage` itself is read afterward.
         userMessage.id = messageId;
-        const messageContent = extractMessageContent(userMessage);
+        const messageContent = userMessageContent;
 
         // Process @mentions in the user message
         const processedMessage = processMentionsInMessage(messageContent);
@@ -742,16 +760,25 @@ export async function POST(request: Request) {
         // SENDER's permissions. The tokens stay in the saved content —
         // transcripts render each as a chip; only the system prompt gains
         // the injections.
-        commandPlans = await planCommandExecutions(messageContent, userId!, {
-          driveId: page.driveId,
-        });
-        if (commandPlans.length > 0) {
-          commandSystemPrompt = buildCommandPromptSection(commandPlans);
-          for (const plan of commandPlans) {
-            loggers.ai.info('AI Chat API: Command resolution', {
-              kind: plan.kind,
-              ...(plan.kind === 'skip' ? { reason: plan.reason } : {}),
-            });
+        //
+        // Skipped for a solo /help: it would resolve /help's dynamic
+        // section (a DB read building the model-facing command list, via
+        // resolveBuiltinInjection -> loadAvailableCommands) only for
+        // commandSystemPrompt, which the solo-help short-circuit below
+        // never sends to a model — respondWithHelpAnswer builds its own
+        // "used" pill directly and does its own (single) command-list read.
+        if (!isSoloHelpRequest) {
+          commandPlans = await planCommandExecutions(messageContent, userId!, {
+            driveId: page.driveId,
+          });
+          if (commandPlans.length > 0) {
+            commandSystemPrompt = buildCommandPromptSection(commandPlans);
+            for (const plan of commandPlans) {
+              loggers.ai.info('AI Chat API: Command resolution', {
+                kind: plan.kind,
+                ...(plan.kind === 'skip' ? { reason: plan.reason } : {}),
+              });
+            }
           }
         }
 
@@ -929,6 +956,56 @@ export async function POST(request: Request) {
           loggers.ai.error('AI Chat API: Failed to merge ask_user answer', error as Error);
         });
       }
+    }
+
+    // The user's /help message is already durably saved above (same generic
+    // transaction as any other message) — answer it directly from code and
+    // return before any of the provider/history/lifecycle machinery below
+    // runs. No streamText, no credit hold (skipped above). It still takes
+    // the SAME per-conversation takeover every other send does (review
+    // finding — chatgpt-codex-connector, PR #2329): without it, a solo
+    // /help sent from a second tab while another turn is generating would
+    // land alongside that turn instead of taking it over, unlike every
+    // other message.
+    if (isSoloHelpRequest) {
+      await startGenerationExclusive({
+        conversationId: conversationId!,
+        run: () => takeOverConversationStreams({ conversationId: conversationId!, channelId: chatId! }),
+      });
+
+      // Broadcast the user's own /help message the same way (and under the
+      // same isShared gate) a real turn does, so collaborators watching a
+      // shared conversation see the chip without a refetch (review finding
+      // — chatgpt-codex-connector, PR #2329). The assistant reply itself
+      // does not get the AI-stream-start/complete broadcast a real turn
+      // gets — replicating that multiplayer live-stream protocol for an
+      // already-complete synthetic reply risks destabilizing it for every
+      // OTHER conversation; collaborators see the reply on next refetch,
+      // same as the already-documented new-conversation-sidebar gap.
+      if (existingConversation?.isShared === true) {
+        broadcastChatUserMessage({
+          message: userMessage,
+          pageId: chatId!,
+          conversationId: conversationId!,
+          triggeredBy: { userId: userId!, displayName: user?.name ?? 'Someone', browserSessionId },
+        }).catch(() => {});
+      }
+
+      return await respondWithHelpAnswer({
+        senderId: userId!,
+        driveId: page.driveId,
+        originalMessages: messages,
+        persist: (payload, messageId) =>
+          saveTerminalAssistantMessage({
+            messageId,
+            pageId: chatId!,
+            conversationId: conversationId!,
+            userId: null,
+            role: 'assistant',
+            status: 'complete',
+            ...payload,
+          }),
+      });
     }
 
     // Get user's current AI provider settings (user was loaded above for the gate)

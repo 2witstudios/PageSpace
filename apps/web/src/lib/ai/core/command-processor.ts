@@ -18,7 +18,7 @@ import {
   parseMessageTokens,
   COMMAND_TOKEN_TYPE,
 } from '@/lib/tokens/message-tokens';
-import { COMMAND_TRIGGER_PATTERN } from '@pagespace/lib/commands/command-core';
+import { COMMAND_TRIGGER_PATTERN, builtinCommandId } from '@pagespace/lib/commands/command-core';
 
 /**
  * A token label is echoed into the system prompt only when it looks like a
@@ -61,6 +61,47 @@ export function findActiveCommandTokens(content: string): ParsedCommandToken[] {
     result.push({ commandId: token.id, label: token.label });
   }
   return result;
+}
+
+/**
+ * Whether `content` is nothing but a single built-in command chip for
+ * `trigger` — no other text before, after, or between. Used to detect a
+ * "solo" invocation (e.g. a bare `/help`) that can be answered directly from
+ * code instead of going through the model: a chip combined with real text
+ * (`/help how do I use spreadsheets`) is a genuine question and stays on the
+ * LLM path.
+ *
+ * Pure — reuses parseMessageTokens instead of re-deriving token positions.
+ */
+export function isSoloBuiltinCommand(content: string, trigger: string): boolean {
+  const { displayText, tokens } = parseMessageTokens(content);
+  if (tokens.length !== 1) return false;
+  const [token] = tokens;
+  if (token.type !== COMMAND_TOKEN_TYPE || token.id !== builtinCommandId(trigger)) return false;
+  const withoutToken = displayText.slice(0, token.start) + displayText.slice(token.end);
+  return withoutToken.trim().length === 0;
+}
+
+/**
+ * Same "solo" test as isSoloBuiltinCommand, but tolerates @mention tokens
+ * alongside the chip — for callers where reaching the message at all
+ * structurally requires a mention (e.g. a channel message triggers an agent
+ * response only via resolveMentionedAgents, which returns nothing unless the
+ * content contains at least one @mention token). Under isSoloBuiltinCommand's
+ * strict "exactly one token" rule, a mentioned agent's `/help` could never
+ * register as solo — the required @mention itself would always disqualify
+ * it. Still disallows any OTHER free text or a second command token.
+ */
+export function isSoloBuiltinCommandIgnoringMentions(content: string, trigger: string): boolean {
+  const { displayText, tokens } = parseMessageTokens(content);
+  const commandTokens = tokens.filter((t) => t.type === COMMAND_TOKEN_TYPE);
+  if (commandTokens.length !== 1 || commandTokens[0].id !== builtinCommandId(trigger)) return false;
+
+  let residual = displayText;
+  for (const token of [...tokens].sort((a, b) => b.start - a.start)) {
+    residual = residual.slice(0, token.start) + residual.slice(token.end);
+  }
+  return residual.trim().length === 0;
 }
 
 /** Why a command was skipped instead of injected (UX spec §7.2). */

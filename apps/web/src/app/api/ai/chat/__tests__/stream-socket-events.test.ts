@@ -20,6 +20,8 @@ const {
   mockTakeOverConversationStreams,
   mockCreateConversation,
   mockAutoTitleConversation,
+  mockRespondWithHelpAnswer,
+  mockCanConsumeAI,
 } = vi.hoisted(() => ({
   mockCreateStreamLifecycle: vi.fn(),
   mockLifecyclePushPart: vi.fn(),
@@ -31,6 +33,8 @@ const {
   mockTakeOverConversationStreams: vi.fn().mockResolvedValue({ aborted: [], reconciled: [] }),
   mockCreateConversation: vi.fn().mockResolvedValue(undefined),
   mockAutoTitleConversation: vi.fn().mockResolvedValue(undefined),
+  mockRespondWithHelpAnswer: vi.fn().mockResolvedValue(new Response('', { status: 200 })),
+  mockCanConsumeAI: vi.fn().mockResolvedValue({ allowed: true, reason: 'unlimited' }),
 }));
 
 interface MockUIStreamOptions {
@@ -221,7 +225,11 @@ vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
 }));
 
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({
-  canConsumeAI: vi.fn().mockResolvedValue({ allowed: true, reason: 'unlimited' }),
+  canConsumeAI: mockCanConsumeAI,
+}));
+
+vi.mock('@/lib/ai/core/help-responder', () => ({
+  respondWithHelpAnswer: mockRespondWithHelpAnswer,
 }));
 
 vi.mock('@/lib/ai/core/provider-factory', () => ({
@@ -957,6 +965,98 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       await POST(makeRequest({ conversationId: CONV_ID }));
 
       expect(mockAutoTitleConversation).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('solo /help short-circuit', () => {
+    const HELP_CHIP = '/[help](builtin:help:command)';
+
+    it('answers via respondWithHelpAnswer and skips the credit gate entirely', async () => {
+      mockGetConversation.mockResolvedValueOnce({ id: CONV_ID, userId: 'user-1', isShared: false });
+      vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
+
+      const response = await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(response).toBe(await mockRespondWithHelpAnswer.mock.results[0].value);
+      expect(mockCanConsumeAI).not.toHaveBeenCalled();
+      expect(mockRespondWithHelpAnswer).toHaveBeenCalledWith(
+        expect.objectContaining({ senderId: 'user-1', driveId: 'drive-1' })
+      );
+    });
+
+    it('/help combined with other text is NOT a solo request — the credit gate and normal flow still run', async () => {
+      mockGetConversation.mockResolvedValueOnce({ id: CONV_ID, userId: 'user-1', isShared: false });
+      vi.mocked(extractMessageContent).mockReturnValueOnce(`${HELP_CHIP} how do I use spreadsheets`);
+
+      await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(mockRespondWithHelpAnswer).not.toHaveBeenCalled();
+      expect(mockCanConsumeAI).toHaveBeenCalled();
+    });
+
+    it('still takes over any in-flight generation on the conversation before answering', async () => {
+      mockGetConversation.mockResolvedValueOnce({ id: CONV_ID, userId: 'user-1', isShared: false });
+      vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
+
+      await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(mockTakeOverConversationStreams).toHaveBeenCalledWith(
+        expect.objectContaining({ conversationId: CONV_ID, channelId: 'page-1' })
+      );
+    });
+
+    it('broadcasts the user message when the conversation is shared, not when private', async () => {
+      mockGetConversation.mockResolvedValueOnce({ id: CONV_ID, userId: 'user-1', isShared: true });
+      vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
+      await POST(makeRequest({ conversationId: CONV_ID }));
+      expect(mockBroadcastChatUserMessage).toHaveBeenCalledTimes(1);
+
+      mockBroadcastChatUserMessage.mockClear();
+      mockGetConversation.mockResolvedValueOnce({ id: CONV_ID, userId: 'user-1', isShared: false });
+      vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
+      await POST(makeRequest({ conversationId: CONV_ID }));
+      expect(mockBroadcastChatUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('the injected persist closure writes an assistant message via saveMessageToDatabase with userId null', async () => {
+      mockGetConversation.mockResolvedValueOnce({ id: CONV_ID, userId: 'user-1', isShared: false });
+      vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
+
+      await POST(makeRequest({ conversationId: CONV_ID }));
+
+      const { persist } = mockRespondWithHelpAnswer.mock.calls[0][0];
+      mockSaveMessageToDatabase.mockClear();
+      await persist({ content: 'help text', toolCalls: undefined, toolResults: undefined, uiMessage: {} }, 'help-msg-1');
+
+      expect(mockSaveMessageToDatabase).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messageId: 'help-msg-1',
+          pageId: 'page-1',
+          conversationId: CONV_ID,
+          userId: null,
+          role: 'assistant',
+          status: 'complete',
+          content: 'help text',
+        })
+      );
+    });
+
+    it('the injected persist closure skips the write when the conversation went inactive in the gap', async () => {
+      mockGetConversation.mockResolvedValueOnce({ id: CONV_ID, userId: 'user-1', isShared: false });
+      vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
+
+      await POST(makeRequest({ conversationId: CONV_ID }));
+
+      const { persist } = mockRespondWithHelpAnswer.mock.calls[0][0];
+      mockSaveMessageToDatabase.mockClear();
+      // Simulate a History-delete landing between the user's /help save (already
+      // committed above, while the conversation was still active) and this
+      // terminal write — the same race saveTerminalAssistantMessage guards
+      // against for every other assistant write.
+      mockConversationActiveAtLockTime.current = false;
+      await persist({ content: 'help text', toolCalls: undefined, toolResults: undefined, uiMessage: {} }, 'help-msg-1');
+
+      expect(mockSaveMessageToDatabase).not.toHaveBeenCalled();
     });
   });
 

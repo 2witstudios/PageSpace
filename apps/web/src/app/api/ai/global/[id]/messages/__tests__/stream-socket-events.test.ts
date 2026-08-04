@@ -15,6 +15,8 @@ const {
   mockBroadcastChatUserMessage,
   mockBroadcastGlobalConversationAdded,
   mockSaveGlobalAssistantMessageToDatabase,
+  mockRespondWithHelpAnswer,
+  mockCanConsumeAI,
 } = vi.hoisted(() => ({
   mockCreateStreamLifecycle: vi.fn(),
   mockLifecyclePushPart: vi.fn(),
@@ -22,6 +24,8 @@ const {
   mockBroadcastChatUserMessage: vi.fn().mockResolvedValue(undefined),
   mockBroadcastGlobalConversationAdded: vi.fn().mockResolvedValue(undefined),
   mockSaveGlobalAssistantMessageToDatabase: vi.fn().mockResolvedValue(undefined),
+  mockRespondWithHelpAnswer: vi.fn().mockResolvedValue(new Response('', { status: 200 })),
+  mockCanConsumeAI: vi.fn().mockResolvedValue({ allowed: true, reason: 'unlimited' }),
 }));
 
 interface MockUIStreamOptions {
@@ -239,7 +243,11 @@ vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
 }));
 
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({
-  canConsumeAI: vi.fn().mockResolvedValue({ allowed: true, reason: 'unlimited' }),
+  canConsumeAI: mockCanConsumeAI,
+}));
+
+vi.mock('@/lib/ai/core/help-responder', () => ({
+  respondWithHelpAnswer: mockRespondWithHelpAnswer,
 }));
 
 vi.mock('@/lib/ai/core/provider-factory', () => ({
@@ -422,6 +430,7 @@ import { createStreamAbortController } from '@/lib/ai/core/stream-abort-registry
 import { db } from '@pagespace/db/db';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { extractMessageContent } from '@/lib/ai/core/message-utils';
 
 /** A signal that reports aborted=true — simulates onAbort having already fired. */
 const abortedSignal = (): AbortSignal => {
@@ -731,6 +740,98 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
       await POST(makeRequest(), makeContext());
 
       expect(mockBroadcastGlobalConversationAdded).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('solo /help short-circuit', () => {
+    const HELP_CHIP = '/[help](builtin:help:command)';
+
+    it('answers via respondWithHelpAnswer and skips the credit gate entirely', async () => {
+      vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
+
+      const response = await POST(makeRequest(), makeContext());
+
+      expect(response).toBe(await mockRespondWithHelpAnswer.mock.results[0].value);
+      expect(mockCanConsumeAI).not.toHaveBeenCalled();
+      expect(mockRespondWithHelpAnswer).toHaveBeenCalledWith(
+        expect.objectContaining({ senderId: 'user-1' })
+      );
+    });
+
+    it('/help combined with other text is NOT a solo request — the credit gate and normal flow still run', async () => {
+      vi.mocked(extractMessageContent).mockReturnValueOnce(`${HELP_CHIP} how do I use spreadsheets`);
+
+      await POST(makeRequest(), makeContext());
+
+      expect(mockRespondWithHelpAnswer).not.toHaveBeenCalled();
+      expect(mockCanConsumeAI).toHaveBeenCalled();
+    });
+
+    it('still takes over any in-flight generation on the conversation before answering', async () => {
+      vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
+
+      await POST(makeRequest(), makeContext());
+
+      expect(mockTakeOverConversationStreams).toHaveBeenCalledWith(
+        expect.objectContaining({ conversationId: 'conv-1', channelId: 'user:user-1:global' })
+      );
+    });
+
+    it('broadcasts the user message unconditionally, same as a real turn', async () => {
+      vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
+
+      await POST(makeRequest({ browserSessionId: 'session-y' }), makeContext());
+
+      expect(mockBroadcastChatUserMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ pageId: 'user:user-1:global', conversationId: 'conv-1' })
+      );
+    });
+
+    it('broadcasts the new-conversation sidebar event when isNew=true (previously an acknowledged gap)', async () => {
+      const { resolveOrCreateConversation } = await import('../resolve-or-create-conversation');
+      vi.mocked(resolveOrCreateConversation).mockResolvedValueOnce({ conversation: newConv, isNew: true });
+      vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
+
+      await POST(makeRequest({ browserSessionId: 'session-z' }), makeContext());
+
+      expect(mockBroadcastGlobalConversationAdded).toHaveBeenCalledWith(
+        'user:user-1:global',
+        expect.objectContaining({ conversation: expect.objectContaining({ id: 'conv-1' }) })
+      );
+    });
+
+    it('the injected persist closure writes an assistant message via saveGlobalAssistantMessageToDatabase with the human userId', async () => {
+      vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
+
+      await POST(makeRequest(), makeContext());
+
+      const { persist } = mockRespondWithHelpAnswer.mock.calls[0][0];
+      mockSaveGlobalAssistantMessageToDatabase.mockClear();
+      await persist({ content: 'help text', toolCalls: undefined, toolResults: undefined, uiMessage: {} }, 'help-msg-1');
+
+      expect(mockSaveGlobalAssistantMessageToDatabase).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messageId: 'help-msg-1',
+          conversationId: 'conv-1',
+          userId: 'user-1',
+          role: 'assistant',
+          status: 'complete',
+          content: 'help text',
+        })
+      );
+    });
+
+    it('the injected persist closure skips the write when the conversation went inactive in the gap', async () => {
+      vi.mocked(extractMessageContent).mockReturnValueOnce(HELP_CHIP);
+
+      await POST(makeRequest(), makeContext());
+
+      const { persist } = mockRespondWithHelpAnswer.mock.calls[0][0];
+      mockSaveGlobalAssistantMessageToDatabase.mockClear();
+      mockConversationActiveAtLockTime.current = false;
+      await persist({ content: 'help text', toolCalls: undefined, toolResults: undefined, uiMessage: {} }, 'help-msg-1');
+
+      expect(mockSaveGlobalAssistantMessageToDatabase).not.toHaveBeenCalled();
     });
   });
 
