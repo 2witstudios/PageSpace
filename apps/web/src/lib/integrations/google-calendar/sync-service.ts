@@ -624,6 +624,56 @@ const upsertEvent = async (
     }
   }
 
+  // Attendee duplicate check: catch events created by OTHER PageSpace users
+  // (e.g., Noah creates a meeting and invites Jono). The event propagates through
+  // Google Calendar's attendee system back to the invitee's calendar, so the sync
+  // would otherwise create a second copy owned by the syncing user.
+  if (pageSpaceEvent.title && pageSpaceEvent.startAt) {
+    const attendeeStartWindow = new Date(pageSpaceEvent.startAt.getTime() - 60_000);
+    const attendeeEndWindow = new Date(pageSpaceEvent.startAt.getTime() + 60_000);
+
+    const attendeeEvent = await db
+      .select({ eventId: eventAttendees.eventId })
+      .from(eventAttendees)
+      .innerJoin(calendarEvents, eq(calendarEvents.id, eventAttendees.eventId))
+      .where(
+        and(
+          eq(eventAttendees.userId, userId),
+          eq(calendarEvents.title, pageSpaceEvent.title),
+          eq(calendarEvents.isTrashed, false),
+          isNull(calendarEvents.googleEventId),
+          sql`${calendarEvents.startAt} >= ${attendeeStartWindow}`,
+          sql`${calendarEvents.startAt} <= ${attendeeEndWindow}`
+        )
+      )
+      .limit(1);
+
+    if (attendeeEvent.length > 0) {
+      // Link the Google event to the existing event (created by another user).
+      // Don't set syncedFromGoogle — the original creator should still be able
+      // to push edits. We're just attaching the Google ID for two-way sync.
+      try {
+        await db
+          .update(calendarEvents)
+          .set({
+            googleEventId: googleEvent.id,
+            googleCalendarId: calendarId,
+            lastGoogleSync: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(calendarEvents.id, attendeeEvent[0].eventId));
+
+        await mapAttendeesToUsers(attendeeEvent[0].eventId, googleEvent.attendees);
+        return { action: 'updated' };
+      } catch (err) {
+        if (isUniqueConstraintError(err)) {
+          return { action: 'skipped' };
+        }
+        throw err;
+      }
+    }
+  }
+
   // Create new event
   const inserted = await db
     .insert(calendarEvents)

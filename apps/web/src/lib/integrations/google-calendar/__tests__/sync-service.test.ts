@@ -13,8 +13,19 @@ const mockInsert = vi.fn().mockReturnValue({
     onConflictDoUpdate: vi.fn(),
   }),
 });
-const mockSelect = vi.fn().mockReturnValue({
-  from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+// Chain builder for select queries — supports from/innerJoin/where/limit
+const buildSelectChain = (resolveValue: unknown[] = []) => {
+  const chain: Record<string, ReturnType<typeof vi.fn>> = {};
+  chain.limit = vi.fn().mockResolvedValue(resolveValue);
+  chain.where = vi.fn().mockReturnValue({ limit: chain.limit });
+  chain.innerJoin = vi.fn().mockReturnValue({ where: chain.where });
+  const from = vi.fn().mockReturnValue({ where: chain.where, innerJoin: chain.innerJoin });
+  return { from, _chain: chain };
+};
+let mockSelectResolveValue: unknown[] = [];
+const mockSelect = vi.fn().mockImplementation(() => {
+  const { from } = buildSelectChain(mockSelectResolveValue);
+  return { from };
 });
 const mockTransaction = vi.fn(async (cb: (tx: unknown) => Promise<void>) => {
   await cb({
@@ -75,6 +86,13 @@ vi.mock('@pagespace/db/schema/calendar', () => ({
   },
 }));
 
+vi.mock('@pagespace/lib/auth/user-repository', () => ({
+  userEmailInListMatch: vi.fn(),
+  decryptUserRows: vi.fn().mockResolvedValue([]),
+}));
+vi.mock('@/lib/logging/mask', () => ({
+  maskIdentifier: vi.fn((id: string) => id),
+}));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
     api: {
@@ -127,6 +145,7 @@ vi.mock('../webhook-token', () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockSelectResolveValue = [];
 });
 
 describe('syncGoogleCalendar', () => {
@@ -265,6 +284,72 @@ describe('syncGoogleCalendar', () => {
       given: 'successful sync with one new event',
       should: 'count 1 created event',
       actual: result.eventsCreated,
+      expected: 1,
+    });
+  });
+
+  it('should link to existing attendee event instead of creating a duplicate', async () => {
+    // Scenario: Noah created 'Meeting' and invited user-1.
+    // Google propagates it to user-1's calendar. Sync should link, not create.
+    mockGetValidAccessToken.mockResolvedValue({
+      success: true,
+      accessToken: 'valid-token',
+    });
+    mockFindFirst.mockResolvedValue({
+      status: 'active',
+      selectedCalendars: ['primary'],
+      syncCursor: null,
+      targetDriveId: null,
+      markAsReadOnly: false,
+      webhookChannels: null,
+      googleEmail: 'user@gmail.com',
+    });
+    mockListEvents.mockResolvedValue({
+      success: true,
+      data: {
+        events: [
+          {
+            id: 'google-evt-1',
+            status: 'confirmed',
+            summary: 'Meeting',
+            start: { dateTime: '2025-01-01T10:00:00Z' },
+            end: { dateTime: '2025-01-01T11:00:00Z' },
+          },
+        ],
+        nextSyncToken: 'new-token',
+      },
+    });
+
+    // No existing event found by googleEventId (first lookup + fallback)
+    const { db } = await import('@pagespace/db/db');
+    (db.query.calendarEvents.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    // Simulate: attendee check finds existing event created by another user
+    mockSelectResolveValue = [{ eventId: 'noahs-event-1' }];
+
+    mockWatchCalendar.mockResolvedValue({ success: false, error: 'skip' });
+
+    const { syncGoogleCalendar } = await import('../sync-service');
+    const result = await syncGoogleCalendar('user-1');
+
+    assert({
+      given: 'event exists as attendee-created event',
+      should: 'report success',
+      actual: result.success,
+      expected: true,
+    });
+
+    assert({
+      given: 'attendee event found matching Google event',
+      should: 'count 0 created events',
+      actual: result.eventsCreated,
+      expected: 0,
+    });
+
+    assert({
+      given: 'attendee event found matching Google event',
+      should: 'count 1 updated event (linked)',
+      actual: result.eventsUpdated,
       expected: 1,
     });
   });
