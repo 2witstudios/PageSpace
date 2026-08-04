@@ -420,13 +420,18 @@ export async function POST(
 
     const userMessageForValidation = requestMessages[requestMessages.length - 1];
 
+    // Extracted once and reused below (isSoloHelpRequest here, and the
+    // user-message-save block further down) — extractMessageContent must run
+    // at most once per request. userMessageForValidation and the userMessage
+    // declared below are the same array element (requestMessages[requestMessages.length - 1]).
+    const userMessageContent =
+      userMessageForValidation?.role === 'user' ? extractMessageContent(userMessageForValidation) : '';
+
     // A message that is nothing but the /help chip answers directly from code
     // (see help-responder.ts) — no model call, so no credit hold is taken for
     // it. Computed this early so it can gate the credit gate below. /help
     // combined with other text is a real question and stays on the LLM path.
-    const isSoloHelpRequest =
-      userMessageForValidation?.role === 'user' &&
-      isSoloBuiltinCommand(extractMessageContent(userMessageForValidation), 'help');
+    const isSoloHelpRequest = isSoloBuiltinCommand(userMessageContent, 'help');
 
     // Image security validation — validate file parts in the user message
     if (userMessageForValidation?.role === 'user' && hasFileParts(userMessageForValidation)) {
@@ -524,7 +529,7 @@ export async function POST(
         // any future read) agrees with what was actually persisted — see the
         // equivalent comment in apps/web/src/app/api/ai/chat/route.ts.
         userMessage.id = messageId;
-        const messageContent = extractMessageContent(userMessage);
+        const messageContent = userMessageContent;
         
         // Process @mentions in the user message
         const processedMessage = processMentionsInMessage(messageContent);

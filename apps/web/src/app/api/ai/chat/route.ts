@@ -413,13 +413,18 @@ export async function POST(request: Request) {
       }
     }
 
+    // Extracted once and reused below (isSoloHelpRequest here, and the
+    // user-message-save block further down) — extractMessageContent must run
+    // at most once per request. userMessageForValidation and the userMessage
+    // declared below are the same array element (messages[messages.length - 1]).
+    const userMessageContent =
+      userMessageForValidation?.role === 'user' ? extractMessageContent(userMessageForValidation) : '';
+
     // A message that is nothing but the /help chip answers directly from code
     // (see help-responder.ts) — no model call, so no credit hold is taken for
     // it. Computed this early so it can gate the credit gate below. /help
     // combined with other text is a real question and stays on the LLM path.
-    const isSoloHelpRequest =
-      userMessageForValidation?.role === 'user' &&
-      isSoloBuiltinCommand(extractMessageContent(userMessageForValidation), 'help');
+    const isSoloHelpRequest = isSoloBuiltinCommand(userMessageContent, 'help');
 
     // Check if user has permission to view and edit this AI chat page
     const maskedUserId = maskIdentifier(userId);
@@ -734,7 +739,7 @@ export async function POST(request: Request) {
         // `messageId`, but still carrying the original (possibly rejected) id anywhere
         // `userMessage` itself is read afterward.
         userMessage.id = messageId;
-        const messageContent = extractMessageContent(userMessage);
+        const messageContent = userMessageContent;
 
         // Process @mentions in the user message
         const processedMessage = processMentionsInMessage(messageContent);
