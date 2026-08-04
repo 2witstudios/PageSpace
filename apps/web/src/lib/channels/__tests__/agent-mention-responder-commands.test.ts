@@ -282,16 +282,16 @@ describe('triggerMentionedAgentResponses — solo /help mention', () => {
     expect(mockLoadHelpAnswerText).toHaveBeenCalledWith('user-1', 'drive-1');
   });
 
-  it('still carries the "used" command-execution pill', async () => {
-    // commandPlans/commandExecution are computed unconditionally from the
-    // real planCommandExecutions (mocked here), independent of the solo-help
-    // fast path — mirrors what resolveBuiltinInjection('help', ...) actually
-    // returns in production.
-    mockPlanCommandExecutions.mockResolvedValue([
-      { kind: 'inject', injection: { commandId: 'builtin:help', trigger: 'help', label: 'help', scope: 'builtin', description: 'List the commands available here and explain how to use them.', entryPage: null, children: [] } },
-    ]);
-
+  it('still carries the "used" command-execution pill, without resolving the command at all', async () => {
+    // The pill is hand-built for the solo-help fast path — the same
+    // {label:'help', status:'used'} commandExecutionDataFromPlan would
+    // produce from a builtin plan anyway — specifically so this path never
+    // pays for planCommandExecutions's DB read (resolveBuiltinInjection ->
+    // loadAvailableCommands) just to build a model prompt (commandContext)
+    // this path never sends. loadHelpAnswerText's own read is the only one.
     await triggerMentionedAgentResponses(soloHelpParams);
+
+    expect(mockPlanCommandExecutions).not.toHaveBeenCalled();
 
     const sendOptions = mockSendChannelExecute.mock.calls[0][1] as {
       experimental_context: { commandExecution?: unknown };

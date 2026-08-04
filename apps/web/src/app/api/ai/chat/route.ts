@@ -757,16 +757,25 @@ export async function POST(request: Request) {
         // SENDER's permissions. The tokens stay in the saved content —
         // transcripts render each as a chip; only the system prompt gains
         // the injections.
-        commandPlans = await planCommandExecutions(messageContent, userId!, {
-          driveId: page.driveId,
-        });
-        if (commandPlans.length > 0) {
-          commandSystemPrompt = buildCommandPromptSection(commandPlans);
-          for (const plan of commandPlans) {
-            loggers.ai.info('AI Chat API: Command resolution', {
-              kind: plan.kind,
-              ...(plan.kind === 'skip' ? { reason: plan.reason } : {}),
-            });
+        //
+        // Skipped for a solo /help: it would resolve /help's dynamic
+        // section (a DB read building the model-facing command list, via
+        // resolveBuiltinInjection -> loadAvailableCommands) only for
+        // commandSystemPrompt, which the solo-help short-circuit below
+        // never sends to a model — respondWithHelpAnswer builds its own
+        // "used" pill directly and does its own (single) command-list read.
+        if (!isSoloHelpRequest) {
+          commandPlans = await planCommandExecutions(messageContent, userId!, {
+            driveId: page.driveId,
+          });
+          if (commandPlans.length > 0) {
+            commandSystemPrompt = buildCommandPromptSection(commandPlans);
+            for (const plan of commandPlans) {
+              loggers.ai.info('AI Chat API: Command resolution', {
+                kind: plan.kind,
+                ...(plan.kind === 'skip' ? { reason: plan.reason } : {}),
+              });
+            }
           }
         }
 

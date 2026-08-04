@@ -527,18 +527,39 @@ export async function triggerMentionedAgentResponses(
     );
     const locationContext = buildLocationContext(params);
 
+    // A mention whose content is nothing but the /help chip (plus the
+    // @mention(s) that got it here at all — reaching this function already
+    // required at least one, see resolveMentionedAgents above, so the
+    // strict isSoloBuiltinCommand could never be satisfied here) answers
+    // directly from code for every eligible agent, below — computed here
+    // (pure, no I/O) so the command resolution right after can skip
+    // resolving /help altogether for this case.
+    const isSoloHelpMention = isSoloBuiltinCommandIgnoringMentions(params.content, 'help');
+
     // Universal Commands (UX spec §6): a chip is inert in a plain channel
     // message, but every command chip executes — with the SENDER's
     // permissions — when this message triggers an agent response.
     // Resolution degrades, never fails; a skipped command becomes a
     // one-line notice. Both the prompt injection and the persisted
     // execution-feedback pill carry every resolved command, in order.
-    const commandPlans = await planCommandExecutions(params.content, params.userId, {
-      driveId: params.driveId ?? null,
-    });
+    //
+    // Skipped entirely for a solo /help mention: planCommandExecutions would
+    // resolve /help's dynamic section (a DB read building the model-facing
+    // command list) only for commandContext, which this path never sends to
+    // a model — and the "used" pill it would also produce is exactly
+    // {label:'help', status:'used'} either way, since a builtin has no entry
+    // page for commandExecutionDataFromPlan to read.
+    const commandPlans = isSoloHelpMention
+      ? []
+      : await planCommandExecutions(params.content, params.userId, {
+          driveId: params.driveId ?? null,
+        });
     const commandContext = buildCommandPromptSection(commandPlans);
-    const commandExecution =
-      commandPlans.length > 0 ? commandPlans.map(commandExecutionDataFromPlan) : undefined;
+    const commandExecution = isSoloHelpMention
+      ? [{ label: 'help', status: 'used' as const }]
+      : commandPlans.length > 0
+        ? commandPlans.map(commandExecutionDataFromPlan)
+        : undefined;
 
     // Only worth resolving presigned URLs/access checks when at least one
     // eligible agent can actually view images. Resolution failure (S3
@@ -559,16 +580,10 @@ export async function triggerMentionedAgentResponses(
       }
     }
 
-    // A mention whose content is nothing but the /help chip (plus the
-    // @mention(s) that got it here at all — reaching this function already
-    // required at least one, see resolveMentionedAgents above, so the
-    // strict isSoloBuiltinCommand could never be satisfied here) answers
-    // directly from code for every eligible agent — the answer is
-    // sender-scoped (the human's command list), not agent-scoped, so it's
-    // identical regardless of which agent replies. Skips
-    // askAgentExecute/generateText entirely.
-    const isSoloHelpMention = isSoloBuiltinCommandIgnoringMentions(params.content, 'help');
-
+    // isSoloHelpMention computed above (before command resolution). The
+    // answer itself is sender-scoped (the human's command list), not
+    // agent-scoped, so it's identical regardless of which agent replies —
+    // this skips askAgentExecute/generateText entirely for every one.
     for (const agent of eligibleAgents) {
       try {
         const mentionConversationId = `channel:${params.channelId}:agent:${agent.id}`;

@@ -568,16 +568,21 @@ export async function POST(
         // uses, so the picker and /help can't drift). The id is
         // client-supplied; the resolver membership-verifies it before any
         // drive commands are included. No drive → personal + built-ins only.
-        commandPlans = await planCommandExecutions(messageContent, userId, {
-          driveId: locationContext?.currentDrive?.id ?? null,
-        });
-        if (commandPlans.length > 0) {
-          commandSystemPrompt = buildCommandPromptSection(commandPlans);
-          for (const plan of commandPlans) {
-            loggers.api.info('Global Assistant Chat API: Command resolution', {
-              kind: plan.kind,
-              ...(plan.kind === 'skip' ? { reason: plan.reason } : {}),
-            });
+        //
+        // Skipped for a solo /help — see the equivalent comment in
+        // apps/web/src/app/api/ai/chat/route.ts.
+        if (!isSoloHelpRequest) {
+          commandPlans = await planCommandExecutions(messageContent, userId, {
+            driveId: locationContext?.currentDrive?.id ?? null,
+          });
+          if (commandPlans.length > 0) {
+            commandSystemPrompt = buildCommandPromptSection(commandPlans);
+            for (const plan of commandPlans) {
+              loggers.api.info('Global Assistant Chat API: Command resolution', {
+                kind: plan.kind,
+                ...(plan.kind === 'skip' ? { reason: plan.reason } : {}),
+              });
+            }
           }
         }
 
