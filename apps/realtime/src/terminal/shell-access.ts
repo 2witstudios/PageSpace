@@ -66,7 +66,7 @@ export interface ShellCheckAuthDeps {
    * rule.
    */
   resolvePayer: (session: AgentSessionAccessSubject) => Promise<{ payerId: string; driveId: string | null }>;
-  /** The requester's tier (slot accounting) + email (audit), or undefined when the row is missing. */
+  /** A user row's tier + email, or undefined when the row is missing. Called for the requester (audit email) and, when different, the payer (slot-eligibility tier). */
   getUser: (userId: string) => Promise<{ subscriptionTier: string | null; email: string | null } | undefined>;
   resolveActorEmail: (email: string | null | undefined) => Promise<string>;
   acquireSlot: (args: { userId: string; tier: SubscriptionTier }) => boolean;
@@ -129,7 +129,14 @@ export function buildShellCheckAuth(deps: ShellCheckAuthDeps): ShellCheckAuthFn 
     // Decrypt the actor email BEFORE anything is reserved (a decrypt throw here
     // must not leak a reserved slot — same ordering the predecessor had).
     const userRow = await deps.getUser(userId);
-    const tier = (userRow?.subscriptionTier ?? 'free') as SubscriptionTier;
+    // The slot-eligibility tier is the PAYER's, not the requester's (review
+    // #2326): `acquireSlot` refuses free-tier outright (`isSandboxAvailable`)
+    // and caps by tier, and a free-tier collaborator opening a shell in a
+    // Pro-owned drive runs on the drive owner's plan. The slot itself is
+    // still counted against the REQUESTER (`userId`), keeping per-actor
+    // concurrency accounting separate from payer-based entitlement.
+    const payerRow = payerId === userId ? userRow : await deps.getUser(payerId);
+    const tier = (payerRow?.subscriptionTier ?? 'free') as SubscriptionTier;
     const actorEmail = await deps.resolveActorEmail(userRow?.email);
 
     return {

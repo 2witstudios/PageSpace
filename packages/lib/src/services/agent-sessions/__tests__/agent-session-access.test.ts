@@ -63,13 +63,20 @@ describe('checkAgentSessionAccess', () => {
     expect(result).toEqual({ allowed: true });
   });
 
-  it('given the capability check refuses, should deny with the capability reason', async () => {
+  it('should NOT consult the capability at all — the session surface is capability-free (review #2326)', async () => {
+    // A free-tier payer (or a member with no code-execution rights) still
+    // opens sessions, chat and panes; only the compute chokepoints weigh
+    // canRunCode.
     const result = await checkAgentSessionAccess({
       requesterId: 'user-2',
       sessionId: SESSION_ID,
-      deps: makeDeps({ canRunCode: async () => false }),
+      deps: makeDeps({
+        canRunCode: async () => {
+          throw new Error('must not consult canRunCode for session-surface access');
+        },
+      }),
     });
-    expect(result).toEqual({ allowed: false, reason: 'code_execution_denied' });
+    expect(result).toEqual({ allowed: true });
   });
 });
 

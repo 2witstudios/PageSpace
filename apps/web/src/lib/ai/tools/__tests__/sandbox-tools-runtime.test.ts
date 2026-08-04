@@ -121,6 +121,34 @@ describe('resolveSandboxActorContext', () => {
       expect(result.driveId).toBe('d1');
       expect(result.tenantId).toBe('owner-1');
     });
+
+    it("should resolve the quota tier from the PAYER (drive owner), not the actor (review #2326)", async () => {
+      // A free-tier collaborator in a Pro-owned drive: every quota check
+      // downstream (`isSandboxAvailable` + the concurrency ceiling) consumes
+      // ctx.tier, so loading the actor's own tier here denied the very access
+      // the payer-based eligibility gate had just granted.
+      const context: ToolExecutionContext = {
+        ...basePageContext,
+        locationContext: { currentDrive: { id: 'd1', name: 'Drive 1', slug: 'drive-1' } },
+      };
+      const tierLookups: string[] = [];
+      const resolve = createResolveSandboxActorContext(
+        makeDeps({
+          findDrive: async () => ({ ownerId: 'owner-1' }),
+          findUser: async (userId) => {
+            tierLookups.push(userId);
+            return userId === 'owner-1'
+              ? { subscriptionTier: 'pro' }
+              : { subscriptionTier: 'free' };
+          },
+        }),
+      );
+      const result = await resolve(context);
+      expect('error' in result).toBe(false);
+      if ('error' in result) return;
+      expect(result.tier).toBe('pro');
+      expect(tierLookups).toEqual(['owner-1']);
+    });
   });
 
   describe('given chatSource type "global", currentDrive present, but drive not found in DB', () => {

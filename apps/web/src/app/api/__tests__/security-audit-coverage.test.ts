@@ -75,6 +75,9 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   // --- Draft persistence (personal, ephemeral, own-user-only) ---
   ['drafts', 'User draft CRUD — ephemeral own-user data, 7-day TTL, no shared resource access'],
 
+  // --- Agent-session history (read-only, own-data listing) ---
+  ['agent-sessions/conversations', 'GET-only listing of the requester\'s OWN conversations (ownerId rides every filter) — open to every authenticated user since the sessions surface opened up (#2326, which removed the admin gate that carried this route\'s only audit call); rows the requester can no longer see are dropped/masked by design (silent, to avoid a drive-membership oracle), so there is no denial path to audit and no shared data written'],
+
   // --- Direct-to-S3 attachment uploads (thin routes; audit lives in the shared
   //     orchestrator) — presign/complete emit data.write via attachment-direct.ts
   //     (auditRequest) and the resolvers emit authz.access.denied on permission /

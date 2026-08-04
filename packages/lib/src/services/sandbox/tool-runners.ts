@@ -66,6 +66,13 @@ export interface SandboxActorContext {
   actorDisplayName?: string;
   aiProvider?: string;
   aiModel?: string;
+  /**
+   * The PAYER's subscription tier (drive owner, or the acting user for a
+   * driveless global context) — NOT the actor's own. Consumed by the quota
+   * eligibility check and the concurrency ceiling; the slot itself is still
+   * counted per acting user (`userId`), so per-actor accounting stays separate
+   * from payer-based entitlement (review #2326).
+   */
   tier: SubscriptionTier;
   /**
    * Stable id for the CURRENT agent turn (one streamText run) — the same value

@@ -138,7 +138,7 @@ export async function resolveActorEmail(rawEmail: string | null | undefined): Pr
 // PTYs) was deleted in the Phase 8 teardown.
 // ---------------------------------------------------------------------------
 
-/** The owner's plan tier, for the live-session ceiling. Unknown/missing rows fall to the free-tier limit. */
+/** A user's plan tier (the payer's, for ceiling/eligibility checks). Unknown/missing rows fall to the free-tier limit. */
 async function resolveOwnerTier(ownerId: string) {
   const [row] = await db
     .select({ subscriptionTier: users.subscriptionTier })
@@ -217,7 +217,11 @@ async function ensureShellSessionSandbox({ sessionId, userId }: { sessionId: str
         });
       },
       checkConcurrency: async ({ ownerId, alreadyProvisioned }) => {
-        const tier = await resolveOwnerTier(ownerId);
+        // Tier of the PAYER — the session's tenant (drive owner, else session
+        // owner), resolved above — not the session creator's own tier (review
+        // #2326); mirrors the web tier's `provisionSessionSandbox`. The count
+        // stays per session owner (`ownerId`).
+        const tier = await resolveOwnerTier(tenantId);
         return checkAgentSessionConcurrency({
           ownerId,
           tier,
@@ -308,7 +312,22 @@ const shellCheckAuth = buildShellCheckAuth({
         canRunCode: canRunCodeForSession,
       },
     });
-    return decision.allowed ? { allowed: true, session: subject } : decision;
+    if (!decision.allowed) return decision;
+    // A PTY is COMPUTE, not session surface: the shared access decision above
+    // is deliberately capability-free (chat/panes are open to every drive
+    // member), so the shell bridge re-adds the `canRunCode` gate itself —
+    // payer-tier, drive-role and kill-switch all resolved by the centralized
+    // checker. This runs on the warm-reattach path and the 60s re-auth tick
+    // too, where the provisioner's own authorize seam (cold path only) never
+    // fires — without it, a member who lost the capability could keep typing
+    // into a live PTY.
+    const allowedToRunCode = await canRunCodeForSession({
+      userId: requesterId,
+      driveId: subject.driveId,
+      ownerId: subject.ownerId,
+    });
+    if (!allowedToRunCode) return { allowed: false, reason: 'code_execution_denied' };
+    return { allowed: true, session: subject };
   },
   resolvePayer: async (session) => {
     // Payer = the session's DRIVE owner; a global-assistant session (or a

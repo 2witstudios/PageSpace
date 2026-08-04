@@ -2,8 +2,8 @@
  * The IO wrapper around the ONE agent-session access decision.
  *
  * Its whole job is to GATHER — the session row, the requester's drive
- * membership, whether they may run code — and hand all three to
- * `decideAgentSessionAccess`. It contains no decision of its own, and that is
+ * membership, and (for the END variant only) whether they may run code — and
+ * hand them to `decideAgentSessionAccess`. It contains no decision of its own, and that is
  * enforceable by reading it: the only `if`s below turn a null into another
  * null (there is no drive, so there is no membership to fetch; there is no
  * session, so there is nothing to decide about). Anything that WEIGHS these
@@ -34,7 +34,12 @@ export interface AgentSessionAccessDeps {
     userId: string;
     driveId: string;
   }) => Promise<DriveMembership | null>;
-  /** The centralized `canRunCode` capability check, already reduced to a boolean by the caller's wiring. Must never throw (it is fail-closed by construction). */
+  /**
+   * The centralized `canRunCode` capability check, already reduced to a boolean
+   * by the caller's wiring. Must never throw (it is fail-closed by construction).
+   * Consulted ONLY by the END check below — the main session-surface check is
+   * deliberately capability-free (see `decideAgentSessionAccess`'s doc).
+   */
   canRunCode: (input: { userId: string; driveId: string | null; ownerId: string }) => Promise<boolean>;
 }
 
@@ -61,16 +66,14 @@ export async function checkAgentSessionAccess({
   const session = await deps.findSession(sessionId);
   if (!session) return { allowed: false, reason: 'session_not_found' };
 
-  const [driveMembership, canRunCode] = await Promise.all([
-    // No drive means no membership to hold — a global-assistant session is
-    // owner-only by construction, which the decider states and enforces.
+  // No drive means no membership to hold — a global-assistant session is
+  // owner-only by construction, which the decider states and enforces.
+  const driveMembership =
     session.driveId === null
-      ? Promise.resolve(null)
-      : deps.resolveDriveMembership({ userId: requesterId, driveId: session.driveId }),
-    deps.canRunCode({ userId: requesterId, driveId: session.driveId, ownerId: session.ownerId }),
-  ]);
+      ? null
+      : await deps.resolveDriveMembership({ userId: requesterId, driveId: session.driveId });
 
-  return decideAgentSessionAccess({ requesterId, session, driveMembership, canRunCode });
+  return decideAgentSessionAccess({ requesterId, session, driveMembership });
 }
 
 /**

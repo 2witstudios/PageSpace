@@ -420,17 +420,25 @@ export function createResolveSandboxActorContext(
       return { error: 'Code execution requires an active drive.' };
     }
 
-    // One parallel fetch covers both branches below: `findDrive` only runs a
-    // real query when driveId is present (an immediately-resolved undefined
-    // otherwise), so this preserves the original concurrency — findDrive,
-    // findUser, and getActorInfo all in flight together — without duplicating
-    // the actor lookup + result-object construction per branch.
-    const [drive, actorRow, actorInfo] = await Promise.all([
+    // `findDrive` only runs a real query when driveId is present (an
+    // immediately-resolved undefined otherwise); it rides alongside
+    // getActorInfo so both facts are in flight together.
+    const [drive, actorInfo] = await Promise.all([
       driveId ? deps.findDrive(driveId) : Promise.resolve(undefined),
-      deps.findUser(userId),
       deps.getActorInfo(userId),
     ]);
     if (driveId && !drive) return { error: 'Code execution requires an active drive.' };
+
+    // The PAYER's tier, not the actor's (review #2326): the drive owner pays
+    // for a drive-scoped session, the user themselves for a driveless global
+    // one — the same drive-owner ?? actor rule `canRunCode`'s tier gate and
+    // billing already apply. Loading the ACTOR's tier here made every quota
+    // check (`isSandboxAvailable` + the concurrency ceiling) fail for a
+    // free-tier collaborator in a Pro-owned drive, despite `canRunCode`
+    // having just authorized them against the payer. Sequenced after the
+    // drive fetch because the payer's id IS the drive's owner.
+    const payerId = drive?.ownerId ?? userId;
+    const payerRow = await deps.findUser(payerId);
 
     const base = {
       userId,
@@ -441,7 +449,7 @@ export function createResolveSandboxActorContext(
       actorDisplayName: actorInfo.actorDisplayName,
       aiProvider: context?.aiProvider,
       aiModel: context?.aiModel,
-      tier: toSubscriptionTier(actorRow?.subscriptionTier),
+      tier: toSubscriptionTier(payerRow?.subscriptionTier),
       turnId,
     };
 
@@ -465,7 +473,8 @@ export function createResolveSandboxActorContext(
 /**
  * Resolve the actor context from the chat tool context. The drive comes from the
  * active location; the tenant is the drive's owning account (the cloud tenant
- * boundary); the concurrency tier is the acting user's subscription tier.
+ * boundary); the quota tier is the PAYER's subscription tier (drive owner, or
+ * the acting user for a driveless global-assistant run).
  *
  * Global assistant context (chatSource.type === 'global') is a first-class path:
  * driveId may be absent and resolves with tenantId = userId.

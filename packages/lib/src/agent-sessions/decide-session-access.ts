@@ -5,8 +5,8 @@
  * handler — call this function. That is the concrete mitigation for the risk
  * that the two surfaces drift apart: they cannot, because there is only one
  * decision, and its input shape is constructible from either side (a requester
- * id, the session row's own identity columns, and two facts the caller looks
- * up: the requester's drive membership, and whether they may run code at all).
+ * id, the session row's own identity columns, and one fact the caller looks
+ * up: the requester's drive membership).
  *
  * A session is a DRIVE-LEVEL workspace (contract invariant 1), so access is
  * drive access. The old model gated on conversation ownership and agent-page
@@ -14,7 +14,7 @@
  * conversations with many agents, so neither a single thread's sharing state
  * nor a single page's ACL can speak for it. The drive can, and does.
  *
- * Three gates, evaluated in a fixed order so a denial always names the FIRST
+ * Two gates, evaluated in a fixed order so a denial always names the FIRST
  * thing wrong:
  *
  *  1. **Requester** — a non-empty id. Fails closed on the degenerate input.
@@ -25,10 +25,16 @@
  *     owner-only by construction. The gate applies to the session's OWNER too:
  *     an owner removed from the drive loses USE of its working context (see
  *     the END variant for why release-of-compute is different).
- *  3. **Capability** — `canRunCode` (app-admin + the CODE_EXECUTION flag,
- *     computed by the centralized checker). A distinct reason, because it is a
- *     distinct condition: the requester may legitimately reach this session
- *     and still not be allowed a sandbox.
+ *
+ * Deliberately NO `canRunCode` gate here: the session surface (list, detail,
+ * conversations, chat, panes) is open to every authenticated user with scope
+ * access — only the SANDBOX (real compute: Sprite provisioning, PTY attach,
+ * code-execution tools) is capability-gated, and each of those chokepoints
+ * consults `canRunCode` itself (`ensureAgentSessionSandbox`'s authorize seam,
+ * the tool gate, and the realtime shell-attach wiring). Weighing `canRunCode`
+ * here made a free-tier payer — or a plain drive member — unable to even open
+ * a chat-only session (review #2326: the tier gate inside `canRunCode` leaked
+ * into the non-compute surface).
  *
  * Everything fails closed: an unresolved membership (`null`) denies, and an
  * empty requester denies.
@@ -64,14 +70,12 @@ export interface DecideAgentSessionAccessInput {
   session: AgentSessionAccessSubject;
   /** The requester's membership in `session.driveId`. Ignored (may be null) for a global-assistant session. */
   driveMembership: DriveMembership | null;
-  canRunCode: boolean;
 }
 
 export function decideAgentSessionAccess({
   requesterId,
   session,
   driveMembership,
-  canRunCode,
 }: DecideAgentSessionAccessInput): AgentSessionAccessDecision {
   if (requesterId.length === 0) {
     return { allowed: false, reason: 'invalid_requester' };
@@ -89,14 +93,18 @@ export function decideAgentSessionAccess({
     return { allowed: false, reason: 'drive_access_denied' };
   }
 
-  if (!canRunCode) {
-    return { allowed: false, reason: 'code_execution_denied' };
-  }
-
   return { allowed: true };
 }
 
-export type DecideAgentSessionEndAccessInput = DecideAgentSessionAccessInput;
+export interface DecideAgentSessionEndAccessInput extends DecideAgentSessionAccessInput {
+  /**
+   * Whether the requester holds the code-execution capability, computed by the
+   * centralized `canRunCode` checker. Consumed ONLY by the END decision (below)
+   * — ending a session is destructive release-of-compute, not part of the free
+   * session surface, so non-owners stay capability-gated (review finding H3).
+   */
+  canRunCode: boolean;
+}
 
 /**
  * The END-SESSION variant: ONE deliberate widening, for the owner only.
@@ -107,13 +115,13 @@ export type DecideAgentSessionEndAccessInput = DecideAgentSessionAccessInput;
  * able to stop paying for their Sprite, or it bills until an operator
  * notices.
  *
- * NON-owners get the full decision, real capability included. The previous
- * shape pinned `canRunCode: true` on the fallthrough, which handed every
- * accepted drive member — including ones with no code-execution rights at
- * all — the power to destroy other members' sessions and kill their live
+ * NON-owners get the surface decision PLUS the real capability gate. The
+ * previous shape pinned `canRunCode: true` on the fallthrough, which handed
+ * every accepted drive member — including ones with no code-execution rights
+ * at all — the power to destroy other members' sessions and kill their live
  * shells (review finding H3). Release-of-compute is the OWNER's emergency
- * exit; a collaborator ending shared compute is ordinary session management
- * and is gated exactly like every other session action.
+ * exit; a collaborator ending shared compute is destructive and stays
+ * capability-gated even now that the read/chat surface itself is free.
  */
 export function decideAgentSessionEndAccess(
   input: DecideAgentSessionEndAccessInput,
@@ -121,5 +129,10 @@ export function decideAgentSessionEndAccess(
   if (input.requesterId.length > 0 && input.requesterId === input.session.ownerId) {
     return { allowed: true };
   }
-  return decideAgentSessionAccess(input);
+  const surface = decideAgentSessionAccess(input);
+  if (!surface.allowed) return surface;
+  if (!input.canRunCode) {
+    return { allowed: false, reason: 'code_execution_denied' };
+  }
+  return { allowed: true };
 }
