@@ -47,7 +47,7 @@ import {
   provisionSessionSandbox,
   toAgentSessionDTO,
 } from '@/lib/agent-sessions/agent-sessions-runtime';
-import { resolveSandboxToolEligibility } from '@/lib/ai/core/sandbox-tool-eligibility';
+import { canRunCodeForSession } from '@pagespace/lib/services/agent-sessions/agent-session-tenant';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -97,12 +97,21 @@ export async function GET(request: Request, context: RouteContext) {
 
   const row = await findSessionRecord(sessionId);
   if (!row) return NextResponse.json({ session: null });
-  // The session's own PAYER (drive owner, or the session's own owner when
-  // driveless) — not the requester — so a free-tier member of a Pro-owned
-  // drive still sees the sandbox as available. Client-side, `useAuth()` only
-  // knows the viewing user's own tier, which is the wrong axis; this is the
-  // one place that resolves the real answer.
-  const sandboxEligible = await resolveSandboxToolEligibility(row.driveId, row.ownerId);
+  // Whether THIS REQUESTER may run the sandbox here — the full centralized
+  // `canRunCode` verdict (kill switch + the PAYER's tier + the requester's
+  // own drive edit access), not payer tier alone (review #2326): a
+  // VIEWER-role member of a Pro-owned drive, or anyone while the kill
+  // switch is off, would otherwise see enabled Shell/reattach controls that
+  // every enforcement point (shells POST, realtime attach) then 403s.
+  // Payer-based tier resolution still means a free-tier EDITOR in a
+  // Pro-owned drive sees the sandbox as available — client-side `useAuth()`
+  // only knows the viewer's own tier, the wrong axis; this is the one place
+  // that resolves the real answer.
+  const sandboxEligible = await canRunCodeForSession({
+    userId: auth.userId,
+    driveId: row.driveId,
+    ownerId: row.ownerId,
+  });
   return NextResponse.json({ session: toAgentSessionDTO(row), sandboxEligible });
 }
 

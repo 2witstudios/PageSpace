@@ -42,8 +42,8 @@ vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
   provisionSessionSandbox: (...args: unknown[]) => mockProvisionSessionSandbox(...args),
   toAgentSessionDTO: (row: { id: string }) => ({ sessionId: row.id, dto: true }),
 }));
-vi.mock('@/lib/ai/core/sandbox-tool-eligibility', () => ({
-  resolveSandboxToolEligibility: (...args: unknown[]) => mockResolveSandboxToolEligibility(...args),
+vi.mock('@pagespace/lib/services/agent-sessions/agent-session-tenant', () => ({
+  canRunCodeForSession: (...args: unknown[]) => mockResolveSandboxToolEligibility(...args),
 }));
 
 import { GET, POST, DELETE } from '../route';
@@ -70,18 +70,25 @@ beforeEach(() => {
 });
 
 describe('GET /api/agent-sessions/[sessionId]', () => {
-  it('given an accessible session, should return its DTO plus the payer sandbox-eligibility verdict', async () => {
+  it("given an accessible session, should return its DTO plus the REQUESTER's sandbox capability verdict", async () => {
     const response = await get();
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       session: { sessionId: SESSION_ID, dto: true },
       sandboxEligible: true,
     });
-    // The SESSION's own owner, not the requester — ROW.ownerId, not AUTH_USER.userId.
-    expect(mockResolveSandboxToolEligibility).toHaveBeenCalledWith(ROW.driveId, ROW.ownerId);
+    // The full centralized canRunCode verdict for THIS requester against the
+    // session's own coordinates (review #2326): payer tier alone enabled
+    // Shell controls for viewer-role members that every enforcement point
+    // then 403'd.
+    expect(mockResolveSandboxToolEligibility).toHaveBeenCalledWith({
+      userId: AUTH_USER.userId,
+      driveId: ROW.driveId,
+      ownerId: ROW.ownerId,
+    });
   });
 
-  it('given a free-tier payer, should report sandboxEligible: false', async () => {
+  it('given a requester who may not run code here (free payer, viewer role, or kill switch off), should report sandboxEligible: false', async () => {
     mockResolveSandboxToolEligibility.mockResolvedValue(false);
     const response = await get();
     expect(await response.json()).toEqual({

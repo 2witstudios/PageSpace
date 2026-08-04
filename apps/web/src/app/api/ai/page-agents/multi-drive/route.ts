@@ -3,9 +3,11 @@ import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds, getPri
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 import { db } from '@pagespace/db/db'
-import { eq, and, inArray } from '@pagespace/db/operators'
+import { eq, and, inArray, isNotNull } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
+import { driveMembers } from '@pagespace/db/schema/members';
+import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { computeSandboxEligibilityByDrive } from './sandbox-eligibility-by-drive';
@@ -73,7 +75,26 @@ export async function GET(request: Request) {
     const ownerRows = ownerIds.length
       ? await db.select({ id: users.id, subscriptionTier: users.subscriptionTier }).from(users).where(inArray(users.id, ownerIds))
       : [];
-    const sandboxEligibleByDrive = computeSandboxEligibilityByDrive(accessibleDrives, ownerRows);
+    // The requester's edit-capable memberships, one batched query — the flag
+    // is "can THIS requester use the sandbox there" (payer tier AND actor
+    // edit access AND the kill switch), not payer tier alone (review #2326):
+    // a viewer-role member would otherwise be offered shell affordances every
+    // enforcement point then 403s.
+    const accessibleDriveIds = accessibleDrives.map((d) => d.id);
+    const membershipRows = accessibleDriveIds.length
+      ? await db
+          .select({ driveId: driveMembers.driveId, role: driveMembers.role })
+          .from(driveMembers)
+          .where(and(eq(driveMembers.userId, userId), inArray(driveMembers.driveId, accessibleDriveIds), isNotNull(driveMembers.acceptedAt)))
+      : [];
+    const editableDriveIds = new Set(
+      membershipRows.filter((row) => row.role === 'ADMIN' || row.role === 'MEMBER').map((row) => row.driveId),
+    );
+    const sandboxEligibleByDrive = computeSandboxEligibilityByDrive(accessibleDrives, ownerRows, {
+      userId,
+      editableDriveIds,
+      codeExecutionEnabled: isCodeExecutionEnabled(),
+    });
 
     // Filter by MCP token scope (if scoped)
     const allowedDriveIds = getAllowedDriveIds(auth);
@@ -88,7 +109,7 @@ export async function GET(request: Request) {
       driveSlug: string;
       agentCount: number;
       agents: AgentSummary[];
-      /** Whether THIS drive's owner (the payer) is on a tier that includes the sandbox. */
+      /** Whether THIS REQUESTER can use the sandbox in this drive (payer tier + actor edit access + kill switch). */
       sandboxEligible: boolean;
     }[] = [];
     const allAccessibleAgents: AgentSummary[] = [];
