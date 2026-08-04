@@ -85,6 +85,7 @@ import {
   filterToolsForMcpScope,
   filterToolsForAgentAllowlist,
   filterToolsForSandboxEnablement,
+  filterToolsForSandboxTier,
 } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
@@ -1094,10 +1095,10 @@ export async function POST(request: Request) {
     const sandboxTierEligible = sandboxEnabled
       ? await resolveSandboxToolEligibilityForConversation(conversationId, page.driveId ?? null, userId)
       : false;
-    filteredTools = filterToolsForSandboxEnablement(
-      filteredTools,
-      sandboxEnabled && sandboxTierEligible
-    ) as ToolSet;
+    filteredTools = filterToolsForSandboxEnablement(filteredTools, sandboxEnabled) as ToolSet;
+    // The tier gate strips only the COMPUTE tools — a free payer keeps the
+    // chat-only session family (sessions/chat are free on every plan).
+    filteredTools = filterToolsForSandboxTier(filteredTools, sandboxTierEligible) as ToolSet;
 
     // Step 4: webSearchEnabled is a runtime input toggle that overrides the allowlist.
     // If the user toggled web search on in the composer, they get web_search regardless of enabledTools.

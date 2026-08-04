@@ -13,6 +13,8 @@ import {
   suppressGithubIntegrationTools,
   filterToolsForAgentAllowlist,
   filterToolsForSandboxEnablement,
+  filterToolsForSandboxTier,
+  SANDBOX_COMPUTE_TOOL_NAMES,
   SANDBOX_TOOL_NAMES,
   SESSION_FAMILY_TOOL_NAMES,
 } from '../tool-filtering';
@@ -531,6 +533,48 @@ describe('filterToolsForSandboxEnablement', () => {
     // disabled sandbox, whose whole tool surface is off.
     const filtered = filterToolsForSandboxEnablement({ read_shell: {}, list_sessions: {} }, false);
     expect(Object.keys(filtered)).toEqual([]);
+  });
+});
+
+describe('filterToolsForSandboxTier', () => {
+  const sample = {
+    bash: {},
+    editFile: {},
+    git_status: {},
+    spawn_shell: {},
+    read_shell: {},
+    // The chat-only session family — free on every plan (review #2326).
+    list_sessions: {},
+    spawn_session: {},
+    send_session: {},
+    read_session: {},
+    kill_session: {},
+    // non-sandbox neighbours
+    read_page: {},
+  };
+
+  it('given an INELIGIBLE payer, strips compute (bash/files, git, PTY shells) but KEEPS the chat-only session family', () => {
+    const filtered = filterToolsForSandboxTier(sample, false);
+    expect(Object.keys(filtered).sort()).toEqual([
+      'kill_session',
+      'list_sessions',
+      'read_page',
+      'read_session',
+      'send_session',
+      'spawn_session',
+    ]);
+  });
+
+  it('given an eligible payer, returns the set untouched', () => {
+    expect(filterToolsForSandboxTier(sample, true)).toEqual(sample);
+  });
+});
+
+describe('SANDBOX_COMPUTE_TOOL_NAMES', () => {
+  it('is exactly SANDBOX_TOOL_NAMES minus the chat-only session tools', () => {
+    const chatOnly = ['list_sessions', 'spawn_session', 'send_session', 'read_session', 'kill_session'];
+    const expected = [...SANDBOX_TOOL_NAMES].filter((name) => !chatOnly.includes(name)).sort();
+    expect([...SANDBOX_COMPUTE_TOOL_NAMES].sort()).toEqual(expected);
   });
 });
 

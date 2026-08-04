@@ -22,7 +22,7 @@ import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factor
 import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
 import { sanitizeMessagesForModel, saveMessageToDatabase, extractMessageContent, convertDbMessageToUIMessage, extractToolResults } from '@/lib/ai/core/message-utils';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import { filterToolsForReadOnly, filterToolsForMcpScope, filterToolsForImageGen, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForReadOnly, filterToolsForMcpScope, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { getModelCapabilities, hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { hasFileParts, validateUserMessageFileParts } from '@/lib/ai/core/validate-image-parts';
@@ -301,10 +301,10 @@ export async function POST(request: Request): Promise<Response> {
       const sandboxTierEligible = sandboxEnabled
         ? await resolveSandboxToolEligibilityForConversation(incomingConversationId, page.driveId ?? null, authResult.userId)
         : false;
-      filteredTools = filterToolsForSandboxEnablement(
-        filteredTools,
-        sandboxEnabled && sandboxTierEligible,
-      ) as ToolSet;
+      filteredTools = filterToolsForSandboxEnablement(filteredTools, sandboxEnabled) as ToolSet;
+      // Tier strips only COMPUTE tools; the chat-only session family stays
+      // available to free payers (sessions/chat are free on every plan).
+      filteredTools = filterToolsForSandboxTier(filteredTools, sandboxTierEligible) as ToolSet;
       const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
       filteredTools = exposure.tools;
       toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
@@ -337,10 +337,10 @@ export async function POST(request: Request): Promise<Response> {
       const sandboxTierEligible = sandboxEnabled
         ? await resolveSandboxToolEligibilityForConversation(incomingConversationId, page.driveId ?? null, authResult.userId)
         : false;
-      filteredTools = filterToolsForSandboxEnablement(
-        filteredTools,
-        sandboxEnabled && sandboxTierEligible,
-      ) as ToolSet;
+      filteredTools = filterToolsForSandboxEnablement(filteredTools, sandboxEnabled) as ToolSet;
+      // Tier strips only COMPUTE tools; the chat-only session family stays
+      // available to free payers (sessions/chat are free on every plan).
+      filteredTools = filterToolsForSandboxTier(filteredTools, sandboxTierEligible) as ToolSet;
       const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
       filteredTools = exposure.tools;
       toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;

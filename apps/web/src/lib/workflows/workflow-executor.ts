@@ -4,7 +4,7 @@ import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { createId } from '@paralleldrive/cuid2';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import { filterToolsForImageGen, filterToolsForSandboxEnablement, SANDBOX_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier, SANDBOX_COMPUTE_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibility } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { spawnSession, createConversationInSession, endSession } from '@/lib/agent-sessions/agent-sessions-runtime';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
@@ -521,10 +521,10 @@ async function runExecution(
     const workflowSandboxTierEligible = workflowSandboxEnabled
       ? await resolveSandboxToolEligibility(agent.driveId ?? null, input.createdBy)
       : false;
-    availableTools = filterToolsForSandboxEnablement(
-      availableTools,
-      workflowSandboxEnabled && workflowSandboxTierEligible,
-    ) as ToolSet;
+    availableTools = filterToolsForSandboxEnablement(availableTools, workflowSandboxEnabled) as ToolSet;
+    // Tier strips only COMPUTE tools — the chat-only session family stays
+    // (sessions/chat are free on every plan).
+    availableTools = filterToolsForSandboxTier(availableTools, workflowSandboxTierEligible) as ToolSet;
 
     // Workflows execute the same page agent used in chat, so they should also
     // inherit integration grants such as GitHub/Notion tools.
@@ -569,7 +569,7 @@ async function runExecution(
     const sandboxToolsActive =
       workflowSandboxEnabled &&
       workflowSandboxTierEligible &&
-      Object.keys(availableTools).some((name) => SANDBOX_TOOL_NAMES.has(name));
+      Object.keys(availableTools).some((name) => SANDBOX_COMPUTE_TOOL_NAMES.has(name));
     if (sandboxToolsActive) {
       const spawned = await spawnSession({
         userId: input.createdBy,
@@ -590,7 +590,7 @@ async function runExecution(
           workflowSessionId = spawned.session.id;
         } catch (error) {
           await endSession(spawned.session.id).catch(() => {});
-          availableTools = filterToolsForSandboxEnablement(availableTools, false) as ToolSet;
+          availableTools = filterToolsForSandboxTier(availableTools, false) as ToolSet;
           loggers.api.warn('Workflow executor: session conversation bind failed — running without sandbox tools', {
             workflowId: input.workflowId,
             sessionId: spawned.session.id,
@@ -598,7 +598,7 @@ async function runExecution(
           });
         }
       } else {
-        availableTools = filterToolsForSandboxEnablement(availableTools, false) as ToolSet;
+        availableTools = filterToolsForSandboxTier(availableTools, false) as ToolSet;
         loggers.api.warn('Workflow executor: session spawn refused — running without sandbox tools', {
           workflowId: input.workflowId,
           reason: spawned.reason,

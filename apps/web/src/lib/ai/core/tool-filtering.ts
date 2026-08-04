@@ -190,6 +190,42 @@ export function filterToolsForSandboxEnablement<T>(
   );
 }
 
+/**
+ * The COMPUTE subset of the sandbox surface — what a free-tier payer must not
+ * see: core execution (bash/files), the git+gh CLI toolkit, and the PTY shell
+ * tools (a shell IS the sandbox). The chat-side session tools
+ * (list/spawn/send/read/kill_session) are deliberately NOT here: sessions and
+ * chat workers are free on every plan (review #2326) — only the machine is
+ * tier-gated — so the TIER filter below must preserve them where the
+ * per-agent switch (`filterToolsForSandboxEnablement` above, which strips all
+ * three families) would not.
+ */
+export const SANDBOX_COMPUTE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  ...SANDBOX_CORE_TOOL_NAMES,
+  ...SANDBOX_GIT_TOOL_NAMES,
+  'spawn_shell',
+  'send_shell',
+  'read_shell',
+  'kill_shell',
+]);
+
+/**
+ * Apply the PAYER-tier gate: an ineligible (free-tier) payer loses the
+ * compute tools but keeps the chat-only session orchestration family —
+ * showing bash/git/shell tools that hard-fail `tier_ineligible` is the UX
+ * bug this prevents, while removing `spawn_session` and friends would gate
+ * the free session surface this release explicitly opens (review #2326).
+ */
+export function filterToolsForSandboxTier<T>(
+  tools: Record<string, T>,
+  tierEligible: boolean
+): Record<string, T> {
+  if (tierEligible) return tools;
+  return Object.fromEntries(
+    Object.entries(tools).filter(([name]) => !SANDBOX_COMPUTE_TOOL_NAMES.has(name))
+  );
+}
+
 // Image-generation tools (a runtime composer toggle, like web search — filtered
 // independently of the saved per-agent allow-list).
 const IMAGE_GEN_TOOLS = new Set(['generate_image']);

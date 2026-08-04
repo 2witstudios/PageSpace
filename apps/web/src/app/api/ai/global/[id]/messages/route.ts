@@ -48,7 +48,7 @@ import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildSystemPrompt, buildNonCoreToolNamesPrompt, TOOL_DISCOVERY_PROMPT } from '@/lib/ai/core/system-prompt';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
-import { filterToolsForReadOnly, filterToolsForWebSearch, filterToolsForImageGen, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForReadOnly, filterToolsForWebSearch, filterToolsForImageGen, filterToolsForSandboxTier } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
 import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree-context';
@@ -889,13 +889,12 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
     // exists when code execution is enabled, and a prompt that names a tool the
     // model does not have makes it attempt delegation that silently fails.
     const agentAwarenessPrompt = await buildAgentAwarenessPrompt(userId, {
-      // ALL THREE gates, because the tool set applies all three: registration
-      // is gated on CODE_EXECUTION_ENABLED, the payer-tier filter strips the
-      // session family for an ineligible payer, and `filterToolsForReadOnly`
-      // then strips spawn_session again as a write tool. Checking only the
-      // first told a read-only (or free-tier) agent to delegate with a tool
-      // it does not have.
-      canDelegate: isCodeExecutionEnabled() && !readOnlyMode && sandboxTierEligible,
+      // BOTH gates, because the tool set applies both: registration is gated on
+      // CODE_EXECUTION_ENABLED, and `filterToolsForReadOnly` then strips
+      // spawn_session again as a write tool. The payer-tier filter does NOT
+      // remove the chat-only session family (sessions are free on every
+      // plan), so tier is deliberately not weighed here.
+      canDelegate: isCodeExecutionEnabled() && !readOnlyMode,
     });
 
     // Build page tree context if enabled
@@ -927,14 +926,14 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
     }
 
     // Full filtered tool set. NOT sent to model directly; used as dispatch map for
-    // execute_tool and as tool_search catalog. The sandbox families (bash/files,
-    // git+gh, sessions/shells) are stripped for a tier-ineligible payer BEFORE
+    // execute_tool and as tool_search catalog. The COMPUTE tools (bash/files,
+    // git+gh, PTY shells — not the free chat-session family) are stripped for a tier-ineligible payer BEFORE
     // anything reads this set — including `resolveGlobalAssistantIntegrationTools`
     // below, whose sandbox-git-overlap suppression keys on these tool NAMES.
     const filteredAllTools = filterToolsForImageGen(
       filterToolsForWebSearch(
         filterToolsForReadOnly(
-          filterToolsForSandboxEnablement(pageSpaceTools, sandboxTierEligible),
+          filterToolsForSandboxTier(pageSpaceTools, sandboxTierEligible),
           readOnlyMode
         ),
         webSearchMode
