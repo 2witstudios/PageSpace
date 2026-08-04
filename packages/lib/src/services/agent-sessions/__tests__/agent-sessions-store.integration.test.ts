@@ -23,7 +23,7 @@ import { drives, pages } from '@pagespace/db/schema/core';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { agentSessions } from '@pagespace/db/schema/agent-sessions';
 import { machineSpriteReclaims } from '@pagespace/db/schema/machine-sprite-reclaims';
-import { createDbAgentSessionStore } from '../agent-sessions-store';
+import { createDbAgentSessionStore, type AgentSessionListFilter } from '../agent-sessions-store';
 
 const ownerId = createId();
 const driveId = createId();
@@ -556,6 +556,111 @@ describe('list bounds and ordering (review M3/M4)', () => {
     await seedSession({ endedAt: new Date() }); // ended — excluded
     const after = await store.countActive(ownerId);
     expect(after).toBe(before + 1);
+  });
+});
+
+describe('list — driveId filter also includes the caller\'s own global sessions', () => {
+  it('includes a null-driveId (global-assistant) session for the same owner', async () => {
+    const globalSessionId = createId();
+    sessionIds.push(globalSessionId);
+    await db.insert(agentSessions).values({
+      id: globalSessionId,
+      ownerId,
+      driveId: null,
+      updatedAt: new Date(),
+    });
+
+    const listed = await store.list({ driveId, ownerId });
+    expect(listed.map((row) => row.id)).toContain(globalSessionId);
+  });
+
+  it('still excludes a null-driveId session belonging to a DIFFERENT owner', async () => {
+    const otherOwnerId = createId();
+    await db.insert(users).values({
+      id: otherOwnerId,
+      email: `agent-sessions-store-other-${otherOwnerId}@example.test`,
+      name: 'Other Owner',
+    });
+    const otherGlobalSessionId = createId();
+    await db.insert(agentSessions).values({
+      id: otherGlobalSessionId,
+      ownerId: otherOwnerId,
+      driveId: null,
+      updatedAt: new Date(),
+    });
+
+    try {
+      const listed = await store.list({ driveId, ownerId });
+      expect(listed.map((row) => row.id)).not.toContain(otherGlobalSessionId);
+    } finally {
+      await db.delete(agentSessions).where(eq(agentSessions.id, otherGlobalSessionId));
+      await db.delete(users).where(eq(users.id, otherOwnerId));
+    }
+  });
+
+  it('given an OWNERLESS driveId filter, excludes every global session — no owner to scope the union to (review: Codex P1 on #2325)', async () => {
+    // `{ driveId }` alone is the admin "every session in this drive, any
+    // owner" shape (`agent-sessions.test.ts`'s `listAgentSessions` "given a
+    // drive filter" case). Without an owner in the filter, unioning in
+    // `driveId IS NULL` would return every user's global-assistant sessions
+    // across the whole deployment, not just sessions relevant to this drive.
+    const otherOwnerId = createId();
+    await db.insert(users).values({
+      id: otherOwnerId,
+      email: `agent-sessions-store-ownerless-${otherOwnerId}@example.test`,
+      name: 'Ownerless Probe Owner',
+    });
+    const otherGlobalSessionId = createId();
+    await db.insert(agentSessions).values({
+      id: otherGlobalSessionId,
+      ownerId: otherOwnerId,
+      driveId: null,
+      updatedAt: new Date(),
+    });
+    const driveScoped = await seedSession();
+
+    try {
+      const listed = await store.list({ driveId });
+      const ids = listed.map((row) => row.id);
+      expect(ids).toContain(driveScoped);
+      expect(ids).not.toContain(otherGlobalSessionId);
+    } finally {
+      await db.delete(agentSessions).where(eq(agentSessions.id, otherGlobalSessionId));
+      await db.delete(users).where(eq(users.id, otherOwnerId));
+    }
+  });
+
+  it('given driveId with an explicitly-undefined ownerId, behaves as ownerless against real Postgres (review: CodeRabbit)', async () => {
+    // `AgentSessionListFilter` no longer has a variant shaped like this — the
+    // cast pins the runtime guard against a value that reaches here some
+    // other way (a bypassed cast, a loosely-typed caller upstream), proving
+    // the SQL itself (not just the type system) refuses to treat a
+    // present-but-unset ownerId as "owned".
+    const otherOwnerId = createId();
+    await db.insert(users).values({
+      id: otherOwnerId,
+      email: `agent-sessions-store-undef-owner-${otherOwnerId}@example.test`,
+      name: 'Undefined-Owner Probe Owner',
+    });
+    const otherGlobalSessionId = createId();
+    await db.insert(agentSessions).values({
+      id: otherGlobalSessionId,
+      ownerId: otherOwnerId,
+      driveId: null,
+      updatedAt: new Date(),
+    });
+    const driveScoped = await seedSession();
+    const filter = { driveId, ownerId: undefined } as unknown as AgentSessionListFilter;
+
+    try {
+      const listed = await store.list(filter);
+      const ids = listed.map((row) => row.id);
+      expect(ids).toContain(driveScoped);
+      expect(ids).not.toContain(otherGlobalSessionId);
+    } finally {
+      await db.delete(agentSessions).where(eq(agentSessions.id, otherGlobalSessionId));
+      await db.delete(users).where(eq(users.id, otherOwnerId));
+    }
   });
 });
 

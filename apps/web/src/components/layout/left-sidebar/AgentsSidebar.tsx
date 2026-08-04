@@ -107,8 +107,17 @@ export default function AgentsSidebar({ className }: SidebarProps) {
     refreshInterval: 20_000,
   });
 
-  // The spawn chooser's agent list rides the same fetch both modes already use.
-  const { agentsByDrive } = usePageAgents(driveId, { enabled: isAdmin });
+  // Unfiltered (no driveId arg) in BOTH modes now, not just global mode: a
+  // drive's sidebar can show a global-assistant session whose conversations
+  // are with agents from ANY accessible drive (agent-sessions-store.ts's
+  // `list()` now surfaces those), so `agentNamesById` below needs every
+  // accessible agent's name, not just this drive's, to label them correctly
+  // instead of falling back to the generic "Agent" (review: Codex P2 on
+  // #2325). The spawn palette stays correctly drive-scoped regardless —
+  // `useSpawnSession` already does its own `agentsByDrive.find(entry =>
+  // entry.driveId === spawnTarget.driveId)` lookup, so handing it the full
+  // list changes nothing about which agents a drive's "+" offers.
+  const { agentsByDrive } = usePageAgents(undefined, { enabled: isAdmin });
 
   useEffect(() => {
     setIsElectronMac(isElectron() && /Mac/.test(navigator.platform));
@@ -313,13 +322,34 @@ function SessionList({
   });
 
   // Group by drive in global mode (roster ∪ session-implied drives, Assistant
-  // first — see session-groups.ts for the ordering rule); a single implicit
-  // group in drive mode, always present (even with zero sessions) so its
-  // header — and the header's spawn affordance — never disappears mid-load.
+  // first — see session-groups.ts for the ordering rule). In drive mode, the
+  // drive's own sessions get an always-present implicit group (even with zero
+  // sessions, so its header's spawn affordance never disappears mid-load).
+  // A second "Global Assistant" group, ahead of it (same "Assistant first"
+  // rule as global mode), surfaces the caller's global sessions (driveId
+  // null) — those aren't this drive's data, they're the user's, and the API
+  // now includes them in every drive-scoped listing (see
+  // agent-sessions-store.ts's `list()`) — but ONLY when there's at least one:
+  // unlike global mode's Assistant group, this one has no `canSpawn`
+  // always-show escape hatch, because "Global Assistant" already names a
+  // different, unrelated affordance in drive mode: the new-session drive
+  // palette's own "Global Assistant" agent-picker entry
+  // (`useSpawnSession.tsx`'s `onPickTarget({ kind: 'assistant', ... label:
+  // 'Global Assistant' })`), which spawns a DRIVE-scoped session whose first
+  // conversation happens to be with the assistant agent — an
+  // always-rendered empty group here would sit right next to that and read
+  // as the same thing when it is not.
   const groups = useMemo(() => {
-    if (driveId) return [{ driveId, driveName: null, sessions: filteredSessions }];
+    if (driveId) {
+      // Same bucketing/ordering `buildSessionGroups` already does for global
+      // mode, just handed a single-drive roster — `assistant: false` is what
+      // encodes "no canSpawn escape hatch" above (`hasAssistantSessions`
+      // still shows the group once one exists).
+      const driveName = drives.find((d) => d.id === driveId)?.name ?? driveId;
+      return buildSessionGroups(filteredSessions, { assistant: false, drives: [{ driveId, driveName }] });
+    }
     return buildSessionGroups(filteredSessions, { assistant: canSpawn, drives: roster });
-  }, [driveId, filteredSessions, canSpawn, roster]);
+  }, [driveId, filteredSessions, drives, canSpawn, roster]);
 
   // While actively searching, a group with no matches is noise — hide it
   // rather than showing an empty group with a spawn "+". Outside search the
@@ -361,7 +391,10 @@ function SessionList({
       )}
       {visibleGroups.map((group) => (
         <div key={group.driveId}>
-          {!driveId && (
+          {/* `group.driveId` is always a real string (never undefined), so
+              this alone already covers global mode (every group differs from
+              an undefined `driveId`) — no separate `!driveId ||` needed. */}
+          {group.driveId !== driveId && (
             <SessionGroupHeader
               label={group.driveName ?? group.driveId}
               newSessionLabel={`New session in ${group.driveName ?? 'this drive'}`}

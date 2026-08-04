@@ -208,7 +208,10 @@ describe('AgentsSidebar', () => {
     // The load-bearing half: neither fetch is ever made, rather than made and
     // discarded.
     expect(mockFetchWithAuth).not.toHaveBeenCalled();
-    expect(mockUsePageAgents).toHaveBeenCalledWith('drive-1', { enabled: false });
+    // Unfiltered (no driveId arg) now in both modes — see AgentsSidebar.tsx's
+    // comment on the `usePageAgents` call — but the load-bearing half of
+    // this assertion is `enabled: false`, unchanged.
+    expect(mockUsePageAgents).toHaveBeenCalledWith(undefined, { enabled: false });
   });
 
   test('shows the cold-load state rather than the empty notice', () => {
@@ -1238,6 +1241,119 @@ describe('AgentsSidebar', () => {
 
       await waitFor(() => expect(mockDel).toHaveBeenCalled());
       expect(screen.queryByRole('alertdialog')).toBeNull();
+    });
+  });
+
+  describe('drive mode + the caller\'s global-assistant sessions (review #2325)', () => {
+    /**
+     * Three parents up, not the `global mode` describe's two: label span →
+     * header-row span → header-row div (`SessionGroupHeader`'s own root, which
+     * is enough to scope a click on its "+") → the actual GROUP div
+     * (`<div key={group.driveId}>`), which is what's needed here to also
+     * assert on sibling `SessionRow`s inside the same group.
+     */
+    const groupContainer = (headerText: string) =>
+      screen.getByText(headerText).parentElement?.parentElement?.parentElement as HTMLElement;
+
+    test('a null-driveId session renders under its own "Global Assistant" header, separate from the drive\'s own (headerless) sessions', async () => {
+      respondWithSessions([
+        SESSION,
+        {
+          ...SESSION,
+          sessionId: 'ses-g',
+          driveId: null,
+          name: 'assistant session',
+          conversations: [{ conversationId: 'conv-g', title: 'Thread', agentPageId: null }],
+        },
+      ]);
+      renderSidebar();
+
+      expect(await screen.findByText('api refactor')).toBeDefined();
+      expect(await screen.findByText('assistant session')).toBeDefined();
+      // The drive's own group stays headerless (unchanged from before this
+      // session type existed) — only the Assistant group gets a header.
+      expect(screen.queryAllByText('Global Assistant')).toHaveLength(1);
+      expect(within(groupContainer('Global Assistant')).getByText('assistant session')).toBeDefined();
+      expect(within(groupContainer('Global Assistant')).queryByText('api refactor')).toBeNull();
+    });
+
+    test('given only drive-scoped sessions, does NOT render an empty "Global Assistant" group — it would collide with the palette\'s unrelated "Global Assistant" agent-picker entry', async () => {
+      // Regression pin for the review round where this group rendered
+      // unconditionally (mirroring global mode's `canSpawn` escape hatch) and
+      // broke two unrelated pre-existing tests via a duplicate-text collision:
+      // the new-session palette's "Global Assistant" agent choice, and the
+      // "falls back to Global Assistant for a null agentPageId" conversation
+      // label. Both name the SAME agent-picker concept, not this session-scope
+      // group, so the group must earn its place on screen only when relevant.
+      renderSidebar();
+
+      await screen.findByText('api refactor');
+      expect(screen.queryByText('Global Assistant')).toBeNull();
+    });
+
+    test('labels a global session\'s conversation with an OUT-OF-DRIVE agent\'s real name, not the generic fallback (review: Codex P2 on #2325)', async () => {
+      // Before this fix, `usePageAgents(driveId)` filtered agent names down to
+      // the CURRENT drive only, so a global session's conversation with an
+      // agent from a different drive (a legitimate shape — a global session
+      // may host any accessible agent) fell back to the generic "Agent" label
+      // even though its real name was fetchable.
+      mockUsePageAgents.mockImplementation((driveId?: string) => ({
+        agentsByDrive: [
+          { driveId: 'drive-1', driveName: 'Alpha', agentCount: 1, agents: [{ id: 'agent-1', title: 'Researcher', driveId: 'drive-1' }] },
+          { driveId: 'drive-2', driveName: 'Beta', agentCount: 1, agents: [{ id: 'agent-2', title: 'Beta Agent', driveId: 'drive-2' }] },
+        ].filter((entry) => driveId === undefined || entry.driveId === driveId),
+        isLoading: false,
+        isError: false,
+        mutate: vi.fn(),
+      }));
+      respondWithSessions([
+        SESSION,
+        {
+          ...SESSION,
+          sessionId: 'ses-g',
+          driveId: null,
+          name: 'assistant session',
+          conversations: [{ conversationId: 'conv-g', title: null, agentPageId: 'agent-2' }],
+        },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('assistant session');
+      await user.click(await screen.findByLabelText(/expand assistant session/i));
+
+      expect(await screen.findByText('Beta Agent')).toBeDefined();
+      expect(screen.queryByText('Agent')).toBeNull();
+    });
+
+    test('spawning from the Assistant group posts driveId: null, distinct from the drive palette\'s own "Global Assistant" agent pick', async () => {
+      mockPost.mockResolvedValue({ session: { sessionId: 'ses-a' }, conversationId: 'conv-a' });
+      respondWithSessions([
+        SESSION,
+        {
+          ...SESSION,
+          sessionId: 'ses-g',
+          driveId: null,
+          name: 'assistant session',
+          conversations: [],
+        },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('assistant session');
+      await user.click(within(groupContainer('Global Assistant')).getByRole('button', { name: /^New session/i }));
+
+      const nameInput = await screen.findByPlaceholderText('Global Assistant');
+      await user.type(nameInput, 'my assistant session{Enter}');
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
+          driveId: null,
+          agentPageId: null,
+          name: 'my assistant session',
+        }),
+      );
     });
   });
 
