@@ -45,7 +45,7 @@ import {
   type CommandExecutionPlan,
 } from '@/lib/ai/core/command-processor';
 import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
-import { respondWithGlobalHelpAnswer } from '@/lib/ai/core/help-responder';
+import { respondWithHelpAnswer } from '@/lib/ai/core/help-responder';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildSystemPrompt, buildNonCoreToolNamesPrompt, TOOL_DISCOVERY_PROMPT } from '@/lib/ai/core/system-prompt';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
@@ -663,17 +663,61 @@ export async function POST(
     // The user's /help message is already durably saved above (same generic
     // update as any other message) — answer it directly from code and return
     // before any of the provider/history/lifecycle machinery below runs. No
-    // streamText, no credit hold (skipped above), nothing to stop or
-    // reconnect to since the reply is already complete. (A brand-new
-    // conversation's realtime sidebar broadcast to other tabs, which normally
-    // happens much later in this route, does not fire on this path — the
-    // conversation is still visible on next load/refetch.)
+    // streamText, no credit hold (skipped above). It still takes the SAME
+    // per-conversation takeover and realtime broadcasts every other send
+    // gets (review finding — chatgpt-codex-connector, PR #2329): without
+    // them, a solo /help from a second tab wouldn't take over an in-flight
+    // generation on this conversation, and other open tabs would see
+    // neither side of the turn until a refetch.
     if (isSoloHelpRequest) {
-      return await respondWithGlobalHelpAnswer({
-        userId,
-        driveId: locationContext?.currentDrive?.id ?? null,
+      const helpChannelId = globalChannelId(userId);
+
+      const [authUserResult, profileResult] = await Promise.allSettled([
+        db.select({ name: users.name }).from(users).where(eq(users.id, userId)).limit(1),
+        db.select({ displayName: userProfiles.displayName }).from(userProfiles).where(eq(userProfiles.userId, userId)).limit(1),
+      ]);
+      const authUserName = await decryptField(
+        authUserResult.status === 'fulfilled' ? authUserResult.value[0]?.name ?? null : null
+      );
+      const profileDisplayName = profileResult.status === 'fulfilled' ? profileResult.value[0]?.displayName ?? null : null;
+      const helpDisplayName = profileDisplayName ?? authUserName ?? 'Someone';
+
+      if (conversationIsNew) {
+        broadcastGlobalConversationAdded(helpChannelId, {
+          conversation: {
+            id: conversation.id,
+            title: resolvedConversationTitle,
+            type: conversation.type,
+            createdAt: conversation.createdAt.toISOString(),
+          },
+          triggeredBy: { userId, displayName: helpDisplayName, browserSessionId },
+        }).catch(() => {});
+      }
+      broadcastChatUserMessage({
+        message: userMessage,
+        pageId: helpChannelId,
         conversationId,
+        triggeredBy: { userId, displayName: helpDisplayName, browserSessionId },
+      }).catch(() => {});
+
+      await startGenerationExclusive({
+        conversationId,
+        run: () => takeOverConversationStreams({ conversationId, channelId: helpChannelId }),
+      });
+
+      return await respondWithHelpAnswer({
+        senderId: userId,
+        driveId: locationContext?.currentDrive?.id ?? null,
         originalMessages: requestMessages,
+        persist: (payload, messageId) =>
+          saveTerminalGlobalAssistantMessage({
+            messageId,
+            conversationId,
+            userId,
+            role: 'assistant',
+            status: 'complete',
+            ...payload,
+          }),
       });
     }
 

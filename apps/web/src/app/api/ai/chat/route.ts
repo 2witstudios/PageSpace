@@ -949,15 +949,50 @@ export async function POST(request: Request) {
     // The user's /help message is already durably saved above (same generic
     // transaction as any other message) — answer it directly from code and
     // return before any of the provider/history/lifecycle machinery below
-    // runs. No streamText, no credit hold (skipped above), nothing to stop
-    // or reconnect to since the reply is already complete.
+    // runs. No streamText, no credit hold (skipped above). It still takes
+    // the SAME per-conversation takeover every other send does (review
+    // finding — chatgpt-codex-connector, PR #2329): without it, a solo
+    // /help sent from a second tab while another turn is generating would
+    // land alongside that turn instead of taking it over, unlike every
+    // other message.
     if (isSoloHelpRequest) {
-      return await respondWithHelpAnswer({
-        userId: userId!,
-        driveId: page.driveId,
-        pageId: chatId!,
+      await startGenerationExclusive({
         conversationId: conversationId!,
+        run: () => takeOverConversationStreams({ conversationId: conversationId!, channelId: chatId! }),
+      });
+
+      // Broadcast the user's own /help message the same way (and under the
+      // same isShared gate) a real turn does, so collaborators watching a
+      // shared conversation see the chip without a refetch (review finding
+      // — chatgpt-codex-connector, PR #2329). The assistant reply itself
+      // does not get the AI-stream-start/complete broadcast a real turn
+      // gets — replicating that multiplayer live-stream protocol for an
+      // already-complete synthetic reply risks destabilizing it for every
+      // OTHER conversation; collaborators see the reply on next refetch,
+      // same as the already-documented new-conversation-sidebar gap.
+      if (existingConversation?.isShared === true) {
+        broadcastChatUserMessage({
+          message: userMessage,
+          pageId: chatId!,
+          conversationId: conversationId!,
+          triggeredBy: { userId: userId!, displayName: user?.name ?? 'Someone', browserSessionId },
+        }).catch(() => {});
+      }
+
+      return await respondWithHelpAnswer({
+        senderId: userId!,
+        driveId: page.driveId,
         originalMessages: messages,
+        persist: (payload, messageId) =>
+          saveTerminalAssistantMessage({
+            messageId,
+            pageId: chatId!,
+            conversationId: conversationId!,
+            userId: null,
+            role: 'assistant',
+            status: 'complete',
+            ...payload,
+          }),
       });
     }
 
