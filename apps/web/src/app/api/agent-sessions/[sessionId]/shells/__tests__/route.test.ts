@@ -224,6 +224,32 @@ describe('POST /api/agent-sessions/[sessionId]/shells', () => {
     expect(mockSpawnShell).not.toHaveBeenCalled();
   });
 
+  it('given a TIER-INELIGIBLE provisioning denial, should 403 naming the plan gate (review #2326)', async () => {
+    // The session surface is free for every drive member, so a free-tier payer
+    // legitimately reaches this route — the denial must read as an upgrade
+    // prompt, not a generic access problem the user could never resolve.
+    mockProvisionSessionSandbox.mockResolvedValue({
+      ok: false,
+      reason: 'denied',
+      denial: 'not_authorized',
+      detail: 'tier_ineligible',
+    });
+
+    const response = await post({});
+
+    expect(response.status).toBe(403);
+    const body = await response.json();
+    expect(body.error).toContain('Pro plan');
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        eventType: 'authz.access.denied',
+        details: expect.objectContaining({ reason: 'not_authorized', detail: 'tier_ineligible' }),
+      }),
+    );
+    expect(mockSpawnShell).not.toHaveBeenCalled();
+  });
+
   it('given a provisioning failure, should 502 and never spawn a row pointing at nothing', async () => {
     mockProvisionSessionSandbox.mockResolvedValue({ ok: false, reason: 'provision_failed' });
     const response = await post({});

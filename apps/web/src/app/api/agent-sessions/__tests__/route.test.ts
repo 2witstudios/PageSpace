@@ -161,16 +161,11 @@ describe('GET /api/agent-sessions', () => {
     expect(mockListSessions).toHaveBeenCalledWith({ ownerId: 'user-1' });
   });
 
-  it('given a non-admin, should 403 WITHOUT enumerating anything, and audit the denial', async () => {
+  it('given a non-admin, should list THEIR OWN sessions same as an admin — sessions/chat/panes are open to every authenticated user, only the sandbox itself is tier-gated', async () => {
     mockAuthenticateRequest.mockResolvedValue(AUTH_NON_ADMIN);
     const response = await GET(new Request('http://localhost/api/agent-sessions'));
-    expect(response.status).toBe(403);
-    expect(mockListSessions).not.toHaveBeenCalled();
-    expect(mockListShellsBulk).not.toHaveBeenCalled();
-    expect(mockAuditRequest).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ eventType: 'authz.access.denied' }),
-    );
+    expect(response.status).toBe(200);
+    expect(mockListSessions).toHaveBeenCalledWith({ ownerId: 'user-2' });
   });
 
   it('given an auth failure, should return the auth error untouched', async () => {
@@ -391,6 +386,25 @@ describe("POST /api/agent-sessions — firstThing: 'shell'", () => {
     });
     const response = await spawn({ driveId: 'drive-1', firstThing: 'shell' });
     expect(response.status).toBe(429);
+    expect(mockEndSession).toHaveBeenCalledWith('ses-new');
+    expect(mockSpawnShell).not.toHaveBeenCalled();
+  });
+
+  // Review #2326: the session surface is free for every drive member, so a
+  // free-tier payer legitimately reaches shell-first provisioning — the
+  // provisioner's tier denial is an entitlement fact and must respond 403
+  // naming the plan gate, not a generic 502 infrastructure failure.
+  it('given sandbox provisioning is denied for tier ineligibility, ENDS the session and responds 403 naming the plan gate (not 502)', async () => {
+    mockProvisionSessionSandbox.mockResolvedValue({
+      ok: false,
+      reason: 'denied',
+      denial: 'not_authorized',
+      detail: 'tier_ineligible',
+    });
+    const response = await spawn({ driveId: 'drive-1', firstThing: 'shell' });
+    expect(response.status).toBe(403);
+    const body = await response.json();
+    expect(body.error).toContain('Pro plan');
     expect(mockEndSession).toHaveBeenCalledWith('ses-new');
     expect(mockSpawnShell).not.toHaveBeenCalled();
   });

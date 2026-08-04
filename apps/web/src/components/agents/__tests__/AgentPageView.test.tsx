@@ -111,7 +111,19 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   post: vi.fn(),
 }));
 
-const authState = vi.hoisted(() => ({ current: { user: { id: 'user-1', role: 'admin' } } }));
+// Deliberately a PLAIN, non-admin user: sessions/chat/panes are open to
+// every authenticated user now, so every test relying on this default
+// doubles as proof a non-admin gets full access too. `user` is nullable —
+// some tests exercise the genuinely-signed-out case. `isLoading` is modeled
+// because `useAuthStore` persists `user`: a stale hydrated row plus a still-
+// resolving auth check is a real state the component must treat as not yet
+// authenticated (review #2326).
+const authState = vi.hoisted(() => ({
+  current: {
+    user: { id: 'user-1', role: 'user' } as { id: string; role: string } | null,
+    isLoading: false,
+  },
+}));
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => authState.current }));
 
 vi.mock('@/lib/ai/shared/hooks/useProviderSettings', () => ({
@@ -229,7 +241,7 @@ beforeEach(() => {
   mockUseSWR.mockReturnValue({ data: undefined });
   mockUseAgentConfig.mockReturnValue({ config: null, setConfig: vi.fn() });
   resolvedConversation.current = { resolved: null, isLoading: true };
-  authState.current = { user: { id: 'user-1', role: 'admin' } };
+  authState.current = { user: { id: 'user-1', role: 'user' }, isLoading: false };
   conversationsState.current = {
     conversations: [],
     isLoading: false,
@@ -298,16 +310,40 @@ describe('AgentPageView', () => {
     expect(screen.getByTestId('agent-panes')).toHaveAttribute('data-drive-id', '');
   });
 
-  it('a NON-session user gets the plain chat even for a session-bound conversation (review M2)', async () => {
-    // A shared session-bound thread can be a non-admin's most-recent
-    // conversation; a grid whose every affordance 403s — except the
-    // destructive last-pane-close — is worse than the chat they can use.
-    authState.current = { user: { id: 'user-2', role: 'user' } };
+  it('a signed-out visitor gets the plain chat even for a session-bound conversation (review M2)', async () => {
+    // A shared session-bound thread can be reached by a visitor whose auth
+    // hasn't resolved yet (or has none); a grid whose every affordance 403s
+    // — except the destructive last-pane-close — is worse than the chat
+    // they can actually use. Sessions/chat/panes are open to every
+    // AUTHENTICATED user now (not just admins), so this only still applies
+    // when there's no user at all.
+    authState.current = { user: null, isLoading: false };
     resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
     render(<AgentPageView page={pageFixture()} />);
 
     await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
     expect(screen.queryByTestId('agent-panes')).not.toBeInTheDocument();
+  });
+
+  it('a STALE persisted user with auth still resolving gets the plain chat, not the pane grid (review #2326)', async () => {
+    // `useAuthStore` persists `user`, so after an expired session a hydrated
+    // stale row coexists with a still-in-flight /api/auth/me. The grid (and
+    // its session actions) must wait for resolution, not trust the stale row.
+    authState.current = { user: { id: 'user-1', role: 'user' }, isLoading: true };
+    resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
+    expect(screen.queryByTestId('agent-panes')).not.toBeInTheDocument();
+  });
+
+  it('a non-admin authenticated user gets the real pane grid for a session-bound conversation', async () => {
+    authState.current = { user: { id: 'user-2', role: 'user' }, isLoading: false };
+    resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+    expect(screen.queryByTestId('plain-chat')).not.toBeInTheDocument();
   });
 
   it('the grid receives the read-only verdict (review M2)', async () => {
@@ -454,8 +490,8 @@ describe('AgentPageView', () => {
     );
   });
 
-  it('hides the console cross-link from non-session users — the console would refuse them', async () => {
-    authState.current = { user: { id: 'user-2', role: 'user' } };
+  it('hides the console cross-link from a signed-out visitor — the console would refuse them', async () => {
+    authState.current = { user: null, isLoading: false };
     resolveTo({ conversationId: 'conv-1', sessionId: null });
     render(<AgentPageView page={pageFixture()} />);
 

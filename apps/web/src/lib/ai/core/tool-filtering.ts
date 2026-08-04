@@ -133,10 +133,12 @@ const WEB_SEARCH_TOOLS = new Set(['web_search', 'web_fetch']);
 /**
  * The SESSION + SHELL families — the agent-session orchestration surface
  * (spawn/send/read/kill workers; spawn/send/read/kill PTY shells in the
- * caller's own session's sandbox). Registered alongside bash/git behind the
- * CODE_EXECUTION kill-switch in `buildPageSpaceTools`; the tools resolve the
- * caller's SESSION from its conversation at call time, so there is no
- * binding to gate registration on.
+ * caller's own session's sandbox). `buildPageSpaceTools` registers the
+ * chat-only session subfamily unconditionally (sessions are free on every
+ * plan and every deployment) and the shell subfamily alongside bash/git
+ * behind the CODE_EXECUTION kill-switch; the tools resolve the caller's
+ * SESSION from its conversation at call time, so there is no binding to
+ * gate registration on.
  *
  * Exported for the read-only DRIFT GUARD in this module's tests: every mutating
  * member must appear in `WRITE_TOOLS` (or a read-only agent could spawn a shell
@@ -156,6 +158,39 @@ export const SESSION_FAMILY_TOOL_NAMES: readonly string[] = [
   'read_shell',
   'kill_shell',
 ];
+
+/**
+ * The DISPATCH-DEPENDENT subset of the session family: these two relay the
+ * caller's own credentials through the chat pipeline
+ * (`dispatchThroughChatPipeline` forwards cookie/CSRF from the live request),
+ * so they only function inside an authenticated USER request. Background
+ * surfaces with no user cookie (cron/webhook/calendar/task workflow fires)
+ * must strip them rather than advertise tools whose dispatch always refuses
+ * (review #2326). list/read/kill_session stay out of this set — they are
+ * direct DB/stream operations with no dispatch hop.
+ */
+export const DISPATCH_DEPENDENT_SESSION_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'spawn_session',
+  'send_session',
+]);
+
+/**
+ * Strip the dispatch-dependent session pair when the current execution cannot
+ * dispatch as the user — i.e. it does not run inside that user's own
+ * authenticated browser request (MCP/API-key surfaces, background workflow
+ * fires, a manual workflow run by someone other than the workspace owner).
+ * Advertising a tool whose dispatch unconditionally refuses is the failure
+ * mode this prevents.
+ */
+export function filterToolsForDispatchCredentials<T>(
+  tools: Record<string, T>,
+  hasUserDispatchCredentials: boolean
+): Record<string, T> {
+  if (hasUserDispatchCredentials) return tools;
+  return Object.fromEntries(
+    Object.entries(tools).filter(([name]) => !DISPATCH_DEPENDENT_SESSION_TOOL_NAMES.has(name))
+  );
+}
 
 /**
  * The WHOLE sandbox tool surface — the three families a `sandboxEnabled: false`
@@ -187,6 +222,42 @@ export function filterToolsForSandboxEnablement<T>(
   if (sandboxEnabled) return tools;
   return Object.fromEntries(
     Object.entries(tools).filter(([name]) => !SANDBOX_TOOL_NAMES.has(name))
+  );
+}
+
+/**
+ * The COMPUTE subset of the sandbox surface — what a free-tier payer must not
+ * see: core execution (bash/files), the git+gh CLI toolkit, and the PTY shell
+ * tools (a shell IS the sandbox). The chat-side session tools
+ * (list/spawn/send/read/kill_session) are deliberately NOT here: sessions and
+ * chat workers are free on every plan (review #2326) — only the machine is
+ * tier-gated — so the TIER filter below must preserve them where the
+ * per-agent switch (`filterToolsForSandboxEnablement` above, which strips all
+ * three families) would not.
+ */
+export const SANDBOX_COMPUTE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  ...SANDBOX_CORE_TOOL_NAMES,
+  ...SANDBOX_GIT_TOOL_NAMES,
+  'spawn_shell',
+  'send_shell',
+  'read_shell',
+  'kill_shell',
+]);
+
+/**
+ * Apply the PAYER-tier gate: an ineligible (free-tier) payer loses the
+ * compute tools but keeps the chat-only session orchestration family —
+ * showing bash/git/shell tools that hard-fail `tier_ineligible` is the UX
+ * bug this prevents, while removing `spawn_session` and friends would gate
+ * the free session surface this release explicitly opens (review #2326).
+ */
+export function filterToolsForSandboxTier<T>(
+  tools: Record<string, T>,
+  tierEligible: boolean
+): Record<string, T> {
+  if (tierEligible) return tools;
+  return Object.fromEntries(
+    Object.entries(tools).filter(([name]) => !SANDBOX_COMPUTE_TOOL_NAMES.has(name))
   );
 }
 

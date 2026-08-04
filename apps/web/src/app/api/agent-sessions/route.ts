@@ -11,9 +11,10 @@
  *   → 201 { session, conversationId } | { session, shellId, shellName } — spawn (see below)
  *
  * Every listing is scoped to the REQUESTER's own sessions (`ownerId` rides
- * every filter): `driveId` narrows *where*, never *whose*. Admin gate first,
- * 403 without enumerating anything — the agents surface is admin-only +
- * CODE_EXECUTION (the population the retired machines surface served).
+ * every filter): `driveId` narrows *where*, never *whose*. Open to every
+ * authenticated user — sessions/chat/panes are free; only the sandbox
+ * itself (real cloud compute) is tier-gated, inside `canRunCode` /
+ * `CODE_EXECUTION` further down the call chain, not at this listing level.
  */
 
 import { NextResponse } from 'next/server';
@@ -95,18 +96,6 @@ export async function GET(request: Request) {
 
   const url = new URL(request.url);
   const driveId = url.searchParams.get('driveId');
-
-  if (auth.role !== 'admin') {
-    auditRequest(request, {
-      eventType: 'authz.access.denied',
-      userId: auth.userId,
-      resourceType: driveId ? 'drive' : 'agent_sessions',
-      resourceId: driveId ?? undefined,
-      details: { reason: 'app_admin_required', method: 'GET', route: 'agent-sessions' },
-      riskScore: 0.5,
-    });
-    return NextResponse.json({ error: 'Agent sessions require administrator privileges' }, { status: 403 });
-  }
 
   // No agent filter exists any more: a session hosts conversations with MANY
   // agents, so "an agent's sessions" is not a real relation to query.
@@ -424,6 +413,34 @@ export async function POST(request: Request) {
         return sessionQuotaExceeded(request, auth.userId, spawned.session.id, 'agent-sessions', {
           reasonCode: provisioned.detail,
         });
+      }
+      if (provisioned.reason === 'denied') {
+        // The provisioner's own authorization refused — an entitlement fact,
+        // not an infrastructure failure, so it must not read as a 502. Since
+        // the session surface opened to every drive member, a free-tier payer
+        // legitimately reaches this shell-first path; name the plan gate.
+        auditRequest(request, {
+          eventType: 'authz.access.denied',
+          userId: auth.userId,
+          resourceType: 'agent_session',
+          resourceId: spawned.session.id,
+          details: {
+            reason: provisioned.denial ?? 'denied',
+            ...(provisioned.detail ? { detail: provisioned.detail } : {}),
+            method: 'POST',
+            route: 'agent-sessions',
+          },
+          riskScore: 0.5,
+        });
+        return NextResponse.json(
+          {
+            error:
+              provisioned.detail === 'tier_ineligible'
+                ? 'Running the agent sandbox requires a Pro plan or above'
+                : 'You cannot open a terminal in this drive',
+          },
+          { status: 403 },
+        );
       }
       loggers.api.error(
         'Agent session spawn: first shell sandbox provision failed',

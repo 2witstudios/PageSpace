@@ -253,6 +253,8 @@ vi.mock('@/lib/ai/core/system-prompt', () => ({
   buildPersonalizationPrompt: vi.fn().mockReturnValue(''),
 }));
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
+  filterToolsForSandboxTier: vi.fn((tools: unknown) => tools),
+  filterToolsForDispatchCredentials: vi.fn((tools: unknown) => tools),
   filterToolsForSandboxEnablement: vi.fn((tools: unknown) => tools),
   filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),

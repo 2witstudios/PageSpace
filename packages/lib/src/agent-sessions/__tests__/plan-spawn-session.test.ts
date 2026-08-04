@@ -134,8 +134,6 @@ describe('planSpawnWorkerSession', () => {
       name: 'parser worker',
       prompt: 'Refactor the parser and report back',
       callerDepth: 0,
-      activeSessionCount: 0,
-      concurrencyLimit: 10,
       sessionConversationCount: 0,
       ...overrides,
     };
@@ -215,32 +213,22 @@ describe('planSpawnWorkerSession', () => {
     expect(MAX_AGENT_DEPTH).toBe(2);
   });
 
-  it('given the concurrency quota is already full, should reject', () => {
-    expect(planSpawnWorkerSession(input({ activeSessionCount: 10, concurrencyLimit: 10 }))).toEqual({
-      ok: false,
-      reason: 'concurrency_exceeded',
-    });
-  });
-
-  it('given one slot left, should allow', () => {
-    expect(planSpawnWorkerSession(input({ activeSessionCount: 9, concurrencyLimit: 10 })).ok).toBe(true);
-  });
-
-  it('given a zero concurrency limit, should reject', () => {
-    expect(planSpawnWorkerSession(input({ activeSessionCount: 0, concurrencyLimit: 0 }))).toEqual({
-      ok: false,
-      reason: 'concurrency_exceeded',
-    });
+  it('should NOT gate on the sandbox-compute concurrency ceiling — a worker spawn mints a conversation, never a sandbox (codex round 11)', () => {
+    // The input type carries no activeSessionCount/concurrencyLimit at all;
+    // this pins the planner staying quota-free apart from the session
+    // conversation ceiling below (session MINTING is capped separately in
+    // spawnAgentSession).
+    expect(planSpawnWorkerSession(input()).ok).toBe(true);
   });
 
   it('should report the input problem before the quota problem', () => {
     expect(
-      planSpawnWorkerSession(input({ prompt: '', callerDepth: MAX_AGENT_DEPTH, activeSessionCount: 99 })),
+      planSpawnWorkerSession(input({ prompt: '', callerDepth: MAX_AGENT_DEPTH, sessionConversationCount: 99 })),
     ).toEqual({ ok: false, reason: 'missing_prompt' });
   });
 
   it('should report the depth problem before the quota problem', () => {
-    expect(planSpawnWorkerSession(input({ callerDepth: MAX_AGENT_DEPTH, activeSessionCount: 99 }))).toEqual({
+    expect(planSpawnWorkerSession(input({ callerDepth: MAX_AGENT_DEPTH, sessionConversationCount: 99 }))).toEqual({
       ok: false,
       reason: 'depth_exceeded',
     });
@@ -264,14 +252,6 @@ describe('planSpawnWorkerSession', () => {
     expect(planSpawnWorkerSession(input({ sessionConversationCount: MAX_SESSION_CONVERSATIONS - 1 })).ok).toBe(
       true,
     );
-  });
-
-  it('should report the account-level quota problem before the session-level one', () => {
-    expect(
-      planSpawnWorkerSession(
-        input({ activeSessionCount: 10, concurrencyLimit: 10, sessionConversationCount: MAX_SESSION_CONVERSATIONS }),
-      ),
-    ).toEqual({ ok: false, reason: 'concurrency_exceeded' });
   });
 
   it('should carry a conversation ceiling that matches the per-session listing cap', () => {

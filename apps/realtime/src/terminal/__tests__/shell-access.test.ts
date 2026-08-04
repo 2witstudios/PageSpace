@@ -233,6 +233,60 @@ describe('buildShellCheckAuth — access half', () => {
       expected: { ok: true, acquiredTier: 'free', emailInput: undefined },
     });
   });
+
+  it("reserves the slot with the PAYER's tier, not the requester's (review #2326)", async () => {
+    // A free-tier collaborator opening a shell in a Pro-owned drive runs on
+    // the drive owner's plan: `acquireSlot` refuses free-tier outright, so
+    // handing it the requester's own tier would deny the very access the
+    // payer-based sandbox eligibility just granted. The slot is still counted
+    // against the REQUESTER — per-actor accounting, payer-based entitlement.
+    let acquired: { userId: string; tier: string } | undefined;
+    const { deps } = buildDeps({
+      getUser: async (id) =>
+        id === 'payer-1'
+          ? { subscriptionTier: 'pro', email: 'payer@d.e' }
+          : { subscriptionTier: 'free', email: 'actor@d.e' },
+      acquireSlot: ({ userId, tier }) => {
+        acquired = { userId, tier };
+        return true;
+      },
+    });
+    const checkAuth = buildShellCheckAuth(deps);
+
+    const result = await checkAuth({ userId: 'u-1', shellId: 'shl-1' });
+    if (result.ok) await result.resolveSandbox();
+
+    assert({
+      given: 'a free-tier requester whose session payer is Pro',
+      should: "acquire the slot for the requester at the payer's tier",
+      actual: acquired,
+      expected: { userId: 'u-1', tier: 'pro' },
+    });
+  });
+
+  it('audits with the REQUESTER’s email even when the payer is someone else', async () => {
+    let auditedEmail: string | undefined;
+    const { deps } = buildDeps({
+      getUser: async (id) =>
+        id === 'payer-1'
+          ? { subscriptionTier: 'pro', email: 'payer@d.e' }
+          : { subscriptionTier: 'free', email: 'actor@d.e' },
+      writeAudit: ({ actorEmail }) => {
+        auditedEmail = actorEmail;
+      },
+    });
+    const checkAuth = buildShellCheckAuth(deps);
+
+    const result = await checkAuth({ userId: 'u-1', shellId: 'shl-1' });
+    if (result.ok) await result.resolveSandbox();
+
+    assert({
+      given: 'a payer distinct from the requester',
+      should: "write the audit row with the requester's own email",
+      actual: auditedEmail,
+      expected: 'actor@d.e',
+    });
+  });
 });
 
 describe('buildShellCheckAuth — resolveSandbox thunk', () => {

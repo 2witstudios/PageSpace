@@ -36,6 +36,8 @@ export interface DriveWithAgents {
   driveSlug: string;
   agentCount: number;
   agents: AgentSummary[];
+  /** Whether THIS requester can use the sandbox in this drive (payer tier + actor edit access + kill switch). */
+  sandboxEligible: boolean;
 }
 
 /**

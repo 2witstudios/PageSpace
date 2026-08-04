@@ -40,8 +40,6 @@ function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
       workspaceSessionId: WORKSPACE_ID,
       isClosed: false,
     })),
-    countActiveSessions: vi.fn(async () => 0),
-    concurrencyLimit: vi.fn(async () => 5),
     countSessionConversations: vi.fn(async () => 0),
     canUseAgent: vi.fn(async () => true),
     createWorkerSession: vi.fn(async () => ({ ok: true as const })),
@@ -190,12 +188,11 @@ describe('spawn_session', () => {
     expect(deps.dispatch).not.toHaveBeenCalled();
   });
 
-  it('given the owner at their concurrency limit, should refuse with a typed error', async () => {
-    const deps = makeDeps({ countActiveSessions: vi.fn(async () => 5), concurrencyLimit: vi.fn(async () => 5) });
+  it('should not consult any sandbox-concurrency quota — a worker spawn mints a conversation, never a sandbox (codex round 11)', async () => {
+    const deps = makeDeps();
     const tools = createSessionTools(deps);
     const result = await run(tools.spawn_session, { name: 'w', prompt: 'p' }, contextOptions());
-    expect(result).toEqual(expect.objectContaining({ success: false, reason: 'concurrency_exceeded' }));
-    expect(deps.createWorkerSession).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({ success: true }));
   });
 
   it('given a blank prompt, should refuse — spawning a worker means giving it work', async () => {

@@ -2,6 +2,12 @@
  * The ONE access decision, exhaustively — a session is a drive-level
  * workspace, so access is drive access. Denials must name the FIRST failing
  * gate, and unknown facts must always deny.
+ *
+ * The session SURFACE decision is capability-free (review #2326: sessions,
+ * chat and panes are open to every drive member — only the sandbox itself is
+ * gated, at the compute chokepoints). The END decision still weighs
+ * `canRunCode` for non-owners (review H3: destroying live compute is not part
+ * of the free surface).
  */
 import { describe, it, expect } from 'vitest';
 import {
@@ -14,47 +20,33 @@ const driveSession: AgentSessionAccessSubject = { sessionId: 'ses-1', ownerId: '
 const globalSession: AgentSessionAccessSubject = { sessionId: 'ses-2', ownerId: 'owner-1', driveId: null };
 
 describe('decideAgentSessionAccess — drive sessions', () => {
-  it('allows a drive member with the capability', () => {
+  it('allows a drive member', () => {
     expect(
-      decideAgentSessionAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'member', canRunCode: true }),
+      decideAgentSessionAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'member' }),
     ).toEqual({ allowed: true });
   });
 
   it('allows the drive owner', () => {
     expect(
-      decideAgentSessionAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'owner', canRunCode: true }),
+      decideAgentSessionAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'owner' }),
     ).toEqual({ allowed: true });
   });
 
   it('denies a non-member — a drive session is shared through the drive, nothing else', () => {
     expect(
-      decideAgentSessionAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'none', canRunCode: true }),
+      decideAgentSessionAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'none' }),
     ).toEqual({ allowed: false, reason: 'drive_access_denied' });
   });
 
   it('denies an UNRESOLVED membership — unknown is never a grant', () => {
     expect(
-      decideAgentSessionAccess({ requesterId: 'user-2', session: driveSession, driveMembership: null, canRunCode: true }),
+      decideAgentSessionAccess({ requesterId: 'user-2', session: driveSession, driveMembership: null }),
     ).toEqual({ allowed: false, reason: 'drive_access_denied' });
   });
 
   it('denies even the session OWNER once they lose the drive — a removed member keeps no working context', () => {
     expect(
-      decideAgentSessionAccess({ requesterId: 'owner-1', session: driveSession, driveMembership: 'none', canRunCode: true }),
-    ).toEqual({ allowed: false, reason: 'drive_access_denied' });
-  });
-
-  it('denies a member without the capability, naming the capability', () => {
-    // A distinct reason: the requester may legitimately reach this session and
-    // still not be allowed a sandbox.
-    expect(
-      decideAgentSessionAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'member', canRunCode: false }),
-    ).toEqual({ allowed: false, reason: 'code_execution_denied' });
-  });
-
-  it('names the FIRST failing gate — scope before capability', () => {
-    expect(
-      decideAgentSessionAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'none', canRunCode: false }),
+      decideAgentSessionAccess({ requesterId: 'owner-1', session: driveSession, driveMembership: 'none' }),
     ).toEqual({ allowed: false, reason: 'drive_access_denied' });
   });
 });
@@ -62,24 +54,18 @@ describe('decideAgentSessionAccess — drive sessions', () => {
 describe('decideAgentSessionAccess — global-assistant sessions', () => {
   it('allows only the owner — no drive to share through', () => {
     expect(
-      decideAgentSessionAccess({ requesterId: 'owner-1', session: globalSession, driveMembership: null, canRunCode: true }),
+      decideAgentSessionAccess({ requesterId: 'owner-1', session: globalSession, driveMembership: null }),
     ).toEqual({ allowed: true });
     expect(
-      decideAgentSessionAccess({ requesterId: 'user-2', session: globalSession, driveMembership: null, canRunCode: true }),
+      decideAgentSessionAccess({ requesterId: 'user-2', session: globalSession, driveMembership: null }),
     ).toEqual({ allowed: false, reason: 'global_assistant_not_owner' });
-  });
-
-  it('still gates the owner on the capability', () => {
-    expect(
-      decideAgentSessionAccess({ requesterId: 'owner-1', session: globalSession, driveMembership: null, canRunCode: false }),
-    ).toEqual({ allowed: false, reason: 'code_execution_denied' });
   });
 });
 
 describe('decideAgentSessionAccess — degenerate input', () => {
   it('denies an empty requester before anything else', () => {
     expect(
-      decideAgentSessionAccess({ requesterId: '', session: driveSession, driveMembership: 'owner', canRunCode: true }),
+      decideAgentSessionAccess({ requesterId: '', session: driveSession, driveMembership: 'owner' }),
     ).toEqual({ allowed: false, reason: 'invalid_requester' });
   });
 });
@@ -99,18 +85,27 @@ describe('decideAgentSessionEndAccess', () => {
     ).toEqual({ allowed: true });
   });
 
-  it('lets a member WITH the capability end — collaborators manage shared compute like any other session action', () => {
+  it('refuses a plain MEMBER even WITH the capability — ending another member\'s session needs delete authority (codex round 12)', () => {
+    // canRunCode widened to every edit-access member (review #2326), so the
+    // capability alone no longer implies delete authority; drive-root
+    // permissions give non-admin members canDelete: false.
     expect(
       decideAgentSessionEndAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'member', canRunCode: true }),
+    ).toEqual({ allowed: false, reason: 'delete_authority_required' });
+  });
+
+  it('lets a drive ADMIN with the capability end — delete authority plus the capability gate', () => {
+    expect(
+      decideAgentSessionEndAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'admin', canRunCode: true }),
     ).toEqual({ allowed: true });
   });
 
-  it('refuses a member WITHOUT the capability — review H3: destroying compute is not release, for a non-owner', () => {
-    // The old shape pinned canRunCode true here, handing every drive member —
-    // including ones with no code-execution rights — the power to kill other
-    // members' sessions and shells.
+  it('refuses a drive ADMIN WITHOUT the capability — review H3: destroying compute is not release, for a non-owner', () => {
+    // The surface decision is capability-free, but ending stays gated: an
+    // admin with no code-execution rights must not kill other members'
+    // sessions and shells.
     expect(
-      decideAgentSessionEndAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'member', canRunCode: false }),
+      decideAgentSessionEndAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'admin', canRunCode: false }),
     ).toEqual({ allowed: false, reason: 'code_execution_denied' });
   });
 

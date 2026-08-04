@@ -19,7 +19,6 @@ import { type ToolDefinitionForExtraction, extractToolSchemas, calculateTotalToo
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
 import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
-import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree-context';
 import { buildInlineInstructions, buildGlobalAssistantInstructions } from '@/lib/ai/core/inline-instructions';
 import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
@@ -222,11 +221,16 @@ async function handleGlobalPrompt(
     // If no drive selected (or invalid), locationContext remains undefined (dashboard context)
 
     // Build async context sections (require DB queries, shared across modes)
-    // Same gate as the live chat route — this preview must show the operator the
-    // prompt the model will ACTUALLY receive, delegation line included or not.
-    const agentAwarenessPrompt = await buildAgentAwarenessPrompt(adminUser.id, {
-      canDelegate: isCodeExecutionEnabled(),
-    });
+    // Same gate as the live chat route (`canDelegate: !readOnlyMode` — the
+    // chat-only session family registers regardless of the CODE_EXECUTION
+    // kill-switch, but read-only strips spawn_session as a write tool): this
+    // preview must show the operator the prompt the model will ACTUALLY
+    // receive, delegation line included or not. Both variants are built here,
+    // and each mode in the loop below picks its own.
+    const [agentAwarenessPromptFull, agentAwarenessPromptReadOnly] = await Promise.all([
+      buildAgentAwarenessPrompt(adminUser.id, { canDelegate: true }),
+      buildAgentAwarenessPrompt(adminUser.id, { canDelegate: false }),
+    ]);
 
     let pageTreePrompt = '';
     if (showPageTree) {
@@ -255,6 +259,7 @@ async function handleGlobalPrompt(
     const promptData: Record<string, ModePromptData> = {};
 
     for (const { key, isReadOnly } of modes) {
+      const agentAwarenessPrompt = isReadOnly ? agentAwarenessPromptReadOnly : agentAwarenessPromptFull;
       // Build complete payload using shared module (EXACT match with chat route)
       const completePayload = buildCompleteRequest({
         isReadOnly,

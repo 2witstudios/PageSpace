@@ -57,16 +57,23 @@ export async function GET(request: Request, context: RouteContext) {
  * OWN authorization, re-checked at provision time, and leaks nothing new by
  * staying a genuine 403.
  */
-function provisioningDenied(request: Request, userId: string, sessionId: string, reason: string): NextResponse {
+function provisioningDenied(request: Request, userId: string, sessionId: string, reason: string, detail?: string): NextResponse {
   auditRequest(request, {
     eventType: 'authz.access.denied',
     userId,
     resourceType: 'agent_session',
     resourceId: sessionId,
-    details: { reason, route: ROUTE },
+    details: { reason, ...(detail ? { detail } : {}), route: ROUTE },
     riskScore: 0.5,
   });
-  return NextResponse.json({ error: 'You do not have access to this session' }, { status: 403 });
+  // The session surface is free for every drive member, so a free-tier payer
+  // legitimately reaches this point — name the plan gate instead of implying
+  // an access problem they could never resolve.
+  const error =
+    detail === 'tier_ineligible'
+      ? 'Running the agent sandbox requires a Pro plan or above'
+      : 'You do not have access to this session';
+  return NextResponse.json({ error }, { status: 403 });
 }
 
 const SPAWN_DENIAL_STATUS: Record<string, number> = {
@@ -124,7 +131,7 @@ export async function POST(request: Request, context: RouteContext) {
           reasonCode: provisioned.detail,
         });
       }
-      return provisioningDenied(request, auth.userId, sessionId, provisioned.denial ?? 'denied');
+      return provisioningDenied(request, auth.userId, sessionId, provisioned.denial ?? 'denied', provisioned.detail);
     }
     loggers.api.error('Shell spawn: session sandbox provision failed', undefined, {
       sessionId,

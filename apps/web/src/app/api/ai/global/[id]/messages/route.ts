@@ -48,7 +48,8 @@ import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildSystemPrompt, buildNonCoreToolNamesPrompt, TOOL_DISCOVERY_PROMPT } from '@/lib/ai/core/system-prompt';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
-import { filterToolsForReadOnly, filterToolsForWebSearch, filterToolsForImageGen } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForReadOnly, filterToolsForWebSearch, filterToolsForImageGen, filterToolsForSandboxTier } from '@/lib/ai/core/tool-filtering';
+import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
 import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree-context';
 import { getModelCapabilities, DEFAULT_IMAGE_MODEL } from '@/lib/ai/core/model-capabilities';
@@ -864,16 +865,36 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
       (canUseAskUser({ role: auth.role }) ? `\n\n${ASK_USER_SECTION}` : '') +
       drivePromptSection;
 
+    // The PAYER's sandbox eligibility for this Global Assistant turn —
+    // derived from the conversation's BOUND SESSION, never the location
+    // drive (review #2326, two rounds): an unbound global conversation gets
+    // a DRIVELESS session on its first tool call (`ensureGlobalSandboxSession`
+    // spawns `driveId: null` unconditionally), so this user is the payer
+    // regardless of which drive they happen to be visiting — keying on the
+    // location drive both advertised tools a free visitor's own session
+    // could never fund AND hid tools a paid visitor's driveless session
+    // funds fine. A conversation already bound to a session uses that
+    // session's own coordinates, exactly as provisioning will. Without this,
+    // a free-tier assistant advertised bash/git tools that always answer
+    // tier_ineligible — and those git tool NAMES in `currentTools` then
+    // suppressed the user's working GitHub OAuth integration tools.
+    const sandboxTierEligible = await resolveSandboxToolEligibilityForConversation(
+      conversation.id,
+      'global',
+      userId,
+    );
+
     // Build agent awareness prompt - lists visible AI agents for consultation
-    // `canDelegate` mirrors the session-tool gate below: spawn_session only
-    // exists when code execution is enabled, and a prompt that names a tool the
-    // model does not have makes it attempt delegation that silently fails.
+    // `canDelegate` mirrors the session-tool gate: spawn_session registers
+    // regardless of the CODE_EXECUTION kill-switch (the chat-only session
+    // family is free conversation orchestration, see `buildPageSpaceTools`),
+    // but `filterToolsForReadOnly` strips it as a write tool — and a prompt
+    // that names a tool the model does not have makes it attempt delegation
+    // that silently fails. The payer-tier filter does NOT remove the
+    // chat-only session family (sessions are free on every plan), so tier is
+    // deliberately not weighed here.
     const agentAwarenessPrompt = await buildAgentAwarenessPrompt(userId, {
-      // BOTH gates, because the tool set applies both: registration is gated on
-      // CODE_EXECUTION_ENABLED, and `filterToolsForReadOnly` then strips
-      // spawn_session again as a write tool. Checking only the first told a
-      // read-only agent to delegate with a tool it does not have.
-      canDelegate: isCodeExecutionEnabled() && !readOnlyMode,
+      canDelegate: !readOnlyMode,
     });
 
     // Build page tree context if enabled
@@ -905,10 +926,16 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
     }
 
     // Full filtered tool set. NOT sent to model directly; used as dispatch map for
-    // execute_tool and as tool_search catalog.
+    // execute_tool and as tool_search catalog. The COMPUTE tools (bash/files,
+    // git+gh, PTY shells — not the free chat-session family) are stripped for a tier-ineligible payer BEFORE
+    // anything reads this set — including `resolveGlobalAssistantIntegrationTools`
+    // below, whose sandbox-git-overlap suppression keys on these tool NAMES.
     const filteredAllTools = filterToolsForImageGen(
       filterToolsForWebSearch(
-        filterToolsForReadOnly(pageSpaceTools, readOnlyMode),
+        filterToolsForReadOnly(
+          filterToolsForSandboxTier(pageSpaceTools, sandboxTierEligible),
+          readOnlyMode
+        ),
         webSearchMode
       ),
       shouldExposeImageGen({

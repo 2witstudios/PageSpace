@@ -50,20 +50,49 @@ describe('code execution concurrency semaphore', () => {
   });
 
   it('should deny acquiring a slot once the per-tier limit is reached', () => {
-    expect(acquireCodeExecutionSlot({ userId: 'u1', tier: 'free' })).toBe(true);
-    expect(canAcquireCodeExecutionSlot({ userId: 'u1', tier: 'free' })).toBe(false);
-    expect(acquireCodeExecutionSlot({ userId: 'u1', tier: 'free' })).toBe(false);
+    // 'pro' (not 'free'): the concurrency ceiling itself, isolated from the
+    // tier-eligibility short-circuit covered separately below — 'free' would
+    // fail this immediately for the wrong reason (tier_ineligible, not the
+    // ceiling this test exercises).
+    for (let i = 0; i < getCodeExecutionConcurrencyLimit('pro'); i++) {
+      expect(acquireCodeExecutionSlot({ userId: 'u1', tier: 'pro' })).toBe(true);
+    }
+    expect(canAcquireCodeExecutionSlot({ userId: 'u1', tier: 'pro' })).toBe(false);
+    expect(acquireCodeExecutionSlot({ userId: 'u1', tier: 'pro' })).toBe(false);
   });
 
   it('should free capacity again after a slot is released', () => {
-    acquireCodeExecutionSlot({ userId: 'u1', tier: 'free' });
+    acquireCodeExecutionSlot({ userId: 'u1', tier: 'pro' });
     releaseCodeExecutionSlot({ userId: 'u1' });
-    expect(canAcquireCodeExecutionSlot({ userId: 'u1', tier: 'free' })).toBe(true);
+    expect(canAcquireCodeExecutionSlot({ userId: 'u1', tier: 'pro' })).toBe(true);
   });
 
   it('should track concurrency independently per user', () => {
-    acquireCodeExecutionSlot({ userId: 'u1', tier: 'free' });
-    expect(canAcquireCodeExecutionSlot({ userId: 'u2', tier: 'free' })).toBe(true);
+    acquireCodeExecutionSlot({ userId: 'u1', tier: 'pro' });
+    expect(canAcquireCodeExecutionSlot({ userId: 'u2', tier: 'pro' })).toBe(true);
+  });
+});
+
+/**
+ * Defense in depth: free-tier is blocked here even with concurrency
+ * capacity to spare — this is the backstop, ahead of (not instead of)
+ * can-run-code.ts's own tier-eligibility gate.
+ */
+describe('sandbox tier eligibility — defense in depth', () => {
+  beforeEach(() => {
+    resetCodeExecutionConcurrency();
+  });
+
+  it('canAcquireCodeExecutionSlot should deny a free-tier user even with capacity to spare', () => {
+    expect(canAcquireCodeExecutionSlot({ userId: 'u1', tier: 'free' })).toBe(false);
+  });
+
+  it('acquireCodeExecutionSlot should deny a free-tier user and reserve nothing', () => {
+    expect(acquireCodeExecutionSlot({ userId: 'u1', tier: 'free' })).toBe(false);
+    // Nothing was reserved — a pro-tier user's capacity is untouched.
+    for (let i = 0; i < getCodeExecutionConcurrencyLimit('pro'); i++) {
+      expect(acquireCodeExecutionSlot({ userId: 'u2', tier: 'pro' })).toBe(true);
+    }
   });
 });
 
@@ -137,6 +166,19 @@ describe('checkCodeExecutionQuota', () => {
     });
     expect(decision).toEqual({ allowed: true });
   });
+
+  it('given a free-tier payer, should deny with tier_ineligible even with concurrency capacity to spare', async () => {
+    const canAcquireSlot = vi.fn(() => true);
+    const decision = await checkCodeExecutionQuota({
+      userId: 'u1',
+      driveId: 'd1',
+      tier: 'free',
+      deps: makeDeps({ canAcquireSlot }),
+    });
+    expect(decision).toEqual({ allowed: false, reason: 'tier_ineligible' });
+    // Checked and short-circuited BEFORE the concurrency slot check.
+    expect(canAcquireSlot).not.toHaveBeenCalled();
+  });
 });
 
 describe('checkAgentSessionConcurrency', () => {
@@ -159,12 +201,25 @@ describe('checkAgentSessionConcurrency', () => {
   });
 
   it('given a live count over the tier ceiling, should deny', async () => {
+    // 'pro' (not 'free'): the concurrency ceiling itself, isolated from the
+    // tier-eligibility short-circuit covered separately below.
+    const decision = await checkAgentSessionConcurrency({
+      ownerId: 'owner-1',
+      tier: 'pro',
+      countLiveAgentSessions: async () => getCodeExecutionConcurrencyLimit('pro') + 5,
+    });
+    expect(decision).toEqual({ allowed: false, reason: 'concurrency_limit' });
+  });
+
+  it('given a free-tier owner, should deny with tier_ineligible without even counting live sessions', async () => {
+    const countLiveAgentSessions = vi.fn(async () => 0);
     const decision = await checkAgentSessionConcurrency({
       ownerId: 'owner-1',
       tier: 'free',
-      countLiveAgentSessions: async () => getCodeExecutionConcurrencyLimit('free') + 5,
+      countLiveAgentSessions,
     });
-    expect(decision).toEqual({ allowed: false, reason: 'concurrency_limit' });
+    expect(decision).toEqual({ allowed: false, reason: 'tier_ineligible' });
+    expect(countLiveAgentSessions).not.toHaveBeenCalled();
   });
 
   it('counts per OWNER — the count function is called with the given ownerId', async () => {
@@ -309,11 +364,14 @@ describe('session runtime guardrail', () => {
  */
 describe('checkAgentSessionConcurrency — resume exemption', () => {
   it('given a session already holding a sandbox at the ceiling, should allow without counting', async () => {
+    // 'pro' (not 'free'): isolates the resume exemption from tier
+    // eligibility, which overrides it regardless — see the next describe
+    // block.
     const countLiveAgentSessions = vi.fn(async () => 99);
 
     const decision = await checkAgentSessionConcurrency({
       ownerId: 'user-1',
-      tier: 'free',
+      tier: 'pro',
       countLiveAgentSessions,
       alreadyProvisioned: true,
     });
@@ -326,11 +384,33 @@ describe('checkAgentSessionConcurrency — resume exemption', () => {
   it('given a COLD session at the ceiling, should still refuse', async () => {
     const decision = await checkAgentSessionConcurrency({
       ownerId: 'user-1',
-      tier: 'free',
+      tier: 'pro',
       countLiveAgentSessions: async () => 99,
       alreadyProvisioned: false,
     });
 
     expect(decision).toEqual({ allowed: false, reason: 'concurrency_limit' });
+  });
+});
+
+/**
+ * Tier eligibility overrides the resume exemption: a downgraded owner's
+ * already-live sandbox must not keep resuming just because it was allocated
+ * before the downgrade — this backstop is checked BEFORE `alreadyProvisioned`
+ * is even consulted.
+ */
+describe('checkAgentSessionConcurrency — tier ineligibility overrides the resume exemption', () => {
+  it('given a free-tier owner with an already-provisioned session, should still deny with tier_ineligible', async () => {
+    const countLiveAgentSessions = vi.fn(async () => 0);
+
+    const decision = await checkAgentSessionConcurrency({
+      ownerId: 'user-1',
+      tier: 'free',
+      countLiveAgentSessions,
+      alreadyProvisioned: true,
+    });
+
+    expect(decision).toEqual({ allowed: false, reason: 'tier_ineligible' });
+    expect(countLiveAgentSessions).not.toHaveBeenCalled();
   });
 });

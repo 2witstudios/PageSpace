@@ -38,6 +38,7 @@ AI in PageSpace isn't bolted on — it's a behaviour the whole product shares. A
 
 ## Related
 
+- [Agent Sessions & Sandbox](/docs/features/agent-sessions) — give an agent a real cloud machine to run code and a terminal in.
 - [AI Chat](/docs/page-types/ai-chat) — the page type the agent lives in, and its per-page configuration.
 - [Channels](/docs/page-types/channel) — where @-mentioning an agent pulls it into a live thread.
 - [Task Lists](/docs/page-types/task-list) — assigning work to an agent so it picks it up.

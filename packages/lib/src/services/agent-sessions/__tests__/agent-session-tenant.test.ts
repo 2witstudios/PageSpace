@@ -23,7 +23,7 @@ vi.mock('@pagespace/db/operators', () => ({
 }));
 vi.mock('@pagespace/db/schema/core', () => ({ drives: { id: 'drives.id', ownerId: 'drives.ownerId' } }));
 vi.mock('@pagespace/db/schema/members', () => ({
-  driveMembers: { id: 'driveMembers.id', driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', acceptedAt: 'driveMembers.acceptedAt' },
+  driveMembers: { id: 'driveMembers.id', driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', role: 'driveMembers.role', acceptedAt: 'driveMembers.acceptedAt' },
 }));
 
 const mockCanRunCode = vi.hoisted(() => vi.fn());
@@ -72,11 +72,18 @@ describe('resolveDriveMembership', () => {
     expect(mockDriveMemberFindFirst).not.toHaveBeenCalled();
   });
 
-  it('given an accepted member who is not the owner, should answer member', async () => {
+  it('given an accepted MEMBER who is not the owner, should answer member', async () => {
     mockDriveFindFirst.mockResolvedValue({ ownerId: 'someone-else' });
-    mockDriveMemberFindFirst.mockResolvedValue({ id: 'membership-1' });
+    mockDriveMemberFindFirst.mockResolvedValue({ role: 'MEMBER' });
     const result = await resolveDriveMembership({ userId: 'user-1', driveId: 'drive-1' });
     expect(result).toBe('member');
+  });
+
+  it('given an accepted ADMIN, should answer admin — the END decision needs delete authority (codex round 12)', async () => {
+    mockDriveFindFirst.mockResolvedValue({ ownerId: 'someone-else' });
+    mockDriveMemberFindFirst.mockResolvedValue({ role: 'ADMIN' });
+    const result = await resolveDriveMembership({ userId: 'user-1', driveId: 'drive-1' });
+    expect(result).toBe('admin');
   });
 
   it('given no accepted membership row, should answer none', async () => {
@@ -88,21 +95,31 @@ describe('resolveDriveMembership', () => {
 });
 
 describe('canRunCodeForSession', () => {
-  it('given a drive-scoped session, should pass the driveId through as-is', async () => {
+  it('given a drive-scoped session, should pass the driveId and ownerId through as-is', async () => {
     mockCanRunCode.mockResolvedValue({ ok: true });
-    await canRunCodeForSession({ userId: 'user-1', driveId: 'drive-1' });
-    expect(mockCanRunCode).toHaveBeenCalledWith({ userId: 'user-1', driveId: 'drive-1', requestOrigin: 'user' });
+    await canRunCodeForSession({ userId: 'user-1', driveId: 'drive-1', ownerId: 'owner-1' });
+    expect(mockCanRunCode).toHaveBeenCalledWith({
+      userId: 'user-1',
+      driveId: 'drive-1',
+      ownerId: 'owner-1',
+      requestOrigin: 'user',
+    });
   });
 
   it('given a global-assistant session (null driveId), should pass undefined, not null', async () => {
     mockCanRunCode.mockResolvedValue({ ok: true });
-    await canRunCodeForSession({ userId: 'user-1', driveId: null });
-    expect(mockCanRunCode).toHaveBeenCalledWith({ userId: 'user-1', driveId: undefined, requestOrigin: 'user' });
+    await canRunCodeForSession({ userId: 'user-1', driveId: null, ownerId: 'owner-1' });
+    expect(mockCanRunCode).toHaveBeenCalledWith({
+      userId: 'user-1',
+      driveId: undefined,
+      ownerId: 'owner-1',
+      requestOrigin: 'user',
+    });
   });
 
   it('given the capability check refuses, should reduce to false', async () => {
     mockCanRunCode.mockResolvedValue({ ok: false, reason: 'kill_switch_off' });
-    const result = await canRunCodeForSession({ userId: 'user-1', driveId: 'drive-1' });
+    const result = await canRunCodeForSession({ userId: 'user-1', driveId: 'drive-1', ownerId: 'owner-1' });
     expect(result).toBe(false);
   });
 });

@@ -50,6 +50,15 @@ export interface SandboxActorContext {
   tenantId: string;
   /** Absent for global (non-drive) contexts. */
   driveId?: string;
+  /**
+   * The drive's owner (or, for a driveless global context, the acting user —
+   * global sessions are owner-only, so actor and owner coincide there). Feeds
+   * the call-time gate's tier-eligibility check, which resolves the PAYER's
+   * tier, not the actor's — see `resolveSandboxPayerTier`. Absent only when a
+   * session genuinely doesn't exist yet at gate-time (falls back to `userId`,
+   * which denies more strictly, never grants incorrectly).
+   */
+  ownerId?: string;
   conversationId: string;
   requestOrigin?: 'user' | 'agent';
   agentPageId?: string;
@@ -57,6 +66,13 @@ export interface SandboxActorContext {
   actorDisplayName?: string;
   aiProvider?: string;
   aiModel?: string;
+  /**
+   * The PAYER's subscription tier (drive owner, or the acting user for a
+   * driveless global context) — NOT the actor's own. Consumed by the quota
+   * eligibility check and the concurrency ceiling; the slot itself is still
+   * counted per acting user (`userId`), so per-actor accounting stays separate
+   * from payer-based entitlement (review #2326).
+   */
   tier: SubscriptionTier;
   /**
    * Stable id for the CURRENT agent turn (one streamText run) — the same value
@@ -324,7 +340,7 @@ export function safeLogWarn(
 // error-level line for every free-tier user hitting their own plan ceiling is
 // noise that trains the on-call to ignore this logger.
 const AUTHZ_DENY_REASONS = new Set([
-  'no_drive_access', 'insufficient_role', 'no_agent_access', 'app_admin_required', 'kill_switch_off', 'no_machine',
+  'no_drive_access', 'insufficient_role', 'no_agent_access', 'tier_ineligible', 'kill_switch_off', 'no_machine',
   'session_runtime_exceeded', 'session_limit_reached',
   // A legacy conversation that predates sessions has no working context to run
   // in — an expected refusal (not an infra fault), so it belongs here rather
@@ -335,7 +351,7 @@ const AUTHZ_DENY_REASONS = new Set([
 
 export type SandboxToolDenialReason =
   | 'kill_switch_off'
-  | 'app_admin_required'
+  | 'tier_ineligible'
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
@@ -376,9 +392,9 @@ export type EditFileToolResult =
 
 export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   kill_switch_off: 'Code execution is disabled.',
-  app_admin_required: 'Code execution is currently restricted to application administrators.',
+  tier_ineligible: 'Running code requires a Pro plan or above.',
   no_drive_access: 'You do not have access to run code in this drive.',
-  insufficient_role: 'Running code requires drive owner or admin access.',
+  insufficient_role: 'Running code requires edit access to this drive.',
   no_agent_access: 'This agent is not permitted to run code in this drive.',
   no_machine: 'No machine is configured for this run.',
   session_runtime_exceeded:

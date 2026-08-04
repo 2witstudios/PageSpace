@@ -123,7 +123,7 @@ export type PlanSpawnWorkerSessionResult =
   | { ok: true; name: string; prompt: string; agentId: string | null; childDepth: number }
   | {
       ok: false;
-      reason: 'invalid_name' | 'missing_prompt' | 'depth_exceeded' | 'concurrency_exceeded' | 'session_full';
+      reason: 'invalid_name' | 'missing_prompt' | 'depth_exceeded' | 'session_full';
     };
 
 export interface PlanSpawnWorkerSessionInput {
@@ -135,15 +135,18 @@ export interface PlanSpawnWorkerSessionInput {
   agentId?: string | null;
   /** How deep the CALLER already is. A caller at the cap may not spawn. */
   callerDepth: number;
-  /** Live sessions already counted against the owner's quota. */
-  activeSessionCount: number;
-  /** The owner's tier concurrency ceiling. */
-  concurrencyLimit: number;
   /**
    * ACTIVE conversations already living in the caller's session — the quantity
    * a spawn actually mints, compared against `MAX_SESSION_CONVERSATIONS`.
-   * Required: without it the only spawn cap counts sandboxes, which a worker
-   * spawn never creates, and worker minting is unbounded.
+   * Required: without it worker minting is unbounded.
+   *
+   * Deliberately the ONLY quota here (review #2326, codex round 11): a worker
+   * spawn creates a CONVERSATION, never a sandbox, so the sandbox-compute
+   * concurrency ceiling does not apply — gating on it denied chat-only
+   * workers to any caller whose account already sat at its compute limit.
+   * The one session a spawn can indirectly mint (the unbound global
+   * conversation's auto-bind) is capped where sessions are minted:
+   * `spawnAgentSession`'s own MAX_ACTIVE_SESSIONS_PER_OWNER ceiling.
    */
   sessionConversationCount: number;
   /** Accepted and ignored for uniqueness — worker names are free labels. Present so callers need no special case. */
@@ -155,8 +158,6 @@ export function planSpawnWorkerSession({
   prompt,
   agentId = null,
   callerDepth,
-  activeSessionCount,
-  concurrencyLimit,
   sessionConversationCount,
 }: PlanSpawnWorkerSessionInput): PlanSpawnWorkerSessionResult {
   const trimmedPrompt = prompt.trim();
@@ -171,10 +172,6 @@ export function planSpawnWorkerSession({
   // caller's bug and stays a bug at any quota, whereas a quota denial is a
   // transient condition the caller can retry.
   if (callerDepth >= MAX_AGENT_DEPTH) return { ok: false, reason: 'depth_exceeded' };
-  // Account-level ceiling before the session-level one: the account problem is
-  // the broader condition, and its remedy (a whole session ending) is different
-  // from the session-full remedy (reuse an existing worker).
-  if (activeSessionCount >= concurrencyLimit) return { ok: false, reason: 'concurrency_exceeded' };
   if (sessionConversationCount >= MAX_SESSION_CONVERSATIONS) return { ok: false, reason: 'session_full' };
 
   return { ok: true, name: trimmedName, prompt: trimmedPrompt, agentId, childDepth: callerDepth + 1 };

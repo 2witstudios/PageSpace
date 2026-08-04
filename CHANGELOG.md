@@ -75,6 +75,16 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Agent sessions and the sandbox are open to everyone — the sandbox itself is a Pro+ feature** —
+  sessions, chat, and the Agents screen's panes (splitting between agent conversations, a terminal,
+  and any page) are now available to every authenticated user, not just admins. Real cloud compute —
+  an agent session's sandbox, where it actually runs code and gives you a terminal — requires Pro
+  tier or above, billed to the session's payer (the drive owner, or the session's own owner for a
+  driveless Global Assistant session), so a free-tier member with edit access in a Pro-owned drive still gets sandbox
+  access. Sessions whose resolved payer is on the free tier get the same session/panes UI, with the
+  terminal affordance disabled and an upgrade prompt where the sandbox would run. Scheduled/triggered Workflows now honor the same
+  per-agent sandbox switch and payer-tier gate as interactive chat, closing a gap where a workflow
+  could reach code-execution tools regardless of an agent's own sandbox setting.
 - **Start a session with Global Assistant directly from a drive** — clicking "+" on a drive in the
   Agents console now offers Global Assistant alongside that drive's own agents and Shell, first in
   the list. The new session is filed under that drive, same as any agent session, rather than only

@@ -11,6 +11,7 @@ import {
   formatTierBytes,
   type SubscriptionTier,
 } from "@pagespace/lib/billing/subscription-tiers";
+import { isSandboxAvailable } from "@pagespace/lib/billing/sandbox-eligibility";
 
 export const metadata = pageMetadata.pricing;
 
@@ -29,6 +30,8 @@ interface Plan {
     buyMore: boolean;
     realtime: boolean;
     hierarchicalAgents: boolean;
+    /** Real cloud compute (a Sprite VM) an agent session can run code and a terminal in. */
+    sandbox: boolean;
     prioritySupport: boolean;
   };
 }
@@ -47,7 +50,7 @@ const PLAN_COPY: Record<
     prioritySupport: false,
   },
   pro: {
-    description: "For individuals who want more AI power and storage",
+    description: "More AI power, more storage, and a real cloud machine your agents can code in",
     cta: "Upgrade to Pro",
     ctaVariant: "default",
     highlight: true,
@@ -55,14 +58,14 @@ const PLAN_COPY: Record<
     prioritySupport: true,
   },
   founder: {
-    description: "For power users and small teams who need serious AI capability",
+    description: "Serious AI capability for power users and small teams, sandbox included",
     cta: "Upgrade to Founder",
     ctaVariant: "outline",
     models: "Standard + Pro",
     prioritySupport: true,
   },
   business: {
-    description: "For teams that need maximum capacity and priority support",
+    description: "Maximum capacity, priority support, and sandbox access for the whole team",
     cta: "Upgrade to Business",
     ctaVariant: "outline",
     models: "Standard + Pro",
@@ -88,6 +91,10 @@ const plans: Plan[] = PLAN_ORDER.map((tier) => {
       buyMore: true,
       realtime: true,
       hierarchicalAgents: true,
+      // Derived from the same eligibility check that actually gates the
+      // feature server-side (packages/lib/src/billing/sandbox-eligibility.ts)
+      // — this row can never drift out of sync with what Free actually gets.
+      sandbox: isSandboxAvailable(tier),
       prioritySupport: copy.prioritySupport,
     },
   };
@@ -163,6 +170,7 @@ export default function PricingPage() {
 
                   <div className="border-t border-border pt-4 space-y-2">
                     {[
+                      { key: "sandbox", label: "Cloud sandbox — run code, use a terminal", value: plan.features.sandbox },
                       { key: "buyMore", label: "Buy more credits anytime", value: plan.features.buyMore },
                       { key: "realtime", label: "Real-time collaboration", value: plan.features.realtime },
                       { key: "hierarchicalAgents", label: "Hierarchical AI agents", value: plan.features.hierarchicalAgents },
@@ -222,6 +230,7 @@ export default function PricingPage() {
                   { key: "storage", label: "Storage" },
                   { key: "monthlyCredits", label: "Monthly credits" },
                   { key: "models", label: "Model access" },
+                  { key: "sandbox", label: "Cloud sandbox — run code, use a terminal" },
                   { key: "buyMore", label: "Buy more credits anytime" },
                   { key: "realtime", label: "Real-time Collaboration" },
                   { key: "hierarchicalAgents", label: "Hierarchical AI Agents" },

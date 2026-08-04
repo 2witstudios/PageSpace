@@ -191,17 +191,14 @@ export async function checkAccessForSubject(
   subject: { sessionId: string; ownerId: string; driveId: string | null },
 ): Promise<AgentSessionAccessCheck> {
   const deps = buildAccessDeps();
-  const [driveMembership, allowedToRunCode] = await Promise.all([
+  const driveMembership =
     subject.driveId === null
-      ? Promise.resolve(null)
-      : deps.resolveDriveMembership({ userId: requesterId, driveId: subject.driveId }),
-    deps.canRunCode({ userId: requesterId, driveId: subject.driveId }),
-  ]);
+      ? null
+      : await deps.resolveDriveMembership({ userId: requesterId, driveId: subject.driveId });
   return decideAgentSessionAccess({
     requesterId,
     session: subject,
     driveMembership,
-    canRunCode: allowedToRunCode,
   });
 }
 
@@ -807,13 +804,20 @@ export async function provisionSessionSandbox(
           containment: isContainmentVerified() ? { contained: true } : null,
         }),
       checkConcurrency: async ({ ownerId, alreadyProvisioned }) => {
-        const owner = await db.query.users.findFirst({
-          where: eq(users.id, ownerId),
+        // Tier of the PAYER — the drive's owner, already resolved as the
+        // session's tenant above (drive owner, else session owner) — not the
+        // session creator's own tier (review #2326): a free-tier member's
+        // session in a Pro-owned drive is paid for, and therefore
+        // tier-entitled, by the drive owner. The ceiling still COUNTS the
+        // session owner's live sessions (`ownerId`), keeping per-owner
+        // accounting separate from payer-based entitlement.
+        const payer = await db.query.users.findFirst({
+          where: eq(users.id, tenant.tenantId),
           columns: { subscriptionTier: true },
         });
         return checkAgentSessionConcurrency({
           ownerId,
-          tier: toSubscriptionTier(owner?.subscriptionTier),
+          tier: toSubscriptionTier(payer?.subscriptionTier),
           countLiveAgentSessions: (id) => store.countLive(id),
           alreadyProvisioned,
         });

@@ -26,7 +26,19 @@ export interface SessionRecordSummary {
   name: string;
 }
 
-async function sessionFetcher(url: string): Promise<{ session: SessionRecordSummary | null }> {
+export interface SessionRecordResponse {
+  session: SessionRecordSummary | null;
+  /**
+   * Whether this session's PAYER (drive owner, or the session's own owner
+   * when driveless) is on a tier that includes the sandbox — server-resolved,
+   * since the client only knows the viewing user's own tier, the wrong axis
+   * for a shared drive. `undefined` when `session` is null (nothing to
+   * resolve a payer against).
+   */
+  sandboxEligible?: boolean;
+}
+
+async function sessionFetcher(url: string): Promise<SessionRecordResponse> {
   const response = await fetchWithAuth(url);
   if (!response.ok) throw new Error(`Failed to load session (${response.status})`);
   return response.json();

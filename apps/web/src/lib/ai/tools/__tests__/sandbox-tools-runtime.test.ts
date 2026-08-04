@@ -68,6 +68,7 @@ function makeDeps(overrides: Partial<ResolveSandboxActorContextDeps> = {}): Reso
     findPageDriveId: async () => undefined,
     findUser: async () => ({ subscriptionTier: 'pro' }),
     getActorInfo: async () => ({ actorEmail: 'u1@example.com', actorDisplayName: 'User One' }),
+    findSessionForConversation: async () => null,
     ...overrides,
   };
 }
@@ -121,18 +122,45 @@ describe('resolveSandboxActorContext', () => {
       expect(result.driveId).toBe('d1');
       expect(result.tenantId).toBe('owner-1');
     });
-  });
 
-  describe('given chatSource type "global", currentDrive present, but drive not found in DB', () => {
-    it('should return an active drive error', async () => {
+    it("should resolve the quota tier from the PAYER (drive owner), not the actor (review #2326)", async () => {
+      // A free-tier collaborator in a Pro-owned drive: every quota check
+      // downstream (`isSandboxAvailable` + the concurrency ceiling) consumes
+      // ctx.tier, so loading the actor's own tier here denied the very access
+      // the payer-based eligibility gate had just granted.
       const context: ToolExecutionContext = {
-        ...baseGlobalContext,
-        locationContext: { currentDrive: { id: 'd-missing', name: 'X', slug: 'x' } },
+        ...basePageContext,
+        locationContext: { currentDrive: { id: 'd1', name: 'Drive 1', slug: 'drive-1' } },
       };
+      const tierLookups: string[] = [];
       const resolve = createResolveSandboxActorContext(
-        makeDeps({ findDrive: async () => undefined }),
+        makeDeps({
+          findDrive: async () => ({ ownerId: 'owner-1' }),
+          findUser: async (userId) => {
+            tierLookups.push(userId);
+            return userId === 'owner-1'
+              ? { subscriptionTier: 'pro' }
+              : { subscriptionTier: 'free' };
+          },
+        }),
       );
       const result = await resolve(context);
+      expect('error' in result).toBe(false);
+      if ('error' in result) return;
+      expect(result.tier).toBe('pro');
+      expect(tierLookups).toEqual(['owner-1']);
+    });
+  });
+
+  describe('given chatSource type "global" bound to a session whose drive is not found in DB', () => {
+    it('should return an active drive error (fail closed)', async () => {
+      const resolve = createResolveSandboxActorContext(
+        makeDeps({
+          findSessionForConversation: async () => ({ driveId: 'd-missing', ownerId: 'owner-2' }),
+          findDrive: async () => undefined,
+        }),
+      );
+      const result = await resolve(baseGlobalContext);
       expect('error' in result).toBe(true);
       if (!('error' in result)) return;
       expect(result.error).toContain('Code execution requires an active drive.');
@@ -186,22 +214,93 @@ describe('resolveSandboxActorContext', () => {
     });
   });
 
-  describe('given chatSource type "global" and currentDrive present', () => {
-    it('should resolve with driveId from locationContext and tenantId from drive ownerId', async () => {
+  describe('given chatSource type "global" and currentDrive present but NO bound session', () => {
+    it('ignores the location drive — the payer is this user, whose auto-spawned session is driveless (review #2326)', async () => {
+      // A free-tier user merely VISITING a Pro-owned drive must not be gated
+      // eligible against the drive owner: `ensureGlobalSandboxSession` spawns
+      // the conversation's session with `driveId: null`, so provisioning
+      // resolves THIS USER as the payer — and conversely, a paid user
+      // visiting a free-owned drive funds their own driveless session fine.
       const context: ToolExecutionContext = {
         ...baseGlobalContext,
         locationContext: {
           currentDrive: { id: 'd1', name: 'My Drive', slug: 'my-drive' },
         },
       };
+      const tierLookups: string[] = [];
       const resolve = createResolveSandboxActorContext(
-        makeDeps({ findDrive: async () => ({ ownerId: 'tenant-from-drive' }) }),
+        makeDeps({
+          findDrive: async () => {
+            throw new Error('must not consult the location drive for an unbound global conversation');
+          },
+          findUser: async (userId) => {
+            tierLookups.push(userId);
+            return { subscriptionTier: 'pro' };
+          },
+        }),
       );
       const result = await resolve(context);
       expect('error' in result).toBe(false);
       if ('error' in result) return;
-      expect(result.driveId).toBe('d1');
-      expect(result.tenantId).toBe('tenant-from-drive');
+      expect(result.driveId).toBeUndefined();
+      expect(result.tenantId).toBe('u1');
+      expect(result.ownerId).toBe('u1');
+      expect(tierLookups).toEqual(['u1']);
+    });
+  });
+
+  describe('given chatSource type "page" BOUND to a DRIVELESS Global session', () => {
+    it("pays as the session's owner, not the agent's drive owner (review #2326)", async () => {
+      // A global session may host any accessible agent
+      // (create-conversation-in-session.ts), and provisioning authorizes the
+      // SESSION's coordinates — deriving the payer from the agent/location
+      // drive here diverged from what provisioning would actually decide.
+      const context: ToolExecutionContext = {
+        ...basePageContext,
+        locationContext: { currentDrive: { id: 'd-agent', name: 'Agent Drive', slug: 'agent-drive' } },
+      };
+      const resolve = createResolveSandboxActorContext(
+        makeDeps({
+          findSessionForConversation: async () => ({ driveId: null, ownerId: 'session-owner' }),
+          findDrive: async () => {
+            throw new Error('must not consult a drive for a driveless bound session');
+          },
+        }),
+      );
+      const result = await resolve(context);
+      expect('error' in result).toBe(false);
+      if ('error' in result) return;
+      expect(result.driveId).toBeUndefined();
+      expect(result.tenantId).toBe('session-owner');
+      expect(result.ownerId).toBe('session-owner');
+    });
+  });
+
+  describe('given chatSource type "global" BOUND to a drive-scoped session', () => {
+    it("resolves the session's own drive and pays as its owner, regardless of location (review #2326)", async () => {
+      const context: ToolExecutionContext = {
+        ...baseGlobalContext,
+        locationContext: {
+          currentDrive: { id: 'd-elsewhere', name: 'Elsewhere', slug: 'elsewhere' },
+        },
+      };
+      const consultedDrives: string[] = [];
+      const resolve = createResolveSandboxActorContext(
+        makeDeps({
+          findSessionForConversation: async () => ({ driveId: 'd-session', ownerId: 'session-owner' }),
+          findDrive: async (driveId) => {
+            consultedDrives.push(driveId);
+            return { ownerId: 'session-drive-owner' };
+          },
+        }),
+      );
+      const result = await resolve(context);
+      expect('error' in result).toBe(false);
+      if ('error' in result) return;
+      expect(result.driveId).toBe('d-session');
+      expect(result.tenantId).toBe('session-drive-owner');
+      expect(result.ownerId).toBe('session-owner');
+      expect(consultedDrives).toEqual(['d-session']);
     });
   });
 

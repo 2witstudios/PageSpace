@@ -247,6 +247,11 @@
       "import": "./dist/billing/sandbox-payer.js",
       "require": "./dist/billing/sandbox-payer.js"
     },
+    "./billing/sandbox-eligibility": {
+      "types": "./dist/billing/sandbox-eligibility.d.ts",
+      "import": "./dist/billing/sandbox-eligibility.js",
+      "require": "./dist/billing/sandbox-eligibility.js"
+    },
     "./billing/live-concurrency-query": {
       "types": "./dist/billing/live-concurrency-query.d.ts",
       "import": "./dist/billing/live-concurrency-query.js",
@@ -941,6 +946,11 @@
       "types": "./dist/email-templates/SdkCliLaunchEmail.d.ts",
       "import": "./dist/email-templates/SdkCliLaunchEmail.js",
       "require": "./dist/email-templates/SdkCliLaunchEmail.js"
+    },
+    "./email-templates/AgentSandboxLaunchEmail": {
+      "types": "./dist/email-templates/AgentSandboxLaunchEmail.d.ts",
+      "import": "./dist/email-templates/AgentSandboxLaunchEmail.js",
+      "require": "./dist/email-templates/AgentSandboxLaunchEmail.js"
     },
     "./email-templates/render-email": {
       "types": "./dist/email-templates/render-email.d.ts",
@@ -2046,6 +2056,9 @@
       ],
       "email-templates/SdkCliLaunchEmail": [
         "./dist/email-templates/SdkCliLaunchEmail.d.ts"
+      ],
+      "email-templates/AgentSandboxLaunchEmail": [
+        "./dist/email-templates/AgentSandboxLaunchEmail.d.ts"
       ],
       "email-templates/PaymentReceiptEmail": [
         "./dist/email-templates/PaymentReceiptEmail.d.ts"

@@ -483,6 +483,22 @@ describe('useAuthStore', () => {
       expect(useAuthStore.getState()._serverSessionInitialized).toBe(true);
     });
 
+    it('given only subscriptionTier changed (a plan upgrade/downgrade), should still update user in state', async () => {
+      useAuthStore.setState({
+        user: createMockUser({ subscriptionTier: 'free' }),
+        isAuthenticated: true,
+      });
+      const upgradedUser = createMockUser({ subscriptionTier: 'pro' });
+      vi.mocked(global.fetch).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(upgradedUser),
+      } as Response);
+
+      await useAuthStore.getState().loadSession();
+
+      expect(useAuthStore.getState().user?.subscriptionTier).toBe('pro');
+    });
+
     it('given 401 response, should clear user state', async () => {
       useAuthStore.setState({ user: createMockUser(), isAuthenticated: true });
       vi.mocked(global.fetch).mockResolvedValue({

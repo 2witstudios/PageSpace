@@ -57,11 +57,12 @@ async function queryDriveAgents(driveId: string): Promise<DriveAgent[]> {
  *
  * @param userId - The authenticated user's ID
  * @param options.canDelegate - Whether `spawn_session` is actually IN the caller's
- *   tool set. Session tools are gated on `CODE_EXECUTION_ENABLED`, which is off by
- *   default, so an unconditional "delegate with spawn_session" instruction told the
- *   model to call a tool it does not have — it would confidently attempt delegation
- *   and silently fail. Defaults to false: a prompt that never mentions a tool is
- *   always safe, one that mentions a missing tool never is.
+ *   tool set. The chat-only session family registers regardless of the
+ *   CODE_EXECUTION kill-switch, but read-only mode strips `spawn_session` as a
+ *   write tool — and an unconditional "delegate with spawn_session" instruction
+ *   told the model to call a tool it does not have: it would confidently attempt
+ *   delegation and silently fail. Defaults to false: a prompt that never mentions
+ *   a tool is always safe, one that mentions a missing tool never is.
  * @returns A formatted string to append to the system prompt, or empty string if no agents
  */
 export async function buildAgentAwarenessPrompt(

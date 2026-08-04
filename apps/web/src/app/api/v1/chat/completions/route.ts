@@ -22,7 +22,8 @@ import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factor
 import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
 import { sanitizeMessagesForModel, saveMessageToDatabase, extractMessageContent, convertDbMessageToUIMessage, extractToolResults } from '@/lib/ai/core/message-utils';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import { filterToolsForReadOnly, filterToolsForMcpScope, filterToolsForImageGen, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForDispatchCredentials, filterToolsForReadOnly, filterToolsForMcpScope, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier } from '@/lib/ai/core/tool-filtering';
+import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { getModelCapabilities, hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { hasFileParts, validateUserMessageFileParts } from '@/lib/ai/core/validate-image-parts';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
@@ -289,8 +290,27 @@ export async function POST(request: Request): Promise<Response> {
               Object.entries(baseTools).filter(([name]) => agentEnabledTools.includes(name)),
             ) as ToolSet)
           : (baseTools as ToolSet);
-      // The per-agent sandbox switch — same gate the chat route applies.
-      filteredTools = filterToolsForSandboxEnablement(filteredTools, Boolean(page.sandboxEnabled)) as ToolSet;
+      // The per-agent sandbox switch AND payer-tier eligibility — same gate
+      // the chat route applies. Short-circuited on sandboxEnabled first —
+      // most agents never touch the sandbox, so this skips the payer-tier
+      // DB round trip for the common case.
+      const sandboxEnabled = Boolean(page.sandboxEnabled);
+      // Bound-session first (review #2326) — same payer source as the chat
+      // route. An unbound (or auto-generated) page conversation is not
+      // eligible (codex round 14): acquire answers no_session for it.
+      const sandboxTierEligible = sandboxEnabled
+        ? await resolveSandboxToolEligibilityForConversation(incomingConversationId, 'page', authResult.userId)
+        : false;
+      filteredTools = filterToolsForSandboxEnablement(filteredTools, sandboxEnabled) as ToolSet;
+      // Tier strips only COMPUTE tools; the chat-only session family stays
+      // available to free payers (sessions/chat are free on every plan).
+      filteredTools = filterToolsForSandboxTier(filteredTools, sandboxTierEligible) as ToolSet;
+      // This route authenticates via MCP/API credentials, never a browser
+      // session cookie — spawn_session/send_session dispatch by forwarding
+      // the caller's cookie and could only ever refuse here, so the
+      // dispatch-dependent pair is stripped (same posture as non-interactive
+      // workflow runs; codex round 8).
+      filteredTools = filterToolsForDispatchCredentials(filteredTools, false) as ToolSet;
       const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
       filteredTools = exposure.tools;
       toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;
@@ -312,8 +332,27 @@ export async function POST(request: Request): Promise<Response> {
               Object.entries(baseTools).filter(([name]) => agentEnabledTools.includes(name)),
             ) as ToolSet)
           : (baseTools as ToolSet);
-      // The per-agent sandbox switch — same gate the chat route applies.
-      filteredTools = filterToolsForSandboxEnablement(filteredTools, Boolean(page.sandboxEnabled)) as ToolSet;
+      // The per-agent sandbox switch AND payer-tier eligibility — same gate
+      // the chat route applies. Short-circuited on sandboxEnabled first —
+      // most agents never touch the sandbox, so this skips the payer-tier
+      // DB round trip for the common case.
+      const sandboxEnabled = Boolean(page.sandboxEnabled);
+      // Bound-session first (review #2326) — same payer source as the chat
+      // route. An unbound (or auto-generated) page conversation is not
+      // eligible (codex round 14): acquire answers no_session for it.
+      const sandboxTierEligible = sandboxEnabled
+        ? await resolveSandboxToolEligibilityForConversation(incomingConversationId, 'page', authResult.userId)
+        : false;
+      filteredTools = filterToolsForSandboxEnablement(filteredTools, sandboxEnabled) as ToolSet;
+      // Tier strips only COMPUTE tools; the chat-only session family stays
+      // available to free payers (sessions/chat are free on every plan).
+      filteredTools = filterToolsForSandboxTier(filteredTools, sandboxTierEligible) as ToolSet;
+      // This route authenticates via MCP/API credentials, never a browser
+      // session cookie — spawn_session/send_session dispatch by forwarding
+      // the caller's cookie and could only ever refuse here, so the
+      // dispatch-dependent pair is stripped (same posture as non-interactive
+      // workflow runs; codex round 8).
+      filteredTools = filterToolsForDispatchCredentials(filteredTools, false) as ToolSet;
       const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS);
       filteredTools = exposure.tools;
       toolDiscoveryPrompt = exposure.toolDiscoveryPrompt;

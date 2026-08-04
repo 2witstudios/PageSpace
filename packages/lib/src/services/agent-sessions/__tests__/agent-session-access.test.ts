@@ -63,13 +63,20 @@ describe('checkAgentSessionAccess', () => {
     expect(result).toEqual({ allowed: true });
   });
 
-  it('given the capability check refuses, should deny with the capability reason', async () => {
+  it('should NOT consult the capability at all — the session surface is capability-free (review #2326)', async () => {
+    // A free-tier payer (or a member with no code-execution rights) still
+    // opens sessions, chat and panes; only the compute chokepoints weigh
+    // canRunCode.
     const result = await checkAgentSessionAccess({
       requesterId: 'user-2',
       sessionId: SESSION_ID,
-      deps: makeDeps({ canRunCode: async () => false }),
+      deps: makeDeps({
+        canRunCode: async () => {
+          throw new Error('must not consult canRunCode for session-surface access');
+        },
+      }),
     });
-    expect(result).toEqual({ allowed: false, reason: 'code_execution_denied' });
+    expect(result).toEqual({ allowed: true });
   });
 });
 
@@ -83,20 +90,29 @@ describe('checkAgentSessionEndAccess', () => {
     expect(result).toEqual({ allowed: false, reason: 'session_not_found' });
   });
 
-  it('gathers the REAL capability for a non-owner — a member without it cannot end (review H3)', async () => {
+  it('gathers the REAL capability for a non-owner — an admin without it cannot end (review H3)', async () => {
     const result = await checkAgentSessionEndAccess({
       requesterId: 'user-2',
       sessionId: SESSION_ID,
-      deps: makeDeps({ canRunCode: async () => false }),
+      deps: makeDeps({ resolveDriveMembership: async () => 'admin', canRunCode: async () => false }),
     });
     expect(result).toEqual({ allowed: false, reason: 'code_execution_denied' });
   });
 
-  it('a member WITH the capability may end — shared compute, ordinary session management', async () => {
+  it('a plain MEMBER with the capability still may NOT end — delete authority required (codex round 12)', async () => {
     const result = await checkAgentSessionEndAccess({
       requesterId: 'user-2',
       sessionId: SESSION_ID,
       deps: makeDeps({ canRunCode: async () => true }),
+    });
+    expect(result).toEqual({ allowed: false, reason: 'delete_authority_required' });
+  });
+
+  it('a drive ADMIN with the capability may end — delete authority plus the capability', async () => {
+    const result = await checkAgentSessionEndAccess({
+      requesterId: 'user-2',
+      sessionId: SESSION_ID,
+      deps: makeDeps({ resolveDriveMembership: async () => 'admin', canRunCode: async () => true }),
     });
     expect(result).toEqual({ allowed: true });
   });

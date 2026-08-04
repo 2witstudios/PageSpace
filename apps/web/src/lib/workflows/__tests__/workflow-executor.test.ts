@@ -17,6 +17,7 @@ const {
   mockUpdateSet,
   mockUpdateWhere,
   mockToolExecute,
+  mockResolveSandboxToolEligibility,
 } = vi.hoisted(() => ({
   mockSelectWhere: vi.fn(),
   mockSelectFrom: vi.fn(),
@@ -30,6 +31,29 @@ const {
   mockUpdateSet: vi.fn(),
   mockUpdateWhere: vi.fn(),
   mockToolExecute: vi.fn(),
+  mockResolveSandboxToolEligibility: vi.fn(),
+}));
+
+vi.mock('@/lib/ai/core/sandbox-tool-eligibility', () => ({
+  resolveSandboxToolEligibility: (...args: unknown[]) => mockResolveSandboxToolEligibility(...args),
+}));
+
+// The run-scoped session mint for sandbox-capable runs (review #2326) — the
+// executor spawns a real session + bound conversation before generateText and
+// ends it in finally. Stubbed here: this suite covers filtering/context
+// wiring, not session lifecycle (spawn refusal degrades to no sandbox tools,
+// which the default ok:false below exercises without a DB).
+const { mockSpawnSession, mockCreateConversationInSession, mockEndSession } = vi.hoisted(() => ({
+  // Untyped vi.fn(): implementations live in beforeEach (resetAllMocks wipes
+  // them), and the loose type lets tests resolve either spawn-result variant.
+  mockSpawnSession: vi.fn(),
+  mockCreateConversationInSession: vi.fn(),
+  mockEndSession: vi.fn(),
+}));
+vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
+  spawnSession: mockSpawnSession,
+  createConversationInSession: mockCreateConversationInSession,
+  endSession: mockEndSession,
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -104,6 +128,8 @@ vi.mock('@/lib/ai/core/ai-tools', () => ({
     list_pages: { name: 'list_pages' },
     create_page: { name: 'create_page' },
     search_pages: { name: 'search_pages' },
+    bash: { name: 'bash' },
+    spawn_session: { name: 'spawn_session' },
   },
 }));
 vi.mock('@/lib/ai/core/timestamp-utils', () => ({
@@ -197,9 +223,15 @@ function setupSelectChain(...results: unknown[][]) {
 describe('executeWorkflow', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // resetAllMocks wipes implementations — restore the session-mint defaults
+    // (spawn refused ⇒ the executor degrades to running without sandbox tools).
+    mockSpawnSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
+    mockCreateConversationInSession.mockResolvedValue(undefined);
+    mockEndSession.mockResolvedValue({ ok: true });
     vi.mocked(isProviderError).mockReturnValue(false);
     vi.mocked(createAIProvider).mockResolvedValue(mockProviderResult as never);
     mockResolvePageAgentIntegrationTools.mockResolvedValue({});
+    mockResolveSandboxToolEligibility.mockResolvedValue(true);
     vi.mocked(generateText).mockResolvedValue({
       text: 'Report complete',
       steps: [{ text: 'Report complete', toolCalls: [{}] }],
@@ -319,6 +351,235 @@ describe('executeWorkflow', () => {
     expect(toolKeys).toContain('list_pages');
     expect(toolKeys).toContain('create_page');
     expect(toolKeys).not.toContain('search_pages');
+  });
+
+  describe('sandbox tool gating (agent.sandboxEnabled + payer tier)', () => {
+    test('an agent with sandboxEnabled off never gets sandbox tools, even if enabledTools lists them', async () => {
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: false, enabledTools: ['list_pages', 'bash'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
+      const toolKeys = Object.keys(genCall.tools as object);
+      expect(toolKeys).toContain('list_pages');
+      expect(toolKeys).not.toContain('bash');
+      // Short-circuited before ever resolving payer tier — sandboxEnabled off
+      // is decisive on its own.
+      expect(mockResolveSandboxToolEligibility).not.toHaveBeenCalled();
+    });
+
+    test('an agent with sandboxEnabled on but an ineligible (free-tier) payer does not get sandbox tools', async () => {
+      mockResolveSandboxToolEligibility.mockResolvedValue(false);
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'bash'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      expect(mockResolveSandboxToolEligibility).toHaveBeenCalledWith('drive_abc', 'user_123');
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
+      const toolKeys = Object.keys(genCall.tools as object);
+      expect(toolKeys).toContain('list_pages');
+      expect(toolKeys).not.toContain('bash');
+    });
+
+    test('a MANUAL run strips the dispatch pair too — a fire-and-forget worker would outlive the run-scoped session the finally ends (codex round 11)', async () => {
+      mockResolveSandboxToolEligibility.mockResolvedValue(false);
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'bash', 'spawn_session'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(
+        createInputFixture({ source: { table: 'manual', id: null, triggerAt: null } }),
+      );
+
+      expect(result.success).toBe(true);
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
+      const toolKeys = Object.keys(genCall.tools as object);
+      expect(toolKeys).toContain('list_pages');
+      expect(toolKeys).not.toContain('bash');
+      expect(toolKeys).not.toContain('spawn_session');
+      // Nothing survived that could act in a fresh run-scoped workspace.
+      expect(mockSpawnSession).not.toHaveBeenCalled();
+      expect(mockCreateConversationInSession).not.toHaveBeenCalled();
+    });
+
+    test('a NON-interactive fire (cron/webhook/task/calendar) strips the dispatch pair and mints no session for the leftovers (codex round 7)', async () => {
+      mockResolveSandboxToolEligibility.mockResolvedValue(false);
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'spawn_session'] }],
+        [mockDrive],
+      );
+
+      // Fixture default source is cron — no live user request, so
+      // spawn_session's chat-pipeline dispatch could never authenticate.
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
+      const toolKeys = Object.keys(genCall.tools as object);
+      expect(toolKeys).toContain('list_pages');
+      expect(toolKeys).not.toContain('spawn_session');
+      // Nothing left that could act in a fresh run-scoped workspace — no
+      // session row is spent on it.
+      expect(mockSpawnSession).not.toHaveBeenCalled();
+      expect(mockCreateConversationInSession).not.toHaveBeenCalled();
+    });
+
+    test('a NON-interactive compute-eligible run still gets its run-scoped session — bash needs no dispatch', async () => {
+      mockResolveSandboxToolEligibility.mockResolvedValue(true);
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'wf-ses-cron' } });
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'bash', 'spawn_session'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
+      const toolKeys = Object.keys(genCall.tools as object);
+      expect(toolKeys).toContain('bash');
+      expect(toolKeys).not.toContain('spawn_session');
+      expect(mockSpawnSession).toHaveBeenCalledTimes(1);
+      expect(mockEndSession).toHaveBeenCalledWith('wf-ses-cron');
+    });
+
+    test('an agent with sandboxEnabled on and an eligible (Pro+) payer gets sandbox tools, backed by a run-scoped session', async () => {
+      mockResolveSandboxToolEligibility.mockResolvedValue(true);
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'wf-ses-1' } });
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'bash'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
+      const toolKeys = Object.keys(genCall.tools as object);
+      expect(toolKeys).toContain('list_pages');
+      expect(toolKeys).toContain('bash');
+      // The sandbox runner refuses session-less page conversations, so a
+      // sandbox-capable run must execute against a REAL bound conversation —
+      // and release the session's compute when the run ends (review #2326).
+      expect(mockSpawnSession).toHaveBeenCalledTimes(1);
+      expect(mockCreateConversationInSession).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: 'wf-ses-1', agentPageId: mockAgent.id }),
+      );
+      expect(mockEndSession).toHaveBeenCalledWith('wf-ses-1');
+    });
+
+    test('a spawn refusal (owner at session cap) degrades to running WITHOUT sandbox tools instead of failing the run', async () => {
+      mockResolveSandboxToolEligibility.mockResolvedValue(true);
+      mockSpawnSession.mockResolvedValue({ ok: false, reason: 'session_limit_reached' });
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'bash'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
+      const toolKeys = Object.keys(genCall.tools as object);
+      expect(toolKeys).toContain('list_pages');
+      expect(toolKeys).not.toContain('bash');
+      expect(mockCreateConversationInSession).not.toHaveBeenCalled();
+      expect(mockEndSession).not.toHaveBeenCalled();
+    });
+
+    test('a RESOLVED teardown failure ({ok:false}) is retried and error-logged like a throw — not mistaken for success (codex round 10)', async () => {
+      mockResolveSandboxToolEligibility.mockResolvedValue(true);
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'wf-ses-resolvedfail' } });
+      mockEndSession.mockResolvedValue({ ok: false, reason: 'teardown_failed', detail: 'sprite kill timed out' });
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'bash'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      // Both bounded attempts consumed — an {ok:false} resolution is a real
+      // failure (the Sprite stays live and billing), never a success.
+      expect(mockEndSession).toHaveBeenCalledTimes(2);
+    });
+
+    test('the tool context carries the workflow agent identity via chatSource — channel messages and session reads attribute to the agent (codex round 10)', async () => {
+      mockResolveSandboxToolEligibility.mockResolvedValue(false);
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(
+        createInputFixture({ source: { table: 'manual', id: null, triggerAt: null } }),
+      );
+
+      expect(result.success).toBe(true);
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
+      const ctx = genCall.experimental_context as { chatSource?: { type: string; agentPageId?: string } };
+      expect(ctx.chatSource).toEqual({ type: 'page', agentPageId: 'agent_1', agentTitle: 'Report Agent' });
+    });
+
+    test('a transient endSession fault is retried once; the run still succeeds (durable backstop is the orphan reconcile cron)', async () => {
+      mockResolveSandboxToolEligibility.mockResolvedValue(true);
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'wf-ses-retry' } });
+      mockEndSession
+        .mockRejectedValueOnce(new Error('transient teardown blip'))
+        .mockResolvedValueOnce({ ok: true });
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'bash'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      expect(mockEndSession).toHaveBeenCalledTimes(2);
+      expect(mockEndSession).toHaveBeenNthCalledWith(2, 'wf-ses-retry');
+    });
+
+    test('a teardown that fails BOTH attempts still returns the workflow result — the reaper owns the residual', async () => {
+      mockResolveSandboxToolEligibility.mockResolvedValue(true);
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'wf-ses-stuck' } });
+      mockEndSession.mockRejectedValue(new Error('teardown keeps failing'));
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'bash'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      expect(mockEndSession).toHaveBeenCalledTimes(2);
+    });
+
+    test('a conversation-bind failure ends the just-minted session and degrades to no sandbox tools', async () => {
+      mockResolveSandboxToolEligibility.mockResolvedValue(true);
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'wf-ses-2' } });
+      mockCreateConversationInSession.mockRejectedValue(new Error('bind blew up'));
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'bash'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
+      expect(Object.keys(genCall.tools as object)).not.toContain('bash');
+      // The scratch session must not be left live and billing.
+      expect(mockEndSession).toHaveBeenCalledWith('wf-ses-2');
+    });
   });
 
   test('merges granted integration tools for workflow agents', async () => {
@@ -530,9 +791,15 @@ describe('executeWorkflow — explicit step chains', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    // resetAllMocks wipes implementations — restore the session-mint defaults
+    // (spawn refused ⇒ the executor degrades to running without sandbox tools).
+    mockSpawnSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
+    mockCreateConversationInSession.mockResolvedValue(undefined);
+    mockEndSession.mockResolvedValue({ ok: true });
     vi.mocked(isProviderError).mockReturnValue(false);
     vi.mocked(createAIProvider).mockResolvedValue(mockProviderResult as never);
     mockResolvePageAgentIntegrationTools.mockResolvedValue({});
+    mockResolveSandboxToolEligibility.mockResolvedValue(true);
     vi.mocked(generateText).mockResolvedValue({
       text: 'AI step done',
       steps: [{ text: 'AI step done', toolCalls: [] }],

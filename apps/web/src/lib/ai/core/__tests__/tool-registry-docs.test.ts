@@ -42,9 +42,19 @@ const DOC_COUNT_ASSERTIONS: Array<{ file: string; re: RegExp }> = [
 ];
 
 describe('tool registry — internal consistency', () => {
-  it('WORKSPACE_TOOL_COUNT equals the base (code-exec-off) registry size', () => {
+  it('WORKSPACE_TOOL_COUNT equals the code-exec-off registry minus exactly the chat-only session family', () => {
+    // The chat-only session tools register on every deployment (sessions are
+    // free everywhere, review #2326) but are deliberately NOT part of the
+    // public workspace-tool count — like the compute tools, they live outside
+    // TOOL_MODULES. This pins the off-build to workspace tools + exactly that
+    // family, so a new always-on extra can't silently skew the doc count.
     const base = buildPageSpaceTools({ codeExecutionEnabled: false });
-    expect(WORKSPACE_TOOL_COUNT).toBe(Object.keys(base).length);
+    const workspaceNames = new Set(WORKSPACE_TOOL_NAMES);
+    const extras = Object.keys(base).filter((name) => !workspaceNames.has(name));
+    expect(new Set(extras)).toEqual(
+      new Set(['list_sessions', 'spawn_session', 'send_session', 'read_session', 'kill_session']),
+    );
+    expect(WORKSPACE_TOOL_COUNT).toBe(Object.keys(base).length - extras.length);
     expect(WORKSPACE_TOOL_COUNT).toBe(WORKSPACE_TOOL_NAMES.length);
     expect(WORKSPACE_TOOL_COUNT).toBeGreaterThan(0);
   });

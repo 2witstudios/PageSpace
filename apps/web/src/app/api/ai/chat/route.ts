@@ -84,8 +84,11 @@ import {
   filterToolsForReadOnly,
   filterToolsForMcpScope,
   filterToolsForAgentAllowlist,
+  filterToolsForDispatchCredentials,
   filterToolsForSandboxEnablement,
+  filterToolsForSandboxTier,
 } from '@/lib/ai/core/tool-filtering';
+import { resolveSandboxToolEligibilityForConversation } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
 import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/core/model-capabilities';
 import { getPageTreeContext } from '@/lib/ai/core/page-tree-context';
@@ -1076,15 +1079,34 @@ export async function POST(request: Request) {
       agentEnabledTools
     ) as ToolSet;
 
-    // Step 3b: the per-agent sandbox switch. An agent with sandboxEnabled off
-    // never sees the sandbox families (bash/files, git+gh, sessions/shells) —
-    // independent of the allowlist, which cannot re-grant them. The env
-    // kill-switch and per-call canRunCode remain the security boundaries
-    // underneath; this is agent configuration.
-    filteredTools = filterToolsForSandboxEnablement(
-      filteredTools,
-      Boolean(page.sandboxEnabled)
-    ) as ToolSet;
+    // Step 3b: the per-agent sandbox switch AND the payer's tier eligibility.
+    // An agent with sandboxEnabled off never sees the sandbox families
+    // (bash/files, git+gh, sessions/shells) — independent of the allowlist,
+    // which cannot re-grant them. A free-tier payer doesn't either: showing
+    // tools that would hard-fail with tier_ineligible the moment they're
+    // called is a UX bug, not a security concern (the env kill-switch and
+    // per-call canRunCode remain the real security boundaries underneath;
+    // this is agent configuration + UX, not authz). Short-circuited on
+    // sandboxEnabled first — most agents never touch the sandbox at all, so
+    // this skips the payer-tier DB round trip for the common case.
+    const sandboxEnabled = Boolean(page.sandboxEnabled);
+    // Bound-session first (review #2326): a page conversation hosted in a
+    // driveless Global session is paid for by the SESSION's owner, not the
+    // agent's drive owner — gate exposure on the payer provisioning will use.
+    // An UNBOUND page conversation is not eligible at all (codex round 14):
+    // the acquire path never lazily mints page conversations a session.
+    const sandboxTierEligible = sandboxEnabled
+      ? await resolveSandboxToolEligibilityForConversation(conversationId, 'page', userId)
+      : false;
+    filteredTools = filterToolsForSandboxEnablement(filteredTools, sandboxEnabled) as ToolSet;
+    // The tier gate strips only the COMPUTE tools — a free payer keeps the
+    // chat-only session family (sessions/chat are free on every plan).
+    filteredTools = filterToolsForSandboxTier(filteredTools, sandboxTierEligible) as ToolSet;
+    // spawn_session/send_session dispatch by forwarding the caller's browser
+    // session cookie — an MCP-authenticated request (allowed on this route)
+    // has none, so its dispatch could only ever refuse (codex round 9; same
+    // posture as /api/v1 and non-interactive workflow runs).
+    filteredTools = filterToolsForDispatchCredentials(filteredTools, !isMCPAuthResult(authResult)) as ToolSet;
 
     // Step 4: webSearchEnabled is a runtime input toggle that overrides the allowlist.
     // If the user toggled web search on in the composer, they get web_search regardless of enabledTools.

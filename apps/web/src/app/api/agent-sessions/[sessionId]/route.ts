@@ -47,6 +47,7 @@ import {
   provisionSessionSandbox,
   toAgentSessionDTO,
 } from '@/lib/agent-sessions/agent-sessions-runtime';
+import { canRunCodeForSession } from '@pagespace/lib/services/agent-sessions/agent-session-tenant';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -62,16 +63,23 @@ type RouteContext = { params: Promise<{ sessionId: string }> };
  * (`ensureAgentSessionSandbox`'s own authorization, re-checked at provision
  * time) that leaks nothing new by staying a genuine 403.
  */
-function provisioningDenied(request: Request, userId: string, sessionId: string, reason: string): NextResponse {
+function provisioningDenied(request: Request, userId: string, sessionId: string, reason: string, detail?: string): NextResponse {
   auditRequest(request, {
     eventType: 'authz.access.denied',
     userId,
     resourceType: 'agent_session',
     resourceId: sessionId,
-    details: { reason, route: ROUTE },
+    details: { reason, ...(detail ? { detail } : {}), route: ROUTE },
     riskScore: 0.5,
   });
-  return NextResponse.json({ error: 'You do not have access to this session' }, { status: 403 });
+  // The session surface is free for every drive member, so a free-tier payer
+  // legitimately reaches this point — name the plan gate instead of implying
+  // an access problem they could never resolve.
+  const error =
+    detail === 'tier_ineligible'
+      ? 'Running the agent sandbox requires a Pro plan or above'
+      : 'You do not have access to this session';
+  return NextResponse.json({ error }, { status: 403 });
 }
 
 export async function GET(request: Request, context: RouteContext) {
@@ -89,7 +97,22 @@ export async function GET(request: Request, context: RouteContext) {
 
   const row = await findSessionRecord(sessionId);
   if (!row) return NextResponse.json({ session: null });
-  return NextResponse.json({ session: toAgentSessionDTO(row) });
+  // Whether THIS REQUESTER may run the sandbox here — the full centralized
+  // `canRunCode` verdict (kill switch + the PAYER's tier + the requester's
+  // own drive edit access), not payer tier alone (review #2326): a
+  // VIEWER-role member of a Pro-owned drive, or anyone while the kill
+  // switch is off, would otherwise see enabled Shell/reattach controls that
+  // every enforcement point (shells POST, realtime attach) then 403s.
+  // Payer-based tier resolution still means a free-tier EDITOR in a
+  // Pro-owned drive sees the sandbox as available — client-side `useAuth()`
+  // only knows the viewer's own tier, the wrong axis; this is the one place
+  // that resolves the real answer.
+  const sandboxEligible = await canRunCodeForSession({
+    userId: auth.userId,
+    driveId: row.driveId,
+    ownerId: row.ownerId,
+  });
+  return NextResponse.json({ session: toAgentSessionDTO(row), sandboxEligible });
 }
 
 const PROVISION_FAILURE_STATUS: Record<string, number> = {
@@ -125,7 +148,7 @@ export async function POST(request: Request, context: RouteContext) {
           reasonCode: provisioned.detail,
         });
       }
-      return provisioningDenied(request, auth.userId, sessionId, provisioned.denial ?? 'denied');
+      return provisioningDenied(request, auth.userId, sessionId, provisioned.denial ?? 'denied', provisioned.detail);
     }
     loggers.api.error('Agent session provision failed', undefined, {
       sessionId,

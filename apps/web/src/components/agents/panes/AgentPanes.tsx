@@ -62,6 +62,7 @@ import { PageAgentHistoryTab, PageAgentSettingsTab, type PageAgentSettingsTabRef
 import { cn } from '@/lib/utils';
 import EndSessionDialog from '../EndSessionDialog';
 import { useResolvedAgent } from '../useResolvedAgent';
+import { useSessionRecord } from '../useSessionRecord';
 import SessionPanes from './SessionPanes';
 import PaneBar, { PaneSessionIdentity, PaneSplitCloseActions } from './PaneBar';
 import PanePicker, { type PickableAgent, type ReattachableShell } from './PanePicker';
@@ -171,6 +172,16 @@ export default function AgentPanes({
   const hydrateWorkspace = useAgentWorkspaceStore((state) => state.hydrateWorkspace);
   const replaceConversation = useAgentWorkspaceStore((state) => state.replaceConversation);
   const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
+
+  // Whether THIS session's payer (not the viewing user) is sandbox-eligible —
+  // server-resolved (the client only knows its own tier, the wrong axis for
+  // a shared drive). Defaults to true while unresolved: a session that has
+  // ALREADY provisioned a Sprite (most of what this grid renders) is proof
+  // enough that it was eligible; the picker's "Shell"/reattach buttons are
+  // the only things this actually gates, and they mustn't flash disabled on
+  // every mount before this fetch resolves.
+  const { data: sessionRecordData } = useSessionRecord(sessionId);
+  const canRunSandbox = sessionRecordData?.sandboxEligible ?? true;
 
   // Layout AND tabs are server-persisted now — debounced, not per-transition
   // (see the hook's own file header for why that distinction matters).
@@ -1582,6 +1593,7 @@ export default function AgentPanes({
               agents={pickableAgents}
               driveId={driveId}
               isLoading={agentsLoading}
+              canRunSandbox={canRunSandbox}
               existingShells={reattachableShells}
               // The assistant identity path is live (AssistantSessionChat), so
               // every session can host an assistant thread beside its agents.

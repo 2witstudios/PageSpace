@@ -13,13 +13,14 @@
  * the only thing that knows whether a pick should reuse an existing row.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type Ref } from 'react';
 import { Bot, Search, TerminalSquare } from 'lucide-react';
 import useSWR from 'swr';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isPaneablePageType } from '@pagespace/lib/content/page-types.config';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { PageTypeIcon } from '@/components/common/PageTypeIcon';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useDebounce } from '@/hooks/useDebounce';
@@ -73,6 +74,13 @@ export interface PanePickerProps {
   /** No agents resolved yet — distinct from "this drive has none". */
   isLoading?: boolean;
   /**
+   * Whether this session's PAYER is on a tier that includes the sandbox
+   * (real cloud compute). Chat/panes/pages stay open regardless — only this
+   * one affordance is tier-gated. Disabled rather than hidden (a control
+   * that should exist must not silently vanish), with an upgrade tooltip.
+   */
+  canRunSandbox: boolean;
+  /**
    * Shells this session already has running, not bound to any pane right
    * now — offered above "Shell" so reopening one is a click rather than a
    * dead end (issue #2263, finding 3: closing a terminal pane used to have
@@ -106,6 +114,7 @@ export default function PanePicker({
   agents,
   driveId = null,
   isLoading = false,
+  canRunSandbox,
   autoFocus = false,
   canPickAssistant = false,
   existingShells = [],
@@ -138,17 +147,13 @@ export default function PanePicker({
           Assistant" button visually collide with "Agents" and eat its
           clicks. */}
       <div className="flex shrink-0 flex-col gap-1">
-        <Button
-          ref={firstRef}
-          variant="ghost"
-          size="sm"
-          className="h-8 justify-start gap-2 px-2"
+        <ShellPickButton
+          ref={canRunSandbox ? firstRef : undefined}
+          label="Shell"
+          disabled={!canRunSandbox}
           onClick={onPickShell}
-          data-testid="pick-shell"
-        >
-          <TerminalSquare className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-          Shell
-        </Button>
+          testId="pick-shell"
+        />
 
         {canPickAssistant && (
           <Button
@@ -171,17 +176,13 @@ export default function PanePicker({
         <div className="flex shrink-0 flex-col gap-1">
           <p className="shrink-0 pt-1 text-xs font-medium text-muted-foreground">Reattach a shell</p>
           {existingShells.map((shell) => (
-            <Button
+            <ShellPickButton
               key={shell.shellId}
-              variant="ghost"
-              size="sm"
-              className="h-8 justify-start gap-2 px-2"
+              label={shell.name}
+              disabled={!canRunSandbox}
               onClick={() => onReattachShell?.(shell.shellId, shell.name)}
-              data-testid={`reattach-shell-${shell.shellId}`}
-            >
-              <TerminalSquare className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-              <span className="truncate">{shell.name}</span>
-            </Button>
+              testId={`reattach-shell-${shell.shellId}`}
+            />
           ))}
         </div>
       )}
@@ -220,6 +221,60 @@ export default function PanePicker({
           set to enumerate up front. */}
       {onPickPage && <PagesSection driveId={driveId} onPickPage={onPickPage} />}
     </div>
+  );
+}
+
+/**
+ * One "Shell"/reattach button. Disabled (not hidden) when the session's
+ * payer isn't sandbox-eligible — wrapped in a focusable, hoverable `span`
+ * rather than relying on the disabled `<button>` itself: a disabled native
+ * button gets `pointer-events: none`, which would make the tooltip
+ * unreachable by mouse (and the wrapping span keeps it reachable by
+ * keyboard too, since Radix's tooltip triggers on focus as well as hover).
+ */
+function ShellPickButton({
+  ref,
+  label,
+  disabled,
+  onClick,
+  testId,
+}: {
+  ref?: Ref<HTMLButtonElement>;
+  label: string;
+  disabled: boolean;
+  onClick: () => void;
+  testId: string;
+}) {
+  const button = (
+    <Button
+      ref={ref}
+      variant="ghost"
+      size="sm"
+      disabled={disabled}
+      className="h-8 w-full justify-start gap-2 px-2"
+      onClick={onClick}
+      data-testid={testId}
+    >
+      <TerminalSquare className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+      <span className="truncate">{label}</span>
+    </Button>
+  );
+
+  if (!disabled) return button;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span tabIndex={0} className="cursor-not-allowed">
+          {button}
+        </span>
+      </TooltipTrigger>
+      {/* Capability-neutral: `canRunSandbox` folds several denial causes
+          (payer tier, the requester's drive role, the deployment kill
+          switch) into one boolean, and "upgrade to Pro" is wrong advice for
+          all but the tier case (codex round 9). */}
+      <TooltipContent>Sandbox terminals aren&apos;t available in this session — they need a Pro-plan workspace with edit access</TooltipContent>
+    </Tooltip>
   );
 }
 
