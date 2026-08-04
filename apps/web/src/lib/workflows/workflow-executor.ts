@@ -389,6 +389,32 @@ async function runToolStep(
   }
 }
 
+/**
+ * Release a run-scoped workflow session, with one bounded retry for transient
+ * faults. Durable safety does NOT depend on this succeeding: `endSession`
+ * (`endAgentSession`) stamps `teardownRequestedAt` BEFORE it kills, so a
+ * failed or half-finished teardown is reclaimed by the
+ * `reconcile-orphaned-sprites` cron on its next tick — this helper's job is
+ * to make the common case immediate and the residual case loudly observable
+ * (error-level, not a swallowed warn), never to be a second reaper.
+ */
+async function releaseWorkflowSession(sessionId: string, workflowId: string): Promise<void> {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      await endSession(sessionId);
+      return;
+    } catch (error) {
+      if (attempt === 2) {
+        loggers.api.error(
+          'Workflow executor: run-scoped session teardown failed after retry — the orphan-Sprite reconcile cron will reclaim it',
+          error instanceof Error ? error : undefined,
+          { sessionId, workflowId },
+        );
+      }
+    }
+  }
+}
+
 async function runExecution(
   input: WorkflowExecutionInput,
   startTime: number,
@@ -589,7 +615,7 @@ async function runExecution(
           conversationId = boundConversationId;
           workflowSessionId = spawned.session.id;
         } catch (error) {
-          await endSession(spawned.session.id).catch(() => {});
+          await releaseWorkflowSession(spawned.session.id, input.workflowId);
           availableTools = filterToolsForSandboxTier(availableTools, false) as ToolSet;
           loggers.api.warn('Workflow executor: session conversation bind failed — running without sandbox tools', {
             workflowId: input.workflowId,
@@ -753,14 +779,11 @@ async function runExecution(
   } finally {
     // Release the run-scoped session's compute on every exit. `endSession`
     // tears the Sprite down (billing stops); the bound conversation and its
-    // messages persist as the run's inspectable record.
+    // messages persist as the run's inspectable record. Retried once, with
+    // the orphan-Sprite reconcile cron as the durable backstop (see
+    // `releaseWorkflowSession`).
     if (workflowSessionId) {
-      await endSession(workflowSessionId).catch((error) => {
-        loggers.api.warn('Workflow executor: failed to end run-scoped session', {
-          sessionId: workflowSessionId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
+      await releaseWorkflowSession(workflowSessionId, input.workflowId);
     }
   }
 }

@@ -432,6 +432,39 @@ describe('executeWorkflow', () => {
       expect(mockEndSession).not.toHaveBeenCalled();
     });
 
+    test('a transient endSession fault is retried once; the run still succeeds (durable backstop is the orphan reconcile cron)', async () => {
+      mockResolveSandboxToolEligibility.mockResolvedValue(true);
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'wf-ses-retry' } });
+      mockEndSession
+        .mockRejectedValueOnce(new Error('transient teardown blip'))
+        .mockResolvedValueOnce({ ok: true });
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'bash'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      expect(mockEndSession).toHaveBeenCalledTimes(2);
+      expect(mockEndSession).toHaveBeenNthCalledWith(2, 'wf-ses-retry');
+    });
+
+    test('a teardown that fails BOTH attempts still returns the workflow result — the reaper owns the residual', async () => {
+      mockResolveSandboxToolEligibility.mockResolvedValue(true);
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'wf-ses-stuck' } });
+      mockEndSession.mockRejectedValue(new Error('teardown keeps failing'));
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'bash'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      expect(mockEndSession).toHaveBeenCalledTimes(2);
+    });
+
     test('a conversation-bind failure ends the just-minted session and degrades to no sandbox tools', async () => {
       mockResolveSandboxToolEligibility.mockResolvedValue(true);
       mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'wf-ses-2' } });
