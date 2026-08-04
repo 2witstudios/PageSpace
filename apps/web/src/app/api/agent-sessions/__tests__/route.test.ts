@@ -390,6 +390,25 @@ describe("POST /api/agent-sessions — firstThing: 'shell'", () => {
     expect(mockSpawnShell).not.toHaveBeenCalled();
   });
 
+  // Review #2326: the session surface is free for every drive member, so a
+  // free-tier payer legitimately reaches shell-first provisioning — the
+  // provisioner's tier denial is an entitlement fact and must respond 403
+  // naming the plan gate, not a generic 502 infrastructure failure.
+  it('given sandbox provisioning is denied for tier ineligibility, ENDS the session and responds 403 naming the plan gate (not 502)', async () => {
+    mockProvisionSessionSandbox.mockResolvedValue({
+      ok: false,
+      reason: 'denied',
+      denial: 'not_authorized',
+      detail: 'tier_ineligible',
+    });
+    const response = await spawn({ driveId: 'drive-1', firstThing: 'shell' });
+    expect(response.status).toBe(403);
+    const body = await response.json();
+    expect(body.error).toContain('Pro plan');
+    expect(mockEndSession).toHaveBeenCalledWith('ses-new');
+    expect(mockSpawnShell).not.toHaveBeenCalled();
+  });
+
   // Codex review finding on PR #2284: spawned.session is the PRE-provision row, so
   // responding with it directly reports a stale sandboxStatus even though provisioning
   // just succeeded. The route must refetch before building the response DTO.

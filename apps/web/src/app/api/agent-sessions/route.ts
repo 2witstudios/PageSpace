@@ -414,6 +414,34 @@ export async function POST(request: Request) {
           reasonCode: provisioned.detail,
         });
       }
+      if (provisioned.reason === 'denied') {
+        // The provisioner's own authorization refused — an entitlement fact,
+        // not an infrastructure failure, so it must not read as a 502. Since
+        // the session surface opened to every drive member, a free-tier payer
+        // legitimately reaches this shell-first path; name the plan gate.
+        auditRequest(request, {
+          eventType: 'authz.access.denied',
+          userId: auth.userId,
+          resourceType: 'agent_session',
+          resourceId: spawned.session.id,
+          details: {
+            reason: provisioned.denial ?? 'denied',
+            ...(provisioned.detail ? { detail: provisioned.detail } : {}),
+            method: 'POST',
+            route: 'agent-sessions',
+          },
+          riskScore: 0.5,
+        });
+        return NextResponse.json(
+          {
+            error:
+              provisioned.detail === 'tier_ineligible'
+                ? 'Running the agent sandbox requires a Pro plan or above'
+                : 'You cannot open a terminal in this drive',
+          },
+          { status: 403 },
+        );
+      }
       loggers.api.error(
         'Agent session spawn: first shell sandbox provision failed',
         undefined,
