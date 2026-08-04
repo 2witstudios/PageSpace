@@ -21,6 +21,16 @@ export interface Route {
    * future long-running command can't forget to opt out of the force-exit.
    */
   readonly longRunning?: true;
+  /**
+   * The handler serves a protocol whose client can only observe a startup
+   * failure as a silent hang (e.g. `mcp`'s stdio server — a child that exits
+   * before the transport connects looks identical to a hung server from the
+   * far side of the pipe). `run.ts` must NOT materialize auth (keychain read,
+   * OAuth discovery/refresh) before dispatching such a route: it defers all
+   * credential resolution to the first actual use, where a failure surfaces
+   * through the protocol as an actionable error instead of a dead process.
+   */
+  readonly lazyAuth?: true;
 }
 
 export type RouteResolution =

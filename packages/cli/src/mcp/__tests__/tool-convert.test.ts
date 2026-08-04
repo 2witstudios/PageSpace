@@ -210,9 +210,15 @@ describe('formatSdkErrorResult — distinct, secret-free messages per SDK error 
     expect(result.content[0]?.text).toContain('drive:admin');
   });
 
-  it('maps an authentication failure to an actionable message', () => {
-    const result = formatSdkErrorResult(globSearch, new FakeAuthenticationError('nope'));
-    expect(result.content[0]?.text).toMatch(/login|PAGESPACE_TOKEN/i);
+  it('maps an authentication failure to a message carrying the provider remediation text', () => {
+    // The CLI authors every AuthenticationError message reaching this server
+    // (FailingAuthProvider remediation copy, the lazy keychain-timeout
+    // message) — the fixed hint this branch used to append said `pagespace
+    // login`, the one remediation `pagespace mcp` deliberately refuses.
+    const result = formatSdkErrorResult(globSearch, new FakeAuthenticationError('mint a key with "pagespace keys create"'));
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain('Authentication failed for "search.glob"');
+    expect(result.content[0]?.text).toContain('mint a key with "pagespace keys create"');
   });
 
   it('maps a not-found error to a distinct message from permission-denied', () => {
