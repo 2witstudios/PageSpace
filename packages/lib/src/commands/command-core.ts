@@ -209,6 +209,13 @@ export const BUILTIN_COMMANDS: readonly BuiltinCommandDefinition[] = [
     requiredTools: ['edit_sheet_cells'],
   },
   {
+    trigger: 'plan',
+    kind: 'skill',
+    description:
+      'Structures non-trivial multi-step work into a durable plan before execution: restating the goal, gathering context, writing the plan to a DOCUMENT page, registering it as a trackable object with create_plan, and getting explicit user approval before work begins. Use when the user asks to plan, scope, or break down a project or feature, or when a request is complex enough that the approach should be agreed on before diving in.',
+    requiredTools: ['create_plan'],
+  },
+  {
     trigger: 'task-management',
     kind: 'skill',
     description:

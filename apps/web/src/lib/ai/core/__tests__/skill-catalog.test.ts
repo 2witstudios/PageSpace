@@ -12,7 +12,7 @@ import {
   COMMAND_CATALOG_CHAR_BUDGET,
 } from '../skill-catalog';
 
-const ALL_SKILL_TOOLS = ['load_skill', 'create_page', 'replace_lines', 'insert_content', 'edit_sheet_cells', 'create_task', 'update_task'];
+const ALL_SKILL_TOOLS = ['load_skill', 'create_page', 'replace_lines', 'insert_content', 'edit_sheet_cells', 'create_task', 'update_task', 'create_plan'];
 
 const userCmd = (trigger: string, description = `Does ${trigger}.`): CommandSummary => ({
   id: `cmd-${trigger}`,

@@ -59,6 +59,10 @@
       "types": "./dist/schema/published-pages.d.ts",
       "default": "./dist/schema/published-pages.js"
     },
+    "./schema/plans": {
+      "types": "./dist/schema/plans.d.ts",
+      "default": "./dist/schema/plans.js"
+    },
     "./schema/auth": {
       "types": "./dist/schema/auth.d.ts",
       "default": "./dist/schema/auth.js"

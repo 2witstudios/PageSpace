@@ -61,7 +61,7 @@ export type AskUserAnswer = z.infer<typeof askUserAnswerSchema>;
  * Client-side tool: no execute. Calling it ends the agent turn with the tool
  * call left open (state input-available); the turn resumes when the user
  * answers in the chat UI and the answer is merged in as the tool result.
- * Injected at route level for app admins only (see ask-user-gating.ts) —
+ * Injected at route level for authenticated users (see ask-user-gating.ts) —
  * intentionally NOT part of baseTools/pageSpaceTools so it never enters the
  * tool_search catalog or the execute_tool dispatch map.
  */

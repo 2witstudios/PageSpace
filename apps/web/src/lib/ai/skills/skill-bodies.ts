@@ -10,12 +10,14 @@
  */
 
 import { CANVAS_WEBSITES_SKILL_BODY } from './bodies/canvas-websites';
+import { PLAN_SKILL_BODY } from './bodies/plan';
 import { SPREADSHEETS_SKILL_BODY } from './bodies/spreadsheets';
 import { TASK_MANAGEMENT_SKILL_BODY } from './bodies/task-management';
 import { WRITING_DOCUMENTS_SKILL_BODY } from './bodies/writing-documents';
 
 const SKILL_BODIES: Readonly<Record<string, string>> = {
   'canvas-websites': CANVAS_WEBSITES_SKILL_BODY,
+  plan: PLAN_SKILL_BODY,
   spreadsheets: SPREADSHEETS_SKILL_BODY,
   'task-management': TASK_MANAGEMENT_SKILL_BODY,
   'writing-documents': WRITING_DOCUMENTS_SKILL_BODY,

@@ -150,6 +150,15 @@ vi.mock('../../tools/command-tools', () => ({
   },
 }));
 
+vi.mock('../../tools/plan-tools', () => ({
+  planTools: {
+    create_plan: { name: 'create_plan', description: 'Create plan' },
+    get_active_plan: { name: 'get_active_plan', description: 'Get active plan' },
+    set_plan_status: { name: 'set_plan_status', description: 'Set plan status' },
+    list_plans: { name: 'list_plans', description: 'List plans' },
+  },
+}));
+
 vi.mock('../../tools/form-tools', () => ({
   formTools: {
     provision_form_target: { name: 'provision_form_target', description: 'Provision form target' },
@@ -193,6 +202,7 @@ import { workflowTools } from '../../tools/workflow-tools';
 import { triggerTools } from '../../tools/trigger-tools';
 import { modelTools } from '../../tools/model-tools';
 import { commandTools } from '../../tools/command-tools';
+import { planTools } from '../../tools/plan-tools';
 import { skillTools } from '../../tools/skill-tools';
 import { formTools } from '../../tools/form-tools';
 import { imageGenerationTools } from '../../tools/image-generation-tools';
@@ -224,6 +234,7 @@ describe('ai-tools', () => {
         ...triggerTools,
         ...modelTools,
         ...commandTools,
+        ...planTools,
         ...skillTools,
         ...formTools,
         ...imageGenerationTools,
@@ -251,6 +262,7 @@ describe('ai-tools', () => {
         Object.keys(triggerTools),
         Object.keys(modelTools),
         Object.keys(commandTools),
+        Object.keys(planTools),
         Object.keys(formTools),
         Object.keys(imageGenerationTools),
         Object.keys(pagePaneTools),

@@ -54,6 +54,7 @@ export * from './schema/machine-sprite-reclaims';
 export * from './schema/email-broadcasts';
 export * from './schema/page-webhooks';
 export * from './schema/agent-sessions';
+export * from './schema/plans';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -111,6 +112,7 @@ import * as machineSpriteReclaims from './schema/machine-sprite-reclaims';
 import * as emailBroadcasts from './schema/email-broadcasts';
 import * as pageWebhooks from './schema/page-webhooks';
 import * as agentSessions from './schema/agent-sessions';
+import * as plans from './schema/plans';
 
 export const schema = {
   ...auth,
@@ -169,4 +171,5 @@ export const schema = {
   ...emailBroadcasts,
   ...pageWebhooks,
   ...agentSessions,
+  ...plans,
 };
