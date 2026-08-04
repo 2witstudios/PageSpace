@@ -65,9 +65,20 @@ export interface NewAgentSessionInput {
  * runtime guard: an unfiltered enumeration of every session in the deployment is
  * not a query any caller has a use for, and making it unrepresentable is
  * cheaper than remembering to reject it.
+ *
+ * THREE variants, not two-with-an-optional-field — `ownerId` being present vs.
+ * absent on the drive-scoped shape is a real behavioral fork in `list()` (the
+ * owned shape additionally unions in the caller's own global sessions; the
+ * ownerless one is a plain drive-wide listing), so it earns its own variant
+ * rather than an optional property a caller could accidentally pass as
+ * `undefined` and silently land in either behavior (review: Codex P1 on
+ * #2325, where that exact ambiguity — a runtime presence-check standing in
+ * for a type-level distinction — let an ownerless drive listing return every
+ * user's global sessions).
  */
 export type AgentSessionListFilter =
-  | { driveId: string; ownerId?: string }
+  | { driveId: string; ownerId: string }
+  | { driveId: string }
   | { ownerId: string };
 
 /** The most sessions one listing returns — the sidebar shows the newest slice, not an archive. */
@@ -401,8 +412,8 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
 
     async list(filter) {
       const conditions = [];
-      if (filter.ownerId !== undefined) conditions.push(eq(agentSessions.ownerId, filter.ownerId));
-      if ('driveId' in filter) {
+      if ('ownerId' in filter) conditions.push(eq(agentSessions.ownerId, filter.ownerId));
+      if ('driveId' in filter && 'ownerId' in filter) {
         // A drive-scoped listing ALSO named to an owner (the sidebar's shape,
         // `{ driveId, ownerId }`) additionally includes that owner's own
         // global-assistant sessions (driveId IS NULL) — those aren't drive
@@ -410,18 +421,16 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
         // the dashboard sidebar does (see session-groups.ts's
         // ASSISTANT_GROUP_KEY). The ownerId condition above ANDs this whole
         // clause down to that one caller.
-        //
+        conditions.push(or(eq(agentSessions.driveId, filter.driveId), isNull(agentSessions.driveId))!);
+      } else if ('driveId' in filter) {
         // An OWNERLESS `{ driveId }` listing — the admin "every session in
         // this drive, any owner" shape `agent-sessions.test.ts`'s
         // `listAgentSessions` "given a drive filter" case exercises — must
-        // NOT gain the OR: with no owner to scope it, `driveId IS NULL` would
-        // return every user's global sessions across the whole deployment
-        // (review: Codex P1, github.com/2witstudios/PageSpace/pull/2325).
-        conditions.push(
-          filter.ownerId !== undefined
-            ? or(eq(agentSessions.driveId, filter.driveId), isNull(agentSessions.driveId))!
-            : eq(agentSessions.driveId, filter.driveId),
-        );
+        // NOT gain the OR above: with no owner to scope it, `driveId IS NULL`
+        // would return every user's global sessions across the whole
+        // deployment (review: Codex P1,
+        // github.com/2witstudios/PageSpace/pull/2325).
+        conditions.push(eq(agentSessions.driveId, filter.driveId));
       }
       if (conditions.length === 0) {
         // Unreachable through `AgentSessionListFilter`, which requires a

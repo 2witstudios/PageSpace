@@ -36,7 +36,7 @@ import {
   forgetConversationInCache,
   restoreSessionInCache,
 } from '@/components/agents/panes/session-conversations';
-import { buildSessionGroups, ASSISTANT_GROUP_KEY, type DriveGroup } from './session-groups';
+import { buildSessionGroups, ASSISTANT_GROUP_KEY } from './session-groups';
 import { RowMenu, type RowMenuItem } from './RowMenu';
 
 /**
@@ -332,17 +332,15 @@ function SessionList({
   // as the same thing when it is not.
   const groups = useMemo(() => {
     if (driveId) {
-      const ownSessions = filteredSessions.filter((session) => session.driveId === driveId);
-      const assistantSessions = filteredSessions.filter((session) => session.driveId === null);
-      const result: DriveGroup<SessionListEntry>[] = [];
-      if (assistantSessions.length > 0) {
-        result.push({ driveId: ASSISTANT_GROUP_KEY, driveName: 'Global Assistant', sessions: assistantSessions });
-      }
-      result.push({ driveId, driveName: null, sessions: ownSessions });
-      return result;
+      // Same bucketing/ordering `buildSessionGroups` already does for global
+      // mode, just handed a single-drive roster — `assistant: false` is what
+      // encodes "no canSpawn escape hatch" above (`hasAssistantSessions`
+      // still shows the group once one exists).
+      const driveName = drives.find((d) => d.id === driveId)?.name ?? driveId;
+      return buildSessionGroups(filteredSessions, { assistant: false, drives: [{ driveId, driveName }] });
     }
     return buildSessionGroups(filteredSessions, { assistant: canSpawn, drives: roster });
-  }, [driveId, filteredSessions, canSpawn, roster]);
+  }, [driveId, filteredSessions, drives, canSpawn, roster]);
 
   // While actively searching, a group with no matches is noise — hide it
   // rather than showing an empty group with a spawn "+". Outside search the
@@ -384,7 +382,10 @@ function SessionList({
       )}
       {visibleGroups.map((group) => (
         <div key={group.driveId}>
-          {(!driveId || group.driveId !== driveId) && (
+          {/* `group.driveId` is always a real string (never undefined), so
+              this alone already covers global mode (every group differs from
+              an undefined `driveId`) — no separate `!driveId ||` needed. */}
+          {group.driveId !== driveId && (
             <SessionGroupHeader
               label={group.driveName ?? group.driveId}
               newSessionLabel={`New session in ${group.driveName ?? 'this drive'}`}

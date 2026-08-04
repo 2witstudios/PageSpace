@@ -137,10 +137,10 @@ export function makeAgentSessionStore(
         .filter((row) => {
           if ('driveId' in filter) {
             const matchesDrive = row.driveId === filter.driveId;
-            const matchesOwnerGlobal = filter.ownerId !== undefined && row.driveId === null;
+            const matchesOwnerGlobal = 'ownerId' in filter && row.driveId === null;
             if (!matchesDrive && !matchesOwnerGlobal) return false;
           }
-          if (filter.ownerId !== undefined && row.ownerId !== filter.ownerId) return false;
+          if ('ownerId' in filter && row.ownerId !== filter.ownerId) return false;
           return row.endedAt === null;
         })
         .sort((a, b) => {
