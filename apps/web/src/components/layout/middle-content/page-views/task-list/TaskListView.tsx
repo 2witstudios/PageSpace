@@ -1,5 +1,13 @@
 'use client';
 
+/**
+ * Pane-safe by design: layout-mode decisions (card vs. table, toolbar wrap)
+ * use `@container` + `@[Npx]:` variants keyed to this view's own rendered
+ * width, not viewport (`sm:`/`md:`/`lg:`) breakpoints — a pane can be narrow
+ * at any viewport width. Follow this pattern for any other page-view
+ * component that needs to reflow inside a resizable pane.
+ */
+
 import { useState, useEffect, useId, useRef, useCallback, memo, useMemo } from 'react';
 import { type Editor } from '@tiptap/react';
 import { useRouter } from 'next/navigation';
@@ -1035,7 +1043,7 @@ function TaskListView({ page }: TaskListViewProps) {
   }
 
   return (
-    <div className="flex flex-col h-full min-w-0">
+    <div className="flex flex-col h-full min-w-0 @container">
       <TaskListHeader
         pageId={page.id}
         viewMode={viewMode}
@@ -1053,8 +1061,8 @@ function TaskListView({ page }: TaskListViewProps) {
         />
       )}
       {/* Toolbar */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3 border-b bg-background">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+      <div className="flex flex-col @[700px]:flex-row @[700px]:flex-wrap @[700px]:items-center @[700px]:justify-between gap-3 px-4 py-3 border-b bg-background">
+        <div className="flex flex-col @[700px]:flex-row @[700px]:items-center gap-2">
           {/* Filter tabs */}
           <div className="flex items-center bg-muted rounded-md p-0.5">
             {(['all', 'active', 'completed'] as const).map((f) => (
@@ -1062,7 +1070,7 @@ function TaskListView({ page }: TaskListViewProps) {
                 key={f}
                 onClick={() => setFilter(f)}
                 className={cn(
-                  'px-3 py-1.5 text-sm font-medium rounded transition-colors flex-1 sm:flex-none',
+                  'px-3 py-1.5 text-sm font-medium rounded transition-colors flex-1 @[700px]:flex-none',
                   filter === f
                     ? 'bg-background text-foreground shadow-sm'
                     : 'text-muted-foreground hover:text-foreground'
@@ -1081,13 +1089,13 @@ function TaskListView({ page }: TaskListViewProps) {
               placeholder="Filter tasks..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="pl-9 w-full sm:w-48"
+              className="pl-9 w-full @[700px]:w-48"
             />
           </div>
         </div>
 
-        <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full sm:w-auto">
-          <div className="flex items-center gap-2 sm:contents">
+        <div className="flex flex-col @[700px]:flex-row @[700px]:items-center gap-2 w-full @[700px]:w-auto">
+          <div className="flex items-center gap-2 @[700px]:contents">
             {canEdit && (
               <StatusConfigManager
                 pageId={page.id}
@@ -1104,7 +1112,7 @@ function TaskListView({ page }: TaskListViewProps) {
                 onClick={() => setWorkflowsDialogOpen(true)}
               >
                 <Zap className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">Workflows</span>
+                <span className="hidden @[700px]:inline">Workflows</span>
               </Button>
             )}
           </div>
@@ -1112,7 +1120,7 @@ function TaskListView({ page }: TaskListViewProps) {
           {canEdit && viewMode === 'table' && (
             <Button
               size="sm"
-              className="w-full sm:w-auto"
+              className="w-full @[700px]:w-auto"
               onClick={() => {
                 const mobileInput = document.getElementById('new-task-input-mobile');
                 const desktopInput = document.getElementById('new-task-input');
@@ -1129,8 +1137,9 @@ function TaskListView({ page }: TaskListViewProps) {
         </div>
       </div>
 
-      {/* Mobile Card View */}
-      <div className="flex-1 overflow-auto md:hidden p-4 space-y-3">
+      {/* Narrow Card View — table/card switch only; Kanban has its own always-visible view below */}
+      {viewMode !== 'kanban' && (
+      <div className="flex-1 overflow-auto @[700px]:hidden p-4 space-y-3">
         {filteredTasks.map((task) => (
           <div key={task.id} data-task-id={task.id}>
           <MobileTaskCard
@@ -1186,10 +1195,11 @@ function TaskListView({ page }: TaskListViewProps) {
           </div>
         )}
       </div>
+      )}
 
-      {/* Desktop View (Table or Kanban) */}
-      <div className="flex-1 overflow-auto hidden md:block">
-        {viewMode === 'kanban' ? (
+      {/* Kanban View — horizontal-scrolling board; visible at any pane width via its own narrow-column step (@max-[500px]:w-60) */}
+      {viewMode === 'kanban' && (
+        <div className="flex-1 overflow-auto">
           <TaskKanbanView
             tasks={filteredTasks}
             driveId={page.driveId}
@@ -1203,7 +1213,13 @@ function TaskListView({ page }: TaskListViewProps) {
             onCreateTask={handleCreateTask}
             statusConfigs={statusConfigs}
           />
-        ) : (
+          {loadMoreControl}
+        </div>
+      )}
+
+      {/* Wide View (Table) — needs ~700px minimum; columns don't reflow */}
+      {viewMode !== 'kanban' && (
+      <div className="flex-1 overflow-auto hidden @[700px]:block">
           <>
             <DndContext
               sensors={sensors}
@@ -1476,15 +1492,14 @@ function TaskListView({ page }: TaskListViewProps) {
               </div>
             )}
           </>
-        )}
-
         {loadMoreControl}
       </div>
+      )}
 
       {/* Footer stats */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] border-t bg-muted/50 text-sm text-muted-foreground">
+      <div className="flex flex-col @[420px]:flex-row @[420px]:items-center @[420px]:justify-between gap-2 px-4 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] border-t bg-muted/50 text-sm text-muted-foreground">
         <span><strong>{data?.tasks.length || 0}</strong> tasks</span>
-        <span className="text-xs sm:text-sm">
+        <span className="text-xs @[420px]:text-sm">
           Updated {data?.taskList.updatedAt
             ? formatDistanceToNow(new Date(data.taskList.updatedAt), { addSuffix: true })
             : 'never'}
