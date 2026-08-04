@@ -33,10 +33,17 @@ interface AgentSandboxLaunchEmailProps {
   postalAddress?: string;
 }
 
+// Same black accent as the SDK/CLI launch email (SdkCliLaunchEmail.tsx), as a
+// LOCAL override — shared-styles.ts (every other transactional email) stays on
+// the brand blue. INK is a near-black with a faint cool-neutral bias so it
+// reads as a chosen color rather than a flat #000.
+const INK = '#17181C';
+const INK_LIFT = '#2C2E36';
+
 const eyebrow = {
   fontSize: typography.tiny,
   fontWeight: typography.semibold,
-  color: colors.primary,
+  color: INK,
   letterSpacing: '0.6px',
   textTransform: 'uppercase' as const,
   margin: `0 0 ${spacing.xs} 0`,
@@ -67,15 +74,31 @@ const calloutText = {
 
 const secondaryLink = {
   fontSize: typography.small,
-  color: colors.link,
+  color: INK,
   textDecoration: 'underline',
 };
+
+// Local black-accent overrides of the shared (blue) header, button, and footer
+// link — spread the shared style so only the color changes (mirrors the SDK
+// launch email).
+const darkHeader = {
+  ...emailStyles.header,
+  background: `linear-gradient(135deg, ${INK} 0%, ${INK_LIFT} 100%)`,
+};
+
+const darkButton = {
+  ...emailStyles.button,
+  background: `linear-gradient(135deg, ${INK} 0%, ${INK_LIFT} 100%)`,
+  boxShadow: '0 2px 8px rgba(0, 0, 0, 0.28), 0 1px 2px rgba(0, 0, 0, 0.18)',
+};
+
+const darkFooterLink = { ...emailStyles.link, color: INK };
 
 // Pro-tier note: a distinct tinted card so the pricing boundary reads as a
 // clear fact, not a buried caveat at the bottom of the email.
 const proNoteCard = {
   backgroundColor: colors.accent,
-  borderLeft: `4px solid ${colors.accentBorder}`,
+  borderLeft: `4px solid ${INK}`,
   borderRadius: radius.sm,
   padding: `${spacing.md} ${spacing.lg}`,
   margin: `${spacing.lg} 0`,
@@ -95,7 +118,7 @@ export function AgentSandboxLaunchEmail({
       <Preview>Real cloud sandboxes, multi-agent panes, and automations that run code on their own</Preview>
       <Body style={emailStyles.main}>
         <Container style={emailStyles.container}>
-          <Section style={emailStyles.header}>
+          <Section style={darkHeader}>
             <Heading style={emailStyles.headerTitle}>PageSpace</Heading>
           </Section>
           <Section style={emailStyles.content}>
@@ -170,7 +193,7 @@ export function AgentSandboxLaunchEmail({
             </Section>
 
             <Section style={emailStyles.buttonContainer}>
-              <Button style={emailStyles.button} href={agentsUrl}>
+              <Button style={darkButton} href={agentsUrl}>
                 Open the Agents screen
               </Button>
             </Section>
@@ -189,7 +212,7 @@ export function AgentSandboxLaunchEmail({
             </Text>
             {unsubscribeUrl ? (
               <Text style={emailStyles.footerText}>
-                <Link href={unsubscribeUrl} style={emailStyles.link}>
+                <Link href={unsubscribeUrl} style={darkFooterLink}>
                   Unsubscribe from product update emails
                 </Link>
               </Text>
