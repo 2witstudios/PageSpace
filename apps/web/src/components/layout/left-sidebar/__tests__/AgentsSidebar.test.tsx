@@ -208,7 +208,10 @@ describe('AgentsSidebar', () => {
     // The load-bearing half: neither fetch is ever made, rather than made and
     // discarded.
     expect(mockFetchWithAuth).not.toHaveBeenCalled();
-    expect(mockUsePageAgents).toHaveBeenCalledWith('drive-1', { enabled: false });
+    // Unfiltered (no driveId arg) now in both modes — see AgentsSidebar.tsx's
+    // comment on the `usePageAgents` call — but the load-bearing half of
+    // this assertion is `enabled: false`, unchanged.
+    expect(mockUsePageAgents).toHaveBeenCalledWith(undefined, { enabled: false });
   });
 
   test('shows the cold-load state rather than the empty notice', () => {
@@ -1286,6 +1289,41 @@ describe('AgentsSidebar', () => {
 
       await screen.findByText('api refactor');
       expect(screen.queryByText('Global Assistant')).toBeNull();
+    });
+
+    test('labels a global session\'s conversation with an OUT-OF-DRIVE agent\'s real name, not the generic fallback (review: Codex P2 on #2325)', async () => {
+      // Before this fix, `usePageAgents(driveId)` filtered agent names down to
+      // the CURRENT drive only, so a global session's conversation with an
+      // agent from a different drive (a legitimate shape — a global session
+      // may host any accessible agent) fell back to the generic "Agent" label
+      // even though its real name was fetchable.
+      mockUsePageAgents.mockImplementation((driveId?: string) => ({
+        agentsByDrive: [
+          { driveId: 'drive-1', driveName: 'Alpha', agentCount: 1, agents: [{ id: 'agent-1', title: 'Researcher', driveId: 'drive-1' }] },
+          { driveId: 'drive-2', driveName: 'Beta', agentCount: 1, agents: [{ id: 'agent-2', title: 'Beta Agent', driveId: 'drive-2' }] },
+        ].filter((entry) => driveId === undefined || entry.driveId === driveId),
+        isLoading: false,
+        isError: false,
+        mutate: vi.fn(),
+      }));
+      respondWithSessions([
+        SESSION,
+        {
+          ...SESSION,
+          sessionId: 'ses-g',
+          driveId: null,
+          name: 'assistant session',
+          conversations: [{ conversationId: 'conv-g', title: null, agentPageId: 'agent-2' }],
+        },
+      ]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await screen.findByText('assistant session');
+      await user.click(await screen.findByLabelText(/expand assistant session/i));
+
+      expect(await screen.findByText('Beta Agent')).toBeDefined();
+      expect(screen.queryByText('Agent')).toBeNull();
     });
 
     test('spawning from the Assistant group posts driveId: null, distinct from the drive palette\'s own "Global Assistant" agent pick', async () => {

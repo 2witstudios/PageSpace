@@ -107,8 +107,17 @@ export default function AgentsSidebar({ className }: SidebarProps) {
     refreshInterval: 20_000,
   });
 
-  // The spawn chooser's agent list rides the same fetch both modes already use.
-  const { agentsByDrive } = usePageAgents(driveId, { enabled: isAdmin });
+  // Unfiltered (no driveId arg) in BOTH modes now, not just global mode: a
+  // drive's sidebar can show a global-assistant session whose conversations
+  // are with agents from ANY accessible drive (agent-sessions-store.ts's
+  // `list()` now surfaces those), so `agentNamesById` below needs every
+  // accessible agent's name, not just this drive's, to label them correctly
+  // instead of falling back to the generic "Agent" (review: Codex P2 on
+  // #2325). The spawn palette stays correctly drive-scoped regardless —
+  // `useSpawnSession` already does its own `agentsByDrive.find(entry =>
+  // entry.driveId === spawnTarget.driveId)` lookup, so handing it the full
+  // list changes nothing about which agents a drive's "+" offers.
+  const { agentsByDrive } = usePageAgents(undefined, { enabled: isAdmin });
 
   useEffect(() => {
     setIsElectronMac(isElectron() && /Mac/.test(navigator.platform));
