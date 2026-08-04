@@ -80,9 +80,11 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   const { user, isLoading: authLoading } = useAuth();
   // Sessions/chat/panes are open to every authenticated user — the sandbox
   // itself (real cloud compute) is what's tier-gated, server-side, on every
-  // spawn/tool-call; this just waits out the hydration window where `user`
-  // is still undefined/false before the auth check resolves.
-  const canUseSessions = Boolean(user);
+  // spawn/tool-call. `!authLoading` matters because `useAuthStore` PERSISTS
+  // `user`: a stale hydrated row would otherwise enable the pane grid and its
+  // session actions before /api/auth/me has confirmed (or rejected) the
+  // session — wait out the resolution window instead (review #2326).
+  const canUseSessions = Boolean(user) && !authLoading;
 
   // A deep link from the Agents surface's past-conversations list
   // (`?conversationId=&sessionId=`) — one-time intent, not durable state like

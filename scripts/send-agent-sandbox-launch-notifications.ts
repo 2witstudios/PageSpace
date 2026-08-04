@@ -159,20 +159,34 @@ async function main(): Promise<number> {
     process.exit(1);
   }
 
+  // CAN-SPAM requires a valid physical postal address in commercial email.
+  // The template only renders the footer address when one is provided, so an
+  // empty env var would silently mail a non-compliant blast — refuse instead.
+  if (opts.live && !postalAddress) {
+    console.error(
+      '❌ Refusing live send: COMPANY_POSTAL_ADDRESS is empty. CAN-SPAM requires a valid\n' +
+        '   physical postal address in every commercial email — set it before sending.',
+    );
+    process.exit(1);
+  }
+
   // Every page this email links to must be deployed before we mail a link to
-  // it — the blog post and the pricing page both need to be LIVE, not just
-  // merged. An unreachable CTA can't be taken back once the blast goes out.
+  // it — the primary CTA (the Agents screen), the blog post and the pricing
+  // page all need to be LIVE, not just merged. An unreachable CTA can't be
+  // taken back once the blast goes out. (An anonymous probe of the Agents
+  // screen follows the auth redirect; a 2xx sign-in page proves the deploy
+  // carries the route, which is all this can and needs to verify.)
   if (opts.live) {
-    const unreachable = await findUnreachableUrls([blogUrl, pricingUrl]);
+    const unreachable = await findUnreachableUrls([agentsUrl, blogUrl, pricingUrl]);
     if (unreachable.length > 0) {
       console.error(
         '❌ Refusing live send: the pages this email links to are not reachable, so every\n' +
-          '   recipient would land on a broken page. Deploy the marketing site first.\n' +
+          '   recipient would land on a broken page. Deploy the app/marketing site first.\n' +
           unreachable.map((u) => `     - ${u}`).join('\n'),
       );
       process.exit(1);
     }
-    console.log('🔗 Blog + pricing links verified reachable.\n');
+    console.log('🔗 Agents screen + blog + pricing links verified reachable.\n');
   }
 
   if (suppressed === null) {

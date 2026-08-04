@@ -81,8 +81,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   an agent session's sandbox, where it actually runs code and gives you a terminal — requires Pro
   tier or above, billed to the session's payer (the drive owner, or the session's own owner for a
   driveless Global Assistant session), so a free-tier member of a Pro-owned drive still gets sandbox
-  access. Free-tier users see the same session/panes UI, with the terminal affordance disabled and
-  an upgrade prompt where the sandbox would run. Scheduled/triggered Workflows now honor the same
+  access. Sessions whose resolved payer is on the free tier get the same session/panes UI, with the
+  terminal affordance disabled and an upgrade prompt where the sandbox would run. Scheduled/triggered Workflows now honor the same
   per-agent sandbox switch and payer-tier gate as interactive chat, closing a gap where a workflow
   could reach code-execution tools regardless of an agent's own sandbox setting.
 - **Start a session with Global Assistant directly from a drive** — clicking "+" on a drive in the

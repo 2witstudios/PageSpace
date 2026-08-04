@@ -65,7 +65,7 @@ We didn't build sandboxed sessions so agents could run code in a black box, and 
 
 ## What it costs
 
-Every PageSpace plan gets the full interface: sessions, chat, panes, and Workflows. The sandbox itself — the actual cloud machine, the terminal, real code execution, whether you trigger it yourself or a workflow does — is a Pro-plan feature. If you're on Free, you'll see everything and can use everything except the machine underneath it, with a clear upgrade prompt wherever that boundary shows up. On Pro and above, sandbox time draws from the same credit balance as everything else in PageSpace — there's no separate line-item charge, just the plan you're already on and the credits you already have.
+Every PageSpace plan gets the full interface: sessions, chat, panes, and Workflows. The sandbox itself — the actual cloud machine, the terminal, real code execution, whether you trigger it yourself or a workflow does — is a Pro-plan feature — and eligibility follows whoever pays for the workspace. If the drive you're working in is owned by a Pro account, everyone in that drive gets the sandbox, even members whose own accounts are on Free. If the payer is on Free — your own drives, your own Global Assistant sessions — you'll see everything and can use everything except the machine underneath it, with a clear upgrade prompt wherever that boundary shows up. On Pro and above, sandbox time draws from the same credit balance as everything else in PageSpace — there's no separate line-item charge, just the plan you're already on and the credits you already have.
 
 ## It's live
 
