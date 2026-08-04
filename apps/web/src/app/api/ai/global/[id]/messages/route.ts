@@ -244,10 +244,27 @@ export async function GET(
     });
   } catch (error) {
     loggers.api.error('Error fetching messages:', error as Error);
-    return NextResponse.json({ 
-      error: 'Failed to fetch messages' 
+    return NextResponse.json({
+      error: 'Failed to fetch messages'
     }, { status: 500 });
   }
+}
+
+/**
+ * The display name that rides realtime broadcast `triggeredBy` payloads:
+ * the profile displayName if set, else the account name (decrypted at the
+ * edge — GDPR #965), else 'Someone'. Shared by the main generation flow and
+ * the solo-/help short-circuit so the two can't drift.
+ */
+async function resolveDisplayName(userId: string): Promise<string> {
+  const [authUserResult, profileResult] = await Promise.allSettled([
+    db.select({ name: users.name }).from(users).where(eq(users.id, userId)).limit(1),
+    db.select({ displayName: userProfiles.displayName }).from(userProfiles).where(eq(userProfiles.userId, userId)).limit(1),
+  ]);
+  const authUserNameRaw = authUserResult.status === 'fulfilled' ? authUserResult.value[0]?.name ?? null : null;
+  const authUserName = await decryptField(authUserNameRaw);
+  const profileDisplayName = profileResult.status === 'fulfilled' ? profileResult.value[0]?.displayName ?? null : null;
+  return profileDisplayName ?? authUserName ?? 'Someone';
 }
 
 export async function POST(
@@ -671,16 +688,7 @@ export async function POST(
     // neither side of the turn until a refetch.
     if (isSoloHelpRequest) {
       const helpChannelId = globalChannelId(userId);
-
-      const [authUserResult, profileResult] = await Promise.allSettled([
-        db.select({ name: users.name }).from(users).where(eq(users.id, userId)).limit(1),
-        db.select({ displayName: userProfiles.displayName }).from(userProfiles).where(eq(userProfiles.userId, userId)).limit(1),
-      ]);
-      const authUserName = await decryptField(
-        authUserResult.status === 'fulfilled' ? authUserResult.value[0]?.name ?? null : null
-      );
-      const profileDisplayName = profileResult.status === 'fulfilled' ? profileResult.value[0]?.displayName ?? null : null;
-      const helpDisplayName = profileDisplayName ?? authUserName ?? 'Someone';
+      const helpDisplayName = await resolveDisplayName(userId);
 
       if (conversationIsNew) {
         broadcastGlobalConversationAdded(helpChannelId, {
@@ -1239,24 +1247,7 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
     activeStreamId = streamId;
 
     const channelId = globalChannelId(userId);
-
-    const [authUserResult, profileResult] = await Promise.allSettled([
-      db
-        .select({ name: users.name })
-        .from(users)
-        .where(eq(users.id, userId))
-        .limit(1),
-      db
-        .select({ displayName: userProfiles.displayName })
-        .from(userProfiles)
-        .where(eq(userProfiles.userId, userId))
-        .limit(1),
-    ]);
-    // Decrypt PII at the edge (GDPR #965) so the sender display name is plaintext.
-    const authUserNameRaw = authUserResult.status === 'fulfilled' ? authUserResult.value[0]?.name ?? null : null;
-    const authUserName = await decryptField(authUserNameRaw);
-    const profileDisplayName = profileResult.status === 'fulfilled' ? profileResult.value[0]?.displayName ?? null : null;
-    const displayName = profileDisplayName ?? authUserName ?? 'Someone';
+    const displayName = await resolveDisplayName(userId);
 
     if (conversationIsNew) {
       broadcastGlobalConversationAdded(channelId, {
