@@ -277,6 +277,12 @@ describe('triggerMentionedAgentResponses — solo /help mention', () => {
     expect(sendInput.content).toBe('Here are the commands available to you:\n\n- **/help** (built-in) — List the commands.');
   });
 
+  it('skips fetching/decrypting the channel transcript entirely — it is only ever read building the askAgentExecute call', async () => {
+    await triggerMentionedAgentResponses(soloHelpParams);
+
+    expect(mockChannelMessagesFindMany).not.toHaveBeenCalled();
+  });
+
   it('resolves the answer against the channel drive context', async () => {
     await triggerMentionedAgentResponses({ ...soloHelpParams, driveId: 'drive-1' });
     expect(mockLoadHelpAnswerText).toHaveBeenCalledWith('user-1', 'drive-1');

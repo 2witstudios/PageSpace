@@ -510,31 +510,54 @@ export async function triggerMentionedAgentResponses(
       return;
     }
 
-    const recentMessages = await fetchRecentChannelMessages(params.channelId);
-
-    // Decrypt PII at the edge (GDPR #965) so the agent transcript shows plaintext
-    // sender names (legacy plaintext passes through unchanged).
-    const contextMessages = await Promise.all(
-      [...recentMessages].reverse().map(async (m) => ({
-        ...m,
-        user: m.user ? { ...m.user, name: await decryptField(m.user.name) } : null,
-      })),
-    );
-    const transcript = buildChannelTranscript(contextMessages);
-    const question = toSingleLine(
-      convertMentionsToDisplayText(params.content),
-      MESSAGE_SNIPPET_LIMIT
-    );
-    const locationContext = buildLocationContext(params);
-
     // A mention whose content is nothing but the /help chip (plus the
     // @mention(s) that got it here at all — reaching this function already
     // required at least one, see resolveMentionedAgents above, so the
     // strict isSoloBuiltinCommand could never be satisfied here) answers
-    // directly from code for every eligible agent, below — computed here
-    // (pure, no I/O) so the command resolution right after can skip
-    // resolving /help altogether for this case.
+    // directly from code for every eligible agent, below. Computed early
+    // (pure, no I/O) so everything below that exists only to build an
+    // askAgentExecute call — the channel transcript fetch/decrypt, image
+    // attachment resolution, command resolution's dynamic section — can
+    // skip entirely for this case; none of it is read on the solo-help path.
     const isSoloHelpMention = isSoloBuiltinCommandIgnoringMentions(params.content, 'help');
+
+    let transcript = '';
+    let question = '';
+    let imageAttachments: ImageFilePart[] = [];
+    if (!isSoloHelpMention) {
+      const recentMessages = await fetchRecentChannelMessages(params.channelId);
+
+      // Decrypt PII at the edge (GDPR #965) so the agent transcript shows plaintext
+      // sender names (legacy plaintext passes through unchanged).
+      const contextMessages = await Promise.all(
+        [...recentMessages].reverse().map(async (m) => ({
+          ...m,
+          user: m.user ? { ...m.user, name: await decryptField(m.user.name) } : null,
+        })),
+      );
+      transcript = buildChannelTranscript(contextMessages);
+      question = toSingleLine(convertMentionsToDisplayText(params.content), MESSAGE_SNIPPET_LIMIT);
+
+      // Only worth resolving presigned URLs/access checks when at least one
+      // eligible agent can actually view images. Resolution failure (S3
+      // misconfigured, transient DB error) must degrade to text-only, not
+      // abort every mentioned agent's reply — this call sits ahead of the
+      // per-agent try/catch below, so an uncaught throw here would propagate
+      // to the function-level catch and silence the whole mention entirely.
+      if (eligibleAgents.some((agent) => agent.hasVision)) {
+        try {
+          imageAttachments = await resolveImageAttachmentsForContext(params.userId, contextMessages);
+        } catch (error) {
+          channelMentionLogger.error(
+            'Failed to resolve recent channel image attachments; continuing with text-only replies',
+            error instanceof Error ? error : undefined,
+            { channelId: params.channelId, sourceMessageId: params.sourceMessageId }
+          );
+        }
+      }
+    }
+
+    const locationContext = buildLocationContext(params);
 
     // Universal Commands (UX spec §6): a chip is inert in a plain channel
     // message, but every command chip executes — with the SENDER's
@@ -560,25 +583,6 @@ export async function triggerMentionedAgentResponses(
       : commandPlans.length > 0
         ? commandPlans.map(commandExecutionDataFromPlan)
         : undefined;
-
-    // Only worth resolving presigned URLs/access checks when at least one
-    // eligible agent can actually view images. Resolution failure (S3
-    // misconfigured, transient DB error) must degrade to text-only, not
-    // abort every mentioned agent's reply — this call sits ahead of the
-    // per-agent try/catch below, so an uncaught throw here would propagate
-    // to the function-level catch and silence the whole mention entirely.
-    let imageAttachments: ImageFilePart[] = [];
-    if (eligibleAgents.some((agent) => agent.hasVision)) {
-      try {
-        imageAttachments = await resolveImageAttachmentsForContext(params.userId, contextMessages);
-      } catch (error) {
-        channelMentionLogger.error(
-          'Failed to resolve recent channel image attachments; continuing with text-only replies',
-          error instanceof Error ? error : undefined,
-          { channelId: params.channelId, sourceMessageId: params.sourceMessageId }
-        );
-      }
-    }
 
     // isSoloHelpMention computed above (before command resolution). The
     // answer itself is sender-scoped (the human's command list), not
