@@ -127,10 +127,19 @@ export function makeAgentSessionStore(
       // Mirrors the real store: active rows only, newest activity first,
       // capped at SESSION_LIST_LIMIT (the sidebar polls this every few
       // seconds — an unbounded fake would let a test pass against a query
-      // shape the real store never allows).
+      // shape the real store never allows). Also mirrors the real store's
+      // driveId+ownerId union: an OWNED drive-scoped filter additionally
+      // matches that owner's own global sessions (driveId null); an
+      // OWNERLESS drive-scoped filter does not, since without an owner to
+      // scope it that would leak every user's global sessions (review: Codex
+      // P1 on #2325).
       return [...rows.values()]
         .filter((row) => {
-          if ('driveId' in filter && row.driveId !== filter.driveId) return false;
+          if ('driveId' in filter) {
+            const matchesDrive = row.driveId === filter.driveId;
+            const matchesOwnerGlobal = filter.ownerId !== undefined && row.driveId === null;
+            if (!matchesDrive && !matchesOwnerGlobal) return false;
+          }
           if (filter.ownerId !== undefined && row.ownerId !== filter.ownerId) return false;
           return row.endedAt === null;
         })

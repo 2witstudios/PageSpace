@@ -454,4 +454,30 @@ describe('listAgentSessions', () => {
     const store = makeAgentSessionStore();
     expect(await listAgentSessions({ filter: { ownerId: OWNER_ID }, deps: { store: store.store } })).toEqual([]);
   });
+
+  describe('drive filter + global-assistant sessions (review: Codex P1 on #2325)', () => {
+    const withGlobal = [
+      makeSessionRecord({ id: 'ses-drive', sandboxId: SESSION_KEY }),
+      makeSessionRecord({ id: 'ses-owner-global', driveId: null }),
+      makeSessionRecord({ id: 'ses-other-owner-global', driveId: null, ownerId: 'user-2' }),
+    ];
+
+    it('given driveId + ownerId, should also include that owner\'s global sessions, not other owners\'', async () => {
+      const store = makeAgentSessionStore(withGlobal);
+      const sessions = await listAgentSessions({
+        filter: { driveId: DRIVE_ID, ownerId: OWNER_ID },
+        deps: { store: store.store },
+      });
+      expect(sessions.map((session) => session.sessionId).sort()).toEqual(['ses-drive', 'ses-owner-global']);
+    });
+
+    it('given driveId with NO owner, should exclude every global session — no owner to scope the union to', async () => {
+      const store = makeAgentSessionStore(withGlobal);
+      const sessions = await listAgentSessions({
+        filter: { driveId: DRIVE_ID },
+        deps: { store: store.store },
+      });
+      expect(sessions.map((session) => session.sessionId)).toEqual(['ses-drive']);
+    });
+  });
 });

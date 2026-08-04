@@ -597,6 +597,38 @@ describe('list — driveId filter also includes the caller\'s own global session
       await db.delete(users).where(eq(users.id, otherOwnerId));
     }
   });
+
+  it('given an OWNERLESS driveId filter, excludes every global session — no owner to scope the union to (review: Codex P1 on #2325)', async () => {
+    // `{ driveId }` alone is the admin "every session in this drive, any
+    // owner" shape (`agent-sessions.test.ts`'s `listAgentSessions` "given a
+    // drive filter" case). Without an owner in the filter, unioning in
+    // `driveId IS NULL` would return every user's global-assistant sessions
+    // across the whole deployment, not just sessions relevant to this drive.
+    const otherOwnerId = createId();
+    await db.insert(users).values({
+      id: otherOwnerId,
+      email: `agent-sessions-store-ownerless-${otherOwnerId}@example.test`,
+      name: 'Ownerless Probe Owner',
+    });
+    const otherGlobalSessionId = createId();
+    await db.insert(agentSessions).values({
+      id: otherGlobalSessionId,
+      ownerId: otherOwnerId,
+      driveId: null,
+      updatedAt: new Date(),
+    });
+    const driveScoped = await seedSession();
+
+    try {
+      const listed = await store.list({ driveId });
+      const ids = listed.map((row) => row.id);
+      expect(ids).toContain(driveScoped);
+      expect(ids).not.toContain(otherGlobalSessionId);
+    } finally {
+      await db.delete(agentSessions).where(eq(agentSessions.id, otherGlobalSessionId));
+      await db.delete(users).where(eq(users.id, otherOwnerId));
+    }
+  });
 });
 
 describe('createIfUnderLimit — the spawn ceiling made atomic (review #2261/2)', () => {
