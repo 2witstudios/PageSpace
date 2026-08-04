@@ -85,18 +85,27 @@ describe('decideAgentSessionEndAccess', () => {
     ).toEqual({ allowed: true });
   });
 
-  it('lets a member WITH the capability end — collaborators manage shared compute', () => {
+  it('refuses a plain MEMBER even WITH the capability — ending another member\'s session needs delete authority (codex round 12)', () => {
+    // canRunCode widened to every edit-access member (review #2326), so the
+    // capability alone no longer implies delete authority; drive-root
+    // permissions give non-admin members canDelete: false.
     expect(
       decideAgentSessionEndAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'member', canRunCode: true }),
+    ).toEqual({ allowed: false, reason: 'delete_authority_required' });
+  });
+
+  it('lets a drive ADMIN with the capability end — delete authority plus the capability gate', () => {
+    expect(
+      decideAgentSessionEndAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'admin', canRunCode: true }),
     ).toEqual({ allowed: true });
   });
 
-  it('refuses a member WITHOUT the capability — review H3: destroying compute is not release, for a non-owner', () => {
-    // The surface decision is capability-free, but ending stays gated: a
-    // member with no code-execution rights must not kill other members'
+  it('refuses a drive ADMIN WITHOUT the capability — review H3: destroying compute is not release, for a non-owner', () => {
+    // The surface decision is capability-free, but ending stays gated: an
+    // admin with no code-execution rights must not kill other members'
     // sessions and shells.
     expect(
-      decideAgentSessionEndAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'member', canRunCode: false }),
+      decideAgentSessionEndAccess({ requesterId: 'user-2', session: driveSession, driveMembership: 'admin', canRunCode: false }),
     ).toEqual({ allowed: false, reason: 'code_execution_denied' });
   });
 

@@ -836,7 +836,7 @@ export async function getUserDrivePermissions(
     }
 
     const membership = await db
-      .select({ role: driveMembers.role })
+      .select({ role: driveMembers.role, customRoleId: driveMembers.customRoleId })
       .from(driveMembers)
       .where(
         and(
@@ -848,9 +848,21 @@ export async function getUserDrivePermissions(
       .limit(1);
 
     if (membership.length > 0) {
-      const role = membership[0].role;
+      const { role, customRoleId } = membership[0];
       const isAdmin = role === 'ADMIN';
-      const canEdit = isAdmin || role === 'MEMBER';
+      let canEdit = isAdmin || role === 'MEMBER';
+
+      // A custom role bounds a MEMBER's drive-wide edit to what the role's
+      // driveWidePermissions explicitly grant (ADMINs bypass custom roles,
+      // mirroring the agent/app permission paths). `canEdit` here answers the
+      // DRIVE-WIDE question — drive-root uploads, sandbox/compute access —
+      // so a view-only custom role must read false even though the member
+      // may hold per-page edit grants (codex round 12). An unresolvable
+      // custom role fails closed rather than degrading to plain-member edit.
+      if (!isAdmin && customRoleId) {
+        const customRole = await fetchCustomRolePermissions(customRoleId, driveId);
+        canEdit = customRole?.driveWidePermissions?.canEdit === true;
+      }
 
       if (!silent) {
         loggers.api.debug(

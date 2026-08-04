@@ -51,15 +51,19 @@ export interface AgentSessionAccessSubject {
 
 /**
  * What the caller determined about the requester's relationship to the DRIVE.
- * `null` = not resolved (denied — unknown is never a grant).
+ * `null` = not resolved (denied — unknown is never a grant). `'admin'` is
+ * distinguished from `'member'` because the END decision needs delete
+ * authority (drive owner/admin), which centralized drive-root permissions
+ * deny to plain members; the main surface decision treats them identically.
  */
-export type DriveMembership = 'owner' | 'member' | 'none';
+export type DriveMembership = 'owner' | 'admin' | 'member' | 'none';
 
 export type AgentSessionDenialReason =
   | 'invalid_requester'
   | 'drive_access_denied'
   | 'global_assistant_not_owner'
-  | 'code_execution_denied';
+  | 'code_execution_denied'
+  | 'delete_authority_required';
 
 export type AgentSessionAccessDecision =
   | { allowed: true }
@@ -87,7 +91,7 @@ export function decideAgentSessionAccess({
     // A global-assistant session has no drive to share through — it stays
     // private to its owner.
     if (!isOwner) return { allowed: false, reason: 'global_assistant_not_owner' };
-  } else if (driveMembership !== 'owner' && driveMembership !== 'member') {
+  } else if (driveMembership !== 'owner' && driveMembership !== 'admin' && driveMembership !== 'member') {
     // Includes an unresolved membership (`null`): unknown is denied. Applies
     // to the session owner too — losing the drive loses its working contexts.
     return { allowed: false, reason: 'drive_access_denied' };
@@ -115,13 +119,17 @@ export interface DecideAgentSessionEndAccessInput extends DecideAgentSessionAcce
  * able to stop paying for their Sprite, or it bills until an operator
  * notices.
  *
- * NON-owners get the surface decision PLUS the real capability gate. The
- * previous shape pinned `canRunCode: true` on the fallthrough, which handed
- * every accepted drive member — including ones with no code-execution rights
- * at all — the power to destroy other members' sessions and kill their live
- * shells (review finding H3). Release-of-compute is the OWNER's emergency
- * exit; a collaborator ending shared compute is destructive and stays
- * capability-gated even now that the read/chat surface itself is free.
+ * NON-owners get the surface decision PLUS the real capability gate PLUS
+ * drive delete authority. The first previous shape pinned `canRunCode: true`
+ * on the fallthrough, handing every accepted drive member the power to
+ * destroy other members' sessions (review finding H3); then, once
+ * `canRunCode` widened from admin-only to every edit-access member
+ * (review #2326), the capability alone stopped implying delete authority —
+ * centralized drive-root permissions give non-admin members
+ * `canDelete: false`, so an ordinary member must not tear down another
+ * member's Sprite, filesystem, and live shells (codex round 12). Ending
+ * someone ELSE's session is therefore owner-of-drive/admin territory, and
+ * still capability-gated on top.
  */
 export function decideAgentSessionEndAccess(
   input: DecideAgentSessionEndAccessInput,
@@ -131,6 +139,9 @@ export function decideAgentSessionEndAccess(
   }
   const surface = decideAgentSessionAccess(input);
   if (!surface.allowed) return surface;
+  if (input.driveMembership !== 'owner' && input.driveMembership !== 'admin') {
+    return { allowed: false, reason: 'delete_authority_required' };
+  }
   if (!input.canRunCode) {
     return { allowed: false, reason: 'code_execution_denied' };
   }

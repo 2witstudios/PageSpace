@@ -23,7 +23,7 @@ vi.mock('@pagespace/db/operators', () => ({
 }));
 vi.mock('@pagespace/db/schema/core', () => ({ drives: { id: 'drives.id', ownerId: 'drives.ownerId' } }));
 vi.mock('@pagespace/db/schema/members', () => ({
-  driveMembers: { id: 'driveMembers.id', driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', acceptedAt: 'driveMembers.acceptedAt' },
+  driveMembers: { id: 'driveMembers.id', driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', role: 'driveMembers.role', acceptedAt: 'driveMembers.acceptedAt' },
 }));
 
 const mockCanRunCode = vi.hoisted(() => vi.fn());
@@ -72,11 +72,18 @@ describe('resolveDriveMembership', () => {
     expect(mockDriveMemberFindFirst).not.toHaveBeenCalled();
   });
 
-  it('given an accepted member who is not the owner, should answer member', async () => {
+  it('given an accepted MEMBER who is not the owner, should answer member', async () => {
     mockDriveFindFirst.mockResolvedValue({ ownerId: 'someone-else' });
-    mockDriveMemberFindFirst.mockResolvedValue({ id: 'membership-1' });
+    mockDriveMemberFindFirst.mockResolvedValue({ role: 'MEMBER' });
     const result = await resolveDriveMembership({ userId: 'user-1', driveId: 'drive-1' });
     expect(result).toBe('member');
+  });
+
+  it('given an accepted ADMIN, should answer admin — the END decision needs delete authority (codex round 12)', async () => {
+    mockDriveFindFirst.mockResolvedValue({ ownerId: 'someone-else' });
+    mockDriveMemberFindFirst.mockResolvedValue({ role: 'ADMIN' });
+    const result = await resolveDriveMembership({ userId: 'user-1', driveId: 'drive-1' });
+    expect(result).toBe('admin');
   });
 
   it('given no accepted membership row, should answer none', async () => {

@@ -12,7 +12,7 @@
  * across two Sprite identities.
  *
  * `resolveDriveMembership` is the requester's relationship to a drive (owner,
- * accepted member, or neither) — the ONE membership read
+ * accepted admin, accepted member, or neither) — the ONE membership read
  * `checkAgentSessionAccess`'s gather calls for a drive-scoped session.
  * `canRunCodeForSession` reduces the centralized `canRunCode` capability check
  * to the boolean the access decider consumes.
@@ -65,9 +65,13 @@ export async function resolveDriveMembership({
   if (drive.ownerId === userId) return 'owner';
   const membership = await db.query.driveMembers.findFirst({
     where: and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt)),
-    columns: { id: true },
+    columns: { role: true },
   });
-  return membership ? 'member' : 'none';
+  if (!membership) return 'none';
+  // ADMIN is surfaced distinctly because the END decision requires drive
+  // delete authority (owner/admin) — plain members may not tear down another
+  // member's session (codex round 12).
+  return membership.role === 'ADMIN' ? 'admin' : 'member';
 }
 
 /** The centralized `canRunCode` capability check, reduced to the boolean the access decider consumes. */
