@@ -43,6 +43,13 @@ const { mockTakeOverConversationStreams } = vi.hoisted(() => ({
   mockTakeOverConversationStreams: vi.fn().mockResolvedValue({ aborted: [], reconciled: [] }),
 }));
 
+// The payer-tier sandbox tool filter (review #2326) hits the real DB through
+// resolveSandboxToolEligibility; a DB-backed lookup is out of scope for this
+// suite, so the payer is always eligible (the filter is a pass-through).
+vi.mock('@/lib/ai/core/sandbox-tool-eligibility', () => ({
+  resolveSandboxToolEligibility: vi.fn().mockResolvedValue(true),
+}));
+
 vi.mock('@/lib/ai/core/stream-lifecycle', () => ({
   createStreamLifecycle: mockCreateStreamLifecycle,
 }));

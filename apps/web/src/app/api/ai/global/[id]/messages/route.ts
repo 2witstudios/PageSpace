@@ -48,7 +48,8 @@ import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildSystemPrompt, buildNonCoreToolNamesPrompt, TOOL_DISCOVERY_PROMPT } from '@/lib/ai/core/system-prompt';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
-import { filterToolsForReadOnly, filterToolsForWebSearch, filterToolsForImageGen } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForReadOnly, filterToolsForWebSearch, filterToolsForImageGen, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
+import { resolveSandboxToolEligibility } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
 import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree-context';
 import { getModelCapabilities, DEFAULT_IMAGE_MODEL } from '@/lib/ai/core/model-capabilities';
@@ -864,16 +865,31 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
       (canUseAskUser({ role: auth.role }) ? `\n\n${ASK_USER_SECTION}` : '') +
       drivePromptSection;
 
+    // The PAYER's sandbox eligibility for this Global Assistant turn — the
+    // current drive's owner when the assistant is working in a drive, else
+    // the user themselves (review #2326: page chat, the OpenAI-compatible
+    // route and workflows all filter the sandbox families by payer tier, but
+    // this pipeline started from unfiltered pageSpaceTools, so a free-tier
+    // Global Assistant advertised bash/git tools that always answer
+    // tier_ineligible — and those git tool NAMES in `currentTools` then
+    // suppressed the user's working GitHub OAuth integration tools).
+    const sandboxTierEligible = await resolveSandboxToolEligibility(
+      locationContext?.currentDrive?.id ?? null,
+      userId,
+    );
+
     // Build agent awareness prompt - lists visible AI agents for consultation
     // `canDelegate` mirrors the session-tool gate below: spawn_session only
     // exists when code execution is enabled, and a prompt that names a tool the
     // model does not have makes it attempt delegation that silently fails.
     const agentAwarenessPrompt = await buildAgentAwarenessPrompt(userId, {
-      // BOTH gates, because the tool set applies both: registration is gated on
-      // CODE_EXECUTION_ENABLED, and `filterToolsForReadOnly` then strips
-      // spawn_session again as a write tool. Checking only the first told a
-      // read-only agent to delegate with a tool it does not have.
-      canDelegate: isCodeExecutionEnabled() && !readOnlyMode,
+      // ALL THREE gates, because the tool set applies all three: registration
+      // is gated on CODE_EXECUTION_ENABLED, the payer-tier filter strips the
+      // session family for an ineligible payer, and `filterToolsForReadOnly`
+      // then strips spawn_session again as a write tool. Checking only the
+      // first told a read-only (or free-tier) agent to delegate with a tool
+      // it does not have.
+      canDelegate: isCodeExecutionEnabled() && !readOnlyMode && sandboxTierEligible,
     });
 
     // Build page tree context if enabled
@@ -905,10 +921,16 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
     }
 
     // Full filtered tool set. NOT sent to model directly; used as dispatch map for
-    // execute_tool and as tool_search catalog.
+    // execute_tool and as tool_search catalog. The sandbox families (bash/files,
+    // git+gh, sessions/shells) are stripped for a tier-ineligible payer BEFORE
+    // anything reads this set — including `resolveGlobalAssistantIntegrationTools`
+    // below, whose sandbox-git-overlap suppression keys on these tool NAMES.
     const filteredAllTools = filterToolsForImageGen(
       filterToolsForWebSearch(
-        filterToolsForReadOnly(pageSpaceTools, readOnlyMode),
+        filterToolsForReadOnly(
+          filterToolsForSandboxEnablement(pageSpaceTools, sandboxTierEligible),
+          readOnlyMode
+        ),
         webSearchMode
       ),
       shouldExposeImageGen({

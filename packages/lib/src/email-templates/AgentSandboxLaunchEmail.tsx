@@ -25,9 +25,10 @@ interface AgentSandboxLaunchEmailProps {
   /** Optional one-click unsubscribe link for product-update emails. */
   unsubscribeUrl?: string;
   /**
-   * The sender's physical postal address. CAN-SPAM wants one on COMMERCIAL
-   * email, which this is. Not enforced by `preflight` — see the identical
-   * note on `SdkCliLaunchEmailProps.postalAddress`.
+   * The sender's physical postal address. CAN-SPAM requires one on COMMERCIAL
+   * email, which this is. The send script refuses a live run when
+   * `COMPANY_POSTAL_ADDRESS` is empty (review #2326), so a live send always
+   * renders the footer address; the prop stays optional for dry runs/previews.
    */
   postalAddress?: string;
 }
@@ -151,8 +152,8 @@ export function AgentSandboxLaunchEmail({
                 Free gets the full interface — sessions, chat, panes,
                 Workflows — everything except the machine underneath it.
                 Sandbox access follows whoever pays for the workspace: in a
-                drive owned by a Pro account, every member gets the sandbox,
-                even members on Free themselves. Upgrade to Pro and the
+                drive owned by a Pro account, every member with edit access
+                gets the sandbox, even members on Free themselves. Upgrade to Pro and the
                 sandbox turns on everywhere it already shows up in your
                 workspace, billed from the same credit balance as everything
                 else you do in PageSpace — no separate charge.

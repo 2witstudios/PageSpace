@@ -27,6 +27,17 @@ const memberPerms: DrivePermissionLevel = {
   canEdit: true,
 };
 
+// A VIEWER-role member: real drive access, no edit rights — the one
+// membership shape the edit-access gate must still refuse (they can't spend
+// the payer's compute any more than they can edit its pages).
+const viewerPerms: DrivePermissionLevel = {
+  hasAccess: true,
+  isOwner: false,
+  isAdmin: false,
+  isMember: true,
+  canEdit: false,
+};
+
 const agentEditPerms: PermissionLevel = {
   canView: true,
   canEdit: true,
@@ -90,11 +101,20 @@ describe('canRunCode', () => {
     expect(result).toEqual({ ok: false, reason: 'no_drive_access' });
   });
 
-  it('given a plain member without admin/owner role, should deny', async () => {
+  it('given a plain MEMBER-role collaborator, should allow — the advertised entitlement is every member of a paid drive (review #2326)', async () => {
     const result = await canRunCode({
       userId: 'u1',
       driveId: 'd1',
       deps: makeDeps({ getUserDrivePermissions: async () => memberPerms }),
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('given a VIEWER-role member (no edit access), should deny', async () => {
+    const result = await canRunCode({
+      userId: 'u1',
+      driveId: 'd1',
+      deps: makeDeps({ getUserDrivePermissions: async () => viewerPerms }),
     });
     expect(result).toEqual({ ok: false, reason: 'insufficient_role' });
   });
@@ -170,13 +190,15 @@ describe('canRunCode', () => {
     expect(result.ok).toBe(true);
   });
 
-  it('given an agent actor whose triggering user is only a plain member, should deny on the user gate', async () => {
+  it('given an agent actor whose triggering user is a VIEWER-role member, should deny on the user gate', async () => {
+    // The rung that stops a view-only member escalating through an agent
+    // that holds drive edit access.
     const result = await canRunCode({
       userId: 'u1',
       driveId: 'd1',
       requestOrigin: 'agent',
       agentPageId: 'agent1',
-      deps: makeDeps({ getUserDrivePermissions: async () => memberPerms }),
+      deps: makeDeps({ getUserDrivePermissions: async () => viewerPerms }),
     });
     expect(result).toEqual({ ok: false, reason: 'insufficient_role' });
   });

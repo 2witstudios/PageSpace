@@ -50,7 +50,7 @@ const DENIAL_MESSAGES: Record<SandboxToolGateDenialReason, string> = {
   kill_switch_off: 'Code execution is disabled.',
   tier_ineligible: 'Running code requires a Pro plan or above.',
   no_drive_access: 'You do not have access to run code in this drive.',
-  insufficient_role: 'Running code requires drive owner or admin access.',
+  insufficient_role: 'Running code requires edit access to this drive.',
   no_agent_access: 'This agent is not permitted to run code in this drive.',
   concurrency_limit: 'Too many concurrent runs. Wait for a run to finish and retry.',
   error: 'Code execution could not be authorized.',

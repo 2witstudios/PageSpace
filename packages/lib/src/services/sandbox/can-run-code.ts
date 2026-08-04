@@ -24,11 +24,12 @@
  * still eligible, billed to the drive's owner, matching how billing/quota
  * already resolve tier.
  *
- * The actor user always clears the owner/admin drive-role gate, regardless of
- * origin. Agent-origin runs additionally require the agent page to hold drive
- * edit access (defence in depth): both the human who triggered the run and the
- * agent acting on their behalf must be entitled, so a plain member can't
- * escalate through an agent that happens to have edit access.
+ * The actor user always clears the drive edit-access gate (owner, admin, or
+ * MEMBER-role collaborator — a VIEWER cannot spend the payer's compute),
+ * regardless of origin. Agent-origin runs additionally require the agent page
+ * to hold drive edit access (defence in depth): both the human who triggered
+ * the run and the agent acting on their behalf must be entitled, so a viewer
+ * can't escalate through an agent that happens to have edit access.
  *
  * `enabledTools` (agent config) is NOT a security boundary — this is.
  */
@@ -152,7 +153,13 @@ async function authorizeUser(
 ): Promise<CanRunCodeResult> {
   const perms = await deps.getUserDrivePermissions(userId, driveId);
   if (!perms?.hasAccess) return deny('no_drive_access');
-  if (!perms.isOwner && !perms.isAdmin) return deny('insufficient_role');
+  // Edit access, not owner/admin (review #2326): the owner/admin gate was a
+  // rollout-era restriction from when the whole surface was admin-only. Under
+  // the open model the advertised entitlement is "every member of a paid
+  // drive gets the sandbox" — MEMBER-role collaborators have canEdit and
+  // pass; VIEWER-role members don't get to spend the payer's compute or
+  // write in the shared workspace, exactly as they can't edit its pages.
+  if (!perms.canEdit) return deny('insufficient_role');
   return { ok: true };
 }
 
@@ -198,9 +205,9 @@ export async function canRunCode({
       return { ok: true };
     }
 
-    // The actor user must always clear the owner/admin drive-role gate. For
-    // agent-origin runs this is the rung that stops a plain member escalating
-    // through an agent that holds drive edit access.
+    // The actor user must always clear the drive edit-access gate. For
+    // agent-origin runs this is the rung that stops a view-only member
+    // escalating through an agent that holds drive edit access.
     const userResult = await authorizeUser(userId, driveId, deps);
     if (!userResult.ok) return userResult;
 
