@@ -38,14 +38,16 @@ export default function DrivePickerDialog({
     <CommandDialog
       open={open}
       onOpenChange={onOpenChange}
-      title="Choose a drive"
-      description="Pick which drive to create this in"
+      title={onPickGlobalAssistant ? 'Choose a destination' : 'Choose a drive'}
+      description={
+        onPickGlobalAssistant ? 'Pick a drive or the Global Assistant' : 'Pick which drive to create this in'
+      }
       showCloseButton={false}
       className="max-w-[420px]"
     >
-      <CommandInput placeholder="Search drives…" autoFocus />
+      <CommandInput placeholder={onPickGlobalAssistant ? 'Search…' : 'Search drives…'} autoFocus />
       <CommandList>
-        <CommandEmpty>No drives found.</CommandEmpty>
+        <CommandEmpty>{onPickGlobalAssistant ? 'Nothing found.' : 'No drives found.'}</CommandEmpty>
         {onPickGlobalAssistant && (
           <CommandGroup>
             <CommandItem value="assistant-Global Assistant" onSelect={onPickGlobalAssistant}>

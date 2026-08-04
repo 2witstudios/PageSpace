@@ -113,8 +113,10 @@ describe('AgentsListHeader', () => {
     // The global-only drive picker must never appear for a drive-scoped spawn.
     // `CommandDialog`'s title/description render outside its Radix `DialogContent`
     // (so it's queryable even while closed) — assert on the picker's actual
-    // content instead, which IS gated on `open`.
+    // content instead, which IS gated on `open`. Both placeholder variants:
+    // the picker's copy depends on whether it offers the Global Assistant.
     expect(screen.queryByPlaceholderText('Search drives…')).toBeNull();
+    expect(screen.queryByPlaceholderText('Search…')).toBeNull();
   });
 
   test('drive-scoped: "New Agent" opens Quick Create scoped to the drive root', async () => {
@@ -141,12 +143,15 @@ describe('AgentsListHeader', () => {
     render(<AgentsListHeader />);
 
     await user.click(screen.getByRole('button', { name: /New Session/ }));
-    expect(await screen.findByText('Choose a drive')).toBeDefined();
+    // The session picker's neutral copy (it offers more than drives) — and,
+    // since a closed `CommandDialog` still renders its title, seeing the
+    // conditional variant proves the session picker is the one that opened.
+    expect(await screen.findByText('Choose a destination')).toBeDefined();
 
     await user.click(screen.getByText('Alpha'));
 
     expect(await screen.findByText('Choose an agent to start a session with in Alpha')).toBeDefined();
-    expect(screen.queryByPlaceholderText('Search drives…')).toBeNull();
+    expect(screen.queryByPlaceholderText('Search…')).toBeNull();
   });
 
   test('global (no driveId): the session picker offers "Global Assistant", which skips straight to naming a drive-less session', async () => {
@@ -161,7 +166,7 @@ describe('AgentsListHeader', () => {
     // Straight to the naming step — no drive was picked, so no target step.
     expect(await screen.findByPlaceholderText('Global Assistant')).toBeDefined();
     expect(screen.getByText('Leave blank to use "Global Assistant"')).toBeDefined();
-    expect(screen.queryByPlaceholderText('Search drives…')).toBeNull();
+    expect(screen.queryByPlaceholderText('Search…')).toBeNull();
   });
 
   test('global (no driveId): "New Agent" opens a drive picker, then navigates into the picked drive without opening Quick Create until that drive is live', async () => {
