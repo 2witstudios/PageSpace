@@ -175,6 +175,24 @@ export const DISPATCH_DEPENDENT_SESSION_TOOL_NAMES: ReadonlySet<string> = new Se
 ]);
 
 /**
+ * Strip the dispatch-dependent session pair when the current execution cannot
+ * dispatch as the user — i.e. it does not run inside that user's own
+ * authenticated browser request (MCP/API-key surfaces, background workflow
+ * fires, a manual workflow run by someone other than the workspace owner).
+ * Advertising a tool whose dispatch unconditionally refuses is the failure
+ * mode this prevents.
+ */
+export function filterToolsForDispatchCredentials<T>(
+  tools: Record<string, T>,
+  hasUserDispatchCredentials: boolean
+): Record<string, T> {
+  if (hasUserDispatchCredentials) return tools;
+  return Object.fromEntries(
+    Object.entries(tools).filter(([name]) => !DISPATCH_DEPENDENT_SESSION_TOOL_NAMES.has(name))
+  );
+}
+
+/**
  * The WHOLE sandbox tool surface — the three families a `sandboxEnabled: false`
  * agent must not see: core execution (bash/files), the git+gh CLI toolkit, and
  * session/shell orchestration (whose entire point is the sandbox a session

@@ -4,7 +4,7 @@ import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { createId } from '@paralleldrive/cuid2';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import { DISPATCH_DEPENDENT_SESSION_TOOL_NAMES, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier, SANDBOX_COMPUTE_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
+import { DISPATCH_DEPENDENT_SESSION_TOOL_NAMES, filterToolsForDispatchCredentials, filterToolsForImageGen, filterToolsForSandboxEnablement, filterToolsForSandboxTier, SANDBOX_COMPUTE_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
 import { resolveSandboxToolEligibility } from '@/lib/ai/core/sandbox-tool-eligibility';
 import { spawnSession, createConversationInSession, endSession } from '@/lib/agent-sessions/agent-sessions-runtime';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
@@ -87,6 +87,16 @@ export interface WorkflowExecutionInput {
   timezone: string;
   /** Identifies the originating trigger so workflow_runs can be joined back to it. */
   source: WorkflowRunSource;
+  /**
+   * The AUTHENTICATED user whose live request this run executes inside — set
+   * only by the manual run route. The dispatch-dependent session tools
+   * (spawn/send_session) forward that request's cookie, so they are retained
+   * only when this identity matches `createdBy`, the owner of the run-scoped
+   * workspace those tools would act in (codex round 8: an admin manually
+   * running another creator's workflow would dispatch as themselves into a
+   * conversation the chat route rightly rejects as someone else's).
+   */
+  runnerUserId?: string;
   taskContext?: { taskItemId: string; triggerType: 'due_date' | 'completion' };
   /**
    * promptOverride replaces the prompt of legacy runs / ai steps (the webhook
@@ -592,7 +602,10 @@ async function runExecution(
     // MANUAL run (`/api/workflows/[workflowId]/run`) is one; cron, task,
     // calendar, and webhook fires carry no user cookie, so those runs strip
     // the dispatch pair rather than mint worker conversations whose dispatch
-    // then refuses (codex round 7).
+    // then refuses (codex round 7). And the manual runner must BE the
+    // workflow's creator: the run-scoped workspace below is owned by
+    // `createdBy`, so a different runner's cookie would dispatch into a
+    // conversation the chat route rejects as someone else's (codex round 8).
     //
     // A session is minted only when a survivor can DO something in a fresh
     // run-scoped workspace: a compute tool, or the dispatch pair. When
@@ -609,12 +622,8 @@ async function runExecution(
     // families rather than failing the workflow — the same posture as an
     // agent with the sandbox toggled off.
     let conversationId = `workflow-${input.workflowId}-${Date.now()}`;
-    const interactiveDispatch = input.source.table === 'manual';
-    if (!interactiveDispatch) {
-      availableTools = Object.fromEntries(
-        Object.entries(availableTools).filter(([name]) => !DISPATCH_DEPENDENT_SESSION_TOOL_NAMES.has(name)),
-      ) as ToolSet;
-    }
+    const interactiveDispatch = input.source.table === 'manual' && input.runnerUserId === input.createdBy;
+    availableTools = filterToolsForDispatchCredentials(availableTools, interactiveDispatch) as ToolSet;
     const sessionBackedToolsActive =
       workflowSandboxEnabled &&
       Object.keys(availableTools).some(

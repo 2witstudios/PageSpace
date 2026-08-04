@@ -53,6 +53,11 @@ export async function POST(
     instructionPageId: workflow.instructionPageId,
     timezone: workflow.timezone,
     source: { table: 'manual', id: null, triggerAt: null },
+    // The authenticated runner, whose live request (and cookie) this run
+    // executes inside — the executor retains the dispatch-dependent session
+    // tools only when this matches the workflow's creator, the owner of the
+    // run-scoped workspace they would dispatch into.
+    runnerUserId: auth.userId,
   };
 
   // Atomic claim is enforced by the workflow_runs partial unique index inside

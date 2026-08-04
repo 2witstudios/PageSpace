@@ -14,6 +14,8 @@ import {
   filterToolsForAgentAllowlist,
   filterToolsForSandboxEnablement,
   filterToolsForSandboxTier,
+  filterToolsForDispatchCredentials,
+  DISPATCH_DEPENDENT_SESSION_TOOL_NAMES,
   SANDBOX_COMPUTE_TOOL_NAMES,
   SANDBOX_TOOL_NAMES,
   SESSION_FAMILY_TOOL_NAMES,
@@ -533,6 +535,42 @@ describe('filterToolsForSandboxEnablement', () => {
     // disabled sandbox, whose whole tool surface is off.
     const filtered = filterToolsForSandboxEnablement({ read_shell: {}, list_sessions: {} }, false);
     expect(Object.keys(filtered)).toEqual([]);
+  });
+});
+
+describe('filterToolsForDispatchCredentials', () => {
+  const sample = {
+    list_sessions: {},
+    spawn_session: {},
+    send_session: {},
+    read_session: {},
+    kill_session: {},
+    bash: {},
+    read_page: {},
+  };
+
+  it('the set holds exactly the pair that dispatches through the chat pipeline with the caller cookie', () => {
+    expect([...DISPATCH_DEPENDENT_SESSION_TOOL_NAMES].sort()).toEqual(['send_session', 'spawn_session']);
+    // Drift guard: every member must be part of the session family — a
+    // rename there must be mirrored here or the strip silently misses it.
+    for (const name of DISPATCH_DEPENDENT_SESSION_TOOL_NAMES) {
+      expect(SESSION_FAMILY_TOOL_NAMES).toContain(name);
+    }
+  });
+
+  it('without user dispatch credentials, strips exactly the dispatch pair — reads/kill and everything else stay', () => {
+    const filtered = filterToolsForDispatchCredentials(sample, false);
+    expect(Object.keys(filtered).sort()).toEqual([
+      'bash',
+      'kill_session',
+      'list_sessions',
+      'read_page',
+      'read_session',
+    ]);
+  });
+
+  it('with user dispatch credentials, passes everything through untouched', () => {
+    expect(filterToolsForDispatchCredentials(sample, true)).toBe(sample);
   });
 });
 

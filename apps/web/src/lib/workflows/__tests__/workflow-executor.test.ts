@@ -398,7 +398,7 @@ describe('executeWorkflow', () => {
       );
 
       const result = await executeWorkflow(
-        createInputFixture({ source: { table: 'manual', id: null, triggerAt: null } }),
+        createInputFixture({ source: { table: 'manual', id: null, triggerAt: null }, runnerUserId: 'user_123' }),
       );
 
       expect(result.success).toBe(true);
@@ -425,7 +425,7 @@ describe('executeWorkflow', () => {
       );
 
       const result = await executeWorkflow(
-        createInputFixture({ source: { table: 'manual', id: null, triggerAt: null } }),
+        createInputFixture({ source: { table: 'manual', id: null, triggerAt: null }, runnerUserId: 'user_123' }),
       );
 
       expect(result.success).toBe(true);
@@ -457,6 +457,25 @@ describe('executeWorkflow', () => {
       // session row is spent on it.
       expect(mockSpawnSession).not.toHaveBeenCalled();
       expect(mockCreateConversationInSession).not.toHaveBeenCalled();
+    });
+
+    test('a MANUAL run by an admin who is not the creator strips the dispatch pair — their cookie cannot act in the creator-owned workspace (codex round 8)', async () => {
+      mockResolveSandboxToolEligibility.mockResolvedValue(false);
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'spawn_session'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(
+        createInputFixture({ source: { table: 'manual', id: null, triggerAt: null }, runnerUserId: 'admin_999' }),
+      );
+
+      expect(result.success).toBe(true);
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
+      const toolKeys = Object.keys(genCall.tools as object);
+      expect(toolKeys).toContain('list_pages');
+      expect(toolKeys).not.toContain('spawn_session');
+      expect(mockSpawnSession).not.toHaveBeenCalled();
     });
 
     test('a NON-interactive compute-eligible run still gets its run-scoped session — bash needs no dispatch', async () => {
