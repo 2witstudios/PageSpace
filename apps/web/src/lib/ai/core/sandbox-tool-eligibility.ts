@@ -33,20 +33,30 @@ export async function resolveSandboxToolEligibility(
  * to (its drive's owner, else the session's own owner), and a conversation
  * can be hosted in a session whose payer differs from the calling surface —
  * a page agent consulted inside a driveless Global session, or a Global
- * Assistant merely visiting a drive. Only an UNBOUND conversation falls back
- * to the surface's own coordinates (`fallbackDriveId` = the agent page's
- * drive, or null for the global assistant, whose auto-spawned session the
- * user pays for). The requester (`userId`) is always the ACTOR the capability
- * check authorizes.
+ * Assistant merely visiting a drive. The requester (`userId`) is always the
+ * ACTOR the capability check authorizes.
+ *
+ * An UNBOUND conversation splits by surface, mirroring the acquire path
+ * (`resolveOrProvisionSession`) exactly (codex round 14):
+ *
+ *  - `'global'`: the first compute call auto-provisions a DRIVELESS session
+ *    the requester pays for, so eligibility is the driveless coordinates.
+ *  - `'page'`: acquire answers `no_session` — page conversations are never
+ *    lazily minted into a session (that per-conversation minting is the
+ *    conflation the session model removed), so compute tools could only
+ *    ever hard-fail, and their git tool NAMES would suppress the user's
+ *    working GitHub integration tools. Not eligible.
  */
 export async function resolveSandboxToolEligibilityForConversation(
   conversationId: string | undefined,
-  fallbackDriveId: string | null,
+  surface: 'page' | 'global',
   userId: string,
 ): Promise<boolean> {
   const { findSessionForConversation } = await import('@/lib/agent-sessions/agent-sessions-runtime');
   const session = conversationId ? await findSessionForConversation(conversationId) : null;
-  return session
-    ? canRunCodeForSession({ userId, driveId: session.driveId, ownerId: session.ownerId })
-    : canRunCodeForSession({ userId, driveId: fallbackDriveId, ownerId: userId });
+  if (session) {
+    return canRunCodeForSession({ userId, driveId: session.driveId, ownerId: session.ownerId });
+  }
+  if (surface === 'page') return false;
+  return canRunCodeForSession({ userId, driveId: null, ownerId: userId });
 }

@@ -296,10 +296,10 @@ export async function POST(request: Request): Promise<Response> {
       // DB round trip for the common case.
       const sandboxEnabled = Boolean(page.sandboxEnabled);
       // Bound-session first (review #2326) — same payer source as the chat
-      // route; an unbound (or auto-generated) conversation falls back to the
-      // agent page's drive.
+      // route. An unbound (or auto-generated) page conversation is not
+      // eligible (codex round 14): acquire answers no_session for it.
       const sandboxTierEligible = sandboxEnabled
-        ? await resolveSandboxToolEligibilityForConversation(incomingConversationId, page.driveId ?? null, authResult.userId)
+        ? await resolveSandboxToolEligibilityForConversation(incomingConversationId, 'page', authResult.userId)
         : false;
       filteredTools = filterToolsForSandboxEnablement(filteredTools, sandboxEnabled) as ToolSet;
       // Tier strips only COMPUTE tools; the chat-only session family stays
@@ -338,10 +338,10 @@ export async function POST(request: Request): Promise<Response> {
       // DB round trip for the common case.
       const sandboxEnabled = Boolean(page.sandboxEnabled);
       // Bound-session first (review #2326) — same payer source as the chat
-      // route; an unbound (or auto-generated) conversation falls back to the
-      // agent page's drive.
+      // route. An unbound (or auto-generated) page conversation is not
+      // eligible (codex round 14): acquire answers no_session for it.
       const sandboxTierEligible = sandboxEnabled
-        ? await resolveSandboxToolEligibilityForConversation(incomingConversationId, page.driveId ?? null, authResult.userId)
+        ? await resolveSandboxToolEligibilityForConversation(incomingConversationId, 'page', authResult.userId)
         : false;
       filteredTools = filterToolsForSandboxEnablement(filteredTools, sandboxEnabled) as ToolSet;
       // Tier strips only COMPUTE tools; the chat-only session family stays

@@ -1093,8 +1093,10 @@ export async function POST(request: Request) {
     // Bound-session first (review #2326): a page conversation hosted in a
     // driveless Global session is paid for by the SESSION's owner, not the
     // agent's drive owner — gate exposure on the payer provisioning will use.
+    // An UNBOUND page conversation is not eligible at all (codex round 14):
+    // the acquire path never lazily mints page conversations a session.
     const sandboxTierEligible = sandboxEnabled
-      ? await resolveSandboxToolEligibilityForConversation(conversationId, page.driveId ?? null, userId)
+      ? await resolveSandboxToolEligibilityForConversation(conversationId, 'page', userId)
       : false;
     filteredTools = filterToolsForSandboxEnablement(filteredTools, sandboxEnabled) as ToolSet;
     // The tier gate strips only the COMPUTE tools — a free payer keeps the

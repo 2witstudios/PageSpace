@@ -880,7 +880,7 @@ CONVERSATION TYPE: ${conversation.type.toUpperCase()}${conversation.contextId ? 
     // suppressed the user's working GitHub OAuth integration tools.
     const sandboxTierEligible = await resolveSandboxToolEligibilityForConversation(
       conversation.id,
-      null,
+      'global',
       userId,
     );
 

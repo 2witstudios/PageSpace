@@ -48,25 +48,41 @@ describe('resolveSandboxToolEligibilityForConversation', () => {
     vi.clearAllMocks();
   });
 
-  it('a BOUND conversation authorizes the requester against the session coordinates, not the surface drive', async () => {
+  it('a BOUND conversation authorizes the requester against the session coordinates, whatever the surface', async () => {
     mockFindSessionForConversation.mockResolvedValue({ id: 'ses-1', driveId: 'session-drive', ownerId: 'session-owner' });
     mockCanRunCodeForSession.mockResolvedValue(true);
-    const result = await resolveSandboxToolEligibilityForConversation('conv-1', 'surface-drive', 'actor-1');
+    const result = await resolveSandboxToolEligibilityForConversation('conv-1', 'page', 'actor-1');
     expect(result).toBe(true);
     expect(mockCanRunCodeForSession).toHaveBeenCalledWith({ userId: 'actor-1', driveId: 'session-drive', ownerId: 'session-owner' });
   });
 
-  it('an UNBOUND conversation falls back to the surface coordinates with the requester as owner', async () => {
+  it('an UNBOUND PAGE conversation is never eligible — acquire answers no_session for it (codex round 14)', async () => {
     mockFindSessionForConversation.mockResolvedValue(null);
     mockCanRunCodeForSession.mockResolvedValue(true);
-    await resolveSandboxToolEligibilityForConversation('conv-2', 'surface-drive', 'actor-1');
-    expect(mockCanRunCodeForSession).toHaveBeenCalledWith({ userId: 'actor-1', driveId: 'surface-drive', ownerId: 'actor-1' });
+    const result = await resolveSandboxToolEligibilityForConversation('conv-2', 'page', 'actor-1');
+    expect(result).toBe(false);
+    // The capability is not even consulted: no session can exist to act in.
+    expect(mockCanRunCodeForSession).not.toHaveBeenCalled();
   });
 
-  it('no conversation id skips the session lookup entirely', async () => {
+  it('an UNBOUND GLOBAL conversation uses the driveless auto-provision coordinates with the requester as owner', async () => {
+    mockFindSessionForConversation.mockResolvedValue(null);
+    mockCanRunCodeForSession.mockResolvedValue(true);
+    await resolveSandboxToolEligibilityForConversation('conv-3', 'global', 'actor-1');
+    expect(mockCanRunCodeForSession).toHaveBeenCalledWith({ userId: 'actor-1', driveId: null, ownerId: 'actor-1' });
+  });
+
+  it('no conversation id skips the session lookup entirely (global surface)', async () => {
     mockCanRunCodeForSession.mockResolvedValue(false);
-    await resolveSandboxToolEligibilityForConversation(undefined, null, 'actor-1');
+    await resolveSandboxToolEligibilityForConversation(undefined, 'global', 'actor-1');
     expect(mockFindSessionForConversation).not.toHaveBeenCalled();
     expect(mockCanRunCodeForSession).toHaveBeenCalledWith({ userId: 'actor-1', driveId: null, ownerId: 'actor-1' });
+  });
+
+  it('no conversation id on a PAGE surface is not eligible without any lookups', async () => {
+    const result = await resolveSandboxToolEligibilityForConversation(undefined, 'page', 'actor-1');
+    expect(result).toBe(false);
+    expect(mockFindSessionForConversation).not.toHaveBeenCalled();
+    expect(mockCanRunCodeForSession).not.toHaveBeenCalled();
   });
 });
