@@ -6,6 +6,7 @@ import {
   toAgentSessionDTO,
   type SpawnAgentSessionDeps,
 } from '../agent-sessions';
+import type { AgentSessionListFilter } from '../agent-sessions-store';
 import { ensureAgentSessionSandbox, type AgentSessionSpriteRow } from '../agent-session-sprite';
 import { agentSessionDtoSchema } from '../../../agent-sessions/contract';
 import { deriveAgentSessionSpriteKey } from '../../../agent-sessions/session-sprite-key';
@@ -477,6 +478,18 @@ describe('listAgentSessions', () => {
         filter: { driveId: DRIVE_ID },
         deps: { store: store.store },
       });
+      expect(sessions.map((session) => session.sessionId)).toEqual(['ses-drive']);
+    });
+
+    it('given driveId with an explicitly-undefined ownerId, should behave as ownerless — presence of the key is not enough (review: CodeRabbit)', async () => {
+      // `AgentSessionListFilter` no longer HAS a variant shaped like this
+      // (`ownerId` is either a real string or the key is absent entirely) —
+      // the cast exists to pin the runtime guard against a value that
+      // reaches here some other way (a bypassed cast, a loosely-typed
+      // caller upstream), not to describe a shape callers should construct.
+      const store = makeAgentSessionStore(withGlobal);
+      const filter = { driveId: DRIVE_ID, ownerId: undefined } as unknown as AgentSessionListFilter;
+      const sessions = await listAgentSessions({ filter, deps: { store: store.store } });
       expect(sessions.map((session) => session.sessionId)).toEqual(['ses-drive']);
     });
   });

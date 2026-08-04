@@ -23,7 +23,7 @@ import { drives, pages } from '@pagespace/db/schema/core';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { agentSessions } from '@pagespace/db/schema/agent-sessions';
 import { machineSpriteReclaims } from '@pagespace/db/schema/machine-sprite-reclaims';
-import { createDbAgentSessionStore } from '../agent-sessions-store';
+import { createDbAgentSessionStore, type AgentSessionListFilter } from '../agent-sessions-store';
 
 const ownerId = createId();
 const driveId = createId();
@@ -621,6 +621,39 @@ describe('list — driveId filter also includes the caller\'s own global session
 
     try {
       const listed = await store.list({ driveId });
+      const ids = listed.map((row) => row.id);
+      expect(ids).toContain(driveScoped);
+      expect(ids).not.toContain(otherGlobalSessionId);
+    } finally {
+      await db.delete(agentSessions).where(eq(agentSessions.id, otherGlobalSessionId));
+      await db.delete(users).where(eq(users.id, otherOwnerId));
+    }
+  });
+
+  it('given driveId with an explicitly-undefined ownerId, behaves as ownerless against real Postgres (review: CodeRabbit)', async () => {
+    // `AgentSessionListFilter` no longer has a variant shaped like this — the
+    // cast pins the runtime guard against a value that reaches here some
+    // other way (a bypassed cast, a loosely-typed caller upstream), proving
+    // the SQL itself (not just the type system) refuses to treat a
+    // present-but-unset ownerId as "owned".
+    const otherOwnerId = createId();
+    await db.insert(users).values({
+      id: otherOwnerId,
+      email: `agent-sessions-store-undef-owner-${otherOwnerId}@example.test`,
+      name: 'Undefined-Owner Probe Owner',
+    });
+    const otherGlobalSessionId = createId();
+    await db.insert(agentSessions).values({
+      id: otherGlobalSessionId,
+      ownerId: otherOwnerId,
+      driveId: null,
+      updatedAt: new Date(),
+    });
+    const driveScoped = await seedSession();
+    const filter = { driveId, ownerId: undefined } as unknown as AgentSessionListFilter;
+
+    try {
+      const listed = await store.list(filter);
       const ids = listed.map((row) => row.id);
       expect(ids).toContain(driveScoped);
       expect(ids).not.toContain(otherGlobalSessionId);

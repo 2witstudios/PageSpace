@@ -1307,13 +1307,13 @@ describe('AgentsSidebar', () => {
       await user.click(within(groupContainer('Global Assistant')).getByRole('button', { name: /^New session/i }));
 
       const nameInput = await screen.findByPlaceholderText('Global Assistant');
-      await user.type(nameInput, '{Enter}');
+      await user.type(nameInput, 'my assistant session{Enter}');
 
       await waitFor(() =>
         expect(mockPost).toHaveBeenCalledWith('/api/agent-sessions', {
           driveId: null,
           agentPageId: null,
-          name: '',
+          name: 'my assistant session',
         }),
       );
     });
