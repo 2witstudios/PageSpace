@@ -98,6 +98,29 @@ claude mcp add pagespace -- pagespace mcp
 
 **Settings > MCP Servers** → add the \`mcpServers\` block above.
 
+### ChatGPT desktop / Codex
+
+ChatGPT desktop and the Codex CLI share one MCP config — \`~/.codex/config.toml\` — and it's **TOML, not the JSON \`mcpServers\` shape** the clients above use:
+
+\`\`\`toml
+[mcp_servers.pagespace]
+command = "npx"
+args = ["-y", "-p", "@pagespace/cli", "pagespace-mcp"]
+startup_timeout_sec = 120
+
+[mcp_servers.pagespace.env]
+PAGESPACE_API_URL = "https://pagespace.ai"
+PAGESPACE_TOKEN = "mcp_your_token_here"
+\`\`\`
+
+Three details matter:
+
+- **The \`-p\` flag is required.** Without it, npx can't pick between the package's two bins and dies with \`could not determine executable to run\` — Codex shows the server as **Tools: (none)**, ChatGPT as a connector that times out.
+- **\`startup_timeout_sec = 120\`** gives a cold \`npx\` install room to download the package before the client abandons the handshake.
+- **Name a credential in the \`env\` block.** \`pagespace mcp\` never falls back to your personal login; without a token (or \`PAGESPACE_KEY\`), tool calls return an error telling you to configure one.
+
+(\`command = "pagespace"\` works only when the CLI is on the PATH the app launches with — macOS GUI apps don't inherit your shell PATH, so prefer the \`npx\` form. "Auth: Unsupported" beside the server in Codex is normal for stdio servers, not an error.)
+
 ## Step 3: Capabilities
 
 \`pagespace mcp\` generates its tool list mechanically from the same operation registry that powers the \`pagespace\` CLI and [\`@pagespace/sdk\`](/docs/features/sdk), so the tool surface can't drift from what the CLI itself supports.
