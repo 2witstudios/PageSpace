@@ -411,7 +411,22 @@ async function runToolStep(
 async function releaseWorkflowSession(sessionId: string, workflowId: string): Promise<void> {
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      await endSession(sessionId);
+      // `endSession` reports most failures as a RESOLVED `{ ok: false }`
+      // (teardown_failed keeps the Sprite live and billing), not a throw —
+      // both shapes get the same bounded retry + error-level residual log
+      // (codex round 10: the old unconditional return treated a resolved
+      // failure as success and skipped both).
+      const result = await endSession(sessionId);
+      if (result && result.ok === false) {
+        if (attempt === 2) {
+          loggers.api.error(
+            'Workflow executor: run-scoped session teardown failed after retry — the orphan-Sprite reconcile cron will reclaim it',
+            undefined,
+            { sessionId, workflowId, reason: result.reason, detail: result.detail },
+          );
+        }
+        continue;
+      }
       return;
     } catch (error) {
       if (attempt === 2) {
@@ -679,6 +694,16 @@ async function runExecution(
       aiProvider: agent.aiProvider ?? undefined,
       aiModel: agent.aiModel ?? undefined,
       conversationId,
+      // The run's agent identity, exactly as the chat route passes it: the
+      // session tools' `callerAgentPageId` reads `chatSource.agentPageId` so
+      // an agent-less `spawn_session` inherits THIS agent (not the Global
+      // Assistant), and channel messages attribute to the agent (codex
+      // round 10).
+      chatSource: {
+        type: 'page' as const,
+        agentPageId: agent.id,
+        agentTitle: agent.title ?? undefined,
+      },
       locationContext: {
         currentPage: {
           id: agent.id,

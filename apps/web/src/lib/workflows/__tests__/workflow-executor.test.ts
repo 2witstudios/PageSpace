@@ -541,6 +541,41 @@ describe('executeWorkflow', () => {
       expect(mockEndSession).not.toHaveBeenCalled();
     });
 
+    test('a RESOLVED teardown failure ({ok:false}) is retried and error-logged like a throw — not mistaken for success (codex round 10)', async () => {
+      mockResolveSandboxToolEligibility.mockResolvedValue(true);
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'wf-ses-resolvedfail' } });
+      mockEndSession.mockResolvedValue({ ok: false, reason: 'teardown_failed', detail: 'sprite kill timed out' });
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'bash'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      // Both bounded attempts consumed — an {ok:false} resolution is a real
+      // failure (the Sprite stays live and billing), never a success.
+      expect(mockEndSession).toHaveBeenCalledTimes(2);
+    });
+
+    test('the session-tool context carries the workflow agent identity — an agent-less spawn_session inherits it, not the Global Assistant (codex round 10)', async () => {
+      mockResolveSandboxToolEligibility.mockResolvedValue(false);
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'wf-ses-ident' } });
+      setupSelectChain(
+        [{ ...mockAgent, sandboxEnabled: true, enabledTools: ['list_pages', 'spawn_session'] }],
+        [mockDrive],
+      );
+
+      const result = await executeWorkflow(
+        createInputFixture({ source: { table: 'manual', id: null, triggerAt: null }, runnerUserId: 'user_123' }),
+      );
+
+      expect(result.success).toBe(true);
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
+      const ctx = genCall.experimental_context as { chatSource?: { type: string; agentPageId?: string } };
+      expect(ctx.chatSource).toEqual({ type: 'page', agentPageId: 'agent_1', agentTitle: 'Report Agent' });
+    });
+
     test('a transient endSession fault is retried once; the run still succeeds (durable backstop is the orphan reconcile cron)', async () => {
       mockResolveSandboxToolEligibility.mockResolvedValue(true);
       mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'wf-ses-retry' } });
