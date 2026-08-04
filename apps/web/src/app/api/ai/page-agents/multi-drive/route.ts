@@ -6,11 +6,11 @@ import { db } from '@pagespace/db/db'
 import { eq, and, inArray, isNotNull } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
-import { driveMembers } from '@pagespace/db/schema/members';
+import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { computeSandboxEligibilityByDrive } from './sandbox-eligibility-by-drive';
+import { computeSandboxEligibilityByDrive, resolveEditableDriveIds } from './sandbox-eligibility-by-drive';
 
 interface AgentSummary {
   id: string;
@@ -75,20 +75,38 @@ export async function GET(request: Request) {
     const ownerRows = ownerIds.length
       ? await db.select({ id: users.id, subscriptionTier: users.subscriptionTier }).from(users).where(inArray(users.id, ownerIds))
       : [];
-    // The requester's edit-capable memberships, one batched query — the flag
-    // is "can THIS requester use the sandbox there" (payer tier AND actor
-    // edit access AND the kill switch), not payer tier alone (review #2326):
-    // a viewer-role member would otherwise be offered shell affordances every
-    // enforcement point then 403s.
+    // The requester's edit-capable memberships, batched — the flag is "can
+    // THIS requester use the sandbox there" (payer tier AND actor edit access
+    // AND the kill switch), not payer tier alone (review #2326): a
+    // viewer-role member would otherwise be offered shell affordances every
+    // enforcement point then 403s. Custom roles bound a MEMBER's drive-wide
+    // edit exactly as `getUserDrivePermissions` does (codex round 13): the
+    // role's driveWidePermissions must grant canEdit explicitly, an
+    // unresolvable role fails closed, and ADMINs bypass custom roles —
+    // otherwise a view-only custom-role member sees an enabled Shell item
+    // that provisioning then rejects with insufficient_role.
     const accessibleDriveIds = accessibleDrives.map((d) => d.id);
     const membershipRows = accessibleDriveIds.length
       ? await db
-          .select({ driveId: driveMembers.driveId, role: driveMembers.role })
+          .select({ driveId: driveMembers.driveId, role: driveMembers.role, customRoleId: driveMembers.customRoleId })
           .from(driveMembers)
           .where(and(eq(driveMembers.userId, userId), inArray(driveMembers.driveId, accessibleDriveIds), isNotNull(driveMembers.acceptedAt)))
       : [];
-    const editableDriveIds = new Set(
-      membershipRows.filter((row) => row.role === 'ADMIN' || row.role === 'MEMBER').map((row) => row.driveId),
+    const customRoleIds = Array.from(
+      new Set(membershipRows.filter((row) => row.role !== 'ADMIN' && row.customRoleId).map((row) => row.customRoleId as string)),
+    );
+    const customRoleRows = customRoleIds.length
+      ? await db
+          .select({ id: driveRoles.id, driveId: driveRoles.driveId, driveWidePermissions: driveRoles.driveWidePermissions })
+          .from(driveRoles)
+          .where(inArray(driveRoles.id, customRoleIds))
+      : [];
+    const editableDriveIds = resolveEditableDriveIds(
+      membershipRows,
+      customRoleRows.map((row) => ({
+        ...row,
+        driveWidePermissions: row.driveWidePermissions as { canEdit?: boolean } | null,
+      })),
     );
     const sandboxEligibleByDrive = computeSandboxEligibilityByDrive(accessibleDrives, ownerRows, {
       userId,

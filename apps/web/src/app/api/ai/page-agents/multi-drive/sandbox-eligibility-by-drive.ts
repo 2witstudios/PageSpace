@@ -32,3 +32,31 @@ export function computeSandboxEligibilityByDrive(
     ]),
   );
 }
+
+/**
+ * Which of the requester's memberships carry DRIVE-WIDE edit — the same
+ * answer `getUserDrivePermissions` gives, computed from batched rows so the
+ * multi-drive listing needs two queries, not one per drive (codex round 13):
+ * ADMINs always edit; a plain MEMBER edits; a MEMBER with a custom role
+ * edits only when that role's driveWidePermissions grant canEdit explicitly
+ * (an unresolvable role fails closed). Keyed strictly by (roleId, driveId)
+ * so a role can never apply outside its own drive.
+ */
+export function resolveEditableDriveIds(
+  membershipRows: readonly { driveId: string; role: string; customRoleId: string | null }[],
+  customRoleRows: readonly { id: string; driveId: string; driveWidePermissions: { canEdit?: boolean } | null }[],
+): Set<string> {
+  const driveWideEditByRole = new Map(
+    customRoleRows.map((row) => [`${row.id}:${row.driveId}`, row.driveWidePermissions?.canEdit === true]),
+  );
+  return new Set(
+    membershipRows
+      .filter((row) => {
+        if (row.role === 'ADMIN') return true;
+        if (row.role !== 'MEMBER') return false;
+        if (!row.customRoleId) return true;
+        return driveWideEditByRole.get(`${row.customRoleId}:${row.driveId}`) === true;
+      })
+      .map((row) => row.driveId),
+  );
+}

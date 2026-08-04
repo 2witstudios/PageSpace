@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeSandboxEligibilityByDrive } from '../sandbox-eligibility-by-drive';
+import { computeSandboxEligibilityByDrive, resolveEditableDriveIds } from '../sandbox-eligibility-by-drive';
 
 /** An actor who can edit everywhere it matters — the default for payer-tier-focused cases. */
 function editorOf(...driveIds: string[]) {
@@ -122,5 +122,45 @@ describe('computeSandboxEligibilityByDrive', () => {
   it('given no drives at all, returns an empty map', () => {
     const result = computeSandboxEligibilityByDrive([], [], editorOf());
     expect(result.size).toBe(0);
+  });
+});
+
+describe('resolveEditableDriveIds', () => {
+  const member = (driveId: string, role: string, customRoleId: string | null = null) => ({ driveId, role, customRoleId });
+
+  it('grants plain MEMBER and ADMIN memberships', () => {
+    const result = resolveEditableDriveIds([member('d1', 'MEMBER'), member('d2', 'ADMIN')], []);
+    expect(result).toEqual(new Set(['d1', 'd2']));
+  });
+
+  it('bounds a MEMBER by their custom role: drive-wide canEdit must be explicitly true (codex round 13)', () => {
+    const roles = [
+      { id: 'r-yes', driveId: 'd1', driveWidePermissions: { canEdit: true } },
+      { id: 'r-no', driveId: 'd2', driveWidePermissions: { canEdit: false } },
+      { id: 'r-none', driveId: 'd3', driveWidePermissions: null },
+    ];
+    const result = resolveEditableDriveIds(
+      [member('d1', 'MEMBER', 'r-yes'), member('d2', 'MEMBER', 'r-no'), member('d3', 'MEMBER', 'r-none')],
+      roles,
+    );
+    expect(result).toEqual(new Set(['d1']));
+  });
+
+  it('fails closed on an unresolvable custom role', () => {
+    const result = resolveEditableDriveIds([member('d1', 'MEMBER', 'r-stale')], []);
+    expect(result).toEqual(new Set());
+  });
+
+  it('never applies a role outside its own drive', () => {
+    // The role grants edit, but for a DIFFERENT drive than the membership's.
+    const roles = [{ id: 'r1', driveId: 'other-drive', driveWidePermissions: { canEdit: true } }];
+    const result = resolveEditableDriveIds([member('d1', 'MEMBER', 'r1')], roles);
+    expect(result).toEqual(new Set());
+  });
+
+  it('lets an ADMIN bypass their custom role', () => {
+    const roles = [{ id: 'r-no', driveId: 'd1', driveWidePermissions: { canEdit: false } }];
+    const result = resolveEditableDriveIds([member('d1', 'ADMIN', 'r-no')], roles);
+    expect(result).toEqual(new Set(['d1']));
   });
 });
