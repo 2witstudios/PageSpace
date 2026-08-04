@@ -149,12 +149,30 @@ describe('AgentsListHeader', () => {
     expect(screen.queryByPlaceholderText('Search drives…')).toBeNull();
   });
 
+  test('global (no driveId): the session picker offers "Global Assistant", which skips straight to naming a drive-less session', async () => {
+    const user = userEvent.setup();
+    render(<AgentsListHeader />);
+
+    await user.click(screen.getByRole('button', { name: /New Session/ }));
+    expect(await screen.findByText('Global Assistant')).toBeDefined();
+
+    await user.click(screen.getByText('Global Assistant'));
+
+    // Straight to the naming step — no drive was picked, so no target step.
+    expect(await screen.findByPlaceholderText('Global Assistant')).toBeDefined();
+    expect(screen.getByText('Leave blank to use "Global Assistant"')).toBeDefined();
+    expect(screen.queryByPlaceholderText('Search drives…')).toBeNull();
+  });
+
   test('global (no driveId): "New Agent" opens a drive picker, then navigates into the picked drive without opening Quick Create until that drive is live', async () => {
     const user = userEvent.setup();
     const { rerender } = render(<AgentsListHeader />);
 
     await user.click(screen.getByRole('button', { name: /New Agent/ }));
     expect(await screen.findByText('Choose a drive')).toBeDefined();
+    // A drive-less assistant session is only a valid target for "New
+    // Session" — the agent flow needs a real drive to navigate into.
+    expect(screen.queryByText('Global Assistant')).toBeNull();
 
     await user.click(screen.getByText('Beta'));
 
