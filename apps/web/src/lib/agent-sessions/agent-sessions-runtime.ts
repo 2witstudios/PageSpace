@@ -319,9 +319,22 @@ function buildClaimDeps(): ClaimConversationInSessionDeps {
       // hook every claim path shares (worker spawns, the HTTP claim route,
       // the global auto-bind), so a session can never hold fresh work while
       // hidden from the sidebar (issue #2335). Best-effort by design: on a
-      // CAS miss the claim itself stands, and the next provision revives the
-      // row through the ordinary ensure path anyway.
-      if (outcome === 'claimed') await reopenEndedSessionListing(sessionId);
+      // CAS miss OR a thrown error, the claim itself still stands (the
+      // binding already committed above) — the next provision revives the
+      // row through the ordinary ensure path regardless. A reopen failure
+      // must therefore never surface as a creation failure: the caller would
+      // treat an ALREADY-BOUND conversation as unavailable and retry into a
+      // SessionFullError or a squat-guard refusal on its own successful bind
+      // (review finding — coderabbitai, PR #2336).
+      if (outcome === 'claimed') {
+        await reopenEndedSessionListing(sessionId).catch((error) => {
+          loggers.api.warn('Failed to reopen ended session listing after a successful claim', {
+            sessionId,
+            conversationId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
       return outcome;
     },
   };

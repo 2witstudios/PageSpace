@@ -5,10 +5,16 @@
  *
  *  1. The happy path works end-to-end: a global caller's session is
  *     auto-minted and the worker conversation (agentPageId null) lands in it.
- *     This is also the direct refutation of the issue's first hypothesis —
  *     `conversations.updatedAt` has NO DB default here (exactly as migration
- *     0000 created it), and the global insert still succeeds, because drizzle
- *     fills a default-less `$onUpdate` column on INSERT.
+ *     0000 created it) — the insert succeeds because
+ *     `resolveOrCreateConversation` sets `updatedAt: new Date()` explicitly
+ *     (this PR's Fix 2, matching the page path). The issue's original
+ *     hypothesis — that the missing default was itself the bug — was
+ *     evaluated separately by inspecting drizzle-orm 0.45.2's insert
+ *     compiler (`pg-core/dialect.js`'s `buildInsertQuery`), which fills a
+ *     default-less `$onUpdate` column on INSERT too; this test does not
+ *     exercise that fallback (the explicit set makes it moot) and makes no
+ *     claim about it.
  *
  *  2. The actual root cause: a conversation bound to an ENDED session used to
  *     dead-end every spawn with a generic `conversation_unavailable` blaming
