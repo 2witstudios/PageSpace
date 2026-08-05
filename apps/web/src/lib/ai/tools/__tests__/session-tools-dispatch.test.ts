@@ -126,7 +126,12 @@ describe('dispatchThroughChatPipeline credentials (issue #2333)', () => {
     // The browser's own token expires after 1h — an agent turn can outlive it.
     // The hop must mint its own token from the server-validated session id
     // (the same binding validateCSRF checks), not replay the stale one.
-    incomingHeaders({ cookie: SESSION_COOKIE, 'x-csrf-token': STALE_BROWSER_CSRF });
+    incomingHeaders({
+      cookie: SESSION_COOKIE,
+      'x-csrf-token': STALE_BROWSER_CSRF,
+      origin: 'http://localhost:3000',
+      referer: 'http://localhost:3000/dashboard',
+    });
     const fetchMock = fetchAdmitted();
 
     const outcome = await dispatchThroughChatPipeline(DISPATCH_INPUT);
@@ -136,6 +141,36 @@ describe('dispatchThroughChatPipeline credentials (issue #2333)', () => {
     const sent = sentHeaders(fetchMock)['x-csrf-token'];
     expect(sent).not.toBe(STALE_BROWSER_CSRF);
     expect(validateCSRFToken(sent, AUTH_SESSION_ID)).toBe(true);
+    // The caller's own credentials ride along with the minted token — the
+    // route re-derives the CSRF binding from this cookie, and its origin
+    // validation for cookie sessions reads origin/referer.
+    expect(sentHeaders(fetchMock)['cookie']).toBe(SESSION_COOKIE);
+    expect(sentHeaders(fetchMock)['origin']).toBe('http://localhost:3000');
+    expect(sentHeaders(fetchMock)['referer']).toBe('http://localhost:3000/dashboard');
+  });
+
+  it('mints despite a non-Bearer Authorization header — only a Bearer credential exempts the hop from CSRF', async () => {
+    // A fronting proxy can inject e.g. `Authorization: Basic …`. The route's
+    // CSRF exemption checks the `Bearer ` prefix (getBearerToken), so a
+    // non-Bearer header must not suppress the mint or the hop 403s again.
+    incomingHeaders({ cookie: SESSION_COOKIE, authorization: 'Basic cHJveHk6aHVzaA==' });
+    const fetchMock = fetchAdmitted();
+
+    const outcome = await dispatchThroughChatPipeline(DISPATCH_INPUT);
+
+    expect(outcome).toEqual({ ok: true, waited: false });
+    expect(validateCSRFToken(sentHeaders(fetchMock)['x-csrf-token'], AUTH_SESSION_ID)).toBe(true);
+  });
+
+  it('degrades to the forwarded browser token when session validation throws — never a raw error out of the tool', async () => {
+    validateSessionMock.mockRejectedValue(new Error('db connection reset'));
+    incomingHeaders({ cookie: SESSION_COOKIE, 'x-csrf-token': STALE_BROWSER_CSRF });
+    const fetchMock = fetchAdmitted();
+
+    const outcome = await dispatchThroughChatPipeline(DISPATCH_INPUT);
+
+    expect(outcome).toEqual({ ok: true, waited: false });
+    expect(sentHeaders(fetchMock)['x-csrf-token']).toBe(STALE_BROWSER_CSRF);
   });
 
   it('mints even when the browser sent no CSRF token at all', async () => {
@@ -149,6 +184,7 @@ describe('dispatchThroughChatPipeline credentials (issue #2333)', () => {
 
     expect(outcome).toEqual({ ok: true, waited: false });
     expect(validateCSRFToken(sentHeaders(fetchMock)['x-csrf-token'], AUTH_SESSION_ID)).toBe(true);
+    expect(sentHeaders(fetchMock)['cookie']).toBe(SESSION_COOKIE);
   });
 
   it('falls back to the forwarded browser token when the cookie session does not validate', async () => {

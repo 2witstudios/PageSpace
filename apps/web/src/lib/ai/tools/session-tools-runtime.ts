@@ -87,19 +87,24 @@ const FORWARDED_HEADERS = ['cookie', 'x-csrf-token', 'origin', 'referer', 'autho
  *
  * Bearer hops return null: Bearer auth is CSRF-immune at the route layer, and
  * `authenticateSessionRequest` resolves Bearer before cookie, so the minted
- * token would bind to a session the route never looks at.
+ * token would bind to a session the route never looks at. The check mirrors
+ * `getBearerToken`'s `Bearer ` prefix test exactly — a non-Bearer
+ * Authorization header (e.g. a fronting proxy's `Basic …`) does NOT exempt
+ * the hop from CSRF at the route, so it must not suppress the mint here.
  */
 async function mintDispatchCSRFToken(incoming: Headers): Promise<string | null> {
-  if (incoming.get('authorization')) return null;
+  if (incoming.get('authorization')?.startsWith('Bearer ')) return null;
   const sessionToken = getSessionFromCookies(incoming.get('cookie'));
   if (!sessionToken) return null;
-  const claims = await sessionService.validateSession(sessionToken, { expectedType: 'user' });
-  if (!claims) return null;
   try {
+    const claims = await sessionService.validateSession(sessionToken, { expectedType: 'user' });
+    if (!claims) return null;
     return generateCSRFToken(claims.sessionId);
   } catch (error) {
-    // CSRF_SECRET missing/invalid — the forwarded browser token (if any) is
-    // still sent, so the route gives its own honest answer.
+    // Transient session-store failure or missing CSRF_SECRET — degrade, never
+    // throw a raw internal error out of a tool (issue #2262 finding 3). The
+    // forwarded browser token (if any) is still sent, so the route gives its
+    // own honest answer.
     loggers.ai.error('session dispatch: could not mint a CSRF token for the internal hop', error instanceof Error ? error : undefined);
     return null;
   }
