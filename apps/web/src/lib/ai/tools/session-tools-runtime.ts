@@ -352,6 +352,18 @@ async function listOwnWorkspaces({
   userId: string;
   excludeWorkspaceSessionId?: string;
 }): Promise<OwnWorkspaceSummary[]> {
+  // The exclusion runs AFTER `listSessions`' own SESSION_LIST_LIMIT cap, not
+  // as a query-level filter before it — deliberately, not an oversight: a
+  // pre-cap exclusion would need a new filter shape on the shared store
+  // (`AgentSessionListFilter`) for a scenario that cannot occur today.
+  // `SESSION_LIST_LIMIT` and `MAX_ACTIVE_SESSIONS_PER_OWNER` are both 100,
+  // and the latter is a STRUCTURAL cap (`createIfUnderLimit`'s atomic
+  // count-and-insert) — no owner can ever HAVE more than 100 active
+  // sessions, so `listSessions` never actually truncates here and this
+  // filter can never drop a workspace that a pre-cap exclusion would have
+  // backfilled (review finding — CodeRabbit). That soundness is CONTINGENT
+  // on the two constants staying equal and the cap staying structural; if
+  // either ever changes independently, revisit this filter's ordering.
   const sessions = (await listSessions({ ownerId: userId })).filter(
     (session) => session.sessionId !== excludeWorkspaceSessionId,
   );

@@ -537,10 +537,14 @@ export function createSessionTools(deps: SessionToolsDeps): {
           excludeWorkspaceSessionId: workspace?.sessionId,
         });
 
-        if (!workspace) {
-          // A plain conversation: nothing HERE, said explicitly — but the
-          // caller's other workspaces still list, because their workers are
-          // addressable from anywhere.
+        if (!conversationId || !workspace) {
+          // No conversation, or a plain one with no workspace: nothing HERE,
+          // said explicitly — but the caller's other workspaces still list,
+          // because their workers are addressable from anywhere. The `||`
+          // also lets TypeScript narrow `conversationId` below without a
+          // cast: `workspace` is only ever non-null when `conversationId`
+          // was truthy (see its assignment above), so this guard makes that
+          // fact one the compiler carries, not one a reader has to trust.
           return {
             success: true,
             workspaceId: null,
@@ -553,7 +557,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
         }
         const listing = await deps.listSessionWorkers({
           workspaceSessionId: workspace.sessionId,
-          callerConversationId: conversationId as string,
+          callerConversationId: conversationId,
         });
         return { success: true, workspaceId: workspace.sessionId, ...listing, otherWorkspaces };
       },
