@@ -121,6 +121,17 @@ Three details matter:
 
 (\`command = "pagespace"\` works only when the CLI is on the PATH the app launches with — macOS GUI apps don't inherit your shell PATH, so prefer the \`npx\` form. "Auth: Unsupported" beside the server in Codex is normal for stdio servers, not an error.)
 
+### OpenAI Secure MCP Tunnel
+
+Using [OpenAI's Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) to reach a private server from ChatGPT? \`tunnel-client\` spawns the stdio server itself:
+
+\`\`\`bash
+tunnel-client init --profile pagespace --tunnel-id <your-tunnel-id> \\
+  --mcp-command "npx -y -p @pagespace/cli pagespace-mcp"
+\`\`\`
+
+The same two rules apply — \`-p\` is required in the \`--mcp-command\`, and the credential env vars (\`PAGESPACE_TOKEN\`, plus \`PAGESPACE_API_URL\` for self-hosted) must be exported **in the environment where \`tunnel-client run\` executes**, since the spawned server inherits that process's env. Both mistakes surface in ChatGPT as tool calls that time out; \`tunnel-client doctor --profile pagespace --explain\` shows whether the server actually came up.
+
 ## Step 3: Capabilities
 
 \`pagespace mcp\` generates its tool list mechanically from the same operation registry that powers the \`pagespace\` CLI and [\`@pagespace/sdk\`](/docs/features/sdk), so the tool surface can't drift from what the CLI itself supports.

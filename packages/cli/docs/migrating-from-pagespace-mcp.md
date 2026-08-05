@@ -131,6 +131,28 @@ works in your terminal. The `npx` form above sidesteps that.
 ("Auth: Unsupported" next to the server in Codex is normal for stdio servers — it means no OAuth
 flow on the transport, not a configuration problem.)
 
+### OpenAI Secure MCP Tunnel (`tunnel-client`)
+
+For ChatGPT reaching a *private* MCP server through [OpenAI's Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels),
+`tunnel-client` spawns the stdio server itself via `--mcp-command`:
+
+```bash
+tunnel-client init \
+  --profile pagespace \
+  --tunnel-id <your-tunnel-id> \
+  --mcp-command "npx -y -p @pagespace/cli pagespace-mcp"
+```
+
+The same two rules apply, and both failure modes surface as ChatGPT-side timeouts ("requests
+through the tunnel fail"):
+
+- **`-p` is required** in the `--mcp-command`, exactly as above.
+- **The credential env vars must exist in the environment where `tunnel-client run` executes** —
+  the spawned server inherits *that* process's env. Export `PAGESPACE_TOKEN` (or the legacy
+  `PAGESPACE_AUTH_TOKEN`) and any `PAGESPACE_API_URL` override in the shell, systemd unit, or
+  container that runs `tunnel-client`, then verify with
+  `tunnel-client doctor --profile pagespace --explain`.
+
 ## Explicit-token variant (agents, CI, headless boxes)
 
 `pagespace login` needs a browser and isn't appropriate for CI or a service account.
