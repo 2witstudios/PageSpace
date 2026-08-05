@@ -9,10 +9,12 @@
  * streaming pipeline a normal conversation uses and shows up live in the
  * sidebar. NEVER a second engine: this module contains no model call.
  *
- * The dispatch forwards the CALLER's own credentials (cookie/CSRF/origin from
- * the live request via `next/headers`) — the worker acts as the same user who
- * asked for it, through the same admission control (credit gate, takeover
- * discipline) the interactive path runs. The chain depth rides the
+ * The dispatch acts as the CALLER: it forwards the live request's own
+ * credentials (cookie/Bearer/origin via `next/headers`) and, for cookie
+ * sessions, MINTS a fresh CSRF token bound to that server-validated session —
+ * so the worker acts as the same user who asked for it, through the same
+ * admission control (credit gate, takeover discipline) the interactive path
+ * runs. The chain depth rides the
  * `X-Agent-Dispatch-Depth` header, which both chat routes fold back into
  * `agentCallDepth` so the pure depth cap keeps terminating across the hop.
  */
@@ -24,7 +26,10 @@ import { chatMessages, pages } from '@pagespace/db/schema/core';
 import { conversations, messages as globalMessages } from '@pagespace/db/schema/conversations';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
+import { sessionService } from '@pagespace/lib/auth/session-service';
 import { deriveSandboxStatus } from '@pagespace/lib/services/agent-sessions/session-status';
+import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 import {
   createConversationInSession,
   ensureGlobalSandboxSession,
@@ -59,8 +64,46 @@ import { createShellIo, realtimeShellIoTransport } from './shell-io';
 // Worker dispatch through the standard chat pipeline
 // ---------------------------------------------------------------------------
 
-/** The headers the dispatch forwards verbatim — the caller's own credentials. */
-const FORWARDED_HEADERS = ['cookie', 'x-csrf-token', 'origin', 'referer'] as const;
+/**
+ * The headers the dispatch forwards verbatim — the caller's own credentials.
+ *
+ * `authorization` matters as much as `cookie`: desktop/mobile/MCP callers
+ * authenticate with a Bearer token, carry no CSRF token, and often send a
+ * cookie anyway (`credentials: 'include'`). Dropping their Bearer credential
+ * degraded the hop to cookie-only session auth, which the chat routes rightly
+ * refuse with "CSRF token required" (issue #2333).
+ */
+const FORWARDED_HEADERS = ['cookie', 'x-csrf-token', 'origin', 'referer', 'authorization'] as const;
+
+/**
+ * A fresh CSRF token for the internal hop, bound to the caller's
+ * server-validated cookie session — the exact binding `validateCSRF` checks on
+ * the receiving route. Minting (rather than replaying the browser's token)
+ * keeps cookie-session dispatches working when the caller's own token is
+ * absent (the route admitted them without one) or older than the 1-hour TTL
+ * (an agent turn can outlive it) — issue #2333. This is a credential FOR the
+ * caller's own session, not a bypass: no valid session cookie, no token, and
+ * nothing here consults any attacker-suppliable header.
+ *
+ * Bearer hops return null: Bearer auth is CSRF-immune at the route layer, and
+ * `authenticateSessionRequest` resolves Bearer before cookie, so the minted
+ * token would bind to a session the route never looks at.
+ */
+async function mintDispatchCSRFToken(incoming: Headers): Promise<string | null> {
+  if (incoming.get('authorization')) return null;
+  const sessionToken = getSessionFromCookies(incoming.get('cookie'));
+  if (!sessionToken) return null;
+  const claims = await sessionService.validateSession(sessionToken, { expectedType: 'user' });
+  if (!claims) return null;
+  try {
+    return generateCSRFToken(claims.sessionId);
+  } catch (error) {
+    // CSRF_SECRET missing/invalid — the forwarded browser token (if any) is
+    // still sent, so the route gives its own honest answer.
+    loggers.ai.error('session dispatch: could not mint a CSRF token for the internal hop', error instanceof Error ? error : undefined);
+    return null;
+  }
+}
 
 /**
  * The self base URL for the internal hop.
@@ -149,7 +192,7 @@ async function readLatestAssistantReply(sessionId: string, agentPageId: string |
  * `wait: true` drains the stream to completion, then reads the reply off the
  * transcript.
  */
-async function dispatchThroughChatPipeline(input: {
+export async function dispatchThroughChatPipeline(input: {
   sessionId: string;
   agentPageId: string | null;
   input: string;
@@ -177,7 +220,7 @@ async function dispatchThroughChatPipeline(input: {
       detail: 'the app\'s own URL is not configured (set WEB_APP_URL or NEXT_PUBLIC_APP_URL)',
     };
   }
-  if (!incoming.get('cookie')) {
+  if (!incoming.get('cookie') && !incoming.get('authorization')) {
     return { ok: false, reason: 'failed', detail: 'the calling request carries no session credentials to dispatch with' };
   }
 
@@ -197,6 +240,8 @@ async function dispatchThroughChatPipeline(input: {
     const value = incoming.get(name);
     if (value) requestHeaders[name] = value;
   }
+  const mintedCSRFToken = await mintDispatchCSRFToken(incoming);
+  if (mintedCSRFToken) requestHeaders['x-csrf-token'] = mintedCSRFToken;
 
   const body = JSON.stringify({
     ...(input.agentPageId !== null ? { chatId: input.agentPageId } : {}),
