@@ -51,7 +51,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 import { resolveCallerSessionForWorker } from '../session-tools-runtime';
 
-const sessionRow = { id: 'ses-1', ownerId: 'user-1' };
+const sessionRow = { id: 'ses-1', ownerId: 'user-1', endedAt: null };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -65,6 +65,16 @@ describe('resolveCallerSessionForWorker', () => {
 
     expect(resolved).toEqual({ ok: true, session: sessionRow });
     expect(mockGetConversation).not.toHaveBeenCalled();
+    expect(mockEnsureGlobalSandboxSession).not.toHaveBeenCalled();
+  });
+
+  test('a conversation bound to an ENDED session refuses truthfully with session_ended — never the create path\'s generic conversation_unavailable (issue #2335)', async () => {
+    mockFindSessionForConversation.mockResolvedValue({ ...sessionRow, endedAt: new Date() });
+
+    const resolved = await resolveCallerSessionForWorker('conv-1', 'user-1');
+
+    expect(resolved).toEqual({ ok: false, reason: 'session_ended' });
+    // The binding is write-once — no re-mint is ever attempted for it.
     expect(mockEnsureGlobalSandboxSession).not.toHaveBeenCalled();
   });
 

@@ -33,7 +33,6 @@ import {
   getAgentSessionStore,
 } from '@/lib/agent-sessions/agent-sessions-runtime';
 import {
-  ConversationUnavailableError,
   AgentNotInSessionDriveError,
   SessionFullError,
 } from '@/lib/agent-sessions/create-conversation-in-session';
@@ -382,7 +381,7 @@ async function readSessionTranscript(input: {
 
 type CallerSessionResolution =
   | { ok: true; session: NonNullable<Awaited<ReturnType<typeof findSessionForConversation>>> }
-  | { ok: false; reason: 'no_session' | 'session_limit_reached' };
+  | { ok: false; reason: 'no_session' | 'session_limit_reached' | 'session_ended' };
 
 /**
  * Resolve the SESSION a worker would join for a caller conversation — a
@@ -405,7 +404,16 @@ export async function resolveCallerSessionForWorker(
   ownerId: string,
 ): Promise<CallerSessionResolution> {
   const existing = await findSessionForConversation(callerConversationId);
-  if (existing) return { ok: true, session: existing };
+  if (existing) {
+    // A bound-but-ENDED session is not a workspace a worker can join, and the
+    // binding is write-once — this conversation can never be re-claimed into a
+    // live one. Refuse truthfully rather than letting the create path's
+    // generic conversation_unavailable answer for it (issue #2335: every
+    // spawn_session in such a conversation failed with a message blaming the
+    // conversation id).
+    if (existing.endedAt !== null) return { ok: false, reason: 'session_ended' };
+    return { ok: true, session: existing };
+  }
 
   const conversation = await conversationRepository.getConversation(callerConversationId);
   if (conversation?.type !== 'global') return { ok: false, reason: 'no_session' };
@@ -484,9 +492,13 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
     createWorkerSession: async ({ sessionId, callerConversationId, ownerId, agentPageId, name }) => {
       const resolved = await resolveCallerSessionForWorker(callerConversationId, ownerId);
       if (!resolved.ok) {
-        return resolved.reason === 'session_limit_reached'
-          ? { ok: false, reason: 'session_limit_reached', detail: 'You are at your active-session limit — end an existing session first.' }
-          : { ok: false, reason: 'no_session', detail: 'This conversation has no session for a worker to join.' };
+        if (resolved.reason === 'session_limit_reached') {
+          return { ok: false, reason: 'session_limit_reached', detail: 'You are at your active-session limit — end an existing session first.' };
+        }
+        if (resolved.reason === 'session_ended') {
+          return { ok: false, reason: 'session_ended', detail: 'This conversation\'s session has ended — a worker joins its caller\'s live session. Start a new conversation to spawn workers.' };
+        }
+        return { ok: false, reason: 'no_session', detail: 'This conversation has no session for a worker to join.' };
       }
       const callerSession = resolved.session;
       try {
@@ -512,9 +524,19 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
         if (error instanceof AgentNotInSessionDriveError) {
           return { ok: false, reason: 'conversation_unavailable', detail: 'That agent belongs to a different drive than this session.' };
         }
-        if (!(error instanceof ConversationUnavailableError)) {
-          loggers.ai.error('createWorkerSession: could not create the worker conversation', error instanceof Error ? error : undefined, { sessionId, callerConversationId, ownerId });
-        }
+        // ConversationUnavailableError is logged too — it is deliberately
+        // generic toward the CALLER, which is exactly why the server log must
+        // say which gate refused (issue #2335: excluding it here meant a
+        // deterministic denial left no trace anywhere). The logger serializes
+        // only name/message/stack, so the wrapped cause is surfaced in the
+        // metadata explicitly.
+        const cause = error instanceof Error && error.cause instanceof Error ? error.cause : undefined;
+        loggers.ai.error('createWorkerSession: could not create the worker conversation', error instanceof Error ? error : undefined, {
+          sessionId,
+          callerConversationId,
+          ownerId,
+          ...(cause ? { cause: `${cause.name}: ${cause.message}` } : {}),
+        });
         return { ok: false, reason: 'conversation_unavailable', detail: 'That conversation id is not available.' };
       }
       return { ok: true };

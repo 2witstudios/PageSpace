@@ -104,6 +104,11 @@ export async function resolveOrCreateConversation(
       isActive: true,
       sessionId: null,
       title: opts?.title ?? null,
+      // Explicit, matching the page path (conversationRepository
+      // .createConversation): the column has no DB default, and leaving it to
+      // drizzle's fill-$onUpdate-columns-on-insert behavior is a subtlety no
+      // reader should have to know (issue #2335 initially suspected it).
+      updatedAt: new Date(),
     })
     .onConflictDoNothing()
     .returning();

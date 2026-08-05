@@ -31,8 +31,15 @@ import {
 } from './claim-conversation-in-session';
 
 export class ConversationUnavailableError extends Error {
-  constructor() {
-    super('conversation_unavailable');
+  /**
+   * `cause` carries the underlying failure (a creator throwing, a claim
+   * losing) for the server-side log at the tool boundary — the CALLER still
+   * sees only the one generic message, so an id-guessing caller learns
+   * nothing extra (issue #2335: the original error used to be dropped here,
+   * leaving the denial undiagnosable).
+   */
+  constructor(options?: ErrorOptions) {
+    super('conversation_unavailable', options);
     this.name = 'ConversationUnavailableError';
   }
 }
@@ -124,8 +131,8 @@ export async function createConversationInSessionWith(
   // not still leave a blank conversation cluttering the caller's history on
   // every retry (review finding — chatgpt-codex-connector: P1).
   const sessionRow = await deps.findSession(sessionId);
-  if (sessionRow === null) throw new ConversationUnavailableError();
-  if (sessionRow.endedAt !== null) throw new ConversationUnavailableError();
+  if (sessionRow === null) throw new ConversationUnavailableError({ cause: new Error('session_not_found') });
+  if (sessionRow.endedAt !== null) throw new ConversationUnavailableError({ cause: new Error('session_ended') });
   if ((await deps.countActiveConversations(sessionId)) >= MAX_SESSION_CONVERSATIONS) {
     // Exempt an idempotent retry of a conversation ALREADY bound HERE — a
     // retry mints nothing new, so the cap must not stand between a caller
@@ -140,10 +147,11 @@ export async function createConversationInSessionWith(
   if (agentPageId === null) {
     try {
       await deps.createGlobalConversation({ conversationId, userId, title });
-    } catch {
+    } catch (error) {
       // Foreign owner or a binding mismatch — one answer, because
       // distinguishing them would tell an id-guessing caller which it was.
-      throw new ConversationUnavailableError();
+      // The original error rides along as `cause` for the boundary's log.
+      throw new ConversationUnavailableError({ cause: error });
     }
   } else {
     // Cheap, early cross-drive exit before inserting a page conversation for
@@ -152,13 +160,13 @@ export async function createConversationInSessionWith(
     // common case where the mismatch is already knowable up front. Fail-
     // closed on unresolved facts.
     const agentDriveId = await deps.findAgentDriveId(agentPageId);
-    if (agentDriveId === null) throw new ConversationUnavailableError();
+    if (agentDriveId === null) throw new ConversationUnavailableError({ cause: new Error('agent_missing_or_trashed') });
     if (sessionRow.driveId !== null && sessionRow.driveId !== agentDriveId) {
       throw new AgentNotInSessionDriveError();
     }
 
     const outcome = await deps.createPageConversation({ conversationId, userId, agentPageId, title });
-    if (outcome === 'message_owner_conflict') throw new ConversationUnavailableError();
+    if (outcome === 'message_owner_conflict') throw new ConversationUnavailableError({ cause: new Error('message_owner_conflict') });
     if (outcome === 'exists') {
       // The repository's existence check is by id ALONE — no contextId
       // filter — so an id collision with a conversation anchored to a
@@ -169,7 +177,7 @@ export async function createConversationInSessionWith(
       // to "does this existing row even mean what the caller asked for".
       const row = await deps.findConversation(conversationId);
       if (row === null || row.type !== 'page' || row.contextId !== agentPageId) {
-        throw new ConversationUnavailableError();
+        throw new ConversationUnavailableError({ cause: new Error('id_collision_with_different_anchor') });
       }
     }
   }
@@ -181,5 +189,5 @@ export async function createConversationInSessionWith(
   // 'not_found' (foreign/inactive/already-bound-elsewhere row) and
   // 'session_ended' (a race after the pre-check above) both collapse to the
   // same generic refusal — an id-guessing caller learns nothing either way.
-  throw new ConversationUnavailableError();
+  throw new ConversationUnavailableError({ cause: new Error(`claim_${claimed}`) });
 }

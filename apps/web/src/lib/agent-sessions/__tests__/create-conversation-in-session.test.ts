@@ -193,6 +193,14 @@ describe('global arm', () => {
     ).rejects.toThrow(ConversationUnavailableError);
     expect(deps.claimConversation).not.toHaveBeenCalled();
   });
+
+  it('preserves the resolver\'s original error as `cause` for the boundary\'s log (issue #2335)', async () => {
+    const original = new Error('ConversationOwnershipError');
+    deps.createGlobalConversation.mockRejectedValue(original);
+    await expect(
+      createConversationInSessionWith(deps as CreateConversationInSessionDeps, input({ agentPageId: null })),
+    ).rejects.toMatchObject({ name: 'ConversationUnavailableError', cause: original });
+  });
 });
 
 describe('worker labels', () => {
