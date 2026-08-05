@@ -26,7 +26,9 @@ import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { deriveSandboxStatus } from '@pagespace/lib/services/agent-sessions/session-status';
 import {
+  checkAccessForSubject,
   createConversationInSession,
+  ensureDriveSessionForConversation,
   ensureGlobalSandboxSession,
   findSessionForConversation,
   provisionSessionSandbox,
@@ -381,21 +383,25 @@ async function readSessionTranscript(input: {
 
 type CallerSessionResolution =
   | { ok: true; session: NonNullable<Awaited<ReturnType<typeof findSessionForConversation>>> }
-  | { ok: false; reason: 'no_session' | 'session_limit_reached' | 'session_ended' };
+  | { ok: false; reason: 'no_session' | 'session_limit_reached' | 'not_permitted' };
 
 /**
  * Resolve the SESSION a worker would join for a caller conversation — a
  * worker works in its SPAWNER's workspace: same session, same sandbox, same
  * filesystem; that shared context is the point of spawning one.
  *
- * No caller session ⇒ refusal, never a lazily-minted per-thread environment
- * (the conflation the session model removed) — with the ONE exception the
- * sandbox acquire path already carved out (`resolveOrProvisionSession` in
- * sandbox-tools-runtime): a GLOBAL conversation is always minted session-less
- * and nothing else ever claims it, so it gets the same spawn+claim its first
- * sandbox tool call would trigger. Without this, a deployment where no
- * sandbox tool exists to run that acquire path (compute kill-switch off)
- * advertises spawn_session that can never succeed (review #2326).
+ * PERMISSION gates minting; workspace lifecycle state never does (issue
+ * #2335's product decision — orchestration must work from any surface):
+ *
+ *  - A bound session is used AS IS, even if ended: ended sessions are
+ *    resumable by the lifecycle's own model (ensure fresh-provisions them),
+ *    and the worker's claim reopens the listing (`planSessionReopen`).
+ *  - An unbound GLOBAL conversation mints a global session — the caller acts
+ *    with the user's own authority, which is the whole permission check.
+ *  - An unbound PAGE conversation mints a session in ITS AGENT'S drive,
+ *    gated by the exact primitives the manual "New session" route enforces:
+ *    the agent view check plus `checkAccessForSubject` on the drive. Same
+ *    rules, one source of truth — no tool-only policy.
  *
  * Exported for unit tests.
  */
@@ -404,21 +410,38 @@ export async function resolveCallerSessionForWorker(
   ownerId: string,
 ): Promise<CallerSessionResolution> {
   const existing = await findSessionForConversation(callerConversationId);
-  if (existing) {
-    // A bound-but-ENDED session is not a workspace a worker can join, and the
-    // binding is write-once — this conversation can never be re-claimed into a
-    // live one. Refuse truthfully rather than letting the create path's
-    // generic conversation_unavailable answer for it (issue #2335: every
-    // spawn_session in such a conversation failed with a message blaming the
-    // conversation id).
-    if (existing.endedAt !== null) return { ok: false, reason: 'session_ended' };
-    return { ok: true, session: existing };
-  }
+  if (existing) return { ok: true, session: existing };
 
   const conversation = await conversationRepository.getConversation(callerConversationId);
-  if (conversation?.type !== 'global') return { ok: false, reason: 'no_session' };
+  if (!conversation || conversation.userId !== ownerId || !conversation.isActive) {
+    return { ok: false, reason: 'no_session' };
+  }
 
-  const ensured = await ensureGlobalSandboxSession(callerConversationId, ownerId);
+  if (conversation.type === 'global') {
+    return mapEnsured(await ensureGlobalSandboxSession(callerConversationId, ownerId));
+  }
+
+  if (conversation.type === 'page' && conversation.contextId !== null) {
+    const agent = await conversationRepository.getAiAgent(conversation.contextId);
+    if (!agent) return { ok: false, reason: 'no_session' };
+    if (!(await canUserViewPage(ownerId, agent.id))) return { ok: false, reason: 'not_permitted' };
+    const access = await checkAccessForSubject(ownerId, {
+      sessionId: 'about-to-be-minted',
+      ownerId,
+      driveId: agent.driveId,
+    });
+    if (!access.allowed) return { ok: false, reason: 'not_permitted' };
+    return mapEnsured(await ensureDriveSessionForConversation(callerConversationId, ownerId, agent.driveId));
+  }
+
+  // 'client' (API-managed) rows have no in-app viewer — same policy the
+  // claim route applies.
+  return { ok: false, reason: 'no_session' };
+}
+
+function mapEnsured(
+  ensured: Awaited<ReturnType<typeof ensureGlobalSandboxSession>>,
+): CallerSessionResolution {
   if (ensured.ok) return { ok: true, session: ensured.session };
   return {
     ok: false,
@@ -439,6 +462,11 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       // spawn returned) — resolve the conversation, not a workspace row.
       const conversation = await conversationRepository.getConversation(sessionId);
       if (!conversation) return null;
+      // A history-deleted worker is not addressable. Load-bearing now that
+      // `openOwnSession` authorizes by the RESOURCE alone (ownership +
+      // bound + not closed) rather than by workspace membership — the old
+      // workspace comparison incidentally masked deleted rows.
+      if (!conversation.isActive) return null;
       return {
         sessionId,
         ownerId: conversation.userId,
@@ -449,15 +477,14 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
         endedAt: null,
         // The WORKSPACE this conversation is bound to (conversations.sessionId
         // — the agent_sessions.id FK), or null for a session-less thread.
-        // Compared against the CALLER's own workspace in openOwnSession
-        // (issue #2262 finding 1): ownership of the row alone is not enough,
-        // because a user's own conversation in a DIFFERENT session must still
-        // refuse — exactly what shells already enforce via findOwnWorkspace.
+        // `openOwnSession` requires it non-null (a plain thread is not a
+        // worker) but no longer compares it to the caller's own workspace —
+        // worker verbs are resource-addressed (issue #2335 product decision).
         workspaceSessionId: conversation.sessionId,
         // The human closed this conversation's LISTING (it no longer shows in
-        // their sidebar) — `openOwnSession` refuses on this the same way it
-        // refuses a foreign workspace, so a worker verb can never dispatch new
-        // work into, read, or kill a sibling the user has already closed.
+        // their sidebar) — `openOwnSession` refuses on this, so a worker verb
+        // can never dispatch new work into, read, or kill a worker the user
+        // has already closed.
         isClosed: conversation.closedInSessionAt !== null,
       };
     },
@@ -495,8 +522,8 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
         if (resolved.reason === 'session_limit_reached') {
           return { ok: false, reason: 'session_limit_reached', detail: 'You are at your active-session limit — end an existing session first.' };
         }
-        if (resolved.reason === 'session_ended') {
-          return { ok: false, reason: 'session_ended', detail: 'This conversation\'s session has ended — a worker joins its caller\'s live session. Start a new conversation to spawn workers.' };
+        if (resolved.reason === 'not_permitted') {
+          return { ok: false, reason: 'not_permitted', detail: 'You are not permitted to start a session for this agent\'s drive.' };
         }
         return { ok: false, reason: 'no_session', detail: 'This conversation has no session for a worker to join.' };
       }

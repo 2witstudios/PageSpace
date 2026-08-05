@@ -10,11 +10,13 @@
  *     0000 created it), and the global insert still succeeds, because drizzle
  *     fills a default-less `$onUpdate` column on INSERT.
  *
- *  2. The actual root cause: a conversation bound to an ENDED session. The
- *     binding is write-once, so such a conversation can never join a live
- *     session again — `resolveCallerSessionForWorker` must refuse truthfully
- *     (`session_ended`), not hand the dead session to the create path, whose
- *     generic `conversation_unavailable` blamed the conversation id.
+ *  2. The actual root cause: a conversation bound to an ENDED session used to
+ *     dead-end every spawn with a generic `conversation_unavailable` blaming
+ *     the conversation id. Sessions are resumable by the lifecycle's own
+ *     model, so the fix is to USE the bound session regardless of lifecycle
+ *     state: the worker's claim reopens the listing (`planSessionReopen`) and
+ *     the next provision fresh-creates the sandbox through the ordinary
+ *     ensure path.
  *
  * Requires DATABASE_URL → a running Postgres with migrations applied
  * (scripts/test-with-db.sh, port 5433). Skipped when no DB is reachable —
@@ -81,7 +83,7 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
     expect(worker.title).toBe('repro worker');
   });
 
-  it('a global conversation bound to an ENDED session refuses with session_ended, not conversation_unavailable', async () => {
+  it('a global conversation bound to an ENDED session spawns anyway — the session is used as-is and its listing REOPENS when the worker claims in (issue #2335)', async () => {
     if (!dbAvailable) return;
 
     const owner = await factories.createUser();
@@ -96,25 +98,35 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
       .set({ endedAt: new Date() })
       .where(eq(agentSessions.id, ensured.session.id));
 
-    // The resolution refuses truthfully instead of handing back the dead
-    // session (pre-fix, this returned ok:true and the create path's generic
-    // refusal blamed the conversation id — the reported bug).
+    // Resolution hands back the bound session — lifecycle state is not a
+    // refusal (pre-fix, the create path's generic conversation_unavailable
+    // blamed the conversation id here — the reported bug).
     const resolved = await resolveCallerSessionForWorker(callerConversationId, owner.id);
-    expect(resolved).toEqual({ ok: false, reason: 'session_ended' });
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.session.id).toBe(ensured.session.id);
 
-    // The create path's own ended-session gate still holds as the backstop,
-    // and now names its gate via `cause` for the boundary's log.
-    await expect(
-      createConversationInSession({
-        conversationId: createId(),
-        userId: owner.id,
-        agentPageId: null,
-        sessionId: ensured.session.id,
-        title: 'doomed worker',
-      }),
-    ).rejects.toMatchObject({
-      name: 'ConversationUnavailableError',
-      cause: expect.objectContaining({ message: 'session_ended' }),
+    // The worker lands in that SAME workspace…
+    const workerConversationId = createId();
+    await createConversationInSession({
+      conversationId: workerConversationId,
+      userId: owner.id,
+      agentPageId: null,
+      sessionId: ensured.session.id,
+      title: 'recovered worker',
     });
+    const [worker] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, workerConversationId));
+    expect(worker.sessionId).toBe(ensured.session.id);
+
+    // …and the claim reopened the session's listing: the end-intent stamp is
+    // withdrawn, so the workspace is visible in the sidebar again.
+    const [session] = await db
+      .select()
+      .from(agentSessions)
+      .where(eq(agentSessions.id, ensured.session.id));
+    expect(session.endedAt).toBeNull();
   });
 });

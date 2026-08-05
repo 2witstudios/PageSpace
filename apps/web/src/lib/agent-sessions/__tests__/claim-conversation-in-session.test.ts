@@ -118,10 +118,10 @@ describe('claimConversationInSessionWith', () => {
       expect(deps.claimConversation).not.toHaveBeenCalled();
     });
 
-    it('refuses an ended session', async () => {
+    it('an ENDED session is a valid claim target — lifecycle state never gates a permitted claim (issue #2335); the runtime reopens its listing', async () => {
       deps.findSession.mockResolvedValue({ driveId: 'drive-1', endedAt: new Date('2026-01-01') });
-      await expect(run()).resolves.toBe('session_ended');
-      expect(deps.claimConversation).not.toHaveBeenCalled();
+      await expect(run()).resolves.toBe('claimed');
+      expect(deps.claimConversation).toHaveBeenCalled();
     });
   });
 

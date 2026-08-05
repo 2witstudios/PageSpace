@@ -71,6 +71,7 @@ import {
 import type { AgentSessionDTO } from '@pagespace/lib/agent-sessions/contract';
 import { decideAgentSessionAccess } from '@pagespace/lib/agent-sessions/decide-session-access';
 import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-sessions/plan-spawn-session';
+import { planSessionReopen } from '@pagespace/lib/agent-sessions/plan-session-lifecycle';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { resolveOrCreateConversation } from '@/app/api/ai/global/[id]/messages/resolve-or-create-conversation';
 import { createConversationInSessionWith } from '@/lib/agent-sessions/create-conversation-in-session';
@@ -312,9 +313,35 @@ function buildClaimDeps(): ClaimConversationInSessionDeps {
       const row = await findSessionRecord(sessionId);
       return row ? { driveId: row.driveId, endedAt: row.endedAt } : null;
     },
-    claimConversation: ({ conversationId, userId, sessionId }) =>
-      conversationRepository.claimConversation(conversationId, userId, sessionId),
+    claimConversation: async ({ conversationId, userId, sessionId }) => {
+      const outcome = await conversationRepository.claimConversation(conversationId, userId, sessionId);
+      // New work landing in an ENDED session reopens its listing — the ONE
+      // hook every claim path shares (worker spawns, the HTTP claim route,
+      // the global auto-bind), so a session can never hold fresh work while
+      // hidden from the sidebar (issue #2335). Best-effort by design: on a
+      // CAS miss the claim itself stands, and the next provision revives the
+      // row through the ordinary ensure path anyway.
+      if (outcome === 'claimed') await reopenEndedSessionListing(sessionId);
+      return outcome;
+    },
   };
+}
+
+/**
+ * Withdraw a session's end-intent (`planSessionReopen` — `endedAt` only, the
+ * confirmed-kill stamp stays; see its doc for why) when new work is claimed
+ * into it. CAS-guarded on the `endedAt` this read observed, so a concurrent
+ * re-end is never silently erased.
+ */
+async function reopenEndedSessionListing(sessionId: string): Promise<void> {
+  const store = await getAgentSessionStore();
+  const row = await store.findById(sessionId);
+  if (!row || row.endedAt === null) return;
+  await store.applyStamps({
+    sessionId,
+    stamps: planSessionReopen(),
+    cas: { endedAt: row.endedAt },
+  });
 }
 
 /**
@@ -540,16 +567,39 @@ export type EnsureGlobalSandboxSessionResult =
  * Auto-provision a workspace for a Global Assistant conversation that has
  * never had one — the exact same primitive a manual "New session → Global
  * Assistant" spawn uses (spawn, then claim), just triggered from the first
- * sandbox tool call instead of the command palette. The caller
- * (`sandbox-tools-runtime.ts`) is the one that decides this only applies to
- * `type === 'global'` conversations; this function only knows how to mint
- * and bind a session, not when that's appropriate.
+ * sandbox or session tool call instead of the command palette. The caller
+ * (`sandbox-tools-runtime.ts` / `session-tools-runtime.ts`) is the one that
+ * decides WHEN minting is appropriate and has checked the actor may spawn
+ * there; this function only knows how to mint and bind.
  */
 export async function ensureGlobalSandboxSession(
   conversationId: string,
   userId: string,
 ): Promise<EnsureGlobalSandboxSessionResult> {
-  const spawned = await spawnSession({ userId, driveId: null });
+  return ensureConversationSession(conversationId, userId, null);
+}
+
+/**
+ * The drive-scoped twin of `ensureGlobalSandboxSession` — same spawn+claim
+ * body, the session lives in `driveId` (a page agent's drive). Callers MUST
+ * have already authorized the mint (`checkAccessForSubject` on the drive plus
+ * the agent view check) — this is mechanism, not policy, exactly like the
+ * global variant.
+ */
+export async function ensureDriveSessionForConversation(
+  conversationId: string,
+  userId: string,
+  driveId: string,
+): Promise<EnsureGlobalSandboxSessionResult> {
+  return ensureConversationSession(conversationId, userId, driveId);
+}
+
+async function ensureConversationSession(
+  conversationId: string,
+  userId: string,
+  driveId: string | null,
+): Promise<EnsureGlobalSandboxSessionResult> {
+  const spawned = await spawnSession({ userId, driveId });
   if (!spawned.ok) {
     // `session_limit_reached` is a distinct, actionable denial ("end an
     // existing session first") the caller already knows how to surface —

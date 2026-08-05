@@ -187,12 +187,6 @@ describe('POST /api/agent-sessions/[sessionId]/conversations/[conversationId]/cl
     expect(response.status).toBe(400);
   });
 
-  it('409s an ended session', async () => {
-    mockClaimConversationInSession.mockResolvedValue('session_ended');
-    const response = await post();
-    expect(response.status).toBe(409);
-  });
-
   it("429s a session already at MAX_SESSION_CONVERSATIONS, as a quota refusal with the shared human message", async () => {
     mockClaimConversationInSession.mockResolvedValue('session_full');
     const response = await post();

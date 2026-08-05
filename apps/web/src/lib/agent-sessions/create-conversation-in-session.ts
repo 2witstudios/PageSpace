@@ -132,7 +132,9 @@ export async function createConversationInSessionWith(
   // every retry (review finding — chatgpt-codex-connector: P1).
   const sessionRow = await deps.findSession(sessionId);
   if (sessionRow === null) throw new ConversationUnavailableError({ cause: new Error('session_not_found') });
-  if (sessionRow.endedAt !== null) throw new ConversationUnavailableError({ cause: new Error('session_ended') });
+  // No endedAt gate: an ended session is a valid target that REOPENS when a
+  // claim lands in it (see claim-conversation-in-session.ts) — lifecycle
+  // state never refuses a permitted create (issue #2335).
   if ((await deps.countActiveConversations(sessionId)) >= MAX_SESSION_CONVERSATIONS) {
     // Exempt an idempotent retry of a conversation ALREADY bound HERE — a
     // retry mints nothing new, so the cap must not stand between a caller
@@ -186,8 +188,8 @@ export async function createConversationInSessionWith(
   if (claimed === 'claimed' || claimed === 'already_in_session') return;
   if (claimed === 'session_full') throw new SessionFullError();
   if (claimed === 'cross_drive_denied') throw new AgentNotInSessionDriveError();
-  // 'not_found' (foreign/inactive/already-bound-elsewhere row) and
-  // 'session_ended' (a race after the pre-check above) both collapse to the
-  // same generic refusal — an id-guessing caller learns nothing either way.
+  // 'not_found' (foreign/inactive/already-bound-elsewhere row) collapses to
+  // the same generic refusal — an id-guessing caller learns nothing either
+  // way; the specific gate rides along as `cause` for the boundary's log.
   throw new ConversationUnavailableError({ cause: new Error(`claim_${claimed}`) });
 }

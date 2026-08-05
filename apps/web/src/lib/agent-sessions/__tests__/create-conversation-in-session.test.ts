@@ -327,10 +327,10 @@ describe('the per-session conversation cap (issue #2262 finding 2, plus the P1 o
     expect(deps.createPageConversation).not.toHaveBeenCalled();
   });
 
-  it('refuses an ENDED session before weighing the cap or creating anything', async () => {
+  it('an ENDED session is a valid create target — lifecycle state never gates a permitted create; the claim reopens the listing (issue #2335)', async () => {
     deps.findSession.mockResolvedValue({ driveId: 'drive-1', endedAt: new Date('2026-01-01') });
-    await expect(run()).rejects.toThrow(ConversationUnavailableError);
-    expect(deps.countActiveConversations).not.toHaveBeenCalled();
-    expect(deps.createPageConversation).not.toHaveBeenCalled();
+    await expect(run()).resolves.toBeUndefined();
+    expect(deps.createPageConversation).toHaveBeenCalled();
+    expect(deps.claimConversation).toHaveBeenCalled();
   });
 });

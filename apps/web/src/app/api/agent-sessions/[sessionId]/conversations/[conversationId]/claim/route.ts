@@ -96,10 +96,6 @@ export async function POST(request: Request, context: RouteContext) {
     );
   }
 
-  if (outcome === 'session_ended') {
-    return NextResponse.json({ error: 'This session has ended' }, { status: 409 });
-  }
-
   if (outcome === 'session_full') {
     return sessionConversationLimitExceeded(request, auth.userId, sessionId, ROUTE);
   }

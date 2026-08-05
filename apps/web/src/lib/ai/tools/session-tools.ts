@@ -408,12 +408,22 @@ export function createSessionTools(deps: SessionToolsDeps): {
   kill_shell: Tool;
 } {
   /**
-   * A session verb's shared open: the row must exist, be the CALLER's own,
-   * AND be a sibling in the CALLER's own workspace session (issue #2262
-   * finding 1 — H2 parity: ownership alone let a worker verb reach any
-   * conversation the calling user owned, including other sessions, other
-   * drives, or session-less threads; mirrors `openOwnShell`'s workspace
-   * comparison).
+   * A session verb's shared open — RESOURCE-addressed, like `read_page`: the
+   * worker id is the address, permission is the only gate, and the calling
+   * conversation plays no authorization role (it supplies defaults and pane
+   * placement, nothing else). Product decision superseding issue #2262
+   * finding 1's workspace confinement: the assistant orchestrates the user's
+   * workers from ANY surface — dashboard, sidebar, panes, agents page — so
+   * "is this worker in MY workspace" is no longer a refusal.
+   *
+   * The gates that remain are about the RESOURCE:
+   *  - ownership — the worker conversation must be the caller's own (a page
+   *    worker's dispatch additionally re-enforces the agent's RBAC in the
+   *    standard chat pipeline it runs through);
+   *  - it must actually BE a worker (bound into some workspace) — a plain
+   *    session-less thread is not addressable as one;
+   *  - not closed — a listing the human closed stays closed to worker verbs.
+   * All three refuse identically: nothing to learn from the difference.
    */
   const openOwnSession = async (
     context: ToolExecutionContext | undefined,
@@ -424,20 +434,11 @@ export function createSessionTools(deps: SessionToolsDeps): {
   > => {
     const actor = readActor(context);
     if (!actor) return { ok: false, error: NEEDS_AUTH };
-    const conversationId = context?.conversationId;
-    if (!conversationId) return { ok: false, error: NEEDS_CONVERSATION };
-    const workspace = await deps.findOwnWorkspace(conversationId);
-    if (!workspace) return { ok: false, error: notYourSession(sessionId) };
     const row = await deps.findSession(sessionId);
-    // Someone else's session, a nonexistent one, a session outside the
-    // caller's own workspace, and one the human already closed all read
-    // identically — there is nothing to learn from the difference and
-    // nothing the caller could do with it.
     if (
       !row ||
       row.ownerId !== actor.userId ||
       row.workspaceSessionId === null ||
-      row.workspaceSessionId !== workspace.sessionId ||
       row.isClosed
     ) {
       return { ok: false, error: notYourSession(sessionId) };
@@ -498,7 +499,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
             sandbox: 'none' as const,
             workers: [],
             shells: [],
-            note: 'This conversation has no session, so there are no workers or shells, and spawn_session/spawn_shell will refuse here too — sessions are not started lazily from a plain conversation.',
+            note: 'This conversation has no session yet, so there are no workers or shells here. spawn_session will start one automatically (permission permitting); workers you spawned elsewhere remain addressable by their sessionId.',
           };
         }
         const listing = await deps.listSessionWorkers({
@@ -511,7 +512,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
 
     spawn_session: tool({
       description:
-        'Spawn a WORKER: a new labeled conversation IN YOUR OWN SESSION (same sandbox, same filesystem) that starts working on your prompt immediately, visible live in the sidebar like any conversation. Returns its sessionId — the address for send_session/read_session/kill_session (the name is only a label). ' +
+        'Spawn a WORKER: a new labeled conversation in your session (same sandbox, same filesystem) that starts working on your prompt immediately, visible live in the sidebar like any conversation. If this conversation has no session yet, one is started automatically (permission permitting). Returns its sessionId — the address for send_session/read_session/kill_session (the name is only a label). ' +
         'Pass agent to run it under another agent (an agentId from list_agents); omit it to use this conversation\'s own agent. ' +
         'Default is fire-and-forget: the reply lands in the worker\'s own transcript (read_session), NOT here. Pass wait: true to block for the first reply and get it back directly.',
       inputSchema: spawnSessionInputSchema,
