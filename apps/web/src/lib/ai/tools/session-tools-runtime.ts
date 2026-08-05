@@ -508,6 +508,144 @@ function mapEnsured(
   };
 }
 
+type CreateWorkerSessionFailure = Extract<
+  Awaited<ReturnType<SessionToolsDeps['createWorkerSession']>>,
+  { ok: false }
+>;
+
+/**
+ * Resolve WHERE a spawned worker lands — permission-gated, never binding-
+ * state-gated (issue #2335). The three `workspace` shapes `createWorkerSession`
+ * accepts, isolated into one place so its own body reads as a straight-line
+ * pipeline: resolve placement, then create, then map errors.
+ */
+async function resolveWorkerPlacement(input: {
+  workspace: string | undefined;
+  callerConversationId: string;
+  ownerId: string;
+  agentPageId: string | null;
+}): Promise<
+  | { ok: true; workspaceSessionId: string; unwind: (() => Promise<void>) | null }
+  | CreateWorkerSessionFailure
+> {
+  const { workspace, callerConversationId, ownerId, agentPageId } = input;
+
+  if (workspace === undefined) {
+    // The caller's own workspace — minted if it has none.
+    const resolved = await resolveCallerSessionForWorker(callerConversationId, ownerId);
+    if (!resolved.ok) {
+      if (resolved.reason === 'session_limit_reached') {
+        return { ok: false, reason: 'session_limit_reached', detail: 'You are at your active-session limit — end an existing session first.' };
+      }
+      if (resolved.reason === 'not_permitted') {
+        return { ok: false, reason: 'not_permitted', detail: 'You are not permitted to start a session for this agent\'s drive.' };
+      }
+      return { ok: false, reason: 'no_session', detail: 'This conversation has no session for a worker to join.' };
+    }
+    return { ok: true, workspaceSessionId: resolved.session.id, unwind: null };
+  }
+
+  if (workspace === 'new') {
+    // A fresh ISOLATED workspace — its own sandbox and filesystem, for
+    // fan-out that must not share the caller's working context. It lives
+    // where its AGENT lives: a page agent's drive, or nowhere (global) — the
+    // same derivation the caller-thread minting path uses, gated by the same
+    // spawn-access primitive.
+    let driveId: string | null = null;
+    if (agentPageId !== null) {
+      const agent = await conversationRepository.getAiAgent(agentPageId);
+      if (!agent) {
+        return { ok: false, reason: 'conversation_unavailable', detail: 'That agent is not available.' };
+      }
+      driveId = agent.driveId;
+    }
+    const access = await checkAccessForSubject(ownerId, { sessionId: 'about-to-be-minted', ownerId, driveId });
+    if (!access.allowed) {
+      return { ok: false, reason: 'not_permitted', detail: 'You are not permitted to start a workspace there.' };
+    }
+    const spawned = await spawnSession({ userId: ownerId, driveId });
+    if (!spawned.ok) {
+      return spawned.reason === 'session_limit_reached'
+        ? { ok: false, reason: 'session_limit_reached', detail: 'You are at your active-session limit — end an existing session first.' }
+        : { ok: false, reason: 'spawn_failed', detail: 'Could not start a new workspace — try again.' };
+    }
+    // A fresh workspace minted FOR this spawn is unwound if the worker never
+    // lands in it — an empty session is the invariant violation the spawn
+    // route unwinds the same way.
+    const unwind = async () => {
+      await endSession(spawned.session.id).catch((cleanupError) => {
+        loggers.ai.warn('createWorkerSession: failed to unwind an empty minted workspace', {
+          workspaceSessionId: spawned.session.id,
+          error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        });
+      });
+    };
+    return { ok: true, workspaceSessionId: spawned.session.id, unwind };
+  }
+
+  // An existing workspaceId, gated by the ONE session access decision
+  // (`checkSessionAccess` — owner or drive member).
+  const access = await checkSessionAccess(ownerId, workspace);
+  if (!access.allowed) {
+    // Missing, foreign, and not-a-member all read identically — an
+    // id-guessing caller learns nothing.
+    return { ok: false, reason: 'workspace_not_found', detail: `There is no workspace "${workspace}" you can use. Call list_sessions to see yours.` };
+  }
+  return { ok: true, workspaceSessionId: workspace, unwind: null };
+}
+
+/**
+ * After `createConversationInSession` throws with a freshly-minted,
+ * unwindable workspace, determine whether the worker's claim actually
+ * COMMITTED despite the throw before tearing anything down.
+ *
+ * The claim's guarded UPDATE may have committed before this call saw the
+ * failure — the exact ambiguous-throw hazard `ensureGlobalSandboxSession`
+ * already documents and guards against elsewhere in this file (a connection
+ * dropping between a durable autocommit write and its acknowledgment).
+ * Unwinding blind on that false negative would end a session the worker is
+ * genuinely bound to: a bound-but-ended worker conversation is unreachable
+ * forever afterward (nothing will ever claim or list a freshly-minted-then-
+ * ended session again), which is worse than the failure this call would
+ * otherwise just report.
+ *
+ * `workerConversationId` was freshly minted by the caller of this dep, so it
+ * can only resolve to unbound or to exactly the workspace just minted —
+ * never a sibling's, unlike the caller-conversation case this pattern is
+ * mirrored from.
+ */
+async function recoverMintedWorkspaceAfterThrow(
+  workerConversationId: string,
+  workspaceSessionId: string,
+  unwind: () => Promise<void>,
+): Promise<'bound' | 'not_bound'> {
+  let boundAfterThrow: Awaited<ReturnType<typeof findSessionForConversation>> = null;
+  let verificationFailed = false;
+  try {
+    boundAfterThrow = await findSessionForConversation(workerConversationId);
+    if (!boundAfterThrow) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      boundAfterThrow = await findSessionForConversation(workerConversationId);
+    }
+  } catch (lookupError) {
+    verificationFailed = true;
+    loggers.ai.warn('createWorkerSession: failed to re-resolve a new worker\'s binding after a claim exception', {
+      workerConversationId,
+      workspaceSessionId,
+      error: lookupError instanceof Error ? lookupError.message : String(lookupError),
+    });
+  }
+  if (boundAfterThrow?.id === workspaceSessionId) return 'bound';
+  if (!verificationFailed) {
+    // Confirmed unbound — safe to unwind the empty workspace.
+    await unwind();
+  }
+  // Verification itself failed: leave the workspace alone rather than gamble
+  // — a stray, empty, endable-by-hand workspace is cheap and recoverable;
+  // wrongly killing one a worker is bound to is not.
+  return 'not_bound';
+}
+
 export function buildSessionToolsDeps(): SessionToolsDeps {
   return {
     findOwnWorkspace: async (conversationId) => {
@@ -577,70 +715,9 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
     },
 
     createWorkerSession: async ({ sessionId, callerConversationId, ownerId, agentPageId, name, workspace }) => {
-      // Placement — permission-gated, never binding-state-gated (issue #2335):
-      //  - omitted: the caller's own workspace (minted if needed);
-      //  - 'new': a fresh ISOLATED workspace — its own sandbox and filesystem,
-      //    for fan-out that must not share the caller's working context;
-      //  - anything else: an existing workspaceId, gated by the ONE session
-      //    access decision (`checkSessionAccess` — owner or drive member).
-      let workspaceSessionId: string;
-      // A fresh workspace minted FOR this spawn is unwound if the worker
-      // never lands in it — an empty session is the invariant violation the
-      // spawn route unwinds the same way.
-      let unwindMintedWorkspace: (() => Promise<void>) | null = null;
-
-      if (workspace === undefined) {
-        const resolved = await resolveCallerSessionForWorker(callerConversationId, ownerId);
-        if (!resolved.ok) {
-          if (resolved.reason === 'session_limit_reached') {
-            return { ok: false, reason: 'session_limit_reached', detail: 'You are at your active-session limit — end an existing session first.' };
-          }
-          if (resolved.reason === 'not_permitted') {
-            return { ok: false, reason: 'not_permitted', detail: 'You are not permitted to start a session for this agent\'s drive.' };
-          }
-          return { ok: false, reason: 'no_session', detail: 'This conversation has no session for a worker to join.' };
-        }
-        workspaceSessionId = resolved.session.id;
-      } else if (workspace === 'new') {
-        // The isolated workspace lives where its AGENT lives: a page agent's
-        // drive, or nowhere (global) — the same derivation the caller-thread
-        // minting path uses, gated by the same spawn-access primitive.
-        let driveId: string | null = null;
-        if (agentPageId !== null) {
-          const agent = await conversationRepository.getAiAgent(agentPageId);
-          if (!agent) {
-            return { ok: false, reason: 'conversation_unavailable', detail: 'That agent is not available.' };
-          }
-          driveId = agent.driveId;
-        }
-        const access = await checkAccessForSubject(ownerId, { sessionId: 'about-to-be-minted', ownerId, driveId });
-        if (!access.allowed) {
-          return { ok: false, reason: 'not_permitted', detail: 'You are not permitted to start a workspace there.' };
-        }
-        const spawned = await spawnSession({ userId: ownerId, driveId });
-        if (!spawned.ok) {
-          return spawned.reason === 'session_limit_reached'
-            ? { ok: false, reason: 'session_limit_reached', detail: 'You are at your active-session limit — end an existing session first.' }
-            : { ok: false, reason: 'spawn_failed', detail: 'Could not start a new workspace — try again.' };
-        }
-        workspaceSessionId = spawned.session.id;
-        unwindMintedWorkspace = async () => {
-          await endSession(spawned.session.id).catch((cleanupError) => {
-            loggers.ai.warn('createWorkerSession: failed to unwind an empty minted workspace', {
-              workspaceSessionId: spawned.session.id,
-              error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
-            });
-          });
-        };
-      } else {
-        const access = await checkSessionAccess(ownerId, workspace);
-        if (!access.allowed) {
-          // Missing, foreign, and not-a-member all read identically — an
-          // id-guessing caller learns nothing.
-          return { ok: false, reason: 'workspace_not_found', detail: `There is no workspace "${workspace}" you can use. Call list_sessions to see yours.` };
-        }
-        workspaceSessionId = workspace;
-      }
+      const placement = await resolveWorkerPlacement({ workspace, callerConversationId, ownerId, agentPageId });
+      if (!placement.ok) return placement;
+      const { workspaceSessionId, unwind } = placement;
 
       try {
         await createConversationInSession({
@@ -655,50 +732,9 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
           title: name,
         });
       } catch (error) {
-        if (unwindMintedWorkspace) {
-          // The claim's guarded UPDATE may have actually COMMITTED before
-          // this call saw the failure — the exact ambiguous-throw hazard
-          // `ensureGlobalSandboxSession` already documents and guards
-          // against elsewhere in this file (a connection dropping between a
-          // durable autocommit write and its acknowledgment). Unwinding
-          // blind on that false negative would end a session the worker is
-          // genuinely bound to: a bound-but-ended worker conversation is
-          // unreachable forever afterward (nothing will ever claim or list
-          // a freshly-minted-then-ended session again), which is worse than
-          // the failure this call would otherwise just report. `sessionId`
-          // was freshly minted by the caller of this dep, so it can only
-          // resolve to unbound or to exactly the workspace just minted —
-          // never a sibling's, unlike the caller-conversation case this
-          // pattern is mirrored from.
-          let boundAfterThrow: Awaited<ReturnType<typeof findSessionForConversation>> = null;
-          let verificationFailed = false;
-          try {
-            boundAfterThrow = await findSessionForConversation(sessionId);
-            if (!boundAfterThrow) {
-              await new Promise((resolve) => setTimeout(resolve, 250));
-              boundAfterThrow = await findSessionForConversation(sessionId);
-            }
-          } catch (lookupError) {
-            verificationFailed = true;
-            loggers.ai.warn('createWorkerSession: failed to re-resolve a new worker\'s binding after a claim exception', {
-              sessionId,
-              workspaceSessionId,
-              error: lookupError instanceof Error ? lookupError.message : String(lookupError),
-            });
-          }
-          if (boundAfterThrow?.id === workspaceSessionId) {
-            // The claim genuinely succeeded despite the thrown error.
-            return { ok: true, workspaceSessionId };
-          }
-          if (!verificationFailed) {
-            // Confirmed unbound — safe to unwind the empty workspace.
-            await unwindMintedWorkspace();
-          }
-          // Verification itself failed: leave the workspace alone rather
-          // than gamble (mirrors ensureGlobalSandboxSession) — a stray,
-          // empty, endable-by-hand workspace is cheap and recoverable;
-          // wrongly killing one a worker is bound to is not. Fall through
-          // to report the original error either way.
+        if (unwind) {
+          const recovered = await recoverMintedWorkspaceAfterThrow(sessionId, workspaceSessionId, unwind);
+          if (recovered === 'bound') return { ok: true, workspaceSessionId };
         }
         // A FIXED message per known cause, never the raw driver/error string
         // (issue #2262 finding 3): a database error's text is an internal
