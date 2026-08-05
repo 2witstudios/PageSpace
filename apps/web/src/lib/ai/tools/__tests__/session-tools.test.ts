@@ -31,6 +31,7 @@ function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
   return {
     findOwnWorkspace: vi.fn(async () => ({ sessionId: WORKSPACE_ID })),
     listSessionWorkers: vi.fn(async () => ({ sandbox: 'running' as const, workers: [], shells: [] })),
+    listOwnWorkspaces: vi.fn(async () => []),
     findSession: vi.fn(async (sessionId: string) => ({
       sessionId,
       ownerId: USER_ID,
@@ -42,7 +43,7 @@ function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
     })),
     countSessionConversations: vi.fn(async () => 0),
     canUseAgent: vi.fn(async () => true),
-    createWorkerSession: vi.fn(async () => ({ ok: true as const })),
+    createWorkerSession: vi.fn(async () => ({ ok: true as const, workspaceSessionId: WORKSPACE_ID })),
     dispatch: vi.fn(async () => ({ ok: true as const, waited: false as const })),
     readTranscript: vi.fn(async () => []),
     endSession: vi.fn(async () => ({ ok: true as const, spriteTornDown: true })),
@@ -111,7 +112,7 @@ describe('list_sessions', () => {
     const deps = makeDeps({ listSessionWorkers: vi.fn(async () => listing) });
     const tools = createSessionTools(deps);
     const result = await run(tools.list_sessions, {}, contextOptions());
-    expect(result).toEqual({ success: true, ...listing });
+    expect(result).toEqual({ success: true, workspaceId: WORKSPACE_ID, ...listing, otherWorkspaces: [] });
     // Review H2b's pin: the listing is resolved from the caller's workspace,
     // and every worker id it returns is a conversation id — the exact address
     // send_session/read_session/kill_session take.
@@ -119,14 +120,37 @@ describe('list_sessions', () => {
       workspaceSessionId: WORKSPACE_ID,
       callerConversationId: CALLER_CONVERSATION,
     });
+    // The caller's own workspace is excluded from the others list — it is
+    // already the top-level detail view.
+    expect(deps.listOwnWorkspaces).toHaveBeenCalledWith({
+      userId: USER_ID,
+      excludeWorkspaceSessionId: WORKSPACE_ID,
+    });
   });
 
-  it('a conversation with NO session says so instead of listing nothing', async () => {
-    const deps = makeDeps({ findOwnWorkspace: vi.fn(async () => null) });
+  it('a conversation with NO session says so — and still lists the caller\'s OTHER workspaces, whose workers are addressable from anywhere', async () => {
+    const elsewhere = {
+      workspaceId: 'ws-elsewhere',
+      name: 'research fleet',
+      driveId: null,
+      sandbox: 'running' as const,
+      workers: [{ sessionId: 'conv-far-worker', name: 'far worker', agent: null }],
+    };
+    const deps = makeDeps({
+      findOwnWorkspace: vi.fn(async () => null),
+      listOwnWorkspaces: vi.fn(async () => [elsewhere]),
+    });
     const tools = createSessionTools(deps);
     const result = await run(tools.list_sessions, {}, contextOptions());
-    expect(result).toMatchObject({ success: true, sandbox: 'none', workers: [], shells: [] });
-    expect(result.note).toContain('no session');
+    expect(result).toMatchObject({
+      success: true,
+      workspaceId: null,
+      sandbox: 'none',
+      workers: [],
+      shells: [],
+      otherWorkspaces: [elsewhere],
+    });
+    expect(result.note).toContain('no workspace');
     expect(deps.listSessionWorkers).not.toHaveBeenCalled();
   });
 
@@ -151,15 +175,50 @@ describe('spawn_session', () => {
     );
     expect(deps.createWorkerSession).toHaveBeenCalledWith({
       sessionId: 'new-session-id',
-      // The worker joins its SPAWNER's workspace — same session, same sandbox.
+      // Default placement: the worker joins its SPAWNER's workspace.
       callerConversationId: CALLER_CONVERSATION,
       ownerId: USER_ID,
       agentPageId: CALLER_AGENT,
       name: 'worker',
+      workspace: undefined,
     });
     expect(deps.dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'new-session-id', depth: 1, wait: false, input: 'do the thing' }),
     );
+  });
+
+  it('workspace targeting passes through, reports where the worker landed, and skips the caller-workspace advisory count — fan-out aims wherever it likes', async () => {
+    const deps = makeDeps({
+      createWorkerSession: vi.fn(async () => ({ ok: true as const, workspaceSessionId: 'ws-target' })),
+      // The caller's own workspace being FULL must not refuse a spawn aimed
+      // elsewhere — the target's own enforced cap answers instead.
+      countSessionConversations: vi.fn(async () => 10_000),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(
+      tools.spawn_session,
+      { name: 'w', prompt: 'p', workspace: 'ws-target' },
+      contextOptions(),
+    );
+    expect(result).toEqual(expect.objectContaining({ success: true, workspaceId: 'ws-target' }));
+    expect(deps.createWorkerSession).toHaveBeenCalledWith(
+      expect.objectContaining({ workspace: 'ws-target' }),
+    );
+    expect(deps.countSessionConversations).not.toHaveBeenCalled();
+  });
+
+  it("workspace: 'new' passes through for an isolated worker", async () => {
+    const deps = makeDeps({
+      createWorkerSession: vi.fn(async () => ({ ok: true as const, workspaceSessionId: 'ws-fresh' })),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(
+      tools.spawn_session,
+      { name: 'w', prompt: 'p', workspace: 'new' },
+      contextOptions(),
+    );
+    expect(result).toEqual(expect.objectContaining({ success: true, workspaceId: 'ws-fresh' }));
+    expect(deps.createWorkerSession).toHaveBeenCalledWith(expect.objectContaining({ workspace: 'new' }));
   });
 
   it('given wait: true, should return the worker\'s reply directly', async () => {

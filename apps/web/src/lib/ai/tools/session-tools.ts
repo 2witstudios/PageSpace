@@ -82,6 +82,13 @@ export const spawnSessionInputSchema = z
     prompt: z.string().min(1).max(MAX_SESSION_INPUT_BYTES),
     /** Spawn the worker under another agent — an agentId. Omitted = your own agent (or the global assistant). */
     agent: z.string().min(1).optional(),
+    /**
+     * WHERE the worker runs. Omitted = this conversation's own workspace
+     * (started automatically if it has none). `'new'` = a fresh ISOLATED
+     * workspace (its own sandbox and filesystem). Any other value = a
+     * workspaceId from `list_sessions` — one of the caller's workspaces.
+     */
+    workspace: z.string().min(1).optional(),
     /** Block until the worker's first reply and return it here. */
     wait: z.boolean().optional(),
   })
@@ -158,6 +165,23 @@ export interface SessionWorkspaceListing {
   shells: Array<Pick<ShellDTO, 'shellId' | 'name' | 'createdAt'>>;
 }
 
+/**
+ * One of the caller's OTHER workspaces, as `list_sessions` reports it —
+ * enough to address every worker anywhere (`sessionId`s for the verbs) and
+ * to target the workspace itself (`workspaceId` for `spawn_session`'s
+ * `workspace` input). No shells: those stay addressable only from inside
+ * their own workspace's conversations.
+ */
+export interface OwnWorkspaceSummary {
+  workspaceId: string;
+  /** Display label only — never an address. */
+  name: string;
+  /** The drive this workspace belongs to, or null for a global-assistant workspace. */
+  driveId: string | null;
+  sandbox: SandboxStatus;
+  workers: Array<Omit<WorkerListingEntry, 'isCaller'>>;
+}
+
 /** The identity slice of a session row the tools act on. */
 export interface SessionToolRow {
   sessionId: string;
@@ -167,11 +191,10 @@ export interface SessionToolRow {
   endedAt: string | null;
   /**
    * The WORKSPACE (agent_sessions.id) this conversation is bound to, or null
-   * for a session-less conversation. Compared against the CALLER's own
-   * workspace so a worker verb only ever reaches a sibling in the caller's own
-   * session — ownership of the row alone is not enough (issue #2262 finding
-   * 1): a user's OWN conversation in a DIFFERENT session must still refuse,
-   * exactly as shells already require via `findOwnWorkspace`.
+   * for a session-less conversation. `openOwnSession` requires it non-null (a
+   * plain thread is not a worker) but does NOT compare it to the caller's own
+   * workspace — worker verbs are resource-addressed (issue #2335 product
+   * decision, superseding #2262 finding 1's workspace confinement).
    */
   workspaceSessionId: string | null;
   /**
@@ -225,6 +248,16 @@ export interface SessionToolsDeps {
     workspaceSessionId: string;
     callerConversationId: string;
   }) => Promise<SessionWorkspaceListing>;
+  /**
+   * ALL the caller's active workspaces (minus `excludeWorkspaceSessionId`,
+   * their current one) with each workspace's workers — how a worker anywhere
+   * becomes addressable, and how `spawn_session`'s `workspace` targeting
+   * discovers its targets.
+   */
+  listOwnWorkspaces: (input: {
+    userId: string;
+    excludeWorkspaceSessionId?: string;
+  }) => Promise<OwnWorkspaceSummary[]>;
   /** One session row's identity slice, or null. */
   findSession: (sessionId: string) => Promise<SessionToolRow | null>;
   /**
@@ -244,12 +277,21 @@ export interface SessionToolsDeps {
   createWorkerSession: (input: {
     /** The WORKER's new conversation id (minted by the caller of this dep). */
     sessionId: string;
-    /** The conversation whose SESSION the worker joins — a worker works in its spawner's workspace. */
+    /** The caller's conversation — the workspace default when `workspace` is omitted. */
     callerConversationId: string;
     ownerId: string;
     agentPageId: string | null;
     name: string;
-  }) => Promise<{ ok: true } | { ok: false; reason: string; detail?: string }>;
+    /**
+     * Placement: omitted = the caller's own workspace (minted if needed);
+     * `'new'` = a fresh isolated workspace; anything else = an existing
+     * workspaceId the caller may use (`checkSessionAccess`).
+     */
+    workspace?: string;
+  }) => Promise<
+    | { ok: true; workspaceSessionId: string }
+    | { ok: false; reason: string; detail?: string }
+  >;
   /**
    * Dispatch one turn into a session's conversation THROUGH THE STANDARD CHAT
    * PIPELINE (the `ai_stream_sessions` background-run machinery normal
@@ -481,42 +523,49 @@ export function createSessionTools(deps: SessionToolsDeps): {
   return {
     list_sessions: tool({
       description:
-        'List YOUR SESSION\'s workers and shells: each worker\'s sessionId (the exact address send_session/read_session/kill_session take), its display name and agent; each shell\'s shellId (the address send_shell/read_shell/kill_shell take); and the one shared sandbox\'s status. Names are labels — always address by id.',
+        'List ALL your workspaces and their workers. Your current conversation\'s workspace comes with full detail (workers, shells, shared sandbox status); every other workspace lists its workspaceId (a spawn_session `workspace` target) and workers. Every worker\'s sessionId is the exact address send_session/read_session/kill_session take, from anywhere. Names are labels — always address by id.',
       inputSchema: listSessionsInputSchema,
       execute: async (_input, options) => {
         const context = readContext(options);
         const actor = readActor(context);
         if (!actor) return NEEDS_AUTH;
         const conversationId = context?.conversationId;
-        if (!conversationId) return NEEDS_CONVERSATION;
 
-        const workspace = await deps.findOwnWorkspace(conversationId);
+        const workspace = conversationId ? await deps.findOwnWorkspace(conversationId) : null;
+        const otherWorkspaces = await deps.listOwnWorkspaces({
+          userId: actor.userId,
+          excludeWorkspaceSessionId: workspace?.sessionId,
+        });
+
         if (!workspace) {
-          // A plain conversation: nothing to list, and saying so beats an
-          // empty array the model would read as "my workers disappeared".
+          // A plain conversation: nothing HERE, said explicitly — but the
+          // caller's other workspaces still list, because their workers are
+          // addressable from anywhere.
           return {
             success: true,
+            workspaceId: null,
             sandbox: 'none' as const,
             workers: [],
             shells: [],
-            note: 'This conversation has no session yet, so there are no workers or shells here. spawn_session will start one automatically (permission permitting); workers you spawned elsewhere remain addressable by their sessionId.',
+            otherWorkspaces,
+            note: 'This conversation has no workspace yet — spawn_session starts one automatically (permission permitting). Workers in your other workspaces are addressable by their sessionId.',
           };
         }
         const listing = await deps.listSessionWorkers({
           workspaceSessionId: workspace.sessionId,
-          callerConversationId: conversationId,
+          callerConversationId: conversationId as string,
         });
-        return { success: true, ...listing };
+        return { success: true, workspaceId: workspace.sessionId, ...listing, otherWorkspaces };
       },
     }),
 
     spawn_session: tool({
       description:
-        'Spawn a WORKER: a new labeled conversation in your session (same sandbox, same filesystem) that starts working on your prompt immediately, visible live in the sidebar like any conversation. If this conversation has no session yet, one is started automatically (permission permitting). Returns its sessionId — the address for send_session/read_session/kill_session (the name is only a label). ' +
+        'Spawn a WORKER: a new labeled conversation that starts working on your prompt immediately, visible live in the sidebar like any conversation. By default it runs in this conversation\'s workspace (same sandbox, same filesystem — started automatically if none exists yet, permission permitting). Pass workspace: "new" for a fresh ISOLATED workspace, or a workspaceId from list_sessions to place it in one of your other workspaces. Returns its sessionId — the address for send_session/read_session/kill_session (the name is only a label). ' +
         'Pass agent to run it under another agent (an agentId from list_agents); omit it to use this conversation\'s own agent. ' +
         'Default is fire-and-forget: the reply lands in the worker\'s own transcript (read_session), NOT here. Pass wait: true to block for the first reply and get it back directly.',
       inputSchema: spawnSessionInputSchema,
-      execute: async ({ name, prompt, agent, wait }, options) => {
+      execute: async ({ name, prompt, agent, workspace: targetWorkspace, wait }, options) => {
         const context = readContext(options);
         const actor = readActor(context);
         if (!actor) return NEEDS_AUTH;
@@ -524,13 +573,15 @@ export function createSessionTools(deps: SessionToolsDeps): {
         if (!callerConversationId) return NEEDS_CONVERSATION;
 
         // The session-level cap (issue #2262 finding 2) counts what a spawn
-        // actually mints — a conversation in THIS workspace — so it is read
-        // against the caller's own workspace, not any account-wide sandbox
-        // count (a worker spawn never creates a sandbox; codex round 11). A
-        // caller whose conversation has no session yet reads as zero here;
-        // createWorkerSession refuses that case with its own truthful reason
-        // once the plan clears.
-        const workspace = await deps.findOwnWorkspace(callerConversationId);
+        // actually mints — a conversation in the TARGET workspace. The
+        // advisory pre-count only applies when the target IS the caller's own
+        // workspace; for 'new' or an explicit target the ENFORCED cap at the
+        // claim answers (counting the caller's workspace there would refuse a
+        // spawn aimed somewhere with room — the fan-out case this parameter
+        // exists for). A worker spawn never creates a sandbox (codex round
+        // 11), so no compute quota applies here either way.
+        const workspace =
+          targetWorkspace === undefined ? await deps.findOwnWorkspace(callerConversationId) : null;
         const sessionConversationCount = workspace
           ? await deps.countSessionConversations(workspace.sessionId)
           : 0;
@@ -563,6 +614,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
           ownerId: actor.userId,
           agentPageId,
           name: plan.name,
+          workspace: targetWorkspace,
         });
         if (!created.ok) {
           return {
@@ -592,6 +644,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
           sessionId,
           name: plan.name,
           agent: agentPageId,
+          workspaceId: created.workspaceSessionId,
           ...(dispatched.waited
             ? { reply: dispatched.reply }
             : {
