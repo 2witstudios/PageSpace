@@ -655,7 +655,51 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
           title: name,
         });
       } catch (error) {
-        if (unwindMintedWorkspace) await unwindMintedWorkspace();
+        if (unwindMintedWorkspace) {
+          // The claim's guarded UPDATE may have actually COMMITTED before
+          // this call saw the failure — the exact ambiguous-throw hazard
+          // `ensureGlobalSandboxSession` already documents and guards
+          // against elsewhere in this file (a connection dropping between a
+          // durable autocommit write and its acknowledgment). Unwinding
+          // blind on that false negative would end a session the worker is
+          // genuinely bound to: a bound-but-ended worker conversation is
+          // unreachable forever afterward (nothing will ever claim or list
+          // a freshly-minted-then-ended session again), which is worse than
+          // the failure this call would otherwise just report. `sessionId`
+          // was freshly minted by the caller of this dep, so it can only
+          // resolve to unbound or to exactly the workspace just minted —
+          // never a sibling's, unlike the caller-conversation case this
+          // pattern is mirrored from.
+          let boundAfterThrow: Awaited<ReturnType<typeof findSessionForConversation>> = null;
+          let verificationFailed = false;
+          try {
+            boundAfterThrow = await findSessionForConversation(sessionId);
+            if (!boundAfterThrow) {
+              await new Promise((resolve) => setTimeout(resolve, 250));
+              boundAfterThrow = await findSessionForConversation(sessionId);
+            }
+          } catch (lookupError) {
+            verificationFailed = true;
+            loggers.ai.warn('createWorkerSession: failed to re-resolve a new worker\'s binding after a claim exception', {
+              sessionId,
+              workspaceSessionId,
+              error: lookupError instanceof Error ? lookupError.message : String(lookupError),
+            });
+          }
+          if (boundAfterThrow?.id === workspaceSessionId) {
+            // The claim genuinely succeeded despite the thrown error.
+            return { ok: true, workspaceSessionId };
+          }
+          if (!verificationFailed) {
+            // Confirmed unbound — safe to unwind the empty workspace.
+            await unwindMintedWorkspace();
+          }
+          // Verification itself failed: leave the workspace alone rather
+          // than gamble (mirrors ensureGlobalSandboxSession) — a stray,
+          // empty, endable-by-hand workspace is cheap and recoverable;
+          // wrongly killing one a worker is bound to is not. Fall through
+          // to report the original error either way.
+        }
         // A FIXED message per known cause, never the raw driver/error string
         // (issue #2262 finding 3): a database error's text is an internal
         // implementation detail, not something a model should read or repeat.
