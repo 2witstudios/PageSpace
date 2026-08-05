@@ -549,7 +549,7 @@ describe("POST /api/agent-sessions — firstThing: 'claim'", () => {
   });
 
   it('given claim fails for a truly unexpected outcome, ENDS the session and responds 502', async () => {
-    mockClaimConversationInSession.mockResolvedValue('session_ended');
+    mockClaimConversationInSession.mockResolvedValue('session_full');
     const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
     expect(response.status).toBe(502);
     expect(mockEndSession).toHaveBeenCalledWith('ses-new');

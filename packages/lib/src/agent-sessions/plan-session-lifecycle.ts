@@ -176,6 +176,25 @@ function reviveStamps(now: Date): AgentSessionRowStamps {
   };
 }
 
+/**
+ * REOPEN a session's listing without provisioning anything — the stamp for
+ * "a permitted actor put new work into this workspace" (a conversation
+ * claimed into it after it was ended; issue #2335). Withdraws only the
+ * user's end-INTENT (`endedAt`), so the session reappears in listings and
+ * its cap/verbs work again.
+ *
+ * Deliberately narrower than `reviveStamps` (private, provisioning-only):
+ * `spriteTornDownAt` — the CONFIRMED-kill record — is preserved, so
+ * `isEnded` stays true for the lifecycle until an actual provision runs:
+ * `ensure` still fresh-creates (never resumes onto the dead VM's stale
+ * `sandboxId`), `attach` still refuses, and the orphan reconciler's
+ * bookkeeping is untouched. Clearing it here, without a provision, would
+ * recreate exactly the stale-attach hazard `resolveLiveInstance` documents.
+ */
+export function planSessionReopen(): AgentSessionRowStamps {
+  return { endedAt: null };
+}
+
 /** Has the VM behind this session's name changed since the row last looked? */
 function instanceMoved(row: AgentSessionLifecycleRow, live: LiveSpriteInstance): boolean {
   return live.sandboxId !== row.sandboxId || (live.spriteInstanceId ?? null) !== (row.spriteInstanceId ?? null);
@@ -243,7 +262,13 @@ export function planAgentSessionLifecycle({
     // together on a CONFIRMED kill, so `endedAt` set with `spriteTornDownAt`
     // still null means the kill was never confirmed) — that row must still
     // retry teardown, not read as already-ended.
-    if (row.spriteTornDownAt !== null) return { action: 'noop', reason: 'already_ended', stamps: {} };
+    if (row.spriteTornDownAt !== null) {
+      // Sprite confirmed dead — never re-kill it. But a REOPENED row
+      // (`planSessionReopen` cleared `endedAt` when new work was claimed in)
+      // must still be endable: record the fresh end-intent, kill nothing.
+      if (row.endedAt !== null) return { action: 'noop', reason: 'already_ended', stamps: {} };
+      return { action: 'noop', reason: 'no_sandbox', stamps: { endedAt: now } };
+    }
     if (row.sandboxId !== null) {
       return {
         action: 'teardown',

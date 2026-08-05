@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   planAgentSessionLifecycle,
+  planSessionReopen,
   type AgentSessionLifecycleRow,
   type AgentSessionIntent,
 } from '../plan-session-lifecycle';
@@ -310,6 +311,19 @@ describe('planAgentSessionLifecycle — end (instance-guarded teardown, row reta
     if (plan.action !== 'noop') throw new Error('expected noop');
     expect(plan.reason).toBe('already_ended');
     expect(plan.stamps).toEqual({});
+  });
+
+  it('a REOPENED row (endedAt withdrawn by planSessionReopen, kill still confirmed) is re-endable: the fresh end-intent is stamped, nothing is re-killed', () => {
+    const reopened = row({ teardownRequestedAt: NOW, spriteTornDownAt: NOW, endedAt: null });
+    const plan = planAgentSessionLifecycle({ row: reopened, intent: 'end', canRun: true, now: NOW });
+    if (plan.action !== 'noop') throw new Error('expected noop');
+    expect(plan.stamps.endedAt).toEqual(NOW);
+  });
+});
+
+describe('planSessionReopen', () => {
+  it('withdraws ONLY the end-intent — the confirmed-kill stamp survives, so provisioning still fresh-creates and attach still refuses', () => {
+    expect(planSessionReopen()).toEqual({ endedAt: null });
   });
 });
 

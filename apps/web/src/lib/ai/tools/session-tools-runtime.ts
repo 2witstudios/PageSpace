@@ -21,7 +21,7 @@
 
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { and, count, eq, isNull, ne, desc } from '@pagespace/db/operators';
+import { and, count, eq, inArray, isNull, ne, desc } from '@pagespace/db/operators';
 import { chatMessages, pages } from '@pagespace/db/schema/core';
 import { conversations, messages as globalMessages } from '@pagespace/db/schema/conversations';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
@@ -31,14 +31,20 @@ import { sessionService } from '@pagespace/lib/auth/session-service';
 import { deriveSandboxStatus } from '@pagespace/lib/services/agent-sessions/session-status';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 import {
+  checkAccessForSubject,
+  checkSessionAccess,
   createConversationInSession,
+  endSession,
+  ensureDriveSessionForConversation,
   ensureGlobalSandboxSession,
   findSessionForConversation,
+  listSessions,
+  listSessionConversationsBulk,
   provisionSessionSandbox,
+  spawnSession,
   getAgentSessionStore,
 } from '@/lib/agent-sessions/agent-sessions-runtime';
 import {
-  ConversationUnavailableError,
   AgentNotInSessionDriveError,
   SessionFullError,
 } from '@/lib/agent-sessions/create-conversation-in-session';
@@ -54,6 +60,7 @@ import { abortConversationStreams } from '@/lib/ai/core/abort-conversation-strea
 import {
   createSessionTools,
   type DispatchOutcome,
+  type OwnWorkspaceSummary,
   type SessionWorkspaceListing,
   type SessionToolsDeps,
   type TranscriptEntry,
@@ -379,6 +386,71 @@ async function listSessionWorkers({
   };
 }
 
+/**
+ * ALL the caller's active workspaces (their newest `SESSION_LIST_LIMIT`
+ * slice, same as the sidebar) with each one's workers — the discovery half of
+ * resource-addressed orchestration: every worker id here is addressable by
+ * the verbs from anywhere, and every workspaceId is a valid `spawn_session`
+ * `workspace` target. Composed from the SAME primitives the sidebar uses
+ * (`listSessions` + `listSessionConversationsBulk`), never a second query
+ * shape; agent labels resolved in one batched lookup.
+ */
+async function listOwnWorkspaces({
+  userId,
+  excludeWorkspaceSessionId,
+}: {
+  userId: string;
+  excludeWorkspaceSessionId?: string;
+}): Promise<OwnWorkspaceSummary[]> {
+  // The exclusion runs AFTER `listSessions`' own SESSION_LIST_LIMIT cap, not
+  // as a query-level filter before it — deliberately, not an oversight: a
+  // pre-cap exclusion would need a new filter shape on the shared store
+  // (`AgentSessionListFilter`) for a scenario that cannot occur today.
+  // `SESSION_LIST_LIMIT` and `MAX_ACTIVE_SESSIONS_PER_OWNER` are both 100,
+  // and the latter is a STRUCTURAL cap (`createIfUnderLimit`'s atomic
+  // count-and-insert) — no owner can ever HAVE more than 100 active
+  // sessions, so `listSessions` never actually truncates here and this
+  // filter can never drop a workspace that a pre-cap exclusion would have
+  // backfilled (review finding — CodeRabbit). That soundness is CONTINGENT
+  // on the two constants staying equal and the cap staying structural; if
+  // either ever changes independently, revisit this filter's ordering.
+  const sessions = (await listSessions({ ownerId: userId })).filter(
+    (session) => session.sessionId !== excludeWorkspaceSessionId,
+  );
+  if (sessions.length === 0) return [];
+
+  const workersBySession = await listSessionConversationsBulk(sessions.map((s) => s.sessionId));
+
+  const agentPageIds = [
+    ...new Set(
+      [...workersBySession.values()].flat().flatMap((w) => (w.agentPageId ? [w.agentPageId] : [])),
+    ),
+  ];
+  const agentTitles = new Map<string, string>();
+  if (agentPageIds.length > 0) {
+    const agentRows = await db
+      .select({ id: pages.id, title: pages.title })
+      .from(pages)
+      .where(inArray(pages.id, agentPageIds));
+    for (const row of agentRows) agentTitles.set(row.id, row.title);
+  }
+
+  return sessions.map((session) => ({
+    workspaceId: session.sessionId,
+    name: session.name,
+    driveId: session.driveId,
+    sandbox: session.sandboxStatus,
+    workers: (workersBySession.get(session.sessionId) ?? []).map((worker) => ({
+      sessionId: worker.conversationId,
+      name: worker.title ?? '',
+      agent:
+        worker.agentPageId !== null
+          ? { agentId: worker.agentPageId, title: agentTitles.get(worker.agentPageId) ?? '' }
+          : null,
+    })),
+  }));
+}
+
 async function readSessionTranscript(input: {
   sessionId: string;
   agentPageId: string | null;
@@ -432,21 +504,25 @@ async function readSessionTranscript(input: {
 
 type CallerSessionResolution =
   | { ok: true; session: NonNullable<Awaited<ReturnType<typeof findSessionForConversation>>> }
-  | { ok: false; reason: 'no_session' | 'session_limit_reached' };
+  | { ok: false; reason: 'no_session' | 'session_limit_reached' | 'not_permitted' };
 
 /**
  * Resolve the SESSION a worker would join for a caller conversation — a
  * worker works in its SPAWNER's workspace: same session, same sandbox, same
  * filesystem; that shared context is the point of spawning one.
  *
- * No caller session ⇒ refusal, never a lazily-minted per-thread environment
- * (the conflation the session model removed) — with the ONE exception the
- * sandbox acquire path already carved out (`resolveOrProvisionSession` in
- * sandbox-tools-runtime): a GLOBAL conversation is always minted session-less
- * and nothing else ever claims it, so it gets the same spawn+claim its first
- * sandbox tool call would trigger. Without this, a deployment where no
- * sandbox tool exists to run that acquire path (compute kill-switch off)
- * advertises spawn_session that can never succeed (review #2326).
+ * PERMISSION gates minting; workspace lifecycle state never does (issue
+ * #2335's product decision — orchestration must work from any surface):
+ *
+ *  - A bound session is used AS IS, even if ended: ended sessions are
+ *    resumable by the lifecycle's own model (ensure fresh-provisions them),
+ *    and the worker's claim reopens the listing (`planSessionReopen`).
+ *  - An unbound GLOBAL conversation mints a global session — the caller acts
+ *    with the user's own authority, which is the whole permission check.
+ *  - An unbound PAGE conversation mints a session in ITS AGENT'S drive,
+ *    gated by the exact primitives the manual "New session" route enforces:
+ *    the agent view check plus `checkAccessForSubject` on the drive. Same
+ *    rules, one source of truth — no tool-only policy.
  *
  * Exported for unit tests.
  */
@@ -458,14 +534,178 @@ export async function resolveCallerSessionForWorker(
   if (existing) return { ok: true, session: existing };
 
   const conversation = await conversationRepository.getConversation(callerConversationId);
-  if (conversation?.type !== 'global') return { ok: false, reason: 'no_session' };
+  if (!conversation || conversation.userId !== ownerId || !conversation.isActive) {
+    return { ok: false, reason: 'no_session' };
+  }
 
-  const ensured = await ensureGlobalSandboxSession(callerConversationId, ownerId);
+  if (conversation.type === 'global') {
+    return mapEnsured(await ensureGlobalSandboxSession(callerConversationId, ownerId));
+  }
+
+  if (conversation.type === 'page' && conversation.contextId !== null) {
+    const agent = await conversationRepository.getAiAgent(conversation.contextId);
+    if (!agent) return { ok: false, reason: 'no_session' };
+    if (!(await canUserViewPage(ownerId, agent.id))) return { ok: false, reason: 'not_permitted' };
+    const access = await checkAccessForSubject(ownerId, {
+      sessionId: 'about-to-be-minted',
+      ownerId,
+      driveId: agent.driveId,
+    });
+    if (!access.allowed) return { ok: false, reason: 'not_permitted' };
+    return mapEnsured(await ensureDriveSessionForConversation(callerConversationId, ownerId, agent.driveId));
+  }
+
+  // 'client' (API-managed) rows have no in-app viewer — same policy the
+  // claim route applies.
+  return { ok: false, reason: 'no_session' };
+}
+
+function mapEnsured(
+  ensured: Awaited<ReturnType<typeof ensureGlobalSandboxSession>>,
+): CallerSessionResolution {
   if (ensured.ok) return { ok: true, session: ensured.session };
   return {
     ok: false,
     reason: ensured.reason === 'session_limit_reached' ? 'session_limit_reached' : 'no_session',
   };
+}
+
+type CreateWorkerSessionFailure = Extract<
+  Awaited<ReturnType<SessionToolsDeps['createWorkerSession']>>,
+  { ok: false }
+>;
+
+/**
+ * Resolve WHERE a spawned worker lands — permission-gated, never binding-
+ * state-gated (issue #2335). The three `workspace` shapes `createWorkerSession`
+ * accepts, isolated into one place so its own body reads as a straight-line
+ * pipeline: resolve placement, then create, then map errors.
+ */
+async function resolveWorkerPlacement(input: {
+  workspace: string | undefined;
+  callerConversationId: string;
+  ownerId: string;
+  agentPageId: string | null;
+}): Promise<
+  | { ok: true; workspaceSessionId: string; unwind: (() => Promise<void>) | null }
+  | CreateWorkerSessionFailure
+> {
+  const { workspace, callerConversationId, ownerId, agentPageId } = input;
+
+  if (workspace === undefined) {
+    // The caller's own workspace — minted if it has none.
+    const resolved = await resolveCallerSessionForWorker(callerConversationId, ownerId);
+    if (!resolved.ok) {
+      if (resolved.reason === 'session_limit_reached') {
+        return { ok: false, reason: 'session_limit_reached', detail: 'You are at your active-session limit — end an existing session first.' };
+      }
+      if (resolved.reason === 'not_permitted') {
+        return { ok: false, reason: 'not_permitted', detail: 'You are not permitted to start a session for this agent\'s drive.' };
+      }
+      return { ok: false, reason: 'no_session', detail: 'This conversation has no session for a worker to join.' };
+    }
+    return { ok: true, workspaceSessionId: resolved.session.id, unwind: null };
+  }
+
+  if (workspace === 'new') {
+    // A fresh ISOLATED workspace — its own sandbox and filesystem, for
+    // fan-out that must not share the caller's working context. It lives
+    // where its AGENT lives: a page agent's drive, or nowhere (global) — the
+    // same derivation the caller-thread minting path uses, gated by the same
+    // spawn-access primitive.
+    let driveId: string | null = null;
+    if (agentPageId !== null) {
+      const agent = await conversationRepository.getAiAgent(agentPageId);
+      if (!agent) {
+        return { ok: false, reason: 'conversation_unavailable', detail: 'That agent is not available.' };
+      }
+      driveId = agent.driveId;
+    }
+    const access = await checkAccessForSubject(ownerId, { sessionId: 'about-to-be-minted', ownerId, driveId });
+    if (!access.allowed) {
+      return { ok: false, reason: 'not_permitted', detail: 'You are not permitted to start a workspace there.' };
+    }
+    const spawned = await spawnSession({ userId: ownerId, driveId });
+    if (!spawned.ok) {
+      return spawned.reason === 'session_limit_reached'
+        ? { ok: false, reason: 'session_limit_reached', detail: 'You are at your active-session limit — end an existing session first.' }
+        : { ok: false, reason: 'spawn_failed', detail: 'Could not start a new workspace — try again.' };
+    }
+    // A fresh workspace minted FOR this spawn is unwound if the worker never
+    // lands in it — an empty session is the invariant violation the spawn
+    // route unwinds the same way.
+    const unwind = async () => {
+      await endSession(spawned.session.id).catch((cleanupError) => {
+        loggers.ai.warn('createWorkerSession: failed to unwind an empty minted workspace', {
+          workspaceSessionId: spawned.session.id,
+          error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        });
+      });
+    };
+    return { ok: true, workspaceSessionId: spawned.session.id, unwind };
+  }
+
+  // An existing workspaceId, gated by the ONE session access decision
+  // (`checkSessionAccess` — owner or drive member).
+  const access = await checkSessionAccess(ownerId, workspace);
+  if (!access.allowed) {
+    // Missing, foreign, and not-a-member all read identically — an
+    // id-guessing caller learns nothing.
+    return { ok: false, reason: 'workspace_not_found', detail: `There is no workspace "${workspace}" you can use. Call list_sessions to see yours.` };
+  }
+  return { ok: true, workspaceSessionId: workspace, unwind: null };
+}
+
+/**
+ * After `createConversationInSession` throws with a freshly-minted,
+ * unwindable workspace, determine whether the worker's claim actually
+ * COMMITTED despite the throw before tearing anything down.
+ *
+ * The claim's guarded UPDATE may have committed before this call saw the
+ * failure — the exact ambiguous-throw hazard `ensureGlobalSandboxSession`
+ * already documents and guards against elsewhere in this file (a connection
+ * dropping between a durable autocommit write and its acknowledgment).
+ * Unwinding blind on that false negative would end a session the worker is
+ * genuinely bound to: a bound-but-ended worker conversation is unreachable
+ * forever afterward (nothing will ever claim or list a freshly-minted-then-
+ * ended session again), which is worse than the failure this call would
+ * otherwise just report.
+ *
+ * `workerConversationId` was freshly minted by the caller of this dep, so it
+ * can only resolve to unbound or to exactly the workspace just minted —
+ * never a sibling's, unlike the caller-conversation case this pattern is
+ * mirrored from.
+ */
+async function recoverMintedWorkspaceAfterThrow(
+  workerConversationId: string,
+  workspaceSessionId: string,
+  unwind: () => Promise<void>,
+): Promise<'bound' | 'not_bound'> {
+  let boundAfterThrow: Awaited<ReturnType<typeof findSessionForConversation>> = null;
+  let verificationFailed = false;
+  try {
+    boundAfterThrow = await findSessionForConversation(workerConversationId);
+    if (!boundAfterThrow) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      boundAfterThrow = await findSessionForConversation(workerConversationId);
+    }
+  } catch (lookupError) {
+    verificationFailed = true;
+    loggers.ai.warn('createWorkerSession: failed to re-resolve a new worker\'s binding after a claim exception', {
+      workerConversationId,
+      workspaceSessionId,
+      error: lookupError instanceof Error ? lookupError.message : String(lookupError),
+    });
+  }
+  if (boundAfterThrow?.id === workspaceSessionId) return 'bound';
+  if (!verificationFailed) {
+    // Confirmed unbound — safe to unwind the empty workspace.
+    await unwind();
+  }
+  // Verification itself failed: leave the workspace alone rather than gamble
+  // — a stray, empty, endable-by-hand workspace is cheap and recoverable;
+  // wrongly killing one a worker is bound to is not.
+  return 'not_bound';
 }
 
 export function buildSessionToolsDeps(): SessionToolsDeps {
@@ -475,12 +715,18 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       return row ? { sessionId: row.id } : null;
     },
     listSessionWorkers,
+    listOwnWorkspaces,
 
     findSession: async (sessionId) => {
       // The tool family's "sessionId" is the WORKER's conversation id (what
       // spawn returned) — resolve the conversation, not a workspace row.
       const conversation = await conversationRepository.getConversation(sessionId);
       if (!conversation) return null;
+      // A history-deleted worker is not addressable. Load-bearing now that
+      // `openOwnSession` authorizes by the RESOURCE alone (ownership +
+      // bound + not closed) rather than by workspace membership — the old
+      // workspace comparison incidentally masked deleted rows.
+      if (!conversation.isActive) return null;
       return {
         sessionId,
         ownerId: conversation.userId,
@@ -491,15 +737,14 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
         endedAt: null,
         // The WORKSPACE this conversation is bound to (conversations.sessionId
         // — the agent_sessions.id FK), or null for a session-less thread.
-        // Compared against the CALLER's own workspace in openOwnSession
-        // (issue #2262 finding 1): ownership of the row alone is not enough,
-        // because a user's own conversation in a DIFFERENT session must still
-        // refuse — exactly what shells already enforce via findOwnWorkspace.
+        // `openOwnSession` requires it non-null (a plain thread is not a
+        // worker) but no longer compares it to the caller's own workspace —
+        // worker verbs are resource-addressed (issue #2335 product decision).
         workspaceSessionId: conversation.sessionId,
         // The human closed this conversation's LISTING (it no longer shows in
-        // their sidebar) — `openOwnSession` refuses on this the same way it
-        // refuses a foreign workspace, so a worker verb can never dispatch new
-        // work into, read, or kill a sibling the user has already closed.
+        // their sidebar) — `openOwnSession` refuses on this, so a worker verb
+        // can never dispatch new work into, read, or kill a worker the user
+        // has already closed.
         isClosed: conversation.closedInSessionAt !== null,
       };
     },
@@ -531,20 +776,17 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       return canUserViewPage(userId, agentPageId);
     },
 
-    createWorkerSession: async ({ sessionId, callerConversationId, ownerId, agentPageId, name }) => {
-      const resolved = await resolveCallerSessionForWorker(callerConversationId, ownerId);
-      if (!resolved.ok) {
-        return resolved.reason === 'session_limit_reached'
-          ? { ok: false, reason: 'session_limit_reached', detail: 'You are at your active-session limit — end an existing session first.' }
-          : { ok: false, reason: 'no_session', detail: 'This conversation has no session for a worker to join.' };
-      }
-      const callerSession = resolved.session;
+    createWorkerSession: async ({ sessionId, callerConversationId, ownerId, agentPageId, name, workspace }) => {
+      const placement = await resolveWorkerPlacement({ workspace, callerConversationId, ownerId, agentPageId });
+      if (!placement.ok) return placement;
+      const { workspaceSessionId, unwind } = placement;
+
       try {
         await createConversationInSession({
           conversationId: sessionId,
           userId: ownerId,
           agentPageId,
-          sessionId: callerSession.id,
+          sessionId: workspaceSessionId,
           // The worker's label, written AT BIRTH onto the conversation row —
           // it is what the sidebar and list_sessions display (codex review,
           // P2: the old path reported the name in the tool response and then
@@ -552,6 +794,10 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
           title: name,
         });
       } catch (error) {
+        if (unwind) {
+          const recovered = await recoverMintedWorkspaceAfterThrow(sessionId, workspaceSessionId, unwind);
+          if (recovered === 'bound') return { ok: true, workspaceSessionId };
+        }
         // A FIXED message per known cause, never the raw driver/error string
         // (issue #2262 finding 3): a database error's text is an internal
         // implementation detail, not something a model should read or repeat.
@@ -562,12 +808,22 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
         if (error instanceof AgentNotInSessionDriveError) {
           return { ok: false, reason: 'conversation_unavailable', detail: 'That agent belongs to a different drive than this session.' };
         }
-        if (!(error instanceof ConversationUnavailableError)) {
-          loggers.ai.error('createWorkerSession: could not create the worker conversation', error instanceof Error ? error : undefined, { sessionId, callerConversationId, ownerId });
-        }
+        // ConversationUnavailableError is logged too — it is deliberately
+        // generic toward the CALLER, which is exactly why the server log must
+        // say which gate refused (issue #2335: excluding it here meant a
+        // deterministic denial left no trace anywhere). The logger serializes
+        // only name/message/stack, so the wrapped cause is surfaced in the
+        // metadata explicitly.
+        const cause = error instanceof Error && error.cause instanceof Error ? error.cause : undefined;
+        loggers.ai.error('createWorkerSession: could not create the worker conversation', error instanceof Error ? error : undefined, {
+          sessionId,
+          callerConversationId,
+          ownerId,
+          ...(cause ? { cause: `${cause.name}: ${cause.message}` } : {}),
+        });
         return { ok: false, reason: 'conversation_unavailable', detail: 'That conversation id is not available.' };
       }
-      return { ok: true };
+      return { ok: true, workspaceSessionId };
     },
 
     dispatch: dispatchThroughChatPipeline,

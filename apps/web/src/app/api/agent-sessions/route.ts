@@ -500,9 +500,8 @@ export async function POST(request: Request) {
     if (outcome !== 'claimed' && outcome !== 'already_in_session') {
       // The session row exists but its first (claimed) conversation failed:
       // end it rather than leave an empty workspace the model says cannot
-      // exist. `session_full`/`session_ended` are unreachable by
-      // construction (a session that was just spawned has zero
-      // conversations and cannot yet be ended) — folded into the generic
+      // exist. `session_full` is unreachable by construction (a session that
+      // was just spawned has zero conversations) — folded into the generic
       // refusal rather than special-cased.
       await endSession(spawned.session.id).catch(() => {});
       if (outcome === 'cross_drive_denied') {

@@ -35,7 +35,6 @@ export type ClaimConversationOutcome =
   | 'already_in_session'
   | 'not_found'
   | 'cross_drive_denied'
-  | 'session_ended'
   | 'session_full';
 
 export interface ClaimConversationInSessionDeps {
@@ -88,7 +87,13 @@ export async function claimConversationInSessionWith(
 
   const sessionRow = await deps.findSession(sessionId);
   if (sessionRow === null) return 'not_found';
-  if (sessionRow.endedAt !== null) return 'session_ended';
+  // An ENDED session is a valid claim target, not a tombstone: the lifecycle
+  // treats ended rows as resumable ("a torn-down session re-provisions under
+  // the SAME key" — plan-session-lifecycle's ensure intent), and the claim
+  // wiring reopens the listing (`planSessionReopen`) when a claim lands in
+  // one. Refusing here contradicted that and permanently dead-ended every
+  // thread bound to an ended workspace (issue #2335). Session lifecycle
+  // state never gates a permitted claim; only ownership and drive rules do.
 
   if (row.type === 'page') {
     if (row.contextId === null) return 'not_found';
