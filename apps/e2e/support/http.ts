@@ -28,6 +28,20 @@ export function sessionPost(
 }
 
 /**
+ * GET as a session-authenticated user. GETs are outside the CSRF gate, so the session
+ * cookie alone is the whole contract.
+ */
+export function sessionGet(
+  request: APIRequestContext,
+  path: string,
+  user: SeededUser,
+): Promise<APIResponse> {
+  return request.get(path, {
+    headers: { cookie: `session=${user.sessionToken}` },
+  });
+}
+
+/**
  * POST with an MCP bearer token. Bearer auth is exempt from CSRF/origin checks, so this
  * is the clean way to drive routes that accept `allow: ['session', 'mcp']`.
  */
