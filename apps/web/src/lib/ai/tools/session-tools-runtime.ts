@@ -161,14 +161,14 @@ export function resolveSelfBaseUrl(): string | null {
  * back after the drained stream finishes. Page-anchored transcripts live in
  * `chat_messages`; global-assistant ones in `messages`.
  */
-async function readLatestAssistantReply(sessionId: string, agentPageId: string | null): Promise<string> {
+async function readLatestAssistantReply(conversationId: string, agentPageId: string | null): Promise<string> {
   if (agentPageId === null) {
     const [row] = await db
       .select({ content: globalMessages.content })
       .from(globalMessages)
       .where(
         and(
-          eq(globalMessages.conversationId, sessionId),
+          eq(globalMessages.conversationId, conversationId),
           eq(globalMessages.role, 'assistant'),
           eq(globalMessages.isActive, true),
         ),
@@ -183,7 +183,7 @@ async function readLatestAssistantReply(sessionId: string, agentPageId: string |
     .where(
       and(
         eq(chatMessages.pageId, agentPageId),
-        eq(chatMessages.conversationId, sessionId),
+        eq(chatMessages.conversationId, conversationId),
         eq(chatMessages.role, 'assistant'),
         eq(chatMessages.isActive, true),
         ne(chatMessages.status, 'streaming'),
@@ -205,7 +205,7 @@ async function readLatestAssistantReply(sessionId: string, agentPageId: string |
  * transcript.
  */
 export async function dispatchThroughChatPipeline(input: {
-  sessionId: string;
+  conversationId: string;
   agentPageId: string | null;
   input: string;
   userId: string;
@@ -238,7 +238,7 @@ export async function dispatchThroughChatPipeline(input: {
 
   const url =
     input.agentPageId === null
-      ? `${base}/api/ai/global/${encodeURIComponent(input.sessionId)}/messages`
+      ? `${base}/api/ai/global/${encodeURIComponent(input.conversationId)}/messages`
       : `${base}/api/ai/chat`;
 
   const requestHeaders: Record<string, string> = {
@@ -257,7 +257,7 @@ export async function dispatchThroughChatPipeline(input: {
 
   const body = JSON.stringify({
     ...(input.agentPageId !== null ? { chatId: input.agentPageId } : {}),
-    conversationId: input.sessionId,
+    conversationId: input.conversationId,
     messages: [
       { id: createId(), role: 'user', parts: [{ type: 'text', text: input.input }] },
     ],
@@ -271,7 +271,7 @@ export async function dispatchThroughChatPipeline(input: {
     // 3) — the real cause (DNS, connection refused, TLS) is an internal detail
     // logged server-side, not something to hand a model dispatching a turn.
     loggers.ai.error('session dispatch: could not reach the chat pipeline', error instanceof Error ? error : undefined, {
-      sessionId: input.sessionId,
+      conversationId: input.conversationId,
     });
     return { ok: false, reason: 'failed', detail: 'could not reach the chat pipeline to dispatch this turn' };
   }
@@ -298,11 +298,11 @@ export async function dispatchThroughChatPipeline(input: {
     await response.text();
   } catch (error) {
     loggers.ai.warn('session dispatch: waiting stream ended abnormally', {
-      sessionId: input.sessionId,
+      conversationId: input.conversationId,
       error: error instanceof Error ? error.message : String(error),
     });
   }
-  const reply = await readLatestAssistantReply(input.sessionId, input.agentPageId);
+  const reply = await readLatestAssistantReply(input.conversationId, input.agentPageId);
   return { ok: true, waited: true, reply };
 }
 
@@ -332,16 +332,16 @@ export async function dispatchThroughChatPipeline(input: {
  * `openOwnSession`'s ownership check, so seeing a sibling listed here grants
  * no access to what it said.
  */
-async function listSessionWorkers({
-  workspaceSessionId,
+async function listWorkspaceWorkers({
+  workspaceId,
   callerConversationId,
 }: {
-  workspaceSessionId: string;
+  workspaceId: string;
   callerConversationId: string;
 }): Promise<SessionWorkspaceListing> {
   const store = await getAgentSessionStore();
   const [row, workerRows, shells] = await Promise.all([
-    store.findById(workspaceSessionId),
+    store.findById(workspaceId),
     db
       .select({
         conversationId: conversations.id,
@@ -354,7 +354,7 @@ async function listSessionWorkers({
       .leftJoin(pages, eq(pages.id, conversations.contextId))
       .where(
         and(
-          eq(conversations.sessionId, workspaceSessionId),
+          eq(conversations.sessionId, workspaceId),
           eq(conversations.isActive, true),
           // A closed listing is gone from the human's sidebar — `list_sessions`
           // must agree, or an agent keeps seeing (and dispatching to) a
@@ -364,7 +364,7 @@ async function listSessionWorkers({
       )
       .orderBy(desc(conversations.createdAt))
       .limit(MAX_SESSION_CONVERSATIONS),
-    listShells(workspaceSessionId),
+    listShells(workspaceId),
   ]);
 
   return {
@@ -397,10 +397,10 @@ async function listSessionWorkers({
  */
 async function listOwnWorkspaces({
   userId,
-  excludeWorkspaceSessionId,
+  excludeWorkspaceId,
 }: {
   userId: string;
-  excludeWorkspaceSessionId?: string;
+  excludeWorkspaceId?: string;
 }): Promise<OwnWorkspaceSummary[]> {
   // The exclusion runs AFTER `listSessions`' own SESSION_LIST_LIMIT cap, not
   // as a query-level filter before it — deliberately, not an oversight: a
@@ -415,7 +415,7 @@ async function listOwnWorkspaces({
   // on the two constants staying equal and the cap staying structural; if
   // either ever changes independently, revisit this filter's ordering.
   const sessions = (await listSessions({ ownerId: userId })).filter(
-    (session) => session.sessionId !== excludeWorkspaceSessionId,
+    (session) => session.sessionId !== excludeWorkspaceId,
   );
   if (sessions.length === 0) return [];
 
@@ -452,7 +452,7 @@ async function listOwnWorkspaces({
 }
 
 async function readSessionTranscript(input: {
-  sessionId: string;
+  conversationId: string;
   agentPageId: string | null;
   limit: number;
 }): Promise<TranscriptEntry[]> {
@@ -460,7 +460,7 @@ async function readSessionTranscript(input: {
     const rows = await db
       .select({ role: globalMessages.role, content: globalMessages.content, createdAt: globalMessages.createdAt })
       .from(globalMessages)
-      .where(and(eq(globalMessages.conversationId, input.sessionId), eq(globalMessages.isActive, true)))
+      .where(and(eq(globalMessages.conversationId, input.conversationId), eq(globalMessages.isActive, true)))
       .orderBy(desc(globalMessages.createdAt))
       .limit(input.limit);
     return rows
@@ -482,7 +482,7 @@ async function readSessionTranscript(input: {
     .where(
       and(
         eq(chatMessages.pageId, input.agentPageId),
-        eq(chatMessages.conversationId, input.sessionId),
+        eq(chatMessages.conversationId, input.conversationId),
         eq(chatMessages.isActive, true),
       ),
     )
@@ -587,7 +587,7 @@ async function resolveWorkerPlacement(input: {
   ownerId: string;
   agentPageId: string | null;
 }): Promise<
-  | { ok: true; workspaceSessionId: string; unwind: (() => Promise<void>) | null }
+  | { ok: true; workspaceId: string; unwind: (() => Promise<void>) | null }
   | CreateWorkerSessionFailure
 > {
   const { workspace, callerConversationId, ownerId, agentPageId } = input;
@@ -604,7 +604,7 @@ async function resolveWorkerPlacement(input: {
       }
       return { ok: false, reason: 'no_session', detail: 'This conversation has no session for a worker to join.' };
     }
-    return { ok: true, workspaceSessionId: resolved.session.id, unwind: null };
+    return { ok: true, workspaceId: resolved.session.id, unwind: null };
   }
 
   if (workspace === 'new') {
@@ -637,12 +637,12 @@ async function resolveWorkerPlacement(input: {
     const unwind = async () => {
       await endSession(spawned.session.id).catch((cleanupError) => {
         loggers.ai.warn('createWorkerSession: failed to unwind an empty minted workspace', {
-          workspaceSessionId: spawned.session.id,
+          workspaceId: spawned.session.id,
           error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
         });
       });
     };
-    return { ok: true, workspaceSessionId: spawned.session.id, unwind };
+    return { ok: true, workspaceId: spawned.session.id, unwind };
   }
 
   // An existing workspaceId, gated by the ONE session access decision
@@ -653,7 +653,7 @@ async function resolveWorkerPlacement(input: {
     // id-guessing caller learns nothing.
     return { ok: false, reason: 'workspace_not_found', detail: `There is no workspace "${workspace}" you can use. Call list_sessions to see yours.` };
   }
-  return { ok: true, workspaceSessionId: workspace, unwind: null };
+  return { ok: true, workspaceId: workspace, unwind: null };
 }
 
 /**
@@ -678,7 +678,7 @@ async function resolveWorkerPlacement(input: {
  */
 async function recoverMintedWorkspaceAfterThrow(
   workerConversationId: string,
-  workspaceSessionId: string,
+  workspaceId: string,
   unwind: () => Promise<void>,
 ): Promise<'bound' | 'not_bound'> {
   let boundAfterThrow: Awaited<ReturnType<typeof findSessionForConversation>> = null;
@@ -693,11 +693,11 @@ async function recoverMintedWorkspaceAfterThrow(
     verificationFailed = true;
     loggers.ai.warn('createWorkerSession: failed to re-resolve a new worker\'s binding after a claim exception', {
       workerConversationId,
-      workspaceSessionId,
+      workspaceId,
       error: lookupError instanceof Error ? lookupError.message : String(lookupError),
     });
   }
-  if (boundAfterThrow?.id === workspaceSessionId) return 'bound';
+  if (boundAfterThrow?.id === workspaceId) return 'bound';
   if (!verificationFailed) {
     // Confirmed unbound — safe to unwind the empty workspace.
     await unwind();
@@ -712,15 +712,15 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
   return {
     findOwnWorkspace: async (conversationId) => {
       const row = await findSessionForConversation(conversationId);
-      return row ? { sessionId: row.id } : null;
+      return row ? { workspaceId: row.id } : null;
     },
-    listSessionWorkers,
+    listWorkspaceWorkers,
     listOwnWorkspaces,
 
-    findSession: async (sessionId) => {
-      // The tool family's "sessionId" is the WORKER's conversation id (what
-      // spawn returned) — resolve the conversation, not a workspace row.
-      const conversation = await conversationRepository.getConversation(sessionId);
+    findWorker: async (conversationId) => {
+      // The wire's "sessionId" is the WORKER's conversation id (what spawn
+      // returned) — resolve the conversation, not a workspace row.
+      const conversation = await conversationRepository.getConversation(conversationId);
       if (!conversation) return null;
       // A history-deleted worker is not addressable. Load-bearing now that
       // `openOwnSession` authorizes by the RESOURCE alone (ownership +
@@ -728,19 +728,16 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       // workspace comparison incidentally masked deleted rows.
       if (!conversation.isActive) return null;
       return {
-        sessionId,
+        conversationId,
         ownerId: conversation.userId,
         agentPageId: conversation.type === 'page' ? conversation.contextId : null,
         name: conversation.title ?? '',
-        // A worker conversation never "ends" — its session might, which the
-        // dispatch surfaces as a failed run rather than a dead address.
-        endedAt: null,
         // The WORKSPACE this conversation is bound to (conversations.sessionId
-        // — the agent_sessions.id FK), or null for a session-less thread.
+        // — the agent_sessions.id FK), or null for a workspace-less thread.
         // `openOwnSession` requires it non-null (a plain thread is not a
         // worker) but no longer compares it to the caller's own workspace —
         // worker verbs are resource-addressed (issue #2335 product decision).
-        workspaceSessionId: conversation.sessionId,
+        workspaceId: conversation.sessionId,
         // The human closed this conversation's LISTING (it no longer shows in
         // their sidebar) — `openOwnSession` refuses on this, so a worker verb
         // can never dispatch new work into, read, or kill a worker the user
@@ -749,13 +746,13 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       };
     },
 
-    countSessionConversations: async (workspaceSessionId) => {
+    countOpenConversations: async (workspaceId) => {
       const [row] = await db
         .select({ n: count() })
         .from(conversations)
         .where(
           and(
-            eq(conversations.sessionId, workspaceSessionId),
+            eq(conversations.sessionId, workspaceId),
             eq(conversations.isActive, true),
             // Mirrors the HTTP creation path's cap count (create-conversation-
             // in-session.ts): a closed listing frees its cap slot here too, or
@@ -776,17 +773,17 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       return canUserViewPage(userId, agentPageId);
     },
 
-    createWorkerSession: async ({ sessionId, callerConversationId, ownerId, agentPageId, name, workspace }) => {
+    createWorkerSession: async ({ conversationId, callerConversationId, ownerId, agentPageId, name, workspace }) => {
       const placement = await resolveWorkerPlacement({ workspace, callerConversationId, ownerId, agentPageId });
       if (!placement.ok) return placement;
-      const { workspaceSessionId, unwind } = placement;
+      const { workspaceId, unwind } = placement;
 
       try {
         await createConversationInSession({
-          conversationId: sessionId,
+          conversationId,
           userId: ownerId,
           agentPageId,
-          sessionId: workspaceSessionId,
+          sessionId: workspaceId,
           // The worker's label, written AT BIRTH onto the conversation row —
           // it is what the sidebar and list_sessions display (codex review,
           // P2: the old path reported the name in the tool response and then
@@ -795,8 +792,8 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
         });
       } catch (error) {
         if (unwind) {
-          const recovered = await recoverMintedWorkspaceAfterThrow(sessionId, workspaceSessionId, unwind);
-          if (recovered === 'bound') return { ok: true, workspaceSessionId };
+          const recovered = await recoverMintedWorkspaceAfterThrow(conversationId, workspaceId, unwind);
+          if (recovered === 'bound') return { ok: true, workspaceId };
         }
         // A FIXED message per known cause, never the raw driver/error string
         // (issue #2262 finding 3): a database error's text is an internal
@@ -816,26 +813,26 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
         // metadata explicitly.
         const cause = error instanceof Error && error.cause instanceof Error ? error.cause : undefined;
         loggers.ai.error('createWorkerSession: could not create the worker conversation', error instanceof Error ? error : undefined, {
-          sessionId,
+          conversationId,
           callerConversationId,
           ownerId,
           ...(cause ? { cause: `${cause.name}: ${cause.message}` } : {}),
         });
         return { ok: false, reason: 'conversation_unavailable', detail: 'That conversation id is not available.' };
       }
-      return { ok: true, workspaceSessionId };
+      return { ok: true, workspaceId };
     },
 
     dispatch: dispatchThroughChatPipeline,
 
     readTranscript: readSessionTranscript,
 
-    endSession: async ({ sessionId, userId }) => {
+    killWorker: async ({ conversationId, userId }) => {
       // Stop the worker's in-flight run (the caller's own streams only —
       // abortConversationStreams' authorization). Deliberately NO sandbox
-      // teardown: a worker works in its SPAWNER's session, so tearing "its"
+      // teardown: a worker works in its SPAWNER's workspace, so tearing "its"
       // sandbox down would destroy the caller's own working context.
-      await abortConversationStreams({ conversationId: sessionId, userId }).catch(() => {});
+      await abortConversationStreams({ conversationId, userId }).catch(() => {});
       return { ok: true, spriteTornDown: false };
     },
 
@@ -858,10 +855,10 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       return { ok: true };
     },
 
-    spawnShell: async ({ sessionId, ownerId, name }) => {
+    spawnShell: async ({ conversationId, ownerId, name }) => {
       // The pure layer hands the CALLER's conversation id; shells hang off the
-      // SESSION, so resolve the working context first.
-      const session = await findSessionForConversation(sessionId);
+      // WORKSPACE, so resolve the working context first.
+      const session = await findSessionForConversation(conversationId);
       if (!session) return { ok: false, reason: 'no_session' };
       const spawned = await spawnShell({ sessionId: session.id, ownerId, name });
       if (!spawned.ok) return { ok: false, reason: spawned.reason };
@@ -874,7 +871,7 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       if (!row) return null;
       return {
         shellId: row.id,
-        sessionId: row.sessionId,
+        workspaceId: row.sessionId,
         name: row.name,
         ...(row.coldTail !== null || row.coldTailHasOutput
           ? {

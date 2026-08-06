@@ -218,7 +218,7 @@ describe('resolveCallerSessionForWorker', () => {
 
 describe('createWorkerSession — placement', () => {
   const baseInput = {
-    sessionId: 'worker-conv-new',
+    conversationId: 'worker-conv-new',
     callerConversationId: 'conv-caller',
     ownerId: 'user-1',
     agentPageId: null as string | null,
@@ -232,7 +232,7 @@ describe('createWorkerSession — placement', () => {
     const deps = buildSessionToolsDeps();
     const result = await deps.createWorkerSession(baseInput);
 
-    expect(result).toEqual({ ok: true, workspaceSessionId: 'ses-caller' });
+    expect(result).toEqual({ ok: true, workspaceId: 'ses-caller' });
     expect(mockCreateConversationInSession).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'ses-caller', conversationId: 'worker-conv-new' }),
     );
@@ -249,7 +249,7 @@ describe('createWorkerSession — placement', () => {
       const deps = buildSessionToolsDeps();
       const result = await deps.createWorkerSession({ ...baseInput, workspace: 'new' });
 
-      expect(result).toEqual({ ok: true, workspaceSessionId: 'ses-fresh' });
+      expect(result).toEqual({ ok: true, workspaceId: 'ses-fresh' });
       expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: null });
       expect(mockCreateConversationInSession).toHaveBeenCalledWith(
         expect.objectContaining({ sessionId: 'ses-fresh' }),
@@ -309,7 +309,7 @@ describe('createWorkerSession — placement', () => {
       const deps = buildSessionToolsDeps();
       const result = await deps.createWorkerSession({ ...baseInput, workspace: 'new' });
 
-      expect(result).toEqual({ ok: true, workspaceSessionId: 'ses-fresh' });
+      expect(result).toEqual({ ok: true, workspaceId: 'ses-fresh' });
       expect(mockEndSession).not.toHaveBeenCalled();
     });
 
@@ -335,7 +335,7 @@ describe('createWorkerSession — placement', () => {
       const deps = buildSessionToolsDeps();
       const result = await deps.createWorkerSession({ ...baseInput, workspace: 'ses-target' });
 
-      expect(result).toEqual({ ok: true, workspaceSessionId: 'ses-target' });
+      expect(result).toEqual({ ok: true, workspaceId: 'ses-target' });
       expect(mockCheckSessionAccess).toHaveBeenCalledWith('user-1', 'ses-target');
       expect(mockCreateConversationInSession).toHaveBeenCalledWith(
         expect.objectContaining({ sessionId: 'ses-target' }),

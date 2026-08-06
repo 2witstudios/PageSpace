@@ -157,7 +157,7 @@ get one shared writer.
 | Canonical name | What it is | Where "sessionId" meant this |
 |---|---|---|
 | `workspaceId` | An `agent_sessions` row — the working context / sandbox owner | Everywhere except the tool layer: `conversations.sessionId`, `agent_session_shells.sessionId`, `/api/agent-sessions/[sessionId]`, `?session=` URLs |
-| `conversationId` | A thread (`conversations` row) | The session-tool layer: the `sessionId` param of `send_session` / `read_session` / `kill_session` is a **worker's conversation id** (`apps/web/src/lib/ai/tools/session-tools.ts`, where `workspaceSessionId` is the workspace) |
+| `conversationId` | A thread (`conversations` row) | The session-tool layer: the `sessionId` param of `send_session` / `read_session` / `kill_session` is a **worker's conversation id** (`apps/web/src/lib/ai/tools/session-tools.ts` — mapped to a `conversationId` local at the zod boundary; internally `WorkerRow.conversationId`, with `WorkerRow.workspaceId` naming the workspace) |
 | *(frozen)* `sessionId` | The model-facing tool param | The wire vocabulary is deliberately frozen at the zod boundary: to the model, a "session" is a worker you talk to and a "workspace" is the environment. Internal renames never touch these schemas |
 | `spriteExecId` | The Sprite PTY exec stream a shell reattaches under | `agent_session_shells.streamSessionId` (rename lands in the epic's final phase) |
 | — | Auth login sessions (`sessions` table, `packages/db/src/schema/sessions.ts`) | Unrelated. Never mix with any of the above |

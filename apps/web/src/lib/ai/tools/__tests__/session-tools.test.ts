@@ -29,27 +29,26 @@ const SHELL = {
 
 function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
   return {
-    findOwnWorkspace: vi.fn(async () => ({ sessionId: WORKSPACE_ID })),
-    listSessionWorkers: vi.fn(async () => ({ sandbox: 'running' as const, workers: [], shells: [] })),
+    findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID })),
+    listWorkspaceWorkers: vi.fn(async () => ({ sandbox: 'running' as const, workers: [], shells: [] })),
     listOwnWorkspaces: vi.fn(async () => []),
-    findSession: vi.fn(async (sessionId: string) => ({
-      sessionId,
+    findWorker: vi.fn(async (conversationId: string) => ({
+      conversationId,
       ownerId: USER_ID,
       agentPageId: CALLER_AGENT,
       name: 'worker',
-      endedAt: null,
-      workspaceSessionId: WORKSPACE_ID,
+      workspaceId: WORKSPACE_ID,
       isClosed: false,
     })),
-    countSessionConversations: vi.fn(async () => 0),
+    countOpenConversations: vi.fn(async () => 0),
     canUseAgent: vi.fn(async () => true),
-    createWorkerSession: vi.fn(async () => ({ ok: true as const, workspaceSessionId: WORKSPACE_ID })),
+    createWorkerSession: vi.fn(async () => ({ ok: true as const, workspaceId: WORKSPACE_ID })),
     dispatch: vi.fn(async () => ({ ok: true as const, waited: false as const })),
     readTranscript: vi.fn(async () => []),
-    endSession: vi.fn(async () => ({ ok: true as const, spriteTornDown: true })),
+    killWorker: vi.fn(async () => ({ ok: true as const, spriteTornDown: true })),
     ensureOwnSessionSandbox: vi.fn(async () => ({ ok: true as const })),
     spawnShell: vi.fn(async () => ({ ok: true as const, shell: SHELL })),
-    findShell: vi.fn(async () => ({ shellId: SHELL.shellId, sessionId: WORKSPACE_ID, name: SHELL.name })),
+    findShell: vi.fn(async () => ({ shellId: SHELL.shellId, workspaceId: WORKSPACE_ID, name: SHELL.name })),
     killShell: vi.fn(async () => ({ ok: true as const, killed: true })),
     shellIo: {
       read: vi.fn(async () => ({ ok: true as const, live: true, hasOutput: true, output: 'hello' })),
@@ -109,22 +108,22 @@ describe('list_sessions', () => {
       ],
       shells: [{ shellId: SHELL.shellId, name: SHELL.name, createdAt: SHELL.createdAt }],
     };
-    const deps = makeDeps({ listSessionWorkers: vi.fn(async () => listing) });
+    const deps = makeDeps({ listWorkspaceWorkers: vi.fn(async () => listing) });
     const tools = createSessionTools(deps);
     const result = await run(tools.list_sessions, {}, contextOptions());
     expect(result).toEqual({ success: true, workspaceId: WORKSPACE_ID, ...listing, otherWorkspaces: [] });
     // Review H2b's pin: the listing is resolved from the caller's workspace,
     // and every worker id it returns is a conversation id — the exact address
     // send_session/read_session/kill_session take.
-    expect(deps.listSessionWorkers).toHaveBeenCalledWith({
-      workspaceSessionId: WORKSPACE_ID,
+    expect(deps.listWorkspaceWorkers).toHaveBeenCalledWith({
+      workspaceId: WORKSPACE_ID,
       callerConversationId: CALLER_CONVERSATION,
     });
     // The caller's own workspace is excluded from the others list — it is
     // already the top-level detail view.
     expect(deps.listOwnWorkspaces).toHaveBeenCalledWith({
       userId: USER_ID,
-      excludeWorkspaceSessionId: WORKSPACE_ID,
+      excludeWorkspaceId: WORKSPACE_ID,
     });
   });
 
@@ -151,7 +150,7 @@ describe('list_sessions', () => {
       otherWorkspaces: [elsewhere],
     });
     expect(result.note).toContain('no workspace');
-    expect(deps.listSessionWorkers).not.toHaveBeenCalled();
+    expect(deps.listWorkspaceWorkers).not.toHaveBeenCalled();
   });
 
   it('given no authenticated user, should refuse', async () => {
@@ -174,7 +173,7 @@ describe('spawn_session', () => {
       expect.objectContaining({ success: true, sessionId: 'new-session-id', name: 'worker' }),
     );
     expect(deps.createWorkerSession).toHaveBeenCalledWith({
-      sessionId: 'new-session-id',
+      conversationId: 'new-session-id',
       // Default placement: the worker joins its SPAWNER's workspace.
       callerConversationId: CALLER_CONVERSATION,
       ownerId: USER_ID,
@@ -183,16 +182,16 @@ describe('spawn_session', () => {
       workspace: undefined,
     });
     expect(deps.dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: 'new-session-id', depth: 1, wait: false, input: 'do the thing' }),
+      expect.objectContaining({ conversationId: 'new-session-id', depth: 1, wait: false, input: 'do the thing' }),
     );
   });
 
   it('workspace targeting passes through, reports where the worker landed, and skips the caller-workspace advisory count — fan-out aims wherever it likes', async () => {
     const deps = makeDeps({
-      createWorkerSession: vi.fn(async () => ({ ok: true as const, workspaceSessionId: 'ws-target' })),
+      createWorkerSession: vi.fn(async () => ({ ok: true as const, workspaceId: 'ws-target' })),
       // The caller's own workspace being FULL must not refuse a spawn aimed
       // elsewhere — the target's own enforced cap answers instead.
-      countSessionConversations: vi.fn(async () => 10_000),
+      countOpenConversations: vi.fn(async () => 10_000),
     });
     const tools = createSessionTools(deps);
     const result = await run(
@@ -204,12 +203,12 @@ describe('spawn_session', () => {
     expect(deps.createWorkerSession).toHaveBeenCalledWith(
       expect.objectContaining({ workspace: 'ws-target' }),
     );
-    expect(deps.countSessionConversations).not.toHaveBeenCalled();
+    expect(deps.countOpenConversations).not.toHaveBeenCalled();
   });
 
   it("workspace: 'new' passes through for an isolated worker", async () => {
     const deps = makeDeps({
-      createWorkerSession: vi.fn(async () => ({ ok: true as const, workspaceSessionId: 'ws-fresh' })),
+      createWorkerSession: vi.fn(async () => ({ ok: true as const, workspaceId: 'ws-fresh' })),
     });
     const tools = createSessionTools(deps);
     const result = await run(
@@ -317,7 +316,7 @@ describe('send_session', () => {
     );
     expect(result).toEqual(expect.objectContaining({ success: true, accepted: true }));
     expect(deps.dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: 's1', depth: 2, wait: false }),
+      expect.objectContaining({ conversationId: 's1', depth: 2, wait: false }),
     );
   });
 
@@ -335,13 +334,12 @@ describe('send_session', () => {
 
   it('given someone else\'s session, should read as nonexistent', async () => {
     const deps = makeDeps({
-      findSession: vi.fn(async () => ({
-        sessionId: 's1',
+      findWorker: vi.fn(async () => ({
+        conversationId: 's1',
         ownerId: 'someone-else',
         agentPageId: null,
         name: '',
-        endedAt: null,
-        workspaceSessionId: WORKSPACE_ID,
+        workspaceId: WORKSPACE_ID,
         isClosed: false,
       })),
     });
@@ -378,17 +376,16 @@ describe('worker verbs are RESOURCE-addressed — ownership is the gate, the cal
   // additionally re-enforces the agent's RBAC inside the standard chat
   // pipeline it runs through.
   const OTHER_WORKSPACE_ROW = {
-    sessionId: 'conv-other',
+    conversationId: 'conv-other',
     ownerId: USER_ID,
     agentPageId: CALLER_AGENT,
     name: 'worker elsewhere',
-    endedAt: null,
-    workspaceSessionId: 'another-of-my-workspaces',
+    workspaceId: 'another-of-my-workspaces',
     isClosed: false,
   };
 
   it('the caller\'s own worker in ANOTHER workspace is addressable — send/read/kill all reach it', async () => {
-    const deps = makeDeps({ findSession: vi.fn(async () => OTHER_WORKSPACE_ROW) });
+    const deps = makeDeps({ findWorker: vi.fn(async () => OTHER_WORKSPACE_ROW) });
     const tools = createSessionTools(deps);
 
     const sent = await run(tools.send_session, { sessionId: 'conv-other', input: 'x' }, contextOptions());
@@ -401,12 +398,12 @@ describe('worker verbs are RESOURCE-addressed — ownership is the gate, the cal
 
     const killed = await run(tools.kill_session, { sessionId: 'conv-other' }, contextOptions());
     expect(killed.success).toBe(true);
-    expect(deps.endSession).toHaveBeenCalled();
+    expect(deps.killWorker).toHaveBeenCalled();
   });
 
   it('a FOREIGN-owned worker reads as nonexistent — ownership is the gate that remains', async () => {
     const deps = makeDeps({
-      findSession: vi.fn(async () => ({ ...OTHER_WORKSPACE_ROW, ownerId: 'someone-else' })),
+      findWorker: vi.fn(async () => ({ ...OTHER_WORKSPACE_ROW, ownerId: 'someone-else' })),
     });
     const tools = createSessionTools(deps);
 
@@ -420,12 +417,12 @@ describe('worker verbs are RESOURCE-addressed — ownership is the gate, the cal
 
     const killed = await run(tools.kill_session, { sessionId: 'conv-other' }, contextOptions());
     expect(killed.success).toBe(false);
-    expect(deps.endSession).not.toHaveBeenCalled();
+    expect(deps.killWorker).not.toHaveBeenCalled();
   });
 
   it('a worker the human already CLOSED reads as nonexistent — never dispatch/read/kill into a closed listing', async () => {
     const deps = makeDeps({
-      findSession: vi.fn(async () => ({ ...OTHER_WORKSPACE_ROW, workspaceSessionId: WORKSPACE_ID, isClosed: true })),
+      findWorker: vi.fn(async () => ({ ...OTHER_WORKSPACE_ROW, workspaceId: WORKSPACE_ID, isClosed: true })),
     });
     const tools = createSessionTools(deps);
 
@@ -439,12 +436,12 @@ describe('worker verbs are RESOURCE-addressed — ownership is the gate, the cal
 
     const killed = await run(tools.kill_session, { sessionId: 'conv-other' }, contextOptions());
     expect(killed.success).toBe(false);
-    expect(deps.endSession).not.toHaveBeenCalled();
+    expect(deps.killWorker).not.toHaveBeenCalled();
   });
 
   it('a SESSION-LESS conversation reads as nonexistent — it is not a worker anywhere', async () => {
     const deps = makeDeps({
-      findSession: vi.fn(async () => ({ ...OTHER_WORKSPACE_ROW, workspaceSessionId: null })),
+      findWorker: vi.fn(async () => ({ ...OTHER_WORKSPACE_ROW, workspaceId: null })),
     });
     const tools = createSessionTools(deps);
     const result = await run(tools.read_session, { sessionId: 'conv-other' }, contextOptions());
@@ -474,9 +471,9 @@ describe('worker verbs are RESOURCE-addressed — ownership is the gate, the cal
 
   it('the refusal reads exactly like a nonexistent session — nothing to learn from the difference', async () => {
     const deps = makeDeps({
-      findSession: vi.fn(async () => ({ ...OTHER_WORKSPACE_ROW, ownerId: 'someone-else' })),
+      findWorker: vi.fn(async () => ({ ...OTHER_WORKSPACE_ROW, ownerId: 'someone-else' })),
     });
-    const noRowDeps = makeDeps({ findSession: vi.fn(async () => null) });
+    const noRowDeps = makeDeps({ findWorker: vi.fn(async () => null) });
     const foreign = await run(
       createSessionTools(deps).send_session,
       { sessionId: 'conv-other', input: 'x' },
@@ -529,12 +526,12 @@ describe('kill_session', () => {
     const tools = createSessionTools(deps);
     const result = await run(tools.kill_session, { sessionId: 's1' }, contextOptions());
     expect(result).toEqual({ success: true, sessionId: 's1', spriteTornDown: true });
-    expect(deps.endSession).toHaveBeenCalledWith({ sessionId: 's1', userId: USER_ID });
+    expect(deps.killWorker).toHaveBeenCalledWith({ conversationId: 's1', userId: USER_ID });
   });
 
   it('given a teardown failure, should say the sandbox may still be running', async () => {
     const deps = makeDeps({
-      endSession: vi.fn(async () => ({ ok: false as const, reason: 'teardown_failed' })),
+      killWorker: vi.fn(async () => ({ ok: false as const, reason: 'teardown_failed' })),
     });
     const tools = createSessionTools(deps);
     const result = await run(tools.kill_session, { sessionId: 's1' }, contextOptions());
@@ -601,7 +598,7 @@ describe('spawn_shell', () => {
 describe('send_shell / read_shell — shells target only the CALLER\'s own session', () => {
   it('given a shell of ANOTHER session, should read as nonexistent', async () => {
     const deps = makeDeps({
-      findShell: vi.fn(async () => ({ shellId: 'x', sessionId: 'someone-elses-workspace', name: 's' })),
+      findShell: vi.fn(async () => ({ shellId: 'x', workspaceId: 'someone-elses-workspace', name: 's' })),
     });
     const tools = createSessionTools(deps);
     const sent = await run(tools.send_shell, { shellId: 'x', keystrokes: 'ls\n' }, contextOptions());
@@ -623,7 +620,7 @@ describe('send_shell / read_shell — shells target only the CALLER\'s own sessi
   it('should read scrollback, threading the cold-tail record through', async () => {
     const cold = { tail: 'bye', at: new Date(), hasOutput: true };
     const deps = makeDeps({
-      findShell: vi.fn(async () => ({ shellId: SHELL.shellId, sessionId: WORKSPACE_ID, name: SHELL.name, cold })),
+      findShell: vi.fn(async () => ({ shellId: SHELL.shellId, workspaceId: WORKSPACE_ID, name: SHELL.name, cold })),
     });
     const tools = createSessionTools(deps);
     const result = await run(tools.read_shell, { shellId: SHELL.shellId, tail: 50 }, contextOptions());
@@ -681,7 +678,7 @@ describe('shell addressing across the two id namespaces (review H2)', () => {
 
   it("kill_shell treats another workspace's shell as already gone and never kills it", async () => {
     const deps = makeDeps({
-      findShell: vi.fn(async () => ({ shellId: SHELL.shellId, sessionId: 'someone-elses-workspace', name: SHELL.name })),
+      findShell: vi.fn(async () => ({ shellId: SHELL.shellId, workspaceId: 'someone-elses-workspace', name: SHELL.name })),
     });
     const tools = createSessionTools(deps);
     const result = await run(tools.kill_shell, { shellId: SHELL.shellId }, contextOptions());
