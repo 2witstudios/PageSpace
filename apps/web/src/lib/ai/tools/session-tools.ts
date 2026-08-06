@@ -360,6 +360,27 @@ export interface SessionToolsDeps {
     | { ok: false; reason: string; detail?: string }
   >;
   /**
+   * Give the freshly spawned worker a PANE in its workspace's grid (epic
+   * Phase 3) — placement the blob era could not express at all, because the
+   * grid's only writer was a browser's debounced PUT. Applied as a real
+   * layout verb, so it lands in the pane rows (visible whenever that grid is
+   * next opened) and broadcasts to any grid already open.
+   *
+   * A courtesy on top of the spawn, never a precondition: the implementation
+   * swallows its own failures, and this dep is OPTIONAL so a test harness (or
+   * any surface with no grid to place into) simply omits it.
+   */
+  placeWorkerPane?: (input: {
+    workspaceId: string;
+    conversationId: string;
+    name: string;
+    agentPageId: string | null;
+    /** Derived from the tool call id — a retried spawn must not place twice. */
+    opId: string;
+    /** The spawning conversation: never evicted by its own spawn. */
+    excludeTargetId?: string;
+  }) => Promise<void>;
+  /**
    * Dispatch one turn into a worker's conversation THROUGH THE STANDARD CHAT
    * PIPELINE (the `ai_stream_sessions` background-run machinery normal
    * conversations use) — never a second engine. `wait` blocks for the reply.
@@ -740,6 +761,23 @@ export function createSessionTools(deps: SessionToolsDeps): {
             error: `Could not create the worker session: ${created.detail ?? created.reason}.`,
             reason: created.reason,
           };
+        }
+
+        // Place the worker's pane BEFORE dispatching: the first token of its
+        // reply should stream into a pane the user is already watching, not
+        // arrive before the surface it belongs to exists. `toolCallId` keys
+        // the placement so an SDK retry of this one call replays through the
+        // verb engine's op memory instead of opening a second pane.
+        const toolCallId = (options as { toolCallId?: string } | undefined)?.toolCallId;
+        if (deps.placeWorkerPane && toolCallId) {
+          await deps.placeWorkerPane({
+            workspaceId: created.workspaceId,
+            conversationId,
+            name: plan.name,
+            agentPageId,
+            opId: `spawn_session:${toolCallId}`,
+            excludeTargetId: callerConversationId,
+          });
         }
 
         const dispatched = await deps.dispatch({

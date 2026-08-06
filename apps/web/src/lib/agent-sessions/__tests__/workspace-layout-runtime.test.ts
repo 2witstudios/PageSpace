@@ -121,6 +121,9 @@ describe('applyWorkspaceLayoutVerb', () => {
       workspaceId: WORKSPACE_ID,
       rev: 1,
       verb: 'ensure',
+      // The causing op's key rides along so a subscriber can recognize its
+      // OWN echo and leave its still-queued verb alone.
+      opId: 'op-ensure',
       grid: [{ id: 'col-1', panes: [{ id: 'pane-1', scope }] }],
     });
   });

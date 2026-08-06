@@ -48,6 +48,7 @@ import {
   getAgentSessionStore,
 } from '@/lib/agent-sessions/agent-sessions-runtime';
 import { countOpenConversations } from '@/lib/agent-sessions/conversation-cap';
+import { placeWorkerPane } from '@/lib/agent-sessions/workspace-placement';
 import {
   AgentNotInSessionDriveError,
   SessionFullError,
@@ -955,6 +956,8 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       }
       return { ok: true, workspaceId };
     },
+
+    placeWorkerPane,
 
     dispatch: dispatchThroughChatPipeline,
 
