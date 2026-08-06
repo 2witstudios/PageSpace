@@ -45,7 +45,7 @@ import {
   type PaneKind,
   type PersistedWorkspaceState,
 } from '../../agent-sessions/contract';
-import type { LayoutGridColumn } from '../../agent-sessions/workspace-layout-verbs';
+import { quantizeFraction, type LayoutGridColumn } from '../../agent-sessions/workspace-layout-verbs';
 
 type DbTransactionCallback = Parameters<typeof DbType.transaction>[0];
 /** The real pooled `db`, OR a transaction obtained from it. Type-only, so
@@ -90,6 +90,17 @@ export interface WorkspaceLayoutStore {
 
 function gridsEqual(a: LayoutGridColumn[], b: LayoutGridColumn[]): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * A `real` (float4) fraction column, read back as the same value the reducer
+ * wrote. The column's storage type is narrower than a JS double, so the round
+ * trip is lossy — and {@link gridsEqual} is a byte comparison, so an unsnapped
+ * read would make every single write look like a change. See
+ * `quantizeFraction`'s own doc for why the snap is exact.
+ */
+function readStoredFraction(value: number | null): number | null {
+  return value === null ? null : quantizeFraction(value);
 }
 
 /**
@@ -158,11 +169,20 @@ export async function createDbWorkspaceLayoutStore(executor?: DbExecutor): Promi
     const panesByColumn = new Map<string, LayoutGridColumn['panes']>();
     for (const pane of paneRows) {
       const list = panesByColumn.get(pane.columnId) ?? [];
-      list.push({ id: pane.id, kind: (pane.kind as PaneKind | null) ?? null, targetId: pane.targetId });
+      list.push({
+        id: pane.id,
+        kind: (pane.kind as PaneKind | null) ?? null,
+        targetId: pane.targetId,
+        heightFraction: readStoredFraction(pane.heightFraction),
+      });
       panesByColumn.set(pane.columnId, list);
     }
 
-    return columnRows.map((col) => ({ id: col.id, panes: panesByColumn.get(col.id) ?? [] }));
+    return columnRows.map((col) => ({
+      id: col.id,
+      widthFraction: readStoredFraction(col.widthFraction),
+      panes: panesByColumn.get(col.id) ?? [],
+    }));
   }
 
   async function mintRev(exec: DbExecutor, workspaceId: string): Promise<number> {
@@ -221,6 +241,9 @@ export async function createDbWorkspaceLayoutStore(executor?: DbExecutor): Promi
             id: column.id,
             workspaceId,
             orderIndex: columnIndex,
+            // No longer reserved (issue #2208): the resize verbs write this,
+            // and `null` is the honest "this grid has never been sized".
+            widthFraction: column.widthFraction,
             createdAt: now,
             updatedAt: now,
           });
@@ -232,6 +255,7 @@ export async function createDbWorkspaceLayoutStore(executor?: DbExecutor): Promi
               orderIndex: paneIndex,
               kind: pane.kind,
               targetId: pane.targetId,
+              heightFraction: pane.heightFraction,
               createdAt: now,
               updatedAt: now,
             });

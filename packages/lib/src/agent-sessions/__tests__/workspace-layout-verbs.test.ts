@@ -217,9 +217,13 @@ describe('projections', () => {
     state = applyVerbLocal(state, WORKSPACE_ID, {
       type: 'split_right', fromPaneId: 'pane-1', newColumnId: 'col-2', newPaneId: 'pane-2',
     }).state!;
+    // Fractions project as CANONICAL null on an unsized grid — never absent.
+    // The store's content diff is a JSON.stringify comparison, and an
+    // `undefined` key vanishes from that string, so "no fraction" and "an
+    // explicit null fraction" would compare equal to two different rows.
     expect(gridFromWorkspaceState(state)).toEqual([
-      { id: 'col-1', panes: [{ id: 'pane-1', kind: 'chat', targetId: 'conv-1' }] },
-      { id: 'col-2', panes: [{ id: 'pane-2', kind: null, targetId: null }] },
+      { id: 'col-1', widthFraction: null, panes: [{ id: 'pane-1', kind: 'chat', targetId: 'conv-1', heightFraction: null }] },
+      { id: 'col-2', widthFraction: null, panes: [{ id: 'pane-2', kind: null, targetId: null, heightFraction: null }] },
     ]);
   });
 

@@ -157,3 +157,96 @@ describe('POST /api/agent-sessions/[sessionId]/workspace/verbs', () => {
     expect(mockCheckSessionAccess).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// The rearrange verbs (issue #2208) — the route's own surface for them
+// ---------------------------------------------------------------------------
+
+describe('POST .../workspace/verbs — the rearrange verbs', () => {
+  it.each([
+    ['resize_column', { type: 'resize_column', columnId: 'col-1', widthFraction: 0.4 }],
+    ['resize_pane', { type: 'resize_pane', paneId: 'pane-1', heightFraction: 0.6 }],
+    ['move_pane (append)', { type: 'move_pane', paneId: 'pane-1', toColumnId: 'col-2' }],
+    ['move_pane (indexed)', { type: 'move_pane', paneId: 'pane-1', toColumnId: 'col-2', toIndex: 0 }],
+    ['reorder_columns', { type: 'reorder_columns', columnIds: ['col-2', 'col-1'] }],
+  ])('accepts %s and hands it to the single writer verbatim', async (_label, rearrange) => {
+    const response = await post({ opId: 'op-r', baseRev: 3, verb: rearrange });
+
+    expect(response.status).toBe(200);
+    expect(mockApplyWorkspaceLayoutVerb).toHaveBeenCalledWith({
+      workspaceId: SESSION_ID,
+      opId: 'op-r',
+      baseRev: 3,
+      verb: rearrange,
+    });
+  });
+
+  it('audits an applied rearrange under its own verb name', async () => {
+    await post({ opId: 'op-r', baseRev: 0, verb: { type: 'reorder_columns', columnIds: ['col-2'] } });
+
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        eventType: 'data.write',
+        resourceType: 'agent_session',
+        resourceId: SESSION_ID,
+        details: expect.objectContaining({ op: 'workspace_layout_verb', verb: 'reorder_columns' }),
+      }),
+    );
+  });
+
+  it('answers a stale baseRev on a rearrange with 409 + truth, exactly like every other verb', async () => {
+    mockApplyWorkspaceLayoutVerb.mockResolvedValue({ status: 'stale', rev: 7, grid });
+    const response = await post({
+      opId: 'op-r',
+      baseRev: 2,
+      verb: { type: 'resize_column', columnId: 'col-1', widthFraction: 0.4 },
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ rev: 7, grid });
+    expect(mockAuditRequest).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a non-finite fraction', { type: 'resize_column', columnId: 'col-1', widthFraction: Number.POSITIVE_INFINITY }],
+    ['a NaN fraction', { type: 'resize_column', columnId: 'col-1', widthFraction: Number.NaN }],
+    ['a string fraction', { type: 'resize_pane', paneId: 'pane-1', heightFraction: '0.5' }],
+    ['a missing fraction', { type: 'resize_pane', paneId: 'pane-1' }],
+    ['an empty column id', { type: 'resize_column', columnId: '', widthFraction: 0.4 }],
+    ['a fractional toIndex', { type: 'move_pane', paneId: 'pane-1', toColumnId: 'col-2', toIndex: 1.5 }],
+    ['a missing destination', { type: 'move_pane', paneId: 'pane-1' }],
+    ['an empty reorder list', { type: 'reorder_columns', columnIds: [] }],
+    ['a reorder list of non-strings', { type: 'reorder_columns', columnIds: [1, 2] }],
+  ])('400s %s rather than letting it reach the engine', async (_label, rearrange) => {
+    const response = await post({ opId: 'op-r', baseRev: 0, verb: rearrange });
+
+    expect(response.status).toBe(400);
+    expect(mockApplyWorkspaceLayoutVerb).not.toHaveBeenCalled();
+  });
+
+  it('refuses an oversized reorder list — the bound is on the schema, not on the reducer', async () => {
+    const response = await post({
+      opId: 'op-r',
+      baseRev: 0,
+      verb: { type: 'reorder_columns', columnIds: Array.from({ length: 65 }, (_, i) => `col-${i}`) },
+    });
+
+    expect(response.status).toBe(400);
+    expect(mockApplyWorkspaceLayoutVerb).not.toHaveBeenCalled();
+  });
+
+  it('404s a rearrange aimed at a session the requester cannot reach, and never touches the grid', async () => {
+    // Same anti-enumeration policy as every other verb: the new verbs open no
+    // new way to learn that someone else's session exists.
+    mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'denied' });
+    const response = await post({
+      opId: 'op-r',
+      baseRev: 0,
+      verb: { type: 'move_pane', paneId: 'pane-1', toColumnId: 'col-2' },
+    });
+
+    expect(response.status).toBe(404);
+    expect(mockApplyWorkspaceLayoutVerb).not.toHaveBeenCalled();
+  });
+});

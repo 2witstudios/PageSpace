@@ -27,6 +27,7 @@ import { conversations } from '@pagespace/db/schema/conversations';
 import { pages } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import type { PaneScope } from '@pagespace/lib/agent-sessions/contract';
+import type { WorkspaceLayoutVerb } from '@pagespace/lib/agent-sessions/workspace-layout-verbs';
 import { createId } from '@paralleldrive/cuid2';
 import { applyWorkspaceLayoutVerb, readWorkspaceLayoutSnapshot } from './workspace-layout-runtime';
 
@@ -45,6 +46,52 @@ const MAX_PLACEMENT_ATTEMPTS = 3;
  * attempts: a rebase is the same op, and reusing the key is what stops a
  * retry from double-placing if an earlier attempt actually landed.
  */
+/**
+ * Apply ONE arbitrary layout verb to a workspace, rebasing while the server
+ * answers `stale` — the general form of {@link placePane}'s loop, and the ONE
+ * path the agent-facing rearrange tools (issue #2208) take into the grid.
+ *
+ * They go through `applyWorkspaceLayoutVerb` exactly like a browser's POST
+ * does: same single writer, same per-workspace lock, same op memory. The
+ * `opId` is CONSTANT across attempts (a rebase is the same op) so an SDK
+ * retry replays instead of applying twice.
+ *
+ * Unlike the placement helpers, this REPORTS its outcome: a rearrange is
+ * something the model asked for explicitly and must be told the truth about,
+ * where a pane placement is a courtesy riding along on other work. It still
+ * never throws — the caller maps the result to a tool answer.
+ */
+export async function applyLayoutVerbForWorkspace(input: {
+  workspaceId: string;
+  opId: string;
+  verb: WorkspaceLayoutVerb;
+}): Promise<{ ok: true; applied: boolean } | { ok: false; reason: 'contended' | 'failed' }> {
+  try {
+    for (let attempt = 0; attempt < MAX_PLACEMENT_ATTEMPTS; attempt += 1) {
+      const snapshot = await readWorkspaceLayoutSnapshot(input.workspaceId);
+      const result = await applyWorkspaceLayoutVerb({
+        workspaceId: input.workspaceId,
+        opId: input.opId,
+        baseRev: snapshot.rev,
+        verb: input.verb,
+      });
+      if (result.status === 'ok') return { ok: true, applied: result.applied };
+    }
+    loggers.api.warn('Agent layout verb gave up after repeated rev conflicts', {
+      workspaceId: input.workspaceId,
+      verb: input.verb.type,
+    });
+    return { ok: false, reason: 'contended' };
+  } catch (error) {
+    loggers.api.error(
+      'Agent layout verb failed',
+      error instanceof Error ? error : undefined,
+      { workspaceId: input.workspaceId, verb: input.verb.type },
+    );
+    return { ok: false, reason: 'failed' };
+  }
+}
+
 async function placePane(input: {
   workspaceId: string;
   scope: PaneScope;

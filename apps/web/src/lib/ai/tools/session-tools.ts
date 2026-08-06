@@ -4,8 +4,8 @@
  * invariant 1: a session hosts many conversations and owns their shared
  * sandbox).
  *
- * Two verb families, EXACTLY nine tools, ONE address namespace each. You name
- * a thing once, at spawn; every verb after that takes the id the spawn
+ * THREE verb families, EXACTLY thirteen tools, ONE address namespace each. You
+ * name a thing once, at spawn; every verb after that takes the id the spawn
  * returned — and `list_sessions` re-lists those ids (plus, for awareness,
  * other members' workers in SHARED workspaces, which are not the caller's to
  * address — see `SharedWorkspaceSummary`):
@@ -19,6 +19,16 @@
  *  - **Shells** — PTYs in the caller's session's ONE sandbox, addressed by
  *    shellId: `spawn_shell` → shellId · `send_shell` (keystrokes) ·
  *    `read_shell` (scrollback) · `kill_shell`.
+ *  - **Layout** (issue #2208) — the caller's own workspace's PANE GRID,
+ *    addressed by paneId/columnId: `list_panes` (the grid, with its ids and
+ *    size shares) · `resize_pane` · `move_pane` · `arrange_panes` (column
+ *    order). These write through `applyWorkspaceLayoutVerb`, the same single
+ *    writer the browser's verb POST uses, so an agent rearranging its
+ *    workspace lands in the pane ROWS and broadcasts live rather than
+ *    reaching only whichever browsers happen to be rendering the grid. They
+ *    were blocked until the grid became relational entities with a verb API
+ *    (epic Phase 3) — as blob writes they would have been yet another writer
+ *    of a client-authored JSONB.
  *
  * `wait: true` on spawn/send blocks for the worker's reply — this absorbs the
  * old `ask_agent` tool's synchronous consult (the inline invoke-an-agent
@@ -53,7 +63,8 @@ import {
   MAX_SESSION_CONVERSATIONS,
   planSpawnWorkerSession,
 } from '@pagespace/lib/agent-sessions/plan-spawn-session';
-import type { SandboxStatus, ShellDTO } from '@pagespace/lib/agent-sessions/contract';
+import type { PaneKind, SandboxStatus, ShellDTO } from '@pagespace/lib/agent-sessions/contract';
+import type { WorkspaceLayoutVerb } from '@pagespace/lib/agent-sessions/workspace-layout-verbs';
 import type { ToolExecutionContext } from '../core/types';
 
 /** Upper bound on one dispatched input — a task brief or a keystroke burst, not a file. */
@@ -145,6 +156,45 @@ export const readShellInputSchema = z
   .strict();
 
 export const killShellInputSchema = z.object({ shellId: z.string().min(1) }).strict();
+
+// --- Layout (issue #2208) ---------------------------------------------------
+// The workspace's PANE GRID, addressed by the paneId/columnId `list_panes`
+// returns. Vocabulary: "pane" and "column" are the environment's furniture, so
+// these sit on the WORKSPACE side of the frozen split — never "session", which
+// on this wire always means a worker you talk to.
+
+export const listPanesInputSchema = z.object({}).strict();
+
+/** Shares are 0..1 of the container, matching the row column exactly — no percentages on the wire. */
+const fraction = z.number().gt(0).lt(1);
+
+export const resizePaneInputSchema = z
+  .object({
+    /** A paneId from list_panes. Give this to set the pane's height within its column. */
+    paneId: z.string().min(1).optional(),
+    /** A columnId from list_panes. Give this to set the column's width in the grid. */
+    columnId: z.string().min(1).optional(),
+    /** The new share of the container, 0..1. Siblings absorb the difference. */
+    size: fraction,
+  })
+  .strict();
+
+export const movePaneInputSchema = z
+  .object({
+    paneId: z.string().min(1),
+    /** The columnId to move it into — its own column reorders it in place. */
+    toColumnId: z.string().min(1),
+    /** 0-based position in the destination. Omit to append. Out-of-range values clamp. */
+    toIndex: z.number().int().min(0).max(64).optional(),
+  })
+  .strict();
+
+export const arrangePanesInputSchema = z
+  .object({
+    /** columnIds in the left-to-right order you want. Unlisted columns keep their order behind these. */
+    columnIds: z.array(z.string().min(1)).min(1).max(64),
+  })
+  .strict();
 
 // ---------------------------------------------------------------------------
 // Injected IO
@@ -437,8 +487,58 @@ export interface SessionToolsDeps {
     }) => Promise<ShellReadOutcome>;
     send: (input: { shellId: string; keystrokes: string; userId: string }) => Promise<ShellSendOutcome>;
   };
+  /**
+   * The caller's workspace's PANE GRID, as `list_panes` reports it (issue
+   * #2208) — the ids the three rearrange tools address, plus enough of each
+   * pane's binding for the model to tell one rectangle from another. `null`
+   * for a workspace with no grid at all.
+   */
+  readPaneGrid?: (workspaceId: string) => Promise<PaneGridListing | null>;
+  /**
+   * Apply ONE layout verb to the caller's workspace grid, through the same
+   * single writer (`applyWorkspaceLayoutVerb`) the verbs route uses — same
+   * per-workspace lock, same op memory, same broadcast. `opId` is derived
+   * from the tool call id, so an SDK retry of one call replays rather than
+   * rearranging twice.
+   *
+   * `applied: false` is a real, successful answer: the reducer is total, so a
+   * stale pane id or a resize that resolves to the size already in force
+   * changes nothing rather than failing. OPTIONAL, like `placeWorkerPane` —
+   * a harness with no grid simply omits it and the tools say so.
+   */
+  applyLayoutVerb?: (input: {
+    workspaceId: string;
+    opId: string;
+    verb: WorkspaceLayoutVerb;
+  }) => Promise<{ ok: true; applied: boolean } | { ok: false; reason: string }>;
   /** Fresh conversation ids (client-mint discipline: the id exists before the row). */
   newId: () => string;
+}
+
+/** One pane of the caller's grid, as `list_panes` reports it. */
+export interface PaneGridPaneEntry {
+  paneId: string;
+  /** `'chat' | 'terminal' | 'page'`, or null for an unbound pane still showing the picker. */
+  kind: PaneKind | null;
+  /** The conversationId / shellId / pageId this pane shows, or null when unbound or still minting. */
+  targetId: string | null;
+  /** Display label only — never an address. */
+  name: string;
+  /** This pane's share of its column's height (0..1), or null when the column is evenly split. */
+  heightFraction: number | null;
+}
+
+/** One column of the caller's grid — a vertical stack of panes. */
+export interface PaneGridColumnEntry {
+  columnId: string;
+  /** This column's share of the grid width (0..1), or null when the grid is evenly split. */
+  widthFraction: number | null;
+  panes: PaneGridPaneEntry[];
+}
+
+/** The caller's whole pane grid: a left-to-right row of columns. */
+export interface PaneGridListing {
+  columns: PaneGridColumnEntry[];
 }
 
 // ---------------------------------------------------------------------------
@@ -500,6 +600,19 @@ function workerListingClosed(sessionId: string): { success: false; error: string
   };
 }
 
+/**
+ * The layout family's "there is nothing here to arrange". Deliberately ONE
+ * message for every way that can be true — no workspace, no grid yet, or a
+ * surface with no layout wiring at all — because the model's remedy is the
+ * same in all of them, and the distinctions are about server plumbing it
+ * cannot act on.
+ */
+const NO_GRID = {
+  success: false as const,
+  error:
+    'This conversation has no pane grid to arrange. Pane layout only exists inside an agent session with an open workspace; elsewhere there is nothing to move or resize.',
+};
+
 function notYourShell(shellId: string): { success: false; error: string } {
   return {
     success: false,
@@ -560,6 +673,10 @@ export function createSessionTools(deps: SessionToolsDeps): {
   send_shell: Tool;
   read_shell: Tool;
   kill_shell: Tool;
+  list_panes: Tool;
+  resize_pane: Tool;
+  move_pane: Tool;
+  arrange_panes: Tool;
 } {
   /**
    * A session verb's shared open — RESOURCE-addressed, like `read_page`: the
@@ -608,6 +725,85 @@ export function createSessionTools(deps: SessionToolsDeps): {
       return { ok: false, error: workerListingClosed(conversationId) };
     }
     return { ok: true, actor, row };
+  };
+
+  /**
+   * A LAYOUT verb's shared open (issue #2208): resolve the caller's own
+   * workspace, which is the only grid these tools can reach.
+   *
+   * Access control is structural rather than a second predicate — the grid is
+   * addressed by resolving the CALLER'S OWN conversation to its workspace
+   * (`findOwnWorkspace`), never by a workspaceId the model supplies, so there
+   * is no id here for a caller to point somewhere it does not belong. That is
+   * the same footing the shell family stands on, and it means the check the
+   * verbs route runs (`checkSessionAccess`) has already been satisfied by the
+   * time this conversation exists in this workspace at all; the runtime
+   * re-runs it anyway on the way in, so the gate is one function in one place
+   * for both entry points.
+   *
+   * Refuses, distinctly, the three ways there is nothing to arrange: no auth,
+   * no conversation, and a conversation with no workspace (a plain thread).
+   */
+  const openOwnGrid = async (
+    context: ToolExecutionContext | undefined,
+  ): Promise<
+    | { ok: true; workspaceId: string }
+    | { ok: false; error: { success: false; error: string } }
+  > => {
+    const actor = readActor(context);
+    if (!actor) return { ok: false, error: NEEDS_AUTH };
+    const conversationId = context?.conversationId;
+    if (!conversationId) return { ok: false, error: NEEDS_CONVERSATION };
+    const workspace = await deps.findOwnWorkspace(conversationId);
+    if (!workspace) return { ok: false, error: NO_GRID };
+    return { ok: true, workspaceId: workspace.workspaceId };
+  };
+
+  /**
+   * Every rearrange tool's tail: derive the idempotency key from the tool call
+   * id, apply the verb through the single writer, and map the outcome to an
+   * answer that never overstates what happened. `applied: false` reports
+   * `changed: false` and SAYS why it might be — a total reducer's no-op is not
+   * an error, but a model told "success" after nothing moved would keep
+   * arranging a grid it has already lost track of.
+   */
+  const runLayoutVerb = async (
+    context: ToolExecutionContext | undefined,
+    options: unknown,
+    toolName: string,
+    verb: WorkspaceLayoutVerb,
+  ): Promise<Record<string, unknown>> => {
+    const opened = await openOwnGrid(context);
+    if (!opened.ok) return opened.error;
+    if (!deps.applyLayoutVerb) return NO_GRID;
+
+    const toolCallId = (options as { toolCallId?: string } | undefined)?.toolCallId;
+    if (!toolCallId) return NO_GRID;
+
+    const result = await deps.applyLayoutVerb({
+      workspaceId: opened.workspaceId,
+      // `toolCallId` is stable across the SDK's own retries of one call, so a
+      // retried rearrange replays through the verb engine's op memory instead
+      // of moving the pane twice.
+      opId: `${toolName}:${toolCallId}`,
+      verb,
+    });
+    if (!result.ok) {
+      return {
+        success: false,
+        error: `Could not rearrange the panes (${result.reason}). Call list_panes to re-read the grid and try again.`,
+        reason: result.reason,
+      };
+    }
+    return {
+      success: true,
+      changed: result.applied,
+      ...(result.applied
+        ? {}
+        : {
+            note: 'Nothing changed — the pane or column id may no longer exist, or the layout was already exactly this. Call list_panes to see the grid as it is now.',
+          }),
+    };
   };
 
   /** A shell verb's shared open: the shell must exist IN the caller's own session. */
@@ -1028,6 +1224,84 @@ export function createSessionTools(deps: SessionToolsDeps): {
         }
         return { success: true, shellId, killed: killed.killed };
       },
+    }),
+
+    // --- Layout (issue #2208) --------------------------------------------
+    // An agent arranging its OWN workspace. Every one of these goes through
+    // `applyWorkspaceLayoutVerb` — the same single writer, lock, and op memory
+    // a browser's verb POST uses — so a rearrange lands in the pane ROWS and
+    // broadcasts live, instead of reaching only whichever browsers happen to
+    // be rendering the grid.
+
+    list_panes: tool({
+      description:
+        'Show the pane grid of THIS conversation\'s workspace: a left-to-right row of columns, each a top-to-bottom stack of panes. Returns the columnIds and paneIds that resize_pane/move_pane/arrange_panes address, what each pane is showing, and the current size shares (null means that container is split evenly). Read this before rearranging anything — ids change as panes open and close. Only meaningful inside an agent session with an open pane grid.',
+      inputSchema: listPanesInputSchema,
+      execute: async (_input, options) => {
+        const opened = await openOwnGrid(readContext(options));
+        if (!opened.ok) return opened.error;
+        if (!deps.readPaneGrid) return NO_GRID;
+
+        const grid = await deps.readPaneGrid(opened.workspaceId);
+        // A workspace whose grid has never been opened is a real, reportable
+        // state — not an error, and not the same as having no workspace.
+        if (!grid) {
+          return {
+            success: true,
+            workspaceId: opened.workspaceId,
+            columns: [],
+            note: 'This workspace has no pane grid open yet — there is nothing laid out to rearrange.',
+          };
+        }
+        return { success: true, workspaceId: opened.workspaceId, columns: grid.columns };
+      },
+    }),
+
+    resize_pane: tool({
+      description:
+        'Resize part of this workspace\'s pane grid: pass a columnId to set that column\'s width, or a paneId to set that pane\'s height within its own column. size is a share of the container from 0 to 1, and the siblings absorb the difference in proportion. A size that would squeeze a sibling below its minimum is clamped rather than refused. Heights are always column-local — a pane\'s height says nothing about panes in other columns. Get the ids from list_panes. A container with only one member cannot be resized: it already fills its space.',
+      inputSchema: resizePaneInputSchema,
+      execute: async ({ paneId, columnId, size }, options) => {
+        const context = readContext(options);
+        // Exactly one target. Accepting both and silently preferring one would
+        // make a model's ambiguous call look like it worked on the axis it
+        // did not mean.
+        if ((paneId === undefined) === (columnId === undefined)) {
+          return {
+            success: false,
+            error: 'Pass exactly one of paneId (to set a pane\'s height in its column) or columnId (to set a column\'s width).',
+          };
+        }
+        const verb: WorkspaceLayoutVerb =
+          columnId !== undefined
+            ? { type: 'resize_column', columnId, widthFraction: size }
+            : { type: 'resize_pane', paneId: paneId!, heightFraction: size };
+        return runLayoutVerb(context, options, 'resize_pane', verb);
+      },
+    }),
+
+    move_pane: tool({
+      description:
+        'Move a pane to a different column in this workspace\'s grid, or to a different position within its own column. Pass toColumnId (from list_panes) and, optionally, toIndex — the 0-based slot in the destination stack; omit it to append at the bottom, and out-of-range values clamp to the ends. The pane keeps showing exactly what it was showing; only its position changes. A column left empty by the move is removed.',
+      inputSchema: movePaneInputSchema,
+      execute: async ({ paneId, toColumnId, toIndex }, options) =>
+        runLayoutVerb(readContext(options), options, 'move_pane', {
+          type: 'move_pane',
+          paneId,
+          toColumnId,
+          ...(toIndex === undefined ? {} : { toIndex }),
+        }),
+    }),
+
+    arrange_panes: tool({
+      description:
+        'Reorder this workspace\'s columns left to right. Pass columnIds (from list_panes) in the order you want them; you do NOT have to list them all — the ones you name go first, in your order, and every column you leave out keeps its current relative position behind them. Ids that no longer exist are skipped rather than failing the call. Panes and sizes travel with their column.',
+      inputSchema: arrangePanesInputSchema,
+      execute: async ({ columnIds }, options) =>
+        runLayoutVerb(readContext(options), options, 'arrange_panes', {
+          type: 'reorder_columns',
+          columnIds,
+        }),
     }),
   };
 }

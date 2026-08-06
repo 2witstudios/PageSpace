@@ -147,14 +147,36 @@ export const persistedPaneStateSchema = z
     id: z.string().min(1),
     scope: paneScopeSchema.nullable(),
     tabs: z.array(paneScopeSchema).optional(),
+    /**
+     * This pane's share of its column's height (issue #2208). Optional and
+     * nullable on the WIRE — an unsized column carries no fractions at all,
+     * and every grid written before the resize verbs shipped is exactly that
+     * — but never partially trusted: the reducer reads a container whose
+     * members are not ALL sized as unsized, and re-establishes the invariant
+     * itself. Preserved through the transform (unlike `tabs`) because it IS a
+     * live field, not a retired one.
+     */
+    heightFraction: z.number().nullable().optional(),
   })
-  .transform(({ id, scope }) => ({ id, scope }));
+  .transform(({ id, scope, heightFraction }) => ({
+    id,
+    scope,
+    ...(typeof heightFraction === 'number' ? { heightFraction } : {}),
+  }));
 export type PersistedPaneState = z.infer<typeof persistedPaneStateSchema>;
 
-export const persistedColumnStateSchema = z.object({
-  id: z.string().min(1),
-  panes: z.array(persistedPaneStateSchema).min(1),
-});
+export const persistedColumnStateSchema = z
+  .object({
+    id: z.string().min(1),
+    panes: z.array(persistedPaneStateSchema).min(1),
+    /** This column's share of the grid's width — {@link persistedPaneStateSchema}'s twin. */
+    widthFraction: z.number().nullable().optional(),
+  })
+  .transform(({ id, panes, widthFraction }) => ({
+    id,
+    panes,
+    ...(typeof widthFraction === 'number' ? { widthFraction } : {}),
+  }));
 export type PersistedColumnState = z.infer<typeof persistedColumnStateSchema>;
 
 export const persistedWorkspaceStateSchema = z.object({

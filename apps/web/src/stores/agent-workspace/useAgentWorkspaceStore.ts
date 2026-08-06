@@ -165,6 +165,19 @@ interface AgentWorkspaceState {
   /** Retire a pane's picker focus. CLIENT-LOCAL, like `selectPane`. */
   dismissPicker(sessionId: string, paneId: string): void;
   /**
+   * Give a column `widthFraction` of the grid's width (issue #2208). Unlike
+   * focus, sizing IS a row — it restores cross-device and an agent can set it
+   * — so this posts a verb like every other structural mutation, and the
+   * shared reducer owns the clamping and the sibling renormalization.
+   */
+  resizeColumn(sessionId: string, columnId: string, widthFraction: number): void;
+  /** Give a pane `heightFraction` of ITS COLUMN's height. Column-local; see {@link resizeColumn}. */
+  resizePane(sessionId: string, paneId: string, heightFraction: number): void;
+  /** Relocate a pane to another column and/or index. `toIndex` omitted = append. */
+  movePane(sessionId: string, paneId: string, toColumnId: string, toIndex?: number): void;
+  /** Reorder the grid's columns. The list is read as a PREFIX — see the reducer's `reorderColumns`. */
+  reorderColumns(sessionId: string, columnIds: string[]): void;
+  /**
    * Point whichever pane is showing `oldConversationId` at its replacement.
    * Used when the current conversation is deleted and re-minted into the
    * SAME session (`AgentPageView`'s delete flow) — a no-op if the deleted
@@ -730,6 +743,22 @@ export const useAgentWorkspaceStore = create<AgentWorkspaceState>()(
           pendingPickerPaneId: null,
         });
       },
+
+      // The four rearrange verbs (issue #2208). Each is a plain enqueue: the
+      // shared reducer applies it optimistically, decides whether it changed
+      // anything at all (a clamped-to-identical resize never reaches the
+      // queue), and the same 409-rebase path covers them as every other verb.
+      resizeColumn: (sessionId, columnId, widthFraction) =>
+        enqueueVerb(sessionId, { type: 'resize_column', columnId, widthFraction }),
+
+      resizePane: (sessionId, paneId, heightFraction) =>
+        enqueueVerb(sessionId, { type: 'resize_pane', paneId, heightFraction }),
+
+      movePane: (sessionId, paneId, toColumnId, toIndex) =>
+        enqueueVerb(sessionId, { type: 'move_pane', paneId, toColumnId, ...(toIndex === undefined ? {} : { toIndex }) }),
+
+      reorderColumns: (sessionId, columnIds) =>
+        enqueueVerb(sessionId, { type: 'reorder_columns', columnIds }),
 
       replaceConversation: (sessionId, oldConversationId, newScope) =>
         enqueueVerb(sessionId, {

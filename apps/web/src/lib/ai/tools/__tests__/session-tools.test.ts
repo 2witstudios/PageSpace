@@ -82,15 +82,21 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe('the nine-tool surface', () => {
-  it('should export EXACTLY the nine tools of the two verb families', () => {
+describe('the thirteen-tool surface', () => {
+  it('should export EXACTLY the thirteen tools of the three verb families', () => {
     const tools = createSessionTools(makeDeps());
+    // Workers + shells (frozen since Phase 1) plus the LAYOUT family that
+    // issue #2208 added once the pane grid became relational entities.
     expect(Object.keys(tools).sort()).toEqual([
+      'arrange_panes',
       'kill_session',
       'kill_shell',
+      'list_panes',
       'list_sessions',
+      'move_pane',
       'read_session',
       'read_shell',
+      'resize_pane',
       'send_session',
       'send_shell',
       'spawn_session',

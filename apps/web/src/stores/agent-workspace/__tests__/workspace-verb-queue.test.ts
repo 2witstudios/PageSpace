@@ -387,3 +387,122 @@ describe('give-up', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// The rearrange verbs (issue #2208)
+// ---------------------------------------------------------------------------
+
+/** A two-column grid as the wire carries it, optionally sized. */
+function twoColumnWireGrid(widths?: [number, number]): PersistedColumnState[] {
+  return [
+    {
+      id: 'col-a',
+      ...(widths ? { widthFraction: widths[0] } : {}),
+      panes: [{ id: 'pane-a', scope: scope('Left', 'conv-a') }, { id: 'pane-a2', scope: scope('Lower', 'conv-a2') }],
+    },
+    {
+      id: 'col-b',
+      ...(widths ? { widthFraction: widths[1] } : {}),
+      panes: [{ id: 'pane-b', scope: scope('Right', 'conv-b') }],
+    },
+  ];
+}
+
+describe('rearrange verbs: optimistic apply', () => {
+  beforeEach(() => {
+    mockFetchWithAuth.mockImplementation(() => new Promise<Response>(() => {}));
+    store().hydrateFromServer('ses-1', { rev: 4, grid: twoColumnWireGrid() });
+  });
+
+  it('resizeColumn renders the new share immediately and posts one resize_column verb', () => {
+    store().resizeColumn('ses-1', 'col-a', 0.7);
+
+    expect(grid().columns[0].widthFraction).toBeCloseTo(0.7, 5);
+    expect(grid().columns[1].widthFraction).toBeCloseTo(0.3, 5);
+    const posted = postedVerbs().at(-1)!;
+    expect(posted.verb).toEqual({ type: 'resize_column', columnId: 'col-a', widthFraction: 0.7 });
+    expect(posted.baseRev).toBe(4);
+  });
+
+  it('resizePane sizes within the pane own column only', () => {
+    store().resizePane('ses-1', 'pane-a', 0.8);
+
+    expect(grid().columns[0].panes.map((pane) => pane.heightFraction?.toFixed(2))).toEqual(['0.80', '0.20']);
+    // A single-pane sibling column is untouched — heights are column-local.
+    expect(grid().columns[1].panes[0].heightFraction).toBeUndefined();
+    expect(postedVerbs().at(-1)!.verb).toEqual({ type: 'resize_pane', paneId: 'pane-a', heightFraction: 0.8 });
+  });
+
+  it('movePane relocates optimistically, dropping a column the move emptied', () => {
+    store().movePane('ses-1', 'pane-b', 'col-a', 0);
+
+    expect(grid().columns).toHaveLength(1);
+    expect(grid().columns[0].panes.map((pane) => pane.id)).toEqual(['pane-b', 'pane-a', 'pane-a2']);
+    expect(postedVerbs().at(-1)!.verb).toEqual({ type: 'move_pane', paneId: 'pane-b', toColumnId: 'col-a', toIndex: 0 });
+  });
+
+  it('movePane omits toIndex from the payload when the caller did (append)', () => {
+    store().movePane('ses-1', 'pane-b', 'col-a');
+    expect(postedVerbs().at(-1)!.verb).toEqual({ type: 'move_pane', paneId: 'pane-b', toColumnId: 'col-a' });
+  });
+
+  it('reorderColumns permutes optimistically', () => {
+    store().reorderColumns('ses-1', ['col-b', 'col-a']);
+
+    expect(grid().columns.map((column) => column.id)).toEqual(['col-b', 'col-a']);
+    expect(postedVerbs().at(-1)!.verb).toEqual({ type: 'reorder_columns', columnIds: ['col-b', 'col-a'] });
+  });
+
+  it('never posts a rearrange the reducer declined', () => {
+    const before = postedVerbs().length;
+    // A ghost id, a single-member container, and an order already in force —
+    // all total no-ops in the shared reducer, so none reaches the queue.
+    store().resizeColumn('ses-1', 'col-ghost', 0.5);
+    store().resizePane('ses-1', 'pane-b', 0.5);
+    store().reorderColumns('ses-1', ['col-a', 'col-b']);
+    store().movePane('ses-1', 'pane-b', 'col-b');
+
+    expect(postedVerbs()).toHaveLength(before);
+    expect(sync().pending).toHaveLength(0);
+  });
+});
+
+describe('rearrange verbs: 409 rebase', () => {
+  it('replays an unacked resize on top of the truth the 409 carried', async () => {
+    // The server has since been resized by someone else (col-a to 0.8) AND is
+    // a rev ahead — the exact shape a 409 exists to report.
+    mockFetchWithAuth
+      .mockResolvedValueOnce(reply(409, { rev: 9, grid: twoColumnWireGrid([0.8, 0.2]) }))
+      .mockResolvedValue(reply(200, { rev: 10, grid: twoColumnWireGrid([0.35, 0.65]) }));
+
+    store().hydrateFromServer('ses-1', { rev: 4, grid: twoColumnWireGrid() });
+    store().resizeColumn('ses-1', 'col-b', 0.65);
+    await settled();
+    await settled();
+
+    // Re-posted from the head against the rev the 409 handed back, then
+    // settled on the server's own answer.
+    const posts = postedVerbs();
+    expect(posts).toHaveLength(2);
+    expect(posts[0].verb.type).toBe('resize_column');
+    expect(posts[1].verb.type).toBe('resize_column');
+    expect(posts[0].opId, 'a rebase re-sends the SAME op').toBe(posts[1].opId);
+    expect(posts[1].baseRev).toBe(9);
+    expect(sync().rev).toBe(10);
+    expect(sync().pending).toHaveLength(0);
+    expect(grid().columns[1].widthFraction).toBeCloseTo(0.65, 5);
+  });
+
+  it('adopts fractions arriving on a remote broadcast without stealing focus', () => {
+    store().hydrateFromServer('ses-1', { rev: 4, grid: twoColumnWireGrid() });
+    store().selectPane('ses-1', 'pane-a2');
+
+    // An agent's resize_pane, or another device's — sizing IS a row, so it
+    // must land here, unlike focus, which must not move.
+    store().applyRemoteUpdate({ workspaceId: 'ses-1', rev: 5, grid: twoColumnWireGrid([0.25, 0.75]) });
+
+    expect(grid().columns.map((column) => column.widthFraction)).toEqual([0.25, 0.75]);
+    expect(grid().activePaneId).toBe('pane-a2');
+    expect(sync().rev).toBe(5);
+  });
+});
