@@ -1,5 +1,6 @@
 /**
- * Migration 0248 (messages-unification EXPAND) — epic "Agent-Session Single Source of Truth", Phase 4
+ * Migrations 0248 (messages-unification EXPAND) and 0249 (integrity
+ * constraints) — epic "Agent-Session Single Source of Truth", Phase 4
  * (docs/2.0-architecture/agent-sessions.md; plan D6).
  *
  * Two layers, deliberately:
@@ -13,7 +14,7 @@
  *      (which it is for `bun run test`, `./scripts/test-with-db.sh` and CI).
  *      A fresh database is migrated to 0247, kept as a TEMPLATE, and each
  *      scenario gets its own copy of it — so every scenario seeds a legacy
- *      corpus and then watches 0248 actually run against it. The app's
+ *      corpus and then watches 0248/0249 actually run against it. The app's
  *      own database is never touched: everything happens in throwaway
  *      databases created and dropped by this file.
  */
@@ -41,6 +42,7 @@ function readMigration(idx: number): { file: string; sql: string; code: string }
 }
 
 const expand = readMigration(248);
+const integrity = readMigration(249);
 
 const journal = JSON.parse(
   readFileSync(path.join(MIGRATIONS_DIR, 'meta/_journal.json'), 'utf8'),
@@ -150,6 +152,42 @@ describe('drizzle/0248 messages unification — expand', () => {
   });
 });
 
+describe('drizzle/0249 integrity constraints', () => {
+  it('should be migration 0249 in the journal', () => {
+    expect(journal.entries.find((e) => e.idx === 249)?.tag).toBe(
+      path.basename(integrity.file, '.sql'),
+    );
+  });
+
+  it('should add all three type ⇄ contextId checks NOT VALID', () => {
+    for (const [name, predicate] of [
+      ['conversations_global_context_null_chk', `"conversations"."type" <> 'global' OR "conversations"."contextId" IS NULL`],
+      ['conversations_page_context_present_chk', `"conversations"."type" <> 'page' OR "conversations"."contextId" IS NOT NULL`],
+      ['conversations_drive_context_present_chk', `"conversations"."type" <> 'drive' OR "conversations"."contextId" IS NOT NULL`],
+    ] as const) {
+      expect(integrity.code).toContain(`ADD CONSTRAINT "${name}"`);
+      expect(integrity.code).toContain(`CHECK (${predicate})`);
+    }
+    // One NOT VALID clause per constraint added (3 checks + 1 FK).
+    expect((integrity.code.match(/^\s*NOT VALID;$/gm) ?? []).length).toBe(4);
+  });
+
+  it('should give ai_stream_sessions.conversation_id a real cascading FK, NOT VALID', () => {
+    expect(integrity.code).toContain(
+      'ADD CONSTRAINT "ai_stream_sessions_conversation_id_conversations_id_fk"',
+    );
+    expect(integrity.code).toMatch(
+      /FOREIGN KEY \("conversation_id"\) REFERENCES "public"\."conversations"\("id"\)\s*\n?\s*ON DELETE cascade/,
+    );
+    expect(integrity.code).not.toMatch(/ALTER TABLE[^;]*VALIDATE CONSTRAINT/);
+  });
+
+  it('should never repair rows — it audits and reports instead', () => {
+    expect(integrity.code).not.toMatch(/^\s*(UPDATE|DELETE FROM|TRUNCATE)\b/m);
+    expect(integrity.code).toContain('RAISE NOTICE');
+  });
+});
+
 // ───────────────────────────── live behavior ──────────────────────────────
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -187,7 +225,7 @@ let adminPool: Pool;
 interface Scenario {
   pool: Pool;
   notices: string[];
-  /** Applies 0248. Resolves to the error when the migration aborts. */
+  /** Applies 0248 + 0249. Resolves to the error when the migration aborts. */
   migrate: () => Promise<Error | null>;
   query: <T extends Record<string, unknown> = Record<string, unknown>>(
     text: string,
@@ -274,7 +312,7 @@ async function insertChatMessage(
   );
 }
 
-describeLive('0248 against a real Postgres', () => {
+describeLive('0248/0249 against a real Postgres', () => {
   beforeAll(async () => {
     adminPool = new Pool({ connectionString: DATABASE_URL, max: 1 });
     await adminPool.query(`CREATE DATABASE "${TEMPLATE_DB}"`);
@@ -302,10 +340,10 @@ describeLive('0248 against a real Postgres', () => {
     await adminPool.end();
   }, 120_000);
 
-  it('pins the base: 0248 is the only pending migration', () => {
+  it('pins the base: 0248 and 0249 are the only pending migrations', () => {
     expect(allMigrations.length).toBe(journal.entries.length);
-    expect(allMigrations.length - baseMigrations.length).toBe(1);
-    expect(journal.entries[journal.entries.length - 1]?.idx).toBe(248);
+    expect(allMigrations.length - baseMigrations.length).toBe(2);
+    expect(journal.entries[journal.entries.length - 1]?.idx).toBe(249);
   });
 
   it('resolves ownership by the ladder, quarantines tombstoned threads, and is idempotent', async () => {
@@ -474,4 +512,52 @@ describeLive('0248 against a real Postgres', () => {
     }
   }, 180_000);
 
+  it('enforces 0249 on new writes while grandfathering legacy-shaped rows', async () => {
+    const s = await openScenario('integrity');
+    try {
+      await seedFixtures(s);
+      // Legacy-shaped rows that the new CHECKs would reject, written BEFORE
+      // the constraints exist.
+      await s.query(`
+        INSERT INTO "conversations" ("id", "userId", "type", "contextId", "createdAt", "updatedAt") VALUES
+          ('c_legacy_global', 'u_speaker', 'global', 'p_with_creator', now(), now()),
+          ('c_legacy_page',   'u_speaker', 'page',   NULL,             now(), now());
+      `);
+      // A stream row pointing at a conversation that does not exist — the
+      // pre-count this FK has to grandfather.
+      await s.query(`
+        INSERT INTO "ai_stream_sessions" ("message_id", "channel_id", "conversation_id", "user_id")
+        VALUES ('msg_dangling', 'chan', 'c_never_existed', 'u_speaker');
+      `);
+
+      expect(await s.migrate()).toBeNull();
+
+      // Grandfathered: still there, and the audit counted them.
+      expect(await s.query(`SELECT 1 FROM "conversations" WHERE "id" IN ('c_legacy_global','c_legacy_page')`)).toHaveLength(2);
+      expect(await s.query(`SELECT 1 FROM "ai_stream_sessions" WHERE "message_id" = 'msg_dangling'`)).toHaveLength(1);
+      expect(s.notices.join('\n')).toMatch(/pre-audit: 1 ai_stream_sessions row/);
+
+      // New writes are checked immediately.
+      await expect(
+        s.query(`INSERT INTO "conversations" ("id","userId","type","contextId","createdAt","updatedAt") VALUES ('c_new_global','u_speaker','global','p_with_creator',now(),now())`),
+      ).rejects.toMatchObject({ code: '23514' });
+      await expect(
+        s.query(`INSERT INTO "conversations" ("id","userId","type","contextId","createdAt","updatedAt") VALUES ('c_new_page','u_speaker','page',NULL,now(),now())`),
+      ).rejects.toMatchObject({ code: '23514' });
+      await expect(
+        s.query(`INSERT INTO "conversations" ("id","userId","type","contextId","createdAt","updatedAt") VALUES ('c_new_drive','u_speaker','drive',NULL,now(),now())`),
+      ).rejects.toMatchObject({ code: '23514' });
+      await expect(
+        s.query(`INSERT INTO "ai_stream_sessions" ("message_id","channel_id","conversation_id","user_id") VALUES ('msg_new','chan','c_still_missing','u_speaker')`),
+      ).rejects.toMatchObject({ code: '23503' });
+
+      // And the stream row cascades with its conversation.
+      await s.query(`INSERT INTO "conversations" ("id","userId","type","contextId","createdAt","updatedAt") VALUES ('c_ok','u_speaker','page','p_with_creator',now(),now())`);
+      await s.query(`INSERT INTO "ai_stream_sessions" ("message_id","channel_id","conversation_id","user_id") VALUES ('msg_ok','chan','c_ok','u_speaker')`);
+      await s.query(`DELETE FROM "conversations" WHERE "id" = 'c_ok'`);
+      expect(await s.query(`SELECT 1 FROM "ai_stream_sessions" WHERE "message_id" = 'msg_ok'`)).toHaveLength(0);
+    } finally {
+      await s.pool.end();
+    }
+  }, 180_000);
 });

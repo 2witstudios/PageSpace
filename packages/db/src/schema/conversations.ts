@@ -1,5 +1,5 @@
-import { pgTable, text, timestamp, jsonb, boolean, bigint, index } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { pgTable, text, timestamp, jsonb, boolean, bigint, index, check } from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
 import { users } from './auth';
 import { pages } from './core';
 import { agentSessions } from './agent-sessions';
@@ -60,6 +60,42 @@ export const conversations = pgTable('conversations', {
   userLastMessageIdx: index('conversations_user_id_last_message_at_idx').on(table.userId, table.lastMessageAt),
   contextIdx: index('conversations_context_id_idx').on(table.contextId),
   sessionIdx: index('conversations_session_id_idx').on(table.sessionId),
+  /**
+   * `type` ⇄ `contextId` consistency — the invariant every reader has always
+   * assumed and nothing has ever enforced (epic "Agent-Session Single Source
+   * of Truth", Phase 4 — integrity constraints). It becomes load-bearing at
+   * the message merge: a page conversation's page IS `contextId`, so a page
+   * row with a NULL context is a message set with no page, and a global row
+   * with a context is a page reference the global reader will never look at.
+   *
+   * All THREE are added `NOT VALID` (hand-appended in migration 0249 —
+   * drizzle has no expression for it): new and updated rows are checked from
+   * the moment they land, the legacy corpus is not scanned, and the
+   * `VALIDATE CONSTRAINT` decision belongs to a later PR that has looked at
+   * real data. Written as `type <> X OR ...` rather than `CASE`, so a row of
+   * any other type is unconstrained rather than accidentally forbidden.
+   */
+  globalHasNoContext: check(
+    'conversations_global_context_null_chk',
+    sql`${table.type} <> 'global' OR ${table.contextId} IS NULL`,
+  ),
+  pageHasContext: check(
+    'conversations_page_context_present_chk',
+    sql`${table.type} <> 'page' OR ${table.contextId} IS NOT NULL`,
+  ),
+  /**
+   * Included after auditing the writers rather than the rows: NO code path in
+   * this repo mints a `type='drive'` conversation (`createConversation` writes
+   * 'page', the global repository writes 'global'; the value survives only in
+   * this column's comment and in type unions). So the constraint cannot break
+   * a live writer, and `NOT VALID` means it cannot break a legacy row either —
+   * it exists to make the first drive-scoped writer supply the driveId
+   * instead of rediscovering this the way page chats did.
+   */
+  driveHasContext: check(
+    'conversations_drive_context_present_chk',
+    sql`${table.type} <> 'drive' OR ${table.contextId} IS NOT NULL`,
+  ),
 }));
 
 /**
