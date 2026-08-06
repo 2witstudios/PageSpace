@@ -1730,6 +1730,13 @@
       "when": 1786025603535,
       "tag": "0246_vengeful_veda",
       "breakpoints": true
+    },
+    {
+      "idx": 247,
+      "version": "7",
+      "when": 1786027860120,
+      "tag": "0247_grey_sister_grimm",
+      "breakpoints": true
     }
   ]
 }

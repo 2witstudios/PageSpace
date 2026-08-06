@@ -1,6 +1,6 @@
 {
-  "id": "cb5d053b-96b8-49e4-be88-527d67c7e558",
-  "prevId": "c4f72715-b487-4f7e-8ee2-8de3df3e1557",
+  "id": "42c8cf28-f4cc-46df-8cf8-7c2005602b60",
+  "prevId": "cb5d053b-96b8-49e4-be88-527d67c7e558",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -4592,6 +4592,13 @@
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false
+        },
+        "rev": {
+          "name": "rev",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         },
         "lastMessageAt": {
           "name": "lastMessageAt",
