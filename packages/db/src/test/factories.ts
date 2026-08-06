@@ -3,7 +3,9 @@ import { createId } from '@paralleldrive/cuid2'
 import { db } from '../db';
 import { users } from '../schema/auth';
 import { drives, pages, chatMessages } from '../schema/core';
+import { conversations, messages } from '../schema/conversations';
 import { driveMembers, pagePermissions } from '../schema/members';
+import { eq } from 'drizzle-orm';
 
 export const factories = {
   async createUser(overrides?: Partial<typeof users.$inferInsert>) {
@@ -64,10 +66,29 @@ export const factories = {
     return created
   },
 
+  /**
+   * A page-chat message, seeded THE WAY PRODUCTION WRITES ONE since the
+   * message-table merge (epic "Agent-Session Single Source of Truth", Phase 4
+   * / D6):
+   *
+   *   1. a real `conversations` row (`type='page'`, `contextId = pageId`) —
+   *      `chat_messages.conversationId` used to be self-minting and parentless,
+   *      but migration 0248 gave it a real FK and the unified leg's FK is
+   *      validated, so a fixture without one is not a state the app can reach;
+   *   2. BOTH legs — `chat_messages` (legacy) and `messages` (unified) — which
+   *      is exactly what PR 10's dual-write does for every live write.
+   *
+   * Readers cut over to the unified table (PR 11 onward) therefore see this
+   * fixture, and so do the legacy readers still awaiting PR 12. The
+   * conversation's owner is `overrides.userId` when given, else the drive
+   * owner (`conversations.userId` is NOT NULL and FK'd, so it needs a real
+   * user).
+   */
   async createChatMessage(pageId: string, overrides?: Partial<typeof chatMessages.$inferInsert>) {
     const message = {
       id: createId(),
       pageId,
+      conversationId: createId(),
       role: 'user',
       content: faker.lorem.sentence(),
       createdAt: new Date(),
@@ -76,7 +97,64 @@ export const factories = {
       ...overrides,
     }
 
+    const [existingConversation] = await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(eq(conversations.id, message.conversationId))
+      .limit(1)
+
+    if (!existingConversation) {
+      let ownerId = message.userId ?? null
+      if (!ownerId) {
+        const [owner] = await db
+          .select({ ownerId: drives.ownerId })
+          .from(pages)
+          .innerJoin(drives, eq(drives.id, pages.driveId))
+          .where(eq(pages.id, pageId))
+          .limit(1)
+        ownerId = owner?.ownerId ?? null
+      }
+      if (ownerId) {
+        await db.insert(conversations).values({
+          id: message.conversationId,
+          userId: ownerId,
+          type: 'page',
+          contextId: pageId,
+          title: null,
+          isActive: true,
+          createdAt: message.createdAt,
+        }).onConflictDoNothing()
+      }
+    }
+
     const [created] = await db.insert(chatMessages).values(message).returning()
+    // The unified leg. Skipped when there is no conversations row to hang it
+    // off (an ownerless fixture page) — same fail-open rule the production
+    // dual-write applies, so this factory can never be the thing that breaks
+    // a test that only cares about the legacy table.
+    const [conversationRow] = await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(eq(conversations.id, message.conversationId))
+      .limit(1)
+    if (conversationRow) {
+      await db.insert(messages).values({
+        id: message.id,
+        conversationId: message.conversationId,
+        userId: message.userId ?? null,
+        role: message.role,
+        content: message.content,
+        messageType: message.messageType,
+        toolCalls: message.toolCalls ?? null,
+        toolResults: message.toolResults ?? null,
+        createdAt: message.createdAt,
+        isActive: message.isActive,
+        editedAt: message.editedAt ?? null,
+        status: message.status ?? 'complete',
+        pageId,
+        sourceAgentId: message.sourceAgentId ?? null,
+      }).onConflictDoNothing()
+    }
     return created
   },
 

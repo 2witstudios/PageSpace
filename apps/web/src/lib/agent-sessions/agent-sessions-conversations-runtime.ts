@@ -17,10 +17,10 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, desc, eq, exists, isNotNull, or, sql } from '@pagespace/db/operators';
+import { and, desc, eq, exists, isNotNull, sql } from '@pagespace/db/operators';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { agentSessions } from '@pagespace/db/schema/agent-sessions';
-import { pages, chatMessages } from '@pagespace/db/schema/core';
+import { pages } from '@pagespace/db/schema/core';
 
 export interface PastConversationRow {
   conversationId: string;
@@ -58,64 +58,64 @@ export interface PaginatedPastConversationsResult {
 
 /**
  * Keeps conversations that never got a first message out of "history" — same
- * rule `globalConversationRepository` applies. NOT a single table: despite
- * `messages`' own doc comment claiming to be "unified... for all conversation
- * types", only `type: 'global'` content actually lands there — `type: 'page'`
- * AND `type: 'client'` conversations write to the older `chat_messages` table
- * instead (both share the same underlying send path,
- * `saveMessageToDatabase`/`chatMessageRepository`). Checking only `messages`
- * here silently excluded every one of those conversations from this listing
- * (review finding).
+ * rule `globalConversationRepository` applies.
  *
- * Matched on `chatMessages.conversationId` ALONE — no `pageId` join. A
- * `type: 'client'` conversation's `chat_messages` rows can carry a DIFFERENT
- * `pageId` per message (the v1 completions API lets each request target a
- * different agent page; only `conversationId` scopes a thread), so a `pageId`
- * equality would just never match for that type. `conversationId` is a
- * cuid2 — already globally unique — so it never needed the extra key even
- * for `type: 'page'`.
+ * ONE table since the message-table merge (epic "Agent-Session Single Source
+ * of Truth", Phase 4 / D6 — reader cutover). This used to be an `OR` of two
+ * `EXISTS`: `messages` for `type: 'global'` and `chat_messages` for
+ * `type: 'page'` / `type: 'client'`. Both legs now live in `messages`.
+ *
+ * Matched on `conversationId` ALONE — no page predicate, exactly as the
+ * legacy `chat_messages` leg was. A `type: 'client'` conversation's rows can
+ * carry a DIFFERENT `pageId` per row (the v1 completions API lets each
+ * request target a different agent page; only `conversationId` scopes a
+ * thread), so a page equality would never match for that type.
+ * `conversationId` is a cuid2 — globally unique — so it never needed the
+ * extra key even for `type: 'page'`.
+ *
+ * The `status != 'streaming'` filter, previously carried by the
+ * `chat_messages` leg only, is now applied uniformly: a conversation whose
+ * only row is a mid-flight placeholder has no history to show, whatever its
+ * type. In practice this is invisible on global threads — the send pipeline
+ * persists the user's `complete` row before it inserts the assistant
+ * placeholder, so a global conversation can never be placeholder-only in a
+ * committed state.
  */
-const hasActiveMessage = or(
-  exists(
-    db
-      .select({ one: sql`1` })
-      .from(messages)
-      .where(and(eq(messages.conversationId, conversations.id), eq(messages.isActive, true))),
-  ),
-  exists(
-    db
-      .select({ one: sql`1` })
-      .from(chatMessages)
-      .where(
-        and(
-          eq(chatMessages.conversationId, conversations.id),
-          eq(chatMessages.isActive, true),
-          sql`${chatMessages.status} != 'streaming'`,
-        ),
+const hasActiveMessage = exists(
+  db
+    .select({ one: sql`1` })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.conversationId, conversations.id),
+        eq(messages.isActive, true),
+        sql`${messages.status} != 'streaming'`,
       ),
-  ),
-)!;
+    ),
+);
 
 /**
  * The real "last activity" timestamp — NOT `conversations.lastMessageAt`,
  * which nothing ever sets for `type: 'page'`/`type: 'client'` conversations
- * (their send path writes only `chat_messages`; grepping every
- * `.set({...lastMessageAt...})` call in this codebase turns up exactly two
- * call sites, both in the global-assistant message routes). Sorting or
- * displaying recency by `conversations.lastMessageAt` alone left every
- * page-agent conversation permanently ordered by its CREATION time, however
- * recently it was actually used (review finding). Mirrors
- * `conversationRepository.listConversations`'s own `MAX(chat_messages."createdAt")
- * GROUP BY "conversationId"` derivation, as a correlated subquery here since
- * this listing needs ONE sortable expression across heterogeneous source
- * tables. Falls back to `conversations.lastMessageAt` for `type: 'global'`
- * rows (where that column IS the source of truth).
+ * (grepping every `.set({...lastMessageAt...})` call in this codebase turns up
+ * exactly two call sites, both in the global-assistant message routes).
+ * Sorting or displaying recency by `conversations.lastMessageAt` alone left
+ * every page-agent conversation permanently ordered by its CREATION time,
+ * however recently it was actually used (review finding).
+ *
+ * Reads the unified `messages` table since the merge (Phase 4 / D6). The
+ * `COALESCE` fallback to `lastMessageAt` is KEPT rather than deleted: it still
+ * carries a conversation whose messages were all soft-deleted or are all
+ * mid-flight, and — during the expand window — one whose legacy rows the
+ * backfill has not copied across yet. For a global thread the two agree to
+ * within the write itself (`lastMessageAt` is stamped in the same transaction
+ * as the row), so the MAX simply becomes the more precise of the two.
  */
 const recencyExpr = sql<Date | null>`COALESCE(
-  (SELECT MAX(${chatMessages.createdAt}) FROM chat_messages
-   WHERE ${chatMessages.conversationId} = ${conversations.id}
-     AND ${chatMessages.isActive} = true
-     AND ${chatMessages.status} != 'streaming'),
+  (SELECT MAX(${messages.createdAt}) FROM messages
+   WHERE ${messages.conversationId} = ${conversations.id}
+     AND ${messages.isActive} = true
+     AND ${messages.status} != 'streaming'),
   ${conversations.lastMessageAt}
 )`;
 
