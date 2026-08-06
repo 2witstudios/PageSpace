@@ -80,12 +80,17 @@ describe('sessionQuotaExceeded', () => {
   });
 
   it('an already-human message override (e.g. a live count) is used verbatim — not replaced by the generic sentence', async () => {
-    const response = sessionQuotaExceeded(request, 'user-1', 'about-to-be-minted', 'agent-sessions', {
+    // The pre-mint refusal: no workspace row exists yet, so the caller passes
+    // null — and the audit row honestly carries NO resourceId, never a
+    // fabricated sentinel id.
+    const response = sessionQuotaExceeded(request, 'user-1', null, 'agent-sessions', {
       message: 'You have 100 active sessions — end some before starting more.',
     });
 
     const body = await response.json();
     expect(body.error).toBe('You have 100 active sessions — end some before starting more.');
+    const [, audited] = mockAuditRequest.mock.calls[0];
+    expect(audited).not.toHaveProperty('resourceId');
   });
 
   it('with neither reasonCode nor message, falls back to the generic sentence and audits no reason code', () => {

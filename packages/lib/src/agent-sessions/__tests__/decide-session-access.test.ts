@@ -16,8 +16,8 @@ import {
   type AgentSessionAccessSubject,
 } from '../decide-session-access';
 
-const driveSession: AgentSessionAccessSubject = { sessionId: 'ses-1', ownerId: 'owner-1', driveId: 'drive-1' };
-const globalSession: AgentSessionAccessSubject = { sessionId: 'ses-2', ownerId: 'owner-1', driveId: null };
+const driveSession: AgentSessionAccessSubject = { ownerId: 'owner-1', driveId: 'drive-1' };
+const globalSession: AgentSessionAccessSubject = { ownerId: 'owner-1', driveId: null };
 
 describe('decideAgentSessionAccess — drive sessions', () => {
   it('allows a drive member', () => {

@@ -152,7 +152,7 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
     // 'new' → a fresh workspace, NOT the caller's.
     const isolatedWorkerId = createId();
     const isolated = await deps.createWorkerSession({
-      sessionId: isolatedWorkerId,
+      conversationId: isolatedWorkerId,
       callerConversationId,
       ownerId: owner.id,
       agentPageId: null,
@@ -160,17 +160,17 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
       workspace: 'new',
     });
     if (!isolated.ok) throw new Error(`isolated spawn failed: ${isolated.reason}`);
-    expect(isolated.workspaceSessionId).not.toBe(ensured.session.id);
+    expect(isolated.workspaceId).not.toBe(ensured.session.id);
     const [isolatedWorker] = await db
       .select()
       .from(conversations)
       .where(eq(conversations.id, isolatedWorkerId));
-    expect(isolatedWorker.sessionId).toBe(isolated.workspaceSessionId);
+    expect(isolatedWorker.sessionId).toBe(isolated.workspaceId);
 
     // Explicit target → lands exactly there (here: back in the caller's own).
     const targetedWorkerId = createId();
     const targeted = await deps.createWorkerSession({
-      sessionId: targetedWorkerId,
+      conversationId: targetedWorkerId,
       callerConversationId,
       ownerId: owner.id,
       agentPageId: null,
@@ -178,7 +178,7 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
       workspace: ensured.session.id,
     });
     if (!targeted.ok) throw new Error(`targeted spawn failed: ${targeted.reason}`);
-    expect(targeted.workspaceSessionId).toBe(ensured.session.id);
+    expect(targeted.workspaceId).toBe(ensured.session.id);
 
     // A workspace the caller cannot use reads as nonexistent.
     const stranger = await factories.createUser();
@@ -187,7 +187,7 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
     const strangerSession = await ensureGlobalSandboxSession(strangerConversationId, stranger.id);
     if (!strangerSession.ok) throw new Error('stranger session failed');
     const denied = await deps.createWorkerSession({
-      sessionId: createId(),
+      conversationId: createId(),
       callerConversationId,
       ownerId: owner.id,
       agentPageId: null,
@@ -200,9 +200,9 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
     // caller's cross-workspace listing, excluded-current respected.
     const others = await deps.listOwnWorkspaces({
       userId: owner.id,
-      excludeWorkspaceSessionId: ensured.session.id,
+      excludeWorkspaceId: ensured.session.id,
     });
-    const isolatedListed = others.find((w) => w.workspaceId === isolated.workspaceSessionId);
+    const isolatedListed = others.find((w) => w.workspaceId === isolated.workspaceId);
     expect(isolatedListed).toBeDefined();
     expect(isolatedListed?.workers.map((w) => w.sessionId)).toContain(isolatedWorkerId);
     expect(others.find((w) => w.workspaceId === ensured.session.id)).toBeUndefined();

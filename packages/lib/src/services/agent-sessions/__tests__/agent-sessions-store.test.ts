@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { SESSION_LIST_LIMIT, stampColumns, revivedAgentSessionColumns } from '../agent-sessions-store';
+import { stampColumns, revivedAgentSessionColumns } from '../agent-sessions-store';
+import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '../../../agent-sessions/contract';
 import { NOW, OWNER_ID, makeAgentSessionStore, makeSessionRecord } from './fakes';
 
 /**
@@ -107,18 +108,18 @@ describe('revivedAgentSessionColumns', () => {
  * the real store never allows (review #2266).
  */
 describe("fake store — mirrors the real store's pinned behaviors", () => {
-  it('given more active sessions than SESSION_LIST_LIMIT, list should cap at the limit', async () => {
-    const seed = Array.from({ length: SESSION_LIST_LIMIT + 5 }, (_, index) =>
+  it('given more active sessions than MAX_ACTIVE_WORKSPACES_PER_OWNER, list should cap at the limit', async () => {
+    const seed = Array.from({ length: MAX_ACTIVE_WORKSPACES_PER_OWNER + 5 }, (_, index) =>
       makeSessionRecord({ id: `ses-cap-${index}`, lastActiveAt: new Date(NOW.getTime() - index) }),
     );
     const store = makeAgentSessionStore(seed);
 
     const listed = await store.store.list({ ownerId: OWNER_ID });
 
-    expect(listed).toHaveLength(SESSION_LIST_LIMIT);
-    // Newest activity first: the kept slice is the first SESSION_LIST_LIMIT rows.
+    expect(listed).toHaveLength(MAX_ACTIVE_WORKSPACES_PER_OWNER);
+    // Newest activity first: the kept slice is the first MAX_ACTIVE_WORKSPACES_PER_OWNER rows.
     expect(listed[0].id).toBe('ses-cap-0');
-    expect(listed[listed.length - 1].id).toBe(`ses-cap-${SESSION_LIST_LIMIT - 1}`);
+    expect(listed[listed.length - 1].id).toBe(`ses-cap-${MAX_ACTIVE_WORKSPACES_PER_OWNER - 1}`);
   });
 
   it("applyStamps should bump updatedAt, mirroring the real store's own bookkeeping touch", async () => {

@@ -72,7 +72,13 @@ export function sessionConversationLimitExceeded(
 export function sessionQuotaExceeded(
   request: Request,
   userId: string,
-  sessionId: string,
+  /**
+   * The workspace (`agent_sessions` row) the refusal is about, or `null` when
+   * the quota refused BEFORE any row existed (the pre-mint active-count
+   * check). Null is logged honestly as an absent `resourceId` — never a
+   * fabricated sentinel id in the audit trail.
+   */
+  workspaceId: string | null,
   /** Which route refused, for the audit trail only — never shown to the caller. */
   route: string,
   options?: {
@@ -86,7 +92,7 @@ export function sessionQuotaExceeded(
     eventType: 'security.rate.limited',
     userId,
     resourceType: 'agent_session',
-    resourceId: sessionId,
+    ...(workspaceId !== null ? { resourceId: workspaceId } : {}),
     details: {
       reason: 'session_limit_reached',
       route,

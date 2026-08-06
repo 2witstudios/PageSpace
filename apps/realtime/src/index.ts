@@ -300,7 +300,7 @@ const shellCheckAuth = buildShellCheckAuth({
     const store = await dbAgentSessionStorePromise;
     const row = await store.findById(sessionId);
     if (!row) return { allowed: false, reason: 'session_not_found' };
-    const subject = { sessionId: row.id, ownerId: row.ownerId, driveId: row.driveId };
+    const subject = { ownerId: row.ownerId, driveId: row.driveId };
     const decision = await checkAgentSessionAccess({
       requesterId,
       sessionId,

@@ -86,10 +86,11 @@ finding 1's workspace confinement.
    the caller owns the worker conversation, it is actually a worker (bound into some
    workspace), and its listing is not human-closed. A resource the caller does **not**
    own always reads as nonexistent — anti-enumeration, today's behavior and kept.
-   For the caller's *own* rows, today every failure cause collapses into the same
-   not-yours message / Phase 1 target: distinct, typed, actionable refusals
-   (closed-listing vs not-yet-a-worker), per the "Tool contract pin and typed
-   refusals" task — the collapse is an implementation state, not an axiom. The
+   For the caller's *own* rows the refusals are distinct, typed and actionable
+   (shipped, epic Phase 1): an unbound thread answers `not_a_worker` with
+   spawn-from-inside-it guidance, a human-closed listing answers `worker_closed`
+   with the reopen-or-spawn-fresh remedy — while no-row and foreign-owner still
+   collapse into one identical not-yours message. The
    calling conversation plays no authorization role and is not required. (Page-worker dispatch additionally
    re-enforces the agent's RBAC inside the standard chat pipeline it runs through.)
 2. **Binding state, lifecycle state, and calling surface NEVER refuse a permitted
@@ -157,7 +158,7 @@ get one shared writer.
 | Canonical name | What it is | Where "sessionId" meant this |
 |---|---|---|
 | `workspaceId` | An `agent_sessions` row — the working context / sandbox owner | Everywhere except the tool layer: `conversations.sessionId`, `agent_session_shells.sessionId`, `/api/agent-sessions/[sessionId]`, `?session=` URLs |
-| `conversationId` | A thread (`conversations` row) | The session-tool layer: the `sessionId` param of `send_session` / `read_session` / `kill_session` is a **worker's conversation id** (`apps/web/src/lib/ai/tools/session-tools.ts`, where `workspaceSessionId` is the workspace) |
+| `conversationId` | A thread (`conversations` row) | The session-tool layer: the `sessionId` param of `send_session` / `read_session` / `kill_session` is a **worker's conversation id** (`apps/web/src/lib/ai/tools/session-tools.ts` — mapped to a `conversationId` local at the zod boundary; internally `WorkerRow.conversationId`, with `WorkerRow.workspaceId` naming the workspace) |
 | *(frozen)* `sessionId` | The model-facing tool param | The wire vocabulary is deliberately frozen at the zod boundary: to the model, a "session" is a worker you talk to and a "workspace" is the environment. Internal renames never touch these schemas |
 | `spriteExecId` | The Sprite PTY exec stream a shell reattaches under | `agent_session_shells.streamSessionId` (rename lands in the epic's final phase) |
 | — | Auth login sessions (`sessions` table, `packages/db/src/schema/sessions.ts`) | Unrelated. Never mix with any of the above |
@@ -178,11 +179,15 @@ no longer enforces is worse than no description: the model plans around it.
 
 The normative sources for session semantics are, in order:
 
-1. **The contract tests** *(forthcoming — epic Phase 1, task "Tool contract pin and
-   typed refusals")*: snapshot tests pinning the model-facing tool JSON schemas, plus
-   tests pinning each tool description's behavioral claims to the code that enforces
-   them. Once landed, a description that drifts from behavior fails CI instead of
-   shipping.
+1. **The contract tests** (shipped, epic Phase 1):
+   `apps/web/src/lib/ai/tools/__tests__/session-tools-schema.test.ts` pins the
+   model-facing wire surface — every tool's name, description, and JSON input
+   schema, as explicit literals — and
+   `apps/web/src/lib/ai/tools/__tests__/session-tools-contract.test.ts` pins each
+   tool description's behavioral claims to the gates that enforce them (with the
+   runtime-wired claims, e.g. kill_session's never-tears-the-sandbox-down, in
+   `session-tools-runtime.test.ts`). A description that drifts from behavior
+   fails CI instead of shipping.
 2. **This document** for the model and the axioms.
 3. Schema doc comments (`agent-sessions.ts`, `conversations.ts`) for per-column
    rationale.

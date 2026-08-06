@@ -335,13 +335,12 @@ export async function POST(request: Request) {
   // branch below maps.
   const activeCount = await countActiveSessionsForOwner(auth.userId);
   if (activeCount >= MAX_ACTIVE_SESSIONS_PER_OWNER) {
-    return sessionQuotaExceeded(request, auth.userId, 'about-to-be-minted', 'agent-sessions', {
+    return sessionQuotaExceeded(request, auth.userId, null, 'agent-sessions', {
       message: `You have ${activeCount} active sessions — end some before starting more.`,
     });
   }
 
   const access = await checkAccessForSubject(auth.userId, {
-    sessionId: 'about-to-be-minted',
     ownerId: auth.userId,
     driveId,
   });
@@ -390,7 +389,7 @@ export async function POST(request: Request) {
     if (spawned.reason === 'session_limit_reached') {
       // The atomic backstop caught what the pre-check above missed — a
       // concurrent spawn landed between the pre-check and here.
-      return sessionQuotaExceeded(request, auth.userId, 'about-to-be-minted', 'agent-sessions', {
+      return sessionQuotaExceeded(request, auth.userId, null, 'agent-sessions', {
         message: 'You have reached your active session limit — end some before starting more.',
       });
     }

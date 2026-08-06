@@ -40,10 +40,15 @@
  * empty requester denies.
  */
 
-/** The session columns the decision needs — no more, so both surfaces can build it from a single row read. */
+/**
+ * The session columns the decision needs — no more, so both surfaces can build
+ * it from a single row read, and the SPAWN path can build it for a session
+ * that does not exist yet (there is deliberately no id here: the decision
+ * never keys on WHICH session, only on whose it is and where it lives —
+ * carrying an id forced pre-mint callers to fabricate an
+ * `'about-to-be-minted'` sentinel, a fake value in a typed interface).
+ */
 export interface AgentSessionAccessSubject {
-  /** The session's own id. */
-  sessionId: string;
   ownerId: string;
   /** null = a global-assistant session: no drive, so no drive to derive access from. */
   driveId: string | null;

@@ -72,7 +72,7 @@ function sentHeaders(fetchMock: ReturnType<typeof vi.fn>): Record<string, string
 }
 
 const DISPATCH_INPUT = {
-  sessionId: 'worker-conversation-1',
+  conversationId: 'worker-conversation-1',
   agentPageId: 'agent-page-1',
   input: 'hello',
   userId: 'user-1',
