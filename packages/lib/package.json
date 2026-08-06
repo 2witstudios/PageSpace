@@ -67,6 +67,11 @@
       "import": "./dist/agent-sessions/contract.js",
       "require": "./dist/agent-sessions/contract.js"
     },
+    "./agent-sessions/workspace-layout-verbs": {
+      "types": "./dist/agent-sessions/workspace-layout-verbs.d.ts",
+      "import": "./dist/agent-sessions/workspace-layout-verbs.js",
+      "require": "./dist/agent-sessions/workspace-layout-verbs.js"
+    },
     "./agent-sessions/session-sprite-key": {
       "types": "./dist/agent-sessions/session-sprite-key.d.ts",
       "import": "./dist/agent-sessions/session-sprite-key.js",
@@ -701,6 +706,11 @@
       "types": "./dist/services/agent-sessions/agent-sessions-store.d.ts",
       "import": "./dist/services/agent-sessions/agent-sessions-store.js",
       "require": "./dist/services/agent-sessions/agent-sessions-store.js"
+    },
+    "./services/agent-sessions/workspace-layout-store": {
+      "types": "./dist/services/agent-sessions/workspace-layout-store.d.ts",
+      "import": "./dist/services/agent-sessions/workspace-layout-store.js",
+      "require": "./dist/services/agent-sessions/workspace-layout-store.js"
     },
     "./services/agent-sessions/session-scrollback": {
       "types": "./dist/services/agent-sessions/session-scrollback.d.ts",

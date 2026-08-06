@@ -12,13 +12,15 @@ const {
   mockAuditRequest,
   mockCheckSessionAccess,
   mockGetSessionWorkspace,
-  mockSaveSessionWorkspace,
+  mockReadWorkspaceLayoutSnapshot,
+  mockSaveWorkspaceBlobReconciled,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
   mockAuditRequest: vi.fn(),
   mockCheckSessionAccess: vi.fn(),
   mockGetSessionWorkspace: vi.fn(),
-  mockSaveSessionWorkspace: vi.fn(),
+  mockReadWorkspaceLayoutSnapshot: vi.fn(),
+  mockSaveWorkspaceBlobReconciled: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -36,7 +38,10 @@ vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
 }));
 vi.mock('@/lib/agent-sessions/session-workspace-runtime', () => ({
   getSessionWorkspace: (...args: unknown[]) => mockGetSessionWorkspace(...args),
-  saveSessionWorkspace: (...args: unknown[]) => mockSaveSessionWorkspace(...args),
+}));
+vi.mock('@/lib/agent-sessions/workspace-layout-runtime', () => ({
+  readWorkspaceLayoutSnapshot: (...args: unknown[]) => mockReadWorkspaceLayoutSnapshot(...args),
+  saveWorkspaceBlobReconciled: (...args: unknown[]) => mockSaveWorkspaceBlobReconciled(...args),
 }));
 
 import { GET, PUT } from '../route';
@@ -79,28 +84,31 @@ beforeEach(() => {
   mockAuthenticateRequest.mockResolvedValue(AUTH_USER);
   mockCheckSessionAccess.mockResolvedValue({ allowed: true });
   mockGetSessionWorkspace.mockResolvedValue(null);
-  mockSaveSessionWorkspace.mockResolvedValue(undefined);
+  mockReadWorkspaceLayoutSnapshot.mockResolvedValue({ rev: 0, grid: null });
+  mockSaveWorkspaceBlobReconciled.mockResolvedValue(undefined);
 });
 
 describe('GET /api/agent-sessions/[sessionId]/workspace', () => {
-  it('returns the saved workspace when one exists', async () => {
+  it('returns the saved workspace when one exists, alongside the relational rev + grid', async () => {
     mockGetSessionWorkspace.mockResolvedValue(workspace);
+    mockReadWorkspaceLayoutSnapshot.mockResolvedValue({ rev: 3, grid: workspace.columns });
     const response = await get();
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ workspace });
+    expect(await response.json()).toEqual({ workspace, rev: 3, grid: workspace.columns });
   });
 
-  it('returns null for a session that has never saved a grid', async () => {
+  it('returns null workspace/grid for a session that has never saved a grid', async () => {
     const response = await get();
-    expect(await response.json()).toEqual({ workspace: null });
+    expect(await response.json()).toEqual({ workspace: null, rev: 0, grid: null });
   });
 
   it('returns null (not 404) for a session the requester cannot reach — same answer as not-found', async () => {
     mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'drive_access_denied' });
     const response = await get();
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ workspace: null });
+    expect(await response.json()).toEqual({ workspace: null, rev: 0, grid: null });
     expect(mockGetSessionWorkspace).not.toHaveBeenCalled();
+    expect(mockReadWorkspaceLayoutSnapshot).not.toHaveBeenCalled();
   });
 
   it('given an auth failure, returns the auth error untouched', async () => {
@@ -113,11 +121,11 @@ describe('GET /api/agent-sessions/[sessionId]/workspace', () => {
 });
 
 describe('PUT /api/agent-sessions/[sessionId]/workspace', () => {
-  it('saves a well-formed workspace', async () => {
+  it('saves a well-formed workspace through the blob+rows reconcile', async () => {
     const response = await put({ workspace });
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
-    expect(mockSaveSessionWorkspace).toHaveBeenCalledWith({ sessionId: SESSION_ID, workspace });
+    expect(mockSaveWorkspaceBlobReconciled).toHaveBeenCalledWith({ workspaceId: SESSION_ID, workspace });
     expect(mockAuditRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ eventType: 'data.write', details: expect.objectContaining({ op: 'save_workspace' }) }),
@@ -127,26 +135,26 @@ describe('PUT /api/agent-sessions/[sessionId]/workspace', () => {
   it('400s a malformed workspace rather than trusting it', async () => {
     const response = await put({ workspace: { id: 'ses-1', columns: [] } }); // columns: [] fails min(1)
     expect(response.status).toBe(400);
-    expect(mockSaveSessionWorkspace).not.toHaveBeenCalled();
+    expect(mockSaveWorkspaceBlobReconciled).not.toHaveBeenCalled();
   });
 
   it('400s a missing body', async () => {
     const response = await put(undefined);
     expect(response.status).toBe(400);
-    expect(mockSaveSessionWorkspace).not.toHaveBeenCalled();
+    expect(mockSaveWorkspaceBlobReconciled).not.toHaveBeenCalled();
   });
 
   it("400s a workspace whose id does not match the route's sessionId", async () => {
     const response = await put({ workspace: { ...workspace, id: 'ses-OTHER' } });
     expect(response.status).toBe(400);
-    expect(mockSaveSessionWorkspace).not.toHaveBeenCalled();
+    expect(mockSaveWorkspaceBlobReconciled).not.toHaveBeenCalled();
   });
 
   it('404s an unknown session', async () => {
     mockCheckSessionAccess.mockResolvedValue({ allowed: false, reason: 'session_not_found' });
     const response = await put({ workspace });
     expect(response.status).toBe(404);
-    expect(mockSaveSessionWorkspace).not.toHaveBeenCalled();
+    expect(mockSaveWorkspaceBlobReconciled).not.toHaveBeenCalled();
   });
 
   it('404s a session the requester cannot reach (SAME as not-found), but still audits it', async () => {
@@ -160,7 +168,7 @@ describe('PUT /api/agent-sessions/[sessionId]/workspace', () => {
   });
 
   it('502s a save failure', async () => {
-    mockSaveSessionWorkspace.mockRejectedValue(new Error('db exploded'));
+    mockSaveWorkspaceBlobReconciled.mockRejectedValue(new Error('db exploded'));
     const response = await put({ workspace });
     expect(response.status).toBe(502);
   });

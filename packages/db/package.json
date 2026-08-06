@@ -51,6 +51,10 @@
       "types": "./dist/schema/agent-sessions.d.ts",
       "default": "./dist/schema/agent-sessions.js"
     },
+    "./schema/agent-workspace-layout": {
+      "types": "./dist/schema/agent-workspace-layout.d.ts",
+      "default": "./dist/schema/agent-workspace-layout.js"
+    },
     "./schema/share-links": {
       "types": "./dist/schema/share-links.d.ts",
       "default": "./dist/schema/share-links.js"

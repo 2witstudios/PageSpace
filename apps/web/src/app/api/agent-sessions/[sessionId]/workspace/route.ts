@@ -1,21 +1,28 @@
 /**
- * A session's persisted pane grid — columns, panes, and each pane's open
- * conversation tabs, written by the client's own debounced sync
- * (`useWorkspaceServerSync`), never on every layout transition (an earlier
- * "machine workspace" version synced eagerly and was torn down for making
- * every split a write — see `pane-reducer.ts`'s file header).
+ * A session's persisted pane grid — columns and each pane's binding, written
+ * by the client's own debounced sync (`useWorkspaceServerSync`), never on
+ * every layout transition (an earlier "machine workspace" version synced
+ * eagerly and was torn down for making every split a write — see
+ * `pane-reducer.ts`'s file header).
  *
- * GET  → 200 { workspace: PersistedWorkspaceState | null }
- *   `null` for a session with no saved grid yet (never opened under this
- *   feature) OR one the requester cannot reach — SAME answer either way
- *   (family policy, review #2261/5): a probe learns nothing from the
- *   difference between "doesn't exist" and "not yours".
+ * GET  → 200 { workspace: PersistedWorkspaceState | null, rev, grid }
+ *   `workspace` is the legacy blob, exactly as before (old clients keep
+ *   working untouched). `rev`/`grid` are the relational truth (epic Phase 3):
+ *   the grid derives from the pane ROWS with display labels JOINed at read
+ *   time, falling back to the blob's columns while a session's rows are
+ *   still empty; `grid: null` + `rev: 0` for a session with no grid anywhere
+ *   OR one the requester cannot reach — SAME answer either way (family
+ *   policy, review #2261/5): a probe learns nothing from the difference
+ *   between "doesn't exist" and "not yours".
  *
  * PUT { workspace: unknown } → 200 { ok: true }
  *   Validated against `persistedWorkspaceStateSchema` before it ever reaches
  *   the DB — a malformed payload 400s rather than getting trusted as an `as`
  *   cast, same discipline `persisted-workspace.ts` applies to a localStorage
- *   read of the identical shape.
+ *   read of the identical shape. During the dual-write window the save also
+ *   reconciles the relational rows from the blob through the verb engine's
+ *   own projection (`saveWorkspaceBlobReconciled`) — a rolling-deploy shim
+ *   that dies with the blob in a later contract PR.
  */
 
 import { NextResponse } from 'next/server';
@@ -24,7 +31,8 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { persistedWorkspaceStateSchema } from '@pagespace/lib/agent-sessions/contract';
 import { checkSessionAccess } from '@/lib/agent-sessions/agent-sessions-runtime';
-import { getSessionWorkspace, saveSessionWorkspace } from '@/lib/agent-sessions/session-workspace-runtime';
+import { getSessionWorkspace } from '@/lib/agent-sessions/session-workspace-runtime';
+import { readWorkspaceLayoutSnapshot, saveWorkspaceBlobReconciled } from '@/lib/agent-sessions/workspace-layout-runtime';
 import { auditSessionAccessDenial, sessionNotFoundOrDenied } from '@/lib/agent-sessions/session-unavailable-response';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -42,11 +50,14 @@ export async function GET(request: Request, context: RouteContext) {
   const access = await checkSessionAccess(auth.userId, sessionId);
   if (!access.allowed) {
     auditSessionAccessDenial(request, auth.userId, sessionId, access.reason, ROUTE);
-    return NextResponse.json({ workspace: null });
+    return NextResponse.json({ workspace: null, rev: 0, grid: null });
   }
 
-  const workspace = await getSessionWorkspace(sessionId);
-  return NextResponse.json({ workspace });
+  const [workspace, snapshot] = await Promise.all([
+    getSessionWorkspace(sessionId),
+    readWorkspaceLayoutSnapshot(sessionId),
+  ]);
+  return NextResponse.json({ workspace, rev: snapshot.rev, grid: snapshot.grid });
 }
 
 export async function PUT(request: Request, context: RouteContext) {
@@ -79,7 +90,7 @@ export async function PUT(request: Request, context: RouteContext) {
   }
 
   try {
-    await saveSessionWorkspace({ sessionId, workspace: parsed.data });
+    await saveWorkspaceBlobReconciled({ workspaceId: sessionId, workspace: parsed.data });
   } catch (error) {
     loggers.api.error('Session workspace save failed', error instanceof Error ? error : undefined, { sessionId });
     return NextResponse.json({ error: 'Could not save the pane layout' }, { status: 502 });

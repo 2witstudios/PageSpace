@@ -64,17 +64,23 @@ Shipped invariants (source: `packages/db/src/schema/agent-sessions.ts`,
   `packages/lib/src/services/agent-sessions/session-status.ts`): the four lifecycle
   stamps are each single-writer facts; a status column would be a second copy. This
   stays true under the epic — it is the pattern, not an exception to it.
-- **Pane grid**: today `agent_sessions.workspaceState` is one jsonb blob with exactly
-  one write path — the client's debounced sync (`useWorkspaceServerSync` →
-  `PUT /api/agent-sessions/{id}/workspace` → `saveSessionWorkspace`). Server tool
-  paths cannot write placement at all: `open_page_pane` only acks and relies on a
-  client-side reaction (`useOpenPagePane`), and worker spawn placement mints
-  conversations without touching the grid — so server-side actions are invisible to
-  any grid no client happens to be rendering, and the client's localStorage copy is a
-  third version of the same fact. / Target: relational pane tables + rev counter +
-  idempotent verbs behind one shared writer that the client, the server, and the AI
-  tool paths all post through, with the blob and the localStorage copy dying at
-  contract (epic Phase 3, the #2202 machine-panes pattern).
+- **Pane grid**: the server side of the relational promotion is SHIPPED (epic
+  Phase 3, the #2202 machine-panes pattern): `agent_workspace_pane_columns` /
+  `agent_workspace_panes` rows behind a per-workspace rev
+  (`agent_workspace_layout_revs`), mutated by idempotent verbs
+  (`POST /api/agent-sessions/{id}/workspace/verbs {opId, baseRev, verb}`,
+  stale rev → 409 + truth) through ONE reducer (`applyVerbLocal`,
+  `packages/lib/src/agent-sessions/workspace-layout-verbs.ts`) that the client
+  store re-exports, each applied verb broadcasting rev-carrying
+  `workspace:updated` to the `session:<id>` room. During the dual-write window
+  the `workspaceState` blob is kept true by the verb engine and the legacy
+  blob PUT conversely reconciles blob→rows via the same projection, under one
+  per-workspace lock (drift-guard property test pins blob ≡ rows). / Still
+  today: the production CLIENT still writes through the debounced blob PUT
+  with a localStorage copy, and the AI tool paths (`open_page_pane`, worker
+  spawn placement) still cannot write placement. / Target: the client store
+  rewritten onto the verbs + live `workspace:updated` application, tool paths
+  posting verbs, then the blob + localStorage copy dying at contract.
 
 ## 2. Authorization axioms (PR #2336 — product-locked)
 

@@ -56,13 +56,8 @@ export async function getSessionWorkspacesBulk(
   return grouped;
 }
 
-/** Overwrite the session's saved grid wholesale — the caller has already validated `workspace` against `persistedWorkspaceStateSchema`. */
-export async function saveSessionWorkspace(input: {
-  sessionId: string;
-  workspace: PersistedWorkspaceState;
-}): Promise<void> {
-  await db
-    .update(agentSessions)
-    .set({ workspaceState: input.workspace })
-    .where(eq(agentSessions.id, input.sessionId));
-}
+// The wholesale blob WRITE moved to `workspace-layout-runtime.ts`'s
+// `saveWorkspaceBlobReconciled` (epic Phase 3): during the dual-write window
+// every blob save must also reconcile the relational pane rows under the
+// per-workspace layout lock, so a bare column UPDATE here would be a second,
+// unreconciled writer — exactly the drift class the promotion exists to kill.
