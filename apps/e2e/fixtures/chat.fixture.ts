@@ -101,23 +101,31 @@ export function chatPageUrl(driveId: string, pageId: string): string {
   return `/dashboard/${driveId}/${pageId}`;
 }
 
-/** Navigate to a seeded AI_CHAT page and wait for the chat surface to mount. */
+/**
+ * Navigate to a seeded AI_CHAT page and wait for the chat surface to mount.
+ *
+ * `session-chat` is the page-chat surface root since the phase-6 unified AgentView
+ * (e479b0053 deleted AiChatView.tsx and its `ai-chat-view` testid — SessionChat now
+ * renders the one chat on AI_CHAT pages and in the agents console). The right-sidebar
+ * assistant is a separate surface (`sidebar-chat-tab`) and never renders `session-chat`,
+ * so this stays unique on a page-chat screen.
+ */
 export async function gotoChatPage(page: Page, driveId: string, pageId: string): Promise<void> {
   await page.goto(chatPageUrl(driveId, pageId));
-  await page.getByTestId('ai-chat-view').waitFor({ state: 'visible' });
+  await page.getByTestId('session-chat').waitFor({ state: 'visible' });
 }
 
 /**
  * Type into a surface's composer and send.
  *
- * `scope` is a surface root (`getByTestId('ai-chat-view')`, `'sidebar-chat-tab'`,
+ * `scope` is a surface root (`getByTestId('session-chat')`, `'sidebar-chat-tab'`,
  * `'global-assistant-view'`) — a Locator, never the bare Page, so the requirement is a compile
  * error rather than a comment nobody reads. The chat surfaces mount simultaneously and each
  * renders its own composer: with the right sidebar open, an unscoped `getByTestId('chat-send')`
  * matches TWO elements and fails Playwright's strict mode. (Verified live: sidebar open →
  * unscoped `chat-textarea`/`chat-send` resolve 2 each, `sidebar-chat-tab`-scoped resolve 1.)
  *
- * The retry is load-bearing, not defensive padding. `ai-chat-view` becomes visible from the
+ * The retry is load-bearing, not defensive padding. `session-chat` becomes visible from the
  * server-rendered markup, BEFORE React has hydrated the composer — and a `fill()` that lands
  * in that window is silently discarded when React mounts its controlled input. The value
  * vanishes, Send never leaves its disabled state, and `click()` then waits out the whole test
