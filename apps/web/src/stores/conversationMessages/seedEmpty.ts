@@ -2,17 +2,38 @@ import type { UIMessage } from 'ai';
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
 import type { AskUserAnswerPayload } from '@/lib/ai/streams/applyAskUserAnswer';
 
-/**
- * A live mutation (remote broadcast) recorded while a load is in flight, so
- * `applyLoad` can replay it onto the loaded snapshot regardless of which
- * resolves first — see `replayPendingMutations`.
- */
-export type PendingMutation =
+type PendingMutationKind =
   | { type: 'remoteMessage'; message: UIMessage }
   | { type: 'confirmedMessage'; message: UIMessage }
   | { type: 'edit'; payload: MessageEditPayload }
   | { type: 'delete'; messageId: string }
   | { type: 'askUserAnswer'; payload: AskUserAnswerPayload };
+
+/**
+ * A live mutation (remote broadcast) recorded while a load is in flight, so
+ * `applyLoad` can replay it onto the loaded snapshot regardless of which
+ * resolves first — see `replayPendingMutations`.
+ *
+ * `rev` is the post-write `conversations.rev` the event carried, when it came
+ * from a rev-bearing `conversation:*` event. It is what makes the replay
+ * ORDER-SAFE against a snapshot: a fetched snapshot read at rev N already
+ * contains every write up to N, so replaying a mutation with `rev <= N` on top
+ * of it re-applies an OLDER payload over newer truth. That is not a transient
+ * glitch — the watermark still folds forward to N, so the cache reads as
+ * current while showing stale content, and `syncWatchedConversationRevs`
+ * (which compares revs, not content) never heals it.
+ *
+ * Reachable in production because conversation events are independent HMAC
+ * POSTs into realtime, which emits in receive order: two near-simultaneous
+ * writes can reach one socket reversed, and the later-delivered/lower-rev one
+ * lands while the gap-triggered refetch is still in flight.
+ *
+ * `undefined` means UNVERSIONED — the mutation came from a path that carries no
+ * rev (the legacy `chat:*` fan-out, an SSE stream commit, `promoteOptimisticSends`).
+ * Those always replay, exactly as before: with no rev there is nothing to prove
+ * the snapshot already contains them, and dropping them would lose content.
+ */
+export type PendingMutation = PendingMutationKind & { rev?: number };
 
 /**
  * Per-conversation slice of `useConversationMessagesStore`. `messages` is the

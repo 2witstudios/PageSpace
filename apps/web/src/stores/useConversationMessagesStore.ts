@@ -67,14 +67,18 @@ interface ConversationMessagesState {
   /** Rolls back an optimistic send whose POST rejected (epic leaf 6.5, M9) — never touches confirmed `messages`. */
   removeOptimisticSendOnFailure: (conversationId: string, messageId: string) => void;
   applyEdit: (conversationId: string, payload: MessageEditPayload) => void;
-  applyDelete: (conversationId: string, messageId: string) => void;
+  /** `rev`: the deleting event's post-write rev, when it carried one — see PendingMutation. */
+  applyDelete: (conversationId: string, messageId: string, rev?: number) => void;
   /** Optimistic ask_user answer patch (epic leaf 6.3) — the resume POST's own commit reconciles it once persisted. */
   applyAskUserAnswer: (conversationId: string, payload: AskUserAnswerPayload) => void;
   /** Reverts an optimistic ask_user answer (the resume POST rejected) back to input-available. */
   revertAskUserAnswer: (conversationId: string, payload: AskUserAnswerRevertPayload) => void;
   applyRemoteUserMessage: (conversationId: string, message: UIMessage) => void;
-  /** Upsert-by-id (replace if present, append if absent) — see applyConfirmedMessage's docblock. */
-  applyConfirmedMessage: (conversationId: string, message: UIMessage) => void;
+  /**
+   * Upsert-by-id (replace if present, append if absent) — see applyConfirmedMessage's
+   * docblock. `rev`: the confirming event's post-write rev, when it carried one.
+   */
+  applyConfirmedMessage: (conversationId: string, message: UIMessage, rev?: number) => void;
   /** Promote optimistic sends into confirmed messages — call on OWN stream commit only (see promoteOptimisticSends). */
   promoteOptimisticSends: (conversationId: string) => void;
   /**
@@ -174,8 +178,8 @@ export const useConversationMessagesStore = create<ConversationMessagesState>((s
     set((state) => ({ byConversationId: applyConversationEdit(state.byConversationId, { conversationId, payload }) }));
   },
 
-  applyDelete: (conversationId, messageId) => {
-    set((state) => ({ byConversationId: applyConversationDelete(state.byConversationId, { conversationId, messageId }) }));
+  applyDelete: (conversationId, messageId, rev) => {
+    set((state) => ({ byConversationId: applyConversationDelete(state.byConversationId, { conversationId, messageId, rev }) }));
   },
 
   applyAskUserAnswer: (conversationId, payload) => {
@@ -199,8 +203,8 @@ export const useConversationMessagesStore = create<ConversationMessagesState>((s
     set((state) => ({ byConversationId: applyRemoteUserMessage(state.byConversationId, { conversationId, message }) }));
   },
 
-  applyConfirmedMessage: (conversationId, message) => {
-    set((state) => ({ byConversationId: applyConfirmedMessage(state.byConversationId, { conversationId, message }) }));
+  applyConfirmedMessage: (conversationId, message, rev) => {
+    set((state) => ({ byConversationId: applyConfirmedMessage(state.byConversationId, { conversationId, message, rev }) }));
   },
 
   promoteOptimisticSends: (conversationId) => {
@@ -232,13 +236,19 @@ export const useConversationMessagesStore = create<ConversationMessagesState>((s
       // bump clear them, or an older recovery snapshot resurrects a message another tab
       // just deleted (CodeRabbit P2, PR #2098). Replayed over the MERGED list so a
       // delete/edit of a preserved older row is honored too.
+      // ...but ONLY the ones this snapshot doesn't already contain. This is the
+      // gap-heal path (`healConversationToRev` → `refreshConversationSnapshot`),
+      // so it is precisely where an out-of-order event applied while the fetch
+      // was in flight would otherwise be replayed over newer truth — leaving the
+      // cache stale at a watermark that says it is current, which no later revs
+      // check can detect. See `replayPendingMutations`.
       const pendingSinceFetch = state.byConversationId[conversationId]?.pendingMutationsSinceLoad ?? [];
       const { byConversationId, generation } = applyStartLoad(state.byConversationId, conversationId);
       return {
         byConversationId: applyLoad(byConversationId, {
           conversationId,
           generation,
-          messages: replayPendingMutations(merged.messages, pendingSinceFetch),
+          messages: replayPendingMutations(merged.messages, pendingSinceFetch, rev),
           pagination: merged.overlapped ? undefined : pagination,
           rev,
         }),
