@@ -1361,6 +1361,34 @@ describe('Socket.IO connection handler', () => {
 
       expect(emitValidationError).toHaveBeenCalledWith(socket, 'join_conversation', 'Conversation ID must be a valid ID');
     });
+
+    it('given no user on the socket, returns silently — no join, no validation error', async () => {
+      const socket = createMockSocket({ id: 'socket-1', data: { user: undefined } });
+      capturedIoConnectionCallback!(socket);
+
+      await socket._trigger('join_conversation', CONV);
+
+      expect(socket.join).not.toHaveBeenCalled();
+      expect(emitValidationError).not.toHaveBeenCalled();
+    });
+
+    it('given the conversation lookup throws, logs the error without joining or disconnecting', async () => {
+      mockDbLimit.mockRejectedValueOnce(new Error('DB error'));
+
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      const joinCountBefore = socket.join.mock.calls.length;
+      await socket._trigger('join_conversation', CONV);
+
+      expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalledWith(
+        'Error joining conversation',
+        expect.objectContaining({ message: 'DB error' }),
+        { conversationId: CONV },
+      );
+      expect(socket.join.mock.calls.length).toBe(joinCountBefore);
+      expect(socket.disconnect).not.toHaveBeenCalled();
+    });
   });
 
   describe('leave_conversation event', () => {
@@ -1372,6 +1400,25 @@ describe('Socket.IO connection handler', () => {
 
       expect(socket.leave).toHaveBeenCalledWith('conv:athmieqpwr4ax1t2e0i4lmor');
       expect(mockSocketRegistry.trackRoomLeave).toHaveBeenCalledWith('socket-1', 'conv:athmieqpwr4ax1t2e0i4lmor');
+    });
+
+    it('given no user on the socket, returns silently — no leave', () => {
+      const socket = createMockSocket({ id: 'socket-1', data: { user: undefined } });
+      capturedIoConnectionCallback!(socket);
+
+      socket._trigger('leave_conversation', 'athmieqpwr4ax1t2e0i4lmor');
+
+      expect(socket.leave).not.toHaveBeenCalled();
+    });
+
+    it('given an invalid conversationId, emits a validation error and leaves nothing', () => {
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      socket._trigger('leave_conversation', 12345);
+
+      expect(emitValidationError).toHaveBeenCalledWith(socket, 'leave_conversation', 'Conversation ID must be a valid ID');
+      expect(socket.leave).not.toHaveBeenCalled();
     });
   });
 

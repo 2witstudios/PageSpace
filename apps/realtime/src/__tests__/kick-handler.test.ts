@@ -448,6 +448,42 @@ describe('executeKick — room-wide kick (userId: "*", conversation un-share)', 
     expect(result).toEqual({ success: true, kickedCount: 0, rooms: [] });
   });
 
+  it('skips a stale socket id still listed in the room but gone from the server, without failing the sweep', () => {
+    const { io, sockets } = createRoomWideIo([
+      { socketId: 'sock-live', userId: 'collab-a' },
+    ]);
+    // The adapter's room set can briefly hold an id whose socket already
+    // disconnected — the sweep must skip it, not crash on undefined.
+    (io.sockets.adapter.rooms.get('conv:convabc123') as Set<string>).add('sock-gone');
+
+    const result = executeKick(io, {
+      userId: '*',
+      roomPattern: 'conv:convabc123',
+      reason: 'conversation_unshared',
+    } as KickPayload);
+
+    expect(result.kickedCount).toBe(1);
+    expect(sockets.get('sock-live')!.leave).toHaveBeenCalledWith('conv:convabc123');
+  });
+
+  it('when every member is the excepted owner, kicks nobody and reports no rooms', () => {
+    const { io, sockets } = createRoomWideIo([
+      { socketId: 'sock-owner-a', userId: 'owner-1' },
+      { socketId: 'sock-owner-b', userId: 'owner-1' },
+    ]);
+
+    const result = executeKick(io, {
+      userId: '*',
+      exceptUserId: 'owner-1',
+      roomPattern: 'conv:convabc123',
+      reason: 'conversation_unshared',
+    } as KickPayload);
+
+    expect(result).toEqual({ success: true, kickedCount: 0, rooms: [] });
+    expect(sockets.get('sock-owner-a')!.leave).not.toHaveBeenCalled();
+    expect(sockets.get('sock-owner-b')!.leave).not.toHaveBeenCalled();
+  });
+
   it('with no exceptUserId, evicts every socket in the room', () => {
     const { io, sockets } = createRoomWideIo([
       { socketId: 'sock-a', userId: 'user-a' },
