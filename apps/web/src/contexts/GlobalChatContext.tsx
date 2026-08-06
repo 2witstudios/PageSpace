@@ -27,6 +27,7 @@ import { loadGlobalConversationMessages, refreshConversationSnapshot } from '@/h
 import { buildConversationCacheHandlers } from '@/hooks/conversationCacheSocketHandlers';
 import { useConversationSubscription } from '@/hooks/useConversationSubscription';
 import { DerivedStreamingRegistrations } from '@/components/ai/shared/DerivedStreamingRegistrations';
+import { SessionDirectoryListener } from '@/lib/realtime/session-directory-listener';
 
 /**
  * Global Chat Context — two tiers to minimize re-render noise:
@@ -337,6 +338,11 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
             surface is currently showing (a bootstrapped stream keeps its own SWR protection while
             the user is on another page). */}
         <DerivedStreamingRegistrations />
+        {/* THE app-wide session/conversation DIRECTORY listener (SSoT epic, Phase 2 /
+            plan PR 4) — mounted here for the same reason as the line above: this
+            provider wraps the whole Layout, so one mount covers every sidebar and
+            pane strip, and N mounts would mean N revalidations per event. */}
+        <SessionDirectoryListener />
         {children}
       </GlobalChatConfigContext.Provider>
     </GlobalChatConversationContext.Provider>
