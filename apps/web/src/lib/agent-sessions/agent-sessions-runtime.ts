@@ -735,6 +735,15 @@ export interface SessionConversationEntry {
   /** The thread's agent page (`contextId` for a page chat), or null for a global-assistant thread. */
   agentPageId: string | null;
   lastMessageAt: Date | null;
+  /**
+   * The thread's own owner (`conversations.userId`) and deliberate-share flag
+   * (`conversations.isShared`) — the two facts the shared-workspace title
+   * redaction rule weighs (`redact-conversation-listing.ts` in
+   * `@pagespace/lib`; see this function's doc below). Derived at read from
+   * the same row, never a second copy.
+   */
+  ownerId: string;
+  isShared: boolean;
 }
 
 /**
@@ -754,14 +763,23 @@ export interface SessionConversationEntry {
  * — one hot session's rows cannot crowd another session's out of a shared cap
  * ordered across all of them together.
  *
- * DELIBERATE metadata exposure (issue #2262 finding 6): every caller with
- * access to a session (its owner, or any member whose own conversation lives
- * there) sees every OTHER conversation's title and agent in that session,
- * this way — including threads it did not create. Shared-workspace semantics,
- * not a leak: a session is one shared sandbox by design. TRANSCRIPT content
- * is a separate, still owner-gated read (`checkSessionAccess` /
- * `openOwnSession` in the tool layer) — this listing carries no message
- * bodies.
+ * Metadata exposure (issue #2262 finding 6) — the rule, decided where the
+ * queries live: the SESSION'S OWNER sees every conversation's title in their
+ * own session (shared-workspace semantics — one shared sandbox by design).
+ * A viewer who does NOT own the session sees a title only for threads that
+ * are their own or deliberately shared (`conversations.isShared`); every
+ * other row survives with its agent and activity time but its title replaced
+ * by the fixed `(private thread)` marker. The mechanism is ONE pure function
+ * — `redactConversationTitleForViewer`
+ * (`@pagespace/lib/agent-sessions/redact-conversation-listing`) — which every
+ * viewer-facing mapping of these rows must route titles through (today: the
+ * session-tool listings in `session-tools-runtime.ts`; the sidebar/API
+ * surfaces only ever enumerate the caller's OWN sessions, where the owner
+ * rule makes redaction a no-op). This entry therefore carries `ownerId` and
+ * `isShared` so mapping layers can apply the rule without a second query.
+ * TRANSCRIPT content is a separate, still owner-gated read
+ * (`checkSessionAccess` / `openOwnSession` in the tool layer) — this listing
+ * carries no message bodies.
  */
 export async function listSessionConversationsBulk(
   sessionIds: string[],
@@ -777,6 +795,8 @@ export async function listSessionConversationsBulk(
       type: conversations.type,
       contextId: conversations.contextId,
       lastMessageAt: conversations.lastMessageAt,
+      ownerId: conversations.userId,
+      isShared: conversations.isShared,
       rowNumber: sql<number>`ROW_NUMBER() OVER (PARTITION BY ${conversations.sessionId} ORDER BY ${conversations.lastMessageAt} DESC)`.as(
         'row_number',
       ),
@@ -802,6 +822,8 @@ export async function listSessionConversationsBulk(
       type: rankedConversations.type,
       contextId: rankedConversations.contextId,
       lastMessageAt: rankedConversations.lastMessageAt,
+      ownerId: rankedConversations.ownerId,
+      isShared: rankedConversations.isShared,
     })
     .from(rankedConversations)
     .where(sql`${rankedConversations.rowNumber} <= ${MAX_SESSION_CONVERSATIONS}`);
@@ -814,6 +836,8 @@ export async function listSessionConversationsBulk(
       title: row.title,
       agentPageId: row.type === 'page' ? row.contextId : null,
       lastMessageAt: row.lastMessageAt,
+      ownerId: row.ownerId,
+      isShared: row.isShared,
     });
     grouped.set(row.sessionId, bucket);
   }

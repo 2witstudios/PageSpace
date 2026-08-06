@@ -107,9 +107,28 @@ finding 1's workspace confinement.
 5. **Cross-workspace orchestration is legitimate.** `spawn_session` takes `workspace`
    (omitted = caller's own, minted if needed; `'new'` = fresh isolated workspace;
    an id = spawn straight into it, gated by session access). `list_sessions` lists all
-   the caller's workspaces, every worker everywhere addressable by the verbs. The
+   the caller's workspaces, every worker the caller owns addressable by the verbs. The
    advisory cap pre-count applies only to own-workspace spawns — a full caller
    workspace can't refuse a spawn aimed somewhere with room.
+6. **Discovery is symmetric with the spawn gate.** Everything
+   `spawn_session`'s explicit-`workspaceId` path would admit the caller into
+   (`checkSessionAccess` → `decideAgentSessionAccess`: owner OR drive member) is
+   discoverable: `list_sessions` additionally reports `sharedWorkspaces` — other
+   members' sessions in drives the caller belongs to, gated per-row by that SAME
+   pure decision, labeled distinctly from the caller's own. The caller's own set
+   is never truncated (the spawn ceiling is structural); the member-visible set
+   has no structural ceiling, so it carries its own explicit bound
+   (`MAX_MEMBER_VISIBLE_WORKSPACES`, newest activity first).
+7. **Foreign private-thread titles redact in listings.** A viewer listing a
+   workspace they do not OWN sees a conversation's title only when the thread is
+   their own or deliberately shared (`conversations.isShared`); every other row
+   keeps its agent and activity time but reads `(private thread)`. The owner sees
+   everything in their own workspace. One pure mechanism —
+   `redactConversationTitleForViewer`
+   (`packages/lib/src/agent-sessions/redact-conversation-listing.ts`) — routed
+   through every viewer-facing mapping of session-conversation rows. This is a
+   deliberately conservative product decision, explicitly open to veto: adjusting
+   it is one function. Transcript content stays owner-gated regardless.
 
 Unchanged by the re-model: the conversation→session binding stays write-once and
 owner-only (the hijack surface stays closed); shells stay workspace-scoped

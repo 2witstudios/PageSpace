@@ -24,6 +24,8 @@ const {
   mockListSessions,
   mockListSessionConversationsBulk,
   mockCanUserViewPage,
+  mockGetDriveIdsForUser,
+  mockResolveDriveMembership,
   mockGetConversation,
   mockGetAiAgent,
 } = vi.hoisted(() => ({
@@ -38,6 +40,8 @@ const {
   mockListSessions: vi.fn(),
   mockListSessionConversationsBulk: vi.fn(),
   mockCanUserViewPage: vi.fn(),
+  mockGetDriveIdsForUser: vi.fn(),
+  mockResolveDriveMembership: vi.fn(),
   mockGetConversation: vi.fn(),
   mockGetAiAgent: vi.fn(),
 }));
@@ -58,6 +62,13 @@ vi.mock('@/lib/agent-sessions/agent-sessions-runtime', () => ({
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   canUserViewPage: mockCanUserViewPage,
+  getDriveIdsForUser: mockGetDriveIdsForUser,
+}));
+// The tenant gather is mocked (it reads the DB); the pure access decision and
+// the pure redaction rule are deliberately REAL — the whole point of the
+// shared-workspace listing is that it reuses those exact functions.
+vi.mock('@pagespace/lib/services/agent-sessions/agent-session-tenant', () => ({
+  resolveDriveMembership: mockResolveDriveMembership,
 }));
 vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: { getConversation: mockGetConversation, getAiAgent: mockGetAiAgent },
@@ -387,5 +398,120 @@ describe('killWorker — kill_session never tears the sandbox down', () => {
 
     expect(result).toEqual({ ok: true, spriteTornDown: false });
     expect(mockEndSession).not.toHaveBeenCalled();
+  });
+});
+
+// ============================================================================
+// Tests for session-tools-runtime.ts — listSharedWorkspaces (discovery
+// symmetry, PR #2336's flagged asymmetry)
+//
+// The spawn gate's explicit-workspaceId path admits any caller
+// `checkSessionAccess` allows (owner OR drive member); discovery must
+// enumerate by the SAME decision. These tests run the REAL pure gate
+// (`decideAgentSessionAccess`) and the REAL redaction rule
+// (`redactConversationTitleForViewer`) — only the IO gathers are mocked.
+// ============================================================================
+
+describe('listSharedWorkspaces — member-visible discovery, gated by the one session-access decision', () => {
+  const VIEWER = 'user-1';
+  const OTHER_OWNER = 'user-2';
+
+  const sharedSession = {
+    sessionId: 'ses-shared',
+    driveId: 'drive-member',
+    ownerId: OTHER_OWNER,
+    name: 'team workspace',
+    sandboxStatus: 'running' as const,
+    createdAt: '2026-08-01T00:00:00.000Z',
+    lastActiveAt: '2026-08-02T00:00:00.000Z',
+    endedAt: null,
+  };
+
+  test('a drive the caller belongs to lists other members\' sessions; the caller\'s own rows and the current workspace are excluded; a page-permission-only drive (membership none) is never even queried', async () => {
+    mockGetDriveIdsForUser.mockResolvedValue(['drive-member', 'drive-page-only']);
+    mockResolveDriveMembership.mockImplementation(async ({ driveId }: { driveId: string }) =>
+      driveId === 'drive-member' ? 'member' : 'none',
+    );
+    mockListSessions.mockResolvedValue([
+      sharedSession,
+      // The caller's OWN session in the shared drive — the own listing's job.
+      { ...sharedSession, sessionId: 'ses-mine', ownerId: VIEWER },
+      // The caller's CURRENT workspace — the top-level detail view.
+      { ...sharedSession, sessionId: 'ses-current' },
+    ]);
+    mockListSessionConversationsBulk.mockResolvedValue(new Map());
+
+    const deps = buildSessionToolsDeps();
+    const shared = await deps.listSharedWorkspaces({ userId: VIEWER, excludeWorkspaceId: 'ses-current' });
+
+    expect(shared.map((w) => w.workspaceId)).toEqual(['ses-shared']);
+    expect(shared[0]).toEqual(
+      expect.objectContaining({ driveId: 'drive-member', name: 'team workspace', sandbox: 'running' }),
+    );
+    expect(mockListSessions).toHaveBeenCalledTimes(1);
+    expect(mockListSessions).toHaveBeenCalledWith({ driveId: 'drive-member' });
+    expect(mockListSessionConversationsBulk).toHaveBeenCalledWith(['ses-shared']);
+  });
+
+  test('a NON-member sees nothing: the same pure decision that refuses the spawn refuses the discovery', async () => {
+    mockGetDriveIdsForUser.mockResolvedValue(['drive-page-only']);
+    mockResolveDriveMembership.mockResolvedValue('none');
+
+    const deps = buildSessionToolsDeps();
+    const shared = await deps.listSharedWorkspaces({ userId: VIEWER });
+
+    expect(shared).toEqual([]);
+    expect(mockListSessions).not.toHaveBeenCalled();
+  });
+
+  test('worker titles route through the ONE redaction rule: the member sees their own and deliberately-shared titles, and "(private thread)" for another member\'s private one — the row (agent slot + activity) survives', async () => {
+    mockGetDriveIdsForUser.mockResolvedValue(['drive-member']);
+    mockResolveDriveMembership.mockResolvedValue('member');
+    mockListSessions.mockResolvedValue([sharedSession]);
+    mockListSessionConversationsBulk.mockResolvedValue(
+      new Map([
+        [
+          'ses-shared',
+          [
+            { conversationId: 'conv-mine', title: 'my research', agentPageId: null, lastMessageAt: new Date('2026-08-02T00:00:00.000Z'), ownerId: VIEWER, isShared: false },
+            { conversationId: 'conv-shared', title: 'team notes', agentPageId: null, lastMessageAt: null, ownerId: OTHER_OWNER, isShared: true },
+            { conversationId: 'conv-private', title: 'their secret', agentPageId: null, lastMessageAt: new Date('2026-08-01T12:00:00.000Z'), ownerId: OTHER_OWNER, isShared: false },
+          ],
+        ],
+      ]),
+    );
+
+    const deps = buildSessionToolsDeps();
+    const shared = await deps.listSharedWorkspaces({ userId: VIEWER });
+
+    expect(shared).toHaveLength(1);
+    // The COUNT is honest — every row survives redaction.
+    expect(shared[0].workers).toHaveLength(3);
+    expect(shared[0].workers.map((w) => w.name)).toEqual(['my research', 'team notes', '(private thread)']);
+    // The real title never leaks anywhere in the redacted entry.
+    expect(JSON.stringify(shared[0])).not.toContain('their secret');
+    // Activity time survives redaction — the orchestration signal.
+    expect(shared[0].workers[2].lastActiveAt).toBe('2026-08-01T12:00:00.000Z');
+  });
+
+  test('the member-visible set carries its own explicit bound (100, newest activity first) — unlike the own set, nothing structural caps it', async () => {
+    mockGetDriveIdsForUser.mockResolvedValue(['drive-member']);
+    mockResolveDriveMembership.mockResolvedValue('member');
+    const many = Array.from({ length: 150 }, (_, i) => ({
+      ...sharedSession,
+      sessionId: `ses-${String(i).padStart(3, '0')}`,
+      lastActiveAt: new Date(Date.UTC(2026, 0, 1) + i * 60_000).toISOString(),
+    }));
+    mockListSessions.mockResolvedValue(many);
+    mockListSessionConversationsBulk.mockResolvedValue(new Map());
+
+    const deps = buildSessionToolsDeps();
+    const shared = await deps.listSharedWorkspaces({ userId: VIEWER });
+
+    // MAX_MEMBER_VISIBLE_WORKSPACES — the documented member-visible bound.
+    expect(shared).toHaveLength(100);
+    // Newest activity first: the most recent 100 survive the cut.
+    expect(shared[0].workspaceId).toBe('ses-149');
+    expect(shared[99].workspaceId).toBe('ses-050');
   });
 });

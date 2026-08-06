@@ -24,7 +24,10 @@ import { db } from '@pagespace/db/db';
 import { and, eq, inArray, isNull, ne, desc } from '@pagespace/db/operators';
 import { chatMessages, pages } from '@pagespace/db/schema/core';
 import { conversations, messages as globalMessages } from '@pagespace/db/schema/conversations';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { canUserViewPage, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
+import { resolveDriveMembership } from '@pagespace/lib/services/agent-sessions/agent-session-tenant';
+import { decideAgentSessionAccess } from '@pagespace/lib/agent-sessions/decide-session-access';
+import { redactConversationTitleForViewer } from '@pagespace/lib/agent-sessions/redact-conversation-listing';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { sessionService } from '@pagespace/lib/auth/session-service';
@@ -62,6 +65,7 @@ import {
   createSessionTools,
   type DispatchOutcome,
   type OwnWorkspaceSummary,
+  type SharedWorkspaceSummary,
   type SessionWorkspaceListing,
   type SessionToolsDeps,
   type TranscriptEntry,
@@ -323,22 +327,28 @@ export async function dispatchThroughChatPipeline(input: {
  * to exist (issue #2262 finding 4 — no unbounded `db.select()` feeding model
  * context).
  *
- * DELIBERATE metadata exposure (issue #2262 finding 6): this lists EVERY
- * active conversation in the session — including siblings the CALLER did not
- * spawn and does not own — by title and agent, to whichever member's agent
- * asks. That is shared-workspace semantics, not a leak: a session is one
- * shared sandbox and filesystem by design, so knowing what else is running
- * there is the same visibility a human teammate has glancing at the sidebar.
- * What stays owner-gated is TRANSCRIPT content — `read_session` still requires
- * `openOwnSession`'s ownership check, so seeing a sibling listed here grants
- * no access to what it said.
+ * Metadata exposure (issue #2262 finding 6): every active conversation in the
+ * session lists — including siblings the CALLER did not spawn — by agent and
+ * row, to whichever member's agent asks. Shared-workspace semantics: a
+ * session is one shared sandbox and filesystem by design, so knowing what
+ * else is running there is the same visibility a human teammate has glancing
+ * at the sidebar. TITLES, though, follow the one listing redaction rule
+ * (`redactConversationTitleForViewer` — full rule documented on
+ * `listSessionConversationsBulk`): the workspace's owner sees them all; a
+ * caller listing a workspace they do NOT own (their conversation was spawned
+ * into a shared one) sees `(private thread)` for siblings that are neither
+ * theirs nor deliberately shared. TRANSCRIPT content stays owner-gated
+ * either way — `read_session` still requires `openOwnSession`'s ownership
+ * check, so seeing a sibling listed here grants no access to what it said.
  */
 async function listWorkspaceWorkers({
   workspaceId,
   callerConversationId,
+  callerUserId,
 }: {
   workspaceId: string;
   callerConversationId: string;
+  callerUserId: string;
 }): Promise<SessionWorkspaceListing> {
   const store = await getAgentSessionStore();
   const [row, workerRows, shells] = await Promise.all([
@@ -350,6 +360,8 @@ async function listWorkspaceWorkers({
         agentPageId: conversations.contextId,
         type: conversations.type,
         agentTitle: pages.title,
+        ownerId: conversations.userId,
+        isShared: conversations.isShared,
       })
       .from(conversations)
       .leftJoin(pages, eq(pages.id, conversations.contextId))
@@ -372,7 +384,14 @@ async function listWorkspaceWorkers({
     sandbox: row ? deriveSandboxStatus(row) : 'none',
     workers: workerRows.map((worker) => ({
       sessionId: worker.conversationId,
-      name: worker.title ?? '',
+      name:
+        redactConversationTitleForViewer({
+          viewerId: callerUserId,
+          // A vanished workspace row (FK-nulled edge) has no owner to grant
+          // through — the empty id matches nobody, so the rule fails CLOSED.
+          workspaceOwnerId: row?.ownerId ?? '',
+          conversation: { ownerId: worker.ownerId, isShared: worker.isShared, title: worker.title },
+        }) ?? '',
       agent:
         worker.type === 'page' && worker.agentPageId !== null
           ? { agentId: worker.agentPageId, title: worker.agentTitle ?? '' }
@@ -423,20 +442,7 @@ async function listOwnWorkspaces({
   if (sessions.length === 0) return [];
 
   const workersBySession = await listSessionConversationsBulk(sessions.map((s) => s.sessionId));
-
-  const agentPageIds = [
-    ...new Set(
-      [...workersBySession.values()].flat().flatMap((w) => (w.agentPageId ? [w.agentPageId] : [])),
-    ),
-  ];
-  const agentTitles = new Map<string, string>();
-  if (agentPageIds.length > 0) {
-    const agentRows = await db
-      .select({ id: pages.id, title: pages.title })
-      .from(pages)
-      .where(inArray(pages.id, agentPageIds));
-    for (const row of agentRows) agentTitles.set(row.id, row.title);
-  }
+  const agentTitles = await resolveAgentTitles(workersBySession);
 
   return sessions.map((session) => ({
     workspaceId: session.sessionId,
@@ -450,6 +456,143 @@ async function listOwnWorkspaces({
         worker.agentPageId !== null
           ? { agentId: worker.agentPageId, title: agentTitles.get(worker.agentPageId) ?? '' }
           : null,
+    })),
+  }));
+}
+
+/** The one batched agent-label lookup both cross-workspace listings share. */
+async function resolveAgentTitles(
+  workersBySession: Awaited<ReturnType<typeof listSessionConversationsBulk>>,
+): Promise<Map<string, string>> {
+  const agentPageIds = [
+    ...new Set(
+      [...workersBySession.values()].flat().flatMap((w) => (w.agentPageId ? [w.agentPageId] : [])),
+    ),
+  ];
+  const agentTitles = new Map<string, string>();
+  if (agentPageIds.length > 0) {
+    const agentRows = await db
+      .select({ id: pages.id, title: pages.title })
+      .from(pages)
+      .where(inArray(pages.id, agentPageIds));
+    for (const row of agentRows) agentTitles.set(row.id, row.title);
+  }
+  return agentTitles;
+}
+
+/**
+ * The most SHARED workspaces (other members' sessions in drives the caller
+ * belongs to) one `list_sessions` call reports. The caller's OWN set needs
+ * no such bound — `MAX_ACTIVE_WORKSPACES_PER_OWNER` is a structural spawn
+ * ceiling, so a listing can never truncate it — but the member-visible set
+ * has no structural ceiling behind it (N members × their own caps), so this
+ * cap is a REAL truncation bound: newest activity first, the rest silently
+ * beyond the horizon. Sized to the same figure as the own-set cap
+ * (`MAX_ACTIVE_WORKSPACES_PER_OWNER`) so one listing's total stays
+ * model-context-shaped.
+ */
+const MAX_MEMBER_VISIBLE_WORKSPACES = 100;
+
+/**
+ * Workspaces the caller can ACCESS as a drive member without owning them —
+ * the discovery HALF of the spawn gate, restoring symmetry PR #2336 flagged:
+ * `spawn_session`'s explicit-`workspaceId` path admits any caller
+ * `checkSessionAccess` allows (owner OR drive member), while discovery only
+ * enumerated owned workspaces — so a member could target a shared workspace
+ * by id but never learn the id from `list_sessions`.
+ *
+ * Per-row access is decided by the SAME one pure decision the spawn gate
+ * uses — `decideAgentSessionAccess`, fed by the same `resolveDriveMembership`
+ * gather (`checkAccessForSubject`'s exact composition) — never a second
+ * predicate. Candidate drives come from the caller's drive relationships
+ * (`getDriveIdsForUser`, deliberately over-broad: it includes
+ * page-permission-only drives whose membership resolves to `'none'`, which
+ * the decision then denies — an over-broad candidate set filtered by the one
+ * real gate beats a hand-rolled narrower query that could drift from it).
+ *
+ * Worker rows come from the same `listSessionConversationsBulk` primitive as
+ * every other listing, with titles routed through the ONE redaction rule
+ * (`redactConversationTitleForViewer`): the caller sees their own and
+ * deliberately-shared titles; another member's private thread keeps its row
+ * (agent + activity — the orchestration signal) as `(private thread)`.
+ * Bounded by {@link MAX_MEMBER_VISIBLE_WORKSPACES} (see its doc).
+ */
+async function listSharedWorkspaces({
+  userId,
+  excludeWorkspaceId,
+}: {
+  userId: string;
+  excludeWorkspaceId?: string;
+}): Promise<SharedWorkspaceSummary[]> {
+  const candidateDriveIds = await getDriveIdsForUser(userId);
+  if (candidateDriveIds.length === 0) return [];
+
+  const memberships = await Promise.all(
+    candidateDriveIds.map(async (driveId) => ({
+      driveId,
+      membership: await resolveDriveMembership({ userId, driveId }),
+    })),
+  );
+
+  const sessionsPerDrive = await Promise.all(
+    memberships
+      .filter(({ membership }) => membership !== 'none')
+      .map(async ({ driveId, membership }) => {
+        // The ownerless `{ driveId }` filter: every ACTIVE session in the
+        // drive, any owner — the sidebar's own store primitive, its per-query
+        // cap included.
+        const sessions = await listSessions({ driveId });
+        return sessions.filter(
+          (session) =>
+            // The caller's own sessions belong to the OWN listing; the
+            // current workspace is the top-level detail view.
+            session.ownerId !== userId &&
+            session.sessionId !== excludeWorkspaceId &&
+            // THE gate — the same pure decision `checkSessionAccess` applies
+            // on spawn_session's explicit-workspaceId path.
+            decideAgentSessionAccess({
+              requesterId: userId,
+              session: { ownerId: session.ownerId, driveId: session.driveId },
+              driveMembership: membership,
+            }).allowed,
+        );
+      }),
+  );
+
+  const shared = sessionsPerDrive
+    .flat()
+    .sort((a, b) => {
+      // Newest activity first, nulls last, then newest created — the store's
+      // own listing order, re-established across the merged drives.
+      const activity = (b.lastActiveAt ?? '').localeCompare(a.lastActiveAt ?? '');
+      return activity !== 0 ? activity : b.createdAt.localeCompare(a.createdAt);
+    })
+    .slice(0, MAX_MEMBER_VISIBLE_WORKSPACES);
+  if (shared.length === 0) return [];
+
+  const workersBySession = await listSessionConversationsBulk(shared.map((s) => s.sessionId));
+  const agentTitles = await resolveAgentTitles(workersBySession);
+
+  return shared.map((session) => ({
+    workspaceId: session.sessionId,
+    name: session.name,
+    // Non-null by construction: only drive-scoped sessions pass the filter
+    // (a global-assistant session is owner-only, and own rows are excluded).
+    driveId: session.driveId ?? '',
+    sandbox: session.sandboxStatus,
+    workers: (workersBySession.get(session.sessionId) ?? []).map((worker) => ({
+      sessionId: worker.conversationId,
+      name:
+        redactConversationTitleForViewer({
+          viewerId: userId,
+          workspaceOwnerId: session.ownerId,
+          conversation: { ownerId: worker.ownerId, isShared: worker.isShared, title: worker.title },
+        }) ?? '',
+      agent:
+        worker.agentPageId !== null
+          ? { agentId: worker.agentPageId, title: agentTitles.get(worker.agentPageId) ?? '' }
+          : null,
+      lastActiveAt: worker.lastMessageAt?.toISOString() ?? null,
     })),
   }));
 }
@@ -718,6 +861,7 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
     },
     listWorkspaceWorkers,
     listOwnWorkspaces,
+    listSharedWorkspaces,
 
     findWorker: async (conversationId) => {
       // The wire's "sessionId" is the WORKER's conversation id (what spawn

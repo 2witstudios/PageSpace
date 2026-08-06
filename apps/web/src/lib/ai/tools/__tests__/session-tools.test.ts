@@ -32,6 +32,7 @@ function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
     findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID })),
     listWorkspaceWorkers: vi.fn(async () => ({ sandbox: 'running' as const, workers: [], shells: [] })),
     listOwnWorkspaces: vi.fn(async () => []),
+    listSharedWorkspaces: vi.fn(async () => []),
     findWorker: vi.fn(async (conversationId: string) => ({
       conversationId,
       ownerId: USER_ID,
@@ -111,17 +112,30 @@ describe('list_sessions', () => {
     const deps = makeDeps({ listWorkspaceWorkers: vi.fn(async () => listing) });
     const tools = createSessionTools(deps);
     const result = await run(tools.list_sessions, {}, contextOptions());
-    expect(result).toEqual({ success: true, workspaceId: WORKSPACE_ID, ...listing, otherWorkspaces: [] });
+    expect(result).toEqual({
+      success: true,
+      workspaceId: WORKSPACE_ID,
+      ...listing,
+      otherWorkspaces: [],
+      sharedWorkspaces: [],
+    });
     // Review H2b's pin: the listing is resolved from the caller's workspace,
     // and every worker id it returns is a conversation id — the exact address
-    // send_session/read_session/kill_session take.
+    // send_session/read_session/kill_session take. The caller's user id rides
+    // along as the VIEWER for the shared-workspace title redaction rule.
     expect(deps.listWorkspaceWorkers).toHaveBeenCalledWith({
       workspaceId: WORKSPACE_ID,
       callerConversationId: CALLER_CONVERSATION,
+      callerUserId: USER_ID,
     });
-    // The caller's own workspace is excluded from the others list — it is
-    // already the top-level detail view.
+    // The caller's own workspace is excluded from BOTH cross-workspace lists
+    // — it is already the top-level detail view (and a caller spawned into a
+    // shared workspace has a current workspace they do not own).
     expect(deps.listOwnWorkspaces).toHaveBeenCalledWith({
+      userId: USER_ID,
+      excludeWorkspaceId: WORKSPACE_ID,
+    });
+    expect(deps.listSharedWorkspaces).toHaveBeenCalledWith({
       userId: USER_ID,
       excludeWorkspaceId: WORKSPACE_ID,
     });

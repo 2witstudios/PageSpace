@@ -6,7 +6,9 @@
  *
  * Two verb families, EXACTLY nine tools, ONE address namespace each. You name
  * a thing once, at spawn; every verb after that takes the id the spawn
- * returned — and `list_sessions` re-lists exactly those ids:
+ * returned — and `list_sessions` re-lists those ids (plus, for awareness,
+ * other members' workers in SHARED workspaces, which are not the caller's to
+ * address — see `SharedWorkspaceSummary`):
  *
  *  - **Workers** — labeled sibling CONVERSATIONS in the caller's own session
  *    (same sandbox, same filesystem), addressed by their conversation id:
@@ -188,6 +190,45 @@ export interface OwnWorkspaceSummary {
   workers: Array<Omit<WorkerListingEntry, 'isCaller'>>;
 }
 
+/**
+ * One worker of a SHARED workspace, as `list_sessions` reports it. Same id
+ * namespace as every other listing (a conversation id) — but only the
+ * caller's OWN workers are addressable by the verbs (a foreign conversation
+ * reads as nonexistent to them), so this entry exists for AWARENESS: what is
+ * running in the shared workspace, under which agent, and how recently.
+ * `name` may be the fixed `(private thread)` redaction marker — another
+ * member's private thread keeps its row but never its title (see
+ * `redact-conversation-listing.ts` in `@pagespace/lib`).
+ */
+export interface SharedWorkspaceWorkerEntry {
+  sessionId: string;
+  /** The title, or the redaction marker for another member's private thread. */
+  name: string;
+  agent: { agentId: string; title: string } | null;
+  /** Last activity (ISO), kept even where the title is redacted — the orchestration signal. */
+  lastActiveAt: string | null;
+}
+
+/**
+ * A workspace the caller can reach as a DRIVE MEMBER without owning it —
+ * `list_sessions`' `sharedWorkspaces` section. Discovery symmetry with
+ * `spawn_session`'s explicit-`workspaceId` path: every workspace the spawn
+ * gate (`checkSessionAccess` — owner or drive member) would admit the caller
+ * into is discoverable here, labeled distinctly from their own so the model
+ * knows which are whose. Listed for two uses: a `spawn_session` `workspace`
+ * target, and awareness of what other members are running. No shells, no
+ * caller-owned rows (those live in `OwnWorkspaceSummary`).
+ */
+export interface SharedWorkspaceSummary {
+  workspaceId: string;
+  /** Display label only — never an address. */
+  name: string;
+  /** Always a real drive: sharing happens through drive membership, and global-assistant workspaces are owner-only. */
+  driveId: string;
+  sandbox: SandboxStatus;
+  workers: SharedWorkspaceWorkerEntry[];
+}
+
 /** The identity slice of a WORKER row — a conversation — the session verbs act on. */
 export interface WorkerRow {
   /** The worker's conversation id — the wire's `sessionId`, mapped at the zod boundary. */
@@ -249,10 +290,17 @@ export interface SessionToolsDeps {
    * everything the listing enumerates, hangs off this one resolution.
    */
   findOwnWorkspace: (conversationId: string) => Promise<{ workspaceId: string } | null>;
-  /** The workspace's workers + shells + sandbox status, labels resolved. */
+  /**
+   * The workspace's workers + shells + sandbox status, labels resolved.
+   * `callerUserId` is the VIEWER: a caller whose conversation lives in a
+   * workspace they do not own (spawned into a shared one) gets other
+   * members' private-thread titles redacted — the one listing redaction rule
+   * (`redact-conversation-listing.ts`).
+   */
   listWorkspaceWorkers: (input: {
     workspaceId: string;
     callerConversationId: string;
+    callerUserId: string;
   }) => Promise<SessionWorkspaceListing>;
   /**
    * ALL the caller's active workspaces (minus `excludeWorkspaceId`, their
@@ -264,6 +312,19 @@ export interface SessionToolsDeps {
     userId: string;
     excludeWorkspaceId?: string;
   }) => Promise<OwnWorkspaceSummary[]>;
+  /**
+   * Workspaces the caller can ACCESS as a drive member without owning —
+   * `listOwnWorkspaces`' discovery sibling, gated by the SAME access
+   * decision `spawn_session`'s explicit-`workspaceId` path enforces
+   * (`decideAgentSessionAccess` — never a second predicate), so anything
+   * spawnable-into is also discoverable (PR #2336's flagged asymmetry).
+   * Bounded by the runtime's own explicit member-visible cap — unlike the
+   * caller's OWN set, this one has no structural per-owner ceiling behind it.
+   */
+  listSharedWorkspaces: (input: {
+    userId: string;
+    excludeWorkspaceId?: string;
+  }) => Promise<SharedWorkspaceSummary[]>;
   /** One worker conversation's identity slice, or null. */
   findWorker: (conversationId: string) => Promise<WorkerRow | null>;
   /**
@@ -563,7 +624,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
   return {
     list_sessions: tool({
       description:
-        'List ALL your workspaces and their workers. Your current conversation\'s workspace comes with full detail (workers, shells, shared sandbox status); every other workspace lists its workspaceId (a spawn_session `workspace` target) and workers. Every worker\'s sessionId is the exact address send_session/read_session/kill_session take, from anywhere. Names are labels — always address by id.',
+        'List the workspaces you can reach, and their workers. Your current conversation\'s workspace comes with full detail (workers, shells, shared sandbox status); every other workspace you OWN lists its workspaceId (a spawn_session `workspace` target) and workers; sharedWorkspaces lists OTHER members\' workspaces in drives you belong to — equally valid spawn_session `workspace` targets, shown for awareness with other members\' private thread titles redacted to "(private thread)". Your own workers\' sessionIds are the exact addresses send_session/read_session/kill_session take, from anywhere; another member\'s worker is not yours to address. Names are labels — always address by id.',
       inputSchema: listSessionsInputSchema,
       execute: async (_input, options) => {
         const context = readContext(options);
@@ -572,10 +633,20 @@ export function createSessionTools(deps: SessionToolsDeps): {
         const conversationId = context?.conversationId;
 
         const workspace = conversationId ? await deps.findOwnWorkspace(conversationId) : null;
-        const otherWorkspaces = await deps.listOwnWorkspaces({
-          userId: actor.userId,
-          excludeWorkspaceId: workspace?.workspaceId,
-        });
+        // Own and member-visible sets in parallel — the SAME exclusion for
+        // both: the caller's current workspace is the top-level detail view
+        // whoever owns it (a caller spawned into a shared workspace has a
+        // current workspace they do not own).
+        const [otherWorkspaces, sharedWorkspaces] = await Promise.all([
+          deps.listOwnWorkspaces({
+            userId: actor.userId,
+            excludeWorkspaceId: workspace?.workspaceId,
+          }),
+          deps.listSharedWorkspaces({
+            userId: actor.userId,
+            excludeWorkspaceId: workspace?.workspaceId,
+          }),
+        ]);
 
         if (!conversationId || !workspace) {
           // No conversation, or a plain one with no workspace: nothing HERE,
@@ -592,14 +663,16 @@ export function createSessionTools(deps: SessionToolsDeps): {
             workers: [],
             shells: [],
             otherWorkspaces,
+            sharedWorkspaces,
             note: 'This conversation has no workspace yet — spawn_session starts one automatically (permission permitting). Workers in your other workspaces are addressable by their sessionId.',
           };
         }
         const listing = await deps.listWorkspaceWorkers({
           workspaceId: workspace.workspaceId,
           callerConversationId: conversationId,
+          callerUserId: actor.userId,
         });
-        return { success: true, workspaceId: workspace.workspaceId, ...listing, otherWorkspaces };
+        return { success: true, workspaceId: workspace.workspaceId, ...listing, otherWorkspaces, sharedWorkspaces };
       },
     }),
 
