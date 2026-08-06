@@ -9,6 +9,7 @@ import { eq, and, lt, ne } from '@pagespace/db/operators'
 import { chatMessages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
+import { mutateUnifiedMessageById } from '@/lib/repositories/unified-message-leg';
 
 export interface ToolResult {
   toolCallId: string;
@@ -204,10 +205,18 @@ export const chatMessageRepository = {
     toolResults: ToolResult[]
   ): Promise<void> {
     if (toolResults.length === 0) return;
-    await db
-      .update(chatMessages)
-      .set({ toolResults: JSON.stringify(toolResults) })
-      .where(and(eq(chatMessages.id, messageId), eq(chatMessages.conversationId, conversationId)));
+    // Dual-write (Phase 4 PR 10): the ONE durable message-content write that
+    // does not go through message-repository.ts (the v1 completions route's
+    // client-tool-result backfill). Wrapped in a transaction so its unified
+    // leg lands with it or not at all, exactly like every repository write.
+    const serialized = JSON.stringify(toolResults);
+    await db.transaction(async (tx) => {
+      await tx
+        .update(chatMessages)
+        .set({ toolResults: serialized })
+        .where(and(eq(chatMessages.id, messageId), eq(chatMessages.conversationId, conversationId)));
+      await mutateUnifiedMessageById(tx, messageId, { toolResults: serialized }, { conversationId });
+    });
   },
 
   /**
