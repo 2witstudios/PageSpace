@@ -153,11 +153,19 @@ vi.mock('@/lib/ai/core/ai-tools', () => ({
     list_pages: { description: 'list_pages' },
   },
 }));
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
+    savePageMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }),
+    saveGlobalMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }),
+    insertPageStreamingPlaceholder: vi.fn().mockResolvedValue({ inserted: true }),
+    insertGlobalStreamingPlaceholder: vi.fn().mockResolvedValue({ inserted: true }),
+  },
+}));
+
 vi.mock('@/lib/ai/core/message-utils', () => ({
   extractMessageContent: vi.fn().mockReturnValue('test content'),
   extractToolCalls: vi.fn().mockReturnValue([]),
   extractToolResults: vi.fn().mockReturnValue([]),
-  saveMessageToDatabase: vi.fn(),
   sanitizeMessagesForModel: vi.fn().mockReturnValue([]),
   convertDbMessageToUIMessage: vi.fn(),
 }));

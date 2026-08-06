@@ -336,6 +336,78 @@ const emitAfterSave = (args: {
   });
 };
 
+/**
+ * Emit context for the mutation paths (edit/delete/undo/placeholder/
+ * materialize). Module-level rather than a `this.`-method: `this` inside an
+ * object literal breaks the moment any caller destructures a method off the
+ * repository (same rationale as conversation-repository.ts).
+ */
+function contextForMutation(
+  row: BumpedConversationRow | null,
+  conversationId: string,
+  fallbackScope: ConversationEmitContext['scope'],
+  triggeredBy: { userId: string; browserSessionId: string },
+): ConversationEmitContext {
+  const slim = { userId: triggeredBy.userId, browserSessionId: triggeredBy.browserSessionId };
+  if (row) return emitContextFromRow(row, slim);
+  return {
+    conversationId,
+    rev: 0,
+    scope: fallbackScope,
+    workspaceId: null,
+    ownerId: triggeredBy.userId,
+    isShared: false,
+    triggeredBy: slim,
+  };
+}
+
+/** Shared 'streaming'-placeholder emission (message_created with an empty streaming shell). */
+function emitPlaceholderCreated(
+  row: BumpedConversationRow | null,
+  args: { messageId: string; conversationId: string; triggeredBy?: ConversationEventTriggeredBy },
+  fallbackScope: ConversationEmitContext['scope'],
+): void {
+  const triggeredBy = args.triggeredBy ?? serverTriggered(row?.userId ?? 'server');
+  const ctx = contextForMutation(row, args.conversationId, fallbackScope, triggeredBy);
+  void conversationEvents
+    .messageCreated(
+      ctx,
+      buildEventMessage({
+        messageId: args.messageId,
+        role: 'assistant',
+        content: '',
+        status: 'streaming',
+      }),
+      row?.lastMessageAt ?? null,
+      { skipDirectory: row === null },
+    )
+    .catch(() => {});
+}
+
+/** Shared materializer emission (a terminal write by another door → message_updated). */
+function emitMaterialized(
+  row: BumpedConversationRow | null,
+  args: { messageId: string; conversationId: string; eventMessage?: UIMessage },
+  fallbackScope: ConversationEmitContext['scope'],
+): void {
+  const triggeredBy = serverTriggered(row?.userId ?? 'server');
+  const ctx = contextForMutation(row, args.conversationId, fallbackScope, triggeredBy);
+  void conversationEvents
+    .messageUpdated(
+      ctx,
+      buildEventMessage({
+        messageId: args.messageId,
+        role: 'assistant',
+        content: '',
+        uiMessage: args.eventMessage,
+        status: 'interrupted',
+      }),
+      row?.lastMessageAt ?? null,
+      { skipDirectory: row === null },
+    )
+    .catch(() => {});
+}
+
 // ---------------------------------------------------------------------------
 // The repository
 // ---------------------------------------------------------------------------
@@ -499,7 +571,7 @@ export const messageRepository = {
       return { bumped };
     });
     if (!outcome) return { inserted: false };
-    this.emitPlaceholderCreated(outcome.bumped, args, { kind: 'page', pageId: args.pageId });
+    emitPlaceholderCreated(outcome.bumped, args, { kind: 'page', pageId: args.pageId });
     return { inserted: true };
   },
 
@@ -533,45 +605,11 @@ export const messageRepository = {
       return { bumped };
     });
     if (!outcome) return { inserted: false };
-    this.emitPlaceholderCreated(outcome.bumped, args, {
+    emitPlaceholderCreated(outcome.bumped, args, {
       kind: 'global',
       ownerId: outcome.bumped?.userId ?? args.userId,
     });
     return { inserted: true };
-  },
-
-  /** Internal: shared placeholder emission. */
-  emitPlaceholderCreated(
-    row: BumpedConversationRow | null,
-    args: { messageId: string; conversationId: string; triggeredBy?: ConversationEventTriggeredBy },
-    fallbackScope: ConversationEmitContext['scope'],
-  ): void {
-    const triggeredBy =
-      args.triggeredBy ?? serverTriggered(row?.userId ?? 'server');
-    const ctx: ConversationEmitContext = row
-      ? emitContextFromRow(row, triggeredBy)
-      : {
-          conversationId: args.conversationId,
-          rev: 0,
-          scope: fallbackScope,
-          workspaceId: null,
-          ownerId: triggeredBy.userId,
-          isShared: false,
-          triggeredBy,
-        };
-    void conversationEvents
-      .messageCreated(
-        ctx,
-        buildEventMessage({
-          messageId: args.messageId,
-          role: 'assistant',
-          content: '',
-          status: 'streaming',
-        }),
-        row?.lastMessageAt ?? null,
-        { skipDirectory: row === null },
-      )
-      .catch(() => {});
   },
 
   /**
@@ -625,7 +663,7 @@ export const messageRepository = {
       return { row };
     });
     if (!outcome) return false;
-    this.emitMaterialized(outcome.row, args, { kind: 'page', pageId: args.pageId });
+    emitMaterialized(outcome.row, args, { kind: 'page', pageId: args.pageId });
     return true;
   },
 
@@ -674,45 +712,11 @@ export const messageRepository = {
       return { row };
     });
     if (!outcome) return false;
-    this.emitMaterialized(outcome.row, args, {
+    emitMaterialized(outcome.row, args, {
       kind: 'global',
       ownerId: outcome.row?.userId ?? args.userId,
     });
     return true;
-  },
-
-  /** Internal: shared materializer emission (a terminal write by another door → message_updated). */
-  emitMaterialized(
-    row: BumpedConversationRow | null,
-    args: { messageId: string; conversationId: string; eventMessage?: UIMessage },
-    fallbackScope: ConversationEmitContext['scope'],
-  ): void {
-    const triggeredBy = serverTriggered(row?.userId ?? 'server');
-    const ctx: ConversationEmitContext = row
-      ? emitContextFromRow(row, triggeredBy)
-      : {
-          conversationId: args.conversationId,
-          rev: 0,
-          scope: fallbackScope,
-          workspaceId: null,
-          ownerId: triggeredBy.userId,
-          isShared: false,
-          triggeredBy,
-        };
-    void conversationEvents
-      .messageUpdated(
-        ctx,
-        buildEventMessage({
-          messageId: args.messageId,
-          role: 'assistant',
-          content: '',
-          uiMessage: args.eventMessage,
-          status: 'interrupted',
-        }),
-        row?.lastMessageAt ?? null,
-        { skipDirectory: row === null },
-      )
-      .catch(() => {});
   },
 
   /**
@@ -747,7 +751,7 @@ export const messageRepository = {
         editedAt: (updated.editedAt ?? new Date()).toISOString(),
         triggeredBy: args.legacyTriggeredBy,
       });
-      const ctx = this.contextForMutation(row, args.conversationId, { kind: 'page', pageId: args.pageId }, args.legacyTriggeredBy);
+      const ctx = contextForMutation(row, args.conversationId, { kind: 'page', pageId: args.pageId }, args.legacyTriggeredBy);
       await conversationEvents.messageUpdated(
         ctx,
         { ...uiMessage, id: args.messageId } as UIMessage,
@@ -783,7 +787,7 @@ export const messageRepository = {
         conversationId: args.conversationId,
         triggeredBy: args.legacyTriggeredBy,
       });
-      const ctx = this.contextForMutation(row, args.conversationId, { kind: 'page', pageId: args.pageId }, args.legacyTriggeredBy);
+      const ctx = contextForMutation(row, args.conversationId, { kind: 'page', pageId: args.pageId }, args.legacyTriggeredBy);
       await conversationEvents.messageDeleted(ctx, args.messageId, { skipDirectory: row === null });
     })().catch((error) => {
       loggers.api.error('messageRepository: delete broadcast failed', error as Error, {
@@ -820,7 +824,7 @@ export const messageRepository = {
         editedAt: new Date().toISOString(),
         triggeredBy: args.legacyTriggeredBy,
       });
-      const ctx = this.contextForMutation(
+      const ctx = contextForMutation(
         row,
         args.conversationId,
         { kind: 'global', ownerId: args.ownerUserId },
@@ -879,7 +883,7 @@ export const messageRepository = {
         conversationId: args.conversationId,
         triggeredBy: args.legacyTriggeredBy,
       });
-      const ctx = this.contextForMutation(
+      const ctx = contextForMutation(
         row,
         args.conversationId,
         { kind: 'global', ownerId: args.ownerUserId },
@@ -918,7 +922,7 @@ export const messageRepository = {
       affectedMessageIds: args.affectedMessageIds,
       triggeredBy: args.legacyTriggeredBy,
     });
-    const ctx = this.contextForMutation(row, args.conversationId, args.scope, args.legacyTriggeredBy);
+    const ctx = contextForMutation(row, args.conversationId, args.scope, args.legacyTriggeredBy);
     await conversationEvents.undoApplied(
       ctx,
       { mode: args.mode, affectedMessageIds: args.affectedMessageIds },
@@ -926,23 +930,4 @@ export const messageRepository = {
     );
   },
 
-  /** Internal: emit context for the mutation paths above. */
-  contextForMutation(
-    row: BumpedConversationRow | null,
-    conversationId: string,
-    fallbackScope: ConversationEmitContext['scope'],
-    triggeredBy: { userId: string; browserSessionId: string },
-  ): ConversationEmitContext {
-    const slim = { userId: triggeredBy.userId, browserSessionId: triggeredBy.browserSessionId };
-    if (row) return emitContextFromRow(row, slim);
-    return {
-      conversationId,
-      rev: 0,
-      scope: fallbackScope,
-      workspaceId: null,
-      ownerId: triggeredBy.userId,
-      isShared: false,
-      triggeredBy: slim,
-    };
-  },
 };

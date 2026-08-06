@@ -19,7 +19,7 @@
 
 import { db, getAdvisoryLockPool } from '@pagespace/db/db';
 import { withAdvisoryLock } from '@pagespace/db/advisory-lock';
-import { and, eq, inArray, isNull, isNotNull, sql } from '@pagespace/db/operators';
+import { and, eq, inArray, isNull, sql } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';

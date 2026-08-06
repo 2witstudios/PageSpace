@@ -204,7 +204,70 @@ vi.mock('@pagespace/db/db', () => {
   };
 });
 
-vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn(), ne: vi.fn(), and: vi.fn() }));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  ne: vi.fn(),
+  and: vi.fn(),
+  // Pulled in transitively by the message-repository module graph
+  // (global-conversation-repository's module-level hasMessages, conversation-rev's sql).
+  sql: vi.fn(),
+  exists: vi.fn(),
+  desc: vi.fn(),
+  lt: vi.fn(),
+  gt: vi.fn(),
+  isNull: vi.fn(),
+  isNotNull: vi.fn(),
+  inArray: vi.fn(),
+}));
+
+// The repository choke point (SSoT Phase 2), shimmed to preserve this file's
+// assertion surface: beforeSave runs against the mocked db's transaction
+// (exactly like the real repository), and the raw write forwards to
+// mockSaveMessageToDatabase — the same spy the route used to call directly.
+vi.mock('@/lib/repositories/message-repository', async () => {
+  const { db } = await import('@pagespace/db/db');
+  type Tx = {
+    select: (...a: unknown[]) => {
+      from: (...a: unknown[]) => {
+        where: (...a: unknown[]) => { for: (...a: unknown[]) => { limit: (n: number) => Promise<Array<{ isActive: boolean }>> } };
+      };
+    };
+    insert: (...a: unknown[]) => { values: (...a: unknown[]) => PromiseLike<unknown> };
+  };
+  type SaveArgs = Record<string, unknown> & {
+    beforeSave?: (tx: Tx) => Promise<unknown>;
+  };
+  return {
+    messageRepository: {
+      savePageMessage: vi.fn(async (args: SaveArgs) => {
+        const saved = await (db as unknown as { transaction: (fn: (tx: Tx) => Promise<boolean>) => Promise<boolean> }).transaction(
+          async (tx) => {
+            if (args.beforeSave) {
+              const r = await args.beforeSave(tx);
+              if (r === false) return false;
+              if (r && typeof r === 'object' && (r as { proceed?: boolean }).proceed === false) return false;
+            }
+            const { beforeSave: _b, triggeredBy: _t, ...rest } = args;
+            await mockSaveMessageToDatabase({ ...rest, dbClient: tx });
+            return true;
+          },
+        );
+        return { saved, rev: 1 };
+      }),
+      insertPageStreamingPlaceholder: vi.fn(async (args: { messageId: string; pageId: string; conversationId: string }) => {
+        const inserted = await (db as unknown as { transaction: (fn: (tx: Tx) => Promise<boolean>) => Promise<boolean> }).transaction(
+          async (tx) => {
+            const [row] = await tx.select({}).from({}).where({}).for('update').limit(1);
+            if (row && !row.isActive) return false;
+            await tx.insert({}).values({ id: args.messageId, status: 'streaming' });
+            return true;
+          },
+        );
+        return { inserted };
+      }),
+    },
+  };
+});
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'id' } }));
 vi.mock('@pagespace/db/schema/core', () => ({
   chatMessages: { pageId: 'pageId', conversationId: 'conversationId', isActive: 'isActive', createdAt: 'createdAt' },

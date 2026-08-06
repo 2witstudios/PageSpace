@@ -11,6 +11,21 @@ import { PATCH, DELETE } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // Mock the repository seam (boundary)
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
+    editPageMessage: vi.fn().mockResolvedValue(undefined),
+    softDeletePageMessage: vi.fn().mockResolvedValue(undefined),
+    editGlobalMessage: vi.fn().mockResolvedValue(undefined),
+    softDeleteGlobalMessage: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+vi.mock('@/lib/websocket/broadcast-triggered-by', () => ({
+  resolveTriggeredBy: vi
+    .fn()
+    .mockResolvedValue({ userId: 'user_123', displayName: 'Tester', browserSessionId: '' }),
+}));
+
 vi.mock('@/lib/repositories/chat-message-repository', () => ({
   chatMessageRepository: {
     getMessageById: vi.fn(),
@@ -75,6 +90,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
@@ -248,7 +264,7 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
     vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(mockChatMessage());
 
     // Default: update succeeds
-    vi.mocked(chatMessageRepository.updateMessageContent).mockResolvedValue(undefined);
+    vi.mocked(messageRepository.editPageMessage).mockResolvedValue(undefined);
 
     // Default: page lookup for driveId
     vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPageLookup());
@@ -334,7 +350,7 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
 
       expect(response.status).toBe(409);
       expect(body.error).toMatch(/still generating/i);
-      expect(chatMessageRepository.updateMessageContent).not.toHaveBeenCalled();
+      expect(messageRepository.editPageMessage).not.toHaveBeenCalled();
     });
   });
 
@@ -398,9 +414,8 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
 
       await PATCH(request, context);
 
-      expect(chatMessageRepository.updateMessageContent).toHaveBeenCalledWith(
-        mockMessageId,
-        'Updated content'
+      expect(messageRepository.editPageMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: mockMessageId, updatedContent: 'Updated content' })
       );
     });
 
@@ -435,7 +450,7 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
 
   describe('error handling', () => {
     it('should return 500 when repository throws', async () => {
-      vi.mocked(chatMessageRepository.updateMessageContent).mockRejectedValue(
+      vi.mocked(messageRepository.editPageMessage).mockRejectedValue(
         new Error('Database error')
       );
 
@@ -572,7 +587,7 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
     vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(mockChatMessage());
 
     // Default: delete succeeds
-    vi.mocked(chatMessageRepository.softDeleteMessage).mockResolvedValue(undefined);
+    vi.mocked(messageRepository.softDeletePageMessage).mockResolvedValue(undefined);
 
     // Default: page lookup for driveId
     vi.mocked(db.query.pages.findFirst).mockResolvedValue(mockPageLookup());
@@ -623,7 +638,7 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
 
       expect(response.status).toBe(409);
       expect(body.error).toMatch(/still generating/i);
-      expect(chatMessageRepository.softDeleteMessage).not.toHaveBeenCalled();
+      expect(messageRepository.softDeletePageMessage).not.toHaveBeenCalled();
     });
   });
 
@@ -678,7 +693,9 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
 
       await DELETE(request, context);
 
-      expect(chatMessageRepository.softDeleteMessage).toHaveBeenCalledWith(mockMessageId);
+      expect(messageRepository.softDeletePageMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: mockMessageId })
+      );
     });
 
     it('should log successful deletion', async () => {
@@ -699,7 +716,7 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
 
   describe('error handling', () => {
     it('should return 500 when repository throws', async () => {
-      vi.mocked(chatMessageRepository.softDeleteMessage).mockRejectedValue(
+      vi.mocked(messageRepository.softDeletePageMessage).mockRejectedValue(
         new Error('Database error')
       );
 

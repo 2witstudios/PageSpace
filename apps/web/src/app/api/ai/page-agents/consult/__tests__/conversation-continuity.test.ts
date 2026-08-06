@@ -170,8 +170,11 @@ vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
 }));
 
 const saveMessageToDatabase = vi.fn().mockResolvedValue(undefined);
-vi.mock('@/lib/ai/core/message-utils', () => ({
-  saveMessageToDatabase: (...args: unknown[]) => saveMessageToDatabase(...args),
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
+    savePageMessage: (...args: unknown[]) =>
+      saveMessageToDatabase(...args).then(() => ({ saved: true, rev: 1 })),
+  },
 }));
 
 const convertToModelMessages = vi.fn().mockImplementation((msgs: unknown) => msgs);

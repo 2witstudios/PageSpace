@@ -91,9 +91,17 @@ vi.mock('@/lib/ai/core/provider-factory', () => ({
 vi.mock('@/lib/ai/core/system-prompt', () => ({
   buildSystemPrompt: vi.fn().mockReturnValue('You are a helpful agent.'),
 }));
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
+    savePageMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }),
+    saveGlobalMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }),
+    insertPageStreamingPlaceholder: vi.fn().mockResolvedValue({ inserted: true }),
+    insertGlobalStreamingPlaceholder: vi.fn().mockResolvedValue({ inserted: true }),
+  },
+}));
+
 vi.mock('@/lib/ai/core/message-utils', () => ({
   sanitizeMessagesForModel: vi.fn((msgs: unknown[]) => msgs),
-  saveMessageToDatabase: vi.fn().mockResolvedValue(undefined),
   convertDbMessageToUIMessage: vi.fn((m: unknown) => {
     const msg = m as { id: string; role: string; content: string };
     return { id: msg.id, role: msg.role as 'user' | 'assistant', parts: [{ type: 'text' as const, text: msg.content || '' }] };

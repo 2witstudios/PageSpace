@@ -33,6 +33,21 @@ vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: mockInsert,
     update: vi.fn(() => ({ set: mockUpdateSet })),
+    // The repository choke point (SSoT Phase 2) wraps the CAS upsert + the
+    // conversations.rev bump in one transaction. The tx reuses the SAME
+    // insert spies (so every table-routing/setWhere assertion below still
+    // binds to the real repository SQL); the rev bump's update chain returns
+    // no row (legacy-conversation shape), which the repository tolerates.
+    transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) =>
+      cb({
+        insert: mockInsert,
+        update: vi.fn(() => ({
+          set: vi.fn(() => ({
+            where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([]) })),
+          })),
+        })),
+      }),
+    ),
   },
 }));
 
@@ -41,6 +56,16 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...args: unknown[]) => ({ conds: args })),
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
+  // Pulled in transitively by the message-repository module graph.
+  sql: vi.fn(),
+  ne: vi.fn(),
+  gt: vi.fn(),
+  lt: vi.fn(),
+  desc: vi.fn(),
+  exists: vi.fn(),
+  isNull: vi.fn(),
+  isNotNull: vi.fn(),
+  inArray: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/schema/ai-streams', () => ({
@@ -62,10 +87,17 @@ vi.mock('@pagespace/db/schema/conversations', () => ({
     id: 'messages.id',
     status: 'messages.status',
   },
+  conversations: {
+    id: 'conversations.id',
+    rev: 'conversations.rev',
+  },
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-  loggers: { ai: { info: vi.fn(), warn: mockLoggerWarn, error: vi.fn(), debug: vi.fn() } },
+  loggers: {
+    ai: { info: vi.fn(), warn: mockLoggerWarn, error: vi.fn(), debug: vi.fn() },
+    api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  },
 }));
 
 vi.mock('@/lib/websocket', () => ({

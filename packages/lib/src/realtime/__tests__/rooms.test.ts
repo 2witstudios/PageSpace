@@ -17,10 +17,12 @@ import {
   userCalendarRoom,
   userDrivesRoom,
   userGlobalRoom,
+  userSessionsRoom,
   driveRoom,
   driveCalendarRoom,
   dmRoom,
   sessionRoom,
+  conversationRoom,
   driveActivityRoom,
   pageActivityRoom,
   isKnownRoomId,
@@ -39,18 +41,20 @@ describe('room builders', () => {
     expect(userCalendarRoom(id)).toBe(`user:${id}:calendar`);
     expect(userDrivesRoom(id)).toBe(`user:${id}:drives`);
     expect(userGlobalRoom(id)).toBe(`user:${id}:global`);
+    expect(userSessionsRoom(id)).toBe(`user:${id}:sessions`);
     expect(driveRoom(id)).toBe(`drive:${id}`);
     expect(driveCalendarRoom(id)).toBe(`drive:${id}:calendar`);
     expect(dmRoom(id)).toBe(`dm:${id}`);
     expect(sessionRoom(id)).toBe(`session:${id}`);
+    expect(conversationRoom(id)).toBe(`conv:${id}`);
     expect(driveActivityRoom(id)).toBe(`activity:drive:${id}`);
     expect(pageActivityRoom(id)).toBe(`activity:page:${id}`);
   });
 
   it('ALL_ROOM_BUILDERS covers every exported builder', () => {
-    expect(ALL_ROOM_BUILDERS).toHaveLength(12);
+    expect(ALL_ROOM_BUILDERS).toHaveLength(14);
     const outputs = ALL_ROOM_BUILDERS.map((build) => build(id));
-    expect(new Set(outputs).size).toBe(12);
+    expect(new Set(outputs).size).toBe(14);
   });
 });
 
@@ -85,6 +89,7 @@ describe('isKnownRoomId', () => {
     expect(isKnownRoomId('')).toBe(false);
     expect(isKnownRoomId('*')).toBe(false);
     expect(isKnownRoomId('drive:*')).toBe(false);
+    expect(isKnownRoomId('conv:*')).toBe(false);
     expect(isKnownRoomId('drive:')).toBe(false);
     expect(isKnownRoomId(':')).toBe(false);
   });
