@@ -40,7 +40,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { UIMessage } from 'ai';
-import { decideConversationApply } from '../conversation-apply';
+import { decideConversationApply, UNVERSIONED_REV } from '../conversation-apply';
 import { applyConfirmedMessage } from '@/stores/conversationMessages/applyConfirmedMessage';
 import { applyConversationDelete } from '@/stores/conversationMessages/applyConversationDelete';
 import { applyStartLoad } from '@/stores/conversationMessages/applyStartLoad';
@@ -138,14 +138,15 @@ class SimulatedClient {
   /** Diagnostics for a failure message — the schedule that produced the state. */
   readonly log: string[] = [];
   /**
-   * Set when this run hit the KNOWN OPEN GAP pinned by the `it.fails` case at
-   * the bottom of this file: an event OLDER than an in-flight snapshot getting
-   * applied during that flight, so `pendingMutationsSinceLoad` replays a stale
-   * payload over a newer snapshot. Schedules that reach it are counted and
-   * excluded from the convergence property rather than quietly generated away —
-   * the exclusion is the finding, and it disappears the day the gap closes.
+   * Set when this run reached the interleaving that used to diverge: an event
+   * OLDER than an in-flight snapshot applied during that flight, so
+   * `pendingMutationsSinceLoad` would replay a stale payload over a newer
+   * snapshot. It is no longer an exclusion — the rev gate in
+   * `replayPendingMutations` (PR #2346) drops exactly those mutations — but it
+   * is still COUNTED, because a generator that stopped producing this
+   * interleaving would make the property pass for the wrong reason.
    */
-  staleReplayHazard = false;
+  reachedOutOfOrderReplay = false;
 
   get rev(): number | null {
     return this.byId[CONVERSATION_ID].rev;
@@ -201,22 +202,29 @@ function simulateDelivery(client: SimulatedClient, server: SimulatedServer, even
     client.refetch(server, `${event.kind}@${event.rev}`);
     return;
   }
-  if (client.inFlight && event.rev <= client.inFlight.snapshot.rev) {
-    // The applied event predates the snapshot already on its way back, so the
-    // `pendingMutationsSinceLoad` replay is about to write OLDER content over
-    // NEWER truth. See the `it.fails` case below.
-    client.staleReplayHazard = true;
-    client.log.push(`  ^ STALE-REPLAY HAZARD: rev ${event.rev} <= in-flight snapshot rev ${client.inFlight.snapshot.rev}`);
+  if (client.inFlight && event.rev > UNVERSIONED_REV && event.rev <= client.inFlight.snapshot.rev) {
+    // The applied event predates the snapshot already on its way back, so a
+    // REV-BLIND `pendingMutationsSinceLoad` replay would write OLDER content
+    // over NEWER truth. The rev gate is what makes this survivable; see the
+    // regression case at the bottom of this file.
+    client.reachedOutOfOrderReplay = true;
+    client.log.push(`  ^ out-of-order replay: rev ${event.rev} <= in-flight snapshot rev ${client.inFlight.snapshot.rev}`);
   }
+  // The rev rides onto the recorded pending mutation exactly as
+  // `useConversationSubscription` passes `payload.rev` through — without it the
+  // replay is rev-blind again and this suite would be exercising a protocol the
+  // product does not run.
   if (event.kind === 'deleted') {
     client.byId = applyConversationDelete(client.byId, {
       conversationId: CONVERSATION_ID,
       messageId: event.messageId,
+      rev: event.rev,
     });
   } else {
     client.byId = applyConfirmedMessage(client.byId, {
       conversationId: CONVERSATION_ID,
       message: event.message,
+      rev: event.rev,
     });
   }
   client.byId = advanceRev(client.byId, { conversationId: CONVERSATION_ID, rev: event.rev });
@@ -368,16 +376,14 @@ const textOf = (message: UIMessage): string =>
 describe('rev protocol convergence (property)', () => {
   it('given any adversarial delivery schedule, should equal DB truth after the watermark check', () => {
     let covered = 0;
-    let excluded = 0;
+    let outOfOrderReplays = 0;
     for (const seed of SEEDS) {
       const { client, server, schedule } = runSchedule(seed);
-      if (client.staleReplayHazard) {
-        // The one interaction this protocol does NOT yet survive — pinned
-        // deterministically by the `it.fails` case below rather than folded in
-        // here, so the property stays a statement about what actually holds.
-        excluded += 1;
-        continue;
-      }
+      // No exclusions. Schedules that apply an event older than an in-flight
+      // snapshot used to be carved out here (~48/240) because the rev-blind
+      // replay stranded stale content at a current rev; the rev gate closes
+      // that, so they are merely counted now and asserted like every other.
+      if (client.reachedOutOfOrderReplay) outOfOrderReplays += 1;
       covered += 1;
       reconcileToWatermark(client, server);
 
@@ -390,11 +396,14 @@ describe('rev protocol convergence (property)', () => {
       // And the watermark itself is honest: the cache claims exactly the rev it holds.
       expect(client.rev, where).toBe(truth.rev);
     }
-    // Guard the guard: a generator that stopped producing hostile schedules —
-    // or an exclusion that swallowed most of them — would make the property
-    // vacuous. Both ends are asserted.
-    expect(covered, 'schedules actually proving convergence').toBeGreaterThan(SEEDS.length * 0.7);
-    expect(excluded, 'schedules reaching the known stale-replay gap').toBeGreaterThan(0);
+    // Guard the guard. EVERY generated schedule is asserted — no exclusions, no
+    // survivorship — and the hardest interleaving is still being generated, so
+    // a generator that quietly went clean cannot make this property vacuous.
+    expect(covered, 'schedules proving convergence').toBe(SEEDS.length);
+    // ~51/240 at the time of writing — the schedules that used to be excluded.
+    expect(outOfOrderReplays, 'schedules applying an event older than an in-flight snapshot').toBeGreaterThan(
+      SEEDS.length * 0.1,
+    );
   });
 
   it('given no reconciliation, should still never claim a watermark it cannot back up', () => {
@@ -406,7 +415,6 @@ describe('rev protocol convergence (property)', () => {
     // would skip a conversation that needed healing and heal nothing, forever.
     for (const seed of SEEDS) {
       const { client, server } = runSchedule(seed);
-      if (client.staleReplayHazard) continue;
       client.settleLoad();
       const local = client.rev;
       if (local === null || local < server.rev) continue;
@@ -495,38 +503,96 @@ describe('rev protocol convergence (property)', () => {
       expect(client.rev, where).toBe(startRev);
     }
   });
+
+  it('given unversioned mutations recorded during a load, should replay every one however high the snapshot rev', () => {
+    // The invariant the rev gate must never break. `replayPendingMutations`
+    // drops a mutation whose REAL rev the snapshot already contains — but an
+    // unversioned mutation (rev 0 / absent: legacy `chat:*` fan-out, an SSE
+    // stream commit, `promoteOptimisticSends`) carries no rev, so it proves
+    // nothing about ordering and no snapshot rev, however high, is evidence it
+    // was included. Dropping one would silently lose content.
+    for (const seed of SEEDS.slice(0, 60)) {
+      const rand = prng(seed * 15485863);
+      const client = new SimulatedClient();
+      const server = new SimulatedServer();
+      const startRev = 1 + Math.floor(rand() * 20);
+      client.byId = applyLoad(applyStartLoad(client.byId, CONVERSATION_ID).byConversationId, {
+        conversationId: CONVERSATION_ID,
+        generation: 1,
+        messages: [],
+        rev: startRev,
+      });
+
+      // A refetch goes out; its snapshot is read far AHEAD of the watermark and
+      // contains none of what follows.
+      const started = applyStartLoad(client.byId, CONVERSATION_ID);
+      client.byId = started.byConversationId;
+      const snapshotRev = startRev + 1 + Math.floor(rand() * 50);
+
+      // Unversioned events land while it is in flight, so each is recorded as an
+      // unversioned pending mutation.
+      const expected: string[] = [];
+      for (let i = 0; i < 8; i += 1) {
+        const id = `u-${i}`;
+        const message: UIMessage = { id, role: 'user', parts: [{ type: 'text', text: id }] };
+        simulateDelivery(client, server, { kind: 'created', rev: UNVERSIONED_REV, message, truncated: false });
+        expected.push(id);
+      }
+
+      client.byId = applyLoad(client.byId, {
+        conversationId: CONVERSATION_ID,
+        generation: started.generation,
+        messages: [],
+        rev: snapshotRev,
+      });
+
+      const where = `seed ${seed} startRev ${startRev} snapshotRev ${snapshotRev}\n${client.log.join('\n')}`;
+      // Every one replayed onto the empty snapshot; none was gated away.
+      expect(idsOf(client.messages), where).toEqual(expected);
+      expect(client.rev, where).toBe(snapshotRev);
+    }
+  });
 });
 
 /**
- * ── KNOWN OPEN GAP ────────────────────────────────────────────────────────────
+ * ── CLOSED GAP (regression guard) ─────────────────────────────────────────────
  *
- * Found by the property above (first counterexample: seed 37), minimised here to
- * three writes. `it.fails` asserts the body DOES throw, so this suite stays green
- * while the gap is open and turns RED the moment it is closed — whoever fixes it
- * is forced to come here and promote it to a normal `it`.
+ * Found by the property above (first counterexample: seed 37) and minimised here
+ * to three writes. It was originally pinned as `it.fails` — a real, reachable
+ * divergence this protocol did not survive — and the ~48/240 schedules that
+ * reached it were excluded from the convergence property. **Both are gone: the
+ * bug is FIXED (PR #2346) and this case now passes.**
  *
- * **The gap.** `applyLoad` replays `pendingMutationsSinceLoad` onto a load's
- * snapshot so a live mutation is never lost to a snapshot that predates it. That
- * replay is REV-BLIND. It assumes every recorded mutation is NEWER than the
- * snapshot — true when events arrive in emission order, false the moment one
- * arrives late: the events are independent HMAC POSTs into the realtime service,
- * which emits them in the order it receives them, so two writes committed
- * microseconds apart can reach a socket in either order.
+ * **What the bug was.** `applyLoad` replays `pendingMutationsSinceLoad` onto a
+ * load's snapshot so a live mutation is never lost to a snapshot that predates
+ * it. That replay was REV-BLIND. It assumed every recorded mutation is NEWER
+ * than the snapshot — true when events arrive in emission order, false the
+ * moment one arrives late: the events are independent HMAC POSTs into the
+ * realtime service, which emits them in the order it receives them, so two
+ * writes committed microseconds apart can reach a socket in either order.
  *
- * When a late event is applied while a refetch is in flight, its (older) payload
- * is replayed OVER the (newer) snapshot, and `applyLoad`'s own `nextWatermark`
- * then advances the watermark to the snapshot's rev — so the cache holds stale
- * content while CLAIMING to be current. The reconnect watermark check compares
- * revs only (`localRev >= serverRev` → skip), so it never heals this. The
- * divergence is permanent until something unrelated forces a reload.
+ * When a late event was applied while a refetch was in flight, its (older)
+ * payload was replayed OVER the (newer) snapshot, and `applyLoad`'s own
+ * `nextWatermark` then advanced the watermark to the snapshot's rev — so the
+ * cache held stale content while CLAIMING to be current. The reconnect watermark
+ * check compares revs only (`localRev >= serverRev` → skip), so it never healed
+ * this. The divergence was permanent until something unrelated forced a reload.
  *
- * Nothing here is a fix — this file changes no production code. The shape a fix
- * would take (record the rev alongside each `PendingMutation` and let `applyLoad`
- * skip any whose rev is at or below the snapshot's) belongs in the sibling PR
- * that owns `applyLoad`.
+ * **The fix.** `PendingMutation` carries the rev of the event that recorded it,
+ * and `replayPendingMutations(messages, pending, snapshotRev)` drops any
+ * mutation whose real rev (> `UNVERSIONED_REV`) is `<= snapshotRev` — the
+ * snapshot demonstrably already contains it. Threaded through both snapshot
+ * commit paths (`applyLoad` and `applyServerSnapshot`, the latter being the
+ * gap-heal route via `healConversationToRev` → `refreshConversationSnapshot`).
+ * Unversioned mutations (rev 0 / absent — legacy `chat:*` fan-out, SSE stream
+ * commits, `promoteOptimisticSends`) always replay; see the unversioned-emitter
+ * property above.
+ *
+ * Keep this case: it is the minimal reproduction, and it is the thing that goes
+ * red first if the rev ever stops riding onto the pending mutation.
  */
-describe('KNOWN OPEN GAP: rev-blind pending-mutation replay', () => {
-  it.fails('an event applied out of order during an in-flight refetch strands stale content at a current rev', () => {
+describe('CLOSED GAP (regression): rev-gated pending-mutation replay', () => {
+  it('an event applied out of order during an in-flight refetch must not strand stale content at a current rev', () => {
     const server = new SimulatedServer();
     const client = new SimulatedClient();
 
@@ -550,13 +616,15 @@ describe('KNOWN OPEN GAP: rev-blind pending-mutation replay', () => {
     simulateDelivery(client, server, updateA!);
     expect(client.rev).toBe(2);
 
-    // The GET lands. Its rev-3 snapshot is replayed over with the rev-2 payload,
-    // and the watermark is folded up to 3.
+    // The GET lands. The rev-2 pending mutation is <= the rev-3 snapshot, so the
+    // gate drops it instead of replaying it over newer truth; the watermark
+    // folds up to 3 either way.
     client.settleLoad();
     expect(client.rev).toBe(3);
 
-    // The reconnect check would skip this conversation (3 >= 3), so this is where
-    // it stays. THIS is the assertion that currently fails:
+    // The reconnect check skips this conversation (3 >= 3), so whatever is here
+    // is final — and it is now the server's truth, not the rev-2 payload.
     expect(client.messages.map(textOf)).toEqual(server.snapshot().messages.map(textOf));
+    expect(client.messages.map(textOf)).toEqual(['m1@v3']);
   });
 });
