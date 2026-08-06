@@ -86,6 +86,15 @@ export const driveCalendarRoom = (driveId: string): string => `drive:${driveId}:
 /** Direct-message conversation room. */
 export const dmRoom = (conversationId: string): string => `dm:${conversationId}`;
 
+/**
+ * Agent-session workspace room (`session:<agent_sessions.id>`) — the layout
+ * plane for one workspace: `workspace:updated` (rev-carrying pane-grid
+ * events) fan out here (epic Phase 3). Join sites arrive with the client
+ * store rewrite PR; the shape is in the grammar now so the server's verb
+ * writes are broadcastable from day one.
+ */
+export const sessionRoom = (workspaceId: string): string => `session:${workspaceId}`;
+
 /** Drive activity feed room. */
 export const driveActivityRoom = (driveId: string): string => `activity:drive:${driveId}`;
 
@@ -106,6 +115,7 @@ export const ALL_ROOM_BUILDERS: ReadonlyArray<(id: string) => string> = [
   driveRoom,
   driveCalendarRoom,
   dmRoom,
+  sessionRoom,
   driveActivityRoom,
   pageActivityRoom,
 ];
@@ -132,8 +142,11 @@ export function isKnownRoomId(roomId: string): boolean {
     return isCUID2(roomId);
   }
 
-  // notifications:<cuid> | dm:<cuid> | drive:<cuid>
-  if (segments.length === 2 && (segments[0] === 'notifications' || segments[0] === 'dm' || segments[0] === 'drive')) {
+  // notifications:<cuid> | dm:<cuid> | drive:<cuid> | session:<cuid>
+  if (
+    segments.length === 2 &&
+    (segments[0] === 'notifications' || segments[0] === 'dm' || segments[0] === 'drive' || segments[0] === 'session')
+  ) {
     return isCUID2(segments[1]);
   }
 

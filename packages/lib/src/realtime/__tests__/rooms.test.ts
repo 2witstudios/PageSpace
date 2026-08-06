@@ -20,6 +20,7 @@ import {
   driveRoom,
   driveCalendarRoom,
   dmRoom,
+  sessionRoom,
   driveActivityRoom,
   pageActivityRoom,
   isKnownRoomId,
@@ -41,14 +42,15 @@ describe('room builders', () => {
     expect(driveRoom(id)).toBe(`drive:${id}`);
     expect(driveCalendarRoom(id)).toBe(`drive:${id}:calendar`);
     expect(dmRoom(id)).toBe(`dm:${id}`);
+    expect(sessionRoom(id)).toBe(`session:${id}`);
     expect(driveActivityRoom(id)).toBe(`activity:drive:${id}`);
     expect(pageActivityRoom(id)).toBe(`activity:page:${id}`);
   });
 
   it('ALL_ROOM_BUILDERS covers every exported builder', () => {
-    expect(ALL_ROOM_BUILDERS).toHaveLength(11);
+    expect(ALL_ROOM_BUILDERS).toHaveLength(12);
     const outputs = ALL_ROOM_BUILDERS.map((build) => build(id));
-    expect(new Set(outputs).size).toBe(11);
+    expect(new Set(outputs).size).toBe(12);
   });
 });
 
@@ -63,6 +65,7 @@ describe('isKnownRoomId', () => {
     expect(isKnownRoomId('not a cuid')).toBe(false);
     expect(isKnownRoomId('notifications:NOT-A-CUID')).toBe(false);
     expect(isKnownRoomId('dm:UPPER')).toBe(false);
+    expect(isKnownRoomId('session:NOT-A-CUID')).toBe(false);
     expect(isKnownRoomId(`drive:${'x'.repeat(40)}`)).toBe(false);
     expect(isKnownRoomId('drive:9startswithdigit')).toBe(false);
     expect(isKnownRoomId(`user:BAD:tasks`)).toBe(false);

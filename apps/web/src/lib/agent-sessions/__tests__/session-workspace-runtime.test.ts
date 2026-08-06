@@ -1,8 +1,9 @@
 /**
- * `getSessionWorkspace`/`saveSessionWorkspace` — a plain single-column
- * read/write, so what's worth pinning is just the shape of the query built
- * and the null-when-unsaved fallback, not any decision logic (there is none
- * here on purpose — access control lives in the route, not this module).
+ * `getSessionWorkspace`/`getSessionWorkspacesBulk` — a plain single-column
+ * read, so what's worth pinning is just the shape of the query built and the
+ * null-when-unsaved fallback, not any decision logic (there is none here on
+ * purpose — access control lives in the route, not this module; the WRITE
+ * moved to `workspace-layout-runtime.ts` with the Phase 3 dual-write).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -18,18 +19,11 @@ vi.mock('@pagespace/db/db', () => {
     limit: vi.fn(() => Promise.resolve(responses.shift() ?? [])),
     then: (resolve: (rows: unknown[]) => void) => resolve(responses.shift() ?? []),
   };
-  const updateChain = {
-    update: vi.fn(() => updateChain),
-    set: vi.fn(() => updateChain),
-    where: vi.fn(() => Promise.resolve(undefined)),
-  };
   const db = {
     select: selectChain.select,
     from: selectChain.from,
     where: selectChain.where,
     limit: selectChain.limit,
-    update: updateChain.update,
-    set: updateChain.set,
   };
   return { db, __queueResponse: (rows: unknown[]) => responses.push(rows) };
 });
@@ -43,7 +37,7 @@ vi.mock('@pagespace/db/schema/agent-sessions', () => ({
 
 import * as dbModule from '@pagespace/db/db';
 import type { PersistedWorkspaceState } from '@pagespace/lib/agent-sessions/contract';
-import { getSessionWorkspace, saveSessionWorkspace, getSessionWorkspacesBulk } from '../session-workspace-runtime';
+import { getSessionWorkspace, getSessionWorkspacesBulk } from '../session-workspace-runtime';
 
 const queueResponse = (rows: unknown[]) => (dbModule as unknown as { __queueResponse(rows: unknown[]): void }).__queueResponse(rows);
 
@@ -90,15 +84,6 @@ describe('getSessionWorkspace', () => {
     // (review finding) must not reach callers unvalidated.
     queueResponse([{ workspaceState: { id: 'ses-1', columns: [], activePaneId: 'pane-1', pendingPickerPaneId: null } }]);
     expect(await getSessionWorkspace('ses-1')).toBeNull();
-  });
-});
-
-describe('saveSessionWorkspace', () => {
-  it('writes the workspace to the session row', async () => {
-    const db = (dbModule as unknown as { db: { update: ReturnType<typeof vi.fn>; set: ReturnType<typeof vi.fn> } }).db;
-    await saveSessionWorkspace({ sessionId: 'ses-1', workspace });
-    expect(db.update).toHaveBeenCalled();
-    expect(db.set).toHaveBeenCalledWith({ workspaceState: workspace });
   });
 });
 
